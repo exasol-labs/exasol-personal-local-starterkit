@@ -254,6 +254,29 @@ jobs:
           bump_pypi("pyexasol", "pyexasol")
           bump_pypi("dbt-exasol", "dbt-exasol")
 
+          # --- the notebook tools: JupyterLab and Marimo, stable PyPI releases ---
+          # Pinned per tool under components.notebook.frontends; a new release is
+          # proposed like any other bump, and the notebook CI tests it in the PR.
+          frontends = (components.get("notebook") or {}).get("frontends") or {}
+          for tool in ("jupyterlab", "marimo"):
+              if not frontends.get(tool):
+                  continue
+              label = "notebook.frontends.%s" % tool
+              body, reason = fetch("https://pypi.org/pypi/%s/json" % tool)
+              if body is None:
+                  notes.append("- `%s`: PyPI did not answer (%s), left alone" % (label, reason))
+                  continue
+              shape = re.compile(r"^\d+(?:\.\d+)*$")
+              candidates = [v for v, files in (body.get("releases") or {}).items()
+                            if shape.match(v) and files and not all(f.get("yanked") for f in files)]
+              winner = pick(candidates, frontends[tool], label, semver_key)
+              if winner:
+                  bumped[label] = (frontends[tool], winner)
+                  frontends[tool] = winner
+                  notes.append("- `%s`: a new install gets %s at once; an installed kit picks it up with "
+                               "`exakit update notebook` (the update notice follows the connector's own version)"
+                               % (label, winner))
+
           # --- exapump: a stable release, plus the five asset digests -----------
           exapump = components.get("exapump") or {}
           if exapump.get("version"):
@@ -467,32 +490,7 @@ jobs:
                   ("setup/lib/common.sh", "bash", "EXAKIT_PYEXASOL_VERSION_FALLBACK"),
                   ("setup/lib/exakit-common.ps1", "pwsh", "PyexasolVersionFallback"),
               ],
-              # Marketplace add-ons keep their constants in their own module
-              # pair, not in the shared libraries.
-              "dbt-exasol": [
-                  ("setup/lib/dbt-exasol.sh", "bash", "EXAKIT_DBT_EXASOL_VERSION_FALLBACK"),
-                  ("setup/lib/dbt-exasol.ps1", "pwsh", "DbtExasolVersionFallback"),
-              ],
-              "exasol-scheduler": [
-                  ("setup/lib/exasol-scheduler.sh", "bash", "EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK"),
-                  ("setup/lib/exasol-scheduler.ps1", "pwsh", "ExasolSchedulerVersionFallback"),
-              ],
-              "dash-server": [
-                  ("setup/lib/dash-server.sh", "bash", "EXAKIT_DASH_SERVER_VERSION_FALLBACK"),
-                  ("setup/lib/dash-server.ps1", "pwsh", "DashServerVersionFallback"),
-              ],
-              "exasol-vscode": [
-                  ("setup/lib/exasol-vscode.sh", "bash", "EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK"),
-                  ("setup/lib/exasol-vscode.ps1", "pwsh", "ExasolVscodeVersionFallback"),
-              ],
-              # json-tables is versioned by the upstream COMMIT its prebuilt
-              # artifacts were built from; the pkg/json-tables workflow moves
-              # that version, so the auto-bump leaves it alone and only the
-              # fallback constants are kept in lockstep by hand.
-              "json-tables": [
-                  ("setup/lib/json-tables.sh", "bash", "EXAKIT_JSON_TABLES_VERSION_FALLBACK"),
-                  ("setup/lib/json-tables.ps1", "pwsh", "JsonTablesVersionFallback"),
-              ],
+              # Marketplace fallbacks live together in marketplace/catalog.json.
           }
           touched = set()
 
@@ -526,11 +524,22 @@ jobs:
               for path, dialect, name in COUPLED.get(key, []):
                   retune(path, dialect, name, new_version)
 
+          marketplace_path = pathlib.Path("marketplace/catalog.json")
+          marketplace = json.loads(marketplace_path.read_text())
+          marketplace_changed = False
+          for row in marketplace["addons"]:
+              if row["id"] in bumped:
+                  row["default_version"] = bumped[row["id"]][1]
+                  marketplace_changed = True
+          if marketplace_changed:
+              marketplace_path.write_text(json.dumps(marketplace, indent=2) + "\n")
+              touched.add(str(marketplace_path))
+
           # --- write it back, canonically --------------------------------------
           summary = []
           if bumped:
               for key in bumped:
-                  block = components[key]
+                  block = components[key.split(".", 1)[0]]     # notebook.frontends.marimo -> the notebook block
                   # Urgency is a human call, and a note written about an older
                   # version does not describe this one.
                   block["severity"] = "normal"

@@ -258,7 +258,10 @@ function Invoke-ExakitCoreRerunInstaller {
 function Invoke-ExakitCoreUpdateCheck {
     param([string]$Target = "all")
     $script:ExakitCoreUpdateActed = $false
-    if ($Target -ne "all" -and $Target -ne "exakit") { return $true }
+    # Several ids arrive joined by spaces (exakit update exakit exapump): the kit
+    # is one of them, so the check runs. Twin of exakit_core_update_check.
+    $targetIds = @("$Target" -split ' ' | Where-Object { $_ })
+    if ($targetIds -notcontains "all" -and $targetIds -notcontains "exakit") { return $true }
     if (Test-ExakitCoreRerunActive) { return $true }
     $root = Get-ExakitRepoRoot
     if (-not $root -or -not (Test-Path -LiteralPath (Join-ExakitCorePath $root "setup" "core" "tasks.json"))) { return $true }
@@ -319,7 +322,9 @@ function Invoke-ExakitUpdateHandover {
             $resultsFile = [System.IO.Path]::GetTempFileName()
             $env:EXAKIT_UPDATE_RESULTS_FILE = $resultsFile
         }
-        $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $newPs1, "update", $Target)
+        # Several ids leave as separate arguments, as they were typed: one
+        # joined word was an unknown target to the new run.
+        $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $newPs1, "update") + @("$Target" -split ' ' | Where-Object { $_ })
         if ($AssumeYes) { $argv += "--yes" }
         if ($script:ExakitUpdateJson) { $argv += "--json" }
         $ErrorActionPreference = "Continue"

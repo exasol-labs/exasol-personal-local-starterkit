@@ -1,0 +1,64 @@
+import marimo
+
+__generated_with = "0.25.2"
+app = marimo.App()
+
+@app.cell
+def _():
+    import marimo as mo
+    from exakit.nb.example_runtime import Lesson, render
+    lesson = Lesson('text_ai/txaie_introduction.ipynb')
+    return lesson, mo, render
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    # Bundled Exasol lesson: Introduction
+
+    Requires a configured Text AI Extension and its database objects. These services are not installed by opening a notebook.
+
+    Run cells from top to bottom. In Marimo each editable cell has its own Run button; opening a lesson executes no example code. Widget steps retain their Python code; use the matching Jupyter notebook for the original widget UI.
+
+    For dashboards use the kit Data Scientist 03_share flow on Dash Server.
+
+    Source: [Exasol Notebook Connector](https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/text_ai/txaie_introduction.ipynb). MIT license: LICENSE.txt.
+    """)
+    return
+
+@app.cell
+def _(mo):
+    editor_001 = mo.ui.code_editor(value="from exakit.nb.example_runtime import bootstrap\nai_lab_config = bootstrap(globals(), 'text_ai/txaie_introduction.ipynb')", language="python", min_height=100)
+    run_001 = mo.ui.run_button(label="Run cell 1")
+    mo.vstack([editor_001, run_001])
+    return editor_001, run_001
+
+@app.cell
+def _(editor_001, lesson, mo, render, run_001):
+    mo.stop(not run_001.value)
+    render(mo, lesson.run(editor_001.value))
+    return
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md("""
+    <div style="text-align: right;">
+      <img src="https://raw.githubusercontent.com/exasol/ai-lab/refs/heads/main/assets/Exasol_Logo_2025_Dark.svg" style="width:200px; margin: 10px;" />
+    </div>
+
+    # Introduction
+
+    This set of notebooks demonstrates the functionality of the Exasol Text AI. Text AI is a native Exasol solution that leverages AI to transform unstructured and semi-structured business data into relational data that can power analytics and drive insight.
+
+    ## Prerequisites
+
+    Before using this notebook the following steps need to be completed:
+    1. [Configure the AI Lab](/?file=exasol-examples/main_config.py).
+
+    ## Setup
+
+    Please start with the [Extension Initialization](/?file=exasol-examples/text_ai/txaie_init.py) page.
+    """)
+    return
+
+if __name__ == "__main__":
+    app.run()

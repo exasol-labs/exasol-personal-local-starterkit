@@ -1,4 +1,8 @@
-# Data dictionary — bundled sample datasets (TPC-H at SF=0.02, ENERGY, WEATHER)
+# Data dictionary — the five datasets
+
+TPCH (TPC-H at SF=0.02), ENERGY and WEATHER, bundled with the kit and loaded offline, and
+AMAZON (`amazon_sales`) and FRAUD (`fraud_transactions`), downloaded from the kit's `datasets`
+release when they are loaded. Each loads into its own schema; there are no joins across schemas.
 
 > The same descriptions ship **inside the database** as table and column comments
 > (`SYS.EXA_ALL_TABLES.TABLE_COMMENT`, `SYS.EXA_ALL_COLUMNS.COLUMN_COMMENT`) and are
@@ -6,7 +10,11 @@
 > shape of the data. This file adds the narrative: keys, joins and conventions.
 
 Reference for every table and column in this folder. Use it to write correct SQL
-(and to ground an AI assistant) without guessing what a column means.
+(and to ground an AI assistant) without guessing what a column means. The downloaded
+datasets (AMAZON, FRAUD) also have a README of their own with the source, the
+terms and how the snapshot was taken; row counts here are the shipped snapshots'.
+
+## TPCH — TPC-H retail benchmark (schema `TPCH`, dataset id `tpch`)
 
 **Notes on the files**
 - CSV, comma-delimited, one header row. Headers are UPPERCASE TPC-H column names, so the loaded
@@ -18,7 +26,7 @@ Reference for every table and column in this folder. Use it to write correct SQL
 - Loaded by `exakit data-load` (or `setup/load-data.sh`) into schema `TPCH`, one table per file
   (`lineitem.csv` → `TPCH.LINEITEM`).
 
-## Relationships & keys
+### Relationships & keys
 
 ```
 region 1─* nation 1─* customer 1─* orders 1─* lineitem
@@ -42,7 +50,7 @@ but not tax. Order-level total is `orders.o_totalprice`.
 
 ---
 
-## region  (5 rows)
+### region  (5 rows)
 Grain: one geographic region. **PK:** `r_regionkey`.
 
 | Column | Type | Description | Example |
@@ -51,7 +59,7 @@ Grain: one geographic region. **PK:** `r_regionkey`.
 | r_name | VARCHAR | Region name | AFRICA, AMERICA, ASIA, EUROPE, MIDDLE EAST |
 | r_comment | VARCHAR | Free-text note | — |
 
-## nation  (25 rows)
+### nation  (25 rows)
 Grain: one nation, belonging to a region. **PK:** `n_nationkey`. **FK:** `n_regionkey`→region.
 
 | Column | Type | Description | Example |
@@ -61,7 +69,7 @@ Grain: one nation, belonging to a region. **PK:** `n_nationkey`. **FK:** `n_regi
 | n_regionkey | INTEGER | Region this nation is in (FK) | 1 |
 | n_comment | VARCHAR | Free-text note | — |
 
-## customer  (3,000 rows)
+### customer  (3,000 rows)
 Grain: one customer. **PK:** `c_custkey`. **FK:** `c_nationkey`→nation.
 
 | Column | Type | Description | Example |
@@ -75,7 +83,7 @@ Grain: one customer. **PK:** `c_custkey`. **FK:** `c_nationkey`→nation.
 | c_mktsegment | VARCHAR | Market segment | AUTOMOBILE, BUILDING, FURNITURE, HOUSEHOLD, MACHINERY |
 | c_comment | VARCHAR | Free-text note | — |
 
-## supplier  (200 rows)
+### supplier  (200 rows)
 Grain: one supplier. **PK:** `s_suppkey`. **FK:** `s_nationkey`→nation.
 
 | Column | Type | Description | Example |
@@ -88,7 +96,7 @@ Grain: one supplier. **PK:** `s_suppkey`. **FK:** `s_nationkey`→nation.
 | s_acctbal | DECIMAL(15,2) | Account balance (can be negative) | 5755.94 |
 | s_comment | VARCHAR | Free-text note | — |
 
-## part  (4,000 rows)
+### part  (4,000 rows)
 Grain: one sellable product. **PK:** `p_partkey`.
 
 | Column | Type | Description | Example |
@@ -103,7 +111,7 @@ Grain: one sellable product. **PK:** `p_partkey`.
 | p_retailprice | DECIMAL(15,2) | List retail price | 901.00 |
 | p_comment | VARCHAR | Free-text note | — |
 
-## partsupp  (16,000 rows)
+### partsupp  (16,000 rows)
 Grain: one part supplied by one supplier. **PK:** `(ps_partkey, ps_suppkey)`.
 **FK:** `ps_partkey`→part, `ps_suppkey`→supplier.
 
@@ -115,7 +123,7 @@ Grain: one part supplied by one supplier. **PK:** `(ps_partkey, ps_suppkey)`.
 | ps_supplycost | DECIMAL(15,2) | Cost to source the part from this supplier | 771.64 |
 | ps_comment | VARCHAR | Free-text note | — |
 
-## orders  (30,000 rows)
+### orders  (30,000 rows)
 Grain: one customer order (header). **PK:** `o_orderkey`. **FK:** `o_custkey`→customer.
 
 | Column | Type | Description | Example / values |
@@ -130,7 +138,7 @@ Grain: one customer order (header). **PK:** `o_orderkey`. **FK:** `o_custkey`→
 | o_shippriority | INTEGER | Ship priority (usually 0) | 0 |
 | o_comment | VARCHAR | Free-text note | — |
 
-## lineitem  (~120K rows) — fact table
+### lineitem  (~120K rows) — fact table
 Grain: one product line within an order. **PK:** `(l_orderkey, l_linenumber)`.
 **FK:** `l_orderkey`→orders, `l_partkey`→part, `l_suppkey`→supplier, `(l_partkey,l_suppkey)`→partsupp.
 
@@ -216,14 +224,96 @@ Grain: one row per city per day. **PK:** `(city_id, w_date)`. **FK (documented, 
 Typical questions: hottest month per city, rainy-day counts per year, a city's
 temperature range on a given day.
 
+## AMAZON — online fashion orders (schema `AMAZON`, dataset id `amazon_sales`)
+
+128,975 order lines of one fashion seller on Amazon.in, 2022-03-31 to 2022-06-29: the order and
+its status, how it was fulfilled and shipped, the product (style, SKU, category, size), quantity
+and amount in rupees, and the city and state it went to ("Amazon Sale Report" on Kaggle, licence
+not confirmed; [datasets/amazon_sales/README.md](datasets/amazon_sales/README.md)). 18,332 lines
+(14.2%) were cancelled. Descriptor slots: `ORDER_LINE_ID` (key), `ORDER_DATE` (time), `CANCELLED`
+(target), `CATEGORY` (category), `SHIP_STATE` (entity); no text.
+
+### ORDER_LINES  (128,975 rows) — fact table
+Grain: one product line of an order. **PK:** `ORDER_LINE_ID`.
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| ORDER_LINE_ID | DECIMAL(6,0) | Row number in the source, from 1 (PK) | 1 |
+| ORDER_ID | VARCHAR(19) | Amazon order number; an order can have several lines | 405-8078784-5731545 |
+| ORDER_DATE | DATE | Day the order was placed, 2022-03-31 to 2022-06-29 | 2022-04-30 |
+| STATUS | VARCHAR(30) | Order status (13 distinct) - **not a feature** | Shipped, Shipped - Delivered to Buyer, Cancelled |
+| FULFILMENT | VARCHAR(8) | Who fulfilled it | Amazon, Merchant |
+| SALES_CHANNEL | VARCHAR(10) | Where it was sold | Amazon.in, Non-Amazon |
+| SHIP_SERVICE_LEVEL | VARCHAR(9) | Shipping speed | Expedited, Standard |
+| STYLE_CODE | VARCHAR(8) | The seller's style code (`Style` in the source) | SET389 |
+| SKU | VARCHAR(30) | Stock keeping unit: style, colour and size | SET389-KR-NP-S |
+| CATEGORY | VARCHAR(13) | Product category (9 distinct) | Set, kurta, Western Dress, Top |
+| SIZE | VARCHAR(4) | Size, `XS` to `6XL`, or `Free` | M |
+| ASIN | VARCHAR(10) | Amazon's product number | B09KXVBD7Z |
+| COURIER_STATUS | VARCHAR(9) | Courier status, or NULL - **not a feature** | Shipped, Unshipped, Cancelled |
+| QTY | DECIMAL(3,0) | Units ordered; 0 on most cancelled lines - **not a feature** | 1 |
+| CURRENCY | VARCHAR(3) | `INR`, or NULL with the amount | INR |
+| AMOUNT | DECIMAL(9,2) | The line's amount in rupees; NULL for some cancelled lines - **not a feature** | 647.62 |
+| SHIP_CITY | VARCHAR(50) | City shipped to, upper case | MUMBAI |
+| SHIP_STATE | VARCHAR(25) | Indian state shipped to, upper case | MAHARASHTRA, KARNATAKA, TAMIL NADU |
+| SHIP_POSTAL_CODE | VARCHAR(6) | PIN code shipped to | 400081 |
+| SHIP_COUNTRY | VARCHAR(2) | Country shipped to | IN |
+| HAS_PROMOTION | DECIMAL(1,0) | 1 when the line carried a promotion | 0 |
+| IS_B2B | DECIMAL(1,0) | 1 when the buyer is a business | 0 |
+| FULFILLED_BY | VARCHAR(9) | `Easy Ship` for merchant-shipped lines, else NULL | Easy Ship |
+| CANCELLED | DECIMAL(1,0) | 1 when the order was cancelled (18,332, 14.2%) — **the label** | 1 |
+
+Typical questions: cancellation rate by who ships, by category and with promotions; revenue by
+category, state, style and week; sizes, shipping speed and business buyers. `STATUS`,
+`COURIER_STATUS`, `QTY` and `AMOUNT` change once an order is cancelled, so they give the label
+away and must stay out of a model.
+
 ## Writing SQL against this data (Exasol notes)
 
 - **Column names are UPPERCASE** and resolve unquoted (`p_type`, `l_extendedprice` — Exasol folds
   identifiers to uppercase). No double-quoting needed.
+- **Upper-case names everywhere:** every bundled table and column is upper-case
+  (`AMAZON.ORDER_LINES.SHIP_STATE`), so unquoted SQL resolves it.
+- **0/1 labels:** `ABOVE_STORE_MEDIAN` and `CANCELLED` are
+  `DECIMAL(1,0)`, so `AVG(label)` is the rate and `SUM(label)` the count.
 - **Row limit:** Exasol uses `LIMIT n` (or `LIMIT n OFFSET m`) — **not** `FETCH FIRST … ROWS ONLY`
   or `TOP n`.
 - **Revenue** (kit convention): `l_extendedprice * (1 - l_discount)` — net of line discount,
   excludes tax, does not subtract returns. Add `WHERE l_returnflag <> 'R'` to exclude returned lines.
 
-See **[example-questions.md](example-questions.md)** for 14 ready-to-ask questions with validated
-reference SQL you can inspect before running.
+## FRAUD — transactions with a fraud label (schema `FRAUD`, dataset id `fraud_transactions`)
+
+51,000 card and bank transactions of 4,000 users: the amount, type, hour of day, device, city and
+payment method, the user's earlier fraud count, account age and activity in the last 24 hours, and
+whether the transaction was fraud ("Fraud Detection Dataset" on Kaggle, licence not confirmed;
+[datasets/fraud_transactions/README.md](datasets/fraud_transactions/README.md)). **Messy on
+purpose:** 1,000 `TRANSACTION_ID`s occur twice (881 exact copies), about 5% of five columns are
+NULL, and `Unknown Device` / `Invalid Method` are placeholders. There is no date. Descriptor
+slots: `ROW_ID` (key), `FRAUDULENT` (target), `TRANSACTION_TYPE` (category), `LOCATION` (entity);
+no time and no text.
+
+### TRANSACTIONS  (51,000 rows) — fact table
+Grain: one row per line of the source file. **PK:** `ROW_ID` (`TRANSACTION_ID` is not unique).
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| ROW_ID | DECIMAL(6,0) | The line of the source file (PK, added by the kit) | 1 |
+| TRANSACTION_ID | VARCHAR(10) | The source's id - 1,000 repeat | T1 |
+| USER_ID | DECIMAL(5,0) | The customer (4,000) | 4174 |
+| TRANSACTION_AMOUNT | DECIMAL(10,2) | Amount in US dollars; NULL in ~5% | 1292.76 |
+| TRANSACTION_TYPE | VARCHAR(20) | Kind of transaction (5) | ATM Withdrawal, Bill Payment, POS Payment |
+| TRANSACTION_HOUR | DECIMAL(2,0) | Hour of day 0-23; NULL in ~5% | 16 |
+| DEVICE_USED | VARCHAR(20) | Device; NULL in ~5% | Desktop, Mobile, Tablet, Unknown Device |
+| LOCATION | VARCHAR(20) | City (8); NULL in ~5% | New York, Chicago |
+| PREVIOUS_FRAUDULENT_TRANSACTIONS | DECIMAL(2,0) | Earlier frauds of the user, 0-4 | 2 |
+| ACCOUNT_AGE | DECIMAL(4,0) | Account age, 1-119 (no unit given) | 79 |
+| TRANSACTIONS_LAST_24H | DECIMAL(3,0) | The user's transactions in the 24 hours before | 13 |
+| PAYMENT_METHOD | VARCHAR(20) | Payment method; NULL in ~5% | UPI, Debit Card, Invalid Method |
+| FRAUDULENT | DECIMAL(1,0) | 1 when the transaction was fraud (2,510, 4.9%) — **the label** | 0 |
+
+Typical questions: are the repeated ids copies, how much is missing, what the placeholders hide,
+the fraud rate counted once per transaction, and fraud by type, history, hour, amount and city.
+
+See **[example-questions.md](example-questions.md)** for 14 ready-to-ask TPC-H questions with
+validated reference SQL you can inspect before running. AMAZON and FRAUD each ship at least
+ten runnable example queries in `datasets/<id>/examples.sql`.

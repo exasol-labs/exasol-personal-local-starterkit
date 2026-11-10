@@ -202,5 +202,29 @@ else
     fail "the PowerShell resume restarts the elapsed counter"
 fi
 
+# 5. A SUBSHELL's outcome line must not end the parent's spinner. Bash gives a
+#    subshell its parent's $$, so an owner check on $$ alone let the subshell
+#    that set up the read-only MCP user stop Step 4's spinner at (3s) and leave
+#    it frozen there while the MCP server took half a minute to start.
+cat > "$WORK/subshell.sh" <<EOF
+cd "$ROOT"
+. setup/lib/ui.sh
+. setup/lib/common.sh 2>/dev/null
+ui_detect >/dev/null 2>&1
+UI_FANCY=1
+EXAKIT_QUIET_DETAIL=1
+ui_spin_begin "Starting the MCP server and checking it answers"
+_outer="\$_UI_SPIN_PID"
+( ui_spin_begin inner; ui_spin_end; ok_step "read-only user ready" ) >/dev/null 2>&1
+sleep 0.5
+if kill -0 "\$_outer" 2>/dev/null; then echo; echo SPINNER-ALIVE; else echo; echo SPINNER-KILLED; fi
+ui_spin_end
+EOF
+case "$(python3 "$WORK/ptyrun.py" "$WORK/subshell.sh" 2>&1 | tr '\r' '\n')" in
+    *SPINNER-ALIVE*)  pass "a subshell's ok_step leaves the parent's spinner running" ;;
+    *SPINNER-KILLED*) fail "a subshell's ok_step stopped the parent's spinner (frozen step line)" ;;
+    *)                fail "the subshell scenario did not report" ;;
+esac
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

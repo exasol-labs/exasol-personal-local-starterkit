@@ -80,6 +80,16 @@ check "copilot"       "vscode_copilot" "$(exakit_parse_mcp_client_selection "cop
 check "gemini"        "gemini_cli" "$(exakit_parse_mcp_client_selection "gemini")"
 if exakit_parse_mcp_client_selection "bogus" >/dev/null 2>&1; then r=accepted; else r=rejected; fi
 check "invalid rejected" rejected "$r"
+# The same answer, however it is typed: case, spaces and a trailing comma do not matter, as on Windows
+# (PowerShell's switch is case-free); empty and the callers' own words ("skip") are not clients.
+check "case and spaces" "claude_desktop,claude_code,cursor" "$(exakit_parse_mcp_client_selection " Claude , Cursor ")"
+check "upper case"      "claude_desktop,claude_code" "$(exakit_parse_mcp_client_selection "CLAUDE")"
+check "trailing comma"  "claude_desktop,claude_code" "$(exakit_parse_mcp_client_selection "claude,")"
+check "ALL with spaces" "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue" "$(exakit_parse_mcp_client_selection " ALL ")"
+for _bad in "" "  " "," "skip" "none" "all,claude"; do
+    if exakit_parse_mcp_client_selection "$_bad" >/dev/null 2>&1; then r=accepted; else r=rejected; fi
+    check "[$_bad] is not a selection" rejected "$r"
+done
 
 echo "EXAKIT_DATA_FILE — naming a file answers the data-load menu:"
 # The var IS the choice: with it set, exakit_data_load_select must pick the

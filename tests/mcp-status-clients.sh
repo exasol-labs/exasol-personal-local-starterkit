@@ -170,144 +170,34 @@ else
     fail "the PowerShell twin cannot tell which clients to filter out"
 fi
 
-# 9. A handshake that fails says what it said. This is the AI-bridge step: a
-#    user whose assistant cannot see the database starts here, and the answer
-#    ("authentication failed", a bad DSN, a package that would not install) is
-#    in this process's own hands when it happens. It used to be spent on "see
-#    log", which sends the reader into a different program to look for
-#    something this run already knew.
-#
-#    The trap for a future change is that the log line still exists, so losing
-#    the SCREEN line looks like tidying. These checks are on the rendered
-#    output for that reason, and on the twin's source, which cannot run here.
-. "$ROOT/setup/lib/mcp.sh" 2>/dev/null || fail "could not source mcp.sh"
-
-EXAKIT_LOG_FILE="$WORK/handshake.log"
-cat > "$EXAKIT_LOG_FILE" <<'HANDSHAKELOG'
-INFO  a step that ran long before this validation
-CMD   uvx exasol-mcp-server@1.10.1 --help
-uvx: building the environment
-uvx: resolved 41 packages
-uvx: installed exasol-mcp-server
-
-Traceback (most recent call last):
-  File "/opt/mcp/exasol/driver.py", line 88, in connect
-    connect(dsn="127.0.0.1:8563", user="mcp_readonly", password="SUPERSECRET123")
-pyexasol.exceptions.ExaAuthError: [08004] Connection exception - authentication failed
-  during handling of the above exception another occurred
-  raise ExaAuthError(message)
-no initialize result in server output
-HANDSHAKELOG
-# What mcp_validate sets before it starts: where in the log this validation's
-# own output begins, and the password the server was handed.
-_mcp_handshake_log_mark=2
-_password="SUPERSECRET123"
-detail="$(mcp_print_handshake_detail 2>&1)"
-
-case "$detail" in
-    *"authentication failed"*) pass "the failure shows what the handshake said" ;;
-    *) fail "the handshake's own reason never reaches the screen" ;;
-esac
-case "$detail" in
-    *"no initialize result in server output"*) pass "...including its last word" ;;
-    *) fail "the last line of the handshake is not shown" ;;
-esac
-# The password is in the server's environment and a driver traceback can echo
-# its connection arguments back out. Redaction is not optional here.
-case "$detail" in
-    *"SUPERSECRET123"*) fail "the database password was printed to the screen" ;;
-    *) pass "the password is not printed" ;;
-esac
-case "$detail" in
-    *"<redacted>"*) pass "...it is redacted in place, so the line still reads" ;;
-    *) fail "the secret's line was dropped instead of redacted" ;;
-esac
-# Only the tail of the slice: uvx narrates its own environment build first and
-# the reason is always last.
-case "$detail" in
-    *"uvx: building the environment"*) fail "the whole slice is dumped, not its tail" ;;
-    *) pass "only the tail of the slice is shown" ;;
-esac
-shown="$(printf '%s\n' "$detail" | grep -c .)"
-if [ "$shown" -le 8 ]; then
-    pass "the detail is capped at a few lines ($shown)"
-else
-    fail "$shown lines were printed - a failure must not dump a screenful"
-fi
-
-# Only this validation's slice of the log, from the mark taken before the first
-# attempt: an earlier step's noise must never be presented as this failure's
-# cause. The mark earns its keep exactly when this validation said LITTLE - a
-# tail taken over the whole file then reaches back into the step before it and
-# quotes that instead, which is why the fixture here is short on purpose.
-EXAKIT_LOG_FILE="$WORK/handshake-short.log"
-cat > "$EXAKIT_LOG_FILE" <<'SHORTLOG'
-OK    an earlier step, long since finished
-OK    a second earlier step
-OK    a third earlier step
-OK    a fourth earlier step
-OK    a fifth earlier step
-OK    a sixth earlier step
-uvx: nothing to install
-handshake timed out
-SHORTLOG
-_mcp_handshake_log_mark=6
-short="$(mcp_print_handshake_detail 2>&1)"
-case "$short" in
-    *"handshake timed out"*) pass "a short slice is shown whole" ;;
-    *) fail "a short slice is not shown at all" ;;
-esac
-case "$short" in
-    *"an earlier step, long since finished"*)
-        fail "the tail reached back into a previous step and quoted it as the reason" ;;
-    *) pass "the tail never reaches back into a previous step" ;;
-esac
-# The detail is only half of it: the reassurance and the deeper check travel
-# with the reason, or a red block is all the reader gets.
+# 9. A server that does not start says what it said. This is the AI-bridge
+#    step: a user whose assistant cannot see the database starts here, and the
+#    launcher's own words for the failure (an image that would not pull, a
+#    container that keeps crashing) are in this process's hands. Both halves
+#    quote them and name the next step on screen, never "see log". The behaviour
+#    itself is driven in tests/mcp-sidecar.sh and tests/mcp-sidecar-ps.ps1.
 MCP_SH="$(cat "$ROOT/setup/lib/mcp.sh")"
-case "$MCP_SH" in
-    *"        mcp_print_handshake_detail"*) pass "mcp_validate prints the detail when it fails" ;;
-    *) fail "mcp_validate no longer prints the handshake detail" ;;
-esac
-case "$MCP_SH" in
-    *"For a deeper check, run: exakit mcp-doctor"*)
-        pass "the failure says the database and configs are unchanged, and names the deeper check" ;;
-    *) fail "the failure leaves the reader with no next step" ;;
-esac
-case "$MCP_SH" in
-    *"MCP stdio validation failed (see log)"*) fail "the shell still sends the reader to the log" ;;
-    *) pass "the shell no longer answers with (see log)" ;;
-esac
-
-# 10. The PowerShell twin decides the same way; it cannot be executed here.
-#     Windows is where the server is most likely not to start at all, so the
-#     side that CI cannot run is the side that had kept the "(see log)" answer.
 MCP_PS="$(cat "$ROOT/setup/lib/mcp.ps1")"
-case "$MCP_PS" in
-    *"function Show-McpHandshakeDetail"*) pass "the PowerShell twin has the handshake-detail printer" ;;
-    *) fail "the PowerShell twin has no handshake-detail printer - Windows keeps (see log)" ;;
+case "$MCP_SH" in
+    *'_mcp_sidecar_field "$_msa_status" detail'*) pass "the shell half quotes the launcher's reason" ;;
+    *) fail "the shell half drops the launcher's reason for a server that did not start" ;;
+esac
+case "$MCP_SH" in
+    *'Fix: exakit mcp-doctor'*) pass "...and names the next step" ;;
+    *) fail "the shell half leaves the reader with no next step" ;;
 esac
 case "$MCP_PS" in
-    *'$handshakeDetail = "$_"'*) pass "the twin keeps what the handshake said, not just the log line" ;;
-    *) fail "the twin throws the reason away and only logs it" ;;
+    *'Get-McpSidecarStatusDetail'*) pass "the PowerShell twin quotes the launcher's reason" ;;
+    *) fail "the PowerShell twin drops the launcher's reason" ;;
 esac
 case "$MCP_PS" in
-    *'Show-McpHandshakeDetail -Text $handshakeDetail'*) pass "...and prints it on the failure path" ;;
-    *) fail "the twin captures the reason and never shows it" ;;
+    *'"Fix: $Fix"'*'"exakit mcp-doctor"'*) pass "...and names the next step" ;;
+    *) fail "the PowerShell twin leaves the reader with no next step" ;;
 esac
-case "$MCP_PS" in
-    *'ConvertTo-McpRedactedText -Text $Text -Secrets @($Password)'*)
-        pass "the twin redacts the password before printing" ;;
-    *) fail "the twin can print the database password to the screen" ;;
-esac
-case "$MCP_PS" in
-    *"MCP stdio validation failed (see log)"*) fail "the twin still sends the reader to the log" ;;
-    *) pass "the twin no longer answers with (see log)" ;;
-esac
-case "$MCP_PS" in
-    *"For a deeper check, run: exakit mcp-doctor"*)
-        pass "the twin says the database and configs are unchanged, and names the deeper check" ;;
-    *) fail "the twin leaves the reader with no next step" ;;
+# The sidecar's own failures, on the shell side (the module is that and little else).
+case "$MCP_SH" in
+    *"(see log)"*) fail "a failure still sends the reader to the log" ;;
+    *) pass "no failure answers with (see log)" ;;
 esac
 
 

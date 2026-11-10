@@ -1,0 +1,165 @@
+name: Reference datasets live
+
+# The reference datasets and the role-per-column descriptor on a real database
+# (Sprint 1 #18; DS-2, DS-5, DS2.3). Like versions.yml's notebooks-live job it
+# deploys Exasol Personal on the runner through the kit's own installer, here
+# with both personas, so the persona's own dataset list is what loads. Then:
+#   (a) the two reference datasets load, 03_verify_setup.sql answers OK and
+#       every table holds its manifest's rows (6,435 / 128,975);
+#   (b) `exakit describe <SCHEMA.TABLE> --id <id> --json` drafts the roles, the
+#       key/time/text slots and the schema digest descriptor.yaml ships - the
+#       digest is the live proof that the declared types are the ones
+#       EXA_ALL_COLUMNS reports (TIMESTAMP against TIMESTAMP(3), say);
+#   (c) `exakit describe <id> --approve --role target=<shipped target>` writes
+#       v1 and publishes EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>, every column
+#       comment role=...;
+#   (d) the core notebooks run headless on the two datasets and on a
+#       synthetic CSV loaded with load_own_file and described/approved, the
+#       text step on the stub model;
+#   (e) no database password in the kit's notebooks, descriptors or workflows.
+# The checks live in tests/integration/reference_datasets_live.py; the
+# notebook runs are tests/notebooks-run.sh. REFERENCE_DATASETS must name every
+# data/datasets folder with a manifest.json (the script and
+# tests/test_workflow_datasets.py both refuse a list that falls behind).
+# Manual, and on a push that touches what it proves.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'data/datasets/**'
+      - 'personas/**'
+      - 'setup/lib/descriptor/**'
+      - 'setup/lib/describe_service.py'
+      - 'setup/lib/describe.sh'
+      - 'setup/lib/dataset_asset.py'
+      - 'notebook/**'
+      - 'tools/notebooks.py'
+      - 'tools/descriptor_rules.py'
+      - 'tools/descriptor_draft.py'
+      - 'tools/dataset_live.py'
+      - 'tests/notebooks-run.sh'
+      - 'tests/lib/stub_model_server.py'
+      - 'tests/integration/reference_datasets_live.py'
+      - '.github/workflows/reference-datasets-live.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reference-datasets-live-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  reference-datasets-live:
+    name: reference datasets, descriptor and notebooks on a live database (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      EXAKIT_NO_FANCY: "1"
+      REFERENCE_DATASETS: amazon_sales fraud_transactions
+    steps:
+      - uses: actions/checkout@v7
+      - name: Podman
+        # Installed here rather than by the kit, so the sudo step is this
+        # workflow's and not the installer's (EXAKIT_INSTALL_PODMAN=0 below).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          podman info --format '{{.Host.Arch}} podman {{.Version.Version}}'
+          df -h "$HOME" | tail -1
+          free -g | head -2
+      - name: install the kit from this checkout as the Data Scientist
+        # No EXAKIT_DATASETS: the persona's own list is what has to load. The
+        # reference datasets' release assets need not exist: EXAKIT_LOCAL_KIT
+        # loads the checkout's CSVs after checking their SHA-256. The ML
+        # Engineer is disabled for now; its notebooks still run below, so its
+        # add-on (udf-devkit) is named beside the persona's own.
+        env:
+          EXAKIT_LOCAL_KIT: ${{ github.workspace }}
+          EXAKIT_PERSONA: data-scientist
+          EXAKIT_MARKETPLACE_ADDONS: dash-server,notebook,udf-devkit
+          EXAKIT_SKIP_MCP: "1"
+          EXAKIT_NOTEBOOK_FRONTENDS: none
+          EXAKIT_INSTALL_PODMAN: "0"
+          EXAKIT_PODMAN_SELFHEAL: "1"
+          EXAKIT_PERSONAL_READY_TIMEOUT: "600"
+          EXAKIT_PERSONAL_MIN_DISK_GB: "10"
+        run: |
+          sh install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: the database answers
+        run: |
+          for _ in $(seq 1 60); do
+            exakit status --json > "$RUNNER_TEMP/status.json" 2>/dev/null && break
+            sleep 10
+          done
+          exakit status
+          python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("status:", d["status"]); sys.exit(0 if d["status"] == "running" else 1)' "$RUNNER_TEMP/status.json"
+      - name: nbclient into the kit's notebook environment
+        # tools/notebooks.py --run executes with nbclient on the kit's own kernel;
+        # the add-on does not ship it (a user never runs a notebook headless).
+        run: |
+          py="$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.exasol-starter-kit/manifest.json")))["components"]["notebook"]["python"])')"
+          uv pip install --python "$py" "nbclient>=0.10,<1"
+          exakit notebook check
+      - name: verified and counted, drafted as shipped, approved and published
+        # (a), (b) and (c) for every reference dataset.
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+        run: python3 tests/integration/reference_datasets_live.py datasets $REFERENCE_DATASETS
+      - name: a file of your own - load_own_file, describe, approve
+        # (d), first half: MY_DATA.TICKETS, approved as my_data_tickets, run by
+        # the notebooks below. The kit's notebook Python with the checkout's
+        # helpers, as tests/notebooks-run.sh binds them.
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+        run: |
+          py="$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.exasol-starter-kit/manifest.json")))["components"]["notebook"]["python"])')"
+          PYTHONPATH="$GITHUB_WORKSPACE/notebook/package:$GITHUB_WORKSPACE/packages/exasol-mlflow" \
+          EXAKIT_NB_KIT="$GITHUB_WORKSPACE" EXAKIT_NB_DATASETS="$GITHUB_WORKSPACE/data/datasets" \
+            "$py" tests/integration/reference_datasets_live.py own-file "$RUNNER_TEMP/my-data/tickets.csv"
+      - name: core notebooks headless on the reference datasets and the own file
+        # (d): the four notebooks of versions.yml's notebooks-live job, the text
+        # step on tests/lib/stub_model_server.py.
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+          EXAKIT_NOTEBOOK_AI_LAB: "0"
+          EXAKIT_NOTEBOOK_AI_THEMES: "1"
+          EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
+          EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
+        run: |
+          for recipe in amazon_sales:balanced fraud_transactions:balanced my_data_tickets:balanced; do
+            # The ML Engineer (disabled for now) takes amazon_sales and fraud_transactions.
+            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
+            EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
+              bash tests/notebooks-run.sh \
+                notebook/notebooks/data-scientist/00_quickstart.py \
+                notebook/notebooks/data-scientist/01_explore.py \
+                $ml
+          done
+      - name: no database password in notebooks, descriptors or workflows
+        # (e): file names only, never a password.
+        if: success() || failure()
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+        run: python3 tests/integration/reference_datasets_live.py no-secrets "$RUNNER_TEMP/executed-notebooks"
+      - name: Check notebook and workflow output before upload
+        id: privacy
+        if: always()
+        run: |
+          if python3 tools/artifact_scan.py "$RUNNER_TEMP/executed-notebooks" "$HOME/.exasol-starter-kit/workflows"; then
+            echo 'safe=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'safe=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - name: keep checked workflow logs and executed notebooks
+        if: failure() && steps.privacy.outputs.safe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: reference-datasets-live-logs
+          path: |
+            ~/.exasol-starter-kit/workflows
+            ${{ runner.temp }}/executed-notebooks
+          if-no-files-found: ignore

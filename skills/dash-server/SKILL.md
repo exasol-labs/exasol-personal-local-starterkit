@@ -11,14 +11,15 @@ server for Exasol-backed dashboards. The division of labour is the point —
 **you build and deploy dashboards through its MCP control plane; the user just
 opens a URL in a browser.**
 
-## Install it (it is never installed by default)
+## Install it (the Data Scientist persona installs it)
 
 ```bash
 EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace
 ```
 
 Interactively, `exakit marketplace` lists it with Space to select and Enter to
-install. Nothing in the kit's setup flow installs it for you.
+install. The Data Scientist persona installs it for you, before the notebook, so the
+notebooks' Share step has its server.
 
 ## The two endpoints
 
@@ -93,7 +94,15 @@ The launcher bootstraps the server against the kit's local database using the
 **dedicated read-only MCP user** — dashboards read, they do not write, the same
 least-privilege posture as the MCP server itself. Credentials are supplied by
 the launcher at run time from the kit's credential files; they are never baked
-into generated files, and you must never print them.
+into generated files, and you must never print them. Without the read-only user
+(a failed MCP step) Dash Server starts with no database connection and says so;
+it is never given the administrator's password. Fix: `exakit mcp-setup`, then
+`exakit stop dash-server && exakit start dash-server`.
+
+The user's dashboards live in `~/.exasol-starter-kit/dash-server/instance`.
+`exakit uninstall dash-server` removes the server and keeps them, and so does a
+full `exakit uninstall`; a reinstall picks them up. On a full uninstall,
+`EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too.
 
 ## Diagnosing
 

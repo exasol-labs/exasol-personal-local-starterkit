@@ -31,19 +31,34 @@ if (Test-Path $legacyModule) { . $legacyModule }
 # core-setup.sh load in setup-macos.sh / setup-linux.sh.
 $coreSetupModule = Join-Path $LibDir "core-setup.ps1"
 if (Test-Path $coreSetupModule) { . $coreSetupModule }
+if (Test-Path (Join-Path $LibDir "persona.ps1")) { . (Join-Path $LibDir "persona.ps1") }
 # Marketplace add-on modules: sourcing installs NOTHING - the modules are
 # needed only so the closing marketplace offer can install what the user says
 # yes to. A module missing from an older kit copy just skips its row.
 foreach ($addonEntry in (Get-ExakitMarketplaceAddons)) {
+    if ($addonEntry.Backend -eq 'python') { continue }
     $addonModule = Join-Path $LibDir "$($addonEntry.Id).ps1"
     if (Test-Path $addonModule) { . $addonModule }
 }
 
 Initialize-ExakitLogging
 Initialize-ExakitManifest
+# The settings file: the commented template, once (never over the user's copy).
+Install-ExakitEnvFile -KitRoot $KitRoot
+Write-ExakitEnvFileNote
 # The installer is the one process whose Fail() reason belongs in .last-failure.
 $script:ExakitRecordFailureNotes = $true
 Resolve-ExakitInstallVersions
+# A persona (EXAKIT_PERSONA) answers every question the user did not answer
+# explicitly; an unknown one stops here, before anything is installed.
+# Not in an installer an update started to finish new setup: the first
+# install's answers stand, and nothing is recorded, offered, installed or
+# started on a persona's strength. Twin of setup-macos.sh / setup-linux.sh.
+if ((Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)) {
+    Remove-Item Env:\EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
+} elseif (Get-Command Set-ExakitPersonaEnv -ErrorAction SilentlyContinue) {
+    Set-ExakitPersonaEnv
+}
 
 if ($env:EXAKIT_BANNER_SHOWN -ne "1") { Write-ExakitBanner "Personal Local Starter Kit" }
 
@@ -65,7 +80,7 @@ if ($kitVersion) { Set-ExakitManifestValue "kit.version" $kitVersion }
 # The `exakit` command first, so `exakit status` answers from the first seconds
 # of this install (AGENTS.md tells an agent to poll it). It used to be written
 # by the LAST step. install.ps1 has already staged the kit copy the shim points
-# at; step 6 still records the tick. Twin of exakit_install_helper_early.
+# at; step 7 still records the tick. Twin of exakit_install_helper_early.
 $earlyPs1 = Join-Path $script:ExakitHome "kit\setup\exakit.ps1"
 if (Test-Path $earlyPs1) {
     try {
@@ -74,6 +89,31 @@ if (Test-Path $earlyPs1) {
         # Recorded in the log, not on the screen. Twin of exakit_install_helper_early.
         Write-ExakitLog "INFO" "exakit command ready - exakit status answers from here on"
     } catch { }
+}
+
+# Invoke-ExakitClosingOffer - automatic start (on by default for a fresh install:
+# the kit's promise is a database that is simply there; only applied when the
+# manifest has no opinion yet, so `exakit autostart off` survives a re-run;
+# before the offer, so an add-on installed from it joins the boot set), then the
+# marketplace offer, asked once, only on an interactive run whose steps all
+# completed and only while something is on offer. Best-effort: nothing in it may
+# end an install that already succeeded.
+function Invoke-ExakitClosingOffer {
+    Initialize-ExakitMarketplacePythonHooks
+    [void](Invoke-ExakitBestEffort -Component "autostart" -Repair "exakit autostart" `
+        -Label "automatic start" `
+        -Warning "Automatic start could not be turned on." `
+        -Body { Enable-ExakitAutostartDefault })
+    # Not asked again by an installer an update started to finish new setup:
+    # the first install already made that offer. Twin of the same guard in
+    # setup-macos.sh / setup-linux.sh.
+    $closingRerun = (Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)
+    if (-not $closingRerun) {
+        [void](Invoke-ExakitBestEffort -Component "marketplace" -Repair "exakit marketplace" `
+            -Label "marketplace add-ons" `
+            -Warning "The marketplace offer did not finish cleanly." `
+            -Body { Request-ExakitMarketplaceOffer })
+    }
 }
 
 try {
@@ -222,12 +262,11 @@ try {
         Invoke-ExakitCoreDatabaseStep -Label $featureLabel -KitRoot $KitRoot
     }
 
-    # Load the sample data before any MCP configuration. exapump is now up
-    # (its only dependency), and doing this first means the read-only MCP
-    # user is provisioned, granted, and posture-checked against a schema
-    # that already holds the sample tables - and the AI client has data to
-    # query the moment it connects. Wrapped so a failed/declined load never
-    # aborts the rest of setup (mirrors kit_shared_steps' `|| true` in bash).
+    # The sample data. With persona.ps1 in the kit it follows the persona
+    # question after every step (Invoke-ExakitPersonaFlow, below), so this
+    # branch is the fallback for a kit copy without it, which still loads here,
+    # before the AI bridge. Wrapped so a failed/declined load never aborts the
+    # rest of setup (mirrors kit_shared_steps in bash).
     if (-not $dbReady) {
         # already said above - nothing more to add here
     } elseif ($exapumpSupported -and (Test-ExakitSoftFailed "exapump")) {
@@ -235,6 +274,11 @@ try {
     } elseif ((Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)) {
         # An installer an update started to finish new setup: the datasets were
         # the first install's question, and its answer stands.
+    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW: the parts everyone
+        # needs first, then "What will you use this machine for?", whose answer
+        # ticks the datasets (Invoke-ExakitPersonaFlow, after the steps). Loaded
+        # here only by a kit copy without persona.ps1. Twin of kit_shared_steps.
     } elseif ($exapumpSupported) {
         # YOUR OWN DATA FIRST, THEN THE SAMPLE. The copy out of the old
         # container needs three things this point in the run is the first to
@@ -245,14 +289,6 @@ try {
         if (Get-Command Invoke-LegacyCrossingAfter -ErrorAction SilentlyContinue) {
             Invoke-LegacyCrossingAfter
         }
-        # THE BRIDGE'S DOWNLOAD STARTS HERE, not two steps later. Priming the
-        # MCP package is a network download and an unpack; the load below is a
-        # local database reading local files. Neither needs the other, so the
-        # download runs underneath the load and Step 5 collects a finished one.
-        # See Start-ExakitMcpPrefetch. Twin of the same call in kit_shared_steps.
-        if (Get-Command Start-ExakitMcpPrefetch -ErrorAction SilentlyContinue) {
-            try { Start-ExakitMcpPrefetch } catch { }
-        }
         [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
             -Label "sample data" `
             -Warning "Sample data load did not finish cleanly." `
@@ -261,18 +297,19 @@ try {
 
     # --- step 5: AI bridge (server, clients, skills) ----------------------------
     if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 5/7  AI bridge (MCP server, clients and skills)")) {
-        if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit update" -Body {
+        if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
                 # One line for this step's server work: the spinner narrates
-                # the prime and the handshake, so the Info/Ok pairs beneath
-                # were the second telling. try/finally because the body can
-                # throw and this is a soft step - a leaked quiet flag would
-                # silence every step after it.
+                # starting the launcher's MCP server and its healing, so the
+                # Info/Ok pairs beneath were the second telling. The launcher's
+                # server is the only one: a step that could not get it serving
+                # fails soft (its error and fix said) and the install goes on.
+                # try/finally because the body can throw and this is a soft
+                # step - a leaked quiet flag would silence every step after it.
                 # Twin of _exakit_install_mcp (common.sh).
                 $prevQuiet = $script:ExakitQuietDetail
                 if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
                 try {
-                    Install-Mcp
-                    Test-McpServer
+                    Install-McpSidecarStep
                 } finally {
                     $script:ExakitQuietDetail = $prevQuiet
                 }
@@ -351,7 +388,26 @@ try {
         }
     }
 
-    # --- step 7: exakit helper command ------------------------------------------
+    # --- the personas, then the data -------------------------------------------
+    # "What will you use this machine for?" comes after the parts everyone
+    # needs, and its answer ticks the datasets (and, at the close, the add-ons).
+    # With EXAKIT_PERSONA set it was answered before step 1. Twin of the call in
+    # setup-macos.sh / setup-linux.sh.
+    # It needs the database: without one it returns at once (the skip was said
+    # above, with the other database steps).
+    # Not asked again by an installer an update started to finish new setup:
+    # the personas and the data were the first install's question, and its
+    # answer stands.
+    $env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
+    if ($coreRerun) {
+        # the first install's answer stands
+    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        Invoke-ExakitPersonaFlow -KitRoot $KitRoot
+    }
+
+    # --- step 7: exakit helper command, last, after the persona's data ---------
+    # The command is in place from the start; this is the tick and the refresh,
+    # what the reader sees last before the panel. Twin of kit_helper_step.
     # The step flag alone is not trusted: if the shim was removed (cleanup,
     # testing, older builds), a re-run must reinstall it rather than skip -
     # and the PATH check must run either way, since the PATH entry can be
@@ -388,7 +444,7 @@ try {
         # and the staged copy is what an installed exakit loads. Installing over
         # the official kit left its nano.ps1, runtime-nano.sh and catalog.tsv in
         # lib\, three files this kit removed on purpose. Twin of the same clear
-        # in kit_shared_steps.
+        # in kit_helper_step.
         #
         # ONLY WHEN THIS IS NOT THE KIT HOME ITSELF. install.ps1 unpacks the kit
         # into ~\.exasol-starter-kit\kit and runs setup from there, so these
@@ -411,7 +467,8 @@ try {
                 (Join-Path $kitSetupDir "core"), (Join-Path $kitSetupDir "preprocessor"),
                 (Join-Path $kitSetupDir "virtual-schemas"),
                 (Join-Path $script:ExakitHome "kit\mcp"), (Join-Path $script:ExakitHome "kit\sql"),
-                (Join-Path $script:ExakitHome "kit\skills"))) {
+                (Join-Path $script:ExakitHome "kit\skills"),
+                (Join-Path $script:ExakitHome "kit\marketplace"))) {
                 Remove-Item -Recurse -Force $stale -ErrorAction SilentlyContinue
             }
         }
@@ -419,7 +476,7 @@ try {
         Copy-ExakitAsset -Source (Join-Path $ScriptDir "exakit.ps1") -Destination (Join-Path $kitSetupDir "exakit.ps1")
         # setup\core and setup\preprocessor are what `exakit update` reads to decide
         # whether this kit asks for setup this machine has not finished. Twin of
-        # the same copy in kit_shared_steps.
+        # the same copy in kit_helper_step.
         foreach ($coreDir in @("core", "preprocessor", "virtual-schemas")) {
             Copy-ExakitAsset -Source (Join-Path $ScriptDir $coreDir) -Destination (Join-Path $kitSetupDir $coreDir)
         }
@@ -428,7 +485,7 @@ try {
         # the repo-root lookup, which PREFERS this staged copy. Omitting it does
         # not fall back to the checkout - it shadows it, so every one of those
         # commands reports "no skills/ directory in this kit build".
-        foreach ($dir in @("mcp", "sql", "data", "skills")) {
+        foreach ($dir in @("mcp", "sql", "data", "skills", "marketplace")) {
             Copy-ExakitAsset -Source (Join-Path $KitRoot $dir) -Destination (Join-Path $script:ExakitHome "kit\$dir")
         }
         # The versions manifest travels with the copy: it is the offline tier of
@@ -471,6 +528,20 @@ try {
         Invoke-LegacyCrossingAfter
     }
 
+    # A PERSONA INSTALL CLOSES ON ITS PANEL. The personas' own add-ons are part
+    # of what was asked for, so they are offered first, and the connection panel
+    # and the ready line are what the reader is left with. Without a persona the
+    # marketplace stays the optional extra it always was, after the panel. Twin
+    # of setup-macos.sh / setup-linux.sh.
+    # Never in an update-started rerun, which asks and installs nothing new.
+    if ($env:EXAKIT_PERSONA_ACTIVE -and -not $coreRerun) {
+        Invoke-ExakitClosingOffer
+        Invoke-ExakitMarketplaceCli -Script installer_flow -AllowFailure -CmdArgs @('--phase', 'services', '--cli',
+            (Join-Path $PSScriptRoot 'exakit.ps1'), '--host', (Get-Process -Id $PID).Path)
+        if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
+    }
+    # How to give the notebooks a model and Langfuse, before the panel the reader keeps.
+    if (Get-Command Write-ExakitModelSetupHint -ErrorAction SilentlyContinue) { Write-ExakitModelSetupHint }
     Show-ExakitConnectionSummary
     # Only when the kit version moved during this run, and never able to fail it:
     # every reader inside degrades to silence.
@@ -492,18 +563,7 @@ try {
     # took it away. Only applied when the manifest has no opinion yet, so
     # `exakit autostart off` survives a re-run. Before the offer, so an add-on
     # installed from it joins the boot set.
-    [void](Invoke-ExakitBestEffort -Component "autostart" -Repair "exakit autostart" `
-        -Label "automatic start" `
-        -Warning "Automatic start could not be turned on." `
-        -Body { Enable-ExakitAutostartDefault })
-    # Not asked again by an installer an update started to finish new setup:
-    # the first install already made that offer.
-    if (-not $coreRerun) {
-        [void](Invoke-ExakitBestEffort -Component "marketplace" -Repair "exakit marketplace" `
-            -Label "marketplace add-ons" `
-            -Warning "The marketplace offer did not finish cleanly." `
-            -Body { Request-ExakitMarketplaceOffer })
-    }
+    if (-not $env:EXAKIT_PERSONA_ACTIVE) { Invoke-ExakitClosingOffer }
     # A rule, then a heading: the last line on screen is where the reader is
     # left, and run together with whatever the marketplace printed it read as
     # one more of its bullets. The rule gives it air; the green arrow says it
@@ -546,11 +606,5 @@ try {
     # stops it on the path it owns; this covers every other way out, including
     # the ones nobody has thought of yet.
     try { Stop-ExakitAnimation } catch { }
-    # A prefetch that never got collected (the MCP step was skipped, or the run
-    # is ending early) must not outlive the installer. This finally is the one
-    # place every exit passes through. Twin of the same call in exakit_finish.
-    if (Get-Command Stop-ExakitMcpPrefetch -ErrorAction SilentlyContinue) {
-        try { Stop-ExakitMcpPrefetch } catch { }
-    }
     Exit-ExakitInstallLock
 }

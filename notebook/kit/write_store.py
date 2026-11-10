@@ -1,0 +1,27 @@
+"""Write the kit's database connection into the notebook connector's encrypted store (only what changed).
+
+Environment: SCS_FILE, SCS_MASTER_PASSWORD (the store and its master password), EXAKIT_NB_HOST, EXAKIT_NB_PORT,
+EXAKIT_NB_USER, EXAKIT_NB_PWFILE (the file holding the password - never the password itself) and EXAKIT_NB_SCHEMA
+(the schema the connector opens; the launchers pass EXAKIT_NOTEBOOK_SCHEMA, default STARTER_KIT). Prints changed|same.
+
+Run by the Python marketplace with the notebook environment’s interpreter.
+"""
+import os
+from pathlib import Path
+from exasol.nb_connector.ai_lab_config import AILabConfig as K, StorageBackend
+from exasol.nb_connector.secret_store import Secrets
+# db_schema: the connector's jupysql.init(ai_lab_config) and open_pyexasol_connection() read it and fail on a store
+# without it. The AI Lab's own default is AI_LAB (the schema its notebooks create); the kit's notebooks and its
+# MCP read-only login work in STARTER_KIT, the schema the kit loads its datasets into, so that is the default
+# here - a store pointing at AI_LAB would open a schema that does not exist on a kit database.
+DEFAULT_SCHEMA = "STARTER_KIT"
+store = Secrets(Path(os.environ["SCS_FILE"]), os.environ["SCS_MASTER_PASSWORD"])
+wanted = {K.storage_backend: StorageBackend.onprem.name, K.db_host_name: os.environ["EXAKIT_NB_HOST"],
+          K.db_port: os.environ["EXAKIT_NB_PORT"], K.db_user: os.environ["EXAKIT_NB_USER"],
+          K.db_password: open(os.environ["EXAKIT_NB_PWFILE"], encoding="utf-8").read().strip(),
+          K.db_schema: os.environ.get("EXAKIT_NB_SCHEMA") or DEFAULT_SCHEMA,
+          K.db_encryption: "True", K.cert_vld: "False"}
+changed = [k.name for k, v in wanted.items() if store.get(k) != v]
+for key in changed:
+    store.save(key, wanted[K[key]])
+print("changed" if changed else "same")

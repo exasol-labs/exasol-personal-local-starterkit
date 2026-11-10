@@ -1,0 +1,532 @@
+{
+  "schema_version": 1,
+  "id": "notebook",
+  "kind": "addon",
+  "role": "Installs Exasol's notebook connector (the package AI Lab is built on), pyexasol, the Langfuse and OpenAI clients, the kit's notebook helpers and a Jupyter kernel named 'Exasol (Starter Kit)' in an environment of their own, and its notebook tools - child rows under it in the marketplace's add-ons table, both ticked: JupyterLab (yours is used; with none, the kit's is installed because it was ticked) and Marimo (installed into the kit's notebook environment).",
+  "docs": "https://github.com/exasol/notebook-connector#readme",
+  "package": "exasol-notebook-connector",
+  "credentials": "The connection lives in the connector's encrypted configuration store (~/.exasol-starter-kit/notebook/connection.scs). Its master password and the JupyterLab and Marimo login tokens are kit credentials in ~/.exasol-starter-kit/credentials, readable by you only. The kernel's spec names only those two file paths, and the helpers read them, so no kernel spec, notebook or output ever holds a secret. The notebooks connect as the kit's admin user, because building tables and UDFs needs it.",
+  "installed_by": "exakit marketplace notebook (EXAKIT_MARKETPLACE_ADDONS=notebook for a script).",
+  "platforms": "macOS on Apple silicon, Linux x86_64 (including WSL) and Windows x86_64. The connector supports Python 3.11 and 3.12; the kit's managed interpreter is 3.12. Linux on Arm and Intel Macs are not offered: one of the connector's dependencies publishes no build for either.",
+  "quickstart": [
+    {
+      "step": "Install it",
+      "run": "exakit marketplace notebook",
+      "note": "About 1 GB: the connector brings PyTorch for its transformer features (the CPU-only build on Linux). Its notebook tools are child rows under it in the add-ons table: JupyterLab and Marimo - both ticked, each saying what will become of it, and then how it settled; untick one you do not want."
+    },
+    {
+      "step": "Open the notebooks",
+      "run": "exakit notebook",
+      "note": "On a terminal it asks which tools to open - one multi-select, each row saying its tool's state (running, ready, missing, not installed) - and opens each one picked: JupyterLab and Marimo in the background, opened in your browser, logged in. Without a terminal it opens JupyterLab. The notebooks are in ~/.exasol-starter-kit/notebooks: the kit's in starter-kit-notebooks/, one folder per persona you picked that has notebooks (data-scientist, ml-engineer), with a README naming the order to open them."
+    },
+    {
+      "step": "Or in Marimo",
+      "run": "exakit notebook marimo",
+      "note": "The same notebooks as Marimo notebooks, from notebooks/marimo/<persona>/."
+    },
+    {
+      "step": "Stop them",
+      "run": "exakit notebook stop"
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit notebook",
+      "options": "[jupyterlab | marimo] [check] [setup] [stop] [--no-browser] [--port <number>]",
+      "summary": "On a terminal, ask which notebook tools to open (JupyterLab, Marimo - each row saying its state, Skip opens nothing) and open them; without one, start JupyterLab in the background, connected, and open it. Before anything opens it checks the notebook environment, the database, the connection store, the kernel and the notebooks folder, and fixes or offers what is wrong. marimo does the same for Marimo (installing it when you say yes); stop stops JupyterLab and Marimo (stop marimo only Marimo); check proves the connection; setup settles a tool without starting it; --port names JupyterLab's port (no menu).",
+      "examples": [
+        "exakit notebook",
+        "exakit notebook marimo --no-browser --port 2720",
+        "exakit notebook check",
+        "exakit notebook setup",
+        "exakit notebook stop marimo"
+      ],
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo"
+          ]
+        },
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo",
+          "description": "A compatibility alias for the tool word. Prefer marimo.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit marketplace",
+      "options": "[<addon-id>...] | --list [--json]",
+      "summary": "Install this add-on by ID.",
+      "parameters": [
+        {
+          "name": "<addon-id>...",
+          "description": "Install only these registered add-ons. Without IDs, open the chooser on a terminal; install nothing without a terminal.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List add-ons and ownership without installing. Cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit marketplace notebook"
+      ]
+    },
+    {
+      "command": "exakit update",
+      "options": "[<component>] [--yes] [--json]",
+      "summary": "Update or repair this kit-owned add-on.",
+      "parameters": [
+        {
+          "name": "<component>",
+          "description": "Update a kit-owned component or add-on; user-owned components are preserved.",
+          "default": "all",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Allow a pending runtime update that stops and restarts the database; not permission to remove user-owned resources.",
+          "default": "ask on a terminal; defer runtime changes without a terminal",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit update notebook"
+      ]
+    },
+    {
+      "command": "exakit uninstall",
+      "options": "[<addon-id>] [--dry-run] [--yes]",
+      "summary": "Preview or remove this kit-owned add-on; preserve user-owned copies.",
+      "parameters": [
+        {
+          "name": "<addon-id>",
+          "description": "Remove one kit-owned add-on. Without an ID, choose components interactively; --yes without an ID selects the whole kit. User-owned resources are preserved.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--dry-run",
+          "description": "Preview removal without deleting anything.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
+          "default": "ask for confirmation",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit uninstall notebook --dry-run",
+        "exakit uninstall notebook"
+      ]
+    },
+    {
+      "command": "exakit notebook jupyterlab",
+      "options": "[check | setup | stop] [--no-browser] [--port N]",
+      "summary": "Open JupyterLab in the kit notebook environment.",
+      "parameters": [
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo",
+          "description": "A compatibility alias for the tool word. Prefer marimo.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook jupyterlab"
+      ]
+    },
+    {
+      "command": "exakit notebook marimo",
+      "options": "[check | setup | stop] [--no-browser] [--port N]",
+      "summary": "Open Marimo in the kit notebook environment.",
+      "parameters": [
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo",
+          "description": "A compatibility alias for the tool word. Prefer marimo.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook marimo"
+      ]
+    },
+    {
+      "command": "exakit notebook check",
+      "options": "[jupyterlab | marimo]",
+      "summary": "Check the notebook environment and database connection.",
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook check"
+      ]
+    },
+    {
+      "command": "exakit notebook setup",
+      "options": "[jupyterlab | marimo]",
+      "summary": "Prepare or repair the notebook environment without starting a server.",
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook setup"
+      ]
+    },
+    {
+      "command": "exakit notebook stop",
+      "options": "[jupyterlab | marimo]",
+      "summary": "Stop notebook servers; name a tool to stop just that server.",
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop"
+      ]
+    },
+    {
+      "command": "exakit notebook stop jupyterlab",
+      "options": "",
+      "summary": "Stop only the jupyterlab notebook server.",
+      "parameters": [
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop jupyterlab"
+      ]
+    },
+    {
+      "command": "exakit notebook stop marimo",
+      "options": "",
+      "summary": "Stop only the marimo notebook server.",
+      "parameters": [
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop marimo"
+      ]
+    }
+  ],
+  "notes": [
+    "The kit also bundles all 50 official Notebook Connector lessons: starter-kit-notebooks/exasol-examples/00_library.ipynb for Jupyter and marimo/exasol-examples/00_library.py for Marimo, beneath the notebook folder. Opening a Marimo lesson does not execute its cells; use their Run buttons. Notebook and UDF packages live in separate environments.",
+    "exakit notebook on a terminal asks 'Open which notebook tools?': JupyterLab ('running at http://127.0.0.1:<port>/lab', 'ready (the kit's <version>)', 'ready (yours: <path>)' or 'missing - reinstall it into the kit's environment'), Marimo ('running at ...', 'ready' or 'not installed - installs it'), with Skip to open nothing. The tools you chose at install are ticked (JupyterLab when none). Each one picked opens in turn, one line each with its address, then one line says how to stop them. Without a terminal (a script, an AI agent) nothing is asked: it opens JupyterLab, and a problem it cannot fix there is one line naming the command that does, with a non-zero exit.",
+    "The notebook tools are child rows of the notebook in the marketplace's add-ons table, both ticked: each says before anything installs what will become of it, and then how it settled (a scripted install that draws no table asks one checklist instead). A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. Marimo goes into the kit's notebook environment. For a script: EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo (or none); EXAKIT_NOTEBOOK_JUPYTER=skip or EXAKIT_NOTEBOOK_MARIMO=skip leaves one out. Untick one now, add it later with exakit notebook setup or marimo.",
+    "The connection store names the kit's schema, STARTER_KIT, as the schema the connector opens (AI Lab notebooks' jupysql.init and open_pyexasol_connection read it); EXAKIT_NOTEBOOK_SCHEMA, set before exakit notebook, names another. The connector's notebook-dependencies extra (ipywidgets, ipyfilechooser, matplotlib, wordcloud, stopwatch.py) is installed, so the AI Lab notebooks it ships import.",
+    "In Jupyter choose the kernel 'Exasol (Starter Kit)' for a notebook of your own. In Marimo or a plain script the kit's notebook Python finds the connection by itself.",
+    "In a notebook: import exakit.nb as nb; conn = nb.connect() opens the database, nb.sql(conn, '...') runs a query into a DataFrame and remembers it, and nb.show_sql() prints the last statement. nb.load_own_file(path, table, descriptor) loads your own CSV, Parquet or JSON file the same way the reference datasets are described. (exakit_nb, the older name, still imports.)",
+    "Model-call tracing is opt-in: with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL (LANGFUSE_HOST is accepted as an alias) set before exakit notebook, nb.trace(...) records the calls in your own Langfuse project. Without them it says tracing is off and does nothing else.",
+    "Setting the model and Langfuse once for every notebook: in a terminal, export EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL, type the API key into read -rs EXAKIT_PROVIDER_API_KEY (hidden, not in the shell history) and export it, the same for LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY, then exakit notebook from that terminal; PowerShell sets $env:NAME, keys through Read-Host -AsSecureString. The server reads its environment only when it starts: exakit notebook stop, then exakit notebook, after a change. The model id and address can stay in ~/.exasol-starter-kit/exakit.env; the keys and the Langfuse names cannot. Or fill in the Your AI model and Langfuse cell in Explore or Ask. nb.model_setup() in a cell says what is set and prints the lines for this machine; the install's closing screen shows them too when the notebook add-on is installed. The recipes: MODEL-PROVIDERS.md in the notebooks folder.",
+    "Exasol's AI Lab notebooks that use only the database run here. Those that upload to BucketFS, install the Transformers or Text AI extensions or deploy a container through BucketFS do not: a local Exasol Personal database has no BucketFS upload service. Use exakit udf-file and exakit udf-use instead.",
+    "A notebook you edited is never overwritten: an update copies only notebooks you do not have yet.",
+    "An AI Lab or a JupyterLab of your own on the same machine is left alone.",
+    "data-scientist/01_explore runs on any dataset with a descriptor: set DATASET in its first code cell to amazon_sales, fraud_transactions, the path of your own descriptor.yaml, or a CSV/Parquet/JSON file with <name>.descriptor.yaml beside it - one assignment and no SQL changes. Every query is built from the descriptor's roles and printed before its result; a small scikit-learn model trains on this computer; its text step (skipped, with the reason, on a dataset with no text column such as amazon_sales and fraud_transactions) sends a few rows to your own model endpoint only when USE_AI_THEMES = True and EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL are set (EXAKIT_PROVIDER_API_KEY when authentication is required), traced to your Langfuse when the LANGFUSE_* variables are set, and it asks before sending rows of a live (virtual schema) source.",
+    "ml-engineer/01_train trains a classifier of the dataset's label (amazon_sales: CANCELLED; fraud_transactions: FRAUDULENT) inside the database with a Python UDF and logs the run with exasol-mlflow from the notebook (with exasol_mlflow.start_run(conn, ...) as run: run.execute(sql)): parameters, metrics, the training SQL, the model file and the session, statement and deployment it came from. The run goes to MLFLOW_TRACKING_URI when set before exakit notebook, else to a local MLflow store in the mlflow folder beside the notebook. ml-engineer/03_score_external_model brings a model trained anywhere in with exakit model put and scores it with the udf-devkit's scoring UDF template.",
+    "The kit's notebooks, one folder per persona, in the order to open them (the requirements document's catalogue): data-scientist/00_quickstart, 01_explore, 02_ask_your_data and 03_share (Data Scientist), ml-engineer/00_quickstart, 01_train, 02_rust_score and 03_score_external_model (ML Engineer). Each quickstart checks what its persona depends on first. What goes where is notebook/catalog.json in the kit: adding a notebook is one entry there and its file, no code.",
+    "Versions: the connector is pinned in the kit's versions.json (components.notebook), and so are the JupyterLab and Marimo the kit installs (components.notebook.frontends; JupyterLab comes in through the connector's [jupyter] extra). exakit update notebook moves them to new pins and always refreshes the kit's own helpers. EXAKIT_NOTEBOOK_VERSION, EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION and EXAKIT_NOTEBOOK_MARIMO_VERSION override a pin.",
+    "All optional model steps use the same settings: EXAKIT_MODEL_ID, EXAKIT_PROVIDER_BASE_URL, EXAKIT_PROVIDER_API_KEY and optional EXAKIT_PROVIDER_HEADERS (JSON routing headers) and EXAKIT_MODEL_TEMPERATURE (none is sent unless set: Claude Opus 4.7 and later refuse it; 0 suits a local model). A model needs an explicit API base URL; unauthenticated local servers need no key. nb.model_settings() checks configuration without making a request or showing keys/header values. The README in the notebooks folder names them, with Claude and Ollama examples; the kit's notebook/MODEL-PROVIDERS.md links the official Claude, Ollama, LM Studio, vLLM and Gemini text/chat connection requirements and distinguishes documented compatibility from live verification.",
+    "exakit uninstall keeps your work: your notebooks (~/.exasol-starter-kit/notebooks), the kit MLflow server's runs and models (~/.exasol-starter-kit/mlflow) and your Dash dashboards (~/.exasol-starter-kit/dash-server/instance); a reinstall picks them up again. EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "exakit notebook says the database is not running, or the connection to it was lost",
+      "remedy": "exakit start - On a terminal exakit notebook offers to start it itself, then rewrites the notebooks' connection and checks it; if the notebooks still cannot connect nothing is opened - see exakit status and exakit logs."
+    },
+    {
+      "symptom": "JupyterLab was deleted, or is not installed, so the notebooks have nothing to open in",
+      "remedy": "exakit notebook setup - Its row in the menu says 'missing'; picking it offers to reinstall the kit's JupyterLab at its pinned version. Without a terminal, setup installs it without asking."
+    },
+    {
+      "symptom": "Marimo was deleted from the kit's notebook environment",
+      "remedy": "exakit notebook marimo - It offers to install it again (yes is the default, and the answer without a terminal)."
+    },
+    {
+      "symptom": "The notebook environment is missing or broken (its Python is gone, or the connector does not import)",
+      "remedy": "exakit update notebook - On a terminal exakit notebook offers the same repair: the notebook environment installed again (about 1 GB)."
+    },
+    {
+      "symptom": "Port 8888 (or Marimo's 2718) is in use by another program",
+      "remedy": "exakit notebook - Without --port the next free port (up to 20 above) is used, said, and remembered. A port named with --port is refused when it is taken: pick another, e.g. exakit notebook --port 8890."
+    },
+    {
+      "symptom": "The notebooks folder was deleted",
+      "remedy": "exakit notebook - It is made again with the kit's notebooks. A single kit notebook you deleted from a folder that is still there is not copied back."
+    },
+    {
+      "symptom": "The notebooks' connection store or its master password was deleted",
+      "remedy": "exakit notebook - A new store is written from the kit's connection (the old one cannot be read without its master password; one that would not open is kept as connection.scs.unreadable)."
+    },
+    {
+      "symptom": "The kernel 'Exasol (Starter Kit)' is gone from Jupyter",
+      "remedy": "exakit notebook setup - Every exakit notebook registers it again."
+    },
+    {
+      "symptom": "The browser does not open",
+      "remedy": "exakit notebook --no-browser - It prints the address; the login token is in ~/.exasol-starter-kit/credentials (notebook_jupyter_token, notebook_marimo_token) - never paste it anywhere else."
+    },
+    {
+      "symptom": "No connection to the kit's database was found",
+      "remedy": "exakit notebook check"
+    },
+    {
+      "symptom": "exakit notebook says the add-on is not installed",
+      "remedy": "exakit marketplace notebook"
+    },
+    {
+      "symptom": "A notebook cannot connect",
+      "remedy": "exakit notebook check"
+    },
+    {
+      "symptom": "import exakit.nb fails",
+      "remedy": "exakit update notebook"
+    },
+    {
+      "symptom": "JupyterLab did not answer in time",
+      "remedy": "exakit logs notebook"
+    },
+    {
+      "symptom": "01_explore says the descriptor does not match the database",
+      "remedy": "exakit data-load amazon_sales"
+    }
+  ],
+  "see_also": [
+    "exakit marketplace",
+    "pyexasol"
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_NOTEBOOK_SCHEMA",
+      "effect": "Default schema in the connector store; default STARTER_KIT."
+    },
+    {
+      "name": "EXAKIT_NOTEBOOK_PORT",
+      "effect": "Preferred JupyterLab port; default 8888. --port overrides for a new server."
+    },
+    {
+      "name": "EXAKIT_MARIMO_PORT",
+      "effect": "Preferred Marimo port; default 2718. --port overrides for a new server."
+    },
+    {
+      "name": "EXAKIT_NOTEBOOK_FRONTENDS",
+      "effect": "Comma-separated jupyterlab, marimo, or none to skip tool setup. Used for initial setup and persona installation."
+    },
+    {
+      "name": "EXAKIT_NOTEBOOK_VERSION",
+      "effect": "Override the tested Notebook Connector version for install/update."
+    },
+    {
+      "name": "EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION / EXAKIT_NOTEBOOK_MARIMO_VERSION",
+      "effect": "Override the tested front-end versions for install/update."
+    },
+    {
+      "name": "EXAKIT_UNINSTALL_NOTEBOOKS",
+      "effect": "keep (default) preserves your notebooks, MLflow runs and models and Dash dashboards; remove deletes them during a full uninstall."
+    }
+  ]
+}

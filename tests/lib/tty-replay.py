@@ -243,7 +243,9 @@ while i < len(raw):
                 while len(scr) <= cur: scr.append('')
                 scr[cur] = scr[cur][:col]
             i += m.end(); continue
-        m = re.match(r'\x1b\[\?25[lh]', raw[i:])
+        # DEC private modes - the cursor (?25) and the menus' mouse reporting (?1000,
+        # ?1006) - change no cell, as on a real terminal.
+        m = re.match(r'\x1b\[\?[0-9;]*[lh]', raw[i:])
         if m: i += m.end(); continue
         # Invisible on a real terminal, and emitted by .NET's console on Unix
         # around every ReadLine (the PowerShell scenarios): any other private

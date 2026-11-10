@@ -52,9 +52,12 @@ STUB="$WORK/exakit"
 # exakit resolves its library relative to its OWN directory, so the stub needs a
 # lib/ beside it or it dies before printing a single row.
 ln -s "$ROOT/setup/lib" "$WORK/lib"
+# The last line that sources a library from $_lib_dir: no one add-on's module, which come and go.
+LAST_LIB="$(grep -n '^\(\[ -f "\$_lib_dir/[^"]*" \] && \)\?\. "\$_lib_dir/' "$ROOT/setup/exakit" | tail -1 | cut -d: -f1)"
+[ -n "$LAST_LIB" ] || { printf 'FAIL could not find where setup/exakit sources its libraries\n'; exit 1; }
 {
     # Everything up to and including the last library source line...
-    sed -n '1,/^\[ -f "\$_lib_dir\/json-tables.sh" \]/p' "$ROOT/setup/exakit"
+    sed -n "1,${LAST_LIB}p" "$ROOT/setup/exakit"
     # ...then the override, so it wins over the real probe...
     cat <<'STUB_EOF'
 if [ -n "${EXAKIT_TEST_ABSENT:-}${EXAKIT_TEST_PRESENT:-}" ]; then
@@ -67,7 +70,7 @@ if [ -n "${EXAKIT_TEST_ABSENT:-}${EXAKIT_TEST_PRESENT:-}" ]; then
 fi
 STUB_EOF
     # ...then the rest of the script.
-    sed -n '/^\[ -f "\$_lib_dir\/json-tables.sh" \]/,$p' "$ROOT/setup/exakit" | tail -n +2
+    sed -n "$((LAST_LIB + 1)),\$p" "$ROOT/setup/exakit"
 } > "$STUB"
 chmod +x "$STUB"
 # The stub is worthless if the injection missed, and a silent miss would make
@@ -262,7 +265,7 @@ EOF
 #    step 5 of the same function deletes that logfile. An unquieted run would
 #    print those lines from info() and pass this for the wrong reason.
 un_out="$(common_sh '
-manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; *) return 1 ;; esac; }
+manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; runtime.ownership) printf "kit\n" ;; *) return 1 ;; esac; }
 personal_teardown() { return 0; }
 exakit_mcp_operation() { return 0; }
 : > "$EXAKIT_BIN_DIR/exakit"
@@ -382,7 +385,7 @@ done
 #     PowerShell's $HOME is the account's home-directory attribute, which on a
 #     domain machine is H:\ or \\server\share\user -- neither can be
 #     bind-mounted, so the install could not run at all.
-head="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" | sed -n '1,200p')")"
+head="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" | sed -n '1,300p')")"
 if has "$head" 'USERPROFILE'; then
     pass "the Windows kit home prefers the local user profile"
 else

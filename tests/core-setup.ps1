@@ -172,6 +172,14 @@ Check "a scoped update leaves it alone" $true (Invoke-ExakitCoreUpdateCheck -Tar
 Check "...nothing ran" $false (Test-Path -LiteralPath $calls)
 
 Reset-Update
+Check "...as does one naming several components without the kit" $true (Invoke-ExakitCoreUpdateCheck -Target "exapump mcp")
+Check "...nothing ran" $false (Test-Path -LiteralPath $calls)
+
+Reset-Update
+Check "several ids with the kit among them check the tasks" $true (Invoke-ExakitCoreUpdateCheck -Target "exapump exakit")
+Check "...and rerun the installer once" "ran 1 2.3.0 exasol-labs/kit@main" ((Get-Content -LiteralPath $calls -ErrorAction SilentlyContinue) -join "|")
+
+Reset-Update
 $env:EXAKIT_CORE_RERUN = "1"
 [void](Invoke-ExakitCoreUpdateCheck -Target "all")
 Remove-Item Env:\EXAKIT_CORE_RERUN
@@ -211,6 +219,7 @@ Write-Host "== exakit update: the handover =="
 $handoverCalls = Join-Path $work "handover-calls"
 $fakeExakit = @'
 Add-Content -LiteralPath '__CALLS__' -Value ("new " + ($args -join " ") + " handover=" + $env:EXAKIT_UPDATE_HANDOVER + " rows=" + $env:EXAKIT_UPDATE_ROW_FIELDS)
+Set-Content -LiteralPath '__CALLS__.argc' -Value $args.Count
 if ($env:EXAKIT_UPDATE_RESULTS_FILE) {
     Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value "exapump|updated|1.0|2.0|"
     Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value "mcp|failed|1.0|2.0|exakit update mcp|uvx did not answer|the hint"
@@ -227,6 +236,12 @@ Check "...its exit code comes back" 3 $code
 Check "...a seven-field row keeps its error and hint" "mcp|exakit update mcp|uvx did not answer|the hint" (@($script:ExakitUpdateResults | Where-Object { $_.component -eq "mcp" } | ForEach-Object { "$($_.component)|$($_.remedy)|$($_.error)|$($_.hint)" }) -join ";")
 Check "...its --json rows are merged into this run's" "exapump|updated|1.0|2.0|;mcp|failed|1.0|2.0|exakit update mcp" (($script:ExakitUpdateResults | ForEach-Object { "$($_.component)|$($_.outcome)|$($_.from)|$($_.to)|$($_.remedy)" }) -join ";")
 Check "...and the handover variables are gone again" "||" ("$env:EXAKIT_UPDATE_HANDOVER|$env:EXAKIT_UPDATE_RESULTS_FILE|$env:EXAKIT_UPDATE_ROW_FIELDS")
+# Several ids (exakit update exakit exapump) arrive joined by spaces and leave
+# as several arguments: one joined word is an unknown target to the new run.
+Remove-Item -Force -LiteralPath $handoverCalls -ErrorAction SilentlyContinue
+[void](Invoke-ExakitUpdateHandover -Target "exakit exapump")
+Check "several ids reach the new run as several arguments" "3" ((Get-Content -LiteralPath "$handoverCalls.argc" -ErrorAction SilentlyContinue) -join "")
+Check "...in the order they were typed" "new update exakit exapump handover=1 rows=7" ((Get-Content -LiteralPath $handoverCalls -ErrorAction SilentlyContinue) -join "|")
 Remove-Item -Force -LiteralPath (Join-Path $kitSetup "exakit.ps1")
 Check "no new exakit.ps1: no handover" $true ($null -eq (Invoke-ExakitUpdateHandover -Target "all"))
 
@@ -297,6 +312,7 @@ function Get-ExakitComponentAvailable { param($c) return "2.0" }
 function Test-ExakitComponentSupported { param($c) return $true }
 function Test-ExakitComponentAhead { param($c) return $false }
 function Test-ExakitComponentHeavy { param($c) return $false }
+function Test-ExakitComponentManaged { param($c) return $true }
 function Get-ExakitComponentMinKit { param($c) return "" }
 function Write-ExakitVersionsSourceLine { }
 function Invoke-ExakitWithSpinner { param([string]$Label, [scriptblock]$Body) & $Body }
@@ -380,6 +396,7 @@ function Get-ExakitComponentAvailable { param($c) return "2.0" }
 function Test-ExakitComponentSupported { param($c) return $true }
 function Test-ExakitComponentAhead { param($c) return $false }
 function Test-ExakitComponentHeavy { param($c) return $false }
+function Test-ExakitComponentManaged { param($c) return $true }
 function Get-ExakitComponentMinKit { param($c) return "" }
 function Write-ExakitVersionsSourceLine { }
 function Invoke-ExakitWithSpinner { param([string]$Label, [scriptblock]$Body) & $Body }

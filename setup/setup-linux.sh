@@ -41,12 +41,16 @@ if [ -f "$LIB_DIR/exapump.sh" ];  then . "$LIB_DIR/exapump.sh"  || die "Could no
 if [ -f "$LIB_DIR/mcp.sh" ];      then . "$LIB_DIR/mcp.sh"      || die "Could not load $LIB_DIR/mcp.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/pyexasol.sh" ]; then . "$LIB_DIR/pyexasol.sh" || die "Could not load $LIB_DIR/pyexasol.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/core-setup.sh" ]; then . "$LIB_DIR/core-setup.sh" || die "Could not load $LIB_DIR/core-setup.sh (corrupted kit copy? re-download and re-run)"; fi
+if [ -f "$LIB_DIR/persona.sh" ];  then . "$LIB_DIR/persona.sh"  || die "Could not load $LIB_DIR/persona.sh (corrupted kit copy? re-download and re-run)"; fi
 
 exakit_init_logging
 # Where the bootstrap time went, in the log: the installer stamps its start,
 # and this is the first line setup can write.
 [ -n "${EXAKIT_INSTALL_T0:-}" ] && _exakit_log_file "INFO  setup started $(( $(date +%s) - EXAKIT_INSTALL_T0 ))s after the installer began (download, extraction and library load)"
 manifest_init
+# The settings file: the commented template, once (never over the user's copy).
+exakit_env_file_install "$KIT_ROOT"
+exakit_env_file_note
 exakit_enable_failure_handling
 # The `exakit` command first, so `exakit status` answers from the first seconds
 # of this install (AGENTS.md tells an agent to poll it). It used to be written
@@ -69,6 +73,16 @@ exakit_note_kit_upgrade "$KIT_ROOT" || true
 _kit_version="$(exakit_kit_version_at "$KIT_ROOT" 2>/dev/null || true)"
 [ -n "$_kit_version" ] && manifest_set kit.version "$_kit_version"
 exakit_resolve_install_versions
+# A persona (EXAKIT_PERSONA) answers every question the user did not answer
+# explicitly; an unknown one stops here, before anything is installed.
+# Not in an installer an update started to finish new setup: the first
+# install's answers stand, and nothing is recorded, offered, installed or
+# started on a persona's strength - not even one named in exakit.env.
+if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+    unset EXAKIT_PERSONA_ACTIVE
+elif command -v exakit_persona_apply_env >/dev/null 2>&1; then
+    exakit_persona_apply_env
+fi
 
 # --- step 0: an installation this kit cannot manage -------------------------
 # An older kit could put the database in a container. This asks what to do with
@@ -143,17 +157,54 @@ else
     fi
 fi
 
-# --- steps 3-7: exapump, database features, MCP server, pyexasol, exakit helper
+# --- steps 3-6: exapump, database features, MCP server, pyexasol (shared) ----
 kit_shared_steps 3 7 "$SCRIPT_DIR" "$KIT_ROOT"
 
-# The other half of the crossing runs inside the shared steps, immediately
-# before the sample-data load (see exakit_maybe_offer_data_load): a user's own
-# tables come back before the kit's demo data, not after the whole install.
-# This call is the safety net for a run that skipped that point altogether, and
-# is a no-op once the restore has happened.
+# --- the personas, then the data ---------------------------------------------
+# "What will you use this machine for?" comes after the parts everyone needs,
+# and its answer ticks the datasets (and, at the close, the add-ons). With
+# EXAKIT_PERSONA set it was answered before step 1. See exakit_persona_flow.
+EXAKIT_MARKETPLACE_PYTHON_APPLY=1
+export EXAKIT_MARKETPLACE_PYTHON_APPLY
+# Not asked again by an installer an update started to finish new setup: the
+# personas and the data were the first install's question, and its answer stands.
+if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+    :
+elif command -v exakit_persona_flow >/dev/null 2>&1; then
+    exakit_persona_flow "$KIT_ROOT"
+fi
+
+# --- step 7: the exakit helper, last, after the persona's data ---------------
+kit_helper_step 7 7 "$SCRIPT_DIR" "$KIT_ROOT"
+
+# The other half of the crossing runs at the start of the sample-data offer
+# (exakit_maybe_offer_data_load, reached through the persona flow above): a
+# user's own tables come back before the kit's demo data, not after the whole
+# install. This call is the safety net for a run that skipped that point
+# altogether, and is a no-op once the restore has happened.
 if command -v legacy_crossing_after >/dev/null 2>&1; then legacy_crossing_after; fi
 
 exakit_finish
+# A PERSONA INSTALL CLOSES ON ITS PANEL. The personas' own add-ons are part of
+# what was asked for, so they are offered first, and the connection panel and
+# the ready line are what the reader is left with. Without a persona the
+# marketplace stays the optional extra it always was, after the panel.
+# Never in an update-started rerun, which asks and installs nothing new.
+if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && \
+   ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
+    # exakit_finish released the install lock, and the personas' add-ons install
+    # after it - minutes, for a UDF container. Held again through them: without
+    # it a second setup run started meanwhile ran beside this one, and the one
+    # interrupted left "did not finish at step" on a kit that was fine.
+    exakit_acquire_lock
+    exakit_autostart_default_on || true
+    ( exakit_marketplace_offer ) || true
+    _exakit_marketplace_cli installer_flow --phase services --cli "$EXAKIT_BIN_DIR/exakit" || true
+    command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
+    exakit_release_lock
+fi
+# How to give the notebooks a model and Langfuse, before the panel the reader keeps.
+command -v exakit_model_setup_hint >/dev/null 2>&1 && exakit_model_setup_hint
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the
 # trap is already released and every reader inside degrades to silence.
@@ -174,17 +225,19 @@ exakit_print_ready_line
 # took it away. Only ever applied when the manifest has no opinion yet, so
 # `exakit autostart off` survives a re-run of the installer. This runs BEFORE
 # the marketplace offer so an add-on installed from it joins the boot set.
-exakit_autostart_default_on || true
-# Not asked again by an installer an update started to finish new setup: the
-# first install already made that offer.
-if ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
-    ( exakit_marketplace_offer ) || true
+if [ -z "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+    exakit_autostart_default_on || true
+    # Not asked again by an installer an update started to finish new setup: the
+    # first install already made that offer.
+    if ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
+        ( exakit_marketplace_offer ) || true
+    fi
 fi
 # A rule, then a heading: the last line on screen is where the reader is left,
 # and run together with whatever the marketplace printed it read as one more of
 # its bullets. The rule gives it air; the green arrow says it is not a step.
 ui_rule
-heading "Run \"exakit help\" for support"
+exakit_closing_hint
 # Two blank lines before the shell prompt returns. The installer's last line was
 # landing directly against it, so the prompt read as part of the output.
 printf '\n\n'

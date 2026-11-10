@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "id": "data-scientist",
+  "title": "Data Scientist",
+  "summary": "Explore data in notebooks, ask it questions, share dashboards.",
+  "picker": true,
+  "visible": true,
+  "order": 10,
+  "datasets": ["amazon_sales", "fraud_transactions"],
+  "mcp_clients": "all",
+  "addons": ["dash-server", "notebook"],
+  "addon_reasons": {"dash-server": "Share what you find as a live dashboard others open in a browser", "notebook": "The Data Scientist notebooks, already connected to your data"}
+}

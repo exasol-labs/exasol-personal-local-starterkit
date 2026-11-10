@@ -1,0 +1,26 @@
+# The kit's Rust smoke UDF (design 5, AC-ML1.5): one scalar UDF, EXAKIT_SMOKE,
+# that reports the container it runs in, the rustc it was compiled with and the
+# exasol-udf-sdk it links, as a JSON string. Built ONLY by CI
+# (.github/workflows/rust-smoke.yml) inside docker.io/library/rust:1.98.1-trixie
+# for x86_64 and aarch64, with cargo-exasol-udf 0.33.0; the .so is a kit
+# release asset whose url, sha256 and size are pinned in versions.json
+# (components.udf-devkit.containers, the Rust rows' smoke_asset). The pins
+# below are the RUST container's (language-container-rs v0.33.0 = exasol-udf-sdk
+# 0.33.0, rustc 1.98.1): the database checks the ABI fingerprint
+# SDK_VERSION:RUSTC_VERSION at load and refuses any other (F-UDF-CL-RUST-9001).
+[package]
+name = "exakit_smoke"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "exakit udf-devkit: the Rust smoke UDF that proves the RUST container"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+exasol-udf-sdk = { version = "=0.33.0", features = [] }
+exasol-udf-macros = { version = "=0.33.0" }
+
+[profile.release]
+strip = true

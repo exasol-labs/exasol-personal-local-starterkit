@@ -19,7 +19,7 @@
     {
       "step": "Connect and query",
       "run": "python -c \"import pyexasol\"",
-      "note": "The kit's database uses a self-signed certificate, so pass websocket_sslopt={'cert_reqs': 0}."
+      "note": "The kit's database uses a self-signed certificate that the kit pins: connect with the dsn host/<fingerprint>:port, the fingerprint being runtime.tls_fingerprint in ~/.exasol-starter-kit/manifest.json (exakit tls-pin shows it), and websocket_sslopt={'cert_reqs': 0}. pyexasol then refuses any other certificate."
     },
     {
       "step": "Repair it if missing",
@@ -39,9 +39,9 @@
   ],
   "snippets": [
     {
-      "title": "Connect and run a query",
+      "title": "Connect (pinned to the database's certificate) and run a query",
       "language": "python",
-      "code": "import pathlib, pyexasol\\npw = (pathlib.Path.home() / '.exasol-starter-kit/credentials/personal_sys_password').read_text().strip()\\nc = pyexasol.connect(dsn='127.0.0.1:8563', user='sys', password=pw,\\n                     websocket_sslopt={'cert_reqs': 0})\\nprint(c.execute('SELECT CURRENT_TIMESTAMP').fetchval())"
+      "code": "import json, pathlib, pyexasol\\nkit = pathlib.Path.home() / '.exasol-starter-kit'\\nruntime = json.loads((kit / 'manifest.json').read_text())['runtime']\\nhost, port = runtime['dsn'].rsplit(':', 1)\\nfp = runtime.get('tls_fingerprint')   # the kit's TLS pin: exakit tls-pin\\ndsn = f'{host}/{fp}:{port}' if fp else runtime['dsn']   # 127.0.0.1/<fingerprint>:8563\\npw = (kit / 'credentials/personal_sys_password').read_text().strip()\\nc = pyexasol.connect(dsn=dsn, user='sys', password=pw,\\n                     websocket_sslopt={'cert_reqs': 0})\\nprint(c.execute('SELECT CURRENT_TIMESTAMP').fetchval())"
     }
   ],
   "notes": [
@@ -55,7 +55,11 @@
     },
     {
       "symptom": "Certificate verify failed",
-      "remedy": "The local database uses a self-signed certificate. Pass websocket_sslopt={'cert_reqs': 0}."
+      "remedy": "The local database uses a self-signed certificate. Pass websocket_sslopt={'cert_reqs': 0}, and pin it with the dsn host/<fingerprint>:port (see the snippet)."
+    },
+    {
+      "symptom": "Provided fingerprint [...] did not match server fingerprint",
+      "remedy": "The certificate on the database port is not the one the kit pinned: the database was redeployed outside the kit, or another process answers on the port. Compare with: exakit tls-pin. Re-pin with exakit tls-pin --accept only if it is your own database."
     }
   ],
   "see_also": [

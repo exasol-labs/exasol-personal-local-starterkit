@@ -23,6 +23,8 @@
 #
 # Options (environment variables):
 #   $env:EXAKIT_DRY_RUN = "1"   show the plan, install nothing
+#   $env:EXAKIT_DRY_RUN_KEEP = "1"  with EXAKIT_DRY_RUN, keep the unpacked kit
+#                               in %TEMP% for reading (removed otherwise)
 #   $env:EXAKIT_PREFLIGHT = "1" check this machine's requirements, install nothing
 #   $env:EXAKIT_REPO    = "..." override the source repo (owner/name)
 #   $env:EXAKIT_REF     = "..." override the git ref to install from
@@ -132,6 +134,65 @@ function Get-ExakitInstallHomeBase {
         if (Test-Path (Join-Path $HOME ".exasol-starter-kit\manifest.json")) { return $HOME }
     } catch { }
     return $base
+}
+# The settings file, ~/.exasol-starter-kit/exakit.env (the kit's setup/exakit.env is its
+# template): read before anything else, so a value kept there answers this install too.
+# A copy of setup/lib/envfile.ps1's functions - this script runs before the kit is here;
+# tests/env-file-ps.ps1 keeps the two the same.
+# Get-ExakitEnvFilePath - where the settings file is: EXAKIT_ENV_FILE, else exakit.env in
+# the kit's home (EXAKIT_HOME, else .exasol-starter-kit in the user's profile).
+function Get-ExakitEnvFilePath {
+    if ($env:EXAKIT_ENV_FILE) { return $env:EXAKIT_ENV_FILE }
+    $homeDir = $env:EXAKIT_HOME
+    if (-not $homeDir) {
+        $base = $env:USERPROFILE
+        if (-not $base) { $base = $HOME }
+        $homeDir = Join-Path $base ".exasol-starter-kit"
+    }
+    return (Join-Path $homeDir "exakit.env")
+}
+
+# Import-ExakitEnvFile - set each NAME=value of the settings file that the environment
+# does not already have: a command line still wins over the file. Nothing in it is run.
+# Only EXAKIT_* names and EXASOL_TELEMETRY_DISABLE are taken; a secret's name (PASSWORD,
+# API_KEY, TOKEN, SECRET) and EXAKIT_HOME / EXAKIT_ENV_FILE are refused and named in
+# $script:ExakitEnvFileRefused. A value may be quoted; unquoted, " #" starts a comment.
+function Import-ExakitEnvFile {
+    $script:ExakitEnvFileRefused = @()
+    $path = Get-ExakitEnvFilePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    try { $lines = [System.IO.File]::ReadAllLines($path) } catch { return }
+    foreach ($raw in $lines) {
+        $line = $raw.Trim()
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        if ($line.StartsWith('export ')) { $line = $line.Substring(7).TrimStart() }
+        $eq = $line.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $name = $line.Substring(0, $eq).Trim()
+        $value = $line.Substring($eq + 1).Trim()
+        if ($name -cnotmatch '^[A-Z0-9_]+$') { continue }
+        if ($name -cnotmatch '^EXAKIT_' -and $name -cne 'EXASOL_TELEMETRY_DISABLE') { continue }
+        if ($name -ceq 'EXAKIT_HOME' -or $name -ceq 'EXAKIT_ENV_FILE' -or $name -cmatch 'PASSWORD|API_KEY|TOKEN|SECRET') {
+            $script:ExakitEnvFileRefused += $name
+            continue
+        }
+        if ($value -match '^"([^"]*)"') { $value = $Matches[1] }
+        elseif ($value -match "^'([^']*)'") { $value = $Matches[1] }
+        else {
+            $hash = $value.IndexOf(' #')
+            $tab = $value.IndexOf("`t#")
+            if ($tab -ge 0 -and ($hash -lt 0 -or $tab -lt $hash)) { $hash = $tab }
+            if ($hash -ge 0) { $value = $value.Substring(0, $hash) }
+            $value = $value.TrimEnd()
+        }
+        if ($null -ne [Environment]::GetEnvironmentVariable($name)) { continue }
+        [Environment]::SetEnvironmentVariable($name, $value)
+    }
+}
+
+Import-ExakitEnvFile
+if (@($script:ExakitEnvFileRefused).Count -gt 0) {
+    [Console]::Error.WriteLine("  ! $(Get-ExakitEnvFilePath) ignores $(@($script:ExakitEnvFileRefused) -join ' '): a secret, or where the file itself lives, stays in the environment")
 }
 $ExakitHome = if ($env:EXAKIT_HOME) { $env:EXAKIT_HOME } else { Join-Path (Get-ExakitInstallHomeBase) ".exasol-starter-kit" }
 $env:EXAKIT_HOME = $ExakitHome
@@ -364,8 +425,9 @@ if ($env:EXAKIT_PREFLIGHT -eq "1") {
 foreach ($check in $RequirementChecks) {
     if ($check.State -ne "bad") { continue }
     if ($env:EXAKIT_DRY_RUN -eq "1") {
-        # A dry run's whole job is to show what WOULD happen and to leave the
-        # scripts on disk to read. Refusing it would take away the one way to
+        # A dry run's whole job is to show what WOULD happen (and, with
+        # EXAKIT_DRY_RUN_KEEP=1, to leave the scripts on disk to read).
+        # Refusing it would take away the one way to
         # inspect the kit on a machine that cannot run it, so the finding is
         # reported and the run carries on to the plan.
         Write-InstallLine "  ! $($check.Text)" Yellow
@@ -426,6 +488,13 @@ if ($env:HTTPS_PROXY) {
     $webArgs["Proxy"] = $env:HTTPS_PROXY
     $webArgs["ProxyUseDefaultCredentials"] = $true
 }
+# GITHUB_TOKEN is SENT, as the failure text below and install.sh promise (audit
+# SEC-06): it was named as the remedy for a private repository and never used.
+# Only github.com is asked here; the archive redirect to codeload carries its
+# own token in the URL, and no Authorization header follows a redirect.
+if ($env:GITHUB_TOKEN) {
+    $webArgs["Headers"] = @{ Authorization = "Bearer $($env:GITHUB_TOKEN)" }
+}
 $fetched = $false
 $proxyDenied = $false
 foreach ($url in $(if ($LocalKit) { @() } else { $urls })) {
@@ -459,125 +528,170 @@ if (-not $fetched -and -not $LocalKit) {
 # Move-Item cannot rename a directory across volumes, and a redirected TEMP or
 # a small system SSD puts %TEMP% on another drive often enough that staging
 # there would have traded one failure mode for another.
-New-Item -ItemType Directory -Force -Path $StageBase | Out-Null
-$incoming  = Join-Path $StageBase "kit.incoming-$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
-$kitBackup = Join-Path $StageBase "kit.previous-$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+# A dry run's staging folder goes with the run, however it ends: the plan
+# below returns, a throw lands in the trap above, Ctrl+C stops the script -
+# each of them runs this finally. It used to be left in %TEMP% every time.
+# EXAKIT_DRY_RUN_KEEP=1 keeps it for reading. Twin of the EXIT trap in
+# install.sh.
+$keepDryRun = $false
 try {
+    New-Item -ItemType Directory -Force -Path $StageBase | Out-Null
+    $incoming  = Join-Path $StageBase "kit.incoming-$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $kitBackup = Join-Path $StageBase "kit.previous-$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
     try {
-        if ($LocalKit) {
-            # Copied into a subdirectory so $inner below resolves the same way
-            # it does for an archive, which unpacks into one top-level folder.
-            $localDest = Join-Path $incoming "kit"
-            New-Item -ItemType Directory -Force -Path $localDest | Out-Null
-            Copy-Item -Path (Join-Path $LocalKit "*") -Destination $localDest -Recurse -Force
-            # .git is the checkout's, not the kit's, and it is large.
-            Remove-Item -Recurse -Force (Join-Path $localDest ".git") -ErrorAction SilentlyContinue
-        } else {
-            Expand-Archive -Path $tmpZip -DestinationPath $incoming
-        }
-    } catch {
-        if ($LocalKit) {
-            throw "Could not copy the local kit checkout from ${LocalKit}: $_"
-        }
-        throw "The downloaded kit archive could not be extracted (a partial or corrupt download). Re-run to download it again."
-    }
-    $inner = Get-ChildItem $incoming | Select-Object -First 1
-    if (-not $inner) { throw "The downloaded kit archive was empty or malformed. Re-run to download it again." }
-
-    # Sentinels: three files every later step reads - the exakit command itself,
-    # the shared library every script dot-sources, and the versions manifest
-    # that is the kit's offline version tier. Checked BEFORE the working copy is
-    # touched, so an archive that unpacked into something unusable is a no-op
-    # instead of a broken install.
-    foreach ($sentinel in @("setup\exakit.ps1", "setup\lib\exakit-common.ps1", "versions.json")) {
-        if (-not (Test-Path (Join-Path $inner.FullName $sentinel))) {
+        try {
             if ($LocalKit) {
-                throw "The local kit checkout is incomplete ($sentinel is missing from $LocalKit), so it was not installed and your existing kit is untouched."
+                # Copied into a subdirectory so $inner below resolves the same way
+                # it does for an archive, which unpacks into one top-level folder.
+                $localDest = Join-Path $incoming "kit"
+                New-Item -ItemType Directory -Force -Path $localDest | Out-Null
+                # What the checkout would ship, not the checkout: .git, the
+                # .claude worktrees (whole other checkouts) and the caches beside
+                # the kit made a copy of ~500 MB for a kit of ~65 MB, on every
+                # dry run. Skipped at the top level, where they live. Twin of
+                # _copy_local_kit in install.sh.
+                $skip = @(".git", ".claude", ".venv", "node_modules", "__pycache__",
+                    ".ruff_cache", ".pytest_cache", ".mypy_cache", "dist", "build")
+                Get-ChildItem -LiteralPath $LocalKit -Force |
+                    Where-Object { $skip -notcontains $_.Name } |
+                    ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $localDest -Recurse -Force }
+            } else {
+                Expand-Archive -Path $tmpZip -DestinationPath $incoming
             }
-            throw "The downloaded kit is incomplete ($sentinel is missing), so it was not installed and your existing kit is untouched. Re-run to download it again."
+        } catch {
+            if ($LocalKit) {
+                throw "Could not copy the local kit checkout from ${LocalKit}: $_"
+            }
+            throw "The downloaded kit archive could not be extracted (a partial or corrupt download). Re-run to download it again."
         }
+        $inner = Get-ChildItem $incoming | Select-Object -First 1
+        if (-not $inner) { throw "The downloaded kit archive was empty or malformed. Re-run to download it again." }
+
+        # Sentinels: three files every later step reads - the exakit command itself,
+        # the shared library every script dot-sources, and the versions manifest
+        # that is the kit's offline version tier. Checked BEFORE the working copy is
+        # touched, so an archive that unpacked into something unusable is a no-op
+        # instead of a broken install.
+        foreach ($sentinel in @("setup\exakit.ps1", "setup\lib\exakit-common.ps1", "versions.json")) {
+            if (-not (Test-Path (Join-Path $inner.FullName $sentinel))) {
+                if ($LocalKit) {
+                    throw "The local kit checkout is incomplete ($sentinel is missing from $LocalKit), so it was not installed and your existing kit is untouched."
+                }
+                throw "The downloaded kit is incomplete ($sentinel is missing), so it was not installed and your existing kit is untouched. Re-run to download it again."
+            }
+        }
+
+        $InstallPhase = "install"
+        $movedAside = $false
+        if (Test-Path $KitDir) {
+            Move-Item -LiteralPath $KitDir -Destination $kitBackup
+            $movedAside = $true
+        }
+        try {
+            Move-Item -LiteralPath $inner.FullName -Destination $KitDir
+        } catch {
+            # Put the working kit back before saying anything: the message the user
+            # reads has to be true about the state of their machine, and the one
+            # thing they will try next is the `exakit` command.
+            $swapError = $_.Exception.Message
+            $restoreNote = "there was no previous kit to put back"
+            if ($movedAside) {
+                $restoreNote = "your previous kit could NOT be put back and is now in $kitBackup - rename that directory to $KitDir by hand to get the exakit command working again"
+                try {
+                    if (Test-Path $KitDir) { Remove-Item -Recurse -Force $KitDir -ErrorAction SilentlyContinue }
+                    Move-Item -LiteralPath $kitBackup -Destination $KitDir
+                    $restoreNote = "your previous kit was put back, so the exakit command still works"
+                } catch { }
+            }
+            throw "The new kit could not be moved into place ($swapError); $restoreNote. Re-run to try again."
+        }
+        if ($movedAside) { Remove-Item -Recurse -Force $kitBackup -ErrorAction SilentlyContinue }
+    } finally {
+        # Best-effort tidy-up of this run's scratch space. A failure above has
+        # already said what went wrong; a leftover temp file must not add to it.
+        Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
+        if (Test-Path $incoming) { Remove-Item -Recurse -Force $incoming -ErrorAction SilentlyContinue }
     }
 
-    $InstallPhase = "install"
-    $movedAside = $false
-    if (Test-Path $KitDir) {
-        Move-Item -LiteralPath $KitDir -Destination $kitBackup
-        $movedAside = $true
+    # --- 3. show the plan -----------------------------------------------------------
+    $InstallPhase = "plan"
+    $ramGb = Get-ExakitTotalRamGb
+    # "RAM unknown" rather than a crash or a bare "-1 GB": the requirements gate
+    # above already decided an unreadable value is not a reason to stop.
+    $ramText = if ($ramGb -ge 0) { "$ramGb GB RAM" } else { "RAM unknown" }
+    # Banner + plan via the kit's shared visual layer (setup\lib\ui.ps1) so the
+    # EXASOL wordmark and palette match the rest of the install exactly. Available
+    # now that the kit is downloaded; plain fallback if the lib is missing.
+    $uiLib = Join-Path $KitDir "setup\lib\ui.ps1"
+    $uiLoaded = $false
+    if (Test-Path $uiLib) {
+        # Load the visual layer WITHOUT dot-sourcing the file. A .ps1 file is
+        # subject to the execution policy (Restricted - the Windows default -
+        # blocks it), but a scriptblock built from the file's text is not: the
+        # same exemption install.ps1 itself runs under via `irm | iex`. Guarded so
+        # any failure just falls back to the plain plan below.
+        #
+        # Read as explicit UTF-8, NOT Get-Content -Raw: ui.ps1 carries the EXASOL
+        # wordmark as multi-byte block glyphs, and on Windows PowerShell 5.1
+        # Get-Content -Raw decodes a BOM-less copy (as a download/extract can leave
+        # it) using the ANSI codepage, corrupting those bytes into a scriptblock
+        # that fails to parse - the silent plain-text fallback seen in the field.
+        # ReadAllText with a UTF-8 encoding decodes correctly with or without a BOM.
+        # The plan render lives inside the try too, so a render-time failure also
+        # falls back cleanly instead of surfacing a raw error before install.
+        try {
+            $uiText = [System.IO.File]::ReadAllText($uiLib, [System.Text.Encoding]::UTF8)
+            . ([scriptblock]::Create($uiText))
+            Write-ExakitInstallPlan `
+                -Platform "windows ($env:PROCESSOR_ARCHITECTURE, $ramText)" `
+                -Database "Exasol Personal (local deployment via Podman)" `
+                -KitDir $KitDir -StateDir $ExakitHome
+            $uiLoaded = $true
+        } catch { $uiLoaded = $false }
     }
-    try {
-        Move-Item -LiteralPath $inner.FullName -Destination $KitDir
-    } catch {
-        # Put the working kit back before saying anything: the message the user
-        # reads has to be true about the state of their machine, and the one
-        # thing they will try next is the `exakit` command.
-        $swapError = $_.Exception.Message
-        $restoreNote = "there was no previous kit to put back"
-        if ($movedAside) {
-            $restoreNote = "your previous kit could NOT be put back and is now in $kitBackup - rename that directory to $KitDir by hand to get the exakit command working again"
-            try {
-                if (Test-Path $KitDir) { Remove-Item -Recurse -Force $KitDir -ErrorAction SilentlyContinue }
-                Move-Item -LiteralPath $kitBackup -Destination $KitDir
-                $restoreNote = "your previous kit was put back, so the exakit command still works"
-            } catch { }
+    if (-not $uiLoaded) {
+        Write-Host ""
+        Write-Host "  Personal Local Starter Kit"
+        Write-Host ""
+    }
+
+    # A persona is a file in the kit. An unknown one is refused here, before
+    # anything is installed - and a dry run says so too, since it never reaches
+    # the setup script that applies it. Twin of the check in install.sh.
+    if ($env:EXAKIT_PERSONA) {
+        # Several personas are joined by commas (general,ml-engineer): each one is a file, checked the same way.
+        # An id is lowercase letters, digits, - and _ (the persona service's rule): a path, a wildcard or another
+        # case never reaches a file test that NTFS would wave through.
+        $known = @(Get-ChildItem -LiteralPath (Join-Path $KitDir "personas") -Filter "*.json" -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.BaseName } | Where-Object { $_ -cmatch '^[a-z0-9][a-z0-9_-]*$' }) -join " "
+        $personaIds = @()
+        foreach ($personaId in ($env:EXAKIT_PERSONA -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            $personaFile = Join-Path (Join-Path $KitDir "personas") "$personaId.json"
+            if (-not ($personaId -cmatch '^[a-z0-9][a-z0-9_-]*$') -or -not (Test-Path -LiteralPath $personaFile)) {
+                throw "Unknown persona '$personaId' (available: $known). Nothing was installed."
+            }
+            $personaIds += $personaId
         }
-        throw "The new kit could not be moved into place ($swapError); $restoreNote. Re-run to try again."
+        if ($personaIds.Count -eq 0) { throw "EXAKIT_PERSONA names no persona (available: $known). Nothing was installed." }
+        Write-InstallLine "  * Persona: $($personaIds -join ',') - it answers every choice you did not set yourself." Blue
     }
-    if ($movedAside) { Remove-Item -Recurse -Force $kitBackup -ErrorAction SilentlyContinue }
+
+    if ($env:EXAKIT_DRY_RUN -eq "1") {
+        Write-InstallLine "  * Dry run requested (EXAKIT_DRY_RUN=1) - nothing was installed, and nothing under $ExakitHome was changed." Blue
+        if ($env:EXAKIT_DRY_RUN_KEEP -eq "1") {
+            $keepDryRun = $true
+            Write-Host "    The kit is kept for inspection in a temporary folder (EXAKIT_DRY_RUN_KEEP=1); delete it when done: $KitDir"
+        } else {
+            Write-Host "    The kit was unpacked to a temporary folder for the plan and has been removed. To keep it for reading, set EXAKIT_DRY_RUN_KEEP=1."
+        }
+        Write-Host "    To install, run the same command again without EXAKIT_DRY_RUN."
+        Write-Host ""
+        return
+    }
 } finally {
-    # Best-effort tidy-up of this run's scratch space. A failure above has
-    # already said what went wrong; a leftover temp file must not add to it.
-    Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-    if (Test-Path $incoming) { Remove-Item -Recurse -Force $incoming -ErrorAction SilentlyContinue }
-}
-
-# --- 3. show the plan -----------------------------------------------------------
-$InstallPhase = "plan"
-$ramGb = Get-ExakitTotalRamGb
-# "RAM unknown" rather than a crash or a bare "-1 GB": the requirements gate
-# above already decided an unreadable value is not a reason to stop.
-$ramText = if ($ramGb -ge 0) { "$ramGb GB RAM" } else { "RAM unknown" }
-# Banner + plan via the kit's shared visual layer (setup\lib\ui.ps1) so the
-# EXASOL wordmark and palette match the rest of the install exactly. Available
-# now that the kit is downloaded; plain fallback if the lib is missing.
-$uiLib = Join-Path $KitDir "setup\lib\ui.ps1"
-$uiLoaded = $false
-if (Test-Path $uiLib) {
-    # Load the visual layer WITHOUT dot-sourcing the file. A .ps1 file is
-    # subject to the execution policy (Restricted - the Windows default -
-    # blocks it), but a scriptblock built from the file's text is not: the
-    # same exemption install.ps1 itself runs under via `irm | iex`. Guarded so
-    # any failure just falls back to the plain plan below.
-    #
-    # Read as explicit UTF-8, NOT Get-Content -Raw: ui.ps1 carries the EXASOL
-    # wordmark as multi-byte block glyphs, and on Windows PowerShell 5.1
-    # Get-Content -Raw decodes a BOM-less copy (as a download/extract can leave
-    # it) using the ANSI codepage, corrupting those bytes into a scriptblock
-    # that fails to parse - the silent plain-text fallback seen in the field.
-    # ReadAllText with a UTF-8 encoding decodes correctly with or without a BOM.
-    # The plan render lives inside the try too, so a render-time failure also
-    # falls back cleanly instead of surfacing a raw error before install.
-    try {
-        $uiText = [System.IO.File]::ReadAllText($uiLib, [System.Text.Encoding]::UTF8)
-        . ([scriptblock]::Create($uiText))
-        Write-ExakitInstallPlan `
-            -Platform "windows ($env:PROCESSOR_ARCHITECTURE, $ramText)" `
-            -Database "Exasol Personal (local deployment via Podman)" `
-            -KitDir $KitDir -StateDir $ExakitHome
-        $uiLoaded = $true
-    } catch { $uiLoaded = $false }
-}
-if (-not $uiLoaded) {
-    Write-Host ""
-    Write-Host "  Personal Local Starter Kit"
-    Write-Host ""
-}
-
-if ($env:EXAKIT_DRY_RUN -eq "1") {
-    Write-InstallLine "  * Dry run requested (EXAKIT_DRY_RUN=1) - nothing was installed, and nothing under $ExakitHome was changed." Blue
-    Write-Host "    The kit is unpacked for inspection in a temporary folder: $KitDir"
-    Write-Host "    To install, run the same command again without EXAKIT_DRY_RUN."
-    Write-Host ""
-    return
+    if ($env:EXAKIT_DRY_RUN -eq "1" -and -not $keepDryRun) {
+        Remove-Item -Recurse -Force -LiteralPath $StageBase -ErrorAction SilentlyContinue
+    }
 }
 
 # --- 4. hand off -----------------------------------------------------------------

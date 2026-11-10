@@ -37,9 +37,15 @@
 #                       for a machine that skipped the offer at install time or
 #                       never got it; the kit's own sample data is left out and
 #                       the container is never removed
+#   tls-pin [--accept [--yes]] [--json]
+#                       the database's pinned TLS certificate against the one
+#                       its port serves now; --accept records the live one
+#                       after a confirmation (a redeploy made outside the kit),
+#                       --yes answers it for a script, and the clients that
+#                       hold the pin are rewritten
 #   autostart           whether everything comes back after a restart; shows
 #                       the current state and asks whether to change it
-#   data-load [--force|<path>]
+#   data-load [--force|<path>|<dataset>]
 #                       open focused data loading options; a file path loads that
 #                       file, a FOLDER path bulk-loads every CSV/Parquet/JSON file
 #                       in it (one table each); --force REPLACES bundled datasets
@@ -62,6 +68,24 @@
 #   marketplace         browse optional add-ons (dash-server, ...) and install
 #                       the ones you select; installed add-ons then update
 #                       through `exakit update` like every other component
+#   persona             list | show <id> | plan [<id>] | add <id>: a named set of
+#                       datasets, AI clients and add-ons (data-scientist, ...);
+#                       add joins the ones this kit has and brings theirs in
+#   notebook            open JupyterLab connected to the database (the notebook
+#                       add-on); --check, --setup, --stop, --no-browser, --port N
+#   workflow            list | show <id> [--json]: the workflow logs the notebook
+#                       helpers write, one JSON line per step (X-1)
+#   mlflow              start | stop | status | url | replay: local model run server
+#   describe <table>    profile SCHEMA.TABLE and draft its descriptor, or approve
+#                       one: --sample N, --id, --json, --write, --approve, --versions
+#   udf-setup           Python (or --language rust) UDFs: install the container
+#   udf-use             install a container: default, or a tarball; --list, --json
+#   udf-build           build a container from a pinned requirements.txt
+#   rust-udf            new | build | deploy a Rust UDF against the pinned container
+#   udf-file            copy a file into BucketFS; prints the path a UDF reads
+#   model put <file> [--replace] [--json] | list [--json] | template [--json]
+#                       model files in the bucket directory, digests recorded;
+#                       put prints the /buckets path the scoring UDF opens
 #   upgrade-kit2        add the Kit 2 trust assets (Trusted AI Workflow add-on)
 #                       on top of this install; nothing is reinstalled
 #   rollback-kit2       remove exactly what upgrade-kit2 added; the database and
@@ -149,9 +173,26 @@ else
     exit 4
 fi
 
+# Module discovery runs while the libraries load. Mark read-only commands
+# before that work so an absent Python cannot trigger the uv bootstrap.
+case "${1:-help}" in
+    status|version|--version|-v|info|mcp-status|mcp-doctor|skills|catalog|logs|help|--help|-h|whats-new)
+        export EXAKIT_READONLY_QUERY=1 ;;
+    # The read-only actions of commands that also write (audit AGT-01, AGT-03): a
+    # persona's plan, list and show, and the marketplace's help and listing.
+    persona)
+        case "${2:-}" in plan|list|show|--help|-h) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
+    # Showing the TLS pin reads; only --accept records one.
+    tls-pin)
+        case " $* " in *" --accept "*) ;; *) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
+    marketplace)
+        case " $* " in *" --help "*|*" -h "*|*" --list "*) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
+esac
+
 . "$_lib_dir/common.sh"
 . "$_lib_dir/detect.sh"
 . "$_lib_dir/runtime-personal.sh"
+command -v exakit_env_file_note >/dev/null 2>&1 && exakit_env_file_note
 [ -f "$_lib_dir/help.sh" ] && . "$_lib_dir/help.sh"
 [ -f "$_lib_dir/exapump.sh" ] && . "$_lib_dir/exapump.sh"
 # The crossing module: `exakit migrate docker-nano` is its after-the-install
@@ -163,14 +204,26 @@ fi
 [ -f "$_lib_dir/pyexasol.sh" ] && . "$_lib_dir/pyexasol.sh"
 [ -f "$_lib_dir/core-setup.sh" ] && . "$_lib_dir/core-setup.sh"
 [ -f "$_lib_dir/virtual-schemas.sh" ] && . "$_lib_dir/virtual-schemas.sh"
-# Marketplace add-on modules: the CLI is where they are installed (exakit
-# marketplace) and updated (exakit update <addon>), so it loads every module
-# it ships. A missing file only makes the marketplace row unavailable.
-[ -f "$_lib_dir/dash-server.sh" ] && . "$_lib_dir/dash-server.sh"
-[ -f "$_lib_dir/dbt-exasol.sh" ] && . "$_lib_dir/dbt-exasol.sh"
-[ -f "$_lib_dir/exasol-vscode.sh" ] && . "$_lib_dir/exasol-vscode.sh"
-[ -f "$_lib_dir/json-tables.sh" ] && . "$_lib_dir/json-tables.sh"
-[ -f "$_lib_dir/exasol-scheduler.sh" ] && . "$_lib_dir/exasol-scheduler.sh"
+[ -f "$_lib_dir/persona.sh" ] && . "$_lib_dir/persona.sh"
+# Load add-on hooks from the Python catalog. The fallback Notebook child rows
+# use the small metadata adapter in common.sh.
+[ -f "$_lib_dir/describe.sh" ] && . "$_lib_dir/describe.sh"
+EXAKIT_MARKETPLACE_PYTHON_HOOKS=1
+_exakit_marketplace_load_modules
+unset EXAKIT_MARKETPLACE_PYTHON_HOOKS
+EXAKIT_MARKETPLACE_PYTHON_APPLY=1
+export EXAKIT_MARKETPLACE_PYTHON_APPLY
+
+# Scratch files a command made in TMPDIR (exakit_track_tmp) go with it, however
+# it ends: return, die(), or Ctrl+C - bash runs the EXIT trap on a fatal signal
+# too. ui_table_abort first, because it is what ui.sh traps EXIT with when
+# nothing else has, and a table must stop drawing before its state file goes.
+# A command that turns on the installer's failure handling replaces this with
+# exakit_on_failure, which sweeps as well.
+trap 'command -v ui_table_abort >/dev/null 2>&1 && ui_table_abort; exakit_sweep_tmp' EXIT
+# The add-ons' read-only answers are remembered for this run (_EXAKIT_HOOK_MEMO):
+# one screen asks each of them many times, and every answer is a Python start.
+_exakit_hook_memo_begin 2>/dev/null || true
 
 _runtime_type() {
     manifest_get runtime.type 2>/dev/null
@@ -353,6 +406,22 @@ cmd_status() {
     if [ "$_cs_json" -eq 0 ]; then ui_spin_end; fi
     _cs_running=0
     case "$_cs_db" in running*) _cs_running=1 ;; esac
+    # A FIRST BOOT THE LAUNCHER GAVE UP ON reads as "stopped" - its port is
+    # silent - and "stopped" alone sends the reader to `exakit start` with no
+    # word of why it failed. The status word stays (it is pinned everywhere);
+    # the reason rides beside it: the launcher's own record, and the
+    # container's error when podman kept one. Asked only for a stopped personal
+    # deployment, so a running database costs nothing extra.
+    _cs_failed=""
+    if [ "$_type" = "personal" ] && [ "$_cs_db" = "stopped" ]; then
+        if [ "$_cs_json" -eq 0 ]; then ui_spin_begin "Asking the launcher why it is stopped"; fi
+        if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
+            _cs_failed="the launcher records this deployment as failed (it never finished starting)"
+            _cs_cerr="$(personal_container_error 2>/dev/null || true)"
+            [ -n "$_cs_cerr" ] && _cs_failed="$_cs_failed; the database container could not start: $(_personal_short "$_cs_cerr")"
+        fi
+        if [ "$_cs_json" -eq 0 ]; then ui_spin_end; fi
+    fi
     # WHICH ENGINE, AND WHETHER IT IS UP. runtime.engine was readable from the
     # manifest file alone, and a Docker deployment whose daemon was down after
     # a reboot read as plain "stopped" with "exakit start" as its remedy -
@@ -424,6 +493,17 @@ cmd_status() {
     _cs_legacy_choice="$(manifest_get legacy.choice 2>/dev/null || true)"
     _cs_legacy_restored="$(manifest_get legacy.restored 2>/dev/null || true)"
     _cs_legacy_sample="$(manifest_get legacy.sample_left_out 2>/dev/null || true)"
+    # THE TLS PIN (SEC-14): the recorded certificate fingerprint against what
+    # the port serves now. Asked whatever the status word says - a certificate
+    # that no longer matches makes every pinned client refuse the database, so
+    # it is exactly when the database reads as unreachable that this is the
+    # reason. A refused port answers at once; nothing recorded asks nothing.
+    _cs_tls_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    _cs_tls_live=""
+    if [ -n "$_cs_tls_fp" ]; then
+        _cs_tls_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+        [ -n "$_cs_tls_dsn" ] && _cs_tls_live="$(exakit_tls_live_fingerprint "${_cs_tls_dsn%:*}" "${_cs_tls_dsn##*:}" 3 2>/dev/null || true)"
+    fi
 
     if [ "$_cs_json" -eq 1 ]; then
         # Composed in Python so every value is escaped properly; the service
@@ -468,17 +548,19 @@ cmd_status() {
         run_python_any - "$(manifest_get kit_level 2>/dev/null)" "${_type:-}" "$_cs_db"             "${_cs_autostart:-false}" "$_cs_datasets" "${_cs_pyx:-}" "$EXAKIT_MANIFEST"             "$(manifest_get steps_completed 2>/dev/null)" "$_cs_services" "$_cs_note" "$_cs_note_at" \
             "$_cs_installing" "$_cs_step" "$_cs_urls" "$(exakit_install_command)" \
             "$_cs_legacy_c" "$_cs_legacy_e" "$_cs_legacy_choice" "$_cs_legacy_restored" "$_cs_legacy_sample" \
-            "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" \
+            "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" "$_cs_failed" \
             "$_cs_skew" "$EXAKIT_CLOCK_SKEW_LIMIT" "$(exakit_clock_skew_words "${_cs_skew:-0}" 2>/dev/null)" \
-            "$_cs_uv" "$_cs_engine" "$_cs_engine_down" <<'EXAKIT_SJ_PY'
+            "$_cs_uv" "$_cs_tls_fp" "$_cs_tls_live" "$_cs_engine" "$_cs_engine_down" <<'EXAKIT_SJ_PY'
 import json, sys
 kit, rtype, db, autostart, datasets, pyx, manifest, steps, services, note, note_at, installing, step, urls, install_cmd = sys.argv[1:16]
 legacy_c, legacy_e, legacy_choice, legacy_restored, legacy_sample = (sys.argv[16:21] + [""] * 5)[:5]
 host_platform, wsl_version = (sys.argv[21:23] + [""] * 2)[:2]
-skew, skew_limit, skew_words = (sys.argv[23:26] + [""] * 3)[:3]
+failed_detail = (sys.argv[23:24] + [""])[0]
+skew, skew_limit, skew_words = (sys.argv[24:27] + [""] * 3)[:3]
 skew = int(skew) if skew.lstrip("-").isdigit() else None
-uv_report = (sys.argv[26:27] + [""])[0]
-engine, engine_down = (sys.argv[27:29] + [""] * 2)[:2]
+uv_report = (sys.argv[27:28] + [""])[0]
+tls_fp, tls_live = (sys.argv[28:30] + [""] * 2)[:2]
+engine, engine_down = (sys.argv[30:32] + [""] * 2)[:2]
 # The steps the installer booked as not finished, with their reason and repair
 # (exakit_record_soft_failure). The failure note that carried the reason is
 # consumed during the install, so this is where it survives.
@@ -610,6 +692,10 @@ if not running:
                                     "or the docker service), then run: exakit start" % engine_down)
     else:
         remedies["database"] = "exakit start"
+        # A deployment the launcher records as failed: the remedy stays the
+        # command that retries it, and the hint says why it is needed.
+        if failed_detail:
+            remedy_hints["database"] = failed_detail + " - exakit start retries the launcher's deploy"
         # `exakit start` WAS REFUSED FOR THE WSL KERNEL (personal_start's
         # network die, recorded as the failure note): handing it back as the
         # remedy is a loop - the same start meets the same kernel. The fix
@@ -636,6 +722,18 @@ if skew is not None and skew_limit.isdigit() and abs(skew) >= int(skew_limit):
     remedy_hints["clock"] = ("the database clock is %s this computer (a Mac that slept or hibernated leaves "
                              "it behind); remote sources' certificates and scheduled jobs go by it. A restart "
                              "resyncs it: run the remedy when nothing is running, then exakit start" % skew_words)
+# The TLS pin (SEC-14): pinned says a fingerprint is recorded, matches whether
+# the port serves that certificate now (null when nothing answers TLS, or no pin).
+# A mismatch is a redeploy outside the kit or another process on the port; the
+# remedy SHOWS both values and changes nothing - re-pinning is the user's call,
+# made with `exakit tls-pin --accept` after they have looked.
+tls = {"pinned": bool(tls_fp), "matches": (tls_live == tls_fp) if (tls_fp and tls_live) else None}
+if tls["matches"] is False:
+    remedies["tls"] = "exakit tls-pin"
+    remedy_hints["tls"] = ("the certificate on the database port is not the one the kit pinned - a database redeployed "
+                           "outside the kit, or another process answering on the port; every kit client refuses it. "
+                           "The remedy shows both fingerprints; re-pin with exakit tls-pin --accept only once the user "
+                           "has confirmed this is their own database")
 if installing:
     remedies["install"] = "exakit status --json"
     remedy_hints["install"] = "the installer is still running (step: %s) — poll the remedy until status is running" % (step or "unknown")
@@ -785,6 +883,7 @@ payload = {
     "steps_missing": steps_missing,
     "pyexasol": pyx or None,
     "uv": uv,
+    "tls": tls,
     "remedies": remedies,
     # Prose that explains a remedy, same keys: the remedy itself stays a
     # runnable command, per the AGENTS.md contract.
@@ -889,9 +988,24 @@ EXAKIT_SJ_PY
     ui_panel_line "$(_cs_pad 'Database' "$(manifest_get runtime.dsn 2>/dev/null || printf 'unknown')$(
         if [ "$_cs_running" -eq 1 ]; then printf ' · reachable'
         elif [ "$_cs_db" = "conflict" ]; then printf ' · port held by another process (not Exasol) — stop it, then: exakit start'
+        elif [ -n "$_cs_failed" ]; then printf ' · not reachable — %s' "$_cs_failed"
         else printf ' · not reachable'; fi)")"
     if exakit_clock_skewed "$_cs_skew" 2>/dev/null; then
         ui_panel_line "$(_cs_pad 'Clock' "$(exakit_clock_skew_words "$_cs_skew") this computer — restart: exakit stop, then exakit start")"
+    fi
+    # The TLS pin, only where it says something: pinned and matching is one
+    # word; a certificate that changed names both causes and the command that
+    # shows the two values. Nothing at all before a runtime exists.
+    if [ -n "$_cs_tls_fp" ]; then
+        if [ -z "$_cs_tls_live" ]; then
+            ui_panel_line "$(_cs_pad 'TLS' "pinned (SHA-256 ${_cs_tls_fp:0:16}...)")"
+        elif [ "$_cs_tls_live" = "$_cs_tls_fp" ]; then
+            ui_panel_line "$(_cs_pad 'TLS' "pinned · certificate matches")"
+        else
+            ui_panel_line "$(_cs_pad 'TLS' "certificate CHANGED — not the pinned one: a redeploy outside the kit, or another process on the port. Clients refuse it. Compare: exakit tls-pin")"
+        fi
+    elif [ "$_cs_running" -eq 1 ]; then
+        ui_panel_line "$(_cs_pad 'TLS' "not pinned — pin it with: exakit tls-pin --accept")"
     fi
     if [ "$_cs_installing" -eq 1 ]; then
         ui_panel_line "$(_cs_pad 'Install' "in progress · step: $_cs_step — poll: exakit status")"
@@ -1231,8 +1345,9 @@ cmd_start() {
     if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
         _exakit_log_file "INFO  start scoped to $EXAKIT_SERVICE_SCOPE"
         if [ "$EXAKIT_SERVICE_SCOPE" = "database" ]; then
-            _start_database
-            return $?
+            _start_database || return $?
+            exakit_tls_ensure_pinned
+            return 0
         fi
         # One add-on was asked for, so only that one is touched: the database
         # is NOT started on its behalf. An add-on talks to the database, and
@@ -1248,6 +1363,9 @@ cmd_start() {
     fi
     # Everything the kit runs, database first, then every add-on service.
     _start_database
+    # An install from before the TLS pin records it now, the database being up
+    # and the launcher's (SEC-14); a no-op once one is recorded.
+    exakit_tls_ensure_pinned
     for _start_id in $(exakit_service_ids); do
         [ "$_start_id" = "database" ] && continue
         exakit_service_start "$_start_id" || true
@@ -1459,7 +1577,11 @@ cmd_repair_runtime() {
         # the log; stdout carries one object and nothing else.
         bash "$_rr_kit/$_rr_setup" >&2
         _rr_rc=$?
-        if [ "$_rr_rc" -eq 0 ]; then
+        # EXIT 0 IS NOT A DATABASE. The setup script finishes with 0 when the
+        # database step was recorded as not finished (a Podman that cannot run
+        # it, a deploy that failed) - the rest of the kit still installs - so
+        # "repaired" is claimed only when the runtime step completed again.
+        if [ "$_rr_rc" -eq 0 ] && step_done runtime; then
             exakit_json_out '{"ok": true, "status": "repaired", "changed": true, "remedy": null}\n'
             return 0
         fi
@@ -1493,6 +1615,7 @@ cmd_repair_runtime() {
             "$(exakit_install_command)"
         return 3
     fi
+    exakit_sweep_tmp                    # exec skips the EXIT trap that would
     exec bash "$_rr_kit/$_rr_setup"
 }
 
@@ -1518,6 +1641,107 @@ cmd_repair_runtime() {
 # 1 the copy did not finish (the reason and the copies' location are printed),
 # 2 bad input, 3 no deployment or no exapump to copy with, 4 not installed,
 # 5 not confirmed. --json prints one object on stdout and narrates on stderr.
+# cmd_tls_pin [--accept [--yes]] [--json] — the database's TLS pin (SEC-14):
+# the fingerprint the kit recorded (trust on first use, when it deployed or
+# started its own database) against the certificate the port serves now.
+#
+# Showing changes nothing. A certificate that no longer matches is either a
+# database redeployed outside the kit or something else answering on the port,
+# and only the user can say which - so --accept, which records the live one and
+# rewrites every client holding the old (exapump profile, MCP entries), asks
+# first, default no for a replacement; --yes answers for a script that has the
+# user's word. A first pin (nothing recorded yet) is the trust-on-first-use the
+# kit takes itself at `exakit start`, so its question defaults to yes.
+#
+# Exit codes: 0 pinned and matching, nothing pinned yet, or recorded; 2 bad
+# arguments; 3 nothing answers TLS on the database port; 4 not installed; 5 the
+# re-pin was not confirmed; 6 the live certificate is not the pinned one.
+# Twin: Invoke-CmdTlsPin in exakit.ps1.
+cmd_tls_pin() {
+    _tp_accept=0; _tp_yes=0; _tp_json=0
+    for _tp_arg in "$@"; do
+        case "$_tp_arg" in
+            --accept) _tp_accept=1 ;;
+            --yes|-y) _tp_yes=1 ;;
+            --json|-j) _tp_json=1 ;;
+            *) reject "Unknown option '$_tp_arg' for tls-pin (supported: --accept, --yes, --json)." ;;
+        esac
+    done
+    [ "$_tp_yes" -eq 0 ] || [ "$_tp_accept" -eq 1 ] || \
+        reject "--yes answers the question --accept asks, and does nothing on its own: exakit tls-pin --accept --yes"
+    _require_install "$_tp_json"
+    _tp_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+    _tp_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    _tp_at="$(manifest_get runtime.tls_fingerprint_at 2>/dev/null || true)"
+    [ -n "$_tp_fp" ] || _tp_at=""
+    _tp_live=""
+    [ -n "$_tp_dsn" ] && _tp_live="$(exakit_tls_live_fingerprint "${_tp_dsn%:*}" "${_tp_dsn##*:}" 10 2>/dev/null || true)"
+    _tp_q() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
+    _tp_matches=null
+    [ -n "$_tp_fp" ] && [ -n "$_tp_live" ] && { [ "$_tp_fp" = "$_tp_live" ] && _tp_matches=true || _tp_matches=false; }
+    # _tp_answer <ok> <changed> <status> <remedy-or-empty> <hint-or-empty> <code>
+    _tp_answer() {
+        if [ "$_tp_json" -eq 1 ]; then
+            exakit_json_out '{"ok": %s, "status": "%s", "pinned": %s, "fingerprint": %s, "recorded_at": %s, "live": %s, "matches": %s, "changed": %s, "dsn": %s, "remedy": %s, "remedy_hint": %s}\n' \
+                "$1" "$3" "$([ -n "$_tp_fp" ] && printf true || printf false)" "$(_tp_q "$_tp_fp")" "$(_tp_q "$_tp_at")" \
+                "$(_tp_q "$_tp_live")" "$_tp_matches" "$2" "$(_tp_q "$_tp_dsn")" "$(_tp_q "$4")" \
+                "$(_tp_q "$(_exakit_json_string "$5")")"
+        fi
+        exit "$6"
+    }
+    if [ "$_tp_json" -eq 0 ]; then
+        printf '  %-9s %s\n' "Database" "${_tp_dsn:-none recorded}"
+        printf '  %-9s %s\n' "Pinned" "${_tp_fp:-nothing pinned yet}${_tp_at:+  (since $_tp_at)}"
+        printf '  %-9s %s\n' "Live" "${_tp_live:-nothing answers TLS on the port}"
+        printf '\n'
+    fi
+    if [ -z "$_tp_live" ]; then
+        [ "$_tp_json" -eq 1 ] || { error "Nothing answers TLS on ${_tp_dsn:-the database port}: the database is not running."; info "Start it, then compare again: exakit start"; }
+        _tp_answer false false "not reachable" "exakit start" "the database must be up to read its certificate" 3
+    fi
+    if [ "$_tp_accept" -eq 0 ]; then
+        if [ -z "$_tp_fp" ]; then
+            [ "$_tp_json" -eq 1 ] || info "Nothing is pinned yet; clients connect without checking the certificate. Pin this one with: exakit tls-pin --accept"
+            _tp_answer true false "not pinned" "exakit tls-pin --accept" "records the certificate the port serves now (trust on first use)" 0
+        fi
+        if [ "$_tp_matches" = true ]; then
+            [ "$_tp_json" -eq 1 ] || ok "The database serves the pinned certificate."
+            _tp_answer true false "pinned" "" "" 0
+        fi
+        if [ "$_tp_json" -eq 0 ]; then
+            error "The certificate on ${_tp_dsn} is NOT the pinned one. Every kit client refuses it."
+            info "Either the database was redeployed outside the kit, or another process answers on the port."
+            info "Only if this is your own database, re-pin it with: exakit tls-pin --accept"
+        fi
+        _tp_answer false false "mismatch" "exakit tls-pin --accept" "re-pin only once the user has confirmed this is their own database (a redeploy outside the kit); otherwise find what holds the port" 6
+    fi
+    if [ "$_tp_matches" = true ]; then
+        [ "$_tp_json" -eq 1 ] || ok "Already pinned to this certificate; nothing changed."
+        _tp_answer true false "pinned" "" "" 0
+    fi
+    if [ "$_tp_yes" -ne 1 ]; then
+        if [ -n "$_tp_fp" ]; then
+            [ "$_tp_json" -eq 1 ] || warn "Replacing a pin: do this only for your own database (one redeployed outside the kit), never for a process you do not recognise on the port."
+            _tp_ok=0; [ "$_tp_json" -eq 0 ] && confirm "Trust the certificate the port serves now, and rewrite the clients?" n && _tp_ok=1
+        else
+            _tp_ok=0; [ "$_tp_json" -eq 0 ] && confirm "Pin the certificate the port serves now?" y && _tp_ok=1
+        fi
+        if [ "$_tp_ok" -ne 1 ]; then
+            [ "$_tp_json" -eq 1 ] || info "Nothing was changed. With the user's confirmation, a script re-pins with: exakit tls-pin --accept --yes"
+            _tp_answer false false "declined" "exakit tls-pin --accept --yes" "only after the user has confirmed the certificate is their own database's" 5
+        fi
+    fi
+    exakit_init_logging 2>/dev/null || true
+    manifest_set runtime.tls_fingerprint "$_tp_live"
+    _tp_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    manifest_set runtime.tls_fingerprint_at "$_tp_at"
+    _exakit_log_file "INFO  TLS pin: accepted by the user (${_tp_fp:-none} -> $_tp_live)"
+    _tp_fp="$_tp_live"; _tp_matches=true
+    if [ "$_tp_json" -eq 1 ]; then exakit_tls_rewrite_clients >&2; else exakit_tls_rewrite_clients; fi
+    [ "$_tp_json" -eq 1 ] || ok "Pinned. The kit's clients now accept only this certificate."
+    _tp_answer true true "pinned" "" "" 0
+}
+
 cmd_migrate() {
     _mg_source="${1:-}"
     [ $# -gt 0 ] && shift
@@ -1747,10 +1971,11 @@ cmd_uninstall() {
                 ;;
         esac
     done
-    exakit_init_logging 2>/dev/null || true
+    # A preview changes nothing on disk, its log included.
+    [ "$_uni_dry" = 1 ] || exakit_init_logging 2>/dev/null || true
 
     if [ -n "$_uni_addon" ]; then
-        [ -f "$EXAKIT_MANIFEST" ] || die "No installation found. Run the installer first."
+        [ -f "$EXAKIT_MANIFEST" ] || _require_install "${EXAKIT_REFUSAL_JSON:-0}"
         if ! exakit_marketplace_addon_installed "$_uni_addon" 2>/dev/null; then
             info "$_uni_addon is not installed — nothing to remove."
             exit 0
@@ -1760,7 +1985,7 @@ cmd_uninstall() {
             # said "nothing else" while dash-server's hook deleted every
             # dashboard, so the preview has to come from the code that removes.
             info "Dry run — removing the $_uni_addon add-on would:"
-            _exakit_uninstall_component "$_uni_addon" 1
+            _exakit_uninstall_component "$_uni_addon" 1 || exit $?
             exit 0
         fi
         if [ "$_uni_yes" -ne 1 ]; then
@@ -1779,7 +2004,7 @@ cmd_uninstall() {
                 exit 5
             }
         fi
-        _exakit_uninstall_component "$_uni_addon" 0
+        _exakit_uninstall_component "$_uni_addon" 0 || exit $?
         ok "$_uni_addon removed. Reinstall any time with: exakit marketplace $_uni_addon"
         exit 0
     fi
@@ -1827,7 +2052,7 @@ cmd_uninstall() {
         exakit_uninstall_run 0
         printf '\n'
         ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
-        info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
+        exakit_uninstall_leftovers
         exit 0
     fi
 
@@ -1876,6 +2101,10 @@ cmd_update() {
         case "$_cu_arg" in --json|-j) _cu_json=1 ;; esac
     done
     _require_install "$_cu_json"
+    # An install from before the TLS pin records it first (SEC-14), so every
+    # client this update rewrites carries it. Narration stays off a --json
+    # answer's stdout.
+    if [ "$_cu_json" -eq 1 ]; then exakit_tls_ensure_pinned >&2; else exakit_tls_ensure_pinned; fi
     exakit_update "$@"
 }
 
@@ -1925,24 +2154,55 @@ cmd_logs() {
     exakit_logs_show "$_log_target" "$_log_follow" "$_log_lines" "$_log_path_only"
 }
 
+# cmd_data_load [--force] [<file-or-folder>|<dataset>] — in either order.
 cmd_data_load() {
     _require_install
-    # data-load takes either --force or a PATH. A path names what to load
-    # without walking the menu to type it in -- and a folder path is the bulk
-    # load: every CSV/Parquet/JSON file in it, one table each.
+    # data-load takes --force, a PATH, or a dataset id - --force together with a
+    # dataset id, in either order. A path names what to load without walking the
+    # menu to type it in -- and a folder path is the bulk load: every
+    # CSV/Parquet/JSON file in it, one table each.
     _dl_force=""
     _dl_path=""
-    case "${1:-}" in
-        "")      ;;
-        --force) _dl_force="--force" ;;
-        -*)      reject "Unknown option '$1' for data-load (pass --force, or a file or folder path)." ;;
-        *)       _dl_path="$1" ;;
-    esac
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            "")      ;;
+            --force) _dl_force="--force" ;;
+            -*)      reject "Unknown option '$1' for data-load (pass --force, a file or folder path, or a dataset id)." ;;
+            *)       [ -n "$_dl_path" ] && \
+                         reject "data-load takes one file, folder or dataset at a time (got '$_dl_path' and '$1'); several datasets: EXAKIT_DATASETS=tpch,energy exakit data-load"
+                     _dl_path="$1" ;;
+        esac
+        shift
+    done
     command -v exakit_load_sample_data >/dev/null 2>&1 || \
         die "The exapump data-loading module is not available in this kit build."
+    # A bundled dataset's id (exakit data-load amazon_sales) is the same answer
+    # as EXAKIT_DATASETS=amazon_sales - a file or folder of that name wins. Named
+    # on the command line it is THE answer: it replaces an EXAKIT_DATASETS and
+    # an EXAKIT_DATA_FILE left in the environment, which would otherwise load
+    # something else instead (the file won over the id without a word).
+    # The ids are read whole and then matched: a `| grep -q` here can lose its
+    # writer to SIGPIPE under `set -o pipefail` and miss an id that is there.
+    _dl_ids="$(exakit_bundled_datasets 2>/dev/null | cut -d'|' -f1)" || _dl_ids=""
+    if [ -n "$_dl_path" ] && [ ! -e "$_dl_path" ] && \
+       case "
+$_dl_ids
+" in *"
+$_dl_path
+"*) true ;; *) false ;; esac; then
+        EXAKIT_DATASETS="$_dl_path"
+        export EXAKIT_DATASETS
+        unset EXAKIT_DATA_FILE
+        _dl_path=""
+    fi
+    # --force drops and rebuilds BUNDLED datasets. A file or folder has its own
+    # answer for a table that already holds rows, and it is not this one.
+    if [ -n "$_dl_force" ] && [ -n "$_dl_path" ]; then
+        reject "--force drops and rebuilds a bundled dataset, not a file or folder. For a table that already holds rows: EXAKIT_ON_EXISTING=replace exakit data-load $_dl_path"
+    fi
     if [ -n "$_dl_path" ]; then
         _dl_norm="$(exakit_normalize_path "$_dl_path")"
-        [ -e "$_dl_norm" ] || die "No such file or folder: $_dl_path"
+        [ -e "$_dl_norm" ] || die "No such file, folder or dataset: $_dl_path (datasets: $(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//'))"
         # Naming a path IS choosing the local-file row, which is exactly what
         # EXAKIT_DATA_FILE already means -- so one contract covers the argument
         # and the variable, and the menu never draws for either.
@@ -2005,7 +2265,7 @@ cmd_data_load() {
                             info "Loading dataset '$_dl_id' (EXAKIT_DATASETS)."
                             exakit_load_dataset "$_kit_root" "$_dl_id" || _dl_failed=1
                             ;;
-                        *) ok "Dataset '$_dl_id' is already loaded — nothing to do (replace it with: exakit data-load --force, which drops and rebuilds its tables)" ;;
+                        *) ok "Dataset '$_dl_id' is already loaded — nothing to do (replace it with: exakit data-load --force $_dl_id, which drops and rebuilds its tables)" ;;
                     esac
                     ;;
                 *)
@@ -2037,6 +2297,9 @@ cmd_mcp_setup() {
     done
     _require_install
     exakit_init_logging
+    # Before the clients are written, so they carry the TLS pin (SEC-14) on an
+    # install that predates it; the AI clients are this command's own output.
+    exakit_tls_ensure_pinned --profile-only
     exakit_mcp_setup || die "Could not complete MCP client setup"
 }
 
@@ -2247,7 +2510,9 @@ cmd_skills() {
 # marketplace dash-server` installs dash-server and nothing else — it used to
 # silently DISCARD the id and install the other pending add-ons instead.
 cmd_marketplace() {
-    [ -f "$EXAKIT_MANIFEST" ] || die "No installation found. Run the installer first."
+    # No kit: exit 4 and the installer's command, as one object under --json -
+    # the answer every state query gives, with nothing recorded as a failure.
+    [ -f "$EXAKIT_MANIFEST" ] || _require_install "${EXAKIT_REFUSAL_JSON:-0}"
     _cm_list=0
     _cm_json=0
     _cm_ids=""
@@ -2290,14 +2555,14 @@ usage() {
         case "$_u_arg" in
             --json|-j) _u_json=1 ;;
             --help|-h) [ -n "$_u_topic" ] || _u_topic="help" ;;
-            *) [ -n "$_u_topic" ] || _u_topic="$_u_arg" ;;
+            *) _u_topic="${_u_topic:+$_u_topic }$_u_arg" ;;
         esac
     done
     if [ "$_u_json" -eq 1 ]; then
-        exakit_can_run_python || die "python3 is needed for --json."
+        exakit_can_run_python_any || die "python3 is needed for --json."
         case "$_u_topic" in
             --all|-a|"") exakit_help_render json all ;;
-            *)           exakit_help_render json "$_u_topic" ;;
+            *)           exakit_help_render command-json "$_u_topic" ;;
         esac
         return $?
     fi
@@ -2654,6 +2919,83 @@ cmd_whats_new() {
     fi
 }
 
+# cmd_persona list [--json] | show <id> [--json] | plan [<id>] [--json] | add <id>[,<id>] | remove <id>
+# — the `exakit persona` command. `apply` is the old name of add, kept as an alias.
+# A wrong or missing persona is bad input: exit 2 and nothing recorded (reject),
+# as one object on stdout under --json.
+cmd_persona() {
+    _cp_json=0
+    for _cp_arg in "$@"; do
+        case "$_cp_arg" in --json|-j) _cp_json=1 ;; esac
+    done
+    case "${1:-list}" in
+        list)
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in list|--json|-j) ;; *) reject "Unknown option for persona list: $_cp_arg (supported: --json)" ;; esac
+            done
+            if [ "$_cp_json" = 1 ]; then
+                # Each persona with what it brings - its notebooks too - and the ones this kit was set up as.
+                _cp_doc="$(EXAKIT_PERSONA_RECORDED="$(manifest_get persona.id 2>/dev/null || true)" \
+                    _exakit_persona_service list-json 2>/dev/null)" || \
+                    die "No persona can be read from this kit copy - the persona service needs Python 3. Repair with: exakit update"
+                exakit_json_pretty "$_cp_doc"
+                return 0
+            fi
+            _cp_ids="$(exakit_persona_ids)"
+            [ -n "$_cp_ids" ] || die "No persona can be read from this kit copy ($(_exakit_persona_service problems 2>/dev/null | head -n 1 | tr '|' ':' || true)) - the persona service needs Python 3. Repair with: exakit update"
+            for _cp_id in $_cp_ids; do
+                printf '  %-16s %s\n' "$_cp_id" "$(exakit_persona_value "$_cp_id" title)"
+                printf '  %-16s %s\n' "" "$(exakit_persona_value "$_cp_id" summary)"
+            done
+            _cp_current="$(manifest_get persona.id 2>/dev/null || true)"
+            if [ -n "$_cp_current" ]; then
+                info "This kit was set up as: $(_exakit_persona_service title "$_cp_current" 2>/dev/null || printf '%s' "$_cp_current")"
+            fi
+            info "Add one with: exakit persona add (a menu), or exakit persona add <id>"
+            ;;
+        show)
+            shift
+            _cp_id=""
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in
+                    --json|-j) ;;
+                    -*) reject "Unknown option for persona show: $_cp_arg (supported: --json)" ;;
+                    *) [ -z "$_cp_id" ] || reject "Name one persona: exakit persona show <id>"; _cp_id="$_cp_arg" ;;
+                esac
+            done
+            exakit_persona_known "$_cp_id" || reject "$EXAKIT_PERSONA_PROBLEM"
+            if [ "$_cp_json" = 1 ]; then
+                _cp_doc="$(EXAKIT_PERSONA_RECORDED="$(manifest_get persona.id 2>/dev/null || true)" \
+                    _exakit_persona_service show-json "$_cp_id" 2>/dev/null)" || reject "Name one persona: exakit persona show <id>"
+                exakit_json_pretty "$_cp_doc"
+                return 0
+            fi
+            _exakit_persona_service show "$_cp_id" 2>/dev/null || reject "Name one persona: exakit persona show <id>"
+            ;;
+        plan)
+            shift
+            _cp_id=""; _cp_json=0
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in
+                    --json) _cp_json=1 ;;
+                    -*) reject "Unknown option for persona plan: $_cp_arg (supported: --json)" ;;
+                    *) _cp_id="$_cp_arg" ;;
+                esac
+            done
+            [ -n "$_cp_id" ] || _cp_id="$(manifest_get persona.id 2>/dev/null || true)"
+            [ -n "$_cp_id" ] || reject "No persona is recorded for this kit - name one: exakit persona plan <id> (exakit persona list shows them)"
+            exakit_persona_known "$_cp_id" || reject "$EXAKIT_PERSONA_PROBLEM"
+            exakit_persona_plan "$_cp_id" "$_cp_json"
+            ;;
+        remove)
+            [ "$#" -eq 2 ] || reject "Name one persona: exakit persona remove <id>"
+            case "$2" in -*) reject "Unknown option for persona remove: $2" ;; esac
+            EXAKIT_HOME="$EXAKIT_HOME" _exakit_persona_service remove "$2" || die "Could not remove persona $2 from the kit record"
+            ;;
+        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | plan [<id>] | add <id> | remove <id>)" ;;
+    esac
+}
+
 # cmd_catalog [search] - the searchable command surface, rendered from the same
 # help documents every other screen uses (setup/help/*.json). --json keeps its
 # original shape: one object whose "commands" array carries tool/command/
@@ -2669,7 +3011,7 @@ cmd_catalog() {
     done
     _search="$(printf '%s' "$_cat_args" | tr '[:upper:]' '[:lower:]')"
     if [ "$_cat_json" -eq 1 ]; then
-        exakit_can_run_python || die "python3 is needed for --json."
+        exakit_can_run_python_any || die "python3 is needed for --json."
         exakit_help_render json "$_search"
         return $?
     fi
@@ -2702,6 +3044,9 @@ _with_notice() {
 # COMMAND with an option, not a request for a topic literally named "--help".
 # It used to fall in here, be rendered as a command page for that topic, and
 # print grep's usage block instead of the JSON document an agent asked for.
+#
+# Keep child words (model put, mlflow start, notebook stop marimo). The
+# registry resolves the same path for human and JSON help before execution.
 case "${1:-}" in
     help|--help|-h) _help_skip=1 ;;
     *)              _help_skip=0 ;;
@@ -2710,12 +3055,17 @@ if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$_help_skip" -eq 0 ]; then
     for _help_arg in "$@"; do
         case "$_help_arg" in
             --help|-h)
-                _help_topic="$1"
-                if exakit_help_is_id "$_help_topic"; then
-                    exakit_help_render component "$_help_topic"
-                else
-                    exakit_help_render command "$_help_topic"
-                fi
+                _help_topic=""; _help_json=""; _help_path_done=0
+                for _help_word in "$@"; do
+                    case "$_help_word" in
+                        --json|-j) _help_json=--json; _help_path_done=1 ;;
+                        -*) _help_path_done=1 ;;
+                        *) if [ "$_help_path_done" -eq 0 ]; then
+                               _help_topic="${_help_topic:+$_help_topic }$_help_word"
+                           fi ;;
+                    esac
+                done
+                usage "$_help_topic" ${_help_json:+"$_help_json"}
                 exit $?
                 ;;
         esac
@@ -2798,11 +3148,6 @@ esac
 # child process inherits it. (A separate case, not a ;;& fall-through arm:
 # that is bash 4.0 syntax and this file must run on the 3.2 macOS ships.)
 case "${1:-help}" in
-    status|version|--version|-v|info|mcp-status|mcp-doctor|skills|catalog|logs|help|--help|-h|whats-new)
-        export EXAKIT_READONLY_QUERY=1 ;;
-esac
-
-case "${1:-help}" in
     preflight) shift; _exakit_refuse_unknown_options preflight "" "$@"; _with_notice preflight_report ;;
     status)   shift
               case "${1:-}" in
@@ -2838,9 +3183,10 @@ case "${1:-help}" in
     start)    shift; _exakit_refuse_unknown_options start "" "$@"; _with_notice cmd_start "$@" ;;
     stop)     shift; _exakit_refuse_unknown_options stop "" "$@"; _with_notice cmd_stop "$@" ;;
     repair-runtime) shift; cmd_repair_runtime "$@" ;;
+    tls-pin)  shift; cmd_tls_pin "$@" ;;
     migrate)  shift; cmd_migrate "$@" ;;
     autostart) shift; _with_notice cmd_autostart "$@" ;;
-    data-load) shift; _with_notice cmd_data_load "${1:-}" ;;
+    data-load) shift; _with_notice cmd_data_load "$@" ;;
     mcp-setup) shift; _with_notice cmd_mcp_setup "$@" ;;
     mcp-doctor) shift; _exakit_refuse_unknown_options mcp-doctor "--json,-j" "$@"; _with_notice cmd_mcp_doctor "$@" ;;
     mcp-remove) shift; _exakit_refuse_unknown_options mcp-remove "" "$@"; _with_notice cmd_mcp_remove "$@" ;;
@@ -2866,6 +3212,44 @@ case "${1:-help}" in
     source)   shift; cmd_source "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
+    persona)
+        shift
+        case "${1:-}" in
+            add|apply)
+                # Refused before anything is fetched: adding needs the kit's own
+                # Python, and on a machine without it that is a download, so a
+                # missing kit (4) and a persona that does not exist (2) are told
+                # first, on whatever Python 3 is there.
+                [ -f "$EXAKIT_MANIFEST" ] || _require_install "${EXAKIT_REFUSAL_JSON:-0}"
+                # No id: the persona question, as the install asks it.
+                if [ "$1" = add ] && [ $# -eq 1 ]; then exakit_persona_add_menu; exit $?; fi
+                _pa_id=""; _pa_skip=0
+                for _pa_arg in "$@"; do
+                    if [ "$_pa_skip" = 1 ]; then _pa_skip=0; continue; fi
+                    case "$_pa_arg" in
+                        add|apply) [ -z "$_pa_id" ] && [ "$_pa_arg" = "$1" ] && continue ;;
+                        --cli|--host) _pa_skip=1; continue ;;
+                        --yes|-y|--cli=*|--host=*) continue ;;
+                        -*) reject "Unknown option for persona add: $_pa_arg (it asks nothing; --yes is accepted)" ;;
+                    esac
+                    [ -z "$_pa_id" ] || reject "Name the personas once, joined by commas: exakit persona add $_pa_id,$_pa_arg"
+                    _pa_id="$_pa_arg"
+                done
+                if exakit_can_run_python_any; then
+                    exakit_persona_known "$_pa_id" || reject "$EXAKIT_PERSONA_PROBLEM"
+                fi
+                _exakit_marketplace_cli persona_apply "$@" --cli "$(exakit_repo_root)/setup/exakit" ;;
+            *) command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
+        esac
+        ;;
+    notebook) shift; _exakit_marketplace_cli notebook_cli "$@" ;;
+    workflow) shift; _exakit_marketplace_cli workflow_cli "$@" ;;
+    mlflow) shift; _exakit_marketplace_cli mlflow_cli "$@" ;;
+    describe) shift; command -v cmd_describe >/dev/null 2>&1 || die "The describe module is missing from this kit copy. Repair with: exakit update"; cmd_describe "$@" ;;
+    rust-udf) shift; _exakit_marketplace_cli rust_cli "$@" ;;
+    udf-file) shift; _exakit_marketplace_cli udf_cli "$@" ;;
+    model) shift; _exakit_marketplace_cli model_cli "$@" ;;
+    udf-setup|udf-use|udf-build) _udf_name="$1"; shift; _exakit_marketplace_cli udf_manage "$_udf_name" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
     # the help command on purpose), so --help/-h are options here and name
     # the help command's own page, like every other command's --help does.

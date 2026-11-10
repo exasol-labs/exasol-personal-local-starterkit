@@ -11,6 +11,7 @@
 # for JSON, this file uses native PowerShell JSON handling instead.
 
 $ErrorActionPreference = "Stop"
+$script:ExakitMarketplaceSourceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 
 # Suppress the progress stream for the whole kit. Two reasons: (1) it removes
 # the "TCP connect to ..."-style progress banners that cmdlets like
@@ -19,6 +20,35 @@ $ErrorActionPreference = "Stop"
 # Invoke-WebRequest an order of magnitude slower, so silencing it speeds up
 # every download step. Callers that genuinely want progress can override.
 $ProgressPreference = "SilentlyContinue"
+
+# ---------------------------------------------------------------------------
+# Exasol usage telemetry: off unless the user chose otherwise
+# ---------------------------------------------------------------------------
+# pyexasol 3 reports one anonymous usage event per connect unless
+# EXASOL_TELEMETRY_DISABLE is present in its environment (any value disables
+# it). exakit.ps1 and setup-windows.ps1 dot-source this file, so the process
+# carries it before anything they run can load pyexasol; a value the user
+# already set is never replaced. Twin of exakit_telemetry_default in
+# common.sh; the Python side is marketplace/kit_telemetry.py. Both scripts run
+# in their own powershell.exe (exakit.cmd and install.ps1 start them with
+# -File), so the user's own session is not changed.
+# The settings file (~/.exasol-starter-kit/exakit.env) before anything else: everything
+# below - the telemetry default first - reads the environment it fills in.
+try {
+    . (Join-Path $PSScriptRoot "envfile.ps1")
+    Import-ExakitEnvFile
+} catch { }
+
+function Set-ExakitTelemetryDefault {
+    # Exasol's, then dbt's anonymous usage stats and MLflow's telemetry the same way (audit SEC-04).
+    foreach ($pair in @(@("EXASOL_TELEMETRY_DISABLE", "1"), @("DBT_SEND_ANONYMOUS_USAGE_STATS", "false"),
+                        @("MLFLOW_DISABLE_TELEMETRY", "true"))) {
+        if ($null -eq [Environment]::GetEnvironmentVariable($pair[0], "Process")) {
+            [Environment]::SetEnvironmentVariable($pair[0], $pair[1], "Process")
+        }
+    }
+}
+Set-ExakitTelemetryDefault
 
 # ---------------------------------------------------------------------------
 # Shared visual layer (banner, boxes, spinner, colour palette)
@@ -64,8 +94,9 @@ if (-not (Get-Command Start-ExakitSpinner -ErrorAction SilentlyContinue)) {
     # non-interactive run would have kept anyway.
     function Invoke-ExakitTableMenu($Table = $null, [int[]]$Defaults = @(),
         [int]$ExclusiveIndex = 0, [int]$GroupParent = 0, [int]$GroupFirst = 0,
-        [int]$GroupLast = 0, [string]$GroupMode = "any", [int]$OnScreen = 0) {
-        $script:ExakitTableConfirmed = $false
+        [int]$GroupLast = 0, [string]$GroupMode = "any", [int]$OnScreen = 0,
+        [switch]$Auto) {
+        $script:ExakitTableConfirmed = [bool]($Auto -or $env:UI_TABLE_AUTO -eq "1")
         return @($Defaults | Sort-Object)
     }
     function Get-ExakitTilde([string]$Path) { return $Path }
@@ -157,6 +188,79 @@ $script:McpDir       = Join-Path $script:ExakitHome "mcp"
 # step of the trust loop into a mkdir it has to guess at.
 $script:WorkflowsDir = Join-Path $script:ExakitHome "workflows"
 $script:BinDir       = if ($env:EXAKIT_BIN_DIR) { $env:EXAKIT_BIN_DIR } else { Join-Path $script:ExakitHomeBase ".local\bin" }
+# Ownership records provenance. Shared binaries/deployments are never inferred
+# to be kit-owned from a matching filename or a completed installation step.
+function Get-ExakitOwnershipKey {
+    param([string]$Id)
+    switch ($Id) {
+        { $_ -in @('database','runtime') } { return 'runtime' }
+        { $_ -in @('personal','launcher','exasol') } { return 'components.personal' }
+        'mcp' { return 'components.mcp_server' }
+        default { return ('components.' + $Id.Replace('-','_')) }
+    }
+}
+function Get-ExakitComponentOwnership {
+    param([string]$Id)
+    if ($Id -in @('exakit','kit2','skills')) { return 'kit' }
+    $key = Get-ExakitOwnershipKey $Id
+    $owner = Get-ExakitManifestValue "$key.ownership"
+    if ($owner -eq 'kit') {
+        $file = Get-ExakitManifestValue "$key.ownership_path"
+        $digest = Get-ExakitManifestValue "$key.ownership_sha256"
+        $live = ""
+        if ($Id -in @('personal','launcher','exasol') -and (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { $live = Get-PersonalCli }
+        elseif ($Id -eq 'exapump' -and (Get-Command Get-ExapumpCli -ErrorAction SilentlyContinue)) { $live = Get-ExapumpCli }
+        elseif ($Id -in @('database','runtime')) { $live = $script:PersonalDeployDir }
+        if ($file -and $live -and $file -ne $live) { $owner = 'user' }
+        if ($digest -and $file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            try { if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $digest) { $owner = 'user' } }
+            catch { $owner = 'unknown' }
+        }
+    }
+    if ($owner -in @('kit','user','unknown')) { return $owner }
+    if ($Id -notin @('personal','launcher','exasol','database','runtime','exapump')) {
+        foreach ($field in @('venv','home','python','path')) {
+            $p = Get-ExakitManifestValue "$key.$field"
+            if ($p -and $p.StartsWith($script:ExakitHome + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return 'kit' }
+        }
+    }
+    return 'unknown'
+}
+function Set-ExakitComponentOwnership {
+    param([string]$Id, [ValidateSet('kit','user','unknown')][string]$Ownership, [string]$OwnedPath = "")
+    Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership" "unknown"
+    if ($OwnedPath) { Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path" $OwnedPath }
+    else { Remove-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path" }
+    if ($Ownership -eq 'kit' -and $OwnedPath -and (Test-Path -LiteralPath $OwnedPath -PathType Leaf)) {
+        Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_sha256" (Get-FileHash -LiteralPath $OwnedPath -Algorithm SHA256).Hash
+    } else { Remove-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_sha256" }
+    Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership" $Ownership
+}
+function Set-ExakitReusedOwnership {
+    param([string]$Id, [string]$OwnedPath = "")
+    $receipt = Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path"
+    if ((Get-ExakitComponentOwnership $Id) -ne 'kit' -or ($OwnedPath -and $receipt -ne $OwnedPath)) { Set-ExakitComponentOwnership $Id 'user' $OwnedPath }
+}
+function Test-ExakitComponentManaged {
+    param([string]$Id)
+    return ((Get-ExakitComponentOwnership $Id) -eq 'kit')
+}
+function Get-ExakitPreservedComponentPaths {
+    $ids = @('database','personal','exapump','pyexasol','mcp') + @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id })
+    foreach ($id in $ids) {
+        if (Test-ExakitComponentManaged $id) { continue }
+        $key = Get-ExakitOwnershipKey $id
+        foreach ($field in @('ownership_path','deployment_dir','path','venv','home','python')) {
+            $candidate = Get-ExakitManifestValue "$key.$field"
+            if ($candidate -and $candidate.StartsWith($script:ExakitHome + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { $candidate }
+        }
+    }
+}
+function Write-ExakitPreservedComponent {
+    param([string]$Id)
+    Info "Keeping $Id ($(Get-ExakitComponentOwnership $Id)-owned; not installed by this kit)."
+}
+
 # Where the reason an install died is left for the NEXT process to find. Twin of
 # exakit_failure_note_file in common.sh, including the file name, so the two
 # platforms describe the same install the same way.
@@ -179,6 +283,12 @@ $script:ExakitHomeNotice = ""
 if (-not $env:EXAKIT_HOME -and -not (Test-ExakitLocalPath $script:ExakitHome)) {
     $script:ExakitHomeNotice = "Your Windows home ($script:ExakitHomeBase) is not on a local drive. A network or redirected home cannot be bind-mounted, so the database cannot be deployed there. Set EXAKIT_HOME to a folder on a local drive (for example C:\exasol-starter-kit) and run the installer again."
 }
+# The Python half (marketplace, MCP, personas) finds the kit through
+# EXAKIT_HOME / EXAKIT_BIN_DIR, else Path.home(), which is USERPROFILE on
+# Windows. A kit this module found under $HOME instead (Get-ExakitHomeBase) was
+# a different kit to Python (WIN-06): the resolved paths go with every child.
+if (-not $env:EXAKIT_HOME) { $env:EXAKIT_HOME = $script:ExakitHome }
+if (-not $env:EXAKIT_BIN_DIR) { $env:EXAKIT_BIN_DIR = $script:BinDir }
 $script:ManagedPythonVersion = if ($env:EXAKIT_MANAGED_PYTHON_VERSION) { $env:EXAKIT_MANAGED_PYTHON_VERSION } else { "3.12" }
 $script:McpReadonlyUser    = if ($env:EXAKIT_MCP_READONLY_USER) { $env:EXAKIT_MCP_READONLY_USER } else { "mcp_readonly" }
 $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT_MCP_READONLY_SCHEMAS } else { "STARTER_KIT" }
@@ -194,9 +304,9 @@ $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT
 $script:VersionPolicy = if ($env:EXAKIT_VERSION_POLICY) { $env:EXAKIT_VERSION_POLICY } else { "manifest" }
 $script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.13.1" }
 $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT_MCP_VERSION_FALLBACK } else { "2.4.0" }
-# uv is the Python tool runner: uvx is the process the AI client launches to
-# run the MCP server (and hands EXA_PASSWORD to on every start), and uv runs
-# the kit's managed Python wherever the system one is too old. Pinned and
+# uv is the Python tool runner: uvx runs the bridge Claude Desktop reaches the
+# MCP server through (`uvx mcp-proxy`), and uv runs the kit's managed Python
+# wherever the system one is too old. Pinned and
 # digest-verified like every other binary the kit installs - see Install-ExakitUv.
 # The MIN version is the oldest uv the kit will RUN at all: below it uv's
 # bundled CA store trusts an emSign root whose intermediate CA keys are
@@ -242,7 +352,7 @@ else {
             $kitSource = ""
             if ($manifestDoc.kit -and $manifestDoc.kit.source) { $kitSource = [string]$manifestDoc.kit.source }
             $kitSourceRepo = ($kitSource -split "@", 2)[0]
-            if ($kitSourceRepo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+            if ($kitSourceRepo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z') {
                 $script:KitRepo = $kitSourceRepo
             }
         } catch { }
@@ -326,10 +436,18 @@ function Set-ExakitAcl {
     }
 }
 
-New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:CredsDir, $script:BinDir | Out-Null
+# A state query writes nothing either (audit AGT-14): status --json made an
+# empty credentials/ folder on a kit that had none, which the shell twin never
+# does. Whatever writes later makes its own folder (Set-ExakitCredential,
+# Initialize-ExakitLogging).
+# credentials/ is not made here either: a marketplace browse or a persona refusal left an empty one on
+# Windows where bash left none; Set-ExakitCredential makes it the moment a credential is written.
+if (-not $script:ExakitReadOnlyHelp -and -not $script:ExakitReadOnlyQuery) {
+    New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:BinDir | Out-Null
+}
 # Best-effort: a home on a network share can refuse Set-Acl outright, and that
 # is not a reason to stop the CLI from running. The files keep their own ACL.
-try { Protect-ExakitDirectory $script:CredsDir } catch { }
+if (Test-Path -LiteralPath $script:CredsDir) { try { Protect-ExakitDirectory $script:CredsDir } catch { } }
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -642,7 +760,8 @@ function Read-ExakitCheckboxMenu {
     )
     # $ExclusiveIndex (1-based, 0 = none): an option that cannot be combined
     # with the others - think "Skip". Selecting it clears every other
-    # choice; selecting any other choice clears it.
+    # choice; selecting any other choice clears it. Enter with the cursor ON
+    # it answers it alone, whatever else is ticked.
     # $GroupParent/$GroupFirst/$GroupLast (optional): row $GroupParent is a
     # group checkbox whose children are rows $GroupFirst..$GroupLast (header
     # and disabled rows in that range are skipped). Toggling the parent ON
@@ -651,7 +770,9 @@ function Read-ExakitCheckboxMenu {
     # is checked (a group header), "all" only while EVERY child is checked - a
     # MASTER toggle - and "master" is "all" downward only: the children may
     # RELEASE the parent but never claim it, for a parent that is a SCOPE rather
-    # than an aggregate.
+    # than an aggregate. "claim" is the other way round: a child going ON ticks
+    # the parent and one going OFF leaves it, for a parent its children need
+    # but that stands on its own (the notebook add-on and its tools).
     # $Groups (optional): further "parent:first:last[:mode]" specs, applied IN
     # ORDER and BEFORE the single group above. That is what nests them - an
     # inner group has to settle its own parent before the outer group re-reads
@@ -712,10 +833,13 @@ function Read-ExakitCheckboxMenu {
                 # leaves the parent alone, so ticking every child never comes to
                 # mean the parent's own scope. "any" is the group-header rule.
                 if ($gmode -eq "master" -and $sel.Contains($toggled)) { continue }
+                if ($gmode -eq "claim" -and -not $sel.Contains($toggled)) { continue }
                 $on = $false
                 if ($gmode -eq "all") {
                     $on = $true
                     foreach ($c in $children) { if (-not $sel.Contains($c)) { $on = $false; break } }
+                } elseif ($gmode -eq "claim") {
+                    $on = $true
                 } elseif ($gmode -eq "master") {
                     $on = $false
                 } else {
@@ -735,7 +859,7 @@ function Read-ExakitCheckboxMenu {
             [void]$sel.Remove($ExclusiveIndex)
         }
     }
-    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
+    if (-not (Test-ExakitMenuConsole)) {
         foreach ($i in @($sel | Sort-Object)) { Ok ("{0} (selected by default)" -f $Options[$i - 1]) }
         return @($sel | Sort-Object)
     }
@@ -772,6 +896,11 @@ function Read-ExakitCheckboxMenu {
     $script:cbCur = 0
     & $step 1
     $firstDraw = $true
+    # A click ticks or unticks the row under it, like Space; Enter still confirms.
+    # Every option is one line, then the hint: entry i starts on line i-1.
+    $starts = @(0..$Options.Count)
+    if (Get-Command Enable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Enable-ExakitMenuMouse }
+    try {
     while ($true) {
         if (-not $firstDraw -and $script:UiFancy) {
             # redraw the block in place: options + hint line
@@ -797,21 +926,34 @@ function Read-ExakitCheckboxMenu {
             }
         }
         Write-ExakitMenuHint "Up/Down to move - $spaceVerb - Enter to confirm"
-        $key = [Console]::ReadKey($true)
-        $handled = $true
-        switch ($key.Key) {
-            "Enter"     { if ($sel.Count -gt 0) { return @($sel | Sort-Object) } }
-            "Spacebar"  {
+        $key = Read-ExakitMenuKey
+        if ($key.Name -eq 'Click') {
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn ($Options.Count + 1) -Starts $starts
+            if ($hit -ge 1 -and -not (& $isHeader $hit) -and -not (& $isDisabled $hit)) {
+                $script:cbCur = $hit
+                $key = @{ Name = 'Space' }
+            }
+        }
+        switch ($key.Name) {
+            "Enter"     {
+                # Enter ON the exclusive row (Skip, No, Nothing) answers that row
+                # alone, whatever else is ticked: the other rows usually start
+                # ticked, so "move to Skip, press Enter" used to confirm them
+                # instead. Twin of ui_checkbox_menu; same rule as
+                # Invoke-ExakitTableMenu.
+                if ($ExclusiveIndex -ge 1 -and $script:cbCur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
+                if ($sel.Count -gt 0) { return @($sel | Sort-Object) }
+            }
+            "Space"     {
                 if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
                 & $applyGroup $script:cbCur
                 & $applyExclusive $script:cbCur
             }
-            "UpArrow"   { & $step -1 }
-            "DownArrow" { & $step 1 }
-            default     { $handled = $false }
+            "Up"        { & $step -1 }
+            "Down"      { & $step 1 }
         }
-        if ($handled) { continue }
-        switch -Regex ([string]$key.KeyChar) {
+        if ($key.Name -ne 'Char') { continue }
+        switch -Regex ($key.Char) {
             '^[kK]$' { & $step -1 }
             '^[jJ]$' { & $step 1 }
             '^[aA]$' {
@@ -823,6 +965,9 @@ function Read-ExakitCheckboxMenu {
                 }
             }
         }
+    }
+    } finally {
+        if (Get-Command Disable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Disable-ExakitMenuMouse }
     }
 }
 # Show-ExakitNoAiPanel - shown when the user skips MCP client setup: the
@@ -837,9 +982,11 @@ function Show-ExakitNoAiPanel {
     Write-ExakitPanelLine "GUI client:  DBeaver - https://dbeaver.io/download/"
     Write-ExakitPanelLine "             or DbVisualizer - https://www.dbvis.com/download/"
     Write-ExakitPanelLine "             New Connection > Exasol > Host $hostName Port $port"
-    Write-ExakitPanelLine "Python:      pyexasol is preinstalled in its own environment:"
-    Write-ExakitPanelLine "             $(Get-ExakitTilde (Join-Path $script:ExakitHome 'pyexasol-venv'))"
-    Write-ExakitPanelLine "Terminal:    exapump interactive -p starter-kit   (SQL shell)"
+    $python = Get-ExakitManifestValue "components.pyexasol.python"
+    if (-not $python) { $python = Join-Path $script:ExakitHome "pyexasol-venv\Scripts\python.exe" }
+    Write-ExakitPanelLine "Python:      pyexasol works in:"
+    Write-ExakitPanelLine "             $(Get-ExakitTilde $python)"
+    Write-ExakitPanelLine "Terminal:    exakit sql 'SELECT 42'   (a SQL shell: exakit guide)"
     Write-ExakitPanelLine "Step-by-step (credentials, TLS setting, first query):  exakit guide"
     Write-ExakitPanelLine "Changed your mind about AI? Any time:  exakit mcp-setup"
     Complete-ExakitPanel
@@ -856,8 +1003,26 @@ function Show-ExakitGuide {
     $user = Get-ExakitManifestValue "runtime.user"; if (-not $user) { $user = "sys" }
     $pwfile = Get-ExakitManifestValue "runtime.password_file"
     $mcpUser = Get-ExakitManifestValue "components.mcp_server.connection.user"
+    # What this kit actually holds: the loaded datasets' schemas, the personas, the
+    # Python pyexasol lives in (a reused one of yours, or the kit's own) and the add-ons.
+    $schemas = @()
+    $sets = Get-ExakitManifestValue "data.datasets"
+    if ($sets) {
+        foreach ($entry in $sets.PSObject.Properties) {
+            if ($entry.Value.loaded -eq $true -and $entry.Value.schema) { $schemas += [string]$entry.Value.schema }
+        }
+    }
+    $schemas = @($schemas | Sort-Object -Unique)
+    $persona = Get-ExakitManifestValue "persona.id"
+    $python = Get-ExakitManifestValue "components.pyexasol.python"
+    if (-not $python) { $python = Join-Path $script:ExakitHome "pyexasol-venv\Scripts\python.exe" }
+    $hasNotebook = [bool](Get-ExakitManifestValue "components.notebook.version")
+    $hasDash = [bool](Get-ExakitManifestValue "components.dash_server.version")
+    $hasUdf = [bool](Get-ExakitManifestValue "components.udf_devkit.version")
+    $dashPort = Get-ExakitManifestValue "components.dash_server.port"
+    if (-not $dashPort) { $dashPort = "5100" }
 
-    Write-ExakitBanner "How to connect" "AI clients, SQL clients, Python - pick your door"
+    Write-ExakitBanner "How to connect" "AI clients, SQL clients, Python, notebooks - pick your door"
 
     Start-ExakitPanel "1 - Ask questions with an AI client (MCP)"
     Write-ExakitPanelLine "Connect one or more AI clients in a single guided step:"
@@ -867,7 +1032,23 @@ function Show-ExakitGuide {
     Write-ExakitPanelLine "First thing to ask it:"
     Write-ExakitPanelLine "  'List the schemas and tables in my Exasol database, then answer my"
     Write-ExakitPanelLine "   questions with read-only SQL - show me the SQL before you run it.'"
-    Write-ExakitPanelLine "14 ready-made questions: data\example-questions.md (in the kit)"
+    # Ready-made questions for the data this kit holds, not a fixed TPC-H list a
+    # persona that never loads TPC-H cannot ask (audit NEW-01). Twin of cmd_guide.
+    $root = Get-ExakitRepoRoot
+    $asked = $false
+    if ($sets -and $root) {
+        foreach ($entry in @($sets.PSObject.Properties | Sort-Object Name)) {
+            if ($entry.Value.loaded -ne $true) { continue }
+            if ($entry.Name -eq "tpch") { $questions = Join-Path (Join-Path $root "data") "example-questions.md" }
+            else { $questions = Join-Path (Join-Path (Join-Path (Join-Path $root "data") "datasets") $entry.Name) "examples.sql" }
+            if (-not (Test-Path -LiteralPath $questions)) { continue }
+            if (-not $asked) { Write-ExakitPanelLine "Ready-made questions for your data (each with its SQL):" }
+            Write-ExakitPanelLine "  $($entry.Name):"
+            Write-ExakitPanelLine "    $questions"
+            $asked = $true
+        }
+    }
+    if (-not $asked) { Write-ExakitPanelLine "Ready-made questions come with each dataset: exakit data-load <id>" }
     Complete-ExakitPanel
 
     Start-ExakitPanel "2 - Browse and query with a SQL client (GUI)"
@@ -881,21 +1062,54 @@ function Show-ExakitGuide {
     if ($mcpUser) { Write-ExakitPanelLine "  (read-only alternative: user $mcpUser)" }
     Write-ExakitPanelLine "  TLS:       local self-signed certificate - in Driver properties set"
     Write-ExakitPanelLine "             validateservercertificate = 0, then Test Connection > Finish."
-    Write-ExakitPanelLine "Each bundled dataset has its own schema (TPCH, ENERGY, WEATHER);"
+    if ($schemas.Count -gt 0) {
+        Write-ExakitPanelLine "Each loaded dataset has its own schema: $($schemas -join ', ');"
+    } else {
+        Write-ExakitPanelLine "No dataset is loaded yet (exakit data-load); each one gets its own schema;"
+    }
     Write-ExakitPanelLine "your own uploads default to STARTER_KIT."
     Complete-ExakitPanel
 
     Start-ExakitPanel "3 - Terminal and Python"
-    Write-ExakitPanelLine "Interactive SQL shell:   exapump interactive -p starter-kit"
-    Write-ExakitPanelLine "One-off query:           exapump sql -p starter-kit 'SELECT 42'"
-    Write-ExakitPanelLine "Python (pyexasol preinstalled in its own environment):"
-    Write-ExakitPanelLine "  $(Get-ExakitTilde (Join-Path $script:ExakitHome 'pyexasol-venv'))"
+    Write-ExakitPanelLine "One-off query:           exakit sql 'SELECT 42'"
+    Write-ExakitPanelLine "Interactive SQL shell, with the kit's exapump profile:"
+    Write-ExakitPanelLine "  `$env:EXAPUMP_CONFIG = '$(Join-Path $script:ExakitHome 'exapump\config.toml')'"
+    Write-ExakitPanelLine "  exapump interactive -p starter-kit"
+    # The shell line, then Python lines marked by their prompt, with the password file's real path (audit NEW-02).
+    $pwPath = if ($pwfile) { $pwfile } else { Join-Path $script:CredsDir "<password file>" }
+    Write-ExakitPanelLine "Python with pyexasol - start the kit's Python:"
+    Write-ExakitPanelLine "  $(Get-ExakitTilde $python)"
+    Write-ExakitPanelLine "then, at its >>> prompt:"
+    Write-ExakitPanelLine "  >>> import pyexasol"
+    Write-ExakitPanelLine "  >>> pw = open(r'$pwPath').read().strip()"
+    # The dsn carries the database's TLS pin once recorded (SEC-14).
+    Write-ExakitPanelLine "  >>> c = pyexasol.connect(dsn='$(Get-ExakitPinnedDsn "$($hostName):$port")', user='$user',"
+    Write-ExakitPanelLine "  ...     password=pw, websocket_sslopt={'cert_reqs': 0})"
+    Write-ExakitPanelLine "  >>> c.execute('SELECT TABLE_NAME FROM EXA_ALL_TABLES').fetchall()"
+    Complete-ExakitPanel
+
+    Start-ExakitPanel "4 - Notebooks, dashboards and models"
+    if ($persona) {
+        Write-ExakitPanelLine "Set up as:            $($persona -replace ',', ', ')  (exakit persona plan)"
+    } else {
+        Write-ExakitPanelLine "Personas:             exakit persona list - exakit persona add <id>"
+    }
+    if ($hasNotebook) { Write-ExakitPanelLine "Notebooks:            exakit notebook (JupyterLab, Marimo)" }
+    else { Write-ExakitPanelLine "Notebooks:            exakit marketplace notebook" }
+    Write-ExakitPanelLine "Roles of a table:     exakit describe <SCHEMA.TABLE>"
+    if ($hasDash) { Write-ExakitPanelLine "Dashboards:           http://127.0.0.1:$dashPort" }
+    else { Write-ExakitPanelLine "Dashboards:           exakit marketplace dash-server" }
+    if ($hasUdf) { Write-ExakitPanelLine "Models and UDFs:      exakit mlflow url - exakit udf-setup - exakit rust-udf" }
+    else { Write-ExakitPanelLine "Models and UDFs:      exakit persona add ml-engineer" }
     Complete-ExakitPanel
 
     Start-ExakitPanel "Everything else"
     Write-ExakitPanelLine "Connection summary:   exakit info"
     Write-ExakitPanelLine "Load more data:       exakit data-load"
+    Write-ExakitPanelLine "Optional add-ons:     exakit marketplace"
+    Write-ExakitPanelLine "Your settings:        $(Get-ExakitTilde (Join-Path $script:ExakitHome 'exakit.env'))"
     Write-ExakitPanelLine "Health check:         exakit status - exakit mcp-doctor"
+    Write-ExakitPanelLine "Every command:        exakit help - exakit catalog"
     Complete-ExakitPanel
     Write-Host ""
 }
@@ -945,7 +1159,12 @@ function Deny-ExakitInput {
     Stop-ExakitAnimation
     if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "REJECT" $Message }
     Write-Host ""
-    if ($script:UiFancy) {
+    # When stdout is not the console (a pipe, an agent reading it) the refusal goes to stderr, as
+    # reject() in common.sh and Fail above do: prose never lands where a program reads the answer.
+    if ([Console]::IsOutputRedirected) {
+        [Console]::Error.WriteLine("")
+        [Console]::Error.WriteLine(("  {0} {1}" -f $script:UiCross, $Message))
+    } elseif ($script:UiFancy) {
         Write-Host ("  {0}{1} {2}{3}{4}" -f $script:UiErr, $script:UiCross, $script:UiBold, $Message, $script:UiReset)
     } else {
         Write-Host ("  {0} {1}" -f $script:UiCross, $Message) -ForegroundColor Red
@@ -974,12 +1193,20 @@ function Fail([string]$Msg) {
         Write-ExakitFailureNote $Msg
     }
     # Rendered as a small "card": prominent cross header, then a dim gutter
-    # line to the log - the same shape as ui.sh's die().
-    Write-Host ""
-    if ($script:UiFancy) {
+    # line to the log - the same shape as ui.sh's die(). When stdout is not the
+    # console (an agent reading --json, a pipe) the card goes to stderr, as die()
+    # does: Write-Host reaches a captured stdout, which put prose where a JSON
+    # object belongs (audit AGT-11).
+    if ([Console]::IsOutputRedirected) {
+        [Console]::Error.WriteLine("")
+        [Console]::Error.WriteLine(("  {0} {1}" -f $script:UiCross, $Msg))
+        if ($script:LogFile) { [Console]::Error.WriteLine(("    | Log: {0}" -f $script:LogFile)) }
+    } elseif ($script:UiFancy) {
+        Write-Host ""
         Write-Host ("  {0}{1} {2}{3}{4}" -f $script:UiErr, $script:UiCross, $script:UiBold, $Msg, $script:UiReset)
         if ($script:LogFile) { Write-Host ("    {0}{1} Log: {2}{3}" -f $script:UiDim, $script:UiVB, $script:LogFile, $script:UiReset) }
     } else {
+        Write-Host ""
         Write-Host ("  {0} {1}" -f $script:UiCross, $Msg) -ForegroundColor Red
         if ($script:LogFile) { Write-Host ("    | Log: {0}" -f $script:LogFile) }
     }
@@ -1042,6 +1269,13 @@ function ConvertTo-ExakitNativeArgs {
             # same parser, so it has to be doubled or it would swallow the
             # backslash that protects the quote.
             $v = [regex]::Replace($v, '(\\*)"', '$1$1\"')
+        }
+        if ($v -match '\s' -and $v.EndsWith('\')) {
+            # 5.1 wraps an argument with a space in quotes and does not double
+            # the backslashes before its closing quote, so a trailing
+            # backslash would escape that quote and run into the next argument
+            # (WIN-05: a statement or path ending in a backslash lost its end).
+            $v = [regex]::Replace($v, '(\\+)$', '$1$1')
         }
         $out += $v
     }
@@ -1320,8 +1554,23 @@ function Test-ExakitSystemPython {
 # ever replaced.
 
 # The uv.exe the kit's own install writes. Twin of $EXAKIT_BIN_DIR/uv.
+# Get-ExakitUvPlatform - which uv release asset fits this machine. Windows (and Windows PowerShell 5.1,
+# which has no $IsWindows) takes the zip with uv.exe; PowerShell 7 on macOS or Linux takes astral's tarball,
+# as setup/lib/common.sh does, so a pwsh there never fetches a Windows binary it cannot start.
+function Get-ExakitUvPlatform {
+    $onWindows = $true
+    if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { $onWindows = [bool]$IsWindows }
+    if ($onWindows) {
+        return @{ Key = "windows-x86_64"; Asset = "uv-x86_64-pc-windows-msvc.zip"; Exe = ".exe"; Folder = "" }
+    }
+    $machine = "x86_64"
+    if ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture -eq [System.Runtime.InteropServices.Architecture]::Arm64) { $machine = "aarch64" }
+    if ($IsMacOS) { $os = "macos"; $triple = "$machine-apple-darwin" } else { $os = "linux"; $triple = "$machine-unknown-linux-gnu" }
+    return @{ Key = "$os-$machine"; Asset = "uv-$triple.tar.gz"; Exe = ""; Folder = "uv-$triple" }
+}
+
 function Get-ExakitUvKitBin {
-    return (Join-Path $script:BinDir "uv.exe")
+    return (Join-Path $script:BinDir ("uv" + (Get-ExakitUvPlatform).Exe))
 }
 
 # The path uv's own Windows installer used to write uv.exe to:
@@ -1376,12 +1625,12 @@ function Get-ExakitUvPinnedSha256 {
 # archive. $null means "no digest"; the caller refuses to install.
 function Get-ExakitUvExpectedSha256 {
     param([Parameter(Mandatory)][string]$Version, [Parameter(Mandatory)][string]$Url)
-    $advertised = Get-ExakitVersionsValue -Path "components.uv.version"
+    $advertised = Get-ExakitVersionsPin -Path "components.uv.version"     # the kit copy's pin (SEC-13)
     if ($advertised -and $advertised -eq $Version) {
-        $digest = Get-ExakitVersionsValue -Path "components.uv.sha256.windows-x86_64"
+        $digest = Get-ExakitVersionsPin -Path ("components.uv.sha256." + (Get-ExakitUvPlatform).Key)
         if ($digest -and $digest -match '^[0-9a-f]{64}$') { return $digest }
     }
-    $digest = Get-ExakitUvPinnedSha256 "uv-$Version-windows-x86_64"
+    $digest = Get-ExakitUvPinnedSha256 ("uv-$Version-" + (Get-ExakitUvPlatform).Key)
     if ($digest) { return $digest }
     if (-not $env:EXAKIT_UV_VERSION) { return $null }
     try {
@@ -1455,13 +1704,14 @@ function Expand-ExakitZip {
 # of exakit_uv_install_pinned.
 function Install-ExakitUvPinned {
     $version = Get-ExakitUvPinnedVersion
-    $asset = "uv-x86_64-pc-windows-msvc.zip"
+    $platform = Get-ExakitUvPlatform
+    $asset = $platform.Asset
     $url = "https://github.com/$($script:UvRepo)/releases/download/$version/$asset"
     $expected = Get-ExakitUvExpectedSha256 -Version $version -Url $url
     # Never install a binary that could not be verified: uvx is the process the
     # AI client hands the database password to. There is no override.
     if (-not $expected) {
-        Fail "No checksum is pinned for uv $version (windows-x86_64); refusing to install an unverified uv. The kit pins components.uv in versions.json - use the advertised version, or add this release's digest there."
+        Fail "No checksum is pinned for uv $version ($($platform.Key)); refusing to install an unverified uv. The kit pins components.uv in versions.json - use the advertised version, or add this release's digest there."
     }
     $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-uv-" + [guid]::NewGuid().ToString("N"))
     New-Item -ItemType Directory -Force -Path $stage | Out-Null
@@ -1473,14 +1723,23 @@ function Install-ExakitUvPinned {
     Test-ExakitSha256 -Path $zip -Expected $expected
     $unpacked = Join-Path $stage "unpacked"
     try {
-        Expand-ExakitZip -Path $zip -Destination $unpacked
+        if ($platform.Exe) {
+            Expand-ExakitZip -Path $zip -Destination $unpacked
+        } else {
+            New-Item -ItemType Directory -Force -Path $unpacked | Out-Null
+            & tar -xzf $zip -C $unpacked
+            if ($LASTEXITCODE -ne 0) { throw "tar exited $LASTEXITCODE" }
+        }
     } catch {
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
         Fail "The uv archive was verified but could not be unpacked ($_); nothing was installed."
     }
-    # astral's Windows zip holds uv.exe, uvx.exe and uvw.exe at its root.
-    $uvExe = Join-Path $unpacked "uv.exe"
-    $uvxExe = Join-Path $unpacked "uvx.exe"
+    # astral's Windows zip holds uv.exe, uvx.exe and uvw.exe at its root; its tarballs hold uv and uvx in a
+    # uv-<target> folder.
+    $inner = $unpacked
+    if ($platform.Folder) { $inner = Join-Path $unpacked $platform.Folder }
+    $uvExe = Join-Path $inner ("uv" + $platform.Exe)
+    $uvxExe = Join-Path $inner ("uvx" + $platform.Exe)
     if (-not (Test-Path $uvExe) -or -not (Test-Path $uvxExe)) {
         Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
         Fail "The uv archive does not hold uv.exe and uvx.exe as astral publishes them; nothing was installed."
@@ -1488,7 +1747,8 @@ function Install-ExakitUvPinned {
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
     $kitUv = Get-ExakitUvKitBin
     Copy-Item -Force $uvExe $kitUv
-    Copy-Item -Force $uvxExe (Join-Path $script:BinDir "uvx.exe")
+    Copy-Item -Force $uvxExe (Join-Path $script:BinDir ("uvx" + $platform.Exe))
+    if (-not $platform.Exe) { & chmod +x $kitUv (Join-Path $script:BinDir "uvx") }
     Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
     # The binary that landed must be the version that was pinned: a checksum
     # proves the bytes, this proves they run and say what the pin says. A
@@ -1553,7 +1813,7 @@ function Install-ExakitUv {
 function Get-ExakitUvUvx {
     $bin = Get-ExakitUvBin
     if (-not $bin) { return $null }
-    $uvx = Join-Path (Split-Path $bin -Parent) "uvx.exe"
+    $uvx = Join-Path (Split-Path $bin -Parent) ("uvx" + (Get-ExakitUvPlatform).Exe)
     if (Test-Path $uvx) { return $uvx }
     return $null
 }
@@ -1872,6 +2132,151 @@ function Remove-ExakitManifestValue {
     }
 }
 
+# ---------------------------------------------------------------------------
+# The database's TLS certificate pin (audit SEC-14). Twin of the "TLS
+# certificate pin" section of common.sh, which explains it: the database's
+# certificate is self-signed, so the kit records its fingerprint ONCE, trust on
+# first use, when it has itself just deployed or started its own database
+# (runtime.tls_fingerprint, runtime.tls_fingerprint_at), and every client it
+# builds pins it - exapump (certificate_fingerprint), pyexasol (dsn
+# host/<fp>:port) and the MCP server's EXA_DSN. Nothing recorded = exactly the
+# old behaviour; a recorded pin is never silently replaced. The live value
+# comes from setup/lib/tls_pin.py, the one implementation both shells call.
+# ---------------------------------------------------------------------------
+$script:ExakitTlsPinScript = Join-Path $PSScriptRoot "tls_pin.py"
+
+# Get-ExakitTlsFingerprint - the recorded pin (lowercase hex SHA-256 of the DER
+# certificate), or "" when none is. A value that is not 64 hex digits is not a
+# pin: the clients would refuse every connection with it.
+function Get-ExakitTlsFingerprint {
+    $value = "" + (Get-ExakitManifestValue "runtime.tls_fingerprint")
+    if ($value -cmatch '^[0-9a-f]{64}$') { return $value }
+    return ""
+}
+
+# Get-ExakitTlsPinnedAt - when the pin was recorded, as written (UTC ISO 8601),
+# or "". pwsh 7's ConvertFrom-Json turns an ISO timestamp into a [datetime],
+# which would print in the local culture; Windows PowerShell 5.1 keeps the text.
+function Get-ExakitTlsPinnedAt {
+    $value = Get-ExakitManifestValue "runtime.tls_fingerprint_at"
+    if ($value -is [datetime]) {
+        return $value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    return "" + $value
+}
+
+# Get-ExakitTlsLiveFingerprint - what the port serves now, or "" (reason in the
+# log) when nothing answers TLS there. Never installs a Python to find out.
+function Get-ExakitTlsLiveFingerprint {
+    param([string]$DbHost, [string]$Port, [int]$TimeoutSeconds = 10)
+    if (-not $DbHost -or -not $Port -or -not (Test-Path $script:ExakitTlsPinScript)) { return "" }
+    $previous = $ErrorActionPreference
+    try {
+        # A native command's stderr must not become a terminating error here;
+        # the exit code is the answer. Same rule as Invoke-ExakitPython.
+        $ErrorActionPreference = "Continue"
+        $pinArgs = @($script:ExakitTlsPinScript, "fingerprint", $DbHost, "$Port", "--timeout", "$TimeoutSeconds")
+        if (Test-ExakitSystemPython) {
+            $out = & python @pinArgs 2>$null
+        } else {
+            $uv = Get-ExakitUvBin
+            if (-not $uv) { return "" }
+            $out = & $uv run --python $script:ManagedPythonVersion --no-project python @pinArgs 2>$null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-ExakitLog "INFO" "TLS pin: nothing answered TLS on ${DbHost}:${Port}"
+            return ""
+        }
+        $text = ("" + (@($out) | Select-Object -Last 1)).Trim()
+        if ($text -cmatch '^[0-9a-f]{64}$') { return $text }
+        return ""
+    } catch {
+        return ""
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+# Split-ExakitDsn <host:port> - @(host, port), the host without a pin.
+function Split-ExakitDsn([string]$Dsn) {
+    $index = "$Dsn".LastIndexOf(":")
+    if ($index -lt 1) { return @("", "") }
+    return @($Dsn.Substring(0, $index).Split("/")[0], $Dsn.Substring($index + 1))
+}
+
+# Get-ExakitPinnedDsn [dsn] - the DSN every kit-built pyexasol connection and
+# the MCP server use: host/<fp>:port when a pin is recorded, the DSN unchanged
+# otherwise. Defaults to runtime.dsn. (tls_pin.py's pinned_dsn, in one line.)
+function Get-ExakitPinnedDsn {
+    param([string]$Dsn = "")
+    if (-not $Dsn) { $Dsn = "" + (Get-ExakitManifestValue "runtime.dsn") }
+    $fp = Get-ExakitTlsFingerprint
+    if (-not $fp -or -not $Dsn) { return $Dsn }
+    $parts = Split-ExakitDsn $Dsn
+    if (-not $parts[0]) { return $Dsn }
+    return "$($parts[0])/${fp}:$($parts[1])"
+}
+
+# Register-ExakitTlsPin [-Replace] - trust on first use: record what the
+# database port serves, ONLY when nothing is recorded yet - or, with -Replace,
+# when the kit has itself just deployed a new database. $true when the pin
+# changed (the clients holding the old value must then be rewritten). Never
+# fatal, never silent. Twin of exakit_tls_record.
+function Register-ExakitTlsPin {
+    param([switch]$Replace)
+    $old = Get-ExakitTlsFingerprint
+    if ($old -and -not $Replace) { return $false }
+    $dsn = "" + (Get-ExakitManifestValue "runtime.dsn")
+    if (-not $dsn) { return $false }
+    $parts = Split-ExakitDsn $dsn
+    $live = Get-ExakitTlsLiveFingerprint -DbHost $parts[0] -Port $parts[1] -TimeoutSeconds 10
+    if (-not $live) {
+        Write-ExakitLog "INFO" "TLS pin: not recorded - nothing answered TLS on $dsn"
+        return $false
+    }
+    if ($live -eq $old) { return $false }
+    Set-ExakitManifestValue "runtime.tls_fingerprint" $live | Out-Null
+    Set-ExakitManifestValue "runtime.tls_fingerprint_at" ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")) | Out-Null
+    if ($old) {
+        Write-ExakitLog "INFO" "TLS pin: replaced for the new deployment ($old -> $live)"
+        Info "Pinned the new database's TLS certificate (SHA-256 $($live.Substring(0, 16))...)"
+    } else {
+        Write-ExakitLog "INFO" "TLS pin: recorded $live (trust on first use)"
+        Info "Pinned the database's TLS certificate (SHA-256 $($live.Substring(0, 16))...); clients now refuse any other"
+    }
+    return $true
+}
+
+# Update-ExakitTlsPinnedClients [-ProfileOnly] - after a pin was (re)recorded,
+# rewrite the clients that hold it so they all agree: the kit's exapump profile.
+# The AI clients' MCP entries hold no DSN - they name the launcher's MCP server
+# beside the database - so there is nothing in them to rewrite. -ProfileOnly
+# is kept for callers that ask for the profile alone. Twin of
+# exakit_tls_rewrite_clients.
+function Update-ExakitTlsPinnedClients {
+    param([switch]$ProfileOnly)
+    $pwFile = "" + (Get-ExakitManifestValue "runtime.password_file")
+    if ((Get-ExakitManifestValue "components.exapump.profile") -and $pwFile -and (Test-Path $pwFile) -and
+        (Get-Command New-ExapumpProfile -ErrorAction SilentlyContinue)) {
+        try { New-ExapumpProfile | Out-Null } catch { Warn2 "Could not rewrite the exapump profile with the pin. Finish it with: exakit update exapump" }
+    }
+}
+
+# Confirm-ExakitTlsPinned [-ProfileOnly] - the lazy half of trust on first use,
+# for an install made before the pin existed: the first kit command that
+# already needs the database up (exakit start, mcp-setup, update) records it
+# and rewrites the clients that hold the old settings - only while the
+# launcher reports ITS deployment running. A recorded pin is left alone. Twin
+# of exakit_tls_ensure_pinned.
+function Confirm-ExakitTlsPinned {
+    param([switch]$ProfileOnly)
+    if (Get-ExakitTlsFingerprint) { return }
+    if ((Get-RuntimeType) -ne "personal") { return }
+    if (-not (Get-Command Test-PersonalDeploymentRunning -ErrorAction SilentlyContinue)) { return }
+    if (-not (Test-PersonalDeploymentRunning)) { return }
+    if (Register-ExakitTlsPin) { Update-ExakitTlsPinnedClients -ProfileOnly:$ProfileOnly }
+}
+
 # Drop a step flag so a re-run of the installer reinstalls what a partial
 # uninstall removed. Twin of exakit_unmark_step in common.sh.
 function Remove-ExakitStepDone {
@@ -1952,10 +2357,10 @@ function Test-ExakitVersionsDoc {
     foreach ($block in $blocks) {
         if ($null -eq $block -or -not ($block -is [System.Management.Automation.PSCustomObject])) { return 1 }
         $version = Get-ManifestValue -Manifest $block -Path "version"
-        if (-not ($version -is [string]) -or $version -notmatch '^[A-Za-z0-9._+-]+$') { return 1 }
+        if (-not ($version -is [string]) -or $version -notmatch '^[A-Za-z0-9._+-]+\z') { return 1 }
         $minKit = Get-ManifestValue -Manifest $block -Path "min_kit_version"
         if ($null -ne $minKit) {
-            if (-not ($minKit -is [string]) -or $minKit -notmatch '^[A-Za-z0-9._+-]+$') { return 1 }
+            if (-not ($minKit -is [string]) -or $minKit -notmatch '^[A-Za-z0-9._+-]+\z') { return 1 }
         }
         $digests = Get-ManifestValue -Manifest $block -Path "sha256"
         if ($null -ne $digests) {
@@ -2112,6 +2517,46 @@ function Write-ExakitFailureNote {
         try { Protect-ExakitFile $script:FailureNotePath } catch { }
     } catch { }
 }
+
+# Get-ExakitRuntimeStatus - the runtime's status; with Start-ExakitRuntime
+# (exakit.ps1) the runtime-agnostic pair the inline offer needs. Anything
+# unrecognised answers "" for "cannot tell", which is not the same as "not
+# running". Twin of exakit_runtime_status in setup/lib/common.sh.
+function Get-ExakitRuntimeStatus {
+    switch (Get-RuntimeType) {
+        "personal" { try { return (Get-PersonalStatus) } catch { return "" } }
+    }
+    return ""
+}
+
+# Start-ExakitDatabase - the database half of `exakit start`: self-heal
+# semantics for the runtime (a stopped one is started, a missing one created -
+# `exakit start` promises a running database). Shared by the bare form, by
+# `exakit start database` and by `exakit notebook` (so it lives here, where the
+# notebook module can reach it), so they cannot drift. Twin of _start_database.
+function Start-ExakitDatabase {
+    if ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
+        Ok "Database is already running"
+    } elseif ((Get-RuntimeType) -eq "personal" -and (Get-PersonalStatus) -eq "conflict") {
+        # Port open is not database up: with another program on the port this
+        # said "already running" and exited 0 while status said stopped. Twin
+        # of the same arm in cmd_start (setup/exakit).
+        Fail "Port $(Get-PersonalDbPort) is held by another process, not by Exasol, so the database cannot start. Stop that process, then: exakit start"
+    } else {
+        Confirm-ExakitRuntimeRunning -Deploy
+    }
+    # The database is up, so a note left by an earlier start that could not is
+    # no longer true. Only a runtime note goes; an install-step note stays.
+    # So does a start failure an installer re-run booked against the completed
+    # runtime step (Clear-ExakitStartSoftFailure).
+    try {
+        if ((Get-ExakitRuntimeStatus) -like "running*") {
+            Clear-ExakitRuntimeFailureNote
+            Clear-ExakitStartSoftFailure
+        }
+    } catch { }
+}
+
 
 # Read, not consumed: `status` reports the note without clearing it, exactly as
 # the bash status does. Both fields are empty when there is no note.
@@ -2731,7 +3176,7 @@ function Get-ExakitKitVersionAt {
     $doc = Join-Path $KitRoot "versions.json"
     if (-not (Test-Path $doc)) { return $null }
     $version = Get-ExakitVersionsValue -Path "kit.version" -DocPath $doc
-    if (-not $version -or $version -notmatch '^[A-Za-z0-9._+-]+$') { return $null }
+    if (-not $version -or $version -notmatch '^[A-Za-z0-9._+-]+\z') { return $null }
     return $version
 }
 
@@ -2938,6 +3383,18 @@ function Test-ExakitVersionsSchemaAhead {
 #   Get-ExakitVersionsValue -Path "components.exapump.version"
 #   Get-ExakitVersionsValue -Path "components.exapump.sha256.windows-x86_64"
 # $null means "not advertised" - never a failure to be propagated.
+# Get-ExakitVersionsPin <dot.path> - a value from THIS KIT COPY's versions.json, never
+# the document fetched from main: every SHA-256 a download is verified against, and its
+# version, come from here (SEC-13). Twin of exakit_versions_pin.
+function Get-ExakitVersionsPin {
+    param([Parameter(Mandatory)][string]$Path)
+    $root = Get-ExakitRepoRoot
+    if (-not $root) { return $null }
+    $doc = Join-Path $root "versions.json"
+    if (-not (Test-Path -LiteralPath $doc)) { return $null }
+    return (Get-ExakitVersionsValue -Path $Path -DocPath $doc)
+}
+
 function Get-ExakitVersionsValue {
     param([Parameter(Mandatory)][string]$Path, [string]$DocPath = "")
     if (-not $DocPath) {
@@ -3052,7 +3509,8 @@ function Resolve-ExakitInstallVersions {
             if (-not $script:ExapumpVersion) { $script:ExapumpVersion = $script:ExapumpVersionFallback }
         }
         if (-not $script:McpVersion) {
-            $script:McpVersion = Get-ExakitLatestPypiVersion $script:McpPackage
+            # Not PyPI's newest: the MCP server is the image this kit copy pins.
+            $script:McpVersion = Get-ExakitVersionsPin -Path "components.mcp.version"
             if (-not $script:McpVersion) { $script:McpVersion = $script:McpVersionFallback }
         }
         if (-not $script:PyexasolVersion) {
@@ -3296,6 +3754,21 @@ function Get-ExakitStepArtifactState {
     return "unknown"
 }
 
+# Write-ExakitStepHeading <title> - a step's header, the installer's look:
+# accent arrow and bold title, set off by a blank line. Begin-ExakitStep draws
+# its steps with it, and `exakit persona add` its three. Twin of
+# exakit_step_heading in common.sh.
+function Write-ExakitStepHeading {
+    param([Parameter(Mandatory)][string]$Title)
+    Write-Host ""
+    if ($script:UiFancy) {
+        Write-Host ("  {0}{1}{2} {3}{4}{5}" -f $script:UiAccent, $script:UiArrow, $script:UiReset, $script:UiBold, $Title, $script:UiReset)
+    } else {
+        Write-Host ("  {0} {1}" -f $script:UiArrow, $Title) -ForegroundColor Blue
+    }
+    Write-ExakitLog "STEP" $Title
+}
+
 # Begin-ExakitStep <name> <description> - announces a step, returns $false
 # (caller should skip) if already done AND what it installed is still there.
 #
@@ -3326,13 +3799,7 @@ function Begin-ExakitStep {
             return $false
         }
     }
-    Write-Host ""
-    if ($script:UiFancy) {
-        Write-Host ("  {0}{1}{2} {3}{4}{5}" -f $script:UiAccent, $script:UiArrow, $script:UiReset, $script:UiBold, $Description, $script:UiReset)
-    } else {
-        Write-Host ("  {0} {1}" -f $script:UiArrow, $Description) -ForegroundColor Blue
-    }
-    Write-ExakitLog "STEP" $Description
+    Write-ExakitStepHeading $Description
     if ($rerun) {
         if ($script:ExakitStepRerunReason) {
             Info "Recorded as done, but $($script:ExakitStepRerunReason)"
@@ -3547,6 +4014,7 @@ function Get-ExakitNoticeStillBehind {
             continue
         }
         $now = Get-ExakitComponentCurrent $name
+        if (-not (Test-ExakitComponentManaged $name)) { continue }
         if (-not $now -or $now -eq "unknown" -or $now -eq $want) { continue }
         # "Caught up" is not only "landed on exactly the advertised version" - an
         # install that overshot it has nothing pending either. Testing equality
@@ -3558,7 +4026,7 @@ function Get-ExakitNoticeStillBehind {
     return $survivors
 }
 
-# Printing is shared by the freshly-computed and the cached path.# Printing is shared by the freshly-computed and the cached path.
+# Shared renderer for fresh and cached notices.
 function Write-ExakitNoticeLines {
     param([string[]]$Light, [string]$LightWorst, [string[]]$Heavy, [string]$HeavyWorst)
     if ($Light.Count -eq 0 -and $Heavy.Count -eq 0) { return }
@@ -3674,6 +4142,7 @@ function Show-ExakitUpdateNotice {
             $available = Get-ExakitComponentAvailable $actual
             if (-not $available) { continue }
             $current = Get-ExakitComponentCurrent $actual
+            if (-not (Test-ExakitComponentManaged $actual)) { continue }
             if (-not $current -or $current -eq "unknown" -or $current -eq "not installed") { continue }
             if ($current -eq $available) { continue }
             # Different is not the same as behind. An install that is PAST the
@@ -3732,12 +4201,12 @@ function Get-ExakitSkillsLocalVersion {
     $marker = Join-Path $root "skills\.version"
     if (Test-Path $marker) {
         $v = ("" + (Get-Content -Path $marker -TotalCount 1 -ErrorAction SilentlyContinue)).Trim()
-        if ($v -match '^[A-Za-z0-9._+-]+$') { return $v }
+        if ($v -match '^[A-Za-z0-9._+-]+\z') { return $v }
     }
     $doc = Join-Path $root "versions.json"
     if (-not (Test-Path $doc)) { return "" }
     $v = Get-ExakitVersionsValue -Path "components.skills.version" -DocPath $doc
-    if ($v -and $v -match '^[A-Za-z0-9._+-]+$') { return $v }
+    if ($v -and $v -match '^[A-Za-z0-9._+-]+\z') { return $v }
     return ""
 }
 
@@ -3865,15 +4334,21 @@ function Update-ExakitSelf {
     # construction makes the swap a rename again. (The zip may stay in TEMP:
     # Expand-Archive writes across volumes fine.)
     $stage = Join-Path $script:ExakitHome ".kit-stage-$([guid]::NewGuid().ToString('N'))"
-    # main first - that is what install.ps1 fetches, and kit script changes live on
-    # main: a tag exists only where a release was cut. The tag URLs stay behind it
-    # so a kit installed from a tagged release still updates.
-    $refs = @("main", "v$Advertised", "$Advertised")
+    # THE ANNOUNCED RELEASE FIRST (SEC-02): its tag, then the branch this kit was
+    # installed from (kit.source), then main. Twin of exakit_update_self.
+    $branch = ""
+    $source = "" + (Get-ExakitManifestValue "kit.source")
+    if ($source.StartsWith("$repo@")) { $branch = $source.Substring($repo.Length + 1) }
+    if ($branch -in @("", "main") -or $branch -match '^v?[0-9]' -or $branch -notmatch '^[A-Za-z0-9._/-]+\z') { $branch = "" }
+    $tags = @("v$Advertised", "$Advertised")
+    $refs = @($tags)
+    if ($branch) { $refs += $branch }
+    $refs += "main"
     $kitRef = ""
     $proxyHint = ""
     foreach ($ref in $refs) {
-        if ($ref -eq "main") { $url = "https://github.com/$repo/archive/refs/heads/main.zip" }
-        else { $url = "https://github.com/$repo/archive/refs/tags/$ref.zip" }
+        if ($tags -contains $ref) { $url = "https://github.com/$repo/archive/refs/tags/$ref.zip" }
+        else { $url = "https://github.com/$repo/archive/refs/heads/$ref.zip" }
         try {
             Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 300
             $kitRef = $ref
@@ -3884,7 +4359,7 @@ function Update-ExakitSelf {
     }
     if (-not $kitRef) {
         Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-        Fail "Could not download the starter kit from github.com/$repo (tried main and the $Advertised tags).$proxyHint"
+        Fail "Could not download the starter kit from github.com/$repo (tried the $Advertised release tags$(if ($branch) { ", $branch" }) and main).$proxyHint"
     }
 
     try {
@@ -3919,6 +4394,14 @@ function Update-ExakitSelf {
     # What actually landed is what gets recorded: GitHub's raw endpoint can serve a
     # newer versions.json than the branch archive for a few minutes after a merge.
     $stagedVersion = Get-ExakitKitVersionAt -KitRoot $stagedRoot
+    # A release archive that is not the announced version is refused; a branch is named for what it is.
+    if ($tags -contains $kitRef -and $stagedVersion -ne $Advertised) {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        Fail "The $kitRef release archive says it is version $(if ($stagedVersion) { $stagedVersion } else { 'unknown' }), not $Advertised; existing kit copy was left untouched."
+    }
+    if (-not ($tags -contains $kitRef) -and $stagedVersion -ne $Advertised) {
+        Info "No $Advertised release tag; updating from the $kitRef branch, which is version $(if ($stagedVersion) { $stagedVersion } else { 'unknown' })."
+    }
     if (-not $stagedVersion) {
         $stagedVersion = $Advertised
     } elseif ($stagedVersion -ne $Advertised -and (Test-ExakitVersionNewer -Latest $Advertised -Current $stagedVersion)) {
@@ -4109,8 +4592,15 @@ Initialize-ExakitWebProxy
 # off to debug their internet connection; naming the variable that fixes it is
 # the whole remedy. Empty for every other failure, so nothing else changes.
 function Get-ExakitProxyHint {
-    param([AllowEmptyString()][string]$ErrorText)
+    param([AllowEmptyString()][string]$ErrorText, [switch]$Python)
     if ("$ErrorText" -notmatch "407") { return "" }
+    # The add-ons install through uv and Python, which cannot sign in to a proxy
+    # with the Windows account the way PowerShell's downloads now do, so the
+    # remedy above did not reach them (WIN-04): they need a proxy that does not
+    # ask, or the proxy's own sign-in in the address.
+    if ($Python) {
+        return " The PROXY refused this, not the server (HTTP 407, authentication required). Add-ons install through uv, which cannot use your Windows sign-in: ask IT for a proxy address that does not need one, or set `$env:HTTPS_PROXY to http://<user>:<password>@<proxy>:<port> for this run, then re-run."
+    }
     return " The PROXY refused this, not the server (HTTP 407, authentication required): set `$env:HTTPS_PROXY to your proxy's address and re-run, or ask IT for one that accepts your Windows sign-in."
 }
 
@@ -4488,11 +4978,17 @@ function Set-ExakitReadonlyAllowlist {
         # match `exakit skills-install`, which writes this very settings file.
         $allow += "Bash($prefix skills)"
         $allow += "Bash($prefix skills --json)"
+        # The same for the TLS pin: showing it reads, `tls-pin --accept`
+        # re-pins (trusts whatever answers on the port) and must keep asking.
+        $allow += "Bash($prefix tls-pin)"
+        $allow += "Bash($prefix tls-pin --json)"
     }
     # The PowerShell tool has its own rule namespace, and bare `exakit` resolves there.
     foreach ($command in $readonly) { $allow += "PowerShell(exakit $command`:*)" }
     $allow += "PowerShell(exakit skills)"
     $allow += "PowerShell(exakit skills --json)"
+    $allow += "PowerShell(exakit tls-pin)"
+    $allow += "PowerShell(exakit tls-pin --json)"
     $allow += "mcp__exasol"
     # The deny needs every spelling too, for the opposite reason: a rule that
     # only names the bare form is trivially sidestepped by the absolute path the
@@ -4632,7 +5128,15 @@ function Get-ExakitSkillField {
     $key = $Field + ": "
     for ($i = 1; $i -lt $lines.Count; $i++) {
         if ($lines[$i].Trim() -eq "---") { break }
-        if ($lines[$i].StartsWith($key)) { return $lines[$i].Substring($key.Length) }
+        if ($lines[$i].StartsWith($key)) {
+            # A YAML-quoted value (the components' own skills quote theirs) is
+            # read without its quotes. Twin of exakit_skill_field.
+            $v = $lines[$i].Substring($key.Length)
+            if ($v.Length -ge 2 -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) {
+                $v = $v.Substring(1, $v.Length - 2)
+            }
+            return $v
+        }
     }
     return ""
 }
@@ -4910,6 +5414,12 @@ function Show-ExakitSkills {
             counts = [ordered]@{
                 installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count
             }
+            # The rows counted by the very token each row's state carries (audit AGT-16).
+            by_state = $(
+                $byState = [ordered]@{}
+                foreach ($group in @($entries | Group-Object -Property state | Sort-Object -Property Name)) { $byState[$group.Name] = $group.Count }
+                $byState
+            )
             installed_version = $(if ($skjHave) { "$skjHave" } else { $null })
             advertised_version = $(if ($skjWant) { "$skjWant" } else { $null })
             status = $skjStatus
@@ -5100,15 +5610,8 @@ function Confirm-ExakitRuntimeRunning {
 # join the routine update flow, and an add-on that is already on the machine
 # (kit-managed or a system install) is never advertised.
 #
-# Adding a new add-on is three additive changes - NO switch-statement surgery.
-# Every registry function (version block, env override, fallback, upstream
-# lookup, installed probe, update targets/dispatch) handles registered add-ons
-# through a generic default arm driven by this registry:
-#   1. Ship its module as setup/lib/<id>.ps1 (+ the .sh twin), defining the
-#      functions named below plus its own $script:<X>VersionFallback constant.
-#   2. Add a components.<id> block to versions.json: version, severity, and
-#      repo (GitHub-release-installed) or package (PyPI-installed).
-#   3. Add one entry here.
+# Python add-ons are declared in marketplace/catalog.json and implemented in
+# marketplace/addons/<id>.py. Notebook child rows also come from Python metadata.
 # The add-on's one-line description is NOT one of those changes: it is the About
 # field of its own repository, read through Get-ExakitMarketplaceAddonDescription.
 # (CI guards move with it: the expected-components set in versions.yml and the
@@ -5131,92 +5634,364 @@ function Get-ExakitVersionPlain {
     return $Version
 }
 
+function Get-ExakitMarketplaceRoot {
+    if (Test-Path (Join-Path $script:ExakitMarketplaceSourceRoot 'marketplace\catalog.json')) {
+        return $script:ExakitMarketplaceSourceRoot
+    }
+    return (Get-ExakitRepoRoot)
+}
+
+# Catalog rows and their order live in marketplace/catalog.json.
 function Get-ExakitMarketplaceAddons {
-    return @(
-        [pscustomobject]@{
-            Id          = "dash-server"
-            Label       = "dash-server (AI dashboard host)"
-            InstallFn   = "Install-DashServer"
-            ValidateFn  = "Test-DashServer"
-            UpdateFn    = "Update-DashServer"
-            VersionFn   = "Get-DashServerInstalledVersion"
-            UninstallFn = "Uninstall-DashServer"
-            StatusFn    = "Get-DashServerStatus"
-            StartFn     = "Start-DashServer"
-            StopFn      = "Stop-DashServer"
-            AutostartFn = "Get-DashServerAutostartCommand"
-            LogFn       = "Get-DashServerLogPath"
-            SummaryFn   = "Get-DashServerSummary"
-            UrlFn       = "Get-DashServerUrl"
-            EnvVar      = "EXAKIT_DASH_SERVER_VERSION"
-            FallbackVar = "DashServerVersionFallback"
-        },
-        [pscustomobject]@{
-            Id          = "dbt-exasol"
-            Label       = "dbt-exasol (dbt models on Exasol)"
-            InstallFn   = "Install-DbtExasol"
-            ValidateFn  = "Test-DbtExasol"
-            UpdateFn    = "Update-DbtExasol"
-            VersionFn   = "Get-DbtExasolInstalledVersion"
-            UninstallFn = "Uninstall-DbtExasol"
-            SummaryFn   = "Get-DbtExasolSummary"
-            SystemPresentFn = "Test-DbtExasolSystemPresent"
-            EnvVar      = "EXAKIT_DBT_EXASOL_VERSION"
-            FallbackVar = "DbtExasolVersionFallback"
-        },
-        [pscustomobject]@{
-            Id          = "exasol-scheduler"
-            Label       = "Exasol Scheduler (SQL jobs on a schedule)"
-            InstallFn   = "Install-ExasolScheduler"
-            ValidateFn  = "Test-ExasolScheduler"
-            UpdateFn    = "Update-ExasolScheduler"
-            VersionFn   = "Get-ExasolSchedulerInstalledVersion"
-            UninstallFn = "Uninstall-ExasolScheduler"
-            StatusFn    = "Get-ExasolSchedulerStatus"
-            StartFn     = "Start-ExasolScheduler"
-            StopFn      = "Stop-ExasolScheduler"
-            AutostartFn = "Get-ExasolSchedulerAutostartCommand"
-            LogFn       = "Get-ExasolSchedulerLogPath"
-            SummaryFn   = "Get-ExasolSchedulerSummary"
-            SystemPresentFn = "Get-ExasolSchedulerSystemPresent"
-            ApplicableFn = "Test-ExasolSchedulerApplicable"
-            ReasonFn     = "Get-ExasolSchedulerApplicableReason"
-            EnvVar      = "EXAKIT_EXASOL_SCHEDULER_VERSION"
-            FallbackVar = "ExasolSchedulerVersionFallback"
-        },
-        [pscustomobject]@{
-            Id          = "exasol-vscode"
-            Label       = "Exasol for VS Code (editor extension)"
-            InstallFn   = "Install-ExasolVscode"
-            ValidateFn  = "Test-ExasolVscode"
-            UpdateFn    = "Update-ExasolVscode"
-            VersionFn   = "Get-ExasolVscodeInstalledVersion"
-            UninstallFn = "Uninstall-ExasolVscode"
-            ApplicableFn = "Test-ExasolVscodeApplicable"
-            ReasonFn     = "Get-ExasolVscodeApplicableReason"
-            SummaryFn    = "Get-ExasolVscodeSummary"
-            SystemPresentFn = "Test-ExasolVscodeSystemPresent"
-            EnvVar      = "EXAKIT_EXASOL_VSCODE_VERSION"
-            FallbackVar = "ExasolVscodeVersionFallback"
-        },
-        [pscustomobject]@{
-            Id          = "json-tables"
-            Label       = "JSON Tables (JSON into Exasol)"
-            InstallFn   = "Install-JsonTables"
-            ValidateFn  = "Test-JsonTables"
-            UpdateFn    = "Update-JsonTables"
-            VersionFn   = "Get-JsonTablesInstalledVersion"
-            UninstallFn = "Uninstall-JsonTables"
-            ApplicableFn = "Test-JsonTablesApplicable"
-            ReasonFn     = "Get-JsonTablesApplicableReason"
-            SummaryFn    = "Get-JsonTablesSummary"
-            LogFn        = "Get-JsonTablesLogPath"
-            SystemPresentFn = "Get-JsonTablesSystemPresent"
-            LatestFn     = "Get-JsonTablesLatest"
-            EnvVar      = "EXAKIT_JSON_TABLES_VERSION"
-            FallbackVar = "JsonTablesVersionFallback"
+    $catalogPath = Join-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace') 'catalog.json'
+    if (-not (Test-Path $catalogPath)) { return @() }
+    try { $catalog = Get-Content -LiteralPath $catalogPath -Raw -Encoding UTF8 | ConvertFrom-Json }
+    catch { throw "Invalid marketplace/catalog.json: $_" }
+    if ($catalog.schema_version -ne 1 -or $null -eq $catalog.addons) {
+        throw 'marketplace/catalog.json needs schema_version 1 and an addons list'
+    }
+    $seen = @{}
+    $result = @()
+    foreach ($row in $catalog.addons) {
+        $id = [string]$row.id
+        if ($id -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $seen.ContainsKey($id)) {
+            throw "Invalid or repeated add-on id: $id"
         }
-    )
+        if ($row.backend -ne 'python' -or $null -ne $row.label -or -not $row.default_version) {
+            throw "Invalid marketplace definition: $id"
+        }
+        # The add-on's GitHub repository, as tools/addon_github.py copied it: the repo and name go into URLs
+        # and file names, the About into a terminal, so each is held to its plain shape. Twin of model.github_block.
+        $gh = $row.github
+        $ghRepo = [string]$gh.repo; $ghName = [string]$gh.name; $ghAbout = [string]$gh.about
+        if ($null -eq $gh -or $ghRepo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z' -or $ghRepo.Contains('..') -or
+            [string]$gh.url -cne "https://github.com/$ghRepo" -or $ghName -notmatch '^[A-Za-z0-9._-]+\z' -or
+            -not $ghAbout.Trim() -or $ghAbout.Length -gt 300 -or $ghAbout -match '\p{Cc}') {
+            throw "Invalid marketplace definition: ${id}: github must name the add-on's repository (tools/addon_github.py)"
+        }
+        if ($null -ne $row.visible -and $row.visible -isnot [bool]) { throw "Invalid visible setting: $id" }
+        # The line the kit writes for an add-on it builds itself (DOC-13). Twin of model.load_addons.
+        $kitAbout = ([string]$row.kit_about).Trim()
+        if ($kitAbout.Length -gt 120 -or $kitAbout -match '[\p{Cc}|"]') { throw "Invalid marketplace definition: ${id}: kit_about must be one line of at most 120 characters" }
+        $seen[$id] = $true
+        $visible = ($row.visible -ne $false)
+        $stem = (($id -split '[-_]') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
+        $label = if ($ghName -ceq $id) { $id } else { "$ghName ($id)" }
+        $addon = [pscustomobject]@{
+            Id = $id; Label = $label
+            GitHubRepo = $ghRepo; GitHubUrl = [string]$gh.url; GitHubName = $ghName; GitHubAbout = $ghAbout
+            KitAbout = $kitAbout
+            InstallFn = "Invoke-Marketplace${stem}Install"
+            ValidateFn = "Invoke-Marketplace${stem}Validate"
+            UpdateFn = "Invoke-Marketplace${stem}Update"
+            VersionFn = "Invoke-Marketplace${stem}InstalledVersion"
+            UninstallFn = "Invoke-Marketplace${stem}Uninstall"
+            SystemPresentFn = "Invoke-Marketplace${stem}SystemPresent"
+            ApplicableFn = "Invoke-Marketplace${stem}Applicable"
+            ReasonFn = "Invoke-Marketplace${stem}ApplicableReason"
+            SummaryFn = "Invoke-Marketplace${stem}Summary"
+            StatusFn = "Invoke-Marketplace${stem}Status"
+            StartFn = "Invoke-Marketplace${stem}Start"
+            StopFn = "Invoke-Marketplace${stem}Stop"
+            UrlFn = "Invoke-Marketplace${stem}Url"
+            LogFn = "Invoke-Marketplace${stem}LogPath"
+            AutostartFn = "Invoke-Marketplace${stem}AutostartCommand"
+            LatestFn = "Invoke-Marketplace${stem}Latest"
+            EnvVar = 'EXAKIT_' + $id.ToUpperInvariant().Replace('-', '_') + '_VERSION'
+            FallbackVar = ''
+        }
+        if ($id -eq 'notebook' -and @($row.choices).Count -gt 0) {
+            $addon | Add-Member -NotePropertyName QuestionsFn -NotePropertyValue 'Read-NotebookQuestions'
+            $addon | Add-Member -NotePropertyName ChildrenFn -NotePropertyValue 'Get-NotebookTableChildren'
+            $addon | Add-Member -NotePropertyName ChildrenPickedFn -NotePropertyValue 'Set-NotebookTableChildrenPicked'
+        }
+        $addon | Add-Member -NotePropertyName Visible -NotePropertyValue $visible -Force
+        $addon | Add-Member -NotePropertyName Backend -NotePropertyValue ([string]$row.backend) -Force
+        $addon | Add-Member -NotePropertyName DefaultVersion -NotePropertyValue ([string]$row.default_version) -Force
+        $result += $addon
+    }
+    return $result
+}
+
+function Get-ExakitMarketplaceVersionsDoc {
+    if ($env:EXAKIT_VERSION_POLICY -and $env:EXAKIT_VERSION_POLICY -notin @('manifest', 'latest')) { return '' }
+    return (Resolve-ExakitVersionsDoc)
+}
+
+# An add-on's read-only answers (is it installed, which version, does it apply here) are asked again and again while
+# one screen is built, and each asks Python: they are remembered for the run. Anything that changes an add-on forgets
+# them all first. Twin of _EXAKIT_HOOK_MEMO in common.sh.
+$script:ExakitHookMemo = @{}
+
+function Invoke-ExakitMarketplacePython {
+    param([string]$Id, [string]$Operation, [bool]$DryRun = $false)
+    if ($Operation -in @('install', 'update', 'uninstall', 'validate', 'start', 'stop')) { $script:ExakitHookMemo.Clear() }
+    if ($DryRun -or $Operation -notin @('installed-version', 'system-present', 'applicable', 'applicable-reason')) {
+        return (Invoke-ExakitMarketplacePythonNow -Id $Id -Operation $Operation -DryRun $DryRun)
+    }
+    $key = "$Id|$Operation"
+    if (-not $script:ExakitHookMemo.ContainsKey($key)) {
+        $script:ExakitHookMemo[$key] = Invoke-ExakitMarketplacePythonNow -Id $Id -Operation $Operation
+    }
+    return $script:ExakitHookMemo[$key]
+}
+
+function Invoke-ExakitMarketplacePythonNow {
+    param([string]$Id, [string]$Operation, [bool]$DryRun = $false)
+    $root = Get-ExakitMarketplaceRoot
+    $service = Join-Path (Join-Path $root 'marketplace') 'service.py'
+    $mutating = $Operation -in @('install', 'update', 'uninstall', 'validate', 'start', 'stop')
+    $python = if (-not $mutating -and (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue)) { Get-ExakitPersonaPython } else { '' }
+    $uv = if ($python) { '' } else { Get-ExakitUvBin }
+    if (-not $uv -and $mutating) {
+        $uv = Install-ExakitUv
+    }
+    if (-not $python -and -not $uv) {
+        if ($Operation -in @('validate', 'applicable', 'system-present')) { return $false }
+        else { return '' }
+    }
+    $previousErrorActionPreference = $ErrorActionPreference
+    $previousTarget = $env:EXAKIT_MARKETPLACE_TARGET_VERSION
+    $previousVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+    $previousUvCache = $env:UV_CACHE_DIR
+    try {
+        $ErrorActionPreference = 'Continue'
+        if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
+        $serviceArgs = @($service, $Id, $Operation)
+        if ($DryRun) { $serviceArgs += '--dry-run' }
+        if ($Operation -in @('install', 'update', 'latest', 'validate')) {
+            $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
+        }
+        if ($Operation -in @('install', 'update')) {
+            $env:EXAKIT_MARKETPLACE_TARGET_VERSION = Get-ExakitComponentAvailable $Id
+        }
+        $captured = [System.Collections.Generic.List[string]]::new()
+        $diagnostics = [System.Collections.Generic.List[string]]::new()
+        if ($python) {
+            $ErrorActionPreference = "Continue"
+            & $python @serviceArgs 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $diagnostics.Add("$_"); return }
+                $line = "$_"
+                if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) { Set-ExakitAddonActivity -Message $Matches[1] }
+                $captured.Add($line)
+            }
+        } else {
+            $uvArgs = @('run')
+            if (-not $mutating) { $uvArgs += '--offline' }
+            $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+            $ErrorActionPreference = "Continue"
+            & $uv @uvArgs @serviceArgs 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $diagnostics.Add("$_"); return }
+                $line = "$_"
+                if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) { Set-ExakitAddonActivity -Message $Matches[1] }
+                $captured.Add($line)
+            }
+        }
+        $code = $LASTEXITCODE
+        $lines = @($captured | Where-Object { $_ })
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -eq $previousTarget) { Remove-Item Env:EXAKIT_MARKETPLACE_TARGET_VERSION -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_TARGET_VERSION = $previousTarget }
+        if ($null -eq $previousVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $previousVersionsDoc }
+        if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
+        else { $env:UV_CACHE_DIR = $previousUvCache }
+    }
+    if (-not $mutating -and $code -eq 0) {
+        foreach ($line in $diagnostics) { [Console]::Error.WriteLine($line) }
+    }
+    if ($Operation -in @('validate', 'applicable', 'system-present')) { return ($code -eq 0) }
+    if ($Operation -in @('installed-version', 'latest') -and $code -ne 0) { return '' }
+    if ($code -ne 0) {
+        $failure = (@($lines) + @($diagnostics) | Select-Object -Last 1) -join ''
+        throw ($failure + (Get-ExakitProxyHint -ErrorText ((@($lines) + @($diagnostics)) -join " ") -Python))
+    }
+    if ($DryRun) {
+        foreach ($line in $lines) { Info "  will remove: $line" }
+        return $true
+    }
+    if ($Operation -in @('install', 'update', 'uninstall', 'start', 'stop')) {
+        foreach ($line in $lines) { Write-ExakitLog 'INFO' "$Id $line" }
+        return $true
+    }
+    return $lines
+}
+
+function Invoke-ExakitMarketplaceCli {
+    param([ValidateSet('notebook_cli', 'udf_cli', 'model_cli', 'udf_manage', 'mlflow_cli', 'rust_cli', 'workflow_cli', 'persona_apply', 'installer_flow')][string]$Script,
+          [string[]]$CmdArgs = @(), [switch]$AllowFailure)
+    $root = Get-ExakitMarketplaceRoot
+    $target = Join-Path (Join-Path $root 'marketplace') "$Script.py"
+    if (-not (Test-Path -LiteralPath $target)) { Fail "The $Script module is missing from this kit copy. Repair with: exakit update" }
+    $readOnly = ($Script -eq 'model_cli' -and $CmdArgs.Count -gt 0 -and $CmdArgs[0] -in @('list','inspect','template')) -or
+                ($Script -eq 'udf_manage' -and $CmdArgs.Count -gt 1 -and $CmdArgs[0] -eq 'udf-use' -and $CmdArgs -contains '--list') -or
+                ($Script -eq 'notebook_cli' -and $CmdArgs.Count -gt 0 -and $CmdArgs[0] -in @('status','url')) -or
+                ($Script -eq 'mlflow_cli' -and $CmdArgs.Count -gt 0 -and $CmdArgs[0] -in @('status','url')) -or
+                ($Script -eq 'workflow_cli')
+    $python = if ($readOnly -and (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue)) { Get-ExakitPersonaPython } else { '' }
+    $uv = if ($python) { '' } else { Get-ExakitUvBin }
+    if (-not $uv -and -not $readOnly) { $uv = Install-ExakitUv }
+    $previousVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+    # What the user typed after the add-on's name keeps its quotes on 5.1 (see ConvertTo-ExakitNativeArgs).
+    $nativeArgs = ConvertTo-ExakitNativeArgs $CmdArgs
+    try {
+        $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
+        if ($uv) {
+            $previousUvCache = $env:UV_CACHE_DIR
+            try {
+                if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
+                $uvArgs = @('run')
+                if ($readOnly) { $uvArgs += '--offline' }
+                $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+                & $uv @uvArgs $target @nativeArgs
+                $code = $LASTEXITCODE
+            } finally {
+                if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
+                else { $env:UV_CACHE_DIR = $previousUvCache }
+            }
+        } else {
+            if (-not $python) { Fail "uv is missing. Repair with: exakit update" }
+            & $python $target @nativeArgs
+            $code = $LASTEXITCODE
+        }
+    } finally {
+        if ($null -eq $previousVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $previousVersionsDoc }
+    }
+    if ($code -ne 0 -and -not $AllowFailure) { exit $code }
+}
+
+# Make hook functions only for operations the Python module actually exports.
+# This keeps service detection honest and makes a new Python add-on a JSON row
+# plus one module, with no edit to this PowerShell file.
+function Initialize-ExakitMarketplacePythonHooks {
+    $root = Get-ExakitMarketplaceRoot
+    $metadata = Join-Path (Join-Path $root 'marketplace') 'metadata.py'
+    if (-not (Test-Path $metadata)) { return }
+    $python = if (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue) { Get-ExakitPersonaPython } else { '' }
+    $uv = if ($python) { '' } else { Get-ExakitUvBin }
+    if (-not $python -and -not $uv) { return }
+    if ($python) {
+        $rows = @(& $python $metadata $root shell-hooks)
+    } else {
+        $previousUvCache = $env:UV_CACHE_DIR
+        try {
+            if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
+            $uvArgs = @('run')
+            if ($script:ExakitReadOnlyQuery) { $uvArgs += '--offline' }
+            $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+            $rows = @(& $uv @uvArgs $metadata $root shell-hooks)
+        } finally {
+            if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
+            else { $env:UV_CACHE_DIR = $previousUvCache }
+        }
+    }
+    if ($LASTEXITCODE -ne 0) { return }
+    foreach ($row in $rows) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 3 -or $parts[0] -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or
+            $parts[1] -cnotmatch '^[a-z_]+$' -or $parts[2] -cnotmatch '^[a-z-]+$') { continue }
+        $stem = (($parts[0] -split '[-_]') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
+        $method = (($parts[1] -split '_') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
+        $name = "Invoke-Marketplace${stem}${method}"
+        if (Get-Command $name -ErrorAction SilentlyContinue) { continue }
+        $body = "Invoke-ExakitMarketplacePython -Id '$($parts[0])' -Operation '$($parts[2])'"
+        if ($parts[2] -eq 'uninstall') {
+            $body = "param([switch]`$DryRun) Invoke-ExakitMarketplacePython -Id '$($parts[0])' -Operation 'uninstall' -DryRun `$DryRun.IsPresent"
+        }
+        Set-Item -Path "Function:Global:$name" -Value ([scriptblock]::Create($body))
+    }
+}
+
+function Invoke-ExakitNotebookChoice {
+    param([string]$Kind, [string]$Value = '')
+    $root = Get-ExakitMarketplaceRoot
+    $metadata = Join-Path (Join-Path $root 'marketplace') 'metadata.py'
+    $python = if (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue) { Get-ExakitPersonaPython } else { '' }
+    $savedDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+    $savedEap = $ErrorActionPreference
+    try {
+        $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
+        $ErrorActionPreference = "Continue"
+        $choiceArgs = @($metadata, $root, $Kind)
+        if ($Kind -eq 'notebook-normalize') { $choiceArgs += $Value }
+        if ($python) { $output = @(& $python @choiceArgs 2>&1) }
+        else {
+            $uv = Get-ExakitUvBin
+            if (-not $uv) { $uv = Install-ExakitUv }
+            $uvArgs = @('run')
+            if ($script:ExakitReadOnlyQuery) { $uvArgs += '--offline' }
+            $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+            $output = @(& $uv @uvArgs @choiceArgs 2>&1)
+        }
+        if ($LASTEXITCODE -ne 0) { throw (($output | ForEach-Object { "$_" }) -join ' ') }
+        return @($output | ForEach-Object { "$_" })
+    } finally {
+        $ErrorActionPreference = $savedEap
+        if ($null -eq $savedDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $savedDoc }
+    }
+}
+
+function Get-NotebookTableChildren {
+    foreach ($row in @(Invoke-ExakitNotebookChoice -Kind 'notebook-rows')) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 5) { continue }
+        [pscustomobject]@{ Key = $parts[0]; Label = $parts[1]; Version = $parts[2]
+            Description = $parts[3]; Ticked = ($parts[4] -eq '1') }
+    }
+}
+
+function Set-NotebookTableChildrenPicked {
+    param([string[]]$Keys = @())
+    $answer = @(Invoke-ExakitNotebookChoice -Kind 'notebook-normalize' -Value ($Keys -join ','))
+    $env:EXAKIT_NOTEBOOK_FRONTENDS = [string]$answer[-1]
+}
+
+function Read-NotebookQuestions {
+    if ($env:EXAKIT_NOTEBOOK_FRONTENDS) {
+        $answer = @(Invoke-ExakitNotebookChoice -Kind 'notebook-default')
+        $env:EXAKIT_NOTEBOOK_FRONTENDS = [string]$answer[-1]
+        return
+    }
+    $rows = @(Get-NotebookTableChildren)
+    $options = @(Invoke-ExakitNotebookChoice -Kind 'notebook-questions')
+    $defaults = @()
+    for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].Ticked) { $defaults += ($i + 1) } }
+    $picked = $defaults
+    if (Test-ExakitInteractive) {
+        $picked = @(Read-ExakitCheckboxMenu -Title "Notebook tools - untick any you do not want" -Defaults $defaults -Options $options)
+    }
+    $keys = @($picked | Where-Object { $_ -ge 1 -and $_ -le $rows.Count } | ForEach-Object { $rows[$_ - 1].Key })
+    Set-NotebookTableChildrenPicked -Keys $keys
+}
+
+# Invoke-ExakitNotebookMenu - bare `exakit notebook` on a Windows console. Textual has no inline driver there, so
+# the notebook tools are the kit's own checkbox menu, as in the install, and each one ticked opens as
+# `exakit notebook <tool>` would. Without the notebook add-on the Python command says so, as everywhere.
+function Invoke-ExakitNotebookMenu {
+    if (-not (Get-ExakitManifestValue "components.notebook.version")) {
+        Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs @()
+        return
+    }
+    $rows = @(Get-NotebookTableChildren)
+    $options = @(Invoke-ExakitNotebookChoice -Kind 'notebook-questions')
+    $defaults = @()
+    for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].Ticked) { $defaults += ($i + 1) } }
+    if (-not $defaults) { $defaults = @(1) }
+    $picked = @(Read-ExakitCheckboxMenu -Title "Notebook tools - tick the ones to open" -Defaults $defaults -Options $options)
+    $keys = @($picked | Where-Object { $_ -ge 1 -and $_ -le $rows.Count } | ForEach-Object { $rows[$_ - 1].Key })
+    if (-not $keys) {
+        Write-Host "Nothing opened. Open the notebook tools any time with: exakit notebook"
+        return
+    }
+    $failed = 0
+    foreach ($key in $keys) {
+        Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs @($key) -AllowFailure
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+    if ($failed) { exit 1 }
 }
 
 # ---------------------------------------------------------------------------
@@ -5276,16 +6051,18 @@ function Get-ExakitAddonDocument {
     return $null
 }
 
-# Get-ExakitAddonRepo <id> - the add-on's repository, as owner/name.
+# Get-ExakitAddonRepo <id> - the add-on's repository, as owner/name, from the
+# catalog's GitHub block.
 #
 # This value is interpolated into a URL, so it is validated as two plain path
-# segments and nothing else.
+# segments and nothing else. Twin of _exakit_addon_repo.
 function Get-ExakitAddonRepo {
     param([string]$Id)
-    $doc = Get-ExakitAddonDocument $Id
-    if (-not $doc) { return "" }
-    $repo = [string]$doc.repo
-    if ($repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') { return $repo }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if (-not $addon) { return "" }
+    $repo = [string]$addon.GitHubRepo
+    if ($repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z' -and -not $repo.Contains('..')) { return $repo }
     return ""
 }
 
@@ -5315,6 +6092,8 @@ function Convert-ExakitAboutText {
     $clean = [regex]::Replace($clean, "$esc\[[0-9;?]*[A-Za-z]", "")
     $clean = [regex]::Replace($clean, "$esc\]8;;[^$bel$esc]*($bel|$esc\\)", "")
     $clean = [regex]::Replace($clean, "\p{Cc}", " ")
+    # The bidi embeddings, overrides and isolates reorder what is printed after them (audit SEC-10).
+    $clean = [regex]::Replace($clean, "[\u202A-\u202E\u2066-\u2069]", "")
     $clean = [regex]::Replace($clean, "\s+", " ").Trim()
     if ($clean.Length -gt $script:ExakitAboutMaxLen) {
         $clean = $clean.Substring(0, $script:ExakitAboutMaxLen)
@@ -5335,23 +6114,45 @@ function Update-ExakitAboutCache {
     if (-not $repo) { return $false }
     $cacheDir = Get-ExakitAboutCacheDir
     $cache = Join-Path $cacheDir "$Id.txt"
+    $attempt = Join-Path $cacheDir ".attempt-$Id"
+    # Another repository's lines (or ones from before line 5): asked again now (audit DAY-05).
+    if ((Test-Path $cache) -and @(Get-ExakitAboutCacheLines $Id).Count -eq 0) {
+        Remove-Item -Force $cache, $attempt -ErrorAction SilentlyContinue
+    }
     if (Test-ExakitAboutCacheFresh $cache) { return $false }
     # The marker is what keeps a rate-limited or offline machine from asking
     # again on every run: it is written BEFORE the request, so the question
     # counts as asked whatever the answer turns out to be.
-    $attempt = Join-Path $cacheDir ".attempt-$Id"
     if (Test-ExakitAboutCacheFresh $attempt) { return $false }
     New-Item -ItemType Directory -Force -Path $cacheDir -ErrorAction SilentlyContinue | Out-Null
     New-Item -ItemType File -Force -Path $attempt -ErrorAction SilentlyContinue | Out-Null
     try {
         $doc = Invoke-RestMethod -Uri "$($script:ExakitAboutUrl)/$repo" -UseBasicParsing -TimeoutSec 5
-    } catch { return $false }
+    } catch {
+        # No answer (offline, timed out, refused): the caller stops asking for this run. An HTTP error
+        # (a deleted repository's 404, a rate limit's 403) is GitHub answering; the next may still be asked.
+        if (-not $_.Exception.Response) { $script:ExakitAboutUnreachable = $true }
+        return $false
+    }
     if (-not $doc) { return $false }
     $text = Convert-ExakitAboutText ([string]$doc.description)
     if (-not $text) { return $false }
+    # The repository as GitHub names it now: a renamed or transferred one answers
+    # under its new owner/name. Anything that is not plain owner/name, with the
+    # matching link, is not kept.
+    $full = [string]$doc.full_name; $url = [string]$doc.html_url
+    if ($full -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z' -or $full.Contains('..') -or $url -cne "https://github.com/$full") {
+        $full = ""; $url = ""
+    }
+    if ($full -and $full -ne $repo) { Write-ExakitLog "INFO" "$repo is now $full on GitHub (refresh with tools/addon_github.py)" }
+    $archived = if ($doc.archived -eq $true) { "true" } else { "false" }
+    if ($archived -eq "true") { Write-ExakitLog "WARN" "$repo is archived on GitHub ($Id)" }
+    $name = if ($full) { $full.Split('/')[1] } else { "" }
     $tmp = "$cache.tmp"
     try {
-        Set-Content -Path $tmp -Value $text -Encoding UTF8 -ErrorAction Stop
+        # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived, 5 the catalog's repository it was
+        # asked of. Twin of _exakit_about_fetch.
+        Set-Content -Path $tmp -Value @($text, $name, $url, $archived, $repo) -Encoding UTF8 -ErrorAction Stop
         Move-Item -Force -Path $tmp -Destination $cache -ErrorAction Stop
     } catch {
         Remove-Item -Force $tmp -ErrorAction SilentlyContinue
@@ -5360,30 +6161,112 @@ function Update-ExakitAboutCache {
     return $true
 }
 
-# Get-ExakitMarketplaceAddonDescription <id> - the one-liner a screen shows.
-# Always answers something; the chain degrades instead of blanking a column:
-#   1. a cached About younger than the TTL     - the common case, no network
-#   2. a fresh fetch                           - one request, timeout bounded
-#   3. a STALE cached About, any age           - old wording beats no wording
-#   4. the help document's own tagline         - on disk, so this is the answer
-#                                                offline and when rate-limited
-#   5. a pointer at the help screen            - only if even that is missing
+# Get-ExakitMarketplaceAddonDescription <id> - the one-liner a screen shows: the
+# add-on repository's GitHub About. Always answers something; the chain degrades
+# instead of blanking a column:
+#   1. the cached About, any age               - what the last lookup saw
+#   2. the catalog's copy of the About         - on disk, so this is the answer
+#                                                before any lookup, offline and
+#                                                when rate-limited
+#   3. a pointer at the help screen            - only if even that is missing
+# It never fetches: Update-ExakitMarketplaceAboutCache does, on demand (install
+# and update). A repository GitHub reports as archived says so after its About.
+# Twin of exakit_marketplace_addon_description.
 function Get-ExakitMarketplaceAddonDescription {
     param([string]$Id)
-    $cache = Join-Path (Get-ExakitAboutCacheDir) "$Id.txt"
-    if (-not (Test-ExakitAboutCacheFresh $cache)) { Update-ExakitAboutCache $Id | Out-Null }
-    if (Test-Path $cache) {
-        $text = ""
-        try { $text = ((Get-Content -Path $cache -Encoding UTF8 -TotalCount 1) | Out-String -Width 4096).Trim() } catch { }
+    # Offered for a persona: the persona's own line for this add-on wins
+    # (EXAKIT_MARKETPLACE_REASONS, addon|reason lines; NEW-10). Twin of
+    # exakit_marketplace_addon_description.
+    if ($env:EXAKIT_MARKETPLACE_REASONS) {
+        foreach ($line in ("" + $env:EXAKIT_MARKETPLACE_REASONS) -split "`r?`n") {
+            $parts = $line -split '\|', 2
+            if ($parts.Count -eq 2 -and $parts[0] -eq $Id -and $parts[1]) { return $parts[1] }
+        }
+    }
+    # An add-on the kit builds itself: the kit's own line (DOC-13). Twin of exakit_marketplace_addon_description.
+    $kit = $null
+    try { $kit = Get-ExakitMarketplaceAddon $Id } catch { $kit = $null }
+    if ($kit -and $kit.KitAbout) { return [string]$kit.KitAbout }
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 1 -and $lines[0]) {
+        if ($lines.Count -ge 4 -and $lines[3] -eq "true") { return "$($lines[0]) (archived on GitHub)" }
+        return $lines[0]
+    }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and $addon.GitHubAbout) {
+        $text = Convert-ExakitAboutText ([string]$addon.GitHubAbout)
         if ($text) { return $text }
     }
-    $doc = Get-ExakitAddonDocument $Id
-    if ($doc -and $doc.tagline) {
-        # A tagline is written as a help-screen header and ends in a period; a
-        # table cell does not.
-        return ([string]$doc.tagline).TrimEnd(".")
-    }
     return "Details: exakit help $Id"
+}
+
+# Get-ExakitAboutCacheLines <id> - the cached lines, trimmed; none when there is no cache, or it is not this add-on's.
+function Get-ExakitAboutCacheLines {
+    param([string]$Id)
+    $cache = Join-Path (Get-ExakitAboutCacheDir) "$Id.txt"
+    if (-not (Test-Path $cache)) { return @() }
+    try { $lines = @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 5 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
+    # Keyed by add-on id: lines fetched from another repository than the catalog's now - a kit update repointed the
+    # add-on - or from before line 5 was written are not this add-on's (audit DAY-05). Twin of _exakit_about_cache_matches.
+    $repo = Get-ExakitAddonRepo $Id
+    if (-not $repo -or $lines.Count -lt 5 -or $lines[4] -cne $repo) { return @() }
+    # The About is cleaned again on the way out: the cache is a file anyone could have written, not only the
+    # fetch that sanitised it (audit SEC-18). The name and link are held to their shapes where they are read.
+    if ($lines.Count -ge 1) { $lines[0] = Convert-ExakitAboutText $lines[0] }
+    return $lines
+}
+
+# Get-ExakitMarketplaceAddonAboutOffline <id> - the About with no lookup: the cached
+# line, else the catalog's copy, else "" (the JSON's null). Twin of
+# _exakit_marketplace_addon_about_offline.
+function Get-ExakitMarketplaceAddonAboutOffline {
+    param([string]$Id)
+    $kit = $null
+    try { $kit = Get-ExakitMarketplaceAddon $Id } catch { $kit = $null }
+    if ($kit -and $kit.KitAbout) { return [string]$kit.KitAbout }
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 1 -and $lines[0]) { return $lines[0] }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and $addon.GitHubAbout) { return (Convert-ExakitAboutText ([string]$addon.GitHubAbout)) }
+    return ""
+}
+
+# Get-ExakitMarketplaceAddonName <id> - the add-on repository's name on GitHub:
+# the one the last fetch saw (a renamed repository shows its new name), else the
+# catalog's copy, else the id. Never fetches. Twin of exakit_marketplace_addon_name.
+function Get-ExakitMarketplaceAddonName {
+    param([string]$Id)
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 2 -and $lines[1] -match '^[A-Za-z0-9._-]+\z') { return $lines[1] }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and ([string]$addon.GitHubName) -match '^[A-Za-z0-9._-]+\z') { return [string]$addon.GitHubName }
+    return $Id
+}
+
+# Get-ExakitMarketplaceAddonLabel <id> - what a table row says: the repository's
+# name, with the id typed in commands beside it when the two differ.
+function Get-ExakitMarketplaceAddonLabel {
+    param([string]$Id)
+    $name = Get-ExakitMarketplaceAddonName $Id
+    if ($name -ceq $Id) { return $Id }
+    return "$name ($Id)"
+}
+
+# Get-ExakitMarketplaceAddonUrl <id> - the add-on repository's link on GitHub:
+# the last fetch's (it follows a rename), else the catalog's. Twin of
+# exakit_marketplace_addon_url.
+function Get-ExakitMarketplaceAddonUrl {
+    param([string]$Id)
+    $pattern = '^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 3 -and $lines[2] -match $pattern -and -not $lines[2].Contains('..')) { return $lines[2] }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and ([string]$addon.GitHubUrl) -match $pattern) { return [string]$addon.GitHubUrl }
+    return ""
 }
 
 # Format-ExakitAboutWrap <text> [width] [pad] - the text in full, folded onto as
@@ -5415,14 +6298,23 @@ function Format-ExakitAboutWrap {
     return $out
 }
 
-# Update-ExakitMarketplaceAboutCache - fill the cache for the rows that will
-# show a description, before a screen is drawn. Twin of
-# _exakit_marketplace_warm_about.
+# Update-ExakitMarketplaceAboutCache [-All] - the ONE place an add-on's GitHub
+# name, link and About are looked up, and only on demand: the install's closing
+# offer (the add-ons it can offer) and exakit update (-All: installed ones too).
+# The cache's TTL and attempt marker still keep a re-run from asking again.
+# Every other screen reads what this cached. Twin of _exakit_marketplace_warm_about.
 function Update-ExakitMarketplaceAboutCache {
+    param([switch]$All)
+    $script:ExakitAboutUnreachable = $false
     foreach ($addon in (Get-ExakitMarketplaceAddons)) {
-        if (-not (Test-ExakitAddonOfferable $addon.Id)) { continue }
-        if (Test-ExakitMarketplaceAddonPresent $addon.Id) { continue }
-        if (-not (Get-Command $addon.InstallFn -ErrorAction SilentlyContinue)) { continue }
+        # GitHub out of reach for this run: the rest are not asked (each would wait out its own timeout), and
+        # every screen goes on with the cached or the catalog's copy.
+        if ($script:ExakitAboutUnreachable) { break }
+        if (-not $All) {
+            if (-not (Test-ExakitAddonOfferable $addon.Id)) { continue }
+            if (Test-ExakitMarketplaceAddonPresent $addon.Id) { continue }
+            if (-not (Get-Command $addon.InstallFn -ErrorAction SilentlyContinue)) { continue }
+        }
         Update-ExakitAboutCache $addon.Id | Out-Null
     }
 }
@@ -5526,6 +6418,8 @@ function Get-ExakitAddonApplicableReason {
 function Test-ExakitAddonOfferable {
     param([Parameter(Mandatory)][string]$Id)
     if (Test-ExakitMarketplaceAddonPresent $Id) { return $true }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and -not $addon.Visible) { return $false }
     return (Test-ExakitAddonApplicable $Id)
 }
 
@@ -5548,17 +6442,91 @@ function Test-ExakitMarketplaceHasPending {
     return $false
 }
 
-# The marketplace menu body, wearing the kit's two established looks:
-#   1. the STATE, as the same aligned table Invoke-CmdUpdateCheck prints
-#      (Add-on / Status / Version / Action, one row per add-on);
-#   2. the SELECTION, as the same live table the data-load menu uses: a group
-#      row with the add-ons hanging off UiTee/UiCorner connectors, Space
-#      toggles, Enter installs, Skip as the exclusive opt-out - and the Status
-#      column of those very rows is what the install then fills in.
-# Only installable add-ons become menu rows - everything else is answered by
-# the table. Non-interactive runs answer with EXAKIT_MARKETPLACE_ADDONS: a csv
-# of ids, "all", or "none". Twin of exakit_marketplace_menu in common.sh.
+# Textual handles interactive selection, drawing this same table in the
+# console's colours; the table remains the fallback.
+# EXAKIT_MARKETPLACE_ADDONS answers unattended runs by ID, all, or none.
+function Resolve-ExakitMarketplaceAnswer {
+    param([Parameter(Mandatory)][string]$Value)
+    $root = Get-ExakitMarketplaceRoot
+    $metadata = Join-Path (Join-Path $root 'marketplace') 'metadata.py'
+    $python = if (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue) { Get-ExakitPersonaPython } else { '' }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        if ($python) { $output = @(& $python $metadata $root answer $Value 2>&1) }
+        else {
+            $uv = Install-ExakitUv
+            $output = @(& $uv run --python $script:ManagedPythonVersion --no-project python $metadata $root answer $Value 2>&1)
+        }
+        # Bad input, not a failed install: exit 2 and no .last-failure note, as the shell twin's reject().
+        if ($LASTEXITCODE -ne 0) { Deny-ExakitInput (($output | ForEach-Object { "$_" }) -join ' ') }
+        return "$($output[-1])"
+    } finally { $ErrorActionPreference = $previousErrorActionPreference }
+}
+
+# Test-ExakitTextualInline - the Textual menus can draw here inline, under the question like every other
+# line of the run. Textual has no inline driver for Windows and would take the whole screen, so there the
+# kit's own menus draw the persona and add-on questions: the same flow, in the console's colours.
+function Test-ExakitTextualInline {
+    $onWindows = $true
+    if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { $onWindows = [bool]$IsWindows }
+    return (-not $onWindows)
+}
+
 function Show-ExakitMarketplaceMenu {
+    if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and
+        $env:UI_TABLE_AUTO -ne '1' -and (Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and
+        $env:EXAKIT_NO_FANCY -ne '1' -and (Test-ExakitTextualInline)) {
+        $root = Get-ExakitMarketplaceRoot
+        $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
+        $statesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-market-state-" + [guid]::NewGuid().ToString('N') + '.json')
+        $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-market-ui-" + [guid]::NewGuid().ToString('N') + '.json')
+        $aboutPath = "$statesPath.about"
+        $previousVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+        try {
+            # The add-ons' states, their descriptions and Textual itself (a download on a
+            # fresh machine) are got ready under the spinner; the table then opens at once.
+            Start-ExakitSpinner "Opening the add-ons"
+            $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
+            $snapshot = Show-ExakitMarketplaceList -Json
+            [System.IO.File]::WriteAllText($statesPath, ("" + $snapshot), (New-Object System.Text.UTF8Encoding($false)))
+            # The Description column is the table's own: each add-on's About.
+            # Each row's name and Description, the add-on repository's on GitHub: id|label|About. The About
+            # first, as its lookup fills the cache the name is read from.
+            $about = @(foreach ($addon in Get-ExakitMarketplaceAddons) {
+                $said = Get-ExakitMarketplaceAddonDescription $addon.Id
+                "$($addon.Id)|$(Get-ExakitMarketplaceAddonLabel $addon.Id)|$said"
+            })
+            [System.IO.File]::WriteAllText($aboutPath, (($about -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
+            $python = Get-ExakitPersonaPython
+            $frontends = if ($env:EXAKIT_NOTEBOOK_FRONTENDS) { $env:EXAKIT_NOTEBOOK_FRONTENDS } else { 'jupyterlab,marimo' }
+            if ($python) { & $python $launcher $root warm | Out-Null }
+            else { & (Install-ExakitUv) run --no-project --python $script:ManagedPythonVersion python $launcher $root warm | Out-Null }
+            Stop-ExakitSpinner
+            if ($python) {
+                & $python $launcher $root marketplace --states $statesPath --about $aboutPath --out $resultPath `
+                    --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) `
+                    --frontends $frontends --apply
+            } else {
+                $uv = Install-ExakitUv
+                & $uv run --no-project --python $script:ManagedPythonVersion python $launcher $root marketplace `
+                    --states $statesPath --about $aboutPath --out $resultPath --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) `
+                    --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) --frontends $frontends --apply
+            }
+            $uiCode = $LASTEXITCODE
+            if ($uiCode -eq 0) { return }
+            if ($uiCode -eq 10) { Info 'Marketplace closed - nothing was installed.'; return }
+            if ($uiCode -ne 11) { Fail "Marketplace installation did not finish (exit $uiCode)." }
+            Warn2 'The Textual marketplace did not start; using the kit table menu.'
+        } catch {
+            Warn2 'The Textual marketplace did not start; using the kit table menu.'
+        } finally {
+            Stop-ExakitSpinner       # a no-op once stopped; ends it on a failure before the table
+            if ($null -eq $previousVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
+            else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $previousVersionsDoc }
+            Remove-Item -LiteralPath $statesPath, $aboutPath, $resultPath -ErrorAction SilentlyContinue
+        }
+    }
     # A previous marketplace in this same process is finished with, and a stale
     # table here is one the scripted path would animate over nothing.
     Reset-ExakitAddonTable
@@ -5567,6 +6535,7 @@ function Show-ExakitMarketplaceMenu {
         # Not applicable here and not installed: not an option on this machine,
         # so it is not shown at all - no row, no table line.
         if (-not (Test-ExakitAddonOfferable $addon.Id)) { continue }
+        if ($env:EXAKIT_MARKETPLACE_ONLY -and -not (@($env:EXAKIT_MARKETPLACE_ONLY -split ',') -contains $addon.Id)) { continue }
         # Every add-on gets BOTH a table row and a menu row. The menu row for a
         # state that cannot be installed is a disabled row ("!" prefix): shown,
         # dimmed, unselectable, saying why. That is what lets the table drop its
@@ -5598,11 +6567,7 @@ function Show-ExakitMarketplaceMenu {
             # used to fall straight through to "unknown" for every row - the
             # version column was blank exactly where a first-time user reads it.
             # Get-ExakitAddonAdvertisedVersion answers in both contexts.
-            $fallback = ""
-            if ($addon.FallbackVar) {
-                $fv = Get-Variable -Name $addon.FallbackVar -Scope Script -ErrorAction SilentlyContinue
-                if ($fv) { $fallback = "" + $fv.Value }
-            }
+            $fallback = $addon.DefaultVersion
             $advertised = Get-ExakitAddonAdvertisedVersion -Id $addon.Id -Fallback $fallback
             if (-not $advertised) { $advertised = "unknown" }
             # Only an installable row shows a description, and only a run that
@@ -5615,19 +6580,29 @@ function Show-ExakitMarketplaceMenu {
             # depends on. Still resolved only on the path that draws it, so a
             # scripted answer (EXAKIT_MARKETPLACE_ADDONS) never pays for it.
             $cell = ""
+            # The add-on's own CHILD ROWS (an optional ChildrenFn): the
+            # notebook's tools, each saying what will become of it, ticked in the
+            # same table rather than asked about later. Local probes only, and
+            # like the description only on the path that draws them. Twin of the
+            # <id>_table_children hook in exakit_marketplace_menu.
+            $kids = @()
             if (-not $env:EXAKIT_MARKETPLACE_ADDONS) {
                 $cell = "" + (Get-ExakitMarketplaceAddonDescription $addon.Id)
+                if ($addon.PSObject.Properties["ChildrenFn"] -and (Get-Command $addon.ChildrenFn -ErrorAction SilentlyContinue)) {
+                    $kids = @(& $addon.ChildrenFn)
+                }
             }
             $rows += @{ Id = $addon.Id; Label = $addon.Id
-                Version = (Get-ExakitVersionPlain $advertised); Description = $cell }
+                Version = (Get-ExakitVersionPlain $advertised); Description = $cell; Children = $kids }
         }
     }
 
     # The env answer wins over any menu, so agents and CI never need a TTY.
     if ($env:EXAKIT_MARKETPLACE_ADDONS) {
-        $answer = ("" + $env:EXAKIT_MARKETPLACE_ADDONS).ToLower().Replace(" ", "")
+        $answer = Resolve-ExakitMarketplaceAnswer -Value $env:EXAKIT_MARKETPLACE_ADDONS
         if ($answer -eq "none") { Info "EXAKIT_MARKETPLACE_ADDONS=none - installing nothing."; return }
         $picked = @()
+        $skipped = $false
         if ($answer -eq "all") {
             foreach ($row in $rows) { if ($row.Id) { $picked += $row.Id } }
         } else {
@@ -5635,13 +6610,34 @@ function Show-ExakitMarketplaceMenu {
             foreach ($token in ($answer -split ",")) {
                 if (-not $token) { continue }
                 if ($rows | Where-Object { $_.Id -eq $token }) { $picked += $token }
+                elseif ($known -contains $token -and -not (Get-ExakitMarketplaceAddon $token).Visible) {
+                    Warn2 "Skipping $token - it is disabled in marketplace/catalog.json"
+                    $skipped = $true
+                }
                 elseif ($known -contains $token -and -not (Test-ExakitAddonApplicable $token)) {
+                    # A real add-on that does not run here. One such id (a
+                    # persona's list is written for every platform) used to end
+                    # the answer before anything installed; it is skipped with
+                    # the reason, and the rest go ahead. Twin of
+                    # exakit_marketplace_menu.
                     $why = Get-ExakitAddonApplicableReason $token
-                    Fail ("$token is not available on this machine" + $(if ($why) { ": $why" } else { "" }))
+                    $msg = "Skipping $token - it is not available on this machine"
+                    if ($why) { $msg = "${msg}: $why" }
+                    Warn2 $msg
+                    $skipped = $true
+                }
+                elseif ($rows | Where-Object { $_.Label -eq $token -and $_.Why -eq "not in this kit copy" }) {
+                    Warn2 "Skipping $token - its module is not part of this kit copy; update the kit first: exakit update"
+                    $skipped = $true
                 }
                 elseif ($known -contains $token) { Info "$token is already present - a kit-managed one updates with: exakit update" }
                 else { Fail "Unknown marketplace add-on in EXAKIT_MARKETPLACE_ADDONS: '$token' (known: $($known -join ' '))" }
             }
+        }
+        if ($picked.Count -eq 0 -and $skipped) {
+            # The warnings above already said why each one was left out.
+            Info "Nothing to install on this machine."
+            return
         }
         if ($picked.Count -eq 0) {
             # Say WHY this is a refusal and not a failure. A reader who arrives
@@ -5656,25 +6652,14 @@ function Show-ExakitMarketplaceMenu {
         return
     }
 
-    # There is ONE table. The reference panel that used to stand above the
-    # selection carried an Add-on / Version / Description row per add-on, and
-    # then the selection below it repeated every installable add-on by name -
-    # the same list twice, a box apart. The version and the description now sit
-    # in the selection itself as columns, so the reader picks from the thing
-    # that describes them.
-    #
-    # What that costs, on the all-covered path only: the rows for add-ons that
-    # are NOT installable had nowhere else to go, and the panel was the only
-    # output that path produced. They are represented by the message below
-    # instead. Twin of exakit_marketplace_menu in common.sh.
+    # The fallback table shows selectable and covered add-ons together.
     $selectable = @($rows | Where-Object { $_.Id })
     $covered = @($rows | Where-Object { -not $_.Id })
     Write-Host ""
 
     if ($selectable.Count -eq 0) {
         Info "Everything available is already covered."
-        # Named, not just counted: an installed add-on shows its version, the
-        # others show why. Twin of the _mm_covered loop in common.sh.
+        # Show each covered add-on and its state.
         foreach ($c in $covered) {
             $why = "" + $c.Why
             if ($c.Version) { $why += " " + $c.Version }
@@ -5683,13 +6668,8 @@ function Show-ExakitMarketplaceMenu {
         return
     }
 
-    # WITHOUT A TERMINAL, THE ANSWER IS SKIP. The pre-ticked rows exist so a
-    # human's bare Enter installs what is on offer; keeping them as the answer
-    # when nobody could see the question turned `exakit marketplace` from a
-    # browse into a full install with a live daemon. Installing without a
-    # terminal takes an explicit answer: EXAKIT_MARKETPLACE_ADDONS, or ids on
-    # the command line. Twin of the same guard in exakit_marketplace_menu.
-    if (-not (Test-ExakitInteractive)) {
+    # A headless run needs an explicit selection; persona add sets UI_TABLE_AUTO.
+    if (-not (Test-ExakitInteractive) -and $env:UI_TABLE_AUTO -ne "1") {
         Info "No terminal to ask on - nothing was installed."
         Info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
         Info "Install explicitly: exakit marketplace <id>   or set EXAKIT_MARKETPLACE_ADDONS=<ids>|all"
@@ -5720,10 +6700,20 @@ function Show-ExakitMarketplaceMenu {
     Info "Details on any add-on: exakit help <id>"
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
+    $script:ExakitAddonTable.Activity = ""
     [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
     $addonCount = $selectable.Count
     $coveredCount = $covered.Count
+    # The defaults and the inner group specs the child rows add as they are
+    # drawn: an add-on with child rows is their "claim" parent (a child ticks
+    # it, unticking it unticks them, and it may stand with none ticked), and
+    # Select All spans them too. Their ids are "<id>:<key>", which no add-on id
+    # matches. Twin of _exakit_addon_table_build in common.sh.
+    $defaults = @(1)
+    $innerGroups = @()
+    $allTicked = $true
+    $kidCount = 0
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
         # after the installable ones, the last installable one is a tee.
@@ -5732,23 +6722,36 @@ function Show-ExakitMarketplaceMenu {
         # cell would make the row two lines tall - which is the frame-height
         # invariant the redraw depends on.
         $desc = ("" + $selectable[$i].Description) -replace "`r?`n", " "
-        [void](Add-ExakitTableRow -Kind $kind -Label $selectable[$i].Id `
-            -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable)
+        $parentRow = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $selectable[$i].Id) `
+            -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
+        $defaults += $parentRow
+        $kids = @($selectable[$i].Children | Where-Object { $_ })
+        if ($kids.Count -eq 0) { continue }
+        for ($k = 0; $k -lt $kids.Count; $k++) {
+            if ($k -eq ($kids.Count - 1)) { $kk = "corner" } else { $kk = "tee" }
+            $at = Add-ExakitTableRow -Kind "$kind-$kk" -Label ("" + $kids[$k].Label) `
+                -Col2 ("" + $kids[$k].Version) -Col3 ("" + $kids[$k].Description) -Table $script:ExakitAddonTable
+            [void]$addonIds.Add($selectable[$i].Id + ":" + $kids[$k].Key)
+            if ($kids[$k].Ticked) { $defaults += $at } else { $allTicked = $false }
+        }
+        $kidCount += $kids.Count
+        # Innermost first: the add-on row settles before Select All re-reads it.
+        $innerGroups += ("{0}:{1}:{2}:claim" -f $parentRow, ($parentRow + 1), ($parentRow + $kids.Count))
     }
     for ($i = 0; $i -lt $coveredCount; $i++) {
         if ($i -eq ($coveredCount - 1)) { $kind = "corner" } else { $kind = "tee" }
         # The state word goes to Description (the selection screen) AND to the
         # disabled note (the Status cell on the install screen), so the row says
         # the same thing on either.
-        $at = Add-ExakitTableRow -Kind $kind -Label $covered[$i].Label `
+        $at = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $covered[$i].Label) `
             -Col2 ("" + $covered[$i].Version) -Col3 ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         Disable-ExakitTableRow -Row $at -Note ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         [void]$addonIds.Add("")
     }
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
-    $rowSkip = $addonCount + $coveredCount + 2
+    $rowSkip = $addonCount + $kidCount + $coveredCount + 2
     $script:ExakitAddonTableIds = $addonIds.ToArray()
     # Default: the group AND every available add-on pre-selected - the same
     # posture as the data-load menu, where Enter alone acts on what is on offer
@@ -5757,11 +6760,14 @@ function Show-ExakitMarketplaceMenu {
     # "all" makes the parent a MASTER toggle, checked only while EVERY child is.
     # Under the default "any" it stayed checked with one child ticked, so the
     # summary row read "everything is selected" when it was not - on the row a
-    # user glances at to confirm what is about to be installed.
-    $defaults = @(1..($addonCount + 1))
+    # user glances at to confirm what is about to be installed. Its range takes
+    # in the add-ons' own child rows, so Select All means every row - and a
+    # child row its add-on starts unticked (a choice recorded earlier) leaves
+    # Select All unticked too, which is what "all" means.
+    if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
     $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
-        -ExclusiveIndex $rowSkip -GroupParent 1 `
-        -GroupFirst 2 -GroupLast ($addonCount + 1) -GroupMode "all")
+        -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
+        -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
     # ONLY A PRESSED ENTER INSTALLS - the defaults standing without a console
     # would install every add-on on a machine where nobody chose anything.
     # Twin of the same gate in _exakit_marketplace_menu (common.sh).
@@ -5771,20 +6777,18 @@ function Show-ExakitMarketplaceMenu {
         Info "Pick add-ons without the menu: `$env:EXAKIT_MARKETPLACE_ADDONS = '<ids|all>'; exakit marketplace"
         return
     }
-    # Version and Description belong to the SELECTION, and are dropped the moment
-    # it is made: the install below reuses this very table as its progress
-    # display, and a heading left behind is how that screen ends up wearing the
-    # menu's columns. On the shell side these are module globals that the caller
-    # simply switches off; here they are fields ON THE OBJECT that outlive the
-    # menu unless cleared, which is why Windows showed four columns through the
-    # install where macOS showed two.
+    # The Description belongs to the SELECTION, and is dropped the moment it is
+    # made: the install below reuses this very table as its progress display,
+    # with each add-on's Version and its Status. On the shell side these are
+    # module globals that the caller switches off; here they are fields ON THE
+    # OBJECT that outlive the menu unless cleared, which is why Windows once
+    # showed the menu's columns through the install.
     #
     # Clearing them also hands the width back to Status: it is withheld only from
     # a table that has other columns to hold the box open, so with these gone it
     # takes its floor again -- which is what the progress bars need.
     #
     # Twin of the two UI_TABLE_COL2/COL3 resets in _exakit_marketplace_menu.
-    $script:ExakitAddonTable.Col2 = ""
     $script:ExakitAddonTable.Col3 = ""
     if ($selection -contains $rowSkip) {
         Reset-ExakitAddonTable
@@ -5792,17 +6796,34 @@ function Show-ExakitMarketplaceMenu {
         return
     }
     $picked = @()
+    # The ticked CHILD rows, as "<id>:<key>": answers to an add-on's own
+    # question, not add-ons of their own.
+    $pickedKids = @()
     foreach ($idx in $selection) {
         if ($idx -lt 1 -or $idx -gt $script:ExakitAddonTableIds.Count) { continue }
         $id = $script:ExakitAddonTableIds[$idx - 1]
         # The group row and the opt-out carry no id: they are answers about the
         # other rows, not add-ons of their own.
-        if ($id -and ($picked -notcontains $id)) { $picked += $id }
+        if (-not $id) { continue }
+        if ($id.Contains(":")) { $pickedKids += $id; continue }
+        if ($picked -notcontains $id) { $picked += $id }
     }
     if ($picked.Count -eq 0) {
         Reset-ExakitAddonTable
         Info "Nothing selected - nothing was installed."
         return
+    }
+    # Each picked add-on that drew child rows takes its ticked ones as its
+    # answer (an optional ChildrenPickedFn, given the ticked keys): the notebook
+    # sets EXAKIT_NOTEBOOK_FRONTENDS, so its install asks nothing. Twin of the
+    # <id>_table_children_picked loop in exakit_marketplace_menu.
+    foreach ($id in $picked) {
+        if ((Get-ExakitAddonTableChildRows -Id $id).Count -eq 0) { continue }
+        $addon = Get-ExakitMarketplaceAddon $id
+        if (-not $addon -or -not $addon.PSObject.Properties["ChildrenPickedFn"]) { continue }
+        if (-not (Get-Command $addon.ChildrenPickedFn -ErrorAction SilentlyContinue)) { continue }
+        $keys = @($pickedKids | Where-Object { $_.StartsWith($id + ":") } | ForEach-Object { $_.Substring($id.Length + 1) })
+        & $addon.ChildrenPickedFn -Keys $keys
     }
     Invoke-ExakitMarketplaceApply -Ids $picked
 }
@@ -5846,6 +6867,11 @@ function Show-ExakitMarketplaceList {
         }
         $version = Get-ExakitVersionPlain ("" + $version)
         $entry = [ordered]@{ id = $addon.Id; status = $status; installed = ($status -eq "installed") }
+        $owner = $null
+        if ($status -eq 'installed') { $owner = Get-ExakitComponentOwnership $addon.Id }
+        elseif ($status -eq 'managed outside the kit') { $owner = 'user' }
+        $entry.ownership = $owner
+        $entry.installed_by_kit = ($owner -eq 'kit')
         # version joins repo and docs below: always present, null when unknown.
         if ($version) { $entry.version = $version } else { $entry.version = $null }
         if ($reason) { $entry.reason = $reason }
@@ -5861,6 +6887,14 @@ function Show-ExakitMarketplaceList {
         if ($docs -notlike "https://*") { $docs = "" }
         if ($repo) { $entry.repo = $repo } else { $entry.repo = $null }
         if ($docs) { $entry.docs = $docs } else { $entry.docs = $null }
+        # The add-on repository on GitHub: its name, link and About (as the last
+        # lookup cached them, else the catalog's copy). Twin of the same fields in
+        # exakit_marketplace_list (audit WIN-01).
+        $entry.name = Get-ExakitMarketplaceAddonName $addon.Id
+        $url = Get-ExakitMarketplaceAddonUrl $addon.Id
+        if ($url) { $entry.url = $url } else { $entry.url = $null }
+        $about = Get-ExakitMarketplaceAddonAboutOffline $addon.Id
+        if ($about) { $entry.about = $about } else { $entry.about = $null }
         $entries += [pscustomobject]$entry
     }
     if ($Json) {
@@ -5889,6 +6923,7 @@ function Show-ExakitMarketplaceList {
 $script:ExakitAddonTable = $null
 $script:ExakitAddonTableIds = @()   # the add-on id per row ("" where the row is not an add-on)
 $script:ExakitAddonTableRow = 0     # the row the add-on being installed owns, or 0
+$script:ExakitAddonTableChildRows = @{}   # key -> row of that add-on's child rows, while it installs
 $script:ExakitAddonTableLive = $false
 $script:ExakitAddonNotes = @()      # lines held back while the table is on screen
 
@@ -5900,6 +6935,7 @@ function Reset-ExakitAddonTable {
     $script:ExakitAddonTable = $null
     $script:ExakitAddonTableIds = @()
     $script:ExakitAddonTableRow = 0
+    $script:ExakitAddonTableChildRows = @{}
     $script:ExakitAddonTableLive = $false
 }
 
@@ -5911,6 +6947,43 @@ function Get-ExakitAddonTableRow {
         if ($script:ExakitAddonTableIds[$i] -eq $Id) { return ($i + 1) }
     }
     return 0
+}
+
+# Get-ExakitAddonTableChildRows <id> - key -> row for that add-on's child rows in
+# the table (see Show-ExakitMarketplaceMenu), empty when it has none.
+# Twin of _exakit_addon_table_child_rows in common.sh.
+function Get-ExakitAddonTableChildRows {
+    param([Parameter(Mandatory)][string]$Id)
+    $out = @{}
+    for ($i = 0; $i -lt @($script:ExakitAddonTableIds).Count; $i++) {
+        $rid = "" + $script:ExakitAddonTableIds[$i]
+        if ($rid.StartsWith($Id + ":")) { $out[$rid.Substring($Id.Length + 1)] = $i + 1 }
+    }
+    return $out
+}
+
+# Set-ExakitAddonTableChild -Key <key> -State <done|failed|skipped> [-Final] - an
+# add-on that brought child rows says, from inside its own install, how one of
+# them settled, and that row's Status column shows it. $false when there is no
+# such row on screen (no live table, a scripted answer, a key the table does
+# not carry): the caller's own line is then the record, exactly as before - and
+# the line it prints anyway goes to the logfile while the table narrates.
+# Twin of exakit_addon_table_child in common.sh.
+function Set-ExakitAddonTableChild {
+    param(
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][ValidateSet("done", "failed", "skipped")][string]$State,
+        [string]$Final = ""
+    )
+    if (-not $script:ExakitAddonTableLive -or $null -eq $script:ExakitAddonTable) { return $false }
+    if (-not $script:ExakitAddonTableChildRows.ContainsKey($Key)) { return $false }
+    # Cut to the column's floor, for the reason Get-ExakitAddonTableCell gives:
+    # a final that overruns the column is a row that wraps.
+    $room = 44 - $script:UiTick.Length - 1
+    if ($Final.Length -gt $room) { $Final = $Final.Substring(0, $room - $script:UiEllipsis.Length) + $script:UiEllipsis }
+    Set-ExakitTableRow -Row ([int]$script:ExakitAddonTableChildRows[$Key]) -State $State -Final $Final `
+        -Table $script:ExakitAddonTable
+    return $true
 }
 
 # Get-ExakitAddonTableCell <summary> <seconds> - the Status column for a finished
@@ -5996,15 +7069,22 @@ function Show-ExakitAddonNotes {
 # almost none. The seconds are what the creep fills the gaps with, capped below
 # the next stage - so a slow PyPI resolve makes the bar wait rather than walk
 # into "validating". Twin of _exakit_addon_progress in common.sh.
+function Set-ExakitAddonActivity {
+    param([string]$Message)
+    if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
+        $script:ExakitAddonTable.ActivityRow = $script:ExakitAddonTableRow
+        $script:ExakitAddonTable.Activity = $Message
+    }
+}
+
 function Set-ExakitAddonProgress {
     param(
         [Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][int]$Pct,
         [Parameter(Mandatory)][int]$Ceiling, [Parameter(Mandatory)][int]$Secs,
         [Parameter(Mandatory)][string]$Phase
     )
-    # An add-on being installed from the TABLE reports into its ROW; the row
-    # already names it, so the "<id> - " prefix the one-line bar needs would be
-    # the same fact twice, in a cell that has to spell a phase in a fixed width.
+    Set-ExakitAddonActivity -Message $Phase
+    # Table rows already show the add-on ID.
     if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
         Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "running" `
             -Pct $Pct -Ceiling $Ceiling -Secs $Secs -Phase $Phase -Table $script:ExakitAddonTable
@@ -6013,155 +7093,169 @@ function Set-ExakitAddonProgress {
     Set-ExakitProgress -Pct $Pct -Ceiling $Ceiling -Secs $Secs -Phase "$Id - $Phase"
 }
 
-# Install each picked add-on in turn. One failure does not strand the rest.
-function Invoke-ExakitMarketplaceApply {
+# Ask add-on questions before progress unless child rows already collected the
+# answers. Continue to the next add-on when one fails.
+function Invoke-ExakitMarketplaceQuestions {
     param([Parameter(Mandatory)][string[]]$Ids)
-    $failed = 0
-    # The SAME table the selection was just made in becomes the progress display:
-    # the rows do not move, so nobody has to map one screen onto another. It
-    # animates only where there is a console to animate on, and a scripted answer
-    # (EXAKIT_MARKETPLACE_ADDONS) never built a table at all - every add-on then
-    # narrates in plain lines exactly as it did before.
-    # Twin of the same block in _exakit_marketplace_apply (common.sh).
+    $askers = @()
+    foreach ($addon in @(Get-ExakitMarketplaceAddons | Where-Object { $Ids -contains $_.Id })) {
+        if ($null -ne $script:ExakitAddonTable -and (Get-ExakitAddonTableChildRows -Id $addon.Id).Count -gt 0) { continue }
+        if ($addon.PSObject.Properties["QuestionsFn"] -and (Get-Command $addon.QuestionsFn -ErrorAction SilentlyContinue)) {
+            $askers += $addon.QuestionsFn
+        }
+    }
+    if ($askers.Count -eq 0) { return }
+    if ($null -ne $script:ExakitAddonTable -and [int]$script:ExakitAddonTable.Lines -gt 0) {
+        try { [Console]::Write("`r$($script:UiEsc)[$([int]$script:ExakitAddonTable.Lines)A$($script:UiEsc)[0J") } catch { }
+        $script:ExakitAddonTable.Lines = 0
+    }
+    foreach ($fn in $askers) { & $fn }
+}
+
+function Invoke-ExakitMarketplaceApplyPython {
+    param([Parameter(Mandatory)][string[]]$Ids)
+    # Preserve the Notebook question for a named interactive install with no
+    # answer; explicit answers reach Python unmodified for batch validation.
+    if (-not $env:EXAKIT_NOTEBOOK_FRONTENDS) { Invoke-ExakitMarketplaceQuestions -Ids $Ids }
     $script:ExakitAddonTableLive = $false
     if ($null -ne $script:ExakitAddonTable) {
         $script:ExakitAddonTableLive = [bool](Start-ExakitTable -Table $script:ExakitAddonTable)
     }
-    # With the table narrating, the per-add-on lines underneath it are the same
-    # facts twice - and printing one scrolls the frame the animator is redrawing.
-    # ExakitQuietDetail routes them to the logfile instead, which is what it is
-    # for; the per-add-on save/restore below nests inside this one.
-    $prevQuietAll = $script:ExakitQuietDetail
-    if ($script:ExakitAddonTableLive) { $script:ExakitQuietDetail = $true }
-    foreach ($id in $Ids) {
-        $addon = Get-ExakitMarketplaceAddon $id
-        if (-not $addon) { continue }
-        # Which row this add-on owns, if a table is on screen. 0 means there is
-        # none and the single-line bar takes over, unchanged.
-        $script:ExakitAddonTableRow = 0
+    $notes = [System.Collections.Generic.List[object]]::new()
+    $root = Get-ExakitMarketplaceRoot
+    $runner = Join-Path (Join-Path $root 'marketplace') 'apply.py'
+    $uv = Get-ExakitUvBin
+    if (-not $uv) { $uv = Install-ExakitUv }
+    $oldError = $ErrorActionPreference
+    $oldCache = $env:UV_CACHE_DIR
+    $oldActivity = $env:EXAKIT_MARKETPLACE_ACTIVITY_FILE
+    $oldVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+    $code = 1
+    $script:ExakitAddonBarLive = $false
+    $script:ExakitApplyCurrentId = ''
+    $script:ExakitApplyLastError = ''
+    $script:ExakitApplyFailureEvent = $false
+    try {
+        $ErrorActionPreference = 'Continue'
+        if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
+        $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
+        Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_FILE -ErrorAction SilentlyContinue
+        & $uv run --python $script:ManagedPythonVersion --no-project python $runner ($Ids -join ',') --stream 2>&1 |
+            ForEach-Object {
+                $line = "$_"
+                if ($line.StartsWith('@@EXAKIT|')) {
+                    $parts = @($line -split '\|', 5)
+                    if ($parts.Count -ne 5) { return }
+                    $id = $parts[1]; $phase = $parts[2]; $detail = $parts[3]
+                    $seconds = 0
+                    [void][int]::TryParse($parts[4], [ref]$seconds)
+                    $script:ExakitAddonTableRow = 0
+                    if ($script:ExakitAddonTableLive) {
+                        $script:ExakitAddonTableRow = [int](Get-ExakitAddonTableRow -Id $id)
+                    }
+                    if ($id.Contains(':')) {
+                        # One of the add-on's tools (notebook:jupyterlab), settled: its own row says how.
+                        # Twin of the *:* arm in _exakit_marketplace_apply_python.
+                        $tool = $id.Substring($id.IndexOf(':') + 1)
+                        if ($script:ExakitAddonTableRow -gt 0 -and $phase -in @('done', 'failed', 'skipped')) {
+                            $room = 44 - $script:UiTick.Length - 1
+                            $final = $detail
+                            if ($final.Length -gt $room) { $final = $final.Substring(0, $room - $script:UiEllipsis.Length) + $script:UiEllipsis }
+                            Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State $phase -Final $final -Table $script:ExakitAddonTable
+                        } elseif (-not $script:ExakitAddonTableLive) {
+                            Info "$($tool): $detail"
+                        }
+                        return
+                    }
+                    switch ($phase) {
+                        'installing' {
+                            $script:ExakitApplyCurrentId = $id
+                            Write-ExakitLog 'INFO' "Installing add-on: $id"
+                            if ($script:ExakitAddonTableRow -gt 0) {
+                                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
+                                    -Pct 0 -Ceiling 65 -Secs 40 -Phase 'installing' -Table $script:ExakitAddonTable
+                            } else {
+                                Info "Installing add-on: $id"
+                                $script:ExakitAddonBarLive = [bool](Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40 -Phase "$id - installing")
+                            }
+                        }
+                        'validating' {
+                            if ($script:ExakitAddonTableRow -gt 0) {
+                                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
+                                    -Pct 65 -Ceiling 90 -Secs 8 -Phase 'validating' -Table $script:ExakitAddonTable
+                            } elseif ($script:ExakitAddonBarLive) {
+                                Set-ExakitProgress -Pct 65 -Ceiling 90 -Secs 8 -Phase "$id - validating"
+                            } else { Info "Validating add-on: $id" }
+                        }
+                        'starting' {
+                            if ($script:ExakitAddonTableRow -gt 0) {
+                                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
+                                    -Pct 90 -Ceiling 100 -Secs 3 -Phase 'starting' -Table $script:ExakitAddonTable
+                            } elseif ($script:ExakitAddonBarLive) {
+                                Set-ExakitProgress -Pct 90 -Ceiling 100 -Secs 3 -Phase "$id - starting"
+                            } else { Info "Starting add-on: $id" }
+                        }
+                        'done' {
+                            if ($script:ExakitAddonBarLive) { Stop-ExakitProgress; $script:ExakitAddonBarLive = $false }
+                            if ($script:ExakitAddonTableRow -gt 0) {
+                                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'done' `
+                                    -Final (Get-ExakitAddonTableCell -Summary $detail -Seconds $seconds) `
+                                    -Table $script:ExakitAddonTable
+                            }
+                            $notes.Add(@{ Kind = 'ok'; Text = "$id installed$(if ($detail) { ' - ' + $detail })" })
+                        }
+                        'warning' { $notes.Add(@{ Kind = 'warn'; Text = "$($id): $detail" }) }
+                        'failed' {
+                            $script:ExakitApplyFailureEvent = $true
+                            if ($script:ExakitAddonBarLive) { Stop-ExakitProgress; $script:ExakitAddonBarLive = $false }
+                            if ($script:ExakitAddonTableRow -gt 0) {
+                                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'failed' `
+                                    -Final 'did not finish - see the log' -Table $script:ExakitAddonTable
+                            }
+                            $notes.Add(@{ Kind = 'warn'; Text = "$id did not finish: $detail" })
+                        }
+                    }
+                    return
+                }
+                if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) {
+                    Set-ExakitAddonActivity -Message $Matches[1]
+                    if ($script:ExakitAddonBarLive) { Set-ExakitProgressPhase -Phase "$($script:ExakitApplyCurrentId) - $($Matches[1])" }
+                    elseif (-not $script:ExakitAddonTableLive) { Info $Matches[1] }
+                } elseif ($line.Trim()) {
+                    Write-ExakitLog 'INFO' $line
+                    $script:ExakitApplyLastError = $line
+                }
+            }
+        $code = $LASTEXITCODE
+    } finally {
+        if ($script:ExakitAddonBarLive) { Stop-ExakitProgress; $script:ExakitAddonBarLive = $false }
+        $ErrorActionPreference = $oldError
+        if ($null -eq $oldCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
+        else { $env:UV_CACHE_DIR = $oldCache }
+        if ($null -eq $oldActivity) { Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_FILE -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_ACTIVITY_FILE = $oldActivity }
+        if ($null -eq $oldVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $oldVersionsDoc }
         if ($script:ExakitAddonTableLive) {
-            $script:ExakitAddonTableRow = [int](Get-ExakitAddonTableRow -Id $id)
+            Stop-ExakitTable -Table $script:ExakitAddonTable
+            $script:ExakitAddonTableLive = $false
         }
-        Info "Installing add-on: $id"
-        $t0 = Get-Date
-        $installed = $false
-        # Every silent stretch of an add-on install already animates, because
-        # Invoke-ExakitLogged starts the spinner. What it did NOT have was a
-        # truthful label: ExakitActiveLabel is set by Begin-ExakitStep, and
-        # add-ons are installed after the last numbered step (or from `exakit
-        # marketplace`, with no step at all), so a long install animated under
-        # the previous step's title, or under the bare word "working". Name what
-        # is actually running. Twin of the same block in
-        # _exakit_marketplace_install_one (common.sh).
-        # Installing three add-ons printed fifty lines: a venv, a pip resolve, a
-        # download, a checksum, a launcher, a package-data repair and a
-        # validation probe, each announcing itself twice. None of it is
-        # something the person who ticked three boxes can act on, and all of it
-        # is in the logfile. ExakitQuietDetail routes it there; the progress line
-        # is the narration. The percentages are milestone positions weighted by
-        # where the TIME goes - fetching and installing is nearly all of it -
-        # not a step count.
-        $prevLabel = $script:ExakitActiveLabel
-        $prevQuiet = $script:ExakitQuietDetail
-        try {
-            $script:ExakitQuietDetail = $true
-            Set-ExakitAddonProgress -Id $id -Pct 0 -Ceiling 65 -Secs 40 -Phase "installing"
-            # The TABLE, when there is one, already holds the UI layer's single
-            # animation slot, so this takes a reference and draws nothing (see the
-            # guard in Start-ExakitProgress) - and the Stop-ExakitProgress below
-            # gives that reference back rather than tearing the table down.
-            [void](Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40 -Phase "$id - installing")
-            $script:ExakitAddonBarLive = $true
-            $installed = & $addon.InstallFn
-        } catch {
-            Write-ExakitAddonNote "warn" "$id installer reported: $_"
-            $installed = $false
-        }
-        if ($installed) {
-            if ($addon.ValidateFn -and (Get-Command $addon.ValidateFn -ErrorAction SilentlyContinue)) {
-                try {
-                    Set-ExakitAddonProgress -Id $id -Pct 65 -Ceiling 90 -Secs 8 -Phase "validating"
-                    & $addon.ValidateFn
-                } catch { Write-ExakitAddonNote "warn" "$id validation reported: $_" }
-            }
-            # The add-on's own skills, placed now rather than at the AI-bridge
-            # step. Twin of the same call in _exakit_marketplace_install_one.
-            try { Install-ExakitAddonSkills $id } catch { }
-            # A service add-on joins the boot set the moment it is installed, so
-            # nobody has to remember a second command. This used to be skipped
-            # during an install, because Register-ExakitAutostart was CLI-only -
-            # which is exactly why an add-on installed from the closing offer
-            # never joined the boot set. It is in the shared layer now, so the
-            # install path registers it like the CLI always did.
-            # Twin of the same block in _exakit_marketplace_install_one.
-            if ((Get-ExakitManifestValue "autostart.enabled") -eq $true -and
-                $addon.PSObject.Properties["AutostartFn"]) {
-                try { [void](Register-ExakitAutostart -Id $id) } catch { }
-            }
-            # ...and it is STARTED now. Registering for boot is not the same as
-            # running: on Windows nothing starts until the next login, so
-            # `exakit status` reported the add-on just installed as "stopped".
-            if ($addon.PSObject.Properties["StartFn"] -and
-                (Get-Command $addon.StartFn -ErrorAction SilentlyContinue)) {
-                Set-ExakitAddonProgress -Id $id -Pct 90 -Ceiling 100 -Secs 3 -Phase "starting"
-                try { [void](& $addon.StartFn) }
-                catch { Write-ExakitAddonNote "warn" "$id installed but did not start - start it with: exakit start" }
-            }
-            # The add-on's own panel already carries an "Update  exakit update
-            # <id>" row, so the result line does not repeat it twice.
-            Stop-ExakitProgress
-            $script:ExakitAddonBarLive = $false
-            $script:ExakitQuietDetail = $prevQuiet
-            $script:ExakitActiveLabel = $prevLabel
-            # SummaryFn is OPTIONAL: the one fact worth carrying out of an
-            # install whose reference panel is now log-only. Twin of the
-            # <id>_summary hook in _exakit_marketplace_apply (common.sh).
-            $note = ""
-            if ($addon.PSObject.Properties["SummaryFn"] -and
-                (Get-Command $addon.SummaryFn -ErrorAction SilentlyContinue)) {
-                try { $note = "$(& $addon.SummaryFn)" } catch { $note = "" }
-            }
-            # Ok() is the record either way: it writes the FULL summary to the
-            # logfile whether or not the screen is showing it, which is what keeps
-            # a summary too long for the column from being lost.
-            if ($note) { Ok "$id installed - $note" } else { Ok "$id installed" }
-            if ($script:ExakitAddonTableRow -gt 0) {
-                $elapsed = [int]((Get-Date) - $t0).TotalSeconds
-                if ($elapsed -lt 0) { $elapsed = 0 }
-                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "done" `
-                    -Final (Get-ExakitAddonTableCell -Summary $note -Seconds $elapsed) `
-                    -Table $script:ExakitAddonTable
-            }
-        } else {
-            Stop-ExakitProgress
-            $script:ExakitAddonBarLive = $false
-            $script:ExakitQuietDetail = $prevQuiet
-            $script:ExakitActiveLabel = $prevLabel
-            if ($script:ExakitAddonTableRow -gt 0) {
-                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "failed" `
-                    -Final "did not finish - see the log" -Table $script:ExakitAddonTable
-            }
-            # NO REMEDY HERE. The module that failed has just printed its own,
-            # specific to what went wrong; adding a generic "retry with: exakit
-            # marketplace" underneath it gave one failure two competing answers
-            # and made the reader choose - and the generic one was the wrong
-            # choice, because marketplace declines to act on an add-on that is
-            # already present and answers "Nothing to install".
-            Write-ExakitAddonNote "warn" "$id did not finish installing - the reason is above, and in the log"
-            $failed += 1
-        }
-        $script:ExakitAddonTableRow = 0
+        Reset-ExakitAddonTable
     }
-    # The table stops redrawing BEFORE anything is said over it, and only then is
-    # what was collected on the way said.
-    if ($script:ExakitAddonTableLive) {
-        Stop-ExakitTable -Table $script:ExakitAddonTable
-        $script:ExakitAddonTableLive = $false
+    foreach ($note in $notes) {
+        if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text }
     }
-    $script:ExakitQuietDetail = $prevQuietAll
-    Show-ExakitAddonNotes
-    Reset-ExakitAddonTable
-    if ($failed -gt 0) { Fail "$failed add-on(s) did not finish installing." }
+    if ($code -ne 0) {
+        if (-not $script:ExakitApplyFailureEvent -and $script:ExakitApplyLastError) {
+            Fail "Marketplace did not finish: $($script:ExakitApplyLastError)"
+        }
+        Fail 'One or more add-ons did not finish installing.'
+    }
+}
+
+function Invoke-ExakitMarketplaceApply {
+    param([Parameter(Mandatory)][string[]]$Ids)
+    Invoke-ExakitMarketplaceApplyPython -Ids $Ids
 }
 
 # Request-ExakitMarketplaceOffer - the closing moment of an install:
@@ -6192,14 +7286,53 @@ function Write-ExakitReadyLine {
     if ($script:ExakitSoftFailed.Count -gt 0) { return }
     Write-Host ""
     Ok "Your starter kit is ready to use."
+    # Where each recorded persona starts (NEW-04). Twin of exakit_print_ready_line.
+    if (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue) {
+        foreach ($id in @(("" + (Get-ExakitManifestValue "persona.id")) -split ',' | Where-Object { $_ })) {
+            $step = @(Invoke-ExakitPersonaService "show" $id) | Where-Object { "$_" -match '^  Start here\s+' } | Select-Object -First 1
+            if (-not $step) { continue }
+            $title = @(Invoke-ExakitPersonaService "title" $id) | Select-Object -First 1
+            if (-not $title) { $title = $id }
+            Info "Start here ($title): $(("$step" -replace '^  Start here\s+', '').Trim())"
+        }
+    }
+}
+
+# Write-ExakitModelSetupHint - after the persona's add-ons and before the closing
+# panel: how to give the notebooks a model and Langfuse, once, in this terminal.
+# Only when the notebook add-on is installed and no model is set yet. The keys
+# are typed into a hidden prompt, never into a command. Twin of
+# exakit_model_setup_hint in common.sh.
+function Write-ExakitModelSetupHint {
+    if ($env:EXAKIT_MODEL_ID) { return }
+    try { if (-not (Test-ExakitMarketplaceAddonInstalled notebook)) { return } } catch { return }
+    Write-Host ""
+    Start-ExakitPanel "Your AI model and Langfuse (optional, for the notebooks)"
+    Write-ExakitPanelLine "Set once, here in PowerShell, then: exakit notebook"
+    Write-ExakitPanelLine '  $env:EXAKIT_MODEL_ID = "claude-opus-5-5"'
+    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"'
+    Write-ExakitPanelLine '  $k = Read-Host "Model API key" -AsSecureString'
+    Write-ExakitPanelLine '  $c = New-Object Net.NetworkCredential "", $k'
+    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_API_KEY = $c.Password'
+    Write-ExakitPanelLine '  $env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"'
+    Write-ExakitPanelLine "  LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY: the same way as the API key"
+    Write-ExakitPanelLine "Or in a notebook: nb.model_setup() shows what is set and how to set it"
+    Write-ExakitPanelLine "Nothing set: the AI steps skip and say so. Everything else runs."
+    Complete-ExakitPanel
 }
 
 function Request-ExakitMarketplaceOffer {
-    if (-not (Test-ExakitMarketplaceHasPending)) { return }
-    # Fill the About cache now, while the gate question below is still being
-    # read: this is the one screen where the cache is reliably cold (a machine
-    # minutes old), and the table it feeds does not exist yet.
-    Update-ExakitMarketplaceAboutCache
+    # Several checks per add-on and a description fetched for each take
+    # seconds: a turning spinner says the install is still going, not stuck.
+    # Twin of exakit_marketplace_offer.
+    Start-ExakitSpinner "Getting the add-ons ready"
+    try {
+        if (-not (Test-ExakitMarketplaceHasPending)) { return }
+        # Fill the About cache now, while the gate question below is still being
+        # read: this is the one screen where the cache is reliably cold (a machine
+        # minutes old), and the table it feeds does not exist yet.
+        Update-ExakitMarketplaceAboutCache
+    } finally { Stop-ExakitSpinner }
 
     # A scripted answer wins over any prompt (same contract as the menu).
     if ($env:EXAKIT_MARKETPLACE_ADDONS) {
@@ -6213,6 +7346,34 @@ function Request-ExakitMarketplaceOffer {
     $softState = Get-Variable -Scope Script -Name ExakitSoftFailed -ErrorAction SilentlyContinue
     if ($softState -and $softState.Value -and $softState.Value.Count -gt 0) { $softFailed = $true }
     $interactive = ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+    # Personas picked on screen: their add-ons, ticked, and nothing else - the
+    # rest of the marketplace is named once by Write-ExakitPersonaMarketplaceNote.
+    # A persona whose add-ons are "all" is the whole marketplace, every row
+    # ticked: "all" is not an id, and as a filter it matched nothing, which ended
+    # the offer with "Everything available is already covered." Twin of
+    # exakit_marketplace_offer.
+    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $softFailed -and $interactive) {
+        # No rule above it: the personas' add-ons carry on from their data, as
+        # one setup, rather than reading as a separate offer.
+        Write-ExakitHeading "Add-ons for your personas"
+        $only = ("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "")
+        if ($only -eq "all") {
+            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+            Show-ExakitMarketplaceMenu
+            return
+        }
+        $env:EXAKIT_MARKETPLACE_ONLY = $only
+        # Each row says what the add-on does for the persona, in the persona's own
+        # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
+        if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {
+            $env:EXAKIT_MARKETPLACE_REASONS = (@(Invoke-ExakitPersonaService "addon-reasons" $env:EXAKIT_PERSONA) -join "`n")
+        }
+        try { Show-ExakitMarketplaceMenu } finally {
+            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+            Remove-Item env:EXAKIT_MARKETPLACE_REASONS -ErrorAction SilentlyContinue
+        }
+        return
+    }
     if ($softFailed -or -not $interactive) {
         Info "Optional add-ons (dashboards & more): exakit marketplace"
         return
@@ -6463,6 +7624,13 @@ function Get-ExakitComponentAvailable {
         $uvReport = Get-ExakitUvReport
         if ($uvReport.Verdict -eq "ok" -and $uvReport.Path -ne (Get-ExakitUvKitBin)) { return $uvReport.Version }
     }
+    # The MCP server - the launcher's, beside the database, the only one the
+    # kit runs - is an image pinned by digest in this kit copy: its tag is the
+    # only version an update can put there, whatever the policy. Twin of the
+    # same rule in exakit_component_available.
+    if ($Component -eq "mcp" -and (Get-Command Get-McpSidecarImageVersion -ErrorAction SilentlyContinue)) {
+        return (Get-McpSidecarImageVersion)
+    }
     if ($script:VersionPolicy -eq "latest") { return (Get-ExakitComponentLatest $Component) }
     if ($script:VersionPolicy -ne "manifest") { return (Get-ExakitComponentFallback $Component) }
     $block = Get-ExakitComponentBlock $Component
@@ -6542,10 +7710,7 @@ function Get-ExakitComponentCurrent {
             return (Get-ExakitManifestValue "components.exapump.version")
         }
         "mcp" {
-            # What the clients are pinned to is what will actually run; the record is
-            # the fallback when no client is configured or the module is absent.
-            $live = Get-ExakitInstalledMcpVersion
-            if ($live) { return $live }
+            # The image the launcher's MCP server runs, recorded when it served.
             return (Get-ExakitManifestValue "components.mcp_server.version")
         }
         "uv" {
@@ -6651,13 +7816,10 @@ function Get-ExakitComponentFallback {
         # on disk, which is exactly what is installed.
         "exakit" { return (Get-ExakitKitBundledVersion) }
         default {
-            # Marketplace add-ons: the module defines the constant the registry
-            # names (empty when the module is not loaded).
+            # Marketplace defaults live in its catalog, including Python and
+            # legacy rows, so an offline release has one fallback source.
             $addon = Get-ExakitMarketplaceAddon $component
-            if ($addon) {
-                $var = Get-Variable -Scope Script -Name $addon.FallbackVar -ErrorAction SilentlyContinue
-                if ($var) { return $var.Value }
-            }
+            if ($addon) { return $addon.DefaultVersion }
         }
     }
     return ""
@@ -6709,7 +7871,9 @@ function Get-ExakitComponentLatest {
         # astral tags releases as plain numbers (0.13.6, no v); the helper
         # strips an optional v, so the answer has the same shape either way.
         "uv" { return (Get-ExakitLatestGithubRelease $script:UvRepo) }
-        "mcp" { return (Get-ExakitLatestPypiVersion $script:McpPackage) }
+        # The MCP server is the image this kit copy pins by digest: nothing newer
+        # can run beside the database until a kit update pins it.
+        "mcp" { if (Get-Command Get-McpSidecarImageVersion -ErrorAction SilentlyContinue) { return (Get-McpSidecarImageVersion) }; return (Get-ExakitVersionsPin -Path "components.mcp.version") }
         "pyexasol" { return (Get-ExakitLatestPypiVersion $script:PyexasolPackage) }
         "personal" { return (Get-ExakitLatestGithubRelease "exasol/exasol-personal") }
         "runtime" {
@@ -6752,44 +7916,6 @@ function Get-ExakitComponentSeverity {
     return "normal"
 }
 
-# Get-ExakitInstalledMcpVersion - the MCP server is never "installed": uvx
-# materialises it per launch. What exists on the machine is the SPEC pinned into each
-# AI client config, and that is what runs the next time a client connects. The
-# adapters own where those configs live, so the paths come from the kit's own status
-# operation rather than a second copy of that knowledge. When clients disagree the
-# oldest pin is the answer here; the per-client picture belongs to mcp-doctor, which
-# names each client whose managed entry is no longer the one the kit would write, and
-# mcp-doctor re-writes those entries from the current definition.
-# Twin of exakit_installed_mcp_version in setup/lib/common.sh.
-function Get-ExakitInstalledMcpVersion {
-    if (-not (Get-Command Invoke-McpOperationCli -ErrorAction SilentlyContinue)) { return "" }
-    try {
-        $json = Invoke-McpOperationCli -Operation "status" -Clients @(
-            "claude_desktop", "claude_code", "cursor", "codex",
-            "vscode_copilot", "gemini_cli", "opencode", "continue")
-        if (-not $json) { return "" }
-        $doc = $json | ConvertFrom-Json
-        $pins = @{}
-        foreach ($artifact in @($doc.artifacts)) {
-            if (-not $artifact.path -or -not (Test-Path $artifact.path)) { continue }
-            $body = Get-Content $artifact.path -Raw -ErrorAction SilentlyContinue
-            if (-not $body) { continue }
-            foreach ($m in [regex]::Matches($body, 'exasol-mcp-server@([0-9][0-9A-Za-z._+-]*)')) {
-                $pins[$m.Groups[1].Value] = $true
-            }
-        }
-        if ($pins.Count -eq 0) { return "" }
-        # The OLDEST pin, not the set: this value is compared against the advertised
-        # version, and a comma-joined list is not a version. The oldest is the weakest
-        # link - the client that would launch the most outdated server. Which client is
-        # stale belongs to `exakit mcp-doctor`, which prints per-client state already.
-        $sorted = $pins.Keys | Sort-Object { [regex]::Replace($_, '\d+', { param($m) $m.Value.PadLeft(12, '0') }) }
-        return ($sorted | Select-Object -First 1)
-    } catch {
-        return ""
-    }
-}
-
 # Get-ExakitProbedVersion - run a command that reports its own version and return
 # just the version. -Raw when the output IS the version (a python one-liner);
 # otherwise the first version-shaped token is taken out of a line like
@@ -6808,7 +7934,7 @@ function Get-ExakitProbedVersion {
         $out = ("" + $out).Trim()
         if (-not $out) { return "" }
         if ($Raw) {
-            if ($out -match '^[A-Za-z0-9._+-]+$') { return $out }
+            if ($out -match '^[A-Za-z0-9._+-]+\z') { return $out }
             return ""
         }
         $match = [regex]::Match($out, '[0-9]+\.[0-9]+[0-9A-Za-z._+-]*')
@@ -6870,6 +7996,72 @@ function Get-ExakitUpdateTargets {
 }
 
 function Get-RuntimeType { return (Get-ExakitManifestValue "runtime.type") }
+
+# ---------------------------------------------------------------------------
+# Services (twin of the exakit_service_* set in common.sh). Every service
+# answers the same three questions - running, start, stop - and add-ons opt in
+# through the registry (StatusFn/StartFn/StopFn/AutostartFn). Here, not in the
+# CLI, because an add-on module stops and starts them around a restart.
+# ---------------------------------------------------------------------------
+function Get-ExakitServiceIds {
+    $ids = @()
+    if (Get-ExakitManifestValue "runtime.type") { $ids += "database" }
+    foreach ($addonId in (Get-ExakitMarketplaceInstalledAddons)) {
+        $addon = Get-ExakitMarketplaceAddon $addonId
+        if ($addon -and $addon.PSObject.Properties["StatusFn"] -and
+            (Get-Command $addon.StatusFn -ErrorAction SilentlyContinue)) { $ids += $addonId }
+    }
+    return $ids
+}
+
+function Get-ExakitServiceStatus {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") {
+        switch (Get-RuntimeType) {
+            "personal" { return (Get-PersonalStatus) }
+        }
+        return "unknown"
+    }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and (Get-Command $addon.StatusFn -ErrorAction SilentlyContinue)) { return (& $addon.StatusFn) }
+    return "unknown"
+}
+
+# Get-ExakitServiceUrl - the address a service is reachable at, or "" when it
+# has none. Optional registry hook (UrlFn), resolved the same generic way as
+# StatusFn/StartFn, so a future add-on gets a `urls` row with no wiring here.
+# Twin of the `url` convention hook that cmd_status resolves via _exakit_addon_fn.
+function Get-ExakitServiceUrl {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") { return "" }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and $addon.PSObject.Properties["UrlFn"] -and
+        (Get-Command $addon.UrlFn -ErrorAction SilentlyContinue)) {
+        try { return "$(& $addon.UrlFn)" } catch { return "" }
+    }
+    return ""
+}
+
+function Start-ExakitService {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") { Confirm-ExakitRuntimeRunning -Deploy; return }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and $addon.PSObject.Properties["StartFn"] -and
+        (Get-Command $addon.StartFn -ErrorAction SilentlyContinue)) { [void](& $addon.StartFn) }
+}
+
+function Stop-ExakitService {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") {
+        switch (Get-RuntimeType) {
+            "personal" { Stop-Personal }
+        }
+        return
+    }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and $addon.PSObject.Properties["StopFn"] -and
+        (Get-Command $addon.StopFn -ErrorAction SilentlyContinue)) { [void](& $addon.StopFn) }
+}
 
 # The recorded runtime types that belong to a kit OLDER than this one: a
 # database in a container, which this kit neither deploys nor drives.

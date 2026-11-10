@@ -63,6 +63,16 @@ class ClaudeDesktopAdapter(ClientAdapter):
             )
         if environment.os_name == "win32":
             return self._locate_windows(environment)
+        if environment.env.get("WSL_DISTRO_NAME") or environment.env.get("WSL_INTEROP"):
+            # Claude Desktop is a Windows app: from a WSL distro it is neither
+            # "not installed" nor unsupported, it is on the other side (WSL-02).
+            return LocationResult(
+                available=False,
+                path=None,
+                evidence=["Claude Desktop runs on Windows, outside this WSL distro, and reads its config there."],
+                remedy=("Connect it from Windows: in PowerShell, install the starter kit there and run "
+                        "exakit mcp-setup, or add the Exasol MCP server in Claude Desktop's own settings."),
+            )
         return LocationResult(
             available=False,
             path=None,

@@ -45,6 +45,8 @@ Podman's machine runs on the WSL kernel, and Exasol Personal 2.4 needs WSL 2.7 o
 
 Podman's default machine is one machine for the whole computer. The Exasol launcher uses it, never reconfigures one that already exists, and leaves it running after `exakit stop` and even after an uninstall. The kit owns the **deployment** (the database and its data) and nothing else, so if you use Podman for other work, that work is not affected.
 
+The installer does not check or change the Podman machine. When a Podman deployment fails or never answers, the kit shows the container's own error and names the fix, which you run yourself. See the [Podman troubleshooting guide](podman.md#windows-rootful-machine).
+
 ## Verify
 
 ```powershell
@@ -80,15 +82,16 @@ For the full detail, see [Staying up to date](../README.md#staying-up-to-date).
 
 ## Windows notes
 
-For help with the Podman machine, rootless mode or WSL2 errors, see the [Podman troubleshooting guide](podman.md).
+For help with the Podman machine, rootful and rootless modes or WSL2 errors, see the [Podman troubleshooting guide](podman.md).
 
 | Issue | Fix |
 |---|---|
 | The Podman install asked for administrator approval | That is Windows Package Manager installing Podman, once, and the installer tells you before it happens. Approve it, or install Podman yourself first (`winget install RedHat.Podman`; you may need to reboot) and re-run. The kit itself never needs admin rights. If you refuse the approval, the kit reports Podman as the cause rather than the database, skips the database step and carries on. Everything that doesn't need a database still installs, and re-running the install command afterwards finishes the job (completed steps are skipped) |
 | "Podman on WSL ... cannot create the network Exasol Personal 2.4 needs" | This WSL kernel has no nftables. Run `wsl --update` in PowerShell, then `wsl --shutdown`, and re-run the command the message names. Nothing was changed. |
 | "Podman is installed, but it cannot run containers" | Podman on Windows is a Linux machine under WSL, and it is off after a reboot. The kit runs `podman info` before deploying and starts the machine if it is only stopped. If Podman still doesn't answer, fix what `podman info` reports (`podman machine start`, or `podman machine init` if there is no machine at all) and re-run the install command |
+| "This deployment never started, so it holds no data" | The first boot failed and no data was ever written, so the installer offers to remove it and deploy a fresh one (default yes). `EXAKIT_REPLACE_DB=0` keeps it. A deployment that ever started keeps the old questions, and deleting it still defaults to no |
 | "Port 8563 is already in use" | The launcher picks the deployment's port itself, and the kit uses whichever port it picked. If the port holds a running Exasol Personal that this launcher deployed, the kit adopts it. Anything else is reported: stop that application and re-run |
-| "It answers like an Exasol database this kit did not deploy" | Windows and WSL share one network stack, so an Exasol Personal running **inside a WSL distro** holds port 8563 for Windows too, and the other way round. The kit never adopts a database it cannot log in to. Stop it on the other side first (`exakit stop` in that distro, or in PowerShell when installing into WSL), then re-run |
+| "It answers like an Exasol database this kit did not deploy" | An Exasol Personal running **inside a WSL distro** holds port 8563 for Windows too: WSL forwards the distro's ports to Windows' `localhost`. The other way round (a Windows-side database seen from the distro) only with mirrored networking (`networkingMode=mirrored`). The kit never adopts a database it cannot log in to. Stop it on the other side first (`exakit stop` in that distro, or in PowerShell when installing into WSL), then re-run |
 | `TLS error: tls handshake eof` right after an install or start | The database is still booting behind its published port. Under rootless Podman the port opens as soon as the container starts, a minute or more before the database inside accepts connections. The kit waits for a completed handshake before it reports the deployment as reachable. If you see this error from your own client, wait a minute and check `exakit status` |
 | A step failed but the install continued | This is expected. The summary at the end lists each missing piece and the one command that installs it. That includes the database step itself: if you decline to reuse a running database or to delete a stopped one, if another process holds port 8563, or if a deploy can't finish, the kit records it instead of stopping |
 | "Reusing the existing Exasol deployment (started)" and then nothing | Fixed. The launcher accepts a start for a deployment it has only initialized and then does nothing. The kit now checks with the database itself instead of the launcher's record, runs the launcher's own deploy when nothing answers, and checks again |

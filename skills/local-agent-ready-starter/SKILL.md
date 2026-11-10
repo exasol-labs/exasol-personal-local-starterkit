@@ -65,7 +65,7 @@ options before piping a remote script into a shell:
   can be read first; installs nothing until the user runs the setup themselves.
 
 When **you** run the installer (no terminal is attached, so the install cannot prompt the
-user), it silently takes safe defaults — it would load **every bundled dataset** and connect
+user), it silently takes safe defaults — it would load **the General persona's samples** (TPC-H, energy, weather) and connect
 **every AI client found on the machine that isn't connected yet** over MCP, without asking.
 Instead, ask the user these questions first, then pass the answers so their choices are
 honored — prefixed before `sh` on macOS/Linux/WSL, or set as `$env:` variables first in
@@ -75,6 +75,9 @@ releases:
   Claude Code CLI; also `claude_desktop`, `claude_code`, `codex`, `cursor`, `copilot`,
   `gemini`, `opencode`, `continue`, `all`, comma-separated); or `EXAKIT_SKIP_MCP=1` to set
   MCP up later via `exakit mcp-setup`
+- what the machine is for → `EXAKIT_PERSONA=general` (or `data-scientist`, `ml-engineer`,
+  comma-separated to combine): a named set of the answers below; an answer you set yourself
+  wins for that one variable (it replaces the persona's: name the persona's add-ons too to keep them)
 - which data to load → `EXAKIT_DATASETS=tpch,weather` (bundled dataset ids; wins over
   `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip data)
 - on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)
@@ -83,8 +86,10 @@ Example: `curl -fsSL <install.sh URL> | EXAKIT_MCP_CLIENTS=claude EXAKIT_DATASET
 or on Windows: `$env:EXAKIT_MCP_CLIENTS = "claude"; $env:EXAKIT_DATASETS = "tpch"; irm <install.ps1 URL> | iex`.
 (`EXAKIT_REUSE_DB` applies to the macOS native runtime only.)
 
-Tell the user what to expect: a detection summary, an install plan, then numbered steps
-ending in a connection panel — and the suggested first AI prompt is copied to the user's
+Tell the user what to expect: a detection summary, an install plan, numbered steps, then
+the persona's data (on a terminal it first asks "What will you use this machine for?"), the `exakit`
+helper as the last step, and a connection panel. The `exakit` command itself is in place
+from the first seconds, so `exakit status` answers while the install runs. The suggested first AI prompt is copied to the user's
 clipboard automatically when a clipboard tool is available, ready to paste into their client.
 **The first database deployment usually finishes in under 2 minutes on every
 platform** (one-time). Do not treat a long-running macOS
@@ -126,9 +131,10 @@ connected or not installed on this machine appear greyed out with the reason and
 selected; **every selectable (pending) client is pre-selected**. The user restarts the
 client afterward.
 
-After setup, the client starts the MCP server named `exasol` on demand over stdio (it is not
-a background service). Verify with `exakit mcp-doctor`, which starts the server itself and
-completes an MCP handshake — so a `connected` client is one that can really reach it.
+After setup, every client has an MCP server named `exasol`: the Exasol Personal launcher's own
+MCP server beside the database (`http://127.0.0.1:4896/mcp`), the only one there is. Verify with
+`exakit mcp-doctor`, which heals it when it does not serve and completes an MCP handshake with
+it — so a `connected` client is one that can really reach it.
 
 **If you are the client you just configured, you cannot use those tools yet.** An MCP client
 reads its server list at startup, so the `exasol` tools appear only after *your own* process
@@ -141,17 +147,22 @@ trust. That is what makes the next steps safe.
 
 ## Step 4 — Load the sample data
 
-So the user is not staring at an empty database, load the bundled TPC-H sample (customers,
+Check what is already there first: `exakit status --json` lists `datasets_loaded`. A persona
+install loaded the persona's own datasets — a Data Scientist machine has `amazon_sales`
+(`AMAZON.ORDER_LINES`) and `fraud_transactions`
+(`FRAUD.TRANSACTIONS`, messy on purpose), **not** TPC-H. Use what
+is loaded. Only on an empty database, load a bundled sample, for example TPC-H (customers,
 orders, line items, parts, suppliers) into the `TPCH` schema:
 
 ```bash
-exakit data-load
+exakit data-load tpch      # a bundled dataset by id; bare `exakit data-load` is the menu (terminal only)
 ```
 
-Safe to run any time; choose the bundled sample option to load it. Use `exakit data-load --force`
-to reload the bundled sample directly. If it reports files as *pending*, the sample data has not shipped in this build —
-the user can still continue with their own data:
-`exapump upload yourfile.csv --table STARTER_KIT.MYTABLE -p starter-kit`.
+Safe to run any time: what is already loaded is skipped. Use `exakit data-load --force tpch`
+to reload it. If it reports files as *pending*, the sample data has not shipped in this build —
+the user can still continue with their own data, through the same command first:
+`EXAKIT_DATA_TABLE=STARTER_KIT.MYTABLE exakit data-load yourfile.csv` (exapump only when
+`exakit data-load` cannot take the file — the order is in the `exakit` skill).
 
 ## Step 5 — The first trusted query (the payoff, and the point)
 
@@ -162,8 +173,9 @@ hold the discipline even though it is tempting to just answer.
 ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (independently)  ->  RERUN
 ```
 
-1. **Discover.** Ask the user's assistant to list schemas/tables and describe the
-   `TPCH` tables first — ground in the *real* schema, do not guess column names.
+1. **Discover.** Ask the user's assistant to list schemas/tables and describe the tables of a
+   dataset this machine actually loaded (`datasets_loaded` above — `TPCH` only where it is
+   listed) — ground in the *real* schema, do not guess column names.
    Without MCP tools (always the case in the session that ran the install) the
    system tables answer the same questions in well under a second:
    `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA NOT LIKE 'SYS%'`
@@ -171,8 +183,9 @@ ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (indepe
    columns and types, and `~/.exasol-starter-kit/kit/data/data-dictionary.md`
    describes each bundled dataset. Run them through `exakit sql` (`--json` for
    one parseable object).
-2. **Ask, but show the SQL first.** For a question like *"which product category generated
-   the most revenue?"*, present the SQL and a plain-English explanation **before executing**.
+2. **Ask, but show the SQL first.** For a question that fits the loaded data — *"which product
+   category generated the most revenue?"* on TPC-H, *"which product categories are most
+   often cancelled?"* on Amazon sales — present the SQL and a plain-English explanation **before executing**.
    Call out the judgment calls: what defines "revenue" (price × quantity? an amount column?),
    whether returns are subtracted, what is filtered out. Let the user correct the SQL before
    it runs.

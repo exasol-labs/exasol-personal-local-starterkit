@@ -1,0 +1,178 @@
+{
+  "version": "1",
+  "metadata": {
+    "marimo_version": "0.25.2",
+    "script_metadata_hash": null
+  },
+  "cells": [
+    {
+      "id": "Hbol",
+      "code_hash": "d67803d0688feeae94d6cfb5e151a482",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "MJUe",
+      "code_hash": "227b08697f481547310638b85f3d08a1",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h1 id=\"bundled-exasol-lesson-abalone\">Bundled Exasol lesson: Abalone</h1>\n<span class=\"paragraph\">Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.</span>\n<span class=\"paragraph\">Run cells from top to bottom. In Marimo each editable cell has its own Run button; opening a lesson executes no example code. Widget steps retain their Python code; use the matching Jupyter notebook for the original widget UI.</span>\n<span class=\"paragraph\">For dashboards use the kit Data Scientist 03_share flow on Dash Server.</span>\n<span class=\"paragraph\">Source: <a href=\"https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/data/data_abalone.ipynb\" rel=\"noopener noreferrer\" target=\"_blank\">Exasol Notebook Connector</a>. MIT license: LICENSE.txt.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "vblA",
+      "code_hash": "1eb1eee95f72fe630242b69da84d81f3",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='vblA-0' random-id='95cf893a-7cff-adb7-1c14-1ba6c5038386'><marimo-code-editor data-initial-value='&quot;from exakit.nb.example_runtime import bootstrap&#92;nai_lab_config = bootstrap(globals(), &#x27;data/data_abalone.ipynb&#x27;)&quot;' data-label='null' data-language='&quot;python&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-min-height='100' data-show-copy-button='true' data-debounce='false'></marimo-code-editor></marimo-ui-element><marimo-ui-element object-id='vblA-1' random-id='1aea9d34-df03-fd60-05a1-d4030f2ea0b0'><marimo-button data-initial-value='0' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eRun cell 1&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "bkHC",
+      "code_hash": "1da8aa1706d8b5d295eba99574d5e020",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "lEQa",
+      "code_hash": "6ee3c7a2dbfbfee4a889a458b4c27c7e",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><div style=\"text-align: right;\">\n  <img src=\"https://raw.githubusercontent.com/exasol/ai-lab/refs/heads/main/assets/Exasol_Logo_2025_Dark.svg\" style=\"width:200px; margin: 10px;\" />\n</div>\n\n<h1 id=\"abalone\">Abalone</h1>\n<span class=\"paragraph\">Here we will load data of physical measurements of abalones (sea snails). <a href=\"https://archive.ics.uci.edu/dataset/1/abalone\" target=\"_blank\" rel=\"noopener\">Follow this link</a> to get details about this dataset.</span>\n<span class=\"paragraph\">To execute queries and upload data to Exasol database we will be using the <a href=\"https://github.com/exasol/pyexasol\" target=\"_blank\" rel=\"noopener\"><code>pyexasol</code></a> module.</span>\n<h2 id=\"prerequisites\">Prerequisites</h2>\n<span class=\"paragraph\">Prior to using this notebook the following steps need to be completed:</span>\n<ol>\n<li><a href=\"/?file=exasol-examples/main_config.py\">Configure the AI Lab</a>.</li>\n</ol>\n<h2 id=\"setup\">Setup</h2>\n<h3 id=\"open-secure-configuration-storage\">Open Secure Configuration Storage</h3></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "PKri",
+      "code_hash": "54af50c0929b7a81e210915c9cf60b75",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='PKri-0' random-id='37a7b886-8d94-8a1b-2ef9-b68c1227df9d'><marimo-code-editor data-initial-value='&quot;print(&#92;&quot;Using the Starter Kit encrypted connection; tutorial schema: EXAKIT_EXAMPLES.&#92;&quot;)&quot;' data-label='null' data-language='&quot;python&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-min-height='100' data-show-copy-button='true' data-debounce='false'></marimo-code-editor></marimo-ui-element><marimo-ui-element object-id='PKri-1' random-id='3dbb64bd-e530-c205-a18c-35b552e05333'><marimo-button data-initial-value='0' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eRun cell 2&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Xref",
+      "code_hash": "1f2d051dd5c805027b6a4b4f084285f8",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "SFPL",
+      "code_hash": "21485fa93b79f1f91d740c538673d0ee",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"download-data\">Download data</h2>\n<span class=\"paragraph\">First, we will load the data into Pandas DataFrame. Each data column represents one of the features and is named accordingly, see section Variable Table in the dataset description. We will name the Pandas columns as per the variable description.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "BYtC",
+      "code_hash": "136b20b868c5677401caed4886232866",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='BYtC-0' random-id='77562a57-e353-1333-964d-6d6af71938e1'><marimo-code-editor data-initial-value='&quot;from urllib.request import urlopen&#92;nimport tempfile&#92;nfrom zipfile import ZipFile&#92;nfrom contextlib import ExitStack&#92;nimport pandas as pd&#92;nfrom stopwatch import Stopwatch&#92;n&#92;nstopwatch = Stopwatch()&#92;n&#92;nDATA_URL = &#92;&quot;https://archive.ics.uci.edu/static/public/1/abalone.zip&#92;&quot;&#92;nDATA_FILE = &#92;&quot;abalone.data&#92;&quot;&#92;n&#92;nresp = urlopen(DATA_URL)&#92;nwith ExitStack() as stack:&#92;n    f = stack.enter_context(tempfile.TemporaryFile())&#92;n    f.write(resp.read())&#92;n    print(f&#92;&quot;Downloading the data took: {stopwatch}&#92;&quot;)&#92;n&#92;n    f.seek(0)&#92;n    z = stack.enter_context(ZipFile(f))&#92;n    f = stack.enter_context(z.open(DATA_FILE, &#92;&quot;r&#92;&quot;))&#92;n    df = pd.read_csv(f)&#92;n&#92;ncolumn_def = [&#92;n    (&#x27;Sex&#x27;, &#x27;CHAR(1)&#x27;),&#92;t                 # M, F, and I (infant)&#92;n    (&#x27;Length&#x27;, &#x27;DECIMAL(4,3)&#x27;),          # longest shell measurement (mm)&#92;n    (&#x27;Diameter&#x27;, &#x27;DECIMAL(4,3)&#x27;),&#92;t     # perpendicular to length (mm)&#92;n    (&#x27;Height&#x27;, &#x27;DECIMAL(4,3)&#x27;),          # with meat in shell (mm)&#92;n    (&#x27;Whole_weight&#x27;, &#x27;DECIMAL(5,4)&#x27;),    # whole abalone (grams)&#92;n    (&#x27;Shucked_weight&#x27;, &#x27;DECIMAL(5,4)&#x27;),  # weight of meat (grams)&#92;n    (&#x27;Viscera_weight&#x27;, &#x27;DECIMAL(5,4)&#x27;),  # gut weight (after bleeding) (grams)&#92;n    (&#x27;Shell_weight&#x27;, &#x27;DECIMAL(4,3)&#x27;),    # after being dried (grams)&#92;n    (&#x27;Rings&#x27;, &#x27;INT&#x27;)                     # +1.5 gives the age in years&#92;n]&#92;ndf.columns = [name for name, _ in column_def]&#92;n&#92;nprint(df.head())&quot;' data-label='null' data-language='&quot;python&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-min-height='100' data-show-copy-button='true' data-debounce='false'></marimo-code-editor></marimo-ui-element><marimo-ui-element object-id='BYtC-1' random-id='d30ebb87-cece-9719-4fcb-f2284b2773d7'><marimo-button data-initial-value='0' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eRun cell 3&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "RGSE",
+      "code_hash": "e97c9f1834ad6cea66ccfeea19a778c9",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Kclp",
+      "code_hash": "5d0d6d454fb4d35bf70dccd2766184d2",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/markdown": "<span class=\"markdown prose dark:prose-invert contents\"><h2 id=\"upload-data-into-db\">Upload data into DB</h2>\n<span class=\"paragraph\">Let's split data randomly into train and test sets. We will then create two tables - ABALONE_TRAIN and ABALONE_TEST - and load the datasets into these tables.</span></span>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "emfo",
+      "code_hash": "91a1108af88cbe28e4927a3e7c333728",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/html": "<div style='display: flex;flex: 1;flex-direction: column;justify-content: flex-start;align-items: normal;flex-wrap: nowrap;gap: 0.5rem'><marimo-ui-element object-id='emfo-0' random-id='2288d82a-da79-b8d1-3082-a4f99ce84f98'><marimo-code-editor data-initial-value='&quot;from sklearn.model_selection import train_test_split&#92;nfrom exakit.nb.example_runtime import open_pyexasol_connection&#92;n&#92;n# Split the data into train and test sets&#92;ndf_train, df_test = train_test_split(df, test_size=0.2)&#92;n&#92;ntrain_table = &#x27;ABALONE_TRAIN&#x27;&#92;ntest_table = &#x27;ABALONE_TEST&#x27;&#92;ncolumn_desc = [&#x27; &#x27;.join(c) for c in column_def]&#92;n&#92;nstopwatch = Stopwatch()&#92;n&#92;n# Create an Exasol connection&#92;nwith open_pyexasol_connection(ai_lab_config, compression=True) as conn:&#92;n    # Create tables&#92;n    sql = f&#x27;CREATE OR REPLACE TABLE &#92;&quot;{ai_lab_config.db_schema}&#92;&quot;.&#92;&quot;{train_table}&#92;&quot;({&#92;&quot;, &#92;&quot;.join(column_desc)})&#x27;&#92;n    conn.execute(query=sql)&#92;n    sql = f&#x27;CREATE OR REPLACE TABLE &#92;&quot;{ai_lab_config.db_schema}&#92;&quot;.&#92;&quot;{test_table}&#92;&quot; LIKE &#92;&quot;{ai_lab_config.db_schema}&#92;&quot;.&#92;&quot;{train_table}&#92;&quot;&#x27;&#92;n    conn.execute(query=sql)&#92;n&#92;n    # Import data into Exasol&#92;n    conn.import_from_pandas(df_train, (ai_lab_config.db_schema, train_table))&#92;n    print(f&#92;&quot;Imported {conn.last_statement().rowcount()} rows into {train_table}.&#92;&quot;)&#92;n    conn.import_from_pandas(df_test, (ai_lab_config.db_schema, test_table))&#92;n    print(f&#92;&quot;Imported {conn.last_statement().rowcount()} rows into {test_table}.&#92;&quot;)&#92;n&#92;nprint(f&#92;&quot;Importing the data took: {stopwatch}&#92;&quot;)&quot;' data-label='null' data-language='&quot;python&quot;' data-placeholder='&quot;&quot;' data-disabled='false' data-min-height='100' data-show-copy-button='true' data-debounce='false'></marimo-code-editor></marimo-ui-element><marimo-ui-element object-id='emfo-1' random-id='4608d29e-2a6f-1e82-54a7-e3d4c90b49d0'><marimo-button data-initial-value='0' data-label='&quot;&#92;u003cspan class=&#92;&quot;markdown prose dark:prose-invert contents&#92;&quot;&#92;u003e&#92;u003cspan class=&#92;&quot;paragraph&#92;&quot;&#92;u003eRun cell 4&#92;u003c/span&#92;u003e&#92;u003c/span&#92;u003e&quot;' data-kind='&quot;neutral&quot;' data-disabled='false' data-full-width='false'></marimo-button></marimo-ui-element></div>"
+          }
+        }
+      ],
+      "console": []
+    },
+    {
+      "id": "Hstk",
+      "code_hash": "d8f2aca7805cc54d7008bb73b90570e6",
+      "outputs": [
+        {
+          "type": "data",
+          "data": {
+            "text/plain": ""
+          }
+        }
+      ],
+      "console": []
+    }
+  ]
+}

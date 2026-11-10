@@ -407,19 +407,19 @@ def _permanent_setup(
 ) -> dict:
     context = context_loader.load(runtime_root)
     subsystem = MCPAccessSubsystem(environment=environment, filesystem=filesystem)
-    result = subsystem.execute(
-        {
-            "operation": "configure",
-            "target_clients": clients,
-            "deployment_mode": "stdio",
-            "runtime_root": str(runtime_root),
-            "server_definition": to_primitive(context.server_definition),
-            "credential_reference": {"kind": "inline_env", "name": "EXA_PASSWORD"},
-            "dsn_reference": {"kind": "literal", "value": context.dsn},
-            "create_snapshot": True,
-            "validate_after_apply": True,
-        }
-    )
+    request = {
+        "operation": "configure",
+        "target_clients": clients,
+        # http: the launcher's MCP sidecar, whose client entries carry a URL and
+        # no credential at all (Claude Desktop's is the stdio bridge to that URL).
+        "deployment_mode": context.server_definition.transport.value,
+        "runtime_root": str(runtime_root),
+        "server_definition": to_primitive(context.server_definition),
+        "dsn_reference": {"kind": "literal", "value": context.dsn},
+        "create_snapshot": True,
+        "validate_after_apply": True,
+    }
+    result = subsystem.execute(request)
     payload = result.to_dict()
     payload.update(
         {
@@ -607,18 +607,16 @@ def _setup_findings(payload: dict) -> list[dict]:
 
 
 def _doctor_stages() -> list[str]:
-    """The doctor's stage list, including the one that actually starts the server.
+    """The doctor's stage list, including the one that actually talks to the server.
 
-    `server_launch` is a live probe: it spawns the configured command and speaks
-    MCP to it. That is the whole point — every other stage inspects paperwork, so
-    a client whose entry was present and well-formed reported "connected" while
-    the server behind it could not start at all (a missing uvx, a package that
-    will not resolve), which is a healthy doctor report and an AI client with no
-    Exasol tools in it.
+    `server_launch` is a live probe: it speaks MCP to the sidecar at its URL.
+    That is the whole point — every other stage inspects paperwork, so a client
+    whose entry was present and well-formed reported "connected" while the
+    server behind it did not answer, which is a healthy doctor report and an AI
+    client with no Exasol tools in it.
 
-    It costs a subprocess and, on a cold uvx cache, a download. Set
-    EXAKIT_MCP_SKIP_SERVER_PROBE=1 to leave it out where that is unacceptable —
-    an offline machine, or a suite that must not reach the network.
+    Set EXAKIT_MCP_SKIP_SERVER_PROBE=1 to leave it out where a live request is
+    unacceptable, such as a suite that must not reach a server.
     """
     stages = list(OperationRequest.stages)
     if os.environ.get("EXAKIT_MCP_SKIP_SERVER_PROBE") == "1":
@@ -657,12 +655,13 @@ def _build_operation_request(
         # nobody has touched since an update moved the pinned server version on
         # reads as perfectly consistent and doctor reports success. It is an input
         # to a comparison on both paths; the read-only paths never apply it.
-        request["deployment_mode"] = "stdio"
+        request["deployment_mode"] = context.server_definition.transport.value
         request["server_definition"] = to_primitive(context.server_definition)
     if operation == "doctor":
         request["stages"] = _doctor_stages()
     if operation == "repair":
-        request["credential_reference"] = {"kind": "inline_env", "name": "EXA_PASSWORD"}
+        # As configure does: snapshot first, validate after. No credential: the
+        # entries hold the sidecar's URL, never the read-only user's password.
         request["validate_after_apply"] = True
         request["create_snapshot"] = True
     if operation == "restore":

@@ -9,11 +9,15 @@
   "repo": "exasol-labs/exapump",
   "docs": "https://github.com/exasol-labs/exapump#readme",
   "binary": "~/.local/bin/exapump",
-  "config": "~/.exapump/config.toml",
+  "config": "~/.exasol-starter-kit/exapump/config.toml",
   "profile": "starter-kit",
   "installed_by": "The installer, at step 3 of 6.",
   "warning": "The starter-kit profile connects as the ADMIN user and is NOT sandboxed: it can create, drop and delete. Never treat an exapump success as proof something is safe for the MCP path, and never reach for exapump to work around an MCP rejection.",
   "quickstart": [
+    {
+      "step": "Point exapump at the kit's profile file",
+      "run": "export EXAPUMP_CONFIG=~/.exasol-starter-kit/exapump/config.toml"
+    },
     {
       "step": "Prove the database works",
       "run": "exapump sql -p starter-kit 'SELECT CURRENT_TIMESTAMP'"
@@ -84,10 +88,14 @@
   "environment": [
     {
       "name": "EXAPUMP_CONFIG",
-      "effect": "Override the config path. Profiles live in ~/.exapump/config.toml by default."
+      "effect": "The profile file. The kit keeps its starter-kit profile in ~/.exasol-starter-kit/exapump/config.toml and leaves your ~/.exapump/config.toml (exapump's default) alone, so set this before calling exapump directly; exakit sets it for its own commands."
     }
   ],
   "troubleshooting": [
+    {
+      "symptom": "Profile 'starter-kit' not found in config",
+      "remedy": "export EXAPUMP_CONFIG=~/.exasol-starter-kit/exapump/config.toml, or run the statement with exakit sql."
+    },
     {
       "symptom": "Failed to connect to 127.0.0.1:8563",
       "remedy": "The database is not running: exakit start, then exakit status."

@@ -40,12 +40,14 @@ EXAKIT_BIN_DIR="$HOME/.local/bin"
 # the fallback landed in the sandbox only while nobody had set the variable.
 EXAKIT_EXAPUMP_CONFIG_DIR="$HOME/.exapump"
 export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_EXAPUMP_CONFIG_DIR
+. "$ROOT/setup/lib/common.sh"
 
 # --- stub the externals the engine calls ---------------------------------
 info(){ :; }; warn(){ :; }; ok(){ :; }; die(){ echo "die: $*" >&2; exit 1; }
 manifest_get(){
     case "$1" in
         runtime.type) echo personal ;;
+        runtime.ownership|components.personal.ownership|components.exapump.ownership|components.dash_server.ownership) echo kit ;;
         # What the install recorded — the only skills the kit may remove. Shaped
         # exactly as manifest_get renders a JSON list (json.dumps spacing).
         components.skills.installed) echo '["local-agent-ready-starter", "exasol-runtime"]' ;;
@@ -58,6 +60,7 @@ exakit_mcp_operation(){ printf '%s\n' "$*" > "$SANDBOX/marker_mcp"; }
 # The engine sweeps add-on launchers by registry id; mirror the real registry
 # so a machine with the dash-server launcher gets it removed.
 exakit_marketplace_addons(){ printf '%s\n' "dash-server|x"; }
+exakit_marketplace_installed_addons(){ :; }
 
 # --- pull in only the functions under test --------------------------------
 # The engine plus the skills-removal helper it delegates to (shared with the
@@ -110,15 +113,26 @@ check "real: db teardown called"  yes "$(exists "$SANDBOX/marker_personal")"
 check "real: teardown got --data" "--data" "$(cat "$SANDBOX/marker_personal" 2>/dev/null)"
 check "real: mcp removal called"  yes "$(exists "$SANDBOX/marker_mcp")"
 check "real: mcp got uninstall"   "uninstall" "$(cat "$SANDBOX/marker_mcp" 2>/dev/null)"
-check "real: kit home gone"       no  "$(exists "$H/.exasol-starter-kit")"
+# The dashboards (dash-server/instance) are the user's work: kept, and with them the home that holds them
+# (audit DAY-01; tests/notebook-addon.sh pins the whole rule). Everything else in it goes.
+check "real: kit home holds only the kept dashboards" "dash-server" "$(ls -A "$H/.exasol-starter-kit" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "real: pyexasol venv gone"  no  "$(exists "$H/.exasol-starter-kit/pyexasol-venv")"
-check "real: exapump gone"        no  "$(exists "$H/.exapump")"
+check "real: user's exapump profiles kept" yes "$(exists "$H/.exapump")"
 check "real: exasol bin gone"     no  "$(exists "$H/.local/bin/exasol")"
 check "real: exakit bin gone"     no  "$(exists "$H/.local/bin/exakit")"
 check "real: exapump bin gone"    no  "$(exists "$H/.local/bin/exapump")"
 check "real: dash-server venv gone" no "$(exists "$H/.exasol-starter-kit/dash-server-venv")"
-check "real: dash-server state gone" no "$(exists "$H/.exasol-starter-kit/dash-server")"
+check "real: dash-server keeps only its instance" "instance" "$(ls -A "$H/.exasol-starter-kit/dash-server" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "real: dash-server bin gone" no "$(exists "$H/.local/bin/dash-server")"
+# The AI client config snapshots: only the newest is kept beside the home, readable by its owner alone (SEC-16).
+seed
+mkdir -p "$H/.exasol-starter-kit/backups/claude" "$H/.exasol-starter-kit-backups-20200101-000000"
+printf '{"EXA_PASSWORD": "x"}\n' > "$H/.exasol-starter-kit/backups/claude/config.json"
+run_engine 0
+kept="$(ls -d "$H"/.exasol-starter-kit-backups-* 2>/dev/null)"
+check "real: one config snapshot is kept" 1 "$(printf '%s\n' "$kept" | grep -c .)"
+check "real: ...the newest, not the older one" no "$(exists "$H/.exasol-starter-kit-backups-20200101-000000")"
+check "real: ...readable by its owner only" "" "$(find "$kept" -perm -g+r -o -perm -o+r 2>/dev/null | head -1)"
 check "real: skill A gone"        no  "$(exists "$H/.claude/skills/local-agent-ready-starter")"
 check "real: skill B gone"        no  "$(exists "$H/.claude/skills/exasol-runtime")"
 # The discovery folders also hold skills the user installed themselves. The kit

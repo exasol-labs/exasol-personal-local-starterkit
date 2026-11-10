@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "skills": {
+    "exasol-mcp-server": {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "commit": "09a71daf6fc619d663885d8e1d62e8665e4a359a",
+      "path": "exasol/ai/mcp/server/skills/exasol-mcp-server",
+      "addon": null,
+      "files": {
+        "LICENSE": "82c9bef9c41e67b1c695fce5ba708c4bb362a7e9ce6439909eac6a764e248731",
+        "SKILL.md": "f7edbfde1b19f6a6ace023e666aa7d281f8cf55e27668fcf2946dcc95a986b72"
+      }
+    },
+    "exasol-sql-dialect": {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "commit": "09a71daf6fc619d663885d8e1d62e8665e4a359a",
+      "path": "exasol/ai/mcp/server/skills/exasol-sql-dialect",
+      "addon": null,
+      "files": {
+        "LICENSE": "82c9bef9c41e67b1c695fce5ba708c4bb362a7e9ce6439909eac6a764e248731",
+        "SKILL.md": "d47bb13a317e313c7171f959cb6579ff0dd4d74815baa5450fdf1a93845d23fe"
+      }
+    },
+    "exasol-system-tables": {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "commit": "09a71daf6fc619d663885d8e1d62e8665e4a359a",
+      "path": "exasol/ai/mcp/server/skills/exasol-system-tables",
+      "addon": null,
+      "files": {
+        "LICENSE": "82c9bef9c41e67b1c695fce5ba708c4bb362a7e9ce6439909eac6a764e248731",
+        "SKILL.md": "c768abd31411e18c4d80d918d9e612f5bf99115e2b4292aa09308f0b40f31165"
+      }
+    },
+    "exasol-table-design": {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "commit": "09a71daf6fc619d663885d8e1d62e8665e4a359a",
+      "path": "exasol/ai/mcp/server/skills/exasol-table-design",
+      "addon": null,
+      "files": {
+        "LICENSE": "82c9bef9c41e67b1c695fce5ba708c4bb362a7e9ce6439909eac6a764e248731",
+        "SKILL.md": "8a675437717f68e5a2afedebe00c0784a8498f48f57c6bf72c111768322dcf6e"
+      }
+    },
+    "exasol-import-export": {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "commit": "09a71daf6fc619d663885d8e1d62e8665e4a359a",
+      "path": "exasol/ai/mcp/server/skills/exasol-import-export",
+      "addon": null,
+      "files": {
+        "LICENSE": "82c9bef9c41e67b1c695fce5ba708c4bb362a7e9ce6439909eac6a764e248731",
+        "SKILL.md": "f21f074eafdded54b847114117e05d3df0388b4a9dfc253341ab3d61b6a6876a"
+      }
+    },
+    "exasol-udfs": {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "commit": "09a71daf6fc619d663885d8e1d62e8665e4a359a",
+      "path": "exasol/ai/mcp/server/skills/exasol-udfs",
+      "addon": null,
+      "files": {
+        "LICENSE": "82c9bef9c41e67b1c695fce5ba708c4bb362a7e9ce6439909eac6a764e248731",
+        "SKILL.md": "e98be0ee32369d4fa79f4c86b393b8eefd0fddef637620780285efac3cfb6380"
+      }
+    },
+    "exasol-database": {
+      "repo": "exasol-labs/exasol-agent-skills",
+      "ref": "af04558dde9f7320e012453bff9a2af57b978368",
+      "commit": "af04558dde9f7320e012453bff9a2af57b978368",
+      "path": "plugins/exasol/skills/exasol-database",
+      "addon": null,
+      "files": {
+        "LICENSE": "b201763be80d13236ff67b2fb7cd66536af42401ab076c2ed108e1497b80b879",
+        "SKILL.md": "f3dfccb6906106f21d2dfd41f6f3e74a1a19e859fae53f41a41a4b1eaa869abc",
+        "references/analytics-qualify.md": "f9d24e7628c793a5efe9a75c8615d51d4c77d844bc7c1bedf469f9987223239b",
+        "references/exapump-reference.md": "c20919c063785592fb5296e9e1d1989d5401a1254f03acf0954508d74281da3d",
+        "references/exasol-grammar-functions.md": "176649a704694bea42045076ee0d18987b0481f44973e0f356e835b4159bf611",
+        "references/exasol-grammar.md": "61e98f761e02d224061abb28e2c4f21f243e79410981b9c66afceaf620566541",
+        "references/exasol-reserved-keywords.md": "741231f472d7b3fa01ad41dec53813f808aa037d4c06a43b77f9109e1d75ad14",
+        "references/exasol-sql.md": "1d17bc01f5beaa346dffafbabf24419d7e4b2a8925ce24befb1532eff97e215d",
+        "references/query-profiling.md": "dfae25d99b5682e215ca2d50bb706fff366d58c1a8ffe1bfeb219aa61429c785",
+        "references/table-design.md": "04df1d6abd712d5d7d1f6b023a0025aaeaac37e7949c9c8e1cdb96274ec11061"
+      }
+    },
+    "exasol-pyexasol": {
+      "repo": "exasol-labs/exasol-agent-skills",
+      "ref": "af04558dde9f7320e012453bff9a2af57b978368",
+      "commit": "af04558dde9f7320e012453bff9a2af57b978368",
+      "path": "plugins/exasol/skills/exasol-pyexasol",
+      "addon": null,
+      "files": {
+        "LICENSE": "b201763be80d13236ff67b2fb7cd66536af42401ab076c2ed108e1497b80b879",
+        "SKILL.md": "56041c5faf60c5518c6a4ab65393cace1762fc7bc4adbb711637da95c79dd7b1",
+        "references/bulk-transfer.md": "1c9e59adbdff33a9ba694797bc65a5eaf5cffa03f138b3c409f566c8e1071fbd",
+        "references/connections-and-sql.md": "8cd6af17c0debf09ae82706657790e77fc3ec09506d76a49947c4684da931638",
+        "references/dbapi.md": "d624af594fe5dcb47d7ab3cbf5bc12209d6d78d6631e88a9b07a47856ee4c892",
+        "references/metadata-and-debugging.md": "1c9caecdb10e4772da56b68a52445ea493dc6dcde8238635e757fbea774e641a",
+        "references/parallel-http-transport.md": "21ba1480539d18794e1251da9d6b5f0ac3150b966fe7f4299ab1fe860a3baec4"
+      }
+    },
+    "exasol-bucketfs": {
+      "repo": "exasol-labs/exasol-agent-skills",
+      "ref": "af04558dde9f7320e012453bff9a2af57b978368",
+      "commit": "af04558dde9f7320e012453bff9a2af57b978368",
+      "path": "plugins/exasol/skills/exasol-bucketfs",
+      "addon": null,
+      "files": {
+        "LICENSE": "b201763be80d13236ff67b2fb7cd66536af42401ab076c2ed108e1497b80b879",
+        "SKILL.md": "be17ed2e6e3d50af0b1878aab28f1ad3894afd75d5b9d012b9a91ed26b5bc983",
+        "references/bucketfs-concepts.md": "a118c65b77fb2198aaf584b79456b8c34fbffb4c7fb2e5d83fec5c46feee8d25",
+        "references/bucketfs-udf-usage.md": "2f41ed433f95d4698474a303e2e48ca784a09de963a58dbd6d855fd40aff9e76",
+        "references/exapump-bucketfs-cli.md": "573559cc297a1542ba4b5e708aa7920293cb1b30eab885a316ddca58abb858f2"
+      }
+    },
+    "exasol-dash": {
+      "repo": "exasol-labs/dash-server",
+      "ref": "v0.2.1",
+      "commit": "0cb2f2d7b9050f8305e62d0f9212a8b0149a223b",
+      "path": "skills",
+      "addon": "dash-server",
+      "files": {
+        "LICENSE": "698ff0a21dda28693d62075a7fa403cb5e4bdd429dbd6039b8ebe41fd7d03631",
+        "SKILL.md": "68797c00a6bbb1170ff01e3465d0022d6ff3850a6688bdf8a7582ce37a4cf362",
+        "pyexasol_skill.md": "ae693c64f91178d99cbf1849e69813dca8093912c1f0398d7a75c92e78a3c43d"
+      }
+    }
+  }
+}

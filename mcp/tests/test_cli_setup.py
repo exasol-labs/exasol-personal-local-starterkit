@@ -88,21 +88,13 @@ class RuntimeClientSetupCLITests(unittest.TestCase):
         cursor_doc = json.loads(cursor_path.read_text(encoding="utf-8"))
         codex_doc = codex_path.read_text(encoding="utf-8")
         self.assertIn("exasol", cursor_doc["mcpServers"])
-        self.assertEqual(cursor_doc["mcpServers"]["exasol"]["env"]["EXA_USER"], "mcp_readonly")
-        self.assertEqual(cursor_doc["mcpServers"]["exasol"]["env"]["EXA_SSL_CERT_VALIDATION"], "no")
-        cursor_settings = json.loads(
-            cursor_doc["mcpServers"]["exasol"]["env"]["EXA_MCP_SETTINGS"]
-        )
-        self.assertTrue(cursor_settings["enable_read_query"])
-        self.assertTrue(cursor_settings["enable_summarize_table"])
-        self.assertTrue(cursor_settings["enable_query_profiling"])
-        self.assertFalse(cursor_settings["enable_write_query"])
+        # The launcher's MCP sidecar: a URL and nothing secret in any client's config (the read-only user's
+        # password lives in the deployment's sidecar definition, and the sidecar enforces read-only itself).
+        self.assertEqual(cursor_doc["mcpServers"]["exasol"], {"url": "http://127.0.0.1:4896/mcp"})
         self.assertIn("[mcp_servers.exasol]", codex_doc)
-        self.assertIn("EXA_MCP_SETTINGS", codex_doc)
-        self.assertIn("enable_read_query", codex_doc)
-        self.assertIn("enable_summarize_table", codex_doc)
-        self.assertIn("enable_query_profiling", codex_doc)
-        self.assertIn("enable_write_query", codex_doc)
+        self.assertIn('url = "http://127.0.0.1:4896/mcp"', codex_doc)
+        self.assertNotIn("EXA_PASSWORD", codex_doc)
+        self.assertNotIn("readonly-secret", cursor_path.read_text(encoding="utf-8") + codex_doc)
         self.assertTrue(any(action["kind"] == "restart_client" for action in output["next_actions"]))
 
         manifest = json.loads(self.manifest_path.read_text(encoding="utf-8"))
@@ -182,6 +174,8 @@ class RuntimeClientSetupCLITests(unittest.TestCase):
             },
             "components": {
                 "mcp_server": {
+                    "backend": "sidecar",
+                    "url": "http://127.0.0.1:4896/mcp",
                     "connection": {
                         "user": "mcp_readonly",
                         "password_file": str(self.mcp_password_file),

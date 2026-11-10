@@ -265,8 +265,9 @@ Seed -EmptyPassword; Check "an empty password file: no profile" $false (Write-Le
 Seed -NoDsn;        Check "no dsn: no profile" $false (Write-LegacyProfile)
 Seed
 Check "a complete record writes the profile" $true (Write-LegacyProfile)
-$cfg = Join-Path $env:USERPROFILE ".exapump\config.toml"
-Check "...under the sandboxed profile home" $true (Test-Path $cfg)
+# The kit's own profile store, never the user's ~/.exapump (#40): exapump.ps1's $script:ExapumpConfigPath.
+$cfg = $script:ExapumpConfigPath
+Check "...in the kit's own exapump profile store" $true (Test-Path $cfg)
 Has "...as the LEGACY profile section" "[starter-kit-legacy]" (Get-Content $cfg -Raw)
 Has "...pointing at the recorded port" "port = 8563" (Get-Content $cfg -Raw)
 Check "the database answers through it" $true (Test-LegacyDbAnswers)

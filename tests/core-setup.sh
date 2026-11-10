@@ -192,6 +192,14 @@ _o="$(upd exakit_core_update_check exapump 2>&1)"
 check "a scoped update (exakit update exapump) never reruns the installer" "no" "$([ -f "$U/installer-calls" ] && echo yes || echo no)"
 
 fresh_upd
+_o="$(upd exakit_core_update_check "exapump mcp" 2>&1)"
+check "...nor does one naming several components without the kit" "no" "$([ -f "$U/installer-calls" ] && echo yes || echo no)"
+
+fresh_upd
+_o="$(upd exakit_core_update_check "exapump exakit" 2>&1)"
+check "several ids with the kit among them (exakit update exapump exakit) check the tasks" "ran 1 2.3.0" "$(cat "$U/installer-calls" 2>/dev/null)"
+
+fresh_upd
 _o="$(EXAKIT_CORE_RERUN=1 upd exakit_core_update_check all 2>&1)"
 check "nor does a check inside a rerun" "no" "$([ -f "$U/installer-calls" ] && echo yes || echo no)"
 
@@ -223,6 +231,7 @@ printf '\n== exakit update: the handover to a freshly downloaded kit ==\n'
 cat > "$U/home/bin/exakit" <<EOF
 #!/bin/sh
 echo "new-exakit \$* handover=\${EXAKIT_UPDATE_HANDOVER:-0}" >> "$U/handover-calls"
+echo "\$#" > "$U/handover-argc"
 echo "\${EXAKIT_UPDATE_ROW_FIELDS:-unset}" > "$U/handover-rowfields"
 exit \$(cat "$U/handover-rc" 2>/dev/null || echo 4)
 EOF
@@ -257,6 +266,9 @@ ho_run() {
       exakit_component_is_ahead() { return 1; }
       exakit_component_is_heavy() { return 1; }
       exakit_component_min_kit() { return 1; }
+      # Every component here is the kit's own: a component without an ownership
+      # receipt is left alone by the update (prod's persona branch).
+      exakit_component_is_managed() { return 0; }
       exakit_core_update_check() { echo "core-check $1" >> "$U/handover-calls"; }
       exakit_update_component() {
           echo "updater $1" >> "$U/handover-calls"
@@ -311,6 +323,15 @@ _ho="$(ho_run 0.3.1 0 "exakit exapump")"
 check "a kit that is already current hands nothing over" "updater exapump|core-check all|" \
     "$(tr '\n' '|' < "$U/handover-calls")"
 
+# SEVERAL IDS (`exakit update exakit exapump`) arrive joined by spaces and must
+# reach the new run as several arguments: one joined word is an unknown target.
+rm -f "$U/handover-calls" "$U/handover-argc"
+( EXAKIT_HOME="$U/home"; EXAKIT_MANIFEST="$U/home/manifest.json"; EXAKIT_BIN_DIR="$U/home/bin"
+  . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/core-setup.sh"
+  exakit_update_handover "exakit exapump" ) >/dev/null 2>&1
+check "several ids reach the new run as several arguments" "3" "$(cat "$U/handover-argc" 2>/dev/null)"
+has "...in the order they were typed" "new-exakit update exakit exapump handover=1" "$(cat "$U/handover-calls" 2>/dev/null)"
+
 printf '\n== handover rows: five fields unless the reader declared seven ==\n'
 # In a handover the OLD kit reads the rows the NEW kit writes. Kits before the
 # error and hint fields unpack exactly five - a sixth field is a ValueError, no
@@ -361,7 +382,15 @@ printf '\n== the installer: seven steps, the database step fourth ==\n'
 for _s in setup/setup-macos.sh setup/setup-linux.sh; do
     check "$_s delegates steps 3-7" "1" "$(grep -c 'kit_shared_steps 3 7 ' "$ROOT/$_s")"
     check "$_s loads core-setup.sh" "1" "$(grep -c 'LIB_DIR/core-setup.sh' "$ROOT/$_s" | awk '{print ($1 > 0)}')"
-    has "$_s keeps the marketplace offer out of an update rerun" "exakit_core_rerun_active" "$(grep -B3 'exakit_marketplace_offer )' "$ROOT/$_s")"
+    # EVERY offer, not the first one grep finds: the persona close and the
+    # plain close each make one.
+    _offers="$(grep -c 'exakit_marketplace_offer )' "$ROOT/$_s")"
+    _guarded=0
+    for _ln in $(grep -n 'exakit_marketplace_offer )' "$ROOT/$_s" | cut -d: -f1); do
+        _from=$((_ln - 12)); [ "$_from" -ge 1 ] || _from=1
+        sed -n "${_from},${_ln}p" "$ROOT/$_s" | grep -q 'exakit_core_rerun_active' && _guarded=$((_guarded + 1))
+    done
+    check "$_s keeps every marketplace offer out of an update rerun" "$_offers" "$_guarded"
     lacks "$_s has no step counted out of six" "/6  " "$(cat "$ROOT/$_s")"
 done
 _win="$(cat "$ROOT/setup/setup-windows.ps1")"
@@ -387,9 +416,15 @@ _kss() {
       exakit_maybe_offer_mcp_setup() { echo "mcp-offer" >> "$K/order"; }
       exakit_maybe_offer_skills_install() { echo "skills-offer" >> "$K/order"; }
       mcp_install() { :; }
+      # The AI bridge step is gated on the launcher's MCP server (prod's sidecar).
+      mcp_sidecar_apply() { :; }
       _exakit_install_mcp() { echo "mcp-step" >> "$K/order"; }
       ensure_path_hint() { :; }
+      # With persona.sh loaded the data follows the persona question instead.
+      [ "${KSS_PERSONA:-0}" = 1 ] && exakit_persona_flow() { :; }
       kit_shared_steps 3 7 "$ROOT/setup" "$ROOT"
+      # The exakit helper is the last step, after the persona's data.
+      kit_helper_step 7 7 "$ROOT/setup" "$ROOT"
       printf 'COMPLETED=%s\n' "$(manifest_get core_tasks.completed 2>/dev/null | tr -d ' \n')" )
 }
 rm -rf "$K/home" "$K/order"
@@ -412,6 +447,50 @@ rm -f "$K/order"
 _o="$(EXAKIT_CORE_RERUN=1 _kss 2>&1)"
 check "an update-started rerun asks none of the first install's questions" \
     "preprocessor-task|" "$(tr '\n' '|' < "$K/order" | sed 's/exapump-step|//')"
+
+# WITH THE PERSONAS the data is not offered inside the shared steps: it follows
+# the persona question, which the setup scripts ask after them - and an
+# update-started rerun asks neither.
+rm -f "$K/order"
+_o="$(KSS_PERSONA=1 _kss 2>&1)"
+check "with persona.sh, the shared steps offer no data" \
+    "preprocessor-task|mcp-offer|skills-offer|" "$(tr '\n' '|' < "$K/order" | sed 's/exapump-step|//')"
+for _s in setup/setup-macos.sh setup/setup-linux.sh; do
+    has "$_s keeps the persona question out of an update rerun" "exakit_core_rerun_active" \
+        "$(grep -B3 'exakit_persona_flow "$KIT_ROOT"' "$ROOT/$_s")"
+done
+has "Windows keeps the persona question out of an update rerun" 'if ($coreRerun) {' \
+    "$(grep -B3 'Invoke-ExakitPersonaFlow -KitRoot' "$ROOT/setup/setup-windows.ps1")"
+
+# THE PERSONA'S ANSWERS ARE NOT APPLIED IN A RERUN EITHER. EXAKIT_PERSONA in
+# exakit.env (or the environment) reached an update-started rerun: the persona
+# was recorded again, its add-ons went through the scripted offer without a
+# question, its services were started, and a persona switched off since made
+# every update die. The two blocks are lifted out of each script and run with
+# every call they make stood in for, a rerun and a first install side by side.
+_persona_probe() { # _persona_probe <script> <rerun 0|1> -> what ran, and ACTIVE
+    _pp_apply="$(awk '/^if command -v exakit_core_rerun_active .* exakit_core_rerun_active; then$/{p=1} p{print} p&&/^fi$/{exit}' "$ROOT/$1")"
+    _pp_close="$(awk '/^if \[ -n "\$\{EXAKIT_PERSONA_ACTIVE:-\}" \] && \\$/{p=1} p{print} p&&/^fi$/{exit}' "$ROOT/$1")"
+    ( exakit_core_rerun_active() { [ "$PP_RERUN" = 1 ]; }
+      exakit_persona_apply_env() { printf 'apply|'; EXAKIT_PERSONA_ACTIVE=1; }
+      exakit_acquire_lock() { :; }; exakit_release_lock() { :; }
+      exakit_autostart_default_on() { printf 'autostart|'; }
+      exakit_marketplace_offer() { printf 'offer|'; }
+      _exakit_marketplace_cli() { printf 'services|'; }
+      exakit_persona_marketplace_note() { :; }
+      PP_RERUN="$2"; EXAKIT_PERSONA_ACTIVE=1; EXAKIT_BIN_DIR="$WORK/pp-bin"
+      eval "$_pp_apply"; eval "$_pp_close"
+      printf 'ACTIVE=%s' "${EXAKIT_PERSONA_ACTIVE:-}" )
+}
+for _s in setup/setup-macos.sh setup/setup-linux.sh; do
+    check "$_s: a rerun applies no persona, offers and starts nothing" "ACTIVE=" "$(_persona_probe "$_s" 1)"
+    check "$_s: a first install applies the persona, then offers and starts its add-ons" \
+        "apply|autostart|offer|services|ACTIVE=1" "$(_persona_probe "$_s" 0)"
+done
+has "Windows applies no persona in a rerun" 'Remove-Item Env:\EXAKIT_PERSONA_ACTIVE' \
+    "$(grep -B4 -A2 'Set-ExakitPersonaEnv$' "$ROOT/setup/setup-windows.ps1")"
+has "...and its persona close (offer and services) is not reached in one" 'EXAKIT_PERSONA_ACTIVE -and -not $coreRerun' \
+    "$(grep -B2 'Script installer_flow' "$ROOT/setup/setup-windows.ps1")"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

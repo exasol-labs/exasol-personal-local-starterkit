@@ -44,6 +44,9 @@ $script:PersonalBinPath         = Join-Path $script:BinDir "exasol.exe"
 # exakit-common.ps1, which is dot-sourced before this file.
 $script:PersonalDeployDir       = if ($env:EXAKIT_PERSONAL_DEPLOY_DIR) { $env:EXAKIT_PERSONAL_DEPLOY_DIR } else { Join-Path (Get-ExakitProfileHome) ".exasol\personal\deployments\default" }
 $script:PersonalRebuildNoted    = $false
+# Seconds between the waits' looks at the container's own error (see
+# Test-PersonalContainerRefused): two podman calls each, so not every 5 s.
+$script:PersonalContainerLookEvery = 15
 
 # Get-PersonalTargetVersion - the launcher version this kit installs or updates
 # to: the env override, the advertised manifest, the fallback - the same
@@ -344,6 +347,8 @@ function Test-PersonalReadyProbe {
         $raise = "EXAKIT_PERSONAL_REBUILD_TIMEOUT"
     }
     $t0 = [DateTime]::UtcNow
+    $script:PersonalContainerError = ""
+    $lastLook = $t0
     while (([DateTime]::UtcNow - $t0).TotalSeconds -lt $budget) {
         # A HANDSHAKE, NOT AN OPEN PORT. Under rootless Podman the port is
         # pasta's from the moment the container starts, and `exasol info`
@@ -352,6 +357,7 @@ function Test-PersonalReadyProbe {
         # connection, and the next step's SELECT 1 paid for it six times.
         if (Test-PersonalTlsAnswers) {
             Ok "Deployment is reachable"
+            Set-PersonalFirstBootPending $false
             # The database answered under this launcher, so whatever rebuild that
             # first start owed is paid - recorded so the notice retires itself.
             $done = Get-PersonalLauncherVersion
@@ -362,6 +368,14 @@ function Test-PersonalReadyProbe {
             # else it emits joins that answer.
             [void](Set-ExakitManifestValue "runtime.guest_rebuilt_for" $done)
             return $true
+        }
+        # A CONTAINER THAT REFUSED TO START WILL NOT ANSWER LATER. Asked every
+        # 15 s rather than every 5 (PersonalContainerLookEvery): it costs two
+        # podman calls, and the point is to stop a 150 s wait early, not to
+        # race it.
+        if (([DateTime]::UtcNow - $lastLook).TotalSeconds -ge $script:PersonalContainerLookEvery) {
+            $lastLook = [DateTime]::UtcNow
+            if (Test-PersonalContainerRefused) { break }
         }
         Start-Sleep -Seconds 5
     }
@@ -397,6 +411,10 @@ function Wait-PersonalReady {
     $spent  = $script:PersonalReadySpent
     $budget = $script:PersonalReadyBudget
     $raise  = $script:PersonalReadyRaise
+    if ($script:PersonalContainerError) {
+        $cause = Show-PersonalFailureCause
+        Fail "The database could not start$cause. Read the state with 'exakit status'; once the cause is fixed: exakit start"
+    }
     Show-PersonalPodmanRootfulHint
     Fail "The deployment did not answer within ${spent} seconds (the ceiling is ${budget}s; raise it with ${raise}). Read the state with 'exakit status', then 'exakit start' to retry - a deployment stuck in 'interrupted' is repaired with 'exakit repair-runtime' (destructive, it asks first)."
 }
@@ -428,6 +446,14 @@ $script:PersonalStartNetworkBlocked = $false
 function Wait-PersonalReadyOrDeploy {
     $script:PersonalStartNetworkBlocked = $false
     if (Test-PersonalReadyProbe) { return $true }
+    # A CONTAINER THAT REFUSED TO START is not fixed by deploying it again: the
+    # deploy would recreate it and the same error would refuse it the same way.
+    # Its cause is the answer.
+    if ($script:PersonalContainerError) {
+        $cause = Show-PersonalFailureCause
+        Set-ExakitFailureReason "The database never answered$cause"
+        return $false
+    }
     Warn2 "The database did not answer after the launcher accepted the start."
     Info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
     $deployArgs = @("deploy")
@@ -448,12 +474,18 @@ function Wait-PersonalReadyOrDeploy {
             return $false
         }
         Show-PersonalPodmanRootfulHint
-        Set-ExakitFailureReason "The database never answered, and the launcher's deploy could not bring it up"
+        $cause = Show-PersonalFailureCause
+        Set-ExakitFailureReason "The database never answered, and the launcher's deploy could not bring it up$cause"
         return $false
     }
     if (Test-PersonalReadyProbe) {
         Ok "The database answered after the launcher's deploy"
         return $true
+    }
+    if ($script:PersonalContainerError) {
+        $cause = Show-PersonalFailureCause
+        Set-ExakitFailureReason "The database never answered, even after the launcher deployed it again$cause"
+        return $false
     }
     Show-PersonalPodmanRootfulHint
     Set-ExakitFailureReason "The database never answered, even after the launcher deployed it again"
@@ -554,24 +586,38 @@ function Get-PersonalS3Source {
     # EXAKIT_PERSONAL_S3=0: the network blocks the bucket, or the release path
     # is wanted for its own sake; the GitHub download is as verified.
     if ($env:EXAKIT_PERSONAL_S3 -eq "0") { return $null }
-    if ((Get-ExakitVersionsValue -Path "components.personal.version") -ne $Version) { return $null }
-    $base = Get-ExakitVersionsValue -Path "components.personal.s3.base_url"
-    $sha = Get-ExakitVersionsValue -Path "components.personal.s3.sha256.windows-x86_64"
+    # The kit copy's own pins, never the fetched document (SEC-13).
+    if ((Get-ExakitVersionsPin -Path "components.personal.version") -ne $Version) { return $null }
+    $base = Get-ExakitVersionsPin -Path "components.personal.s3.base_url"
+    $sha = Get-ExakitVersionsPin -Path "components.personal.s3.sha256.windows-x86_64"
     if (-not $base -or $base -notmatch '^https://' -or $sha -notmatch '^[0-9a-f]{64}$') { return $null }
     return @{ Url = "$($base.TrimEnd('/'))/windows/x86_64/$Version/exasol.exe"; Sha256 = $sha }
 }
 
 function Install-PersonalLauncher {
-    if ($env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1") {
+    $candidate = Get-Command exasol -ErrorAction SilentlyContinue
+    if ($candidate) { Set-ExakitReusedOwnership "personal" $candidate.Source }
+    if ($env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1" -or -not (Test-ExakitComponentManaged "personal")) {
         $existing = Get-Command exasol -ErrorAction SilentlyContinue
         if ($existing) {
+            Set-ExakitReusedOwnership "personal" $existing.Source
             $help = Invoke-ExakitBounded -FilePath $existing.Source -Arguments @("install", "--help") -TimeoutSeconds $script:PersonalProbeTimeout
             if ($help -and ($help -match '(?m)^\s*(-[-a-zA-Z0-9]+,\s*)?local(\s|,|$)')) {
+                Set-ExakitReusedOwnership "personal" $existing.Source
                 Ok "Exasol launcher already installed: $($existing.Source)"
                 return
             }
+            if (-not (Test-ExakitComponentManaged "personal")) {
+                Fail "The user-owned Exasol launcher is incompatible. Update it outside the kit; it was not replaced."
+            }
             Warn2 "The installed Exasol launcher ($($existing.Source)) does not support the 'local' preset (too old)."
-            Info "Installing launcher v$(Get-PersonalTargetVersion) to $(Get-ExakitTilde $script:PersonalBinPath) - your existing launcher is left untouched"
+            # Say what happens to it (#41): the kit's own launcher at the same path is replaced; one anywhere
+            # else is only shadowed, never touched.
+            if ($existing.Source -eq $script:PersonalBinPath) {
+                Info "Replacing the kit's launcher at $(Get-ExakitTilde $script:PersonalBinPath) with v$(Get-PersonalTargetVersion)"
+            } else {
+                Info "Installing launcher v$(Get-PersonalTargetVersion) to $(Get-ExakitTilde $script:PersonalBinPath) - your launcher at $(Get-ExakitTilde $existing.Source) is left untouched"
+            }
         }
     }
 
@@ -598,18 +644,24 @@ function Install-PersonalLauncher {
         } elseif ($source) {
             Info "Downloading Exasol launcher v$version from Exasol S3"
             if (Get-ExakitFile -Url $source.Url -Dest $binaryPath -Soft) {
+                $actual = $null
                 try {
                     $actual = Get-ExakitSha256 -Path $binaryPath
-                    if ($actual -eq $source.Sha256) {
-                        $verifiedS3 = $true
-                        Ok "S3 launcher SHA-256 verified"
-                    } else {
-                        Warn2 "The launcher from Exasol's server did not match its expected checksum and was discarded; getting it from the verified GitHub release instead."
-                        Write-ExakitLog "WARN" "S3 launcher SHA-256 expected $($source.Sha256), got $actual"
-                    }
                 } catch {
                     Warn2 "Could not check the launcher from Exasol's server, so it was discarded; getting it from the verified GitHub release instead."
                     Write-ExakitLog "WARN" "S3 launcher hashing failed: $_"
+                }
+                if ($actual -and $actual -eq $source.Sha256) {
+                    $verifiedS3 = $true
+                    Ok "S3 launcher SHA-256 verified"
+                } elseif ($actual) {
+                    # A mismatch is not a missing file (SEC-03): nothing is
+                    # installed and the person decides. Twin of personal_install_launcher.
+                    Write-ExakitLog "ERROR" "S3 launcher SHA-256 expected $($source.Sha256), got $actual"
+                    Remove-Item -Force $binaryPath -ErrorAction SilentlyContinue
+                    Info "That is either a changed file on the server or a wrong pin: report it (exakit logs setup has both checksums)."
+                    Info "To install from the GitHub release instead, checked against its own checksums file: `$env:EXAKIT_PERSONAL_S3 = '0' and re-run the installer."
+                    Fail "The Exasol launcher from Exasol's server does not match the checksum this kit pins for v$version, so it was not installed."
                 }
             } else {
                 Warn2 "Could not download the launcher from Exasol's server; getting the same version from the verified GitHub release instead."
@@ -654,6 +706,7 @@ function Install-PersonalLauncher {
         Info "Installing launcher to $(Get-ExakitTilde $script:PersonalBinPath)"
         New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
         Move-Item -Force $binaryPath $script:PersonalBinPath
+        Set-ExakitComponentOwnership "personal" "kit" $script:PersonalBinPath
         OkStep "Exasol launcher v$version installed to $(Get-ExakitTilde $script:PersonalBinPath)"
     } finally {
         # The flag is restored in the SAME finally that cleans the temp dir:
@@ -698,13 +751,18 @@ function Clear-PersonalStaleRecord {
     }
 }
 
-# Set-PersonalManifest [status] - the connection details this kit hands to every
-# client, plus the runtime state. The deployment directory has everything a
+# Set-PersonalManifest [status] [-Fresh] - the connection details this kit hands
+# to every client, plus the runtime state and the database's TLS pin. The deployment directory has everything a
 # client needs: deployment.json (host, dbPort, username) and secrets.json
 # (dbPassword). The keys are the contract every add-on reads - identical to the
 # sh side's personal_record_manifest.
 function Set-PersonalManifest {
-    param([string]$Status = "")
+    # -Fresh: the kit has just deployed this database itself (see the TLS pin
+    # at the end). Every other caller adopted, started or updated one.
+    param([string]$Status = "", [switch]$Fresh)
+    # Said by $script:PersonalRecordFresh on the line before, consumed here, so
+    # the fresh deploy's record line reads like every other one.
+    if ($script:PersonalRecordFresh) { $Fresh = $true; $script:PersonalRecordFresh = $false }
     Set-ExakitManifestValue "runtime.type" "personal"
     # Read before the clear below drops the key: a record that already names
     # its engine keeps it, and one that never did is Podman (every deployment
@@ -765,6 +823,22 @@ function Set-PersonalManifest {
     # Never assert health without either having just seen it or probing for it.
     if (-not $Status) { $Status = Get-PersonalStatus }
     Set-ExakitManifestValue "runtime.status" $Status
+    # A database that has been seen healthy may hold data from now on.
+    if ($Status -eq "healthy") { Set-PersonalFirstBootPending $false }
+    # ITS TLS CERTIFICATE, PINNED (SEC-14). Trust on first use, taken while the
+    # kit is looking at its own database: a deployment it has just made
+    # replaces any earlier pin (a new deployment is a new certificate); one it
+    # adopted, started or merely updated the launcher of records one only when
+    # none is recorded yet. Clients that already exist hold the old value; a
+    # first install writes them after this step. Never fatal. Twin of the end
+    # of personal_record_manifest.
+    if ($Status -eq "healthy" -or "$Status".StartsWith("running")) {
+        if ($Fresh) {
+            if (Register-ExakitTlsPin -Replace) { Update-ExakitTlsPinnedClients -ProfileOnly }
+        } else {
+            if (Register-ExakitTlsPin) { Update-ExakitTlsPinnedClients }
+        }
+    }
 }
 
 # Install-PersonalDeployment - run the local deployment, the long step. The
@@ -797,7 +871,7 @@ function Test-PersonalPodmanAnswers {
 # which it can do no work for anyone. Twin of personal_podman_running, which
 # has no machine to start and so only asks.
 function Test-PersonalPodmanRunning {
-    $podman = Get-Command podman -ErrorAction SilentlyContinue
+    $podman = Get-PersonalPodman
     # Not installed is a different failure, and the launcher's to fix.
     if (-not $podman) { return $true }
     if (Test-PersonalPodmanAnswers $podman) { return $true }
@@ -815,13 +889,88 @@ function Test-PersonalPodmanRunning {
         }
     }
 
-    # THE WHOLE ERROR TO THE LOG. The bounded probe above keeps only the exit
-    # code, and "podman info failed" with nothing else is not diagnosable.
+    # THE WHOLE ERROR TO THE LOG, AND ITS LAST LINE TO THE SCREEN. The bounded
+    # probe above keeps only the exit code, and "podman info failed" with
+    # nothing else is not diagnosable. Twin of "What it said" in
+    # personal_podman_running.
+    $mark = Get-PersonalLogLineCount
     [void](Invoke-ExakitLogged $podman.Source "info")
+    $said = @(Get-PersonalLogSince $mark) | Select-Object -Last 1
     Warn2 "Podman is installed, but it cannot run containers on this machine."
+    if ($said) { Info "What it said: $(Get-PersonalShortText $said)" }
     Info "Check it with 'podman info' (and 'podman machine start' if its machine is off)."
     Info "Once that answers, re-run the installer to finish the install: $(Get-ExakitInstallCommand)"
     return $false
+}
+
+# Get-PersonalLogLineCount / Get-PersonalLogSince <line> - the log as a cursor.
+# Invoke-ExakitLogged sends a command's whole output to the log and none of it
+# to the screen, so showing or classifying what ONE command said means
+# remembering where the log ended before it ran. The kit's own timestamped
+# lines are left out: what is wanted is the tool's words.
+function Get-PersonalLogLineCount {
+    if ($script:LogFile -and (Test-Path $script:LogFile)) { return @(Get-Content -Path $script:LogFile).Count }
+    return 0
+}
+
+function Get-PersonalLogSince {
+    param([int]$Line = 0)
+    if (-not $script:LogFile -or -not (Test-Path $script:LogFile)) { return @() }
+    return @(Get-Content -Path $script:LogFile | Select-Object -Skip $Line |
+        Where-Object { "$_".Trim() -and "$_" -notmatch '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ' })
+}
+
+# Get-PersonalShortText <text> - one line of foreign output, cut to a length a
+# terminal row can carry. The pids error alone names a cgroup path 150
+# characters deep.
+function Get-PersonalShortText {
+    param([AllowEmptyString()][string]$Text)
+    $one = ("$Text" -split "`r?`n")[0].Trim()
+    if ($one.Length -gt 240) { $one = $one.Substring(0, 237) + "..." }
+    return $one
+}
+
+# Show-PersonalLauncherTail - the launcher's own last words after a failed
+# deploy, in the dim gutter foreign output has always used here. The deploy's
+# output goes to the log, so without this a failure was left with nothing but
+# "Local deployment failed" and a log path. Twin of _personal_deploy_print_tail.
+function Show-PersonalLauncherTail {
+    $lines = @($script:PersonalLauncherOutput | Select-Object -Last 12)
+    if ($lines.Count -eq 0) { return }
+    $rule = $script:UiHr
+    if (-not $rule) { $rule = "-" }
+    Write-Host ("      {0}{1} last lines from the exasol launcher{2}" -f $script:UiDim, $rule, $script:UiReset)
+    foreach ($line in $lines) {
+        $shown = "$line".TrimEnd()
+        if ($shown.Length -gt 300) { $shown = $shown.Substring(0, 297) + "..." }
+        Write-Host ("      {0}{1} {2}{3}" -f $script:UiDim, $script:UiVB, $shown, $script:UiReset)
+    }
+}
+
+# ---------------------------------------------------------------------------
+# WHAT WENT WRONG, SAID. A deploy or start that fails used to end in "Local
+# deployment failed", or in 150 seconds of "never answered", with the real
+# error - the one podman or docker recorded for the container - never shown.
+# The helpers below read it (inspect --format {{.State.Error}}), name the cause
+# when the kit recognises it, and change nothing: a fix is named, never
+# applied - the kit does not switch or reconfigure a Podman machine on Windows.
+# ---------------------------------------------------------------------------
+
+$script:PersonalRegistryHost = "registry-1.docker.io"
+$script:PersonalPidsIssue    = "podman-container-tools/podman#29909"
+
+# Get-PersonalPodman - podman on PATH, or $null. The one question every helper
+# below starts from, asked in one place.
+function Get-PersonalPodman {
+    return (Get-Command podman -ErrorAction SilentlyContinue)
+}
+
+# Get-PersonalEngineCommand - the command of the engine this deployment runs on
+# (Get-PersonalEngineRecorded): docker for a Docker deployment, else podman;
+# $null when it is not on PATH.
+function Get-PersonalEngineCommand {
+    if ((Get-PersonalEngineRecorded) -eq "docker") { return (Get-Command docker -ErrorAction SilentlyContinue) }
+    return (Get-PersonalPodman)
 }
 
 # --- container engine ---------------------------------------------------------
@@ -882,6 +1031,82 @@ function Invoke-PersonalDockerInfo {
         if ($process) { $process.Dispose() }
     }
     return $result
+}
+
+# Get-PersonalWindowsBuild - the Windows build number; 0 when it cannot say.
+function Get-PersonalWindowsBuild {
+    try { return [int][Environment]::OSVersion.Version.Build } catch { return 0 }
+}
+
+# Get-PersonalDnsRemedy - the fix for a machine that cannot resolve names, for
+# THIS Windows: WSL's DNS tunneling exists from Windows 11 22H2 (build 22621);
+# before it, the machine's user-mode networking is the road.
+function Get-PersonalDnsRemedy {
+    if ((Get-PersonalWindowsBuild) -ge 22621) {
+        return "add 'dnsTunneling=true' under [wsl2] in %USERPROFILE%\.wslconfig, then run: wsl --shutdown; podman machine start"
+    }
+    return "switch Podman's machine to user-mode networking: podman machine stop; podman machine set --user-mode-networking; podman machine start"
+}
+
+# Get-PersonalKnownCause <text> - the cause and the fix for an error the kit
+# recognises, in a container's State.Error or in the launcher's output; $null
+# for anything else. Twin of personal_known_cause.
+function Get-PersonalKnownCause {
+    param([AllowEmptyString()][string]$Text)
+    if ("$Text" -match "controller .pids. is not available") {
+        return [pscustomobject]@{
+            Kind   = "pids"
+            Cause  = "Podman's machine gives the container no 'pids' cgroup controller, so the database cannot start ($($script:PersonalPidsIssue))"
+            Remedy = "make the machine rootful, where the limit works: podman machine stop; podman machine set --rootful; podman machine start - then re-run the installer"
+        }
+    }
+    if ("$Text" -match "Temporary failure in name resolution|lookup registry") {
+        return [pscustomobject]@{
+            Kind   = "dns"
+            Cause  = "Podman's machine cannot resolve $($script:PersonalRegistryHost), so the database image cannot be downloaded"
+            Remedy = (Get-PersonalDnsRemedy)
+        }
+    }
+    return $null
+}
+
+# Get-PersonalContainers - this deployment's containers, as Name/State pairs.
+# The launcher names them exasol-db-<id>.
+function Get-PersonalContainers {
+    $podman = Get-PersonalEngineCommand
+    if (-not $podman) { return @() }
+    $out = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
+        -Arguments @("ps", "-a", "--filter", "name=exasol-db", "--format", "{{.Names}} {{.State}}"))
+    $found = @()
+    foreach ($line in @($out -split "`r?`n")) {
+        $parts = @("$line".Trim() -split '\s+')
+        if ($parts.Count -ge 2 -and $parts[0]) {
+            $found += [pscustomobject]@{ Name = $parts[0]; State = $parts[1].ToLowerInvariant() }
+        }
+    }
+    return $found
+}
+
+# Get-PersonalContainerError - the error podman recorded for a container that
+# never ran ("created") or died ("exited"), first line only; "" otherwise. THE
+# REAL ERROR, which the launcher never repeats: in the incident behind this, a
+# container sat in "created" with "crun: controller 'pids' is not available"
+# while the kit waited 150 seconds, three times, and then said "never
+# answered". Nothing is reported while any of the containers runs: a stale
+# one left by an earlier deployment is not this one's error. Twin of
+# personal_container_error.
+function Get-PersonalContainerError {
+    $containers = @(Get-PersonalContainers)
+    if (@($containers | Where-Object { $_.State -eq "running" }).Count -gt 0) { return "" }
+    $podman = Get-PersonalEngineCommand
+    foreach ($c in @($containers | Select-Object -First 3)) {
+        if ($c.State -notmatch '^(created|exited|stopped)$') { continue }
+        $err = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
+            -Arguments @("inspect", "--format", "{{.State.Error}}", $c.Name))
+        $first = @($err -split "`r?`n" | Where-Object { "$_".Trim() }) | Select-Object -First 1
+        if ($first) { return "$first".Trim() }
+    }
+    return ""
 }
 
 # Test-PersonalDockerUsable - $true when the launcher could deploy on this
@@ -1041,6 +1266,62 @@ function Get-PersonalDeploymentId {
         if ($text -match '"deploymentId"\s*:\s*"([^"]+)"') { return $Matches[1] }
     }
     return ""
+}
+
+# Test-PersonalContainerRefused - has the database container failed for good?
+# Asked from inside every wait, so a terminal error ends the wait at once
+# instead of spending the rest of its budget; the error is kept for the
+# failure reason and said once.
+function Test-PersonalContainerRefused {
+    $err = Get-PersonalContainerError
+    if (-not $err) { return $false }
+    $script:PersonalContainerError = $err
+    Warn2 "The database container could not start: $(Get-PersonalShortText $err)"
+    return $true
+}
+
+# Show-PersonalFailureCause - after a deploy or start that failed: the
+# container's own error when it has one, and the cause and the fix when the kit
+# recognises it there or in what the launcher said. Returns the cause as a
+# suffix for the failure reason (": ..."), "" when nothing more is known.
+function Show-PersonalFailureCause {
+    $err = $script:PersonalContainerError
+    $suffix = ""
+    if (-not $err) {
+        $err = Get-PersonalContainerError
+        if ($err) { Warn2 "The database container could not start: $(Get-PersonalShortText $err)" }
+    }
+    if ($err) { $suffix = ": the database container could not start ($(Get-PersonalShortText $err))" }
+    $known = Get-PersonalKnownCause ((@($err) + @($script:PersonalLauncherOutput)) -join "`n")
+    if ($known) {
+        Warn2 "$($known.Cause)."
+        # InfoStep, not Info: this is printed from inside the deploy's quiet
+        # bracket, and a fix nobody sees is no fix.
+        InfoStep "Fix: $($known.Remedy)"
+        if (-not $suffix) { $suffix = ": $($known.Cause)" }
+    }
+    return $suffix
+}
+
+# Test-PersonalFirstBootPending / Set-PersonalFirstBootPending - did the KIT
+# create this deployment and never see its database answer? Recorded right
+# before the kit's own `install local` and cleared the first time the database
+# answers, so a deployment the kit did not make - or one that has EVER
+# answered, and so may hold data - never reads as pending. The never-booted
+# branch of Install-PersonalDeployment rests on it. Twin of
+# personal_first_boot_pending.
+function Test-PersonalFirstBootPending {
+    return ("" + (Get-ExakitManifestValue "runtime.first_boot_pending")) -eq "true"
+}
+
+function Set-PersonalFirstBootPending {
+    param([bool]$Pending)
+    if (-not (Test-Path $script:ManifestPath)) { return }
+    if ($Pending) {
+        [void](Set-ExakitManifestValue "runtime.first_boot_pending" "true")
+    } elseif ($null -ne (Get-ExakitManifestValue "runtime.first_boot_pending")) {
+        [void](Remove-ExakitManifestValue "runtime.first_boot_pending")
+    }
 }
 
 # Get-PersonalEngineExisting [-Quiet] - the engine an EXISTING deployment runs
@@ -1513,20 +1794,21 @@ function Test-PersonalUpdateCrossesTo24 {
 # retry is short and only fires on that signature: any other failure is real and
 # goes straight back to the caller. Nothing to undo in between - the launcher
 # failed in initialisation, before creating a deployment.
+# What the last attempt said is kept in $script:PersonalLauncherOutput, for the
+# failure's tail and its diagnosis.
 # Windows only: POSIX rename replaces an open file, so the sh side has no twin.
 function Invoke-PersonalInstallLocal {
     param([string[]]$InstallArgs)
     $attempts = 3
+    $script:PersonalLauncherOutput = @()
     for ($attempt = 1; $attempt -le $attempts; $attempt++) {
-        $logBefore = 0
-        if ($script:LogFile -and (Test-Path $script:LogFile)) {
-            $logBefore = @(Get-Content -Path $script:LogFile).Count
-        }
+        $logBefore = Get-PersonalLogLineCount
         $rc = Invoke-ExakitLogged (Get-PersonalCli) @InstallArgs
+        $script:PersonalLauncherOutput = @(Get-PersonalLogSince $logBefore)
         if ($rc -eq 0) { return 0 }
         if ($attempt -eq $attempts -or -not $script:LogFile) { return $rc }
         if (Test-PersonalDeploymentExists) { return $rc }
-        $output = @(Get-Content -Path $script:LogFile | Select-Object -Skip $logBefore) -join "`n"
+        $output = $script:PersonalLauncherOutput -join "`n"
         if ($output -notmatch 'Access is denied|being used by another process') { return $rc }
         Write-ExakitLog "WARN" "exasol install local hit a file lock (attempt $attempt of $attempts) - retrying"
         Start-Sleep -Seconds (3 * $attempt)
@@ -1535,6 +1817,8 @@ function Invoke-PersonalInstallLocal {
 }
 
 function Install-PersonalDeployment {
+    $deployed = Test-PersonalDeploymentExists
+    if ($deployed) { Set-ExakitReusedOwnership "database" $script:PersonalDeployDir }
     # WHICH ENGINE, BEFORE ANYTHING ELSE IN THIS STEP. A deployment that already
     # exists keeps the engine it was made on - the launcher's rule, and every
     # deployment from before 2.4 is Podman - so the kit only chooses for a
@@ -1587,7 +1871,8 @@ function Install-PersonalDeployment {
         return
     }
 
-    if (Test-PersonalDeploymentExists) {
+    $neverBootedReplaced = $false
+    if ($deployed) {
         # This run's launcher output starts here: the evidence the replace
         # below reads before deleting anything (Test-PersonalStartNetworkBlocked).
         $startLogAt = Get-PersonalLogOffset
@@ -1604,14 +1889,50 @@ function Install-PersonalDeployment {
             $flag = Get-PersonalAutoApproveFlag "deploy"
             if ($flag) { $deployArgs += $flag }
             $script:ExakitActiveLabel = "Retrying the deployment"
+            $script:PersonalContainerError = ""
+            $mark = Get-PersonalLogLineCount
             if (((Invoke-ExakitLogged (Get-PersonalCli) @deployArgs) -eq 0) -or (Wait-PersonalSlowFirstBoot)) {
                 Ok "Reusing the existing Exasol deployment (deployed again)"
                 if (-not (Wait-PersonalReadyOrDeploy)) { $script:PersonalNoDatabase = $true; return }
                 Set-PersonalManifest "healthy"
                 return
             }
+            $script:PersonalLauncherOutput = @(Get-PersonalLogSince $mark)
             Warn2 "The failed deployment could not be brought up.$(Get-PersonalForeignDbHint)"
+            [void](Show-PersonalFailureCause)
+            # A DEPLOYMENT THAT NEVER STARTED HOLDS NO DATA, so the ladder below
+            # asks the wrong questions of it: "start it and keep its data" is a
+            # no-op in this state, and "DELETE ... and its data" defaulting to
+            # no left the user with nothing either way. The kit made it and has
+            # never seen it answer (Test-PersonalFirstBootPending), so it is
+            # offered for replacement, default yes - still a consent prompt,
+            # still answered by EXAKIT_REPLACE_DB. A deployment that ever
+            # answered, one the kit did not make, and an explicit
+            # EXAKIT_REUSE_DB=1 all keep the ladder unchanged.
+            $reuseAsked = ("" + $env:EXAKIT_REUSE_DB) -cmatch '^(1|y|Y|yes|YES|Yes)$'
+            if ((Test-PersonalFirstBootPending) -and -not $reuseAsked) {
+                if (-not (Confirm-ExakitEnvPrompt "EXAKIT_REPLACE_DB" "This deployment never started, so it holds no data. Remove it and deploy a fresh one?" $true)) {
+                    Info "Nothing was deleted. Diagnose it with 'exakit status', or re-run with EXAKIT_REPLACE_DB=1 to replace it: $(Get-ExakitInstallCommand)"
+                    Set-ExakitFailureReason "A deployment that never started could not be brought up, and replacing it was declined"
+                    $script:PersonalNoDatabase = $true
+                    return
+                }
+                # A FRESH DEPLOY ON A WSL KERNEL WITHOUT NFTABLES FAILS, so a
+                # Podman deployment is checked before its destroy, as the
+                # replace below is (Test-PersonalWslPodmanNetworkOk -Replace).
+                if ($script:PersonalEngine -ne "docker" -and -not (Test-PersonalWslPodmanNetworkOk -Replace -StartMachine)) {
+                    $script:PersonalNoDatabase = $true
+                    return
+                }
+                Info "Removing the deployment that never started, and deploying a fresh one."
+                if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -ne 0) {
+                    Warn2 "Could not fully remove the old deployment; the launcher will deploy over it."
+                }
+                $neverBootedReplaced = $true
+            }
         }
+    }
+    if ($deployed -and -not $neverBootedReplaced) {
         Info "An Exasol deployment was found, not running."
         if (Confirm-ExakitEnvPrompt "EXAKIT_REUSE_DB" "Start the existing database and keep its data?" $true) {
             Show-PersonalGuestRebuildNote
@@ -1681,12 +2002,15 @@ function Install-PersonalDeployment {
             $script:PersonalNoDatabase = $true
             return
         }
+        if (-not (Test-ExakitComponentManaged "database")) {
+            Fail "The user-owned deployment could not start. Repair it outside the kit; it was not replaced."
+        }
         Info "Replacing the existing deployment - its previous data is not recoverable."
         # --auto-approve: destroy has its own [y/N] prompt, which a piped or
         # scripted install cannot answer; the consent came from the explicit
         # replace question (or EXAKIT_REPLACE_DB=1) just above.
-        if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -ne 0) {
-            Warn2 "Could not fully remove the old deployment; the launcher will deploy over it."
+        if (-not (Invoke-PersonalDestroy)) {
+            Warn2 "Could not fully remove the old deployment (the launcher said: $($script:PersonalDestroyError)); it will deploy over it."
         }
     } elseif ($script:PersonalEngine -ne "docker") {
         # A FRESH Podman deployment on a WSL kernel without nftables fails at
@@ -1778,7 +2102,16 @@ function Install-PersonalDeployment {
     if ($flag) { $installArgs += $flag }
     $installArgs += Get-PersonalEngineFlag $script:PersonalEngine
     $script:ExakitActiveLabel = "Deploying Exasol Personal locally"
-    if ((Invoke-PersonalInstallLocal $installArgs) -ne 0) {
+    $script:PersonalContainerError = ""
+    # Keep first-boot recovery and ownership as separate records: only a new
+    # deployment created by this install becomes kit-owned.
+    Set-PersonalFirstBootPending $true
+    $freshDeployment = -not (Test-PersonalDeploymentExists)
+    $installResult = Invoke-PersonalInstallLocal $installArgs
+    if ($freshDeployment -and (Test-PersonalDeploymentExists)) {
+        Set-ExakitComponentOwnership "database" "kit" $script:PersonalDeployDir
+    }
+    if ($installResult -ne 0) {
         # A DEPLOYMENT THAT EXISTS IS GIVEN THE KIT'S OWN BUDGET FIRST: the
         # launcher waits 27 seconds for a first boot, and a first boot in a
         # fresh Podman machine takes longer. Twin of the same branch in
@@ -1802,6 +2135,12 @@ function Install-PersonalDeployment {
                 return
             }
             Warn2 "Local deployment failed.$(Get-PersonalForeignDbHint)"
+            # WHAT ACTUALLY WENT WRONG, which "Local deployment failed" never
+            # said: the launcher's last lines, the container's own error, and
+            # the fix when the kit knows it. Twin of _personal_deploy_print_tail
+            # and personal_explain_failure.
+            Show-PersonalLauncherTail
+            $cause = Show-PersonalFailureCause
             Show-PersonalPodmanRootfulHint
             # The INSTALLER, not `exakit update`: update only moves components
             # that have a newer advertised version, so a deployment that never
@@ -1809,7 +2148,7 @@ function Install-PersonalDeployment {
             # crossing the manifest still names nano, which it skips outright.
             # A re-run resumes at this step. Twin of personal_deploy_local.
             Info "Retry it by re-running the installer - completed steps are skipped: $(Get-ExakitInstallCommand)"
-            Set-ExakitFailureReason "The launcher could not deploy the database locally"
+            Set-ExakitFailureReason "The launcher could not deploy the database locally$cause"
             $script:PersonalNoDatabase = $true
             return
         }
@@ -1822,7 +2161,9 @@ function Install-PersonalDeployment {
     } finally {
         $script:ExakitQuietDetail = $prevDeployQuiet
     }
+    Set-ExakitComponentOwnership "database" "kit" $script:PersonalDeployDir
     Ok "Exasol Personal deployed and answering on 127.0.0.1:$(Get-PersonalDbPort)"
+    $script:PersonalRecordFresh = $true
     Clear-PersonalDatabaseSteps
     Set-PersonalManifest "healthy"
 }
@@ -1851,11 +2192,20 @@ function Wait-PersonalSlowFirstBoot {
     if ($env:EXAKIT_PERSONAL_READY_TIMEOUT) { $budget = [int]$env:EXAKIT_PERSONAL_READY_TIMEOUT }
     Info "The launcher stopped waiting after its own short budget, but the deployment exists - waiting up to ${budget}s for the database"
     $t0 = [DateTime]::UtcNow
+    $lastLook = $t0
+    $script:PersonalContainerError = ""
     while (-not (Test-PersonalTlsAnswers)) {
         if (([DateTime]::UtcNow - $t0).TotalSeconds -ge $budget) { return $false }
+        # The same early exit as Test-PersonalReadyProbe: a container that
+        # refused to start is not slow.
+        if (([DateTime]::UtcNow - $lastLook).TotalSeconds -ge $script:PersonalContainerLookEvery) {
+            $lastLook = [DateTime]::UtcNow
+            if (Test-PersonalContainerRefused) { return $false }
+        }
         Start-Sleep -Seconds 5
     }
     Ok "The database answered after $([int]([DateTime]::UtcNow - $t0).TotalSeconds)s"
+    Set-PersonalFirstBootPending $false
     # THE RECONCILE IS THE OWNERSHIP PROOF. A handshake says a database answers
     # on the port, not whose: with Windows and WSL sharing one network stack it
     # may be the other side's. The launcher's deploy connects with this
@@ -1948,6 +2298,14 @@ function Start-Personal {
         Info "Check the database with: $(Get-PersonalCli) info"
         return
     }
+    # PODMAN FIRST. After a reboot its machine is off, and a start against it
+    # fails inside the launcher naming neither: Test-PersonalPodmanRunning
+    # starts a machine that is merely stopped, so `exakit start` (and
+    # autostart) names a Podman that cannot run instead of waiting on it.
+    # Docker was checked above. Twin of the same check in personal_start.
+    if ((Get-PersonalEngineRecorded) -ne "docker" -and (Get-PersonalPodman) -and -not (Test-PersonalPodmanRunning)) {
+        Fail "Podman is installed but not usable ('podman info' failed; its machine may be stopped). Once that is fixed: exakit start"
+    }
     # In "deployment_failed" the launcher's start (and stop) do nothing and
     # exit 0, so this reported "Database started" over a database that was
     # never asked to start and then waited its whole budget for it. The
@@ -1957,13 +2315,18 @@ function Start-Personal {
         $deployArgs = @("deploy")
         $flag = Get-PersonalAutoApproveFlag "deploy"
         if ($flag) { $deployArgs += $flag }
+        $mark = Get-PersonalLogLineCount
+        $script:PersonalContainerError = ""
         if ((Invoke-ExakitLogged (Get-PersonalCli) @deployArgs) -eq 0) {
             Ok "Database started"
             return
         }
         if (Test-PersonalStartNetworkBlocked -LogOffset $logOffset) { Stop-PersonalStartNetworkBlocked }
         Show-PersonalPodmanRootfulHint
-        Fail "The deployment could not be brought up.$(Get-PersonalForeignDbHint) Check the log; if it fails the same way, repair with: exakit repair-runtime"
+        $script:PersonalLauncherOutput = @(Get-PersonalLogSince $mark)
+        Show-PersonalLauncherTail
+        $cause = Show-PersonalFailureCause
+        Fail "The deployment could not be brought up$cause.$(Get-PersonalForeignDbHint) Check the log; if it fails the same way, repair with: exakit repair-runtime"
     }
     Show-PersonalGuestRebuildNote
     $startArgs = @("start")
@@ -1983,7 +2346,9 @@ function Start-Personal {
             Fail "Port $(Get-PersonalDbPort) is held by another process, so the database cannot start. Stop that process, then: exakit start"
         }
         Show-PersonalPodmanRootfulHint
-        Fail "Failed to start the database. Check the log, then retry with 'exakit start'; if it fails the same way, repair with: exakit repair-runtime"
+        $script:PersonalContainerError = ""
+        $cause = Show-PersonalFailureCause
+        Fail "Failed to start the database$cause. Check the log, then retry with 'exakit start'; if it fails the same way, repair with: exakit repair-runtime"
     }
     Ok "Database started"
     # Every start rebuilds the language containers from their images, and with
@@ -2189,6 +2554,71 @@ function Stop-Personal {
     Ok "Database stopped"
 }
 
+# The launcher's words for a deployment whose lock another run holds.
+$script:PersonalLockedText = "locked by another operation"
+$script:PersonalDestroyError = ""
+
+# Invoke-PersonalDestroyOnce - one `destroy --remove --auto-approve`; returns
+# @(exit code, output lines). The output also goes to the log. Twin of
+# _personal_destroy_once.
+function Invoke-PersonalDestroyOnce {
+    $cli = Get-PersonalCli
+    Write-ExakitLog "CMD" "$cli destroy --remove --auto-approve"
+    $previous = $ErrorActionPreference
+    $spinLabel = if ($script:ExakitActiveLabel) { $script:ExakitActiveLabel } else { "working" }
+    Start-ExakitSpinner $spinLabel
+    try {
+        $ErrorActionPreference = "Continue"
+        $lines = @(& $cli destroy --remove --auto-approve 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.Exception.Message)" } else { "$_" }
+        })
+        $code = $LASTEXITCODE
+    } catch {
+        $lines = @("$_")
+        $code = 1
+    } finally {
+        $ErrorActionPreference = $previous
+        Stop-ExakitSpinner
+    }
+    if ($script:LogFile -and $lines.Count) { $lines | Add-Content -Path $script:LogFile }
+    return ,@($code, $lines)
+}
+
+# Unlock-PersonalStale - release the deployment's lock when no launcher holds
+# it (a launcher that crashed or was killed leaves it behind, and then even
+# destroy refuses). A running launcher keeps its lock; the database daemon runs
+# under another image name and does not count. Twin of personal_unlock_stale.
+function Unlock-PersonalStale {
+    $image = [System.IO.Path]::GetFileNameWithoutExtension((Get-PersonalCli))
+    if (Get-Process -Name $image -ErrorAction SilentlyContinue) {
+        Write-ExakitLog "WARN" "the deployment is locked and a launcher is running: not unlocking"
+        return $false
+    }
+    return ((Invoke-ExakitLogged (Get-PersonalCli) diag unlock --auto-approve) -eq 0)
+}
+
+# Invoke-PersonalDestroy - destroy the deployment and remove its folder; a stale
+# lock is released and the destroy tried once more. When it still fails,
+# $script:PersonalDestroyError holds the launcher's own last error line. Twin
+# of personal_destroy.
+function Invoke-PersonalDestroy {
+    $script:PersonalDestroyError = ""
+    $first = Invoke-PersonalDestroyOnce
+    if ($first[0] -eq 0) { return $true }
+    $lines = $first[1]
+    if ((($lines -join "`n") -like "*$($script:PersonalLockedText)*") -and (Unlock-PersonalStale)) {
+        $again = Invoke-PersonalDestroyOnce
+        if ($again[0] -eq 0) { return $true }
+        $lines = $again[1]
+    }
+    $said = @($lines | Where-Object { $_ -match '(?i)error|fail|cannot|could not|denied' } | Select-Object -Last 1)
+    if (-not $said.Count) { $said = @($lines | Where-Object { "$_".Trim() } | Select-Object -Last 1) }
+    $text = if ($said.Count) { "$($said[0])".Trim() } else { "nothing more" }
+    if ($text.Length -gt 300) { $text = $text.Substring(0, 300) }
+    $script:PersonalDestroyError = $text
+    return $false
+}
+
 # Remove-Personal - destroy the deployment and its data. The Podman machine is
 # deliberately untouched: it is shared host-wide, the launcher never
 # reconfigures an existing one, and it stays running after destroy - this
@@ -2198,8 +2628,8 @@ function Remove-Personal {
         Warn2 "An Exasol Personal deployment keeps the database software and your data together - removing it deletes every table you loaded."
         # --auto-approve: the launcher's destroy prompts for confirmation by
         # itself; the caller (uninstall) has already asked its own question.
-        if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -ne 0) {
-            Warn2 "The launcher reported errors while destroying the deployment. What it said: exakit logs setup"
+        if (-not (Invoke-PersonalDestroy)) {
+            Warn2 "The launcher could not fully remove the deployment (it said: $($script:PersonalDestroyError)). If its folder $($script:PersonalDeployDir) or a database process is still there, restart the computer and delete the folder."
         }
     }
     Set-ExakitManifestValue "runtime.status" "removed"
@@ -2252,6 +2682,7 @@ function Test-PersonalSecretsReadable {
 
 function Update-Personal {
     param([string]$Advertised = "")
+    if (-not (Test-ExakitComponentManaged "personal")) { Write-ExakitPreservedComponent "personal"; return }
     if (-not $Advertised) { $Advertised = Get-PersonalTargetVersion }
     # NO WSL CHECK BEFORE THE SWAP, ON PURPOSE. A launcher swap changes no
     # data, and the WSL release is only a proxy for the real question (can

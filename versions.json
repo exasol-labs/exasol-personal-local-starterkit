@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-06",
+  "updated": "2026-11-10",
   "kit": {
     "version": "0.3.0"
   },
@@ -48,6 +48,8 @@
     "mcp": {
       "version": "2.4.0",
       "package": "exasol-mcp-server",
+      "sidecar_image": "docker.io/exasol/mcp-server:2.4.0@sha256:ae13d5430dff463aa0817f5a188211820fb8c2565e95e477d5ca71b04bb50b68",
+      "bridge": "mcp-proxy@0.13.0",
       "severity": "normal"
     },
     "pyexasol": {
@@ -56,7 +58,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.24.4",
+      "version": "1.24.5",
       "severity": "normal"
     },
     "dash-server": {
@@ -115,6 +117,108 @@
         "release-sql": "8bb8219ac944aaaa8616a32a6c759c303a75b606901f30343adc9a35a7f3facf",
         "core-only": "8ac590708f3a7d0aeda6599f363529b28c4ffed4a55f306252fe2ed7b16ccc70"
       }
+    },
+    "notebook": {
+      "version": "3.1.0",
+      "package": "exasol-notebook-connector",
+      "severity": "normal",
+      "frontends": {
+        "jupyterlab": "4.6.4",
+        "marimo": "0.25.2"
+      }
+    },
+    "udf-devkit": {
+      "version": "0.1.0",
+      "severity": "normal",
+      "mlflow_server": "3.17.2",
+      "containers": [
+        {
+          "language": "python",
+          "alias": "PYTHON3_ML",
+          "kind": "prebuilt",
+          "arch": "x86_64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "python": "3.12"
+          },
+          "packages": {
+            "scikit-learn": "1.9.0",
+            "pandas": "2.3.3",
+            "numpy": "2.4.6",
+            "scipy": "1.18.0"
+          },
+          "url": "https://github.com/exasol/script-languages-release/releases/download/12.0.0/standard-EXASOL-all-python-3.12_release_x64_12.0.0.tar.gz",
+          "sha256": "c16106076dc9932104cb2662ee758d011c9a220e72435cac16b03e5bc96399e7",
+          "size": 866462911
+        },
+        {
+          "language": "python",
+          "alias": "PYTHON3_ML",
+          "kind": "prebuilt",
+          "arch": "aarch64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "python": "3.12"
+          },
+          "packages": {
+            "scikit-learn": "1.9.0",
+            "pandas": "2.3.3",
+            "numpy": "2.4.6",
+            "scipy": "1.18.0"
+          },
+          "url": "https://github.com/exasol/script-languages-release/releases/download/12.0.0/standard-EXASOL-all-python-3.12_release_arm64_12.0.0.tar.gz",
+          "sha256": "35d7903e4a8cac398ad33a7b351da80dfe9d8a860283adaf715b65ac4b69cd6b",
+          "size": 842133548
+        },
+        {
+          "language": "rust",
+          "alias": "RUST",
+          "kind": "prebuilt",
+          "arch": "x86_64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "rustc": "1.98.1"
+          },
+          "crates": {
+            "exasol-udf-sdk": "0.33.0"
+          },
+          "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0.tar.gz",
+          "sha256": "eeedf5f2f8f7a4ad3a329065e516f93106412f270280bf47dede8e5023985245",
+          "size": 10238906,
+          "validated": false,
+          "smoke_asset": {
+            "url": null,
+            "bundled_path": "udf/rust-smoke/prebuilt/libexakit_smoke-x86_64.so",
+            "sha256": "c2ca03ed34155e24bc61c1f8c591ac85a1ecd8c60c53b2901fa552aae6cc7434",
+            "size": 326536,
+            "note": "Built and validated inside docker.io/library/rust:1.98.1-trixie with cargo-exasol-udf 0.33.0. The kit verifies the bundled library before use."
+          }
+        },
+        {
+          "language": "rust",
+          "alias": "RUST",
+          "kind": "prebuilt",
+          "arch": "aarch64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "rustc": "1.98.1"
+          },
+          "crates": {
+            "exasol-udf-sdk": "0.33.0"
+          },
+          "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0-aarch64.tar.gz",
+          "sha256": "de311ae8acadd30579373820d00b92364866880c15bf2edf8284567a8aaa5f8e",
+          "size": 9574265,
+          "validated": false,
+          "smoke_asset": {
+            "url": null,
+            "bundled_path": "udf/rust-smoke/prebuilt/libexakit_smoke-aarch64.so",
+            "sha256": "ece7c98550614fd318bdf3614c31126bd2316a2cb235875d147904314cc36b91",
+            "size": 332280,
+            "note": "Built and validated inside docker.io/library/rust:1.98.1-trixie with cargo-exasol-udf 0.33.0. The kit verifies the bundled library before use."
+          }
+        }
+      ]
     }
   }
 }

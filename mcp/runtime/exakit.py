@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 import shutil
 
@@ -15,10 +14,22 @@ from .filesystem import FileSystem
 from .paths import RuntimePaths
 
 
-DEFAULT_MCP_COMMAND = "uvx"
+DEFAULT_MCP_COMMAND = "uvx"                 # runs the Claude Desktop bridge below
 DEFAULT_MCP_PACKAGE = "exasol-mcp-server"
+# The version of the server the sidecar image is (its tag): CI keeps it equal to versions.json components.mcp.version.
 DEFAULT_MCP_VERSION = "2.4.0"
 DEFAULT_SERVER_NAME = "exasol"
+# The kit's one MCP server: the launcher's (Exasol Personal 2.4.0+), a sidecar
+# next to the database answering Streamable HTTP on loopback, connected as the
+# kit's read-only MCP user (setup/lib/mcp.sh mcp_sidecar_apply). Recorded in the
+# manifest as components.mcp_server.backend = "sidecar" with its url. There is
+# no other server to fall back to: a sidecar that does not serve is healed by
+# mcp_sidecar_apply (exakit mcp-setup, exakit mcp-doctor), never replaced.
+SIDECAR_BACKEND = "sidecar"
+# Claude Desktop runs only local (stdio) servers: it reaches the sidecar through
+# this bridge, run by the uvx the kit already has. Pinned; versions.json
+# components.mcp.bridge overrides it through the manifest.
+DEFAULT_MCP_BRIDGE = "mcp-proxy@0.13.0"
 # The dash-server add-on's MCP control plane. dash-server speaks Streamable
 # HTTP on a port it records at install time (5100 unless something already held
 # it), so it is registered as a URL, not a command.
@@ -26,14 +37,6 @@ DASH_SERVER_SERVER_NAME = "dash-server"
 DASH_SERVER_DEFAULT_PORT = 5100
 DASH_SERVER_HOST = "127.0.0.1"
 DASH_SERVER_MCP_PATH = "/mcp"
-LOCAL_SELF_SIGNED_TLS_ENV = {"EXA_SSL_CERT_VALIDATION": "no"}
-DEFAULT_READ_ONLY_MCP_SETTINGS = {
-    "enable_read_query": True,
-    "enable_summarize_table": True,
-    "enable_query_profiling": True,
-    "enable_write_query": False,
-    "enable_write_bucketfs": False,
-}
 
 
 @dataclass
@@ -105,38 +108,30 @@ class ExakitRuntimeLoader:
 
         components = document.get("components", {})
         component_state = components.get("mcp_server", {}) if isinstance(components, dict) else {}
-        package = str(
-            self._environment.env.get("EXAKIT_MCP_PACKAGE")
-            or component_state.get("package")
-            or DEFAULT_MCP_PACKAGE
-        ).strip()
-        version = str(
-            self._environment.env.get("EXAKIT_MCP_VERSION")
-            or component_state.get("version")
-            or DEFAULT_MCP_VERSION
-        ).strip()
+        sidecar_url = str(component_state.get("url") or "").strip()
+        if component_state.get("backend") != SIDECAR_BACKEND or not sidecar_url.startswith("http://127.0.0.1:"):
+            raise MCPSubsystemError(
+                "runtime_mcp_server_not_set_up",
+                "The MCP server beside your database is not set up yet. Run: exakit mcp-setup",
+            )
         command = self._resolve_mcp_command(component_state)
         server_name = str(
             self._environment.env.get("EXAKIT_MCP_SERVER_NAME") or DEFAULT_SERVER_NAME
         ).strip()
-        env = {
-            "EXA_DSN": dsn,
-            "EXA_USER": connection_user,
-            "EXA_PASSWORD": password,
-            "EXA_MCP_SETTINGS": json.dumps(DEFAULT_READ_ONLY_MCP_SETTINGS),
-        }
-        env.update(self._ssl_environment(runtime, dsn))
-        # The install validated the server only with OpenSSL's ARM fast paths
-        # disabled (this guest advertises SVE its host CPU cannot execute —
-        # see setup/lib/mcp.sh mcp_validate). Launch clients the same way.
-        if component_state.get("openssl_armcap_workaround") is True:
-            env["OPENSSL_armcap"] = "0"
+        # The launcher's server: clients get its URL and nothing secret - the
+        # read-only user's password lives in the deployment's sidecar
+        # definition (0600, the launcher's), not in any client's config.
+        bridge = str(component_state.get("bridge") or DEFAULT_MCP_BRIDGE).strip()
         definition = ServerDefinition(
-            transport=DeploymentMode.STDIO,
+            transport=DeploymentMode.HTTP,
             name=server_name,
-            command=command,
-            args=(f"{package}@{version}",),
-            env=env,
+            url=sidecar_url,
+            bridge=ServerDefinition(
+                transport=DeploymentMode.STDIO,
+                name=server_name,
+                command=command,
+                args=(bridge, "--transport", "streamablehttp", sidecar_url),
+            ),
         )
         return ExakitRuntimeContext(
             runtime_root=runtime_root,
@@ -188,7 +183,7 @@ class ExakitRuntimeLoader:
     def _dash_server_port(self, component_state: dict) -> int:
         """The port every dash-server command agrees on.
 
-        Same precedence as the shell side (setup/lib/dash-server.sh): an
+        Same precedence as the Python add-on: an
         explicit environment choice outranks the recorded port, which outranks
         the default. A recorded value that is not a port is ignored rather than
         raising — a malformed manifest field must not cost the user MCP setup.
@@ -304,12 +299,3 @@ class ExakitRuntimeLoader:
                 "The MCP connection must use a dedicated read-only database user, not the runtime admin user.",
             )
         return user, password_file
-
-    @staticmethod
-    def _ssl_environment(runtime: dict, dsn: str) -> dict[str, str]:
-        """Match the local Exasol Personal self-signed TLS posture."""
-        tls = str(runtime.get("tls") or "").strip().lower()
-        local_dsn = dsn.startswith(("127.0.0.1:", "localhost:", "[::1]:"))
-        if tls in {"self-signed", "self_signed", "selfsigned"} or local_dsn:
-            return dict(LOCAL_SELF_SIGNED_TLS_ENV)
-        return {}

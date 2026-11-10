@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exasol-mlflow"
+version = "0.3.0"
+description = "Train inside Exasol with a Python UDF and log the run - parameters, metrics, training SQL, model and lineage - to your MLflow from the client."
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "MIT"
+dependencies = []
+
+[project.optional-dependencies]
+mlflow = ["mlflow-skinny>=3,<4", "sqlalchemy>=2,<2.1", "alembic>=1.13,<2"]   # the client (MLflow 3.x), and the local SQLite store
+server = ["mlflow>=3,<4"]                                                    # the full package: `mlflow server` for exakit mlflow start (skinny cannot serve)
+
+[tool.setuptools]
+packages = ["exasol_mlflow"]

@@ -1,14 +1,10 @@
 # The marketplace: optional add-ons, and how to add one
 
 The marketplace is the kit's home for **optional tools** — things worth having
-next to the database but not worth lengthening the install for. dash-server
-(the AI dashboard host) is the first one.
+next to the database. Dash Server is one of the available add-ons.
 
-This document is three things: the contract for how the marketplace behaves,
-how a user meets it in every scenario — fresh installation, existing kit,
-browsing, updating, removal — each with a flowchart, and the **complete
-walkthrough for adding a new add-on**, which is deliberately three additive
-changes with no case-statement surgery anywhere.
+This document covers installation, updates, removal, and how to add a Python
+marketplace component.
 
 Contents:
 [How it behaves](#how-it-behaves-the-contract) ·
@@ -29,8 +25,8 @@ Contents:
 
 ## How it behaves (the contract)
 
-- **Never in the install flow.** The setup scripts install nothing from the
-  marketplace. After a successful interactive install, the closing screen
+- **After the core install.** The setup scripts finish the database and core
+  tools before applying persona add-ons or marketplace selections. The closing screen
   says *"Your Starter Kit installation is done and working"* and asks one
   gate question as a cursor selection — *Do you want to add optional tools?*
   with Yes pre-ticked and No as the opt-out. Yes opens the marketplace
@@ -59,6 +55,29 @@ Contents:
   report in `exakit version`, pin with
   `EXAKIT_<ID>_VERSION`, and are swept by `exakit uninstall`. Add-ons you never
   picked are never touched by `update all`.
+- **Every answer is read by one parser.** `EXAKIT_MARKETPLACE_ADDONS`,
+  `exakit marketplace a,b`, the menu's preselection and the notebook's
+  front ends all go through `model.parse_ids` / `notebook.normalize_frontends`:
+  case and spaces do not matter, a repeat counts once, `all` and `none` stand
+  alone, and an empty part (`dash-server,`) or an unknown id is bad input -
+  refused with exit 2, no `.last-failure` note, the known ids named - the same
+  on bash and PowerShell.
+- **A second run changes nothing.** `exakit marketplace <id>` for an add-on
+  the kit already has says so and installs nothing; a skill or login entry
+  already in place with the same bytes is neither rewritten nor reloaded (a
+  reload would restart the service); `exakit update <id>` at the target
+  version leaves a running service running; `uninstall <id>` of what is not
+  installed says so and exits 0; `persona add` of a persona already recorded
+  says *Already set up as* and leaves the manifest byte for byte; `persona
+  remove` of one not recorded does the same. `EXAKIT_VERSION_POLICY=latest`
+  asks GitHub or PyPI once per process.
+- **No terminal, no question - and never a hang.** Without a terminal to read
+  keys (CI, a pipe, a closed stdin) the menu prints how to answer with
+  `EXAKIT_MARKETPLACE_ADDONS` and installs nothing; a database restart that a
+  step would need is refused, not taken, when nobody can confirm it (`--yes`
+  confirms). `NO_COLOR`, `TERM=dumb`, `EXAKIT_NO_FANCY=1` or a non-UTF-8
+  locale turn the drawn menu off (the message says which) and never colour a
+  pipe; `TERM=dumb` gets the kit's own plain menus instead of the Textual one.
 
 ---
 
@@ -182,14 +201,26 @@ names `exakit marketplace --list`, `exakit marketplace <id>` and
   ╭─ Marketplace add-ons ────────────────────────────────────────────────────╮
   │     Add-on               Version  Description                            │
   │ [✓] Select All                                                           │
-  │ [✓] ├─ dash-server       0.1.0    Agent-operated Dash hosting for live   │
+  │ [✓] ├─ dash-server       0.2.1    Agent-operated Dash hosting for live   │
   │     │                             analytical apps                        │
-  │ [✓] ├─ exasol-scheduler  0.2      Lightweight table-driven SQL job       │
+  │ [✓] ├─ dbt-exasol        1.12.1   Data Build Tool adapter for Exasol     │
+  │ [✓] ├─ exasol-scheduler  0.4.1    Lightweight table-driven SQL job       │
   │     │                             scheduling for Exasol                  │
-  │ [✓] ├─ exasol-vscode     1.7.0    A Visual Studio Code extension for     │
+  │ [✓] ├─ exasol-vscode     1.9.0    A Visual Studio Code extension for     │
   │     │                             working with Exasol databases.         │
-  │ [✓] └─ json-tables       0.3      Exasol JSON Tables: ingest, query, and │
-  │                                   reshape JSON-shaped data in Exasol.    │
+  │     │                             Provides comprehensive database        │
+  │     │                             management, intelligent SQL editing,   │
+  │     │                             and powerful query execution           │
+  │     │                             capabilities.                          │
+  │ [✓] ├─ json-tables       0.4.1    Exasol JSON Tables: ingest, query, and │
+  │     │                             reshape JSON-shaped data in Exasol.    │
+  │ [✓] ├─ notebook          3.1.0    Connection configuration management    │
+  │     │                             and additional tools for Jupyter       │
+  │     │                             notebooks.                             │
+  │ [✓] └─ udf-devkit        0.1.0    Release Repository for Script Language │
+  │                                   Container for user defined functions   │
+  │                                   (UDF's) that can be used in the EXASOL │
+  │                                   database.                              │
   │ [ ] Skip                                                                 │
   ╰──────────────────────────────────────────────────────────────────────────╯
 ```
@@ -197,10 +228,15 @@ names `exakit marketplace --list`, `exakit marketplace <id>` and
 An add-on this machine cannot install — no VS Code-compatible editor, no
 prebuilt binary for the architecture, already installed outside the kit — gets
 a dimmed, unpickable row carrying the reason instead, or no row at all when it
-is neither applicable nor present. The descriptions are each repository's
-GitHub About, fetched and cached; offline the kit falls back to the tagline in
-`setup/help/<id>.json`, so the wording of a row can differ from the capture
-above. The same rows fill in with progress as each pick installs — the
+is neither applicable nor present. Each row's name, link and description are
+the add-on repository's own on GitHub (the id you type is shown beside a name
+that differs, e.g. `exasol-json-tables (json-tables)`). They are looked up only
+while installing and while showing updates (`exakit update`), and cached; every
+other screen, and any lookup that fails, uses the copy in
+`marketplace/catalog.json`, so the wording of a row can differ from the capture
+above. At 80 columns a row shows the id (`json-tables`) where `name (id)` does
+not fit its column; the notebook row carries JupyterLab and Marimo as child
+rows of their own. The same rows fill in with progress as each pick installs — the
 selection and the install are one table, not two screens.
 
 ```mermaid
@@ -236,11 +272,13 @@ reach `127.0.0.1` on the machine can call its tools, which build, deploy and
 pip-install dependencies for Dash apps as the installing user. Fine on a
 personal laptop; on a shared or multi-user machine, stop dash-server when it is
 not in use (`exakit stop`), and never expose the port on a LAN or through a
-tunnel. dash-server is also the one add-on installed **without a kit-pinned
-checksum** — the version is tag-pinned, but a GitHub source tarball publishes no
-digest to verify the download against, and its Python dependencies come from
-PyPI unpinned. Every other add-on refuses an artifact whose digest it cannot
-check.
+tunnel. Not every add-on is installed **against a kit-pinned checksum**:
+dash-server is tag-pinned, but a GitHub source tarball publishes no digest to
+verify the download against, and its Python dependencies come from PyPI
+unpinned; dbt-exasol, the notebook environment (JupyterLab, Marimo) and MLflow
+are pinned by version from PyPI, without hash checking. exasol-scheduler,
+Exasol for VS Code, JSON Tables and the UDF containers are verified against
+pinned digests and refuse an artifact whose digest they cannot check.
 
 Non-interactive use, same contract as the closing offer:
 
@@ -346,341 +384,78 @@ The rest of this document is for whoever adds an add-on.
 
 ## Where the pieces live
 
-| Piece | bash | PowerShell |
-|---|---|---|
-| Registry + menu + offer + generic arms | `setup/lib/common.sh` (marketplace block) | `setup/lib/exakit-common.ps1` (marketplace block), registry arms in `setup/exakit.ps1` |
-| The add-on itself | `setup/lib/<id>.sh` | `setup/lib/<id>.ps1` |
-| CLI entry point | `setup/exakit` (`cmd_marketplace`) | `setup/exakit.ps1` (`Invoke-CmdMarketplace`) |
-| Closing offer call | `setup/setup-macos.sh`, `setup/setup-linux.sh` | `setup/setup-windows.ps1` |
-
-Every registry function — version block, env override, fallback, upstream
-lookup, installed probe, update targets and dispatch — resolves a registered
-add-on through **one generic arm driven by conventions**, so a new add-on
-needs no edits there. The conventions, for an id like `my-tool`:
-
-| Convention | Value for `my-tool` |
+| Concern | Source |
 |---|---|
-| Module functions (bash; dashes → underscores) | `my_tool_install`, `my_tool_validate`, `my_tool_update`, `my_tool_installed_version`, `my_tool_uninstall`; a tool that *runs* adds `my_tool_status`, `my_tool_start`, `my_tool_stop`, `my_tool_autostart_command`, `my_tool_log_path`; a tool that extends a host app adds `my_tool_applicable` (+ `my_tool_applicable_reason`); a tool whose installable version is not a plain upstream release adds `my_tool_latest`; sharpen manual-install detection with `my_tool_system_present` |
-| Version env override / fallback (bash) | `EXAKIT_MY_TOOL_VERSION`, `EXAKIT_MY_TOOL_VERSION_FALLBACK` |
-| versions.json block | `components.my-tool` (`repo` = GitHub release, `package` = PyPI — the generic upstream lookup reads whichever is present; neither, plus a `my_tool_latest` hook, when the kit repackages the tool itself — see json-tables) |
-| Manifest keys | `components.my_tool.*`, `desired.my_tool` |
-| Kit-managed state | venv/state under `$EXAKIT_HOME`, launcher at `$EXAKIT_BIN_DIR/my-tool` (swept by uninstall automatically, by registry id) |
-| PowerShell functions | named explicitly in the registry entry (no derivation) |
+| Ordered add-ons and visibility | `marketplace/catalog.json` |
+| Advertised versions and artifact checksums | Root `versions.json` |
+| Offline UI runtime defaults | `marketplace/defaults.env` |
+| Individual add-on lifecycle | `marketplace/addons/<id_with_underscores>.py` |
+| Catalog validation and selection parsing | `marketplace/model.py` |
+| Lifecycle dispatch and ownership checks | `marketplace/service.py`, `marketplace/runtime.py` |
+| Interactive picker and batch progress | `marketplace/ui.py`, `marketplace/apply.py` |
+| Bash/PowerShell entry adapters | `setup/exakit`, `setup/exakit.ps1`, `setup/lib/common.sh`, `setup/lib/exakit-common.ps1` |
 
----
+The platform adapters launch Python and present CLI output. Add-on decisions,
+installation, validation, and receipts live in `marketplace/`. The adapter
+discovers supported hooks from the Python module through `metadata.py`; a new
+add-on needs no shell or PowerShell lifecycle implementation.
 
-## Adding a new add-on: the walkthrough
+## Adding a new add-on
 
-Three changes, one PR. `setup/lib/dash-server.sh` / `.ps1` are the reference
-implementation — copy them when in doubt.
+1. Add an ordered row to `marketplace/catalog.json`: a unique `id`, a
+   `github` block with the add-on's `repo` (`owner/name`), `backend: "python"`,
+   `visible`, and `default_version`; then run `python3 tools/addon_github.py`,
+   which writes the repository's `url`, `name` and `about` from GitHub. Never
+   type those by hand, and never add a `label`: the row's name is the
+   repository's. The one exception is an add-on the kit builds itself and that
+   has no repository of its own (udf-devkit): its `github` block names the
+   upstream it is built on, so the row adds `kit_about`, one line (at most 120
+   characters, at the end of the row) shown in place of that upstream's About.
+   Set `visible: false`
+   to stop new selections while keeping an existing installation manageable.
+   Add `choices` only when the add-on has user-selectable variants.
+2. Add `marketplace/addons/<id_with_underscores>.py`. Implement the lifecycle
+   functions that the tool supports: `install`, `validate`, `update`,
+   `uninstall`, `installed_version`, and optional service hooks such as
+   `status`, `start`, `stop`, `url`, and `log_path`. Use
+   `marketplace/runtime.py` for version selection, verified downloads,
+   manifest receipts, and ownership. See `dash_server.py` for a service and
+   `exasol_vscode.py` for a host application extension.
+3. Add the tested version and any published artifact digests to root
+   `versions.json`. The catalog's `default_version` is an offline fallback;
+   it is not the update pin. `exakit_component_latest_source` and the Python
+   context apply the existing version policy and explicit override.
+4. Test an install, a repeat install, update, validation failure, user-owned
+   discovery, and uninstall. Test the platform adapter only for behavior unique
+   to the add-on. Do not put credentials in command arguments or catalog JSON.
 
-Pick your reference by what the tool is:
-
-- **A Python package that installs straight from its tagged source** → copy
-  dash-server (venv, launcher, live validation). Copy its *shape*, not its
-  supply chain: it installs a GitHub source tarball, which publishes no digest,
-  so it is the one add-on with nothing to verify. If your tool publishes a wheel
-  or an sdist, pin its `sha256` in versions.json and fail closed on a missing
-  digest, the way the other three do.
-- **An extension to a host application** → copy exasol-vscode (the
-  `_applicable` gate, the host-app CLI discovery, the refusal to touch a copy
-  the user installed themselves).
-- **A tool users cannot install as shipped** (needs a toolchain, ships no
-  binaries, hardcodes a build step) → copy **json-tables**: a packaging
-  workflow in this repo (`.github/workflows/pkg-json-tables.yml`) assembles the
-  artifacts once for every platform — downloading and digest-verifying the ones
-  upstream prebuilds, building only the rest — and publishes them as **one immutable
-  release per build** (`<id>-<version>`, never rewritten); the module downloads
-  the prebuilt pair from the release versions.json names and verifies each
-  against the digest pinned there, "latest" is the advertised version
-  (`<id>_latest` hook) so nothing is ever offered before it is built, and the
-  workflow's `advertise` job writes the whole pin — version, release tag,
-  wheel, digests — by pull request only after a successful publish. A rolling
-  tag is the one shape to avoid: overwriting its assets breaks every pinned
-  install until the pins catch up.
-
-### 1. Ship the module pair
-
-**`setup/lib/my-tool.sh`** — the skeleton every add-on follows:
-
-```bash
-#!/usr/bin/env bash
-# my-tool.sh — my-tool (<one-line purpose>): managed install + validation.
-# A MARKETPLACE ADD-ON: never installed by the setup scripts.
-
-# The add-on's version constants live here, next to the code that uses them —
-# the generic registry arms find them by the derived-name convention, and the
-# versions-bump workflow keeps the fallback in lockstep with versions.json.
-EXAKIT_MY_TOOL_VERSION="${EXAKIT_MY_TOOL_VERSION:-}"
-EXAKIT_MY_TOOL_VERSION_FALLBACK="${EXAKIT_MY_TOOL_VERSION_FALLBACK:-1.0.0}"
-EXAKIT_MY_TOOL_REPO="${EXAKIT_MY_TOOL_REPO:-exasol-labs/my-tool}"
-
-# The live probe: answer with the installed version, FAIL for a provably
-# absent install. This is what keeps a stale manifest record from ever
-# claiming "installed".
-my_tool_installed_version() {
-    # e.g. "$venv_python" -c 'from importlib.metadata import version; ...'
-    return 1
-}
-
-# Soft-fail helper: marketplace installs must never end the caller's run.
-_my_tool_not_installed() {
-    warn "my-tool was not installed: $1"
-    warn "Everything else in the kit is unaffected. Retry with: exakit update"
-    command -v exakit_note_failure >/dev/null 2>&1 && exakit_note_failure "$1"
-    manifest_set components.my_tool.validated false
-    return 1
-}
-
-my_tool_install() {
-    # The marketplace path runs from the exakit CLI, where the installer's
-    # version resolution has not run — resolve the advertised version here.
-    if [ -z "${EXAKIT_MY_TOOL_VERSION:-}" ]; then
-        EXAKIT_MY_TOOL_VERSION="$(exakit_component_available my-tool 2>/dev/null || true)"
-        [ -n "$EXAKIT_MY_TOOL_VERSION" ] || EXAKIT_MY_TOOL_VERSION="$EXAKIT_MY_TOOL_VERSION_FALLBACK"
-        export EXAKIT_MY_TOOL_VERSION
-    fi
-    # ... install (venv under $EXAKIT_HOME, launcher in $EXAKIT_BIN_DIR) ...
-    # On any failure: _my_tool_not_installed "<reason>"; return 1
-    manifest_set components.my_tool.version "$EXAKIT_MY_TOOL_VERSION"
-}
-
-# Prove it actually works; record validated=true/false. Soft — return 0 even
-# when validation fails (the failure has already explained itself).
-my_tool_validate() {
-    manifest_set components.my_tool.validated true
-    return 0
-}
-
-# Install the advertised version. Doubles as the repair command; asked for
-# explicitly, so a failure here IS a failure (die).
-my_tool_update() {
-    _available="$(exakit_component_available my-tool 2>/dev/null || true)"
-    [ -n "$_available" ] || die "Could not resolve the advertised my-tool version."
-    _current="$(my_tool_installed_version 2>/dev/null || true)"
-    if [ -n "$_current" ] && [ "$_current" = "$_available" ]; then
-        ok "my-tool is already current ($_current)"
-        return 0
-    fi
-    EXAKIT_MY_TOOL_VERSION="$_available"
-    export EXAKIT_MY_TOOL_VERSION
-    my_tool_install || die "my-tool could not be installed — see the warning above."
-    my_tool_validate || true
-    manifest_set desired.my_tool "$EXAKIT_MY_TOOL_VERSION"
-    ok "my-tool updated; database data was not changed"
-}
-
-# Remove what the install put on this machine (with "1": narrate the plan
-# only). This one hook folds the add-on into the selectable
-# `exakit uninstall` menu AND the full teardown — no other wiring exists.
-# Best-effort, idempotent, and it must refuse anything the kit does not
-# manage (see exasol_vscode_uninstall for the pattern).
-my_tool_uninstall() {
-    _dry="${1:-0}"
-    # rm the kit-managed artifacts; then:
-    # manifest_del components.my_tool; manifest_del desired.my_tool
-    return 0
-}
-
-# OPTIONAL — only for an add-on that extends a host application. Return
-# non-zero when the host is absent and the add-on is hidden everywhere instead
-# of being offered and then failing (see exasol_vscode_applicable).
-# my_tool_applicable()        { command -v the-host-app >/dev/null 2>&1; }
-# my_tool_applicable_reason() { printf '%s\n' "the host app was not found"; }
-
-# OPTIONAL — only for an add-on that RUNS as a service. Defining these four
-# folds it into `exakit status`, `exakit start`, `exakit stop` and the boot
-# entries (`exakit autostart`) with no wiring anywhere else.
-# my_tool_status()            { ... }   # running | stopped | not installed
-# my_tool_start()             { ... }   # background it, wait until it answers
-# my_tool_stop()              { ... }   # bounded, idempotent
-# my_tool_autostart_command() { ... }   # what the boot entry runs
-# my_tool_log_path()          { ... }   # what `exakit logs my-tool` shows
-
-# OPTIONAL: sharpen "already on this system" detection beyond the default
-# check (the id AND the launcher's basename from EXAKIT_MY_TOOL_BIN on PATH),
-# e.g. an import probe for PATH-less pip installs (see json_tables_system_present).
-# my_tool_system_present() { ... }
-
-# OPTIONAL — only when "installable" is stricter than "released upstream".
-# json-tables is the model: the kit prebuilds its artifacts in a packaging
-# workflow, so what CAN be installed is what that workflow has published and
-# versions.json advertises, not what upstream tagged. The generic upstream
-# lookup calls this hook first; json_tables_latest answers from versions.json
-# alone, with no network call.
-# my_tool_latest() { ... }   # print the newest INSTALLABLE version
-```
-
-**`setup/lib/my-tool.ps1`** — the twin. Same shape with the house verbs
-(`Install-MyTool`, `Test-MyTool`, `Update-MyTool`, `Get-MyToolInstalledVersion`,
-`Write-MyToolNotInstalled`) and its own
-`$script:MyToolVersionFallback = if ($env:EXAKIT_MY_TOOL_VERSION_FALLBACK) { $env:EXAKIT_MY_TOOL_VERSION_FALLBACK } else { "1.0.0" }`.
-
-Hard rules for both files (CI enforces them):
-
-- bash stays **3.2**-compatible (macOS default); PowerShell stays **5.1**-
-  compatible (no ternary, no `??`).
-- The `.ps1` is **pure ASCII** — no em dashes, no box-drawing glyphs
-  (`tests/ps-encoding-guard.sh` scans every `.ps1` automatically).
-- Install failures are **soft** (warn + `validated=false` + return non-zero),
-  never `die` — the marketplace and the closing offer run best-effort.
-- Secrets never land in generated files: bake credential-file *paths* into a
-  launcher and read them at run time (see `dash_server_write_launcher`).
-
-### 2. Add the versions.json block
-
-```json
-"my-tool": {
-  "version": "1.0.0",
-  "repo": "exasol-labs/my-tool",
-  "severity": "normal"
-}
-```
-
-`repo` for a GitHub-release-installed tool, `package` for a PyPI one — that
-field is what the generic upstream lookup (`EXAKIT_VERSION_POLICY=latest`) and
-the auto-bump workflow read. A tool the kit repackages itself (json-tables)
-carries neither: its `my_tool_latest` hook answers from
-`versions.json`, `exakit_component_latest` asks that hook *first*, so a `repo`
-beside it would never be read, and `exakit_component_latest_source` reports
-such a tool as `pinned` — which is how the latest-policy screen names it
-instead of crediting its version to an upstream lookup. Keep the file
-canonical: `python3 -m json.tool --indent 2` output, LF-only (CI diffs it).
-
-### 3. Add one registry line each side
-
-`setup/lib/common.sh`, in `exakit_marketplace_addons`:
-
-```bash
-printf '%s\n' "my-tool|my-tool (short label)"
-```
-
-Two fields, and no description: the one-liner the menu shows is the **About
-field of your add-on's own repository**, fetched and cached at runtime (step 4).
-Typing a description here is the drift this replaced — it used to be spelled out
-in both registries and in the help document, and the three disagreed.
-
-`setup/lib/exakit-common.ps1`, in `Get-ExakitMarketplaceAddons`:
-
-```powershell
-[pscustomobject]@{
-    Id          = "my-tool"
-    Label       = "my-tool (short label)"
-    InstallFn   = "Install-MyTool"
-    ValidateFn  = "Test-MyTool"
-    UpdateFn    = "Update-MyTool"
-    VersionFn   = "Get-MyToolInstalledVersion"
-    EnvVar      = "EXAKIT_MY_TOOL_VERSION"
-    FallbackVar = "MyToolVersionFallback"
-}
-```
-
-### 4. Ship a help document — and with it, the description
-
-`setup/help/my-tool.json`, alongside the other components' documents. Two of its
-fields carry the marketplace:
-
-```json
-{
-  "schema_version": 1,
-  "id": "my-tool",
-  "kind": "addon",
-  "title": "my-tool",
-  "tagline": "What it does, in one clause.",
-  "repo": "exasol-labs/my-tool",
-  "docs": "https://github.com/exasol-labs/my-tool#readme"
-}
-```
-
-`docs` is required and must be an https URL: `tests/marketplace.sh` rejects a
-help document without one, and it is the `docs` field every row of
-`exakit marketplace --json` carries (`null` only when a document has none).
-
-`repo` is where the About is read from — `https://api.github.com/repos/<repo>`,
-resolved offline from this document, so a machine with no network still knows
-which repository owns the wording. `tagline` is the help screen's own header
-line, and it doubles as the answer when the About cannot be reached.
-
-The description therefore needs no maintenance in this repository: write the
-one-liner in your add-on's GitHub About and the marketplace picks it up within a
-day (`EXAKIT_ABOUT_TTL`, default 86400s). What the kit does to that text before
-printing it is not negotiable, though — it is prose from a repository the kit
-does not control, so escape sequences and control bytes are stripped, it is
-collapsed to one line and capped, on the way into the cache. It is then shown in
-full: the Description column is 44 characters wide and folds onto as many lines
-as the text needs, so nothing is cut off. A long About costs table rows rather
-than meaning -- but the checkbox list below the table shows ids only, because the
-shared checkbox layer keeps every menu row to exactly one terminal line.
-
-Skipping this document is allowed — the row then reads
-`Details: exakit help my-tool` — but the screen is worse for it.
-
-### 5. Optional: ship an AI skill with it
-
-If the add-on is worth teaching an agent to drive, add
-`skills/my-tool/SKILL.md` with the usual `name` + `description` frontmatter and
-one extra key naming its owner:
-
-```yaml
----
-name: my-tool
-addon: my-tool
-description: ... Triggers — "...".
----
-```
-
-That key is the whole wiring. The marketplace places the skill as part of
-installing the add-on and removes it again when the add-on is uninstalled; the
-AI-bridge step, which installs the core skills, leaves it alone until then. A
-skill is a set of triggers for an agent to match on, and matching them for a
-tool that is not on the machine is worse than not shipping the skill — so an
-add-on's skill travels with the add-on, not with the kit.
-
-Nothing in the shell or PowerShell learns the skill's name: the owner is read
-out of the frontmatter. Bump `components.skills.version` in `versions.json`, add
-a row to `skills/README.md` under the marketplace heading, and that is all.
-
-### The CI guards (same PR, mechanical)
-
-| File | Change |
-|---|---|
-| `.github/workflows/versions.yml` | Add `"my-tool"` to the `expected = {...}` components set; add an upstream-exists stanza (assert the release tag / PyPI version is real) |
-| `.github/workflows/versions-bump.yml` | Add a `COUPLED` entry pointing at the module files' fallback constants; for a GitHub-release tool, add a bump stanza (copy the dash-server one) |
-
-### What you do NOT touch
-
-The registry line is the switch. The Description column and the checkbox
-label's one-liner (both come from the About, cached, with the tagline behind
-them), menu row, closing-offer row, presence detection, `exakit update
-my-tool`, `update all` gating (installed only), `exakit version` row,
-`EXAKIT_MARKETPLACE_ADDONS` parsing, uninstall sweep of the launcher and the
-kit-home state, placing and removing the add-on's own skill — all generic. `tests/marketplace.sh` asserts `common.sh`
-carries **zero** per-add-on case arms, so a regression back to hand-wired
-arms fails CI.
-
----
+The public commands remain `exakit marketplace <id>`,
+`exakit marketplace --list`, `exakit version`, `exakit update <id>`, and
+`exakit uninstall`. An unattended install can select IDs through
+`EXAKIT_MARKETPLACE_ADDONS`. The catalog controls what is newly selectable;
+ownership receipts control what the kit may update or remove.
 
 ## Verifying
 
-Every behaviour this document describes is enforced by the automated suites —
-the contract above, the scenarios, and the twin parity between each module's
-`.sh` and `.ps1`. If a claim here and the code disagree, one of these fails.
-
 ```bash
-bash tests/marketplace.sh        # registry, gating, offer, non-interactive contract
-bash tests/dry-run-matrix.sh     # .sh/.ps1 twin parity guards
-bash tests/ps-encoding-guard.sh  # the new .ps1 is pure ASCII
-bash tests/versions-manifest.sh  # versions.json contract (add your components.my-tool.* paths to the reader-parity list)
-bash tests/marketplace-e2e.sh    # sandboxed end-to-end: real install, update flow, uninstall
+python3 -m unittest discover -s tests -p 'test_marketplace_*.py'
+bash tests/marketplace.sh
+bash tests/dry-run-matrix.sh
+bash tests/agent-operability.sh
+bash tests/versions-manifest.sh
+bash tests/ps-encoding-guard.sh
 ```
 
-For the new add-on itself, extend `tests/marketplace.sh` sparingly (the
-generic layer is already covered — test only what is unique to your module,
-e.g. its launcher or validation quirks), and consider a stanza in
-`tests/marketplace-e2e.sh` if the tool can prove itself end to end without a
-database.
+`tests/test_marketplace_rules.py` proves the rules above once each (the parser
+on present, absent and malformed answers; the apply skip; skills and login
+entries left alone; the persona record writer). `tests/test_marketplace_blackbox.py`
+runs the real `exakit` as a subprocess on every entry point the host has (bash,
+`pwsh`, `powershell`), with a timeout on every run: stdin from /dev/null, a pipe
+and closed; `NO_COLOR`, `TERM=dumb`, `EXAKIT_NO_FANCY` and a forced palette
+compared after stripping ANSI; `COLUMNS=60`; every environment answer present,
+absent and malformed; and each command twice for idempotency, asserting that
+bash and PowerShell give the same exit-code class, the same stream and the same
+files. CI runs both on Linux, macOS and Windows PowerShell 5.1.
 
-Manual smoke, safely sandboxed:
-
-```bash
-EXAKIT_HOME=$(mktemp -d) EXAKIT_BIN_DIR=$(mktemp -d) EXAKIT_MARKETPLACE_ADDONS=my-tool bash setup/exakit marketplace
+Run `tests/marketplace-e2e.sh` for the isolated integration path. A live
+database and native Windows/WSL checks are separate.

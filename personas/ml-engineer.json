@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "id": "ml-engineer",
+  "title": "ML Engineer",
+  "summary": "Train and score models inside the database, tracked in MLflow.",
+  "picker": true,
+  "visible": false,
+  "order": 20,
+  "datasets": ["amazon_sales", "fraud_transactions"],
+  "mcp_clients": "all",
+  "addons": ["notebook", "udf-devkit"],
+  "addon_reasons": {"notebook": "The ML Engineer notebooks, already connected to your data", "udf-devkit": "Train and score models inside the database, runs kept in MLflow"},
+  "services": ["mlflow"],
+  "udf_language": "python"
+}

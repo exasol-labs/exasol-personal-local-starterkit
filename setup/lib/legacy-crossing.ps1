@@ -362,7 +362,8 @@ function Invoke-LegacyQuery {
     $previous = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        $out = & (Get-ExapumpCli) sql -p $Profile $Sql 2>$null
+        $nativeArgs = ConvertTo-ExakitNativeArgs @("sql", "-p", $Profile, $Sql)
+        $out = & (Get-ExapumpCli) @nativeArgs 2>$null
         return ("" + ($out -join "`n"))
     } catch {
         return ""

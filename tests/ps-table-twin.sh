@@ -193,10 +193,19 @@ has "the twin carries a second column"  'Col2 = $Col2; Col3 = $Col3' "$UI_PS1"
 # same menu drew it unbroken while installing, where every row is one line.
 lacks "no rule drawn between columns"   'if ($sepW -eq 3) { $sep = " " + $script:UiDim + $script:UiVB' "$UI_PS1"
 lacks "...and none on the shell side"   '_UI_TABLE_SEP=" ${UI_DIM:-}${UI_VB:-|}${UI_RESET:-} "' "$UI_SH"
-has "a tee remembers to carry a spine"  'if ($row.Kind -eq "tee") { $conn = $script:UiTee + " "; $spine = $true }' "$UI_PS1"
-has "...drawn on every wrapped line"    '$wleft = (" " * 5) + $script:UiVB + (" " * ($nameW - 1))' "$UI_PS1"
-has "the shell flags the tee the same"  'tee)    _utr_conn="${UI_TEE:-|-} "; _utr_spine=1 ;;' "$UI_SH"
-has "...and draws the same spine"       '_utr_wleft="     ${UI_VB:-|}${_UI_TABLE_SP:0:$(( UI_TABLE_NAME_W - 1 ))}"' "$UI_SH"
+has "a tee remembers to carry a spine"  '"tee"           { $conn = $script:UiTee + " "; $spine = $vb }' "$UI_PS1"
+has "...drawn on every wrapped line"    '$wleft = (" " * 5) + $spine + (" " * $spinePad)' "$UI_PS1"
+has "the shell flags the tee the same"  'tee)           _utr_conn="${UI_TEE:-|-} "; _utr_spine="${UI_VB:-|}" ;;' "$UI_SH"
+has "...and draws the same spine"       '_utr_wleft="     ${_utr_spine}${_UI_TABLE_SP:0:$_utr_wsp}"' "$UI_SH"
+# A row one level deeper (the notebook's tools under its row in the add-ons
+# table) carries its parent's spine in front of its own, on both sides, and is
+# measured six columns wider than its label rather than three.
+has "the deeper rows on Windows"        '"tee-tee"       { $conn = $vb + "  " + $script:UiTee + " "; $spine = $vb + "  " + $vb }' "$UI_PS1"
+has "...and in the shell"               'tee-tee)       _utr_conn="${UI_VB:-|}  ${UI_TEE:-|-} "; _utr_spine="${UI_VB:-|}  ${UI_VB:-|}" ;;' "$UI_SH"
+has "...measured with both connectors"  'elseif ($row.Kind -like "*-tee" -or $row.Kind -like "*-corner") { $len += 6 }' "$UI_PS1"
+has "...the same in the shell"          '*-tee|*-corner) _utw_len=$(( ${#_utw_label} + 6 )) ;;' "$UI_SH"
+has "a settled-but-skipped row on Windows" '"skipped" {' "$UI_PS1"
+has "...and in the shell"               'skipped)' "$UI_SH"
 has "the description wraps, never truncates" "function Split-ExakitWrap" "$UI_PS1"
 has "...and the shell wraps without forking" "_ui_wrap() {" "$UI_SH"
 has "the description width is fixed"    '$script:UiTableCol3Fixed = 44' "$UI_PS1"
@@ -542,27 +551,36 @@ else
     printf 'SKIP the balance check needs python3\n'
 fi
 
-printf '\n== the selection\047s columns do not survive into the install ==\n'
+printf '\n== the install keeps Version and drops Description ==\n'
 # The add-on table the reader ticks IS the table the install then fills in, so
 # whatever headings the menu chose are still attached when the progress display
 # starts. On the shell they are module globals the caller switches off; in
 # PowerShell they are fields on the table OBJECT, which outlive the menu unless
-# cleared. Nothing forced the two to agree, and they did not: a Windows install
-# ran with Add-on, Version, Description AND Status while macOS showed Add-on and
-# Status. Asserted as text because there is no pwsh on the machine this kit is
-# developed on, and Windows is the only place that screen is drawn.
-if grep -A2 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL2=""'; then
-    pass "the shell drops Version once the add-on menu closes"
+# cleared. Nothing forced the two to agree, and once they did not: a Windows
+# install ran with every menu column while macOS showed two. The install shows
+# Add-on, Version and Status on both; the Description is the selection's alone.
+# Asserted as text: Windows is the only place the PowerShell screen is drawn.
+if grep -A4 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL2=""'; then
+    fail "the shell drops Version once the add-on menu closes"
 else
-    fail "the shell no longer drops Version after the add-on menu"
+    pass "the shell keeps Version through the install"
 fi
-if grep -A3 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL3=""'; then
-    pass "...and Description with it"
+if grep -A4 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL3=""'; then
+    pass "...and drops Description once the menu closes"
 else
     fail "the shell no longer drops Description after the add-on menu"
 fi
-has "the twin drops Version on the object"  '$script:ExakitAddonTable.Col2 = ""' "$COMMON_PS1"
-has "...and Description with it"            '$script:ExakitAddonTable.Col3 = ""' "$COMMON_PS1"
+if grep -A10 '^_exakit_addon_table_cleanup()' "$COMMON_SH" | grep -qF 'UI_TABLE_COL2=""'; then
+    pass "...and the Version heading goes with the table"
+else
+    fail "the Version heading outlives the add-on table"
+fi
+if grep -qF '$script:ExakitAddonTable.Col2 = ""' "$COMMON_PS1"; then
+    fail "the twin drops Version on the object"
+else
+    pass "the twin keeps Version on the object"
+fi
+has "...and drops Description"            '$script:ExakitAddonTable.Col3 = ""' "$COMMON_PS1"
 
 printf '\n== a row nobody can pick keeps its columns ==\n'
 # It used to merge into one sentence -- "json-tables · Installed (0.2)" -- which
@@ -630,7 +648,7 @@ for ps_module in exakit-common.ps1 exapump.ps1 mcp.ps1 runtime-personal.ps1 pyex
 done
 has "the profile-home resolver exists"        'function Get-ExakitProfileHome' "$COMMON_PS1"
 has "the agent home is the same resolver"     'return (Get-ExakitProfileHome)' "$COMMON_PS1"
-has "the exapump profile follows it"          'Join-Path (Get-ExakitProfileHome) ".exapump\config.toml"' "$PUMP_PS1"
+has "the kit profile is private"             'Join-Path $script:ExakitHome "exapump\config.toml"' "$PUMP_PS1"
 has "so does uv's installer directory"        'Join-Path (Get-ExakitProfileHome) ".local\bin\uv.exe"' "$COMMON_PS1"
 
 
@@ -686,6 +704,13 @@ else
     fail "a quiet flag escapes its bracket: $_ps_on set, only $_ps_off restored"
 fi
 rm -f "$_PS_ALL"
+
+printf '\n== Enter on the exclusive row (Skip) answers Skip, on both sides ==\n'
+# The shell side is replayed under a pty in tests/dataset-load-progress.sh; the
+# PowerShell menu reads [Console]::ReadKey, which no test can type into, so its
+# twin is pinned here: on Enter, the cursor on the exclusive row selects it alone.
+has "ui.sh: Enter on the exclusive row selects it alone" '[ "$_utm_cur" = "$EXAKIT_TABLE_EXCLUSIVE" ]' "$ROOT/setup/lib/ui.sh"
+has "ui.ps1: Enter on the exclusive row selects it alone" 'if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }' "$ROOT/setup/lib/ui.ps1"
 
 printf '\n%d checks, %d failed\n' "$checks" "$fails"
 [ "$fails" -eq 0 ]

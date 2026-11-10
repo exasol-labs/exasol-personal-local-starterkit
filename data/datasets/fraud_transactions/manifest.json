@@ -1,0 +1,29 @@
+{
+  "id": "fraud_transactions",
+  "source": {
+    "name": "Fraud Detection Dataset (Kaggle; the exact page was not recorded)",
+    "url": "https://www.kaggle.com/search?q=Fraud+Detection+Dataset",
+    "file": "Fraud Detection Dataset.csv",
+    "builder": "tools/datasets/fraud_transactions.py"
+  },
+  "terms": {
+    "url": "https://www.kaggle.com/search?q=Fraud+Detection+Dataset",
+    "license": "as stated on the Kaggle dataset page (not confirmed)",
+    "summary": "51,000 card and bank transactions with a fraud label, as published on Kaggle. The licence has not been confirmed: check the dataset page before redistributing it.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-06",
+  "asset": {
+    "file": "fraud_transactions-2026-11-06.tar.gz",
+    "sha256": "19f3a889d63cb66951533104394a3033d5388ea5ba4d30a0475e1acc4a20c545",
+    "size": 957568,
+    "tar_sha256": "99f759773066d7fdf0652e518d1a0722befc0acad9c597721639dc952ee31383",
+    "url": "https://github.com/{repo}/releases/download/datasets/fraud_transactions-2026-11-06.tar.gz"
+  },
+  "files": {
+    "data/transactions.csv": {
+      "rows": 51000,
+      "sha256": "3ff66dc7ac0e8979ba7e04b40ac4bc6b58238b586ed53e4087833f975d582254"
+    }
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "id": "amazon_sales",
+  "source": {
+    "name": "Amazon Sale Report (Kaggle; the exact page was not recorded)",
+    "url": "https://www.kaggle.com/search?q=Amazon+Sale+Report",
+    "file": "Amazon Sale Report.csv",
+    "builder": "tools/datasets/amazon_sales.py"
+  },
+  "terms": {
+    "url": "https://www.kaggle.com/search?q=Amazon+Sale+Report",
+    "license": "as stated on the Kaggle dataset page (not confirmed)",
+    "summary": "Amazon.in order lines of one fashion seller, April-June 2022, as published on Kaggle. The licence has not been confirmed: check the dataset page before redistributing it.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-05",
+  "asset": {
+    "file": "amazon_sales-2026-11-05.tar.gz",
+    "sha256": "b7ed9c1034ef023c0fb61bf2d0ebc29c4ce06e82b52963de72fe565a6a3ce80e",
+    "size": 4535714,
+    "tar_sha256": "f5614184ab9e61d68c6561e8d937b132f21ec62ac1c5c7f3583e5a37c5ba75b3",
+    "url": "https://github.com/{repo}/releases/download/datasets/amazon_sales-2026-11-05.tar.gz"
+  },
+  "files": {
+    "data/order_lines.csv": {
+      "rows": 128975,
+      "sha256": "bf7f57aff6d66bfa9a421ede5ae75c573ec285dfabfcef8216fd8b58c02d742c"
+    }
+  }
+}
