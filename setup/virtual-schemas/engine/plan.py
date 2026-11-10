@@ -357,8 +357,15 @@ def validate_inputs(connector, given):
     """Defaults applied, every value checked by kind; secrets are not taken here."""
     values, problems = {}, []
     known = {spec["name"] for spec in connector["inputs"]}
+    secrets = {spec["name"] for spec in connector["inputs"] if spec["kind"] in ("secret", "secret-file")}
     for key in given:
-        if key not in known:
+        if key in secrets:
+            # Refused, never dropped: a credential on the command line is
+            # readable by every local user, and dropping it would let a
+            # command "succeed" without the credential it was given.
+            problems.append("%s is a credential and is never taken with --set (other users can read the command "
+                            "line): give it with --password-file <file> or --password-stdin" % key)
+        elif key not in known:
             problems.append("%s is not an input of %s (inputs: %s)" % (key, connector["id"], ", ".join(sorted(known))))
     for spec in connector["inputs"]:
         name, kind = spec["name"], spec["kind"]
