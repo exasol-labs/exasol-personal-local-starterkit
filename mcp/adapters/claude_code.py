@@ -162,7 +162,7 @@ class ClaudeCodeAdapter(ClientAdapter):
         mcp_servers[server_definition.name] = entry
         # No sort_keys: ~/.claude.json is the CLI's own state file, so the
         # managed edit is kept minimally invasive (insertion-order preserved).
-        content = json.dumps(document, indent=2) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
@@ -203,7 +203,7 @@ class ClaudeCodeAdapter(ClientAdapter):
                 document.pop("mcpServers", None)
         # Never delete ~/.claude.json: it holds unrelated Claude Code CLI state
         # (and even when empty, the CLI expects to own the file's lifecycle).
-        content = json.dumps(document, indent=2) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,

@@ -195,6 +195,67 @@ class AdditionalAdapterTests(unittest.TestCase):
         self.assertEqual([f.code for f in findings], ["lossy_render_output"])
         self.assertTrue(findings[0].blocking)
 
+    def test_json_adapters_keep_the_users_values_order_and_text(self) -> None:
+        """Adding the kit's entry changes nothing else in a JSON client config:
+        no value changes type, keys keep the user's order, and non-ASCII text
+        stays readable instead of turning into \\u escapes."""
+        user = {
+            "zeta": 1,
+            "alpha": {
+                "timeout": 120.0, "big": 12345678901234567890, "none": None, "flag": False,
+                "name": "Müller ✓", "esc": "a\nb\t\"q\"\\", "list": [1, 2.5, "x", None, {"k": [1.0]}],
+            },
+            "mcpServers": {"other": {"command": "node", "args": ["a.js"], "timeout": 30.0}},
+            "servers": {"other": {"type": "stdio", "command": "node"}},
+            "mcp": {"other": {"type": "local", "command": ["node"]}},
+        }
+        for adapter_id in ("claude_desktop", "claude_code", "cursor", "vscode_copilot", "gemini_cli", "opencode"):
+            with self.subTest(adapter=adapter_id):
+                adapter = self._registry.get(adapter_id)
+                path: Path = adapter.locate(self._environment).path  # type: ignore[assignment]
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps(user, indent=2), encoding="utf-8")
+                rendered = adapter.render(self._server, adapter.inspect(path, "exasol"))
+                self.assertEqual(adapter.validate_render(rendered), [])
+                content = rendered.content or ""
+                self.assertIn("Müller ✓", content)
+                after = json.loads(content)
+                self.assertEqual(list(after)[:2], ["zeta", "alpha"])
+                self.assertIsInstance(after["alpha"]["timeout"], float)
+                for key in ("mcpServers", "servers", "mcp"):
+                    after[key].pop("exasol", None)
+                after.pop("$schema", None)  # OpenCode adds its schema reference.
+                self.assertEqual(after, user)
+
+    def test_continue_yaml_values_read_back_as_the_same_strings(self) -> None:
+        """Every value the kit writes into Continue's YAML block must parse back
+        as the identical string: no number, date, boolean or parse error."""
+        from mcp.adapters.continue_dev import _yaml_scalar
+        # Without PyYAML (CI): every risky value must come out double-quoted,
+        # and a double-quoted scalar here is a JSON string, so it decodes exact.
+        for risky in ("0x1F", "0b101", "1_000", "2026-11-10", ".inf", "@scope/pkg", "-", "no", "y", "8563", "line\nbreak", ""):
+            with self.subTest(risky=risky):
+                quoted = _yaml_scalar(risky)
+                self.assertTrue(quoted.startswith('"'), quoted)
+                self.assertEqual(json.loads(quoted), risky)
+        try:
+            import yaml  # type: ignore[import-untyped]
+        except ModuleNotFoundError:
+            return
+        values = [
+            "no", "y", "n", "on", "~", "null", "8563", "1.0", "0x1F", "0o17", "0b101", "1_000",
+            "2026-11-10", "2026-11-10T09:00:00Z", ".inf", ".NaN", "@scope/pkg", "-", "a#b",
+            "a: b", "Müller", "C:\\Users\\x", "line\nbreak", "tab\tx", "", "!tag", "*a", "&a",
+            "exasol", "exasol-mcp-server@1.2.0", "/usr/bin/uvx", "127.0.0.1:8563", "\x01",
+        ]
+        for value in values:
+            with self.subTest(value=value):
+                parsed = yaml.safe_load("k: " + _yaml_scalar(value))["k"]
+                self.assertIsInstance(parsed, str)
+                self.assertEqual(parsed, value)
+        self.assertEqual(_yaml_scalar("exasol"), "exasol")
+        self.assertEqual(_yaml_scalar("EXA_DSN"), "EXA_DSN")
+
     def test_opencode_adapter_renders_local_entry_shape(self) -> None:
         # OpenCode's entry shape is distinctive: the section key is "mcp", the
         # command and its args fold into ONE array, env goes under
