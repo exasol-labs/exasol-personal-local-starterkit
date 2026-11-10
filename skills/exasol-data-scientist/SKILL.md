@@ -56,7 +56,8 @@ answer. When one is missing and would not change it, take a default and say so.
 | Check the kit | `exakit status --json`, or `nb.kit_check()` in a notebook |
 | Load a practice dataset | `exakit data-load amazon_sales` (or `fraud_transactions`) |
 | Load a file or a folder | `exakit data-load <path>`; in a notebook the quickstart's `MY_DATA` cell, `nb.load_own_file(path, schema)` |
-| Connect an external source | `exakit connect <connector>` and the matching `exasol-vs-<connector>` skill; tables appear as `VS_<NAME>` |
+| Connect an external source | `exakit connect <connector>` and the matching `exasol-vs-<connector>` skill; tables appear as `VS_<NAME>`. In a notebook: `nb.connect_source("postgresql", "sales", url=...)` (password in a hidden box), then `SOURCE = "VS_SALES.ORDERS"` |
+| See all the data at once | `nb.data_map(conn)`: every table by origin (source, local, sample), its column map and roles, and the links across them |
 | Find tables and columns | MCP: list schemas, list and describe tables |
 | Profile a table | MCP SELECTs (see `references/sql-recipes.md`), or `nb.data_checks(conn, ds)` |
 | Approve the column map | `exakit describe <SCHEMA.TABLE>`, then `exakit describe <id> --approve --role target=<COLUMN>`; in a notebook `nb.review_roles(conn, data)` |
@@ -169,8 +170,10 @@ A virtual schema reads the source at query time, so nothing is copied.
   `CAST(AMOUNT AS DECIMAL(12,2))`.
 - **Snapshot for modelling.** Copy a source table once into a local table (with
   the user's yes), so every model run reads the same rows.
-- **Approve its column map.** `nb.load_source(conn, "VS_<NAME>.<TABLE>")` reviews
-  it like any other table.
+- **Approve its column map.** `nb.load_source(conn, "VS_<NAME>.<TABLE>")` reads it once
+  and the quickstart reviews it like any other table. `VS_<NAME>` alone lists its tables.
+- **Fuse it with local data.** `nb.data_map(conn)` lists the columns it shares with
+  local and sample tables. Check a `possible` link's overlap in SQL before a join.
 - **Refresh after change.** `exakit source refresh <name>` picks up new tables.
 
 ## Report template

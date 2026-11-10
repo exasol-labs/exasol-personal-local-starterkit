@@ -860,11 +860,57 @@ class QuickstartTest(unittest.TestCase):
 
     def test_no_connected_source_says_so_and_skips(self):
         with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=[]))]), redirect_stdout(io.StringIO()) as out:
-            self.assertIsNone(exakit_nb.load_source(object(), "~/x.descriptor.yaml"))
+            self.assertIsNone(exakit_nb.load_source(object(), None))
         self.assertIn("No external source is connected", out.getvalue())
+        self.assertIn("nb.connect_source(", out.getvalue())
         with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["CRM"]))]), redirect_stdout(io.StringIO()) as out:
             self.assertIsNone(exakit_nb.load_source(object(), None))
         self.assertIn("Connected sources: CRM", out.getvalue())
+
+    def test_a_source_named_but_not_connected_stops_with_how_to_connect(self):
+        with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=[]))]):
+            with self.assertRaises(exakit_nb.SourceProblem) as err:
+                exakit_nb.load_source(object(), "VS_SALES.ORDERS")
+        self.assertIn("no external source is connected", str(err.exception))
+        self.assertIn("nb.connect_source(", str(err.exception))
+        self.assertEqual(err.exception._render_traceback_(), [str(err.exception)])     # one message, no traceback
+
+    def test_a_connection_string_as_source_says_to_connect_it_first(self):
+        with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["VS_SALES"]))]):
+            with self.assertRaises(exakit_nb.SourceProblem) as err:
+                exakit_nb.load_source(object(), "postgres://reader@192.168.64.1:5432/shop")
+        self.assertIn("connection string", str(err.exception))
+
+    def test_a_source_table_is_found_in_any_case_and_read_once(self):
+        answers = [("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["VS_SALES"])),
+                   ("EXA_ALL_TABLES", _Frame(TABLE_NAME=["CUSTOMERS", "ORDERS"])),
+                   ("LIMIT 1", _Frame(X=[1]))]
+        for given in ("VS_SALES.ORDERS", "vs_sales.orders", "  'sales.Orders' "):
+            with self.subTest(given=given), self.run_sql(answers) as sql, redirect_stdout(io.StringIO()) as out:
+                table = exakit_nb.load_source(object(), given)
+            self.assertEqual((table.id, table.fact_table), ("vs_sales_orders", "VS_SALES.ORDERS"))
+            self.assertIn('SELECT * FROM "VS_SALES"."ORDERS" LIMIT 1', sql.call_args_list[-1][0][1])
+            self.assertIn("is a live source", out.getvalue())
+
+    def test_a_wrong_source_or_table_lists_what_is_there(self):
+        answers = [("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["VS_SALES"])),
+                   ("EXA_ALL_TABLES", _Frame(TABLE_NAME=["CUSTOMERS", "ORDERS"]))]
+        cases = {"VS_SALES.ORDER": "Its tables: CUSTOMERS, ORDERS", "VS_CRM.X": "Connected sources: VS_SALES",
+                 "VS_SALES": "has 2 tables: CUSTOMERS, ORDERS"}
+        for given, says in cases.items():
+            with self.subTest(given=given), self.run_sql(answers), self.assertRaises(exakit_nb.SourceProblem) as err:
+                exakit_nb.load_source(object(), given)
+            self.assertIn(says, str(err.exception))
+
+    def test_a_source_that_cannot_be_read_names_the_check(self):
+        def answer(conn, statement):
+            if "LIMIT 1" in statement:
+                raise RuntimeError("permission denied for table orders\nmore")
+            return (_Frame(SCHEMA_NAME=["VS_SALES"]) if "VIRTUAL" in statement else _Frame(TABLE_NAME=["ORDERS"]))
+        with mock.patch.object(quickstart, "_sql", side_effect=answer), self.assertRaises(exakit_nb.SourceProblem) as err:
+            exakit_nb.load_source(object(), "VS_SALES")
+        self.assertIn("permission denied for table orders", str(err.exception))
+        self.assertIn("exakit source check sales", str(err.exception))
 
     def test_a_connected_source_is_named_as_live(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -1475,6 +1521,136 @@ class MissingRoleTest(unittest.TestCase):
         self.assertIn("No category (no column with 3-50 values): rows are counted per entity", out)
         self.assertIn("No target (no 0/1 column): the target rate is left out", out)
 
+
+
+
+class SourcesTest(unittest.TestCase):
+    """Pasted paths, connection strings and the in-notebook connect: no password on a command line or in output."""
+
+    def test_a_pasted_path_is_cleaned(self):
+        home = str(Path.home())
+        cases = {"'~/My Data/a.csv'": f"{home}/My Data/a.csv", '  "/tmp/x.csv" ': "/tmp/x.csv",
+                 "\u201c/tmp/y.csv\u201d": "/tmp/y.csv", "file:///tmp/My%20Data/z.csv": "/tmp/My Data/z.csv", "": ""}
+        if os.sep == "/":
+            cases["/tmp/My\\ Data/q.csv"] = "/tmp/My Data/q.csv"
+        for given, wanted in cases.items():
+            with self.subTest(given=given):
+                self.assertEqual(exakit_nb.clean_path(given), wanted)
+
+    def test_a_password_in_a_url_is_taken_out(self):
+        parts = importlib.import_module("exakit_nb.sources")._url_parts
+        self.assertEqual(parts("postgres://u:p%40ss@h:5432/db"), ("postgres://u@h:5432/db", "p@ss", "h"))
+        self.assertEqual(parts("jdbc:postgresql://h/db?user=u&password=s&ssl=1"), ("jdbc:postgresql://h/db?user=u&ssl=1", "s", "h"))
+        self.assertEqual(parts("jdbc:mysql://h/db"), ("jdbc:mysql://h/db", None, "h"))
+
+    def test_connect_sends_the_password_on_stdin_only(self):
+        sources = importlib.import_module("exakit_nb.sources")
+        done = subprocess.CompletedProcess([], 0, stdout='{"ok": true, "name": "sales"}\nLog: x\n', stderr="")
+        with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
+                mock.patch.object(sources.subprocess, "run", return_value=done) as run, \
+                mock.patch.object(sources.sys, "platform", "darwin"), redirect_stdout(io.StringIO()) as out:
+            schema = exakit_nb.connect_source("pg", "sales", url="postgres://u:topsecret@localhost:5432/shop")
+        command, kwargs = run.call_args[0][0], run.call_args[1]
+        self.assertEqual(schema, "VS_SALES")
+        self.assertNotIn("topsecret", " ".join(command) + out.getvalue())
+        self.assertEqual(kwargs["input"], "topsecret")
+        self.assertIn("--password-stdin", command)
+        self.assertIn("postgres://u@192.168.64.1:5432/shop", command)
+        self.assertEqual(command[-2:], ["--yes", "--json"])
+
+    def test_connect_asks_the_password_hidden_and_reports_the_kits_reason(self):
+        sources = importlib.import_module("exakit_nb.sources")
+        failed = subprocess.CompletedProcess([], 1, stdout='{"ok": false, "error": "password authentication failed", '
+                                             '"remedy": "check the user"}', stderr="")
+        asked = []
+        with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
+                mock.patch.object(sources.subprocess, "run", return_value=failed) as run, redirect_stdout(io.StringIO()):
+            with self.assertRaises(exakit_nb.SourceProblem) as err:
+                exakit_nb.connect_source("postgresql", "sales", host="db.example.com", database="shop", user="r",
+                                         secret=lambda prompt: asked.append(prompt) or "pw")
+        self.assertTrue(asked and "hidden" in asked[0])
+        self.assertEqual(run.call_args[1]["input"], "pw")
+        self.assertIn("host=db.example.com", run.call_args[0][0])
+        self.assertIn("password authentication failed", str(err.exception))
+        self.assertIn("check the user", str(err.exception))
+
+
+    def test_marimo_takes_a_password_field_and_never_waits_on_a_prompt(self):
+        sources = importlib.import_module("exakit_nb.sources")
+        done = subprocess.CompletedProcess([], 0, stdout='{"ok": true}', stderr="")
+        field = types.SimpleNamespace(value="from-the-field")
+        with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
+                mock.patch.object(sources.subprocess, "run", return_value=done) as run, \
+                mock.patch.object(sources, "_in_marimo", return_value=True), redirect_stdout(io.StringIO()):
+            exakit_nb.connect_source("mysql", "shop", host="db.example.com", password=field)
+            self.assertEqual(run.call_args[1]["input"], "from-the-field")
+            with self.assertRaises(exakit_nb.SourceProblem) as err:
+                exakit_nb.connect_source("mysql", "shop", host="db.example.com")
+        self.assertIn('mo.ui.text(kind="password")', str(err.exception))
+
+class DataMapTest(unittest.TestCase):
+    """The semantic map: every table by origin, its roles from the approved, stored or shipped column map, and links."""
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.addCleanup(self.home.cleanup)
+        patcher = mock.patch.dict(os.environ, {"EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets"),
+                                               "EXAKIT_HOME": self.home.name})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def build(self, semantic=None, relations=None):
+        tables = _Frame(TABLE_SCHEMA=["AMAZON", "STARTER_KIT", "PREPROC", "EXAKIT_PREPARED", "VS_SALES"],
+                        TABLE_NAME=["ORDER_LINES", "EMPLOYEES", "CONFIG", "J", "ORDERS"],
+                        TABLE_ROW_COUNT=[128975, 10, 2, 1, None], TABLE_COMMENT=[None] * 5,
+                        SCHEMA_IS_VIRTUAL=[False, False, False, False, True])
+        columns = _Frame(COLUMN_SCHEMA=["AMAZON", "AMAZON", "STARTER_KIT", "VS_SALES", "VS_SALES", "VS_SALES"],
+                         COLUMN_TABLE=["ORDER_LINES", "ORDER_LINES", "EMPLOYEES", "ORDERS", "ORDERS", "ORDERS"],
+                         COLUMN_NAME=["ORDER_LINE_ID", "SKU", "EMPLOYEE_ID", "ORDER_ID", "SKU", "EMPLOYEE_ID"],
+                         COLUMN_TYPE=["DECIMAL(18,0)", "VARCHAR(40)", "DECIMAL(9,0)", "DECIMAL(9,0)", "VARCHAR(40)", "DECIMAL(9,0)"])
+        semantic = semantic or _Frame(VIEW_NAME=[], VIEW_COMMENT=[], COLUMN_NAME=[], COLUMN_COMMENT=[])
+        module = importlib.import_module("exakit_nb.data_map")
+
+        def answer(conn, statement):
+            if "__RELATIONS" in statement:
+                return relations
+            if "EXA_ALL_VIEWS" in statement:
+                return semantic
+            return columns if "COLUMN_OBJECT_TYPE" in statement else tables
+        with mock.patch.object(module, "_sql", side_effect=answer):
+            return exakit_nb.data_map(object())
+
+    def test_every_origin_is_shown_and_the_kits_own_schemas_are_not(self):
+        found = self.build()
+        origins = {r["table"]: r["origin"] for r in found.table_rows}
+        self.assertEqual(origins, {"AMAZON.ORDER_LINES": "sample", "STARTER_KIT.EMPLOYEES": "local", "VS_SALES.ORDERS": "source"})
+        sample = found.table("amazon.order_lines")
+        self.assertEqual((sample["map"], sample["target"], sample["rows_shown"]), ("shipped", "CANCELLED", "128,975"))
+        self.assertEqual(found.table("VS_SALES.ORDERS")["rows_shown"], "live")
+        text = str(found)
+        self.assertLess(text.index("External source"), text.index("Your data"))
+        self.assertIn("key ORDER_LINE_ID", text)
+        self.assertIn("External source", found._repr_html_())
+
+    def test_shared_key_names_across_origins_are_possible_links(self):
+        links = {(l["from_table"], l["from_column"], l["to_table"]): l for l in self.build().link_rows}
+        self.assertIn(("STARTER_KIT.EMPLOYEES", "EMPLOYEE_ID", "VS_SALES.ORDERS"), links)
+        self.assertEqual(links[("STARTER_KIT.EMPLOYEES", "EMPLOYEE_ID", "VS_SALES.ORDERS")]["origins"],
+                         "Your data + External source")
+        self.assertTrue(all(l["kind"].startswith("possible") for l in links.values()))
+
+    def test_an_approved_map_and_its_relations_win(self):
+        semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS", "VS_SALES__ORDERS", "VS_SALES__RELATIONS"],
+                          VIEW_COMMENT=["grain=x; source=VS_SALES.ORDERS; descriptor=v2"] * 2 + ["r"],
+                          COLUMN_NAME=["ORDER_ID", "EMPLOYEE_ID", "FROM_TABLE"],
+                          COLUMN_COMMENT=["role=key; descriptor=v2", "role=identifier; descriptor=v2", None])
+        relations = _Frame(FROM_TABLE=["VS_SALES.ORDERS"], FROM_COLUMN=["EMPLOYEE_ID"], TO_TABLE=["STARTER_KIT.EMPLOYEES"],
+                           TO_COLUMN=["EMPLOYEE_ID"], KIND=["found"])
+        found = self.build(semantic, relations)
+        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2")
+        self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"})
+        kinds = [l["kind"] for l in found.link_rows if "EMPLOYEE_ID" == l["from_column"]]
+        self.assertEqual(kinds, ["found"])                         # the declared one, not repeated as possible
 
 if __name__ == "__main__":
     unittest.main()

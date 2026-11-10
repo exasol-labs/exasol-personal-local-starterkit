@@ -52,17 +52,34 @@ MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-d
 own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
 
 # %% [markdown] tags=["load"]
-# **A connected source (optional):** set `SOURCE = "SCHEMA.TABLE"` for a virtual-schema table. `None` skips it.
+# **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
+#
+# 1. Not connected yet? Fill in `CONNECTOR`, `SOURCE_NAME` and `SOURCE_URL` (the source's connection string). The password is asked in a hidden box. On a Mac, use `192.168.64.1` for a database on this computer.
+# 2. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
 
 # %% tags=["load"]
-SOURCE = None   # e.g. "VS_SALES.ORDERS"
-source_data = nb.load_source(connection, SOURCE)
+CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
+SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
+SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
+connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL) if CONNECTOR else None
+
+# %% tags=["load"]
+SOURCE = None   # e.g. "VS_SALES.ORDERS" (None after a connect above: the new source's tables)
+source_data = nb.load_source(connection, SOURCE or connected)
 
 # %% [markdown] tags=["load"]
 # The notebook uses the source first, then your file, then the sample.
 
 # %% tags=["load"]
 chosen_data = nb.first(source_data, own_data, sample_data)
+
+# %% [markdown] tags=["load"]
+# ### All your data in one map
+#
+# Every table by origin: external source, your data, sample data. Each shows its rows, its column map and the roles in it. *Links* lists columns that join tables, across origins too. A `possible` link only shares a name: check it before a join.
+
+# %% tags=["load"]
+nb.data_map(connection)
 
 # %% [markdown] tags=["review"]
 # ### Approve the column map

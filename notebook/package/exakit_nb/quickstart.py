@@ -15,6 +15,7 @@ Nothing here prints a host, a user or a password.
 
 from __future__ import annotations
 
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -96,30 +97,90 @@ GROUP BY S.SCHEMA_NAME
 ORDER BY S.SCHEMA_NAME""")
 
 
+def _tables(conn, schema: str) -> list[str]:
+    frame = _sql(conn, "SELECT TABLE_NAME FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA = '"
+                       + schema.replace("'", "''") + "' ORDER BY TABLE_NAME")
+    return [str(name) for name in frame["TABLE_NAME"]]
+
+
+def _source_alias(schema: str) -> str:
+    return schema[3:].lower() if schema.upper().startswith("VS_") else schema.lower()
+
+
+def _listed(names: list[str], limit: int = 12) -> str:
+    return ", ".join(names[:limit]) + (f" and {len(names) - limit} more" if len(names) > limit else "") if names else "none"
+
+
+CONNECT_HINT = ('Connect one here: nb.connect_source("postgresql", "sales", url="postgres://reader@HOST:5432/DB") '
+                "(the password is asked in a hidden box), or in a terminal: exakit connect")
+
+
 def load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | None:
-    """A table in a connected external source (a virtual schema), described by ``descriptor`` (a descriptor file whose
-    fact_table is in that schema; its ``source`` names the source). With no virtual schema in the database it says so
-    and returns None, as it does when no descriptor is given (then it lists the sources there are)."""
+    """A table in a connected external source (a virtual schema). ``descriptor`` is ``VS_<NAME>.<TABLE>`` (any case,
+    the VS_ prefix optional), ``VS_<NAME>`` alone (its one table, or a list of them), or a descriptor file whose
+    fact_table is in a source. None skips it and lists the sources there are. A name that cannot be used stops the
+    cell with one line naming what is there and how to connect one; the table is read once (one row) to prove it."""
+    from .sources import SourceProblem, clean_path, clean_text
+
     names = [str(name) for name in connected_sources(conn)["SCHEMA_NAME"]]
+    given = clean_text(descriptor)
+    if not given:
+        if names:
+            print(f"Connected sources: {', '.join(names)}. Set SOURCE = \"{names[0]}.<TABLE>\" to use one, or "
+                  f"\"{names[0]}\" to list its tables.")
+        else:
+            print("No external source is connected: skipped. " + CONNECT_HINT)
+        return None
+    if "://" in given or given.lower().startswith("jdbc:"):
+        raise SourceProblem("SOURCE is a connection string. Connect it first, then set SOURCE to its table:\n"
+                            f'  nb.connect_source("<connector>", "<name>", url=SOURCE)   # e.g. "postgresql", "sales"')
+    path = Path(clean_path(given))
+    if path.suffix.lower() in (".yaml", ".yml", ".json") or path.is_file():
+        if not path.is_file():
+            raise SourceProblem(f"No descriptor file at {path}.")
+        return _source_descriptor(conn, path, names)
     if not names:
-        print("No external source is connected (there is no virtual schema in the database): skipped.")
-        return None
-    if not descriptor:
-        print(f"Connected sources: {', '.join(names)}. To use a table of one, set SOURCE to a descriptor.yaml whose "
-              "fact_table is that table and whose source names it.")
-        return None
-    from .descriptor_rules import qualified_table
-    name = qualified_table(str(descriptor))
-    if name is not None:
-        schema = name.split(".", 1)[0]
-        if schema not in names:
-            raise ValueError(f"{name} is not in a connected source ({', '.join(names)}).")
-        print(f"{name} is a live source. The next cell will draft and approve its roles.")
-        return LoadedTable(name.replace(".", "_").lower(), name, Path("."))
-    ds = dataset(conn, descriptor)
+        raise SourceProblem(f"SOURCE = {given!r}, but no external source is connected (no virtual schema in the "
+                            "database). " + CONNECT_HINT)
+    parts = [part.strip().strip('"') for part in given.split(".")]
+    if len(parts) > 2 or not all(parts):
+        raise SourceProblem(f"{given!r} is not SCHEMA.TABLE. Connected sources: {', '.join(names)}.")
+    by_upper = {name.upper(): name for name in names}
+    wanted = parts[0].upper()
+    schema = by_upper.get(wanted) or by_upper.get("VS_" + wanted)
+    if schema is None:
+        raise SourceProblem(f"{parts[0]} is not a connected source. Connected sources: {', '.join(names)}. "
+                            "A new one: " + CONNECT_HINT)
+    tables = _tables(conn, schema)
+    if len(parts) == 1:
+        if len(tables) != 1:
+            raise SourceProblem(f"{schema} has {len(tables)} tables: {_listed(tables)}. "
+                                f"Set SOURCE = \"{schema}.<TABLE>\"." if tables else
+                                f"{schema} shows no tables. If the source has some now: exakit source refresh "
+                                f"{_source_alias(schema)}")
+        parts.append(tables[0])
+    match = [t for t in tables if t == parts[1]] or [t for t in tables if t.upper() == parts[1].upper()]
+    if not match:
+        raise SourceProblem(f"{schema} has no table {parts[1]}. Its tables: {_listed(tables)}.")
+    table = f"{schema}.{match[0]}"
+    quoted = ".".join('"' + p.replace('"', '""') + '"' for p in (schema, match[0]))
+    try:
+        _sql(conn, f"SELECT * FROM {quoted} LIMIT 1")
+    except Exception as err:                                   # the source is down, a grant is missing, a type fails
+        reason = str(err).strip().splitlines()[0][:300] if str(err).strip() else type(err).__name__
+        raise SourceProblem(f"{table} could not be read: {reason}\nCheck the source: exakit source check "
+                            f"{_source_alias(schema)}") from None
+    print(f"{table} is a live source: queries read it through the virtual schema. The next cells propose its roles.")
+    ident = re.sub(r"[^a-z0-9]+", "_", table.lower()).strip("_") or "source"
+    return LoadedTable(ident, table, Path("."))
+
+
+def _source_descriptor(conn, path: Path, names: list[str]) -> Dataset:
+    ds = dataset(conn, str(path))
     schema = ds.fact_table.split(".", 1)[0]
     if schema not in names:
-        print(f"Note: {ds.fact_table} is not in a connected source ({', '.join(names)}); it is used as a plain table.")
+        print(f"Note: {ds.fact_table} is not in a connected source ({', '.join(names) or 'none'}); "
+              "it is used as a plain table.")
     else:
         print(f"{ds.fact_table} is a live source ({ds.source or schema}): every query reads it through the virtual schema.")
     return ds
