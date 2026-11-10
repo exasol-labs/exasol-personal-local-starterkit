@@ -1053,6 +1053,17 @@ check "...and is in no child's environment" "0" "$(grep -c 'Exp0rted-Val' "$B/en
 reset_bridge 0 0
 OUT="$(printf 'Exp0rted-Val' | env _cs_secret= _evx_secret= bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source reauth docs --password-stdin)" 2>/dev/null
 check "review 5: reauth, _cs_secret exported empty: in no child's environment" "1 0" "$(grep -c '^reauth' "$B/argv") $(grep -c 'Exp0rted-Val' "$B/env")"
+# A public IP or a person's go-ahead from an earlier command (a restart's
+# `exakit start` hands its environment to the add-on services it brings back)
+# is never trusted by a later one: each command starts without them.
+reset_bridge 0 0
+OUT="$(env _EXAKIT_VS_PUBLIC_IP=198.51.100.9 _EXAKIT_VS_INTERACTIVE=1 bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_connect pg --name sales --set host=h --dry-run --json </dev/null)" 2>/dev/null
+check "connect: an inherited public IP and go-ahead reach no engine run" "0 0" \
+    "$(grep -c '^_EXAKIT_VS_PUBLIC_IP=198.51.100.9' "$B/env") $(grep -c '^_EXAKIT_VS_INTERACTIVE=1' "$B/env")"
+reset_bridge 0
+OUT="$(env _EXAKIT_VS_PUBLIC_IP=198.51.100.9 _EXAKIT_VS_INTERACTIVE=1 bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source list --json </dev/null)" 2>/dev/null
+check "source: the same" "1 0 0" \
+    "$(grep -c '^--json list' "$B/argv") $(grep -c '^_EXAKIT_VS_PUBLIC_IP=198.51.100.9' "$B/env") $(grep -c '^_EXAKIT_VS_INTERACTIVE=1' "$B/env")"
 
 # Security review 12: under bash -x the credential is not in the trace.
 traced() { set -x; "$@"; }
