@@ -2127,8 +2127,13 @@ function Remove-ExakitBinariesDeferred {
         $me = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
         # The parent is the cmd.exe running exakit.cmd - the one that re-reads
         # the batch file after we return. Wait for it too, but not its parent
-        # (the user's interactive shell, which never exits).
-        if ($me.ParentProcessId) { $waitPids += [int]$me.ParentProcessId }
+        # (the user's interactive shell, which never exits). Only a cmd.exe: run
+        # through the exakit.ps1 launcher, the parent IS that interactive shell,
+        # and waiting on it would hold the removal for the full timeout.
+        if ($me.ParentProcessId) {
+            $parent = Get-CimInstance Win32_Process -Filter "ProcessId=$($me.ParentProcessId)" -ErrorAction SilentlyContinue
+            if ($parent -and "$($parent.Name)" -ieq "cmd.exe") { $waitPids += [int]$me.ParentProcessId }
+        }
     } catch { }
     $waitPids = @($waitPids | Sort-Object -Unique)
     $pidList = $waitPids -join ','
