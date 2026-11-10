@@ -95,7 +95,7 @@ class ReviewTest(unittest.TestCase):
 
     def test_corrections_approve_without_editing_a_file(self):
         review = RoleReview(draft(), object())
-        with self.assertRaisesRegex(RuntimeError, "Approve descriptor"):
+        with self.assertRaisesRegex(RuntimeError, "Approve column map"):
             review.dataset()
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
             result = review.approve({"C": "text", "D": "measure"}, {"text": "C", "category": None})
@@ -120,7 +120,7 @@ class ReviewTest(unittest.TestCase):
         with self.assertRaises(role_picker.ApprovalNeeded) as stopped:
             RoleReview(draft(), object()).dataset()
         self.assertEqual([str(stopped.exception)], stopped.exception._render_traceback_())
-        self.assertIn("click Approve descriptor, then run this cell again", str(stopped.exception))
+        self.assertIn("click Approve column map, then run this cell again", str(stopped.exception))
 
     def test_an_earlier_pickers_names_still_fill_their_slot(self):
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
@@ -302,7 +302,7 @@ class MarimoTest(unittest.TestCase):
                          ["key", "time", "measure", "category", "flag", "text", "identifier", "other"])
         self.assertEqual([d.kwargs["value"] for d in slots.elements.values()], ["—", "—", "—", "—", "B", "A"])
         self.assertIsNone(slots.elements["key"].kwargs["options"]["—"])
-        self.assertEqual(button.kwargs["label"], "Approve descriptor")
+        self.assertEqual(button.kwargs["label"], "Approve column map")
 
     def test_dataset_stops_cleanly_until_the_click_then_approves_the_choices(self):
         mo = FakeMarimo()
@@ -310,7 +310,7 @@ class MarimoTest(unittest.TestCase):
             review = marimo_review(mo, draft(), object()).show()
         with self.assertRaises(FakeMarimo.Stop):
             review.dataset()
-        self.assertIn("Approve descriptor", mo.stopped[0])
+        self.assertIn("Approve column map", mo.stopped[0])
         roles = {"A": "category", "B": "category", "C": "text", "D": "category"}
         slots = {"key": None, "time": None, "text": "C", "target": None, "category": None, "entity": "A"}
         review.value = {"roles": roles, "slots": slots, "approve": True}

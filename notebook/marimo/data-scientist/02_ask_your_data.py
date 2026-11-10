@@ -139,7 +139,7 @@ def _(mo):
     mo.md(r"""
     ## Next: steps 8 and 9
 
-    Open `03_share.ipynb` to publish a dashboard and hand off the work.
+    Open `03_share` to publish a dashboard and hand off the work.
     """)
     return
 

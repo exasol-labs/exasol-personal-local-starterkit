@@ -1349,7 +1349,7 @@ class NotebookWorkflowTest(unittest.TestCase):
         path = Path(self.home.name) / "workflows" / f"{workflow_id}.jsonl"
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
-    def test_the_quickstarts_first_cell_starts_a_workflow_and_prints_how_to_show_it(self):
+    def test_the_quickstarts_first_cell_starts_a_workflow_and_says_so(self):
         for persona, name in self.QUICKSTARTS.items():
             with self.subTest(persona=persona):
                 os.environ.pop("EXAKIT_WORKFLOW_ID", None)
@@ -1359,7 +1359,8 @@ class NotebookWorkflowTest(unittest.TestCase):
                 namespace, out = self.run_cell(first)
                 wid = namespace["workflow_id"]
                 self.assertRegex(wid, r"^wf-\d{8}-[0-9a-f]{6}$")
-                self.assertIn(f"exakit workflow show {wid}", out)
+                self.assertIn(f"Workflow {wid}: every step below is recorded under it.", out)
+                self.assertNotIn("exakit workflow show", out, "no terminal command in the notebook's output")
                 self.assertEqual(os.environ["EXAKIT_WORKFLOW_ID"], wid, "a child process inherits it")
                 self.assertEqual([(e["kind"], e.get("name")) for e in self.log(wid)], [("start", name)])
 
@@ -1373,7 +1374,7 @@ class NotebookWorkflowTest(unittest.TestCase):
             with self.subTest(persona=persona):
                 namespace, out = self.run_cell(_workflow_cell(NOTEBOOKS / persona / "00_quickstart.py"))
                 self.assertEqual(namespace["workflow_id"], started)
-                self.assertIn(f"exakit workflow show {started}", out)
+                self.assertIn(f"Workflow {started}: every step below is recorded under it.", out)
         self.assertEqual([e["kind"] for e in self.log(started)], ["start"], "resuming adds no second start line")
 
     def test_explore_continues_the_workflow_before_it_opens_the_data(self):
@@ -1471,8 +1472,8 @@ class MissingRoleTest(unittest.TestCase):
         self.assertIn("SELECT DEVICE AS DEVICE", sql)
         self.assertIn("GROUP BY DEVICE", sql)
         self.assertNotIn("AVG", sql)
-        self.assertIn("No category role (no column with 3-50 values): rows are counted per entity", out)
-        self.assertIn("No label role (no 0/1 column): the label rate is left out", out)
+        self.assertIn("No category (no column with 3-50 values): rows are counted per entity", out)
+        self.assertIn("No target (no 0/1 column): the target rate is left out", out)
 
 
 if __name__ == "__main__":

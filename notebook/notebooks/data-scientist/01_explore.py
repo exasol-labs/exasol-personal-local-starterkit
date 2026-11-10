@@ -11,9 +11,9 @@
 #
 # **Dataset:** the one you approved last (else `amazon_sales`). Change `DATASET` for `fraud_transactions` or your own file.
 #
-# ![Steps 3 Prepare, 4 Explore, 5 Model and 6 Validate of nine: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:3,4,5,6)
+# ![Steps 3 Prepare, 4 Explore, 5 Model and 6 Validate . All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:3,4,5,6)
 #
-# Each query is built from the approved column map, so no cell names a column. If the data has no date or no text, the step that needs it skips and says why. All settings are in the first cell. The AI step at the end is optional and off.
+# Each query is built from the approved column map, so no cell names a column. If the data has no date or no text, the step that needs it skips and says why. Settings are in the first cell. The AI model has its own cell. The AI step at the end is optional and off.
 
 # %%
 DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
@@ -61,7 +61,7 @@ nb.show_roles(loaded_dataset)
 # %% [markdown]
 # ### Is the data clean?
 #
-# Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare label, and says what each does to a result. It changes nothing. `fraud_transactions` has all of them.
+# Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. `fraud_transactions` has all of them.
 
 # %%
 findings = nb.data_checks(connection, loaded_dataset)
@@ -79,7 +79,7 @@ schema_map = nb.describe_schema(connection, loaded_dataset)
 schema_map
 
 # %% [markdown]
-# The joined view combines this table with every linked table. Read the joins and the SQL. To use it, set `USE_JOINED = True` in the first cell and run again. The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+# The joined view combines this table with every linked table. Read the joins and the SQL. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
 
 # %%
 joined_view_proposal = schema_map.joined_view(loaded_dataset)
@@ -91,7 +91,7 @@ joined_view_proposal
 #
 # Proposes a view with correct types (numbers, dates), blanks and placeholders as NULL, and exact copies removed. The table never changes.
 #
-# Read what changes. To use it, set `USE_PREPARED = True` in the first cell and run again. The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+# Read what changes. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
 
 # %%
 typed_view_proposal = nb.typed_view(connection, joined_dataset)
@@ -115,15 +115,16 @@ TEXT_SQL = dataset.text_sql() if dataset.has("text") else None
 DATE_COLUMN = dataset.col("date") if dataset.has("date") else None      # a role no column fits is None here, never guessed
 LABEL_COLUMN = dataset.col("label") if dataset.has("label") else None
 missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing if not dataset.has(missing["role"])}
-missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in missing_roles.items())
+SHOWN = {"date": "time", "label": "target"}   # the column map's names for these two roles
+missing_line = "; ".join(f"no {SHOWN.get(role, role)}: {reason}" for role, reason in missing_roles.items())
 for role in ("entity", "category", "date", "label", "text"):
     if role in missing_roles:
-        print(f"No {role} role ({missing_roles[role]}): steps that need it explain why they skip below.")
+        print(f"No {SHOWN.get(role, role)} ({missing_roles[role]}): steps that need it explain why they skip below.")
 
 # %% [markdown]
 # ### Compare groups
 #
-# The 10 largest entities by category: the row count and the % where the label is 1.
+# The 10 largest entities by category: the row count and the % where the target is 1.
 
 # %%
 landscape = landscape_grid = None
@@ -134,7 +135,7 @@ ENTITY_HEADER = nb.name(ENTITY_COLUMN) if ENTITY_COLUMN else None
 CATEGORY_HEADER = nb.name(CATEGORY_COLUMN) if CATEGORY_COLUMN else None
 LABEL_PCT_HEADER = nb.name(LABEL_COLUMN, "PCT") if LABEL_COLUMN else None
 if not all(dataset.has(role) for role in ("entity", "category", "label")):
-    print(f"Skipped - the landscape needs entity, category and label roles ({missing_line}).")
+    print(f"Skipped - the landscape needs an entity, a category and a target ({missing_line}).")
 else:
     overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL_COLUMN}), 1) AS PCT FROM {dataset.fact_table}")
     landscape = nb.sql(connection, f"""
@@ -166,12 +167,12 @@ landscape_grid
 # %% [markdown]
 # ### Over time
 #
-# Rows per day, month or year, and the % where the label is 1. Needs the date and label roles.
+# Rows per day, month or year, and the % where the target is 1. Needs a time and a target.
 
 # %%
 over_time = None
 if not (dataset.has("date") and dataset.has("label")):
-    print(f"Skipped - rows and label rate per period need the date and label roles ({missing_line}).")
+    print(f"Skipped - rows and target rate per period need a time and a target ({missing_line}).")
 else:
     date_span = nb.sql(connection, f"SELECT DAYS_BETWEEN(MAX({DATE_COLUMN}), MIN({DATE_COLUMN})) AS DAYS FROM {dataset.fact_table}")
     span_days = int(date_span["DAYS"][0] or 0)
@@ -191,12 +192,12 @@ over_time
 # %% [markdown]
 # ## Step 5 · Train a model
 #
-# Trains a small model on this computer to predict the label. First, it removes the columns that give the answer away.
+# Trains a small model on this computer to predict the target. First, it removes the columns that give the answer away.
 
 # %% [markdown]
 # ### Remove columns that give the answer away
 #
-# A column written after the outcome (an order's status after cancellation) predicts the label perfectly on old rows and fails on new rows. This cell flags those columns. The model does not use them.
+# A column written after the outcome (an order's status after cancellation) predicts the target perfectly on old rows and fails on new rows. This cell flags those columns. The model does not use them.
 
 # %%
 LEAKING_COLUMNS = nb.leakage_check(connection, dataset)
@@ -212,7 +213,7 @@ LEAKING_COLUMNS = nb.leakage_check(connection, dataset)
 
 # %%
 MODEL_ROW_LIMIT = 20000
-# The features the model reads, each only when its role exists and does not give the label away: the category and the
+# The features the model reads, each only when its role exists and does not give the target away: the category and the
 # entity as text, then the month of the date.
 USE_CATEGORY = dataset.has("category") and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
 USE_ENTITY = dataset.has("entity") and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
@@ -225,8 +226,8 @@ ROW_ORDER = f"{dataset.col('date')} DESC" if dataset.has("date") else (f'"{KEY_C
 
 model = None
 if not (dataset.has("label") and (USE_CATEGORY or USE_ENTITY)):
-    print(f"Skipped - the small model predicts the label from the category and entity, which needs a label and a "
-          f"category or entity role that does not give the label away ({missing_line or 'see the cell above'}).")
+    print(f"Skipped - the small model predicts the target from the category and entity, so it needs a target and a "
+          f"category or entity that does not give the target away ({missing_line or 'see the cell above'}).")
 else:
     # What each feature is called on screen: the column it comes from, or "month".
     FEATURE_LABELS = {"MONTH_": "month", "CATEGORY_": (CATEGORY_COLUMN or "").strip('"'), "ENTITY_": (ENTITY_COLUMN or "").strip('"')}
@@ -296,16 +297,16 @@ if model is not None:
     print(f"Make {LABEL_COLUMN} = 1 less likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[:CLUES_PER_SIDE]]))
 
 # %% [markdown]
-# ## Optional · Themes in the label-1 texts (AI)
+# ## Optional · Themes in the texts where the target is 1 (AI)
 #
 # Needs a text column. The practice datasets have none, so this step skips.
 #
-# Your model groups the newest texts on each side of the label into themes. A theme on one side only is a lead.
+# Your model groups the newest texts where the target is 1 and where it is 0 into themes. A theme on one side only is a lead.
 #
 # To turn it on, fill in the model cell above and run it. Then set `USE_AI_THEMES = True` in the first cell. It makes two model calls. A live source asks before it sends anything. With `LANGFUSE_BASE_URL` set, both calls go into one trace, `explore-themes`.
 
 # %%
-SAMPLE_TEXTS = 20      # per side: the newest texts where the label is 1, and as many where it is 0
+SAMPLE_TEXTS = 20      # per side: the newest texts where the target is 1, and as many where it is 0
 text_sample = themes = None
 NEWEST_FIRST = f"{dataset.col('date')} DESC" if dataset.has("date") else dataset.col("entity") if dataset.has("entity") else "1"
 PER_LABEL = f"PARTITION BY {dataset.col('label')} " if dataset.has("label") else ""
@@ -332,5 +333,5 @@ themes if themes is not None else text_sample
 # %% [markdown]
 # ## Next: step 7
 #
-# Note one finding to check. Then open `02_ask_your_data.ipynb` and ask a question in plain English. For other data, change `DATASET` and run again.
+# Note one finding to check. Then open `02_ask_your_data` and ask a question in plain English. For other data, change `DATASET` and run again.
 

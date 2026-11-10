@@ -197,7 +197,7 @@ class RoleReview:
                 "A rule's confidence says how close the evidence is to its line; it is not a probability that the "
                 "business meaning is correct. The columns drafted at low confidence come first: those are where the "
                 "draft guessed, so check them before the rest. Keep useful suggestions, change the others, and leave a "
-                "slot empty (—) when no column fits. Approve descriptor saves this column map for the next notebooks.")
+                "slot empty (—) when no column fits. Approve column map saves this column map for the next notebooks.")
 
     def explanations(self) -> dict[str, str]:
         """Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied."""
@@ -337,7 +337,7 @@ class RoleReview:
         if self.approved is None and self.draft.status == "approved":
             self.approved = dataset(self.conn, self.file if self.file is not None else self.draft.id)
             print(f"Using the approved roles of {self.approved.id} v{self.approved.version}. To change them, set the "
-                  "dropdowns above, click Approve descriptor and run this cell again.")
+                  "dropdowns above, click Approve column map and run this cell again.")
         return self.approved
 
     def dataset(self, draft_ok: bool = False) -> Dataset:
@@ -349,7 +349,7 @@ class RoleReview:
             return self.approved
         if draft_ok or self.headless == "draft":
             return self._draft_dataset()
-        raise ApprovalNeeded("Not approved yet: check the dropdowns above, click Approve descriptor, then run this cell "
+        raise ApprovalNeeded("Not approved yet: check the dropdowns above, click Approve column map, then run this cell "
                              "again (plain Python: review.approve({...})).")
 
     # --- the front ends ------------------------------------------------------------------------------------------------
@@ -412,7 +412,7 @@ class RoleReview:
             slot_pickers[slot] = picker
             hint = SLOT_PURPOSES[slot] + (f" (empty: {reasons[slot]})" if column is None and reasons.get(slot) else "")
             rows.append(widgets.VBox([picker, widgets.HTML(f"<small>{escape(hint)}</small>")]))
-        button = widgets.Button(description="Approve descriptor", button_style="success")
+        button = widgets.Button(description="Approve column map", button_style="success")
         output = widgets.Output()
 
         def clicked(_):
@@ -455,7 +455,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
                               for slot, column in self.slot_suggestions().items()}
             mo.ui.dictionary.__init__(self, {"roles": mo.ui.dictionary(dropdowns),
                                              "slots": mo.ui.dictionary(slot_dropdowns),
-                                             "approve": mo.ui.run_button(label="Approve descriptor")},
+                                             "approve": mo.ui.run_button(label="Approve column map")},
                                       label=f"Roles of {draft.table}" + (f" - the {len(low)} drafted at low "
                                                                           "confidence come first" if low else ""))
 
@@ -477,7 +477,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
                 return self.approved
             if draft_ok or self.headless == "draft":
                 return self._draft_dataset()
-            mo.stop(True, mo.md("Check the role of each column and the slots above, then click **Approve descriptor**; the "
+            mo.stop(True, mo.md("Check the role of each column and the slots above, then click **Approve column map**; the "
                                 "cells below run then."))
             raise RuntimeError("Approve the roles first.")          # not reached: mo.stop raises
 

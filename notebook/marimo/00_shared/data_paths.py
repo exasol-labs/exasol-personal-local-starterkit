@@ -57,7 +57,7 @@ def _(mo):
     mo.md(r"""
     ### Choose a dataset
 
-    The kit has two practice datasets:
+    These notebooks use two practice datasets:
 
     - `amazon_sales`: online fashion orders, one row per order line.
     - `fraud_transactions`: card and bank payments with a fraud label. It has repeats, gaps and placeholders on purpose.
@@ -89,8 +89,8 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    MY_DATA = ""     # a file or a folder, e.g. "~/my-data/sales.csv" or "~/my-data"
-    MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/my-data -> MY_DATA)
+    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data"
+    MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
     own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
     return (own_data,)
 
@@ -136,7 +136,7 @@ def _(mo):
 
     The column map (the descriptor) gives each column a role. Every later query is built from it, so no notebook types your column names.
 
-    The kit proposes the map from the data. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away. Check the map before any query uses it.
+    The kit proposes the map from the data. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away. The kit warns about it when you approve, and the model leaves it out. Check the map before any query uses it.
 
     **Roles:** `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes) and `other`.
 
@@ -155,12 +155,12 @@ def _(mo):
 
     1. Look at *Check these first*. These are the columns the kit was least sure about.
     2. Correct what is wrong.
-    3. Click **Approve descriptor**. No click is needed if the map is already approved and you change nothing.
+    3. Click **Approve column map**. No click is needed if the map is already approved and you change nothing.
     4. Run the next cell.
 
     Approval checks the data again and warns about a column that gives the target away.
 
-    In plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
+    In plain Python: `role_review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
     """)
     return
 
