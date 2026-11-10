@@ -28,14 +28,15 @@ them) and `recorded` (the ids this kit was set up as).
 `addons.installed`, `addons.pending` and `nothing_pending`. The text forms
 (`exakit persona list`, `show <id>`, `plan`) print the same for a person.
 
-The kit currently ships `data-scientist`, `ml-engineer` and `general`; check
-`persona list --json` before relying on that.
+The kit offers `data-scientist` and `general`; check `persona list --json`
+before relying on that. `ml-engineer` ships in `personas/` but is not offered
+in this release: never offer it, add it or set it.
 
 ## Adding a persona to an installed kit
 
 ```bash
-exakit persona add ml-engineer                 # one
-exakit persona add data-scientist,ml-engineer  # several, joined by a comma
+exakit persona add data-scientist             # one
+exakit persona add data-scientist,general     # several, joined by a comma
 exakit persona add                             # on a terminal only: the install's persona question
 ```
 
@@ -56,7 +57,7 @@ Without a terminal (an agent's shell) always name the persona: the bare
 ## Removing a persona
 
 ```bash
-exakit persona remove ml-engineer
+exakit persona remove general
 ```
 
 It takes the persona off the kit's record and **keeps everything it brought** —
@@ -86,7 +87,7 @@ dbt-exasol`. `persona plan` then shows what of the persona is still pending.
 
 `start_here` in `persona show <id> --json` is the persona's first step (the
 The ML Engineer is disabled for now (`"visible": false` in its file: kept, not offered, refused by
-name); never offer or add it, and say so if the user asks for it. Data Scientist and ML Engineer open their quickstart notebook with `exakit
+name); never offer or add it, and say so if the user asks for it. Data Scientist opens its quickstart notebook with `exakit
 notebook`); the install's closing line prints it too. The persona's notebooks
 are `notebooks[]` in the same answer.
 

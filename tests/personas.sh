@@ -238,7 +238,8 @@ out="$( (exakit_pending_datasets() { printf 'fraud_transactions|Fraud transactio
         exakit_persona_plan ml-engineer 0 2>&1) )"
 contains "what is loaded and what is pending" "loaded: amazon_sales   pending: fraud_transactions" "$out"
 contains "...add-ons the same way" "installed: notebook   pending: udf-devkit" "$out"
-contains "...and how to finish" "exakit persona add ml-engineer" "$out"
+contains "...and, for a persona not offered, that it cannot be added (audit AGX-03)" "is not offered in this release, so it cannot be added" "$out"
+lacks "...never naming the refused command" "exakit persona add ml-engineer" "$out"
 out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\nudf-devkit\n'; }
         exakit_persona_plan ml-engineer 1 2>/dev/null) )"
 check "--json after a complete install: nothing pending" "true" \

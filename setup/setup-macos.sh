@@ -38,6 +38,8 @@ if [ -f "$LIB_DIR/mcp.sh" ];      then . "$LIB_DIR/mcp.sh"      || die "Could no
 if [ -f "$LIB_DIR/pyexasol.sh" ]; then . "$LIB_DIR/pyexasol.sh" || die "Could not load $LIB_DIR/pyexasol.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/persona.sh" ];  then . "$LIB_DIR/persona.sh"  || die "Could not load $LIB_DIR/persona.sh (corrupted kit copy? re-download and re-run)"; fi
 
+# Every environment answer checked before anything is installed (audit AGK-10).
+exakit_validate_env_answers </dev/null || exit 2
 exakit_init_logging
 # Where the bootstrap time went, in the log: the installer stamps its start,
 # and this is the first line setup can write.
@@ -188,8 +190,9 @@ if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
     command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
     exakit_release_lock
 fi
-# How to give the notebooks a model and Langfuse, before the panel the reader keeps.
-command -v exakit_model_setup_hint >/dev/null 2>&1 && exakit_model_setup_hint
+# How to give the notebooks a model, before the panel the reader keeps: for a
+# Data Scientist install only (the General persona has no notebooks to feed).
+command -v exakit_model_setup_hint >/dev/null 2>&1 && exakit_model_setup_hint installer
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the
 # trap is already released and every reader inside degrades to silence.
@@ -213,7 +216,13 @@ exakit_print_ready_line
 # the marketplace offer so an add-on installed from it joins the boot set.
 if [ -z "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
     exakit_autostart_default_on || true
+    _setup_nb_before=0
+    exakit_marketplace_addon_installed notebook 2>/dev/null && _setup_nb_before=1
     ( exakit_marketplace_offer ) || true
+    # The notebook was just added from the offer: how to give it a model, once.
+    if [ "$_setup_nb_before" = 0 ] && command -v exakit_model_setup_hint >/dev/null 2>&1; then
+        exakit_model_setup_hint marketplace
+    fi
 fi
 # A rule, then a heading: the last line on screen is where the reader is left,
 # and run together with whatever the marketplace printed it read as one more of

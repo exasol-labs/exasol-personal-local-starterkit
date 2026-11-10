@@ -115,6 +115,8 @@ def _apply_one(ctx: KitContext, addon_id: str, module: object, emit: Callable[[E
             warning = step()
         except Failure as error:
             warning = f"{said}: {error}"
+        except Exception as error:   # noqa: BLE001 - a step after the install can only warn (audit WIN-02)
+            warning = f"{said}: {type(error).__name__}: {error}"
         if warning:
             emit(Event(addon_id, "warning", warning))
     emit(Event(addon_id, "done", _summary(ctx, addon_id, module), int(time.monotonic() - started)))

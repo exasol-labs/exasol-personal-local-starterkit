@@ -131,7 +131,7 @@ the first step. Then, in this order:
 | Persona | First | Then | Then |
 |---|---|---|---|
 | `data-scientist` | its notebooks in order: `00_quickstart`, `01_explore`, `02_ask_your_data`, `03_share` | its datasets through MCP / `exakit sql` | `03_share` → a dashboard on dash-server |
-| `ml-engineer` | its notebooks in order: `00_quickstart`, `01_train` (logs to the local MLflow), `02_rust_score`, `03_score_external_model` | udf-devkit: `exakit udf-setup`, `exakit model put`, `exakit mlflow` | MCP / `exakit sql` to check the scores |
+| `ml-engineer` (not offered in this release: only a kit set up with it before) | its notebooks in order: `00_quickstart`, `01_train` (logs to the local MLflow), `02_rust_score`, `03_score_external_model` | udf-devkit: `exakit udf-setup`, `exakit model put`, `exakit mlflow` | MCP / `exakit sql` to check the scores |
 | `general` | the AI client over MCP on TPC-H, energy and weather | `exakit sql` | add a persona when the user wants more: `exakit persona add <id>` |
 
 Anything a persona lists as pending (`persona plan --json`) is brought in with

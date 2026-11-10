@@ -237,8 +237,8 @@ for each key. A server already running read its environment at start: `exakit no
 then `exakit notebook`, from that terminal; a kernel restart does not re-read it. The model's
 id and address (not a key, not the Langfuse names) can stay in `~/.exasol-starter-kit/exakit.env`.
 `nb.model_setup()` in a cell prints what is set and these lines for the machine it runs on
-(Windows, Mac, Linux, WSL): point a user who asks "how do I set the model" at it. The install's
-closing screen shows the same lines when the notebook add-on is installed.
+(Windows, Mac, Linux, WSL): point a user who asks "how do I set the model" at it. A short version
+appears at the end of a Data Scientist install and right after `exakit marketplace` adds the notebook.
 When an agent sets these for a user, it runs the `read -rs` lines in the user's own terminal
 and never types, echoes or logs a key itself; `notebook/MODEL-PROVIDERS.md` (*Set them once*)
 is the page to point at.

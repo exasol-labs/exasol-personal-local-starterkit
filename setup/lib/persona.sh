@@ -254,27 +254,52 @@ exakit_persona_plan() {
     esac
     _epl_pending_ids=" $(exakit_pending_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
     _epl_installed=" $(exakit_marketplace_installed_addons 2>/dev/null | tr '\n' ' ') "
-    _epl_dl=""; _epl_dp=""; _epl_ai=""; _epl_ap=""
+    _epl_dl=""; _epl_dp=""; _epl_ai=""; _epl_ap=""; _epl_au=""
     for _epl_x in $_epl_ds; do
         case "$_epl_pending_ids" in *" $_epl_x "*) _epl_dp="$_epl_dp $_epl_x" ;; *) _epl_dl="$_epl_dl $_epl_x" ;; esac
     done
     for _epl_x in $_epl_ad; do
-        case "$_epl_installed" in *" $_epl_x "*) _epl_ai="$_epl_ai $_epl_x" ;; *) _epl_ap="$_epl_ap $_epl_x" ;; esac
+        case "$_epl_installed" in
+            *" $_epl_x "*) _epl_ai="$_epl_ai $_epl_x" ;;
+            *)
+                # NOT AVAILABLE ON THIS MACHINE is not pending (audit AGX-02): it
+                # can never install here, so `nothing_pending` stayed false for
+                # good and `persona add` was named as the fix it is not.
+                if command -v _exakit_addon_applicable >/dev/null 2>&1 && ! _exakit_addon_applicable "$_epl_x" 2>/dev/null; then
+                    _epl_au="$_epl_au $_epl_x"
+                else
+                    _epl_ap="$_epl_ap $_epl_x"
+                fi ;;
+        esac
     done
     if [ "$2" = 1 ]; then
         _epl_arr() { printf '%s' "$1" | awk '{for (i = 1; i <= NF; i++) printf "%s\"%s\"", (i > 1 ? ", " : ""), $i}'; }
-        exakit_json_out '{"persona": "%s", "datasets": {"loaded": [%s], "pending": [%s]}, "addons": {"installed": [%s], "pending": [%s]}, "nothing_pending": %s}\n' \
-            "$(_exakit_json_string "$1")" "$(_epl_arr "$_epl_dl")" "$(_epl_arr "$_epl_dp")" "$(_epl_arr "$_epl_ai")" "$(_epl_arr "$_epl_ap")" \
+        exakit_json_out '{"persona": "%s", "datasets": {"loaded": [%s], "pending": [%s]}, "addons": {"installed": [%s], "pending": [%s], "unavailable": [%s]}, "nothing_pending": %s}\n' \
+            "$(_exakit_json_string "$1")" "$(_epl_arr "$_epl_dl")" "$(_epl_arr "$_epl_dp")" "$(_epl_arr "$_epl_ai")" "$(_epl_arr "$_epl_ap")" "$(_epl_arr "$_epl_au")" \
             "$([ -z "$_epl_dp$_epl_ap" ] && echo true || echo false)"
         return 0
     fi
     printf '%s\n' "$(_exakit_persona_service title "$1" 2>/dev/null) ($1)"
     printf '  %-12s %s\n' "Datasets" "loaded:${_epl_dl:- none}   pending:${_epl_dp:- none}"
     printf '  %-12s %s\n' "Add-ons" "installed:${_epl_ai:- none}   pending:${_epl_ap:- none}"
+    for _epl_x in $_epl_au; do
+        printf '  %-12s %s\n' "" "not available on this machine: $_epl_x ($(_exakit_addon_applicable_reason "$_epl_x" 2>/dev/null || echo "this platform"))"
+    done
     if [ -z "$_epl_dp$_epl_ap" ]; then
         ok "Nothing pending for $1"
     else
-        info "Pending - bring it in with: exakit persona add $1"
+        # Only an OFFERED persona can be added: naming `persona add` for one
+        # that is not offered sent the reader to a refusal (audit AGX-03).
+        _epl_offered=" $(_exakit_persona_service ids 2>/dev/null | tr '\n' ' ') "
+        _epl_hidden=""
+        for _epl_x in $(printf '%s' "$1" | tr ',' ' '); do
+            case "$_epl_offered" in *" $_epl_x "*) ;; *) _epl_hidden="$_epl_hidden $_epl_x" ;; esac
+        done
+        if [ -n "$_epl_hidden" ]; then
+            info "Pending, but${_epl_hidden} is not offered in this release, so it cannot be added."
+        else
+            info "Pending - bring it in with: exakit persona add $1"
+        fi
     fi
     return 0
 }

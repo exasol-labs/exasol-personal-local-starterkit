@@ -715,6 +715,12 @@ if tls["matches"] is False:
 if installing:
     remedies["install"] = "exakit status --json"
     remedy_hints["install"] = "the installer is still running (step: %s) — poll the remedy until status is running" % (step or "unknown")
+    # NOTHING ELSE MAY RUN UNDER A LIVE INSTALLER (audit AGK-03): the database
+    # arm above named repair-runtime or start, which would race the
+    # installer's own deploy. While it runs, the database's remedy is to wait.
+    if not running:
+        remedies["database"] = "exakit status --json"
+        remedy_hints["database"] = "the installer is deploying the database - poll the remedy until status is running"
 elif step:
     # A DEAD installer: the lock names a process that is gone, but the step it
     # died at is still recorded. AGENTS.md promises exactly this shape —
@@ -777,7 +783,10 @@ if not installing:
             remedy_hints[step_id] = "this step was refused: %s. Fix that, then run the remedy (it resumes at this step)" % reason.rstrip(".")
         # No database because its step was refused: the database remedy is the
         # step's, or the top-level remedy would loop on the installer.
-        if step_id == "runtime" and step_id in remedies and db.startswith("not installed"):
+        # "not deployed" too (audit AGK-02): the launcher is there, the
+        # deployment was refused (the WSL kernel, Docker down), and
+        # repair-runtime meets the same refusal.
+        if step_id == "runtime" and step_id in remedies and (db.startswith("not installed") or db.startswith("not deployed")):
             remedies["database"] = remedies[step_id]
             remedy_hints["database"] = remedy_hints[step_id]
 if not installing:
@@ -2344,8 +2353,17 @@ cmd_mcp_doctor() {
             # command and silently false for the other two. The sentence lives
             # on in `database` and in the prose below, where it reads well;
             # `status` is the machine field and now has one value per state.
-            exakit_json_out '{"installed": true, "status": "stopped", "database": "not running", "remedy": "%s"}\n' \
-                "$(exakit_runtime_remedy)"
+            # INSTALLING AND INTERRUPTED as status says them (audit AGK-01):
+            # both read "stopped" before, interrupted with a destructive remedy
+            # and no warning.
+            if [ -n "$(manifest_get install.current_step 2>/dev/null || true)" ] && \
+               exakit_lock_holder_alive "$EXAKIT_HOME/.install.lock"; then
+                exakit_json_out '{"installed": true, "status": "installing", "database": "not running", "remedy": "exakit status --json", "remedy_hint": "the installer is still running - poll the remedy until status is running"}\n'
+            elif [ "$(exakit_runtime_remedy)" = "exakit repair-runtime" ]; then
+                exakit_json_out '{"installed": true, "status": "interrupted", "database": "not running", "remedy": "exakit repair-runtime", "remedy_hint": "this DESTROYS the database and its data - ask the user, then pass --yes"}\n'
+            else
+                exakit_json_out '{"installed": true, "status": "stopped", "database": "not running", "remedy": "exakit start"}\n'
+            fi
         else
             warn "The database is not running — fix that first: $(exakit_runtime_remedy)"
             info "MCP diagnostics need a live database (the read-only user and its grants are checked against it)."
@@ -2507,11 +2525,20 @@ cmd_marketplace() {
         return $?
     fi
     exakit_init_logging
+    # Was the notebook here before? If this run adds it, the panel that says
+    # how to give it a model follows the install (exakit_model_setup_hint).
+    _cm_nb_before=0
+    exakit_marketplace_addon_installed notebook 2>/dev/null && _cm_nb_before=1
+    _cm_rc=0
     if [ -n "$_cm_ids" ]; then
-        EXAKIT_MARKETPLACE_ADDONS="$_cm_ids" exakit_marketplace_menu
-        return $?
+        EXAKIT_MARKETPLACE_ADDONS="$_cm_ids" exakit_marketplace_menu || _cm_rc=$?
+    else
+        exakit_marketplace_menu || _cm_rc=$?
     fi
-    exakit_marketplace_menu
+    if [ "$_cm_nb_before" = 0 ] && command -v exakit_model_setup_hint >/dev/null 2>&1; then
+        exakit_model_setup_hint marketplace
+    fi
+    return "$_cm_rc"
 }
 
 usage() {
@@ -2597,22 +2624,54 @@ cmd_info_json() {
     # with the installer's command for this same machine state; two state
     # queries may not disagree about it.
     _ij_rtype="$(_runtime_type 2>/dev/null || true)"
+    # INSTALLING AND INTERRUPTED, as status says them (audit AGK-01). Both read
+    # as "stopped" here before, with `exakit start` as the remedy: mid-install
+    # that told an agent to start a database being deployed, and on an
+    # interrupted deployment it handed back the start that fails every time.
+    _ij_installing=0
+    if [ -n "$(manifest_get install.current_step 2>/dev/null || true)" ] && \
+       exakit_lock_holder_alive "$EXAKIT_HOME/.install.lock"; then
+        _ij_installing=1
+    fi
+    _ij_db=""
+    if [ "$_ij_running" = 0 ] && [ "$_ij_rtype" = personal ] && command -v personal_status >/dev/null 2>&1; then
+        _ij_db="$(personal_status 2>/dev/null || true)"
+    fi
     if exakit_can_run_python_any; then
-        run_python_any - "$EXAKIT_MANIFEST" "$_ij_running" "$_ij_skills_want" "${_ij_rtype:-}" "$(exakit_install_command)" <<'EXAKIT_IJ_PY'
+        run_python_any - "$EXAKIT_MANIFEST" "$_ij_running" "$_ij_skills_want" "${_ij_rtype:-}" "$(exakit_install_command)" \
+            "$_ij_installing" "$_ij_db" <<'EXAKIT_IJ_PY'
 import json, sys
 with open(sys.argv[1], encoding="utf-8") as handle:
     doc = json.load(handle)
 running = sys.argv[2] == "1"
 rtype = sys.argv[4]
 install_cmd = sys.argv[5]
+installing = (sys.argv[6:7] or ["0"])[0] == "1"
+db_state = (sys.argv[7:8] or [""])[0]
 doc["installed"] = True
 if running:
     doc["status"] = "running"
     doc["remedy"] = None
+elif installing:
+    # The installer is deploying it: polling is the next step, not a start.
+    doc["status"] = "installing"
+    doc["database"] = "not running"
+    doc["remedy"] = "exakit status --json"
+    doc["remedy_hint"] = "the installer is still running - poll the remedy until status is running"
 elif not rtype:
     doc["status"] = "no database"
     doc["remedy"] = install_cmd
     doc["remedy_hint"] = "no runtime is recorded yet; the installer resumes at the unfinished step"
+elif db_state.startswith("interrupted"):
+    doc["status"] = "interrupted"
+    doc["database"] = "not running"
+    doc["remedy"] = "exakit repair-runtime"
+    doc["remedy_hint"] = "this DESTROYS the database and its data - ask the user, then pass --yes"
+elif db_state.startswith("not deployed"):
+    doc["status"] = "no database"
+    doc["database"] = "not running"
+    doc["remedy"] = "exakit repair-runtime"
+    doc["remedy_hint"] = "the launcher is installed but no database is deployed; this deploys one"
 else:
     # "stopped" - the same word status --json uses for this state. See the
     # note in cmd_mcp_doctor: the status field is the machine's, and it has

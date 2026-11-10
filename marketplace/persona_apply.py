@@ -114,6 +114,11 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
     installed = {row.get("id") for row in rows if isinstance(row, dict) and row.get("installed")}
     external = {row.get("id") for row in rows if isinstance(row, dict)
                 and row.get("status") == "managed outside the kit"}
+    # An add-on that cannot run on this machine (an Intel Mac, Linux arm64) is
+    # neither installed nor pending: said by name at the end, never folded into
+    # a plain "Persona added" (audit AGX-01).
+    unavailable = {row.get("id"): (row.get("reason") or "not available on this machine")
+                   for row in rows if isinstance(row, dict) and row.get("status") == "not available on this machine"}
     for item in addons:
         owner = ctx.manifest.get(f"components.{item.replace('-', '_')}.ownership")
         if owner in ("user", "unknown"):
@@ -168,12 +173,16 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
     print("Step 3/3  Add-ons", flush=True)
     have_addons = [item for item in addons if item in installed]
     external_addons = [item for item in addons if item in external and item not in installed]
-    pending_addons = [item for item in addons if item not in installed and item not in external]
+    pending_addons = [item for item in addons if item not in installed and item not in external
+                      and item not in unavailable]
+    missing_here = [item for item in addons if item in unavailable and item not in installed]
     if have_addons:
         print("Already installed: " + ", ".join(have_addons), flush=True)
     if external_addons:
         print("Already available outside the kit: " + ", ".join(external_addons), flush=True)
-    if not pending_addons and not have_addons and not external_addons:
+    for item in missing_here:
+        print(f"Not available on this machine: {item} ({unavailable[item]})", flush=True)
+    if not pending_addons and not have_addons and not external_addons and not missing_here:
         print("No add-ons for these personas", flush=True)
     elif pending_addons:
         child_env = dict(environment)
@@ -204,6 +213,11 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
         for part, retry in failures:
             print(f"{part} did not finish - retry with: {retry}", file=sys.stderr)
         return 1
+    if missing_here:
+        # Recorded, and everything that CAN run here is in place - but not the
+        # whole persona: said in the closing line an agent reads.
+        print(f"\nPersona added: {all_title} - without {', '.join(missing_here)} (not available on this machine)", flush=True)
+        return 0
     print(f"\nPersona added: {all_title}", flush=True)
     return 0
 

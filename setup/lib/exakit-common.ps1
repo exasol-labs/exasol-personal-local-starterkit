@@ -199,6 +199,36 @@ function Get-ExakitOwnershipKey {
         default { return ('components.' + $Id.Replace('-','_')) }
     }
 }
+# Test-ExakitLegacyKitOwned <id> - for a component with no ownership receipt
+# at all: did the kit install it? Read only from what the kit's own manifest
+# recorded, never from PATH. Twin of _exakit_legacy_kit_owned in common.sh.
+function Test-ExakitLegacyKitOwned {
+    param([string]$Id)
+    $same = { param($a, $b) $a -and $b -and ([string]::Equals($a, $b, [StringComparison]::OrdinalIgnoreCase)) }
+    switch ($Id) {
+        { $_ -in @('personal','launcher','exasol') } {
+            $launcher = "" + (Get-ExakitManifestValue "runtime.launcher")
+            return [bool]((& $same $launcher (Join-Path $script:BinDir "exasol.exe")) -and (Test-Path -LiteralPath $launcher -PathType Leaf))
+        }
+        'exapump' {
+            $path = "" + (Get-ExakitManifestValue "components.exapump.path")
+            $kitPath = if ($env:EXAKIT_EXAPUMP_BIN) { $env:EXAKIT_EXAPUMP_BIN } else { Join-Path $script:BinDir "exapump.exe" }
+            return [bool]((& $same $path $kitPath) -and (Test-Path -LiteralPath $path))
+        }
+        { $_ -in @('database','runtime') } {
+            if (("" + (Get-ExakitManifestValue "runtime.type")) -ne "personal") { return $false }
+            if (-not (Test-ExakitLegacyKitOwned 'personal')) { return $false }
+            $dir = "" + (Get-ExakitManifestValue "runtime.deployment_dir")
+            if (-not $dir) { return $false }
+            $deployDir = Get-Variable -Name PersonalDeployDir -Scope Script -ValueOnly -ErrorAction SilentlyContinue
+            return [bool](-not $deployDir -or (& $same $dir $deployDir))
+        }
+        'mcp' {
+            return [bool]("" + (Get-ExakitManifestValue "components.mcp_server.version") + (Get-ExakitManifestValue "components.mcp_server.backend"))
+        }
+    }
+    return $false
+}
 function Get-ExakitComponentOwnership {
     param([string]$Id)
     if ($Id -in @('exakit','kit2','skills')) { return 'kit' }
@@ -218,6 +248,10 @@ function Get-ExakitComponentOwnership {
         }
     }
     if ($owner -in @('kit','user','unknown')) { return $owner }
+    # NO RECEIPT AT ALL: an install made before receipts existed (every kit up
+    # to 0.2.4). The kit's own manifest says what it installed. Twin of the
+    # same arm in exakit_component_ownership.
+    if (-not $owner -and (Test-ExakitLegacyKitOwned $Id)) { return 'kit' }
     if ($Id -notin @('personal','launcher','exasol','database','runtime','exapump')) {
         foreach ($field in @('venv','home','python','path')) {
             $p = Get-ExakitManifestValue "$key.$field"
@@ -239,7 +273,12 @@ function Set-ExakitComponentOwnership {
 function Set-ExakitReusedOwnership {
     param([string]$Id, [string]$OwnedPath = "")
     $receipt = Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path"
-    if ((Get-ExakitComponentOwnership $Id) -ne 'kit' -or ($OwnedPath -and $receipt -ne $OwnedPath)) { Set-ExakitComponentOwnership $Id 'user' $OwnedPath }
+    $existing = Get-ExakitComponentOwnership $Id
+    if ($existing -eq 'kit' -and -not (Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership")) {
+        # The kit's own install from before receipts: write the receipt it
+        # never had. Twin of the same arm in exakit_reuse_ownership.
+        Set-ExakitComponentOwnership $Id 'kit' $OwnedPath
+    } elseif ($existing -ne 'kit' -or ($OwnedPath -and $receipt -ne $OwnedPath)) { Set-ExakitComponentOwnership $Id 'user' $OwnedPath }
 }
 function Test-ExakitComponentManaged {
     param([string]$Id)
@@ -3778,6 +3817,24 @@ function Get-ExakitOemEncoding {
     }
 }
 
+# Write-ExakitCmdFile <path> <text> - a .cmd file cmd.exe reads as written:
+# the user's profile folded into %USERPROFILE% (cmd expands it at run time, so
+# the bytes stay ASCII for any user name) and the rest in the console's OEM
+# code page. The Startup entry was written -Encoding Ascii with the full path,
+# so a user named Mueller with an umlaut got `?` in the launcher path and the
+# database never started at login while status said autostart: true (audit
+# WIN-01). Same treatment as Set-ExakitCmdShim.
+function Write-ExakitCmdFile {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Text)
+    $profileDir = "$env:USERPROFILE".TrimEnd([char]92)
+    if ($profileDir) {
+        $Text = [regex]::Replace($Text, [regex]::Escape($profileDir + [string][char]92), "%USERPROFILE%\", [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    }
+    $oem = Get-ExakitOemEncoding
+    if ($oem) { [System.IO.File]::WriteAllText($Path, $Text, $oem) }
+    else { Set-Content -Path $Path -Value $Text -NoNewline }
+}
+
 function Set-ExakitCmdShim {
     param([Parameter(Mandatory)][string]$PsTarget)
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
@@ -7230,20 +7287,23 @@ function Write-ExakitReadyLine {
 # are typed into a hidden prompt, never into a command. Twin of
 # exakit_model_setup_hint in common.sh.
 function Write-ExakitModelSetupHint {
+    # -Mode installer|marketplace. The installer shows it only to a Data
+    # Scientist; `marketplace` is the caller that has just installed the
+    # notebook add-on, for anyone. Twin of exakit_model_setup_hint.
+    param([string]$Mode = "installer")
     if ($env:EXAKIT_MODEL_ID) { return }
     try { if (-not (Test-ExakitMarketplaceAddonInstalled notebook)) { return } } catch { return }
+    if ($Mode -eq "installer" -and ((",$(Get-ExakitManifestValue 'persona.id')," -notlike "*,data-scientist,*"))) { return }
     Write-Host ""
-    Start-ExakitPanel "Your AI model and Langfuse (optional, for the notebooks)"
-    Write-ExakitPanelLine "Set once, here in PowerShell, then: exakit notebook"
+    Start-ExakitPanel "Optional: your AI model for the notebooks"
+    Write-ExakitPanelLine "Run these here, then: exakit notebook"
     Write-ExakitPanelLine '  $env:EXAKIT_MODEL_ID = "claude-opus-5-5"'
     Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"'
     Write-ExakitPanelLine '  $k = Read-Host "Model API key" -AsSecureString'
-    Write-ExakitPanelLine '  $c = New-Object Net.NetworkCredential "", $k'
+    Write-ExakitPanelLine '  $c = [Net.NetworkCredential]::new("", $k)'
     Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_API_KEY = $c.Password'
-    Write-ExakitPanelLine '  $env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"'
-    Write-ExakitPanelLine "  LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY: the same way as the API key"
-    Write-ExakitPanelLine "Or in a notebook: nb.model_setup() shows what is set and how to set it"
-    Write-ExakitPanelLine "Nothing set: the AI steps skip and say so. Everything else runs."
+    Write-ExakitPanelLine "Skip it and the notebooks still run; only the AI steps are skipped."
+    Write-ExakitPanelLine "More, Langfuse included: nb.model_setup() in a notebook"
     Complete-ExakitPanel
 }
 
@@ -8046,10 +8106,10 @@ function Register-ExakitAutostart {
     $lines = @(
         "@echo off",
         "rem Starts $Id at login - written by the Exasol Personal Local Starter Kit.",
-        "rem Remove it with: exakit autostart off",
+        "rem Turn it off with: exakit autostart",
         "start `"`" /min $command"
     )
-    Set-Content -Path $entry -Value ($lines -join "`r`n") -Encoding Ascii
+    Write-ExakitCmdFile -Path $entry -Text (($lines -join "`r`n") + "`r`n")
     # Twin of the same silence in common.sh: the entry path is not actionable,
     # and per-service it said the same fact once per service.
     Write-ExakitLog "OK" "$Id starts at login ($entry)"

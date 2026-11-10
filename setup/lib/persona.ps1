@@ -334,7 +334,13 @@ function Show-ExakitPersonaPlan {
     $plan = [ordered]@{
         persona  = $Ids
         datasets = [ordered]@{ loaded = @($ds | Where-Object { $pendingIds -cnotcontains $_ }); pending = @($ds | Where-Object { $pendingIds -ccontains $_ }) }
-        addons   = [ordered]@{ installed = @($addons | Where-Object { $installed -ccontains $_ }); pending = @($addons | Where-Object { $installed -cnotcontains $_ }) }
+        addons   = [ordered]@{
+            installed = @($addons | Where-Object { $installed -ccontains $_ })
+            # Not available on this machine is not pending (audit AGX-02).
+            # Twin of the same split in exakit_persona_plan.
+            pending = @($addons | Where-Object { $installed -cnotcontains $_ -and (Test-ExakitAddonApplicable $_) })
+            unavailable = @($addons | Where-Object { $installed -cnotcontains $_ -and -not (Test-ExakitAddonApplicable $_) })
+        }
     }
     $plan.nothing_pending = ($plan.datasets.pending.Count -eq 0 -and $plan.addons.pending.Count -eq 0)
     if ($Json) { Write-Output ($plan | ConvertTo-Json -Depth 4); return }
@@ -342,7 +348,16 @@ function Show-ExakitPersonaPlan {
     Write-Host "$(@(Invoke-ExakitPersonaService 'title' $Ids) -join '') ($Ids)"
     Write-Host ("  {0,-12} loaded: {1}   pending: {2}" -f "Datasets", $(if ($plan.datasets.loaded.Count) { $plan.datasets.loaded -join ' ' } else { $none }), $(if ($plan.datasets.pending.Count) { $plan.datasets.pending -join ' ' } else { $none }))
     Write-Host ("  {0,-12} installed: {1}   pending: {2}" -f "Add-ons", $(if ($plan.addons.installed.Count) { $plan.addons.installed -join ' ' } else { $none }), $(if ($plan.addons.pending.Count) { $plan.addons.pending -join ' ' } else { $none }))
-    if ($plan.nothing_pending) { Ok "Nothing pending for $Ids" } else { Info "Pending - bring it in with: exakit persona add $Ids" }
+    foreach ($u in $plan.addons.unavailable) { Write-Host ("  {0,-12} not available on this machine: {1} ({2})" -f "", $u, (Get-ExakitAddonApplicableReason $u)) }
+    if ($plan.nothing_pending) { Ok "Nothing pending for $Ids" }
+    else {
+        # Only an OFFERED persona can be added (audit AGX-03). Twin of the same
+        # check in exakit_persona_plan.
+        $offered = @(Invoke-ExakitPersonaService "ids" | Where-Object { $_ })
+        $hidden = @($Ids -split ',' | Where-Object { $_ -and $offered -cnotcontains $_ })
+        if ($hidden.Count -gt 0) { Info "Pending, but $($hidden -join ', ') is not offered in this release, so it cannot be added." }
+        else { Info "Pending - bring it in with: exakit persona add $Ids" }
+    }
 }
 
 # Get-ExakitPersonaRecorded - the personas this kit was set up as (persona.id),

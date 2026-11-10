@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext, cmd_quote
+from runtime import AddonFailure, KitContext, cmd_file_bytes, cmd_quote
 
 
 def _skill_owner(path: Path) -> str:
@@ -148,7 +148,7 @@ def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
         root = Path(base)
         root.mkdir(parents=True, exist_ok=True)
         line = " ".join(cmd_quote(item) for item in argv)
-        content = ("@echo off\r\nstart \"\" /min " + line + "\r\n").encode("ascii")
+        content = cmd_file_bytes("@echo off\r\nstart \"\" /min " + line + "\r\n")
         if not _write_if_changed(root / f"{label}.cmd", content):
             ctx.log_event(f"Autostart unchanged: {addon_id}")
             return True

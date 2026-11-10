@@ -427,14 +427,14 @@
     {
       "command": "persona",
       "options": "list | show <id> | plan [<id>] [--json] | add [<id>[,<id>]] | remove <id>",
-      "summary": "Who the kit is set up for - Data Scientist, ML Engineer, General: list, show, plan, add or remove one.",
-      "description": "A persona is a named set of the answers the installer already takes: which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit ships three, and they combine with a comma (all three load everything).\n\ndata-scientist: the Amazon sales and fraud transactions reference datasets (downloaded from the kit's datasets release), every AI client, the dash-server and notebook add-ons. ml-engineer: the same datasets, the notebook and udf-devkit add-ons and a local MLflow. general: the kit's own TPC-H, energy and weather samples (bundled, loaded offline), every AI client.\n\nexakit persona add <id> (apply is its old name) joins the personas named to the ones this kit was set up as and brings in what is not here yet - the sample data, the AI clients, the add-ons - with no question, each step showing the installer's own table (plain lines without a terminal). What is already here is named once and not redone; a part that fails does not stop the others, and the closing line names the command that retries it. With no id, on a terminal, it asks the install's persona question with this kit's personas ticked; without a terminal it names the command instead. --yes is accepted and changes nothing.\n\nexakit persona plan [<id>] shows what the personas bring and what of it is still pending here - with no id, the ones recorded (--json for a script). exakit persona list and show <id> take --json too. exakit persona remove <id> takes a persona off the record and keeps everything it brought.\n\nAt install time: EXAKIT_PERSONA=<id>. An answer you give yourself replaces the persona's for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales loads only that dataset. Personas are files in personas/ (personas/README.md); adding one needs no installer code.",
+      "summary": "Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.",
+      "description": "A persona is a named set of the answers the installer already takes: which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit offers two, data-scientist and general, and they combine with a comma (both together load everything).\n\ndata-scientist: the Amazon sales and fraud transactions reference datasets (downloaded from the kit's datasets release), every AI client, the dash-server and notebook add-ons. general: the kit's own TPC-H, energy and weather samples (bundled, loaded offline), every AI client.\n\nexakit persona add <id> (apply is its old name) joins the personas named to the ones this kit was set up as and brings in what is not here yet - the sample data, the AI clients, the add-ons - with no question, each step showing the installer's own table (plain lines without a terminal). What is already here is named once and not redone; a part that fails does not stop the others, and the closing line names the command that retries it. With no id, on a terminal, it asks the install's persona question with this kit's personas ticked; without a terminal it names the command instead. --yes is accepted and changes nothing.\n\nexakit persona plan [<id>] shows what the personas bring and what of it is still pending here - with no id, the ones recorded (--json for a script). exakit persona list and show <id> take --json too. exakit persona remove <id> takes a persona off the record and keeps everything it brought.\n\nAt install time: EXAKIT_PERSONA=<id>. An answer you give yourself replaces the persona's for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales loads only that dataset. Personas are files in personas/ (personas/README.md); adding one needs no installer code.",
       "examples": [
         "exakit persona list",
-        "exakit persona show ml-engineer",
+        "exakit persona show data-scientist",
         "exakit persona plan",
         "exakit persona plan data-scientist --json",
-        "exakit persona add ml-engineer",
+        "exakit persona add general",
         "exakit persona remove data-scientist"
       ],
       "exit_codes": {
@@ -1187,7 +1187,7 @@
   "environment": [
     {
       "name": "EXAKIT_PERSONA",
-      "effect": "A named set of answers (personas/<id>.json): data-scientist, ml-engineer or general, or several joined with a comma (all three load everything). It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
+      "effect": "A named set of answers (personas/<id>.json): data-scientist or general, or both joined with a comma (ml-engineer ships in the files but is not offered in this release). It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
     },
     {
       "name": "EXAKIT_MCP_CLIENTS",
