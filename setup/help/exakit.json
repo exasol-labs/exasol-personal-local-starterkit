@@ -39,7 +39,7 @@
       ]
     },
     {
-      "title": "Models and UDFs (udf-devkit)",
+      "title": "Models and UDFs (udf-devkit, hidden for now)",
       "commands": [
         "mlflow",
         "udf-setup",

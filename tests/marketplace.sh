@@ -222,7 +222,8 @@ run_menu() ( # run_menu <env-answer> — echoes "installed:<ids>" + menu output
 )
 check "none installs nothing" "rc=0 called=" "$(run_menu none)"
 check "naming one addon installs only it" "rc=0 called=dash-server" "$(run_menu dash-server)"
-check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook udf-devkit" "$(run_menu all)"
+# udf-devkit is hidden for now ("visible": false, kept for the ML Engineer): "all" leaves it out.
+check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook" "$(run_menu all)"
 _unknown_out="$( (run_menu not-a-tool) 2>&1 || true)"
 check "an unknown id refuses" "yes" "$( (EXAKIT_MARKETPLACE_ADDONS=not-a-tool exakit_marketplace_menu >/dev/null 2>&1); [ $? -ne 0 ] && echo yes || echo no )"
 # An installer that fails must not report success.
@@ -553,8 +554,8 @@ cat >/dev/null 2>&1 || true
 exit 0
 DRAINSTUBEOF
 chmod +x "$WORK/drain-bin/code"
-# The last registry row is the canary.
-_drain_last="$(exakit_marketplace_addons | tail -1 | cut -d'|' -f1)"
+# The last offered registry row is the canary (a hidden one is never a version-table target).
+_drain_last="$(_exakit_registry | awk -F'|' '$4 == 1 { id = $1 } END { print id }')"
 _drain_last_fn="$(printf '%s' "$_drain_last" | tr '-' '_')"
 check "the canary is registered after exasol-vscode" "yes" \
     "$(exakit_marketplace_addons | cut -d'|' -f1 | sed -n '/^exasol-vscode$/,$p' | grep -qx "$_drain_last" && [ "$_drain_last" != exasol-vscode ] && echo yes || echo no)"

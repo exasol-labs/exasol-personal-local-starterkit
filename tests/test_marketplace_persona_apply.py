@@ -23,12 +23,12 @@ from runtime import KitContext, Manifest  # noqa: E402
 
 
 def kit_with_ml_engineer(where: Path) -> Path:
-    """A kit root that is this checkout with the ML Engineer switched on. It ships disabled on this branch
-    ("visible": false, kept, not removed); the add sequence it exercises - UDF add-on, MLflow service - is still the
-    kit's, so it stays tested."""
+    """A kit root that is this checkout with the ML Engineer and its udf-devkit add-on switched on. Both ship
+    disabled on this branch ("visible": false, kept, not removed); the add sequence it exercises - UDF add-on, MLflow
+    service - is still the kit's, so it stays tested."""
     where.mkdir()
     for entry in ROOT.iterdir():
-        if entry.name in (".git", "personas"):
+        if entry.name in (".git", "personas", "marketplace"):
             continue
         try:
             (where / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
@@ -37,6 +37,13 @@ def kit_with_ml_engineer(where: Path) -> Path:
     shutil.copytree(ROOT / "personas", where / "personas")
     ml = where / "personas" / "ml-engineer.json"
     ml.write_text(json.dumps({**json.loads(ml.read_text(encoding="utf-8")), "visible": True}), encoding="utf-8")
+    shutil.copytree(ROOT / "marketplace", where / "marketplace", ignore=shutil.ignore_patterns("__pycache__"))
+    catalog = where / "marketplace" / "catalog.json"
+    doc = json.loads(catalog.read_text(encoding="utf-8"))
+    for row in doc["addons"]:
+        if row["id"] == "udf-devkit":
+            row["visible"] = True
+    catalog.write_text(json.dumps(doc), encoding="utf-8")
     return where
 
 
