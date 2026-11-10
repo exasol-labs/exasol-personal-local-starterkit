@@ -42,6 +42,7 @@ environment: when the Python running this has none, ``--run`` re-runs itself wit
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import sys
@@ -103,10 +104,50 @@ def _cells(source: str, where: Path | None = None) -> list[Cell]:
     return [cell for cell in cells if cell[0] != "skip"]
 
 
+JOURNEY = ("Access", "Understand", "Prepare", "Explore", "Model", "Validate", "Ask with AI", "Share", "Hand off")
+JOURNEY_LINK = re.compile(r"\]\(journey:([0-9,]+)\)")
+
+
+def journey_svg(current: set[int]) -> str:
+    """The Data Scientist's nine steps as one strip of boxes, this notebook's filled in and underlined. Step 0 (the
+    kit check) is drawn only where a notebook has it. Opaque boxes, so it reads on a light or a dark theme."""
+    steps = ([(0, "Kit")] if 0 in current else []) + list(enumerate(JOURNEY, 1))
+    gap, width = 14, 880
+    box = (width - 2 - gap * (len(steps) - 1)) / len(steps)
+    font = "font-family='system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif'"
+    parts, xs = [], []
+    for index, (number, label) in enumerate(steps):
+        x = 1 + index * (box + gap)
+        on = number in current
+        fill, stroke, ink, sub = ("#1F6FEB", "#1F6FEB", "#FFFFFF", "#FFFFFF") if on else ("#F2F4F7", "#D0D5DD", "#344054", "#475467")
+        parts.append(f"<rect x='{x:.1f}' y='1' width='{box:.1f}' height='58' rx='10' fill='{fill}' stroke='{stroke}'/>")
+        parts.append(f"<text x='{x + box / 2:.1f}' y='26' text-anchor='middle' {font} font-size='18' font-weight='700' fill='{ink}'>{number}</text>")
+        parts.append(f"<text x='{x + box / 2:.1f}' y='46' text-anchor='middle' {font} font-size='11.5' fill='{sub}'>{label}</text>")
+        if index < len(steps) - 1:
+            mid = x + box + gap / 2
+            parts.append(f"<path d='M{mid - 3:.1f} 24 L{mid + 3:.1f} 30 L{mid - 3:.1f} 36' fill='none' stroke='#98A2B3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>")
+        if on:
+            xs.append(x)
+    left, right = min(xs), max(xs) + box
+    parts.append(f"<rect x='{left:.1f}' y='66' width='{right - left:.1f}' height='4' rx='2' fill='#1F6FEB'/>")
+    parts.append(f"<text x='{(left + right) / 2:.1f}' y='88' text-anchor='middle' {font} font-size='12.5' font-weight='600' fill='#1F6FEB'>This notebook</text>")
+    return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='94' viewBox='0 0 {width} 94'>"
+            + "".join(parts) + "</svg>")
+
+
+def _journey(line: str) -> str:
+    """``![alt](journey:3,4,5,6)`` in a source's markdown becomes the strip as an embedded image, so the built
+    notebook shows it in JupyterLab and Marimo without running a cell and the .py stays readable."""
+    def image(match: re.Match) -> str:
+        svg = journey_svg({int(n) for n in match.group(1).split(",")})
+        return "](data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii") + ")"
+    return JOURNEY_LINK.sub(image, line)
+
+
 def _source(kind: str, lines: list[str]) -> list[str]:
     """A cell's source as the .ipynb keeps it: markdown without its ``# ``, no blank lines at either end."""
     if kind == "markdown":
-        lines = [line[2:] if line.startswith("# ") else line.lstrip("#") for line in lines]
+        lines = [_journey(line[2:] if line.startswith("# ") else line.lstrip("#")) for line in lines]
     while lines and not lines[0].strip():
         lines = lines[1:]
     while lines and not lines[-1].strip():

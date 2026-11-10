@@ -11,7 +11,7 @@
 #
 # **Dataset:** the one you approved last (else `amazon_sales`), `fraud_transactions` or your own approved descriptor.
 #
-# **Steps:** 1 Access, 2 Understand, 3 Prepare, 4 Explore, 5 Model, 6 Validate, 7 Ask with AI, **8 Share, 9 Hand off**. **This notebook: steps 8 and 9.**
+# ![Steps 8 Share and 9 Hand off of nine: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:8,9)
 #
 # Builds a dashboard on Dash Server, then packs the work into one folder. No AI model is needed. This notebook installs and starts Dash Server.
 
