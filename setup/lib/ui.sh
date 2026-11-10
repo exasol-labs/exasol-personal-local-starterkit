@@ -1119,6 +1119,9 @@ ui_table_widths() {
     # to barely wider than the longest name, then doubles the moment the first
     # row starts. The marketplace table has a description holding the width
     # either way, so the column can come and go without the box lurching.
+    # UI_TABLE_STAT_MIN=0 is a pick-only menu that never runs anything in its
+    # rows (the connect menu): no Status column at all. ⇄ twin: the table's
+    # StatMin in Get-ExakitTableWidths (ui.ps1).
     UI_TABLE_STAT_W="${UI_TABLE_STAT_MIN:-44}"
     if [ -n "${UI_TABLE_COL2:-}" ] || [ -n "${UI_TABLE_COL3:-}" ]; then
         UI_TABLE_STAT_W=0

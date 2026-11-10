@@ -1,6 +1,6 @@
 """The virtual schema coordinator, called by setup/lib/virtual-schemas.{sh,ps1}.
 
-    cli.py [context] catalog    [--query Q]
+    cli.py [context] catalog    [--query Q] [--public-ip]
     cli.py [context] resolve    QUERY
     cli.py [context] inputs     CONNECTOR
     cli.py [context] field      CONNECTOR INPUT [--base64]   (the value on standard input)
@@ -68,6 +68,7 @@ try:
     import lifecycle  # noqa: E402
     import paste  # noqa: E402
     import plan as planner  # noqa: E402
+    import publicip  # noqa: E402
     import sources  # noqa: E402
     import vslog  # noqa: E402
     BROKEN = None
@@ -87,6 +88,9 @@ def parse(argv):
     sub = parser.add_subparsers(dest="command")
     cmd = sub.add_parser("catalog")
     cmd.add_argument("--query", default="")
+    # The connect menu's first line: this computer's public IP (publicip.py),
+    # an INFO event when it is known and public_ip in the result either way.
+    cmd.add_argument("--public-ip", action="store_true")
     sub.add_parser("resolve").add_argument("query")
     sub.add_parser("inputs").add_argument("connector")
     cmd = sub.add_parser("field")
@@ -409,9 +413,15 @@ def main(argv=None):
                                             code=lifecycle.EXIT["gated"])
                 result = {"connector": connector}
             else:
+                if args.public_ip:
+                    publicip.start()        # asked while the catalog is read
                 q = args.query.lower()
                 result = {"connectors": [dict(e, profile=e["profile"], version=adapter_version(defs, e["id"]))
                                          for e in defs.entries() if not q or q in json.dumps(e).lower()]}
+                if args.public_ip:
+                    result["public_ip"] = publicip.get()
+                    if result["public_ip"]:
+                        emit("INFO", publicip.advice(result["public_ip"]))
         else:
             engine = lifecycle.Engine(args, emit, log)
             if args.command in ("plan", "connect"):

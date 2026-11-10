@@ -4368,12 +4368,18 @@ function Invoke-CmdConnect {
     }
     # --json never asks: a console is as good as none.
     $interactive = (-not $json) -and (Test-ExakitInteractive)
-    # Someone answering at a console: each question says (required) or
-    # (optional), and a connection string can stand for the fields. --yes,
+    # A person at a console (asked "Connect now?" below, or gave --yes): what
+    # the source needs first - a language container, a restart - is said, not
+    # asked (Test-ExakitVsInteractive). Without one, the contract stands.
+    $script:ExakitVsInteractive = $interactive
+    # Someone answering at a console: a required question ends in a red *
+    # (the legend says so), and a connection string can stand for the fields. --yes,
     # --dry-run and --json ask exactly as they always did.
     $ask = ($interactive -and -not $dry -and -not $json -and -not $script:ExakitVsAssumeYes)
     if (-not $source) {
         if (-not $interactive) { Deny-ExakitVsInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" "exakit source catalog" }
+        # The wizard's first line, as above the menu: this computer's public IP.
+        [void](Get-ExakitVsCatalog)
         $source = Read-ExakitPrompt "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" ""
     }
     # With --json the plan below resolves the source (an unknown or gated one
@@ -4384,10 +4390,12 @@ function Invoke-CmdConnect {
         if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
         $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
     }
+    if ($interactive) { $script:ExakitVsFor = Get-ExakitVsLabel $connector }
     if ($ask -and $given.Count -eq 0) {
         $pasted = Read-ExakitVsLinePaste -Connector $connector
         $sets = @($pasted.Sets) + $sets; $given += @($pasted.Names)
     }
+    if ($ask) { Write-ExakitVsLegend }
     # With --json a missing name is the plan's refusal, after the gate, as
     # resolve orders them here without it.
     if (-not $name -and -not $json) {

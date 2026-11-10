@@ -2,13 +2,13 @@
   "_comment": [
     "The connector catalog: what `exakit connect` can search and offer.",
     "",
-    "  tier    GA = the selected Phase 1 scope, Beta = everything else. Rollout",
-    "          labels, not upstream certifications.",
+    "  tier    GA, every connector: a rollout label, not an upstream",
+    "          certification. Kept for exakit source catalog, its --json and the plan.",
     "  status  candidate = defined and unit-tested, not yet qualified end to end",
     "          against a real source; kit-tested = qualified; gated = defined but",
     "          blocked by a named release gate (see `gate`).",
   "  caveat  said in the plan's warnings: what a candidate has not been run",
-  "          against yet (a Beta connector built without a live source).",
+  "          against yet (no connector has one today).",
     "  aliases what a search also matches; ambiguous input lists the choices.",
     "  summary what a source of this kind becomes, for the exakit connect menu.",
     "",
@@ -148,9 +148,8 @@
         "iceberg-rest-catalog"
       ],
       "profile": "rust-native",
-      "tier": "Beta",
-      "status": "candidate",
-      "caveat": "Beta: the same engine as the Glue lakehouse connector, but this route has not been run against a live Iceberg REST catalog yet"
+      "tier": "GA",
+      "status": "candidate"
     },
     {
       "id": "unity",
@@ -161,9 +160,8 @@
         "oss-unity-catalog"
       ],
       "profile": "rust-native",
-      "tier": "Beta",
-      "status": "candidate",
-      "caveat": "Beta: the same engine as the Glue lakehouse connector, but this route has not been run against a live Unity Catalog yet"
+      "tier": "GA",
+      "status": "candidate"
     },
     {
       "id": "mongodb",
