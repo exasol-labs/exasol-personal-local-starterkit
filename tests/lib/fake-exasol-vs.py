@@ -7,7 +7,11 @@ database and inspect it afterwards:
                 like java false (the custom container is not installed)
     lua         always true: Lua is built into the database
     java        false -> creating a JAVA script fails like a deployment with no
-                container ("No usable script language container ...")
+                container ("No usable script language container ...");
+                "builtin" -> it fails like a fresh Exasol Personal 2.4, whose
+                SCRIPT_LANGUAGES names JAVA=builtin_java but whose BucketFS
+                has no Java client yet ("The required executable ... does not
+                exist in BucketFS")
     dns         false -> the DNS probe answers "nodns ..." (no resolver at all);
                 a host ending in .invalid answers "dns ..." (no such name)
     unreachable host names whose TCP probe fails
@@ -30,8 +34,14 @@ database and inspect it afterwards:
     "secret_key" (the storage keys it accepts), "warehouse" (the one it
     knows), "region" (the bucket's) and "fail": "external" (Unity closed to
     outside engines) | "managed" (a catalog-managed table, at the read)
-    sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied",
-                        "secret": "<the credential the source accepts>"}}
+    sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied"|"echo",
+                        "secret": "<the credential the source accepts>",
+                        "read_error": "<the driver's words for a refused read>"}}
+                read_error is raised by the bounded read alone, as Exasol
+                reports a pushed-down IMPORT the source refused (a missing
+                grant): the metadata was read, the rows may not be.
+                "echo" fails with the source's "message" as the driver's
+                text (one that quotes credentials the run never knew)
                 a document source (S3) is keyed by <bucket>.s3.<region>.amazonaws.com
                 and also takes "region" (the bucket's real one) and "empty"
                 (tables whose objects match nothing); its tables come from the
@@ -50,8 +60,13 @@ database and inspect it afterwards:
                 them (the share's delay on Exasol Personal); stage_never
                 true -> they never are. files_probes counts the probes.
     refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
-                cannot reach its source); script_fail scripts (SCHEMA.NAME)
-                whose CREATE OR REPLACE fails
+                cannot reach its source, or refresh_error's words when set);
+                script_fail scripts (SCHEMA.NAME) whose CREATE OR REPLACE fails
+    vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
+                adapter that echoes what the CONNECTION holds)
+    connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
+                its query => field printing the statement back, secret and
+                all, across as many lines as the statement has
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -364,6 +379,8 @@ def _source_for(doc, connection, via="adapter"):
     if src is None:
         raise Exception("JDBC-Client-Error: The connection attempt failed.")
     fail = src.get("fail")
+    if fail == "echo":
+        raise Exception(src["message"])
     if fail == "auth" or (src.get("secret") is not None and con.get("secret") != src["secret"]):
         raise Exception('FATAL: password authentication failed for user "%s"' % con["user"])
     if fail == "tls":
@@ -507,10 +524,14 @@ class Fake(object):
             # A JDBC adapter pushes the read down as IMPORT FROM JDBC: the loader runs it.
             _loader_trust(doc, vs["connection"])
             src = _source_for(doc, vs["connection"], "loader")
+            if src.get("read_error"):
+                raise Exception(src["read_error"])
             return [] if m.group(2) in src.get("empty", []) else [{"X": 1}]
         raise Exception("fake: unexpected query: %s" % sql[:80])
 
     def _execute(self, doc, sql):
+        if doc.get("vs_fail") and sql.startswith("CREATE VIRTUAL SCHEMA"):
+            raise Exception(doc["vs_fail"])
         if sql == "CREATE SCHEMA EXAKIT_VS":
             doc["schemas"].append("EXAKIT_VS")
             return
@@ -518,6 +539,8 @@ class Fake(object):
         if m:
             if not doc[m.group(1).lower()]:
                 raise Exception("No usable script language container is installed for the requested language.")
+            if m.group(1) == "JAVA" and doc["java"] == "builtin":
+                raise Exception("VM error: The required executable '/exaudf/exaudfclient' does not exist in BucketFS")
             name = "%s.%s" % (m.group(3), m.group(4))
             if name in doc.get("script_fail", []):
                 raise Exception("VM error: could not create script %s" % name)
@@ -526,6 +549,9 @@ class Fake(object):
             return
         m = re.match(r"CREATE (OR REPLACE )?CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'(?: USER '((?:[^']|'')*)' IDENTIFIED BY '((?:[^']|'')*)')?$", sql)
         if m:
+            if doc.get("connection_fail"):
+                raise Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
+                                "    code        =>  42000\n    query       =>  %s\n)" % (doc["connection_fail"], sql))
             if not m.group(1) and m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
             doc["connections"][m.group(2)] = {"url": m.group(3), "user": (m.group(4) or "").replace("''", "'"),
@@ -579,7 +605,7 @@ class Fake(object):
         if m:
             vs = doc["virtual"][m.group(1)]
             if m.group(1) in doc.get("refresh_fail", []):
-                raise Exception("Connection refused. Check that the hostname and port are correct")
+                raise Exception(doc.get("refresh_error") or "Connection refused. Check that the hostname and port are correct")
             src = _source_for(doc, vs["connection"])
             if "tables" in src:
                 vs["tables"] = list(src["tables"])

@@ -45,6 +45,12 @@ mkdir -p "$FIX"
 EXAKIT_HOME="$WORK/home"
 EXAKIT_BIN_DIR="$WORK/bin"
 mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
+# EXPORTED, AND HOME WITH THEM. Unexported, the child shells this suite starts
+# fell back to $HOME/.exasol-starter-kit and left credentials/ and logs/ in
+# the developer's real home on every run.
+HOME="$WORK/userhome"
+mkdir -p "$HOME"
+export EXAKIT_HOME EXAKIT_BIN_DIR HOME
 
 # shellcheck source=/dev/null
 . "$ROOT/setup/lib/common.sh"
@@ -1055,8 +1061,11 @@ check "the MCP server keeps its recorded version" "1.10.1" "$(live_read mcp)"
 # the version table and status both said "not installed".
 # PATH must not contain a real exapump either, or the binary fallback finds the
 # tester's own install; python3 has to stay reachable for the manifest reads.
+# The offline URL as everywhere else here: `exakit version` always asks upstream,
+# and with PATH reset to the system directories no stubbed curl stands in its way.
 absent_version="$( rm -f "$LIVE/bin/exapump" "$LIVE/venv/bin/python"
     EXAKIT_HOME="$LIVE" PATH="$(dirname "$(command -v python3)"):/usr/bin:/bin" \
+        EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" \
         bash "$ROOT/setup/exakit" version 2>&1 )"
 has "version agrees that a deleted exapump is gone" "exapump not installed" "$(row "$absent_version" exapump)"
 has "version agrees that a deleted venv is gone" "pyexasol not installed" "$(row "$absent_version" pyexasol)"
@@ -1349,9 +1358,11 @@ EOF
 }
 # EXAKIT_HOME has to be exported into the child: `exakit version` is a separate
 # process, and a plain assignment in this shell would leave it reading the real
-# installation instead of the fixture.
+# installation instead of the fixture. Offline too: `exakit version` always asks
+# upstream for versions.json, and the fixture carries its own copy (kit/).
 version_out() {
-    EXAKIT_HOME="$DR" bash "$ROOT/setup/exakit" version 2>&1
+    EXAKIT_HOME="$DR" EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" \
+        bash "$ROOT/setup/exakit" version 2>&1
 }
 # A component upgraded outside the kit reads as what it now IS. The cell used to
 # carry a "(kit installed 0.11.2)" suffix as well, and it cost more than it said:

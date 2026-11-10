@@ -9,6 +9,7 @@
 # cannot fix from inside the database:
 #
 #   exit 20  Java in the database has no DNS resolver -> Repair-PersonalSlcDns, retry once
+#            (Docker: the fix is in the image - one restart, asked, then the retry)
 #   exit 21  the Java language container is missing   -> `exasol slc install java` (asked), retry once
 
 function Get-ExakitVsDefs {
@@ -37,16 +38,31 @@ function Test-ExakitVsAvailable {
 # re-encodes what it pipes to a native program - measured on CI, a
 # byte-order mark added and every non-ASCII character turned into '?' even
 # with $OutputEncoding set to UTF-8 - and plain ASCII survives every code
-# page. Returns @{ Code; Lines }.
+# page. Returns @{ Code; Lines }. Every engine run (catalog, resolve, inputs,
+# field, paste, plan, connect, the source commands, the terminal form) comes
+# through here. Python runs isolated (-I), which ignores every PYTHON*
+# variable (PYTHONPATH, PYTHONHOME, PYTHONSTARTUP, ...), the user's
+# site-packages and the script's own folder. It does NOT stop a macOS
+# framework build taking its program path from PYTHONEXECUTABLE (or
+# __PYVENV_LAUNCHER__), which decides sys.prefix - another venv's
+# site-packages and its .pth files - so both are taken out of the child's
+# environment for the run. cli.py puts its own folder on sys.path. Twin of
+# exakit_vs_engine and _exakit_vs_python.
 function Invoke-ExakitVsEngine {
     param([string[]]$Arguments = @(), [string]$Secret = "")
+    # Asked for JSON, the bridge's own failures come in the engine's shape too.
+    $asJson = @($Arguments) -contains "--json"
     $defs = Get-ExakitVsDefs
-    if (-not $defs) { return [pscustomobject]@{ Code = 2; Lines = @("FAIL This kit copy has no setup\virtual-schemas. Update it: exakit update") } }
+    if (-not $defs) {
+        if ($asJson) { return [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "this kit copy has no setup\virtual-schemas" -Remedy "update the kit: exakit update" -Command "exakit update") } }
+        return [pscustomobject]@{ Code = 2; Lines = @("FAIL This kit copy has no setup\virtual-schemas. Update it: exakit update") }
+    }
     $python = Get-PyexasolVenvPython
     if (-not (Test-Path -LiteralPath $python)) {
+        if ($asJson) { return [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "virtual schemas run with the kit's pyexasol, which is not installed" -Remedy "repair it: exakit update pyexasol" -Command "exakit update pyexasol") } }
         return [pscustomobject]@{ Code = 2; Lines = @("FAIL Virtual schemas run with the kit's pyexasol, which is not installed. Repair it: exakit update pyexasol") }
     }
-    $argv = @((Join-ExakitCorePath $defs "engine" "cli.py"), "--defs", $defs, "--kit-home", $script:ExakitHome)
+    $argv = @("-I", (Join-ExakitCorePath $defs "engine" "cli.py"), "--defs", $defs, "--kit-home", $script:ExakitHome)
     # An empty value is never passed: 5.1 drops it and the option before it
     # would swallow the next one.
     foreach ($pair in @(@("--deployment-dir", "runtime.deployment_dir"), @("--dsn", "runtime.dsn"),
@@ -59,11 +75,27 @@ function Invoke-ExakitVsEngine {
     } else {
         $argv += $Arguments
     }
-    $errFile = [System.IO.Path]::GetTempFileName()
+    # Today's log exists and is owner-only BEFORE the engine writes a line to
+    # it: content written under the inherited ACL would stay readable to
+    # others if the run were stopped (Ctrl+C) before the step after it.
+    Protect-ExakitVsLog -Today
+    try { $errFile = [System.IO.Path]::GetTempFileName() }
+    catch {
+        if (-not $asJson) { throw }
+        return [pscustomobject]@{ Code = 1; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "could not create a temporary file" -Remedy "check that the temporary folder exists, is writable and has space, then run the same command again") }
+    }
     $previous = $ErrorActionPreference
     $previousEncoding = $OutputEncoding
+    $previousExecutable = $env:PYTHONEXECUTABLE
+    $previousLauncher = $env:__PYVENV_LAUNCHER__
+    $previousEngine = $env:EXAKIT_PERSONAL_ENGINE
+    # This run's engine choice, where Get-PersonalSlcDnsEngine falls back to
+    # it, so the engine (plan.py recorded_engine) falls back the same way.
+    $runEngine = "" + (Get-Variable -Name PersonalEngine -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
     try {
         $ErrorActionPreference = "Continue"
+        Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__, Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
+        if ($runEngine) { $env:EXAKIT_PERSONAL_ENGINE = $runEngine }
         if ($Secret) {
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Secret))
@@ -76,12 +108,143 @@ function Invoke-ExakitVsEngine {
     } finally {
         $ErrorActionPreference = $previous
         $OutputEncoding = $previousEncoding
+        if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
+        if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
+        Remove-Item Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
+        if ($null -ne $previousEngine) { $env:EXAKIT_PERSONAL_ENGINE = $previousEngine }
     }
     foreach ($line in @(Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
     }
     Remove-Item -Force -LiteralPath $errFile -ErrorAction SilentlyContinue
+    # Again after it: a run that crossed midnight wrote a new day's file.
+    Protect-ExakitVsLog
     return [pscustomobject]@{ Code = $code; Lines = @($lines | ForEach-Object { "$_" }) }
+}
+
+# Get-ExakitVsLogFolder - the kit's log folder, where the engine writes its
+# day log (--kit-home + logs, as engine/cli.py names it); "" when unknown.
+function Get-ExakitVsLogFolder {
+    $folder = $script:LogDir
+    if (-not $folder -and $script:ExakitHome) { $folder = Join-Path $script:ExakitHome "logs" }
+    if (-not $folder) { return "" }
+    return $folder
+}
+
+# Protect-ExakitVsLog [-Today] - the engine's day log owner-only. The engine
+# creates it mode 600 on macOS and Linux; on Windows that is the file's ACL,
+# which this side sets, as it does for the install log (Initialize-ExakitLogging).
+# -Today creates today's file first, so the ACL is on it before the engine
+# writes; without it, the newest file is protected.
+function Protect-ExakitVsLog {
+    param([switch]$Today)
+    if (-not (Get-Command Protect-ExakitFile -ErrorAction SilentlyContinue)) { return }
+    $path = ""
+    if ($Today) {
+        $folder = Get-ExakitVsLogFolder
+        if (-not $folder) { return }
+        # The local Gregorian date in digits, as the engine names the file
+        # (vslog.day_name): the invariant culture, since th-TH or ar-SA would
+        # format another calendar's year and make ready a file nobody writes.
+        $path = Join-Path $folder ("virtual-schemas-{0}.log" -f (Get-Date).ToString("yyyyMMdd", [Globalization.CultureInfo]::InvariantCulture))
+        try {
+            if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
+            if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType File -Path $path | Out-Null }
+        } catch { return }
+    } else {
+        $path = Get-ExakitVsLogPath
+    }
+    if ($path) { try { Protect-ExakitFile $path } catch { } }
+}
+
+# Get-ExakitVsLogPath - the engine's day log (virtual-schemas-YYYYMMDD.log in
+# the kit's log folder, written by engine/vslog.py: every statement it sent
+# and every event, secrets redacted), the newest one; "" when there is none.
+# Twin of exakit_vs_log_path.
+function Get-ExakitVsLogPath {
+    $folder = Get-ExakitVsLogFolder
+    if (-not $folder) { return "" }
+    $newest = Get-ChildItem -LiteralPath $folder -Filter "virtual-schemas-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($newest) { return $newest.FullName }
+    return ""
+}
+
+# Get-ExakitVsLogMark - what that log is now (path:size), so the end of the
+# command can tell whether this run wrote to it: a lookup or a refusal the
+# engine never logged points at no log. Twin of _exakit_vs_log_mark.
+function Get-ExakitVsLogMark {
+    $path = Get-ExakitVsLogPath
+    if (-not $path) { return "" }
+    $size = 0
+    try { $size = (Get-Item -LiteralPath $path -ErrorAction Stop).Length } catch { }
+    return ("{0}:{1}" -f $path, $size)
+}
+
+# Exit-ExakitVs - end a connect or source command. A failure (not 5, a
+# question not confirmed or a gated source) that the engine logged names the
+# log once, so the statements it sent are one command away; with --json on
+# stderr, which no parser reads. An empty file (made ready by
+# Protect-ExakitVsLog for a command the engine does not log) names nothing.
+# Twin of _exakit_vs_exit.
+function Exit-ExakitVs {
+    param([int]$Code)
+    if ($Code -ne 0 -and $Code -ne 5) {
+        $mark = Get-ExakitVsLogMark
+        if ($mark -and $mark -ne $script:ExakitVsLogMark -and -not $mark.EndsWith(":0")) {
+            $line = "Log (every SQL statement, secrets redacted): " + (Get-ExakitVsLogPath)
+            if ($script:ExakitVsJson) { [Console]::Error.WriteLine($line) } else { Info $line }
+        }
+    }
+    exit $Code
+}
+
+# New-ExakitVsFailureJson - the engine's failure shape (cli.py) for what the
+# bridge refuses or cannot run itself, so --json is one object of one shape
+# whoever said no: what happened, its class, the fix in words, the one exakit
+# command that is the fix or null; rejected and public_ip as the other
+# refusals and plan/connect carry them. Twin of _exakit_vs_json_failure.
+function New-ExakitVsFailureJson {
+    param([string]$Kind, [string]$Problem, [string]$Remedy, [string]$Command = "")
+    $cmd = $null
+    if ($Command) { $cmd = $Command }
+    $payload = [ordered]@{ ok = $false; error = $Problem; kind = $Kind; remedy = $Remedy; command = $cmd; rejected = $true; public_ip = $null }
+    return ($payload | ConvertTo-Json -Depth 4)
+}
+
+# Deny-ExakitVsInput - the bridge says no before the engine runs: the message
+# as Deny-ExakitInput says it (exit 2), with --json the failure object instead.
+# Twin of _exakit_vs_refuse.
+function Deny-ExakitVsInput {
+    param([string]$Message, [string]$Problem, [string]$Remedy, [string]$Command = "")
+    if ($script:ExakitVsJson) {
+        if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "REJECT" $Message }
+        Write-Output (New-ExakitVsFailureJson -Kind "input" -Problem $Problem -Remedy $Remedy -Command $Command)
+        exit 2
+    }
+    Deny-ExakitInput $Message
+}
+
+# Deny-ExakitVsCredentialArgument - a credential given as an option on the
+# command line (--password=..., --passwd ..., --secret..., --token...):
+# refused without repeating any of it, since every local user can read a
+# process's arguments. Twin of _exakit_vs_credential_argument.
+function Deny-ExakitVsCredentialArgument {
+    Deny-ExakitVsInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or --password-stdin." "a credential was given as an argument, where other users can read it in the process list" "pipe it in with --password-stdin or give it with --password-file <file>"
+}
+
+# Invoke-ExakitVsAside - a step of the bridge's own (a DNS repair, a language
+# container install) whose lines are for a person: on the console as always,
+# with --json on stderr, where no parser reads them. Returns the step's answer.
+function Invoke-ExakitVsAside {
+    param([scriptblock]$Step)
+    if (-not $script:ExakitVsJson) { return (& $Step) }
+    $answer = $null
+    & $Step 6>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.InformationRecord]) { [Console]::Error.WriteLine("$_") }
+        else { $answer = $_ }
+    }
+    return $answer
 }
 
 # Show-ExakitVsLines - the engine's event lines in the kit's own marks; the
@@ -100,25 +263,196 @@ function Show-ExakitVsLines {
     return $result
 }
 
+# ConvertFrom-ExakitVsSecretBytes - a credential's bytes as text: UTF-16
+# little or big endian by its byte-order mark, else UTF-8 with or without
+# one, and no NUL anywhere; one trailing line ending (CRLF or LF) dropped, as
+# the shell's reader does (the engine drops any others). $null when the bytes
+# are not such text: a credential read in the wrong code page is another
+# credential, so it is refused, never guessed. The engine and the shell read
+# by the same rules (engine/cli.py decode_secret, _exakit_vs_secret_text);
+# NUL is refused on all three because a shell variable drops it without a
+# word. Get-Content without an encoding read a BOM-less UTF-8 file in the
+# ANSI code page on Windows PowerShell 5.1, and a non-ASCII password became
+# another one.
+function ConvertFrom-ExakitVsSecretBytes {
+    param([byte[]]$Bytes = @())
+    $n = $Bytes.Length
+    $skip = 0
+    # Decoded without throwing (a caught decode error keeps a byte of the
+    # credential in $Error: "Unable to translate bytes [E4]"), then encoded
+    # back: an invalid byte became U+FFFD, which does not encode to what was read.
+    $encoding = New-Object System.Text.UTF8Encoding($false, $false)
+    if ($n -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) {
+        $encoding = New-Object System.Text.UnicodeEncoding($false, $false, $false); $skip = 2
+    } elseif ($n -ge 2 -and $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF) {
+        $encoding = New-Object System.Text.UnicodeEncoding($true, $false, $false); $skip = 2
+    } elseif ($n -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        $skip = 3
+    }
+    $text = $encoding.GetString($Bytes, $skip, $n - $skip)
+    $back = $encoding.GetBytes($text)
+    $same = ($back.Length -eq ($n - $skip))
+    for ($i = 0; $same -and $i -lt $back.Length; $i++) { if ($back[$i] -ne $Bytes[$skip + $i]) { $same = $false } }
+    [Array]::Clear($back, 0, $back.Length)
+    if (-not $same -or $text.IndexOf([char]0) -ge 0) { return $null }
+    # Ordinal: a culture comparison ignores a soft hyphen after the newline
+    # and would cut that instead.
+    if ($text.EndsWith("`r`n", [StringComparison]::Ordinal)) { $text = $text.Substring(0, $text.Length - 2) }
+    elseif ($text.EndsWith("`n", [StringComparison]::Ordinal)) { $text = $text.Substring(0, $text.Length - 1) }
+    return $text
+}
+
+# Get-ExakitVsSecretFileBytes - a credential file's bytes, read whole: a
+# stream, not a length, so a pipe given as the file is read too (once - it
+# cannot be opened again). $null when it is not there or cannot be read.
+function Get-ExakitVsSecretFileBytes {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        # The full path: .NET resolves a relative one against the process's
+        # folder, not PowerShell's current location.
+        $stream = [System.IO.File]::OpenRead((Get-Item -LiteralPath $Path -ErrorAction Stop).FullName)
+        $buffer = New-Object System.IO.MemoryStream
+        try { $stream.CopyTo($buffer) } finally { $stream.Dispose() }
+        # The comma keeps an empty file's empty array from unrolling to $null.
+        return ,$buffer.ToArray()
+    } catch { return $null }
+}
+
+# Get-ExakitVsSecretFileText - a credential file's text
+# (ConvertFrom-ExakitVsSecretBytes); $null when it cannot be read, or is
+# neither UTF-8 nor UTF-16 text.
+function Get-ExakitVsSecretFileText {
+    param([string]$Path)
+    $bytes = Get-ExakitVsSecretFileBytes -Path $Path
+    if ($null -eq $bytes) { return $null }
+    return (ConvertFrom-ExakitVsSecretBytes -Bytes $bytes)
+}
+
+# Read-ExakitVsSecretFile - the file's text, or the refusal (exit 2; with
+# --json the one object) saying which: it cannot be read (a missing file is
+# the same refusal), or it is not text this side reads.
+function Read-ExakitVsSecretFile {
+    param([string]$Path)
+    $bytes = Get-ExakitVsSecretFileBytes -Path $Path
+    if ($null -eq $bytes) { Deny-ExakitVsInput "Cannot read $Path" "cannot read $Path" "give a file this user can read with --password-file" }
+    $text = ConvertFrom-ExakitVsSecretBytes -Bytes $bytes
+    if ($null -eq $text) { Deny-ExakitVsInput "The credential in $Path is not UTF-8 or UTF-16 text (another encoding, or a NUL byte): save it as UTF-8 (UTF-16 needs its byte-order mark)." "the credential is not UTF-8 or UTF-16 text" "save the file as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again" }
+    return $text
+}
+
+# Test-ExakitVsMsysPtyName <name> - is this pipe a Git Bash / MSYS2 / Cygwin
+# terminal (\msys-<hex>-pty<n>-from-master, or cygwin-)?
+function Test-ExakitVsMsysPtyName {
+    param([string]$Name)
+    return ($Name -match '^\\(msys|cygwin)-[0-9a-fA-F]+-pty[0-9]+-(from|to)-master')
+}
+
+# Get-ExakitVsStdinPipeName - the name of the pipe behind standard input on
+# Windows, "" elsewhere or when there is none: GetFileInformationByHandleEx
+# (FileNameInfo), as Git for Windows and go-isatty tell a mintty terminal
+# from a pipe.
+function Get-ExakitVsStdinPipeName {
+    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) { return "" }
+    try {
+        if (-not ("ExakitVsStdinName" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ExakitVsStdinName {
+    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
+    [DllImport("kernel32.dll")] static extern bool GetFileInformationByHandleEx(IntPtr handle, int infoClass, IntPtr info, int size);
+    public static string Get() {
+        int size = 4 + 2 * 1024;
+        IntPtr info = Marshal.AllocHGlobal(size);
+        try {
+            if (!GetFileInformationByHandleEx(GetStdHandle(-10), 2, info, size)) { return ""; }
+            int length = Marshal.ReadInt32(info);
+            if (length <= 0 || length > size - 4) { return ""; }
+            return Marshal.PtrToStringUni(new IntPtr(info.ToInt64() + 4), length / 2);
+        } finally { Marshal.FreeHGlobal(info); }
+    }
+}
+'@
+        }
+        return [ExakitVsStdinName]::Get()
+    } catch { return "" }
+}
+
+# Test-ExakitVsStdinTerminal - is a person's terminal on standard input? The
+# console (nothing piped or redirected into it), or Git Bash's mintty, which
+# hands a Windows program its terminal as a named pipe: "redirected", yet
+# what is typed there echoes and nothing ever ends it.
+function Test-ExakitVsStdinTerminal {
+    if (-not [Console]::IsInputRedirected) { return $true }
+    return (Test-ExakitVsMsysPtyName (Get-ExakitVsStdinPipeName))
+}
+
+# Read-ExakitVsStdinSecret - --password-stdin: ALL of standard input (a JSON
+# key file has line breaks), decoded and trimmed as a --password-file is
+# (ConvertFrom-ExakitVsSecretBytes). Its bytes, not [Console]::In, which
+# decodes in the console's input code page and turns a UTF-8 credential's
+# non-ASCII characters into others. Refuses (exit 2; with --json the one
+# object) a console on stdin - the flag means a pipe or a file - and nothing
+# read. It reaches the engine as every secret does: base64 on its stdin.
+# Never echoed, logged or passed as an argument. Twin of _exakit_vs_stdin_secret.
+function Read-ExakitVsStdinSecret {
+    if (Test-ExakitVsStdinTerminal) {
+        # Not a PowerShell pipe as the way out: Windows PowerShell 5.1 pipes only ASCII to a command.
+        Deny-ExakitVsInput '--password-stdin reads the credential from standard input, which is a terminal here: give it with --password-file <file>, or redirect the file in cmd.exe (cmd /c "exakit ... --password-stdin < key.json"), or leave --password-stdin out to be asked.' "--password-stdin was given, but standard input is a terminal" "give it with --password-file <file>, or redirect a file into the command from cmd.exe (exakit ... --password-stdin < key.json)"
+    }
+    $buffer = New-Object System.IO.MemoryStream
+    $stdin = [Console]::OpenStandardInput()
+    try { $stdin.CopyTo($buffer) } finally { $stdin.Dispose() }
+    $text = ConvertFrom-ExakitVsSecretBytes -Bytes $buffer.ToArray()
+    $buffer.Dispose()
+    if ($null -eq $text) { Deny-ExakitVsInput "--password-stdin: the credential on standard input is not UTF-8 or UTF-16 text (another encoding, or a NUL byte)." "the credential is not UTF-8 or UTF-16 text" "send it as UTF-8 (UTF-16 needs its byte-order mark), or give it with --password-file <file>" }
+    if (-not $text) { Deny-ExakitVsInput "--password-stdin read nothing: standard input was empty." "--password-stdin was given, but standard input was empty" "pipe the credential into the command and close the pipe once it is written, or give it with --password-file <file>" }
+    return $text
+}
+
 function Read-ExakitVsSecret {
     param([string]$Label, [string]$PasswordFile = "", [string]$Kind = "secret")
-    if ($PasswordFile) {
-        if (-not (Test-Path -LiteralPath $PasswordFile)) { Deny-ExakitInput "Cannot read $PasswordFile" }
-        return ((Get-Content -Raw -LiteralPath $PasswordFile) -replace "[\r\n]+$", "")
-    }
+    if ($PasswordFile) { return (Read-ExakitVsSecretFile -Path $PasswordFile) }
+    # --json never prompts: without --password-file there is no credential.
+    if ($script:ExakitVsJson) { return "" }
     if (-not (Test-ExakitInteractive)) { Deny-ExakitInput "No $Label was given: use --password-file (a credential is never taken as an argument)." }
     if ($Kind -eq "secret-file") {
         # A key file is asked for by its path - nobody pastes a JSON key into a hidden prompt.
         $path = Read-ExakitPrompt "$Label - path to the file" ""
         if ($path -like "~*") { $path = $HOME + $path.Substring(1) }
         if (-not $path -or -not (Test-Path -LiteralPath $path)) { Deny-ExakitInput "Cannot read $path" }
-        return ((Get-Content -Raw -LiteralPath $path) -replace "[\r\n]+$", "")
+        return (Read-ExakitVsSecretFile -Path $path)
     }
+    return (Read-ExakitVsHidden $Label)
+}
+
+# Read-ExakitVsHidden - one line from the console, never echoed: the
+# credential, and the connection string (it often holds one). Twin of
+# exakit_read_hidden.
+function Read-ExakitVsHidden {
+    param([string]$Label)
     Write-Host ("    {0}?{1} {2} (input hidden): " -f $script:UiAsk, $script:UiReset, $Label) -NoNewline
     $secure = Read-Host -AsSecureString
+    # The rest of a multi-line paste answers no later question.
+    Clear-ExakitVsPendingKeys
     $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
     finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+}
+
+# Clear-ExakitVsPendingKeys - after a hidden answer, the keys still pending (the
+# rest of a multi-line paste) are read and dropped, until a tenth of a second
+# passes with none: they would otherwise answer the next question, and a
+# visible one would echo them. Twin of the drain in _exakit_vs_hidden_line.
+function Clear-ExakitVsPendingKeys {
+    try {
+        do {
+            Start-Sleep -Milliseconds 100
+            $any = $false
+            while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true); $any = $true }
+        } while ($any)
+    } catch { }
 }
 
 # Get-ExakitVsSecretKind - the kind of a connector's credential input (secret
@@ -137,6 +471,8 @@ function Get-ExakitVsSecretKind {
 function Confirm-ExakitVs {
     param([string]$Question)
     if ($script:ExakitVsAssumeYes) { return $true }
+    # --json never asks: without --yes the answer is no.
+    if ($script:ExakitVsJson) { return $false }
     if (-not (Test-ExakitInteractive)) { return $false }
     $answer = Read-ExakitPrompt "$Question [y/N]" "N"
     return ($answer -match '^(y|yes)$')
@@ -191,7 +527,8 @@ function Install-ExakitVsRust {
         $env:EXAKIT_STOP_ADDONS = "1"
         & $exakit stop *> $null
     } finally { $env:EXAKIT_STOP_ADDONS = $previousStop }
-    & $exakit start | Out-Host
+    # Write-Host, not Out-Host: with --json, Invoke-ExakitVsAside moves these lines to stderr.
+    & $exakit start | ForEach-Object { Write-Host "$_" }
     Ok "Rust language container installed"
     return $true
 }
@@ -210,45 +547,120 @@ function Install-ExakitVsJava {
         Write-Host ("  {0} The Java language container did not install. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red
         return $false
     }
+    # Docker: the download the start would make, made now, and the image
+    # linked to the deployment's DNS before the start mounts it read-only - so
+    # this start is the only one (Initialize-PersonalSlcDns).
+    try { Initialize-PersonalSlcDns -Pull } catch { }
+    if (-not (Restart-ExakitVsDatabase)) {
+        Write-Host ("  {0} The database did not come back after installing Java. Run: exakit start" -f $script:UiCross) -ForegroundColor Red
+        return $false
+    }
+    # An installed kit's start repairs DNS; this kit copy may be newer than it.
+    # Docker: linked in the image after an older kit's start mounted it - one
+    # more start mounts it.
+    try { [void](Repair-PersonalSlcDns) } catch { }
+    if ($script:PersonalSlcDnsNeedsStart -and -not (Restart-ExakitVsDatabase)) {
+        Write-Host ("  {0} The database did not come back after installing Java. Run: exakit start" -f $script:UiCross) -ForegroundColor Red
+        return $false
+    }
+    Ok "Java language container installed"
+    return $true
+}
+
+# Restart-ExakitVsDatabase - exakit stop (add-on services with it), then
+# exakit start, through the installed kit: its start brings add-on services
+# back and gives the language containers the deployment's DNS. $true when
+# that start succeeded: a caller must not go on with a database that is down.
+function Restart-ExakitVsDatabase {
     $exakit = Join-Path $script:BinDir "exakit.cmd"
     $previousStop = $env:EXAKIT_STOP_ADDONS
     try {
         $env:EXAKIT_STOP_ADDONS = "1"
         & $exakit stop *> $null
     } finally { $env:EXAKIT_STOP_ADDONS = $previousStop }
-    & $exakit start | Out-Host
-    try { [void](Repair-PersonalSlcDns) } catch { }
-    Ok "Java language container installed"
-    return $true
+    # Write-Host, not Out-Host: with --json, Invoke-ExakitVsAside moves these lines to stderr.
+    & $exakit start | ForEach-Object { Write-Host "$_" }
+    return ($LASTEXITCODE -eq 0)
+}
+
+# Repair-ExakitVsForRetry - what the bridge does about exit 20 (DNS repaired),
+# 21 (Java installed) or 23 (Rust installed) before its one retry; $false when
+# it could not, or was not allowed to. Twin of _exakit_vs_repair.
+function Repair-ExakitVsForRetry {
+    param([int]$Code)
+    if ($Code -eq 20) {
+        Info "Giving the database's language containers the deployment's DNS, then trying again"
+        if (Repair-PersonalSlcDns) { return $true }
+        if ($script:PersonalSlcDnsNeedsStart) {
+            # Docker: the fix is in the language container image, and the
+            # database mounts an image only when it starts.
+            Info "The database sees it from its next start: one restart (add-on services restart with it)."
+            if (-not (Confirm-ExakitVs "Restart the database now?")) {
+                Write-Host "  Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again." -ForegroundColor Red
+                return $false
+            }
+            if (-not (Restart-ExakitVsDatabase)) {
+                Write-Host "  The database did not come back. Run: exakit start" -ForegroundColor Red
+                return $false
+            }
+            return $true
+        }
+        Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red
+        return $false
+    }
+    if ($Code -eq 21) { return [bool](Install-ExakitVsJava) }
+    if ($Code -eq 23) { return [bool](Install-ExakitVsRust) }
+    return $false
 }
 
 # Invoke-ExakitVsRun - the engine once, repairing DNS (exit 20) or installing
-# Java (exit 21) and retrying once. Twin of _exakit_vs_run.
+# Java (exit 21) and retrying once. Twin of _exakit_vs_run. With --json
+# ($script:ExakitVsJson) the engine answers in JSON, its events to the log; the
+# last run's lines are kept in $script:ExakitVsLastLines for the caller to
+# print, and what the bridge says while it repairs goes to stderr.
 function Invoke-ExakitVsRun {
     param([string[]]$Arguments, [string]$Secret = "")
     $script:ExakitVsResult = $null
+    $script:ExakitVsLastLines = @()
+    # Once: a caller that built its arguments with --json already has it.
+    if ($script:ExakitVsJson -and (@($Arguments) -notcontains "--json")) { $Arguments = @("--json") + @($Arguments) }
     for ($try = 1; $try -le 2; $try++) {
         $run = Invoke-ExakitVsEngine -Arguments $Arguments -Secret $Secret
-        $script:ExakitVsResult = Show-ExakitVsLines -Lines $run.Lines
+        if ($script:ExakitVsJson) { $script:ExakitVsLastLines = @($run.Lines) }
+        else { $script:ExakitVsResult = Show-ExakitVsLines -Lines $run.Lines }
         if ($try -eq 2) { break }
-        if ($run.Code -eq 20) {
-            Info "Giving the database's language containers the deployment's DNS, then trying again"
-            if (-not (Repair-PersonalSlcDns)) { Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red; break }
-        } elseif ($run.Code -eq 21) {
-            if (-not (Install-ExakitVsJava)) { break }
-        } elseif ($run.Code -eq 23) {
-            if (-not (Install-ExakitVsRust)) { break }
-        } else { break }
+        if (@(20, 21, 23) -notcontains $run.Code) { break }
+        $code = $run.Code
+        if ($script:ExakitVsJson) {
+            # A repair that throws (a download, an install) ends the repair,
+            # not the command: the first run's object is still the answer.
+            $fixed = $false
+            try { $fixed = Invoke-ExakitVsAside { Repair-ExakitVsForRetry -Code $code } }
+            catch {
+                [Console]::Error.WriteLine("  " + $_.Exception.Message)
+                if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "ERROR" $_.Exception.Message }
+            }
+            if (-not $fixed) { break }
+        } elseif (-not (Invoke-ExakitVsAside { Repair-ExakitVsForRetry -Code $code })) { break }
     }
     return $run.Code
 }
 
 # Show-ExakitVsQueryHints - a first query on one of the source's real tables,
-# quoted as it must be, then the connector's tips. Twin of _exakit_vs_query_hints.
+# quoted as it must be, then the connector's tips. Twin of _exakit_vs_query_hints,
+# plus a line bash has no need for: here `exakit` is exakit.cmd, and PowerShell
+# (5.1, and 7 too for a batch file) strips the inner double quotes of an argument
+# it hands to one, so an example that quotes a name (MySQL, SQL Server, MongoDB
+# keep their names' case) is shown again with each one written \".
 function Show-ExakitVsQueryHints {
     param($Result, [string]$Name)
     if ($null -ne $Result -and $Result.PSObject.Properties["example"] -and $Result.example) {
-        Ok ("Query it like any schema: " + $Result.example)
+        $example = "" + $Result.example
+        Ok ("Query it like any schema: " + $example)
+        if ($example.Contains('"')) {
+            Info ("From PowerShell: exakit sql '" + $example.Replace('"', '\"').Replace("'", "''") + "'")
+            Info 'Each inner double quote needs its \ there: PowerShell drops unescaped ones when it hands the query to exakit.cmd.'
+        }
         foreach ($t in @($Result.tips)) { if ($t) { Info $t } }
     } else {
         Ok "Query it like any schema: SELECT * FROM VS_$($Name.ToUpperInvariant()).<table> LIMIT 10"
@@ -325,8 +737,19 @@ function Format-ExakitVsTuiTail {
     return $script:UiEllipsis + $Text.Substring($Text.Length - $Width + 1)
 }
 
+# Format-ExakitVsTuiFit - the text, its end kept when it is wider, or nothing
+# when the width is too small to say anything. Twin of _exakit_vs_tui_fit.
+function Format-ExakitVsTuiFit {
+    param([string]$Text = "", [int]$Width = 10)
+    if ($Text.Length -le $Width) { return $Text }
+    if ($Width -ge 4) { return (Format-ExakitVsTuiTail $Text $Width) }
+    return ""
+}
+
 # Get-ExakitVsTuiRows - how many console lines a line of that many characters
-# takes. Twin of _exakit_vs_tui_rows.
+# takes; one that fills the last column exactly is one row, as the console
+# holds the wrap until the next character. Twin of _exakit_vs_tui_rows (which
+# counts a readline line one more; PowerShell reads no line through readline).
 function Get-ExakitVsTuiRows {
     param([int]$Chars)
     if ($Chars -le 0) { return 1 }
@@ -369,9 +792,13 @@ function Invoke-ExakitVsPick {
 }
 
 # Show-ExakitVsTuiPanel - one source's panel over what the form drew last
-# ($script:EvtOnScreen lines), in one write. Twin of _exakit_vs_tui_draw.
+# ($script:EvtOnScreen lines), in one write. A field still to answer is dim, with
+# (required) or (optional) and its default; an answered one is ticked - or, with
+# -Numbered (the summary), numbered - and says so when a pasted connection string
+# gave it. The engine's notes on that string ($Form.Notes) stay under the panel.
+# Twin of _exakit_vs_tui_draw and _exakit_vs_tui_frame.
 function Show-ExakitVsTuiPanel {
-    param([hashtable]$Form, [int]$Current)
+    param([hashtable]$Form, [int]$Current, [switch]$Numbered)
     $e = $script:UiEsc
     $in = $script:EvtIn
     $title = " " + $Form.Title + " "
@@ -379,46 +806,79 @@ function Show-ExakitVsTuiPanel {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append("  " + $script:UiAccent + $script:UiTL + $script:UiHr + $script:UiReset + $script:UiBold + $title + $script:UiReset + $script:UiAccent + ($script:UiHr * $fill) + $script:UiTR + $script:UiReset + "`r`n")
     $lines = 1
+    # What a row's value may take: the panel's inside less the mark and label.
+    $room = $in - 7 - $Form.LW
     for ($i = 0; $i -lt $Form.Fields.Count; $i++) {
         $f = $Form.Fields[$i]
         $lab = $f.Label.PadRight($Form.LW)
+        $lead = ""
         if ($i -eq $Current) {
             $mark = $script:UiAccent + $script:UiArrow + $script:UiReset; $shown = $script:UiBold + $lab + $script:UiReset
             $plain = ""; $val = ""
         } elseif ($f.Done) {
             $mark = $script:UiOk + $script:UiTick + $script:UiReset; $shown = $lab
+            # The summary's number takes the tick's place, in as many columns.
+            if ($Numbered) { $lead = " " + $script:UiAccent + ("{0,2}" -f ($i + 1)) + $script:UiReset + "  " }
             $v = "" + $f.Val
             if ($f.Kind -eq "secret") { if ($v) { $v = "(given, hidden)" } else { $v = "(read from a file)" } }
+            # Emptied with "-": the default is what the plan will use.
+            if (-not $v) { $v = "" + $f.Def }
             if (-not $v) { $v = "(none)" }
-            $plain = Format-ExakitVsTuiTail $v $Form.VW
+            $from = ""
+            if ($f.From) { $from = " (from the string)" }
+            # Too narrow for both: the mark goes first, then the value is cut.
+            if ($v.Length + $from.Length -gt $room) { $from = "" }
+            $plain = Format-ExakitVsTuiFit $v $room
             $val = $plain
+            if ($from) { $val = $val + $script:UiDim + $from + $script:UiReset; $plain = $plain + $from }
         } else {
             $mark = " "; $shown = $script:UiDim + $lab + $script:UiReset
+            $req = "(optional)"
+            if ($f.Req) { $req = "(required)" }
             $v = "" + $f.Val
             if (-not $v) { $v = "" + $f.Def }
             if ($f.Kind -in @("secret", "secret-file")) { $v = "" }
-            $plain = ""
-            if ($v) { $plain = "[" + (Format-ExakitVsTuiTail $v ($Form.VW - 2)) + "]" }
+            $plain = $req
+            if ($v) { $plain = $req + " [" + $v + "]" }
+            if ($plain.Length -gt $room) {
+                # Too narrow: the mark goes first, then the default is cut, then
+                # it goes too (the question says both again).
+                $plain = ""
+                if ($v -and $room -ge 6) { $plain = "[" + (Format-ExakitVsTuiFit $v ($room - 2)) + "]" }
+            }
             $val = $script:UiDim + $plain + $script:UiReset
         }
+        if (-not $lead) { $lead = "  " + $mark + "  " }
         $pad = [Math]::Max(0, $in - 7 - $Form.LW - $plain.Length)
-        [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + "  " + $mark + "  " + $shown + "  " + $val + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
+        [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $lead + $shown + "  " + $val + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
         $lines++
     }
     [void]$sb.Append("  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $in) + $script:UiBR + $script:UiReset + "`r`n")
     $lines++
+    foreach ($note in @($Form.Notes)) {
+        if (-not $note) { continue }
+        $nm = $script:UiDim + $script:UiBullet + $script:UiReset
+        if ($note -like "WARN *") { $nm = $script:UiWarn + "!" + $script:UiReset }
+        $parts = @(Split-ExakitWrap -Text ($note.Substring($note.IndexOf(" ") + 1)) -Width ($script:EvtCols - 8))
+        for ($k = 0; $k -lt $parts.Count; $k++) {
+            if ($k -eq 0) { [void]$sb.Append("    " + $nm + " " + $parts[$k] + "`r`n") }
+            else { [void]$sb.Append("      " + $parts[$k] + "`r`n") }
+            $lines++
+        }
+    }
     if ($script:EvtOnScreen -gt 0) { [Console]::Write("`r$e[$($script:EvtOnScreen)A$e[0J" + $sb.ToString()) }
     else { [Console]::Write($sb.ToString()) }
     $script:EvtOnScreen = $lines
 }
 
-# Write-ExakitVsTuiSay - a line under the panel (a refused answer and why),
-# wrapped and counted. Twin of _exakit_vs_tui_say.
+# Write-ExakitVsTuiSay - a line under the panel (a refused answer and why, or
+# with -Mark a hint), wrapped and counted. Twin of _exakit_vs_tui_say.
 function Write-ExakitVsTuiSay {
-    param([string]$Text)
+    param([string]$Text, [string]$Mark = "")
+    if (-not $Mark) { $Mark = $script:UiErr + $script:UiCross + $script:UiReset }
     $parts = @(Split-ExakitWrap -Text $Text -Width ($script:EvtCols - 8))
     for ($k = 0; $k -lt $parts.Count; $k++) {
-        if ($k -eq 0) { [Console]::Write("    " + $script:UiErr + $script:UiCross + $script:UiReset + " " + $parts[$k] + "`r`n") }
+        if ($k -eq 0) { [Console]::Write("    " + $Mark + " " + $parts[$k] + "`r`n") }
         else { [Console]::Write("      " + $parts[$k] + "`r`n") }
     }
     $script:EvtOnScreen += $parts.Count
@@ -430,11 +890,35 @@ function Read-ExakitVsTuiAnswer {
     param([string]$Plain, [string]$Colour, [switch]$Hidden)
     [Console]::Write("  " + $Colour + ": ")
     if ($Hidden) {
-        $secure = Read-Host -AsSecureString
-        $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
-        try { $answer = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
-        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+        # Key by key, nothing echoed - the console call the menu reads with.
+        # Read-Host -AsSecureString here left the console's next ReadLine
+        # reading garbage on pwsh for Unix after an empty answer (measured).
+        # Twin of _exakit_vs_hidden_line: Backspace and Ctrl-U edit, Ctrl-D (or
+        # Ctrl-Z, the Windows console's) on an empty line is the end of input,
+        # and what is still pending after Enter is discarded.
+        $sb = New-Object System.Text.StringBuilder
+        $ended = $false
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            $code = [int]$key.KeyChar
+            if ($key.Key -eq [ConsoleKey]::Enter -or $code -eq 13 -or $code -eq 10) { break }
+            if ($code -eq 4 -or $code -eq 26) {
+                if ($sb.Length -eq 0) { $ended = $true; break }
+                continue
+            }
+            if ($key.Key -eq [ConsoleKey]::Backspace -or $code -eq 8 -or $code -eq 127) {
+                if ($sb.Length -gt 0) { [void]$sb.Remove($sb.Length - 1, 1) }
+                continue
+            }
+            if ($code -eq 21) { [void]$sb.Clear(); continue }
+            if ($code -ge 32) { [void]$sb.Append($key.KeyChar) }
+        }
+        $answer = $sb.ToString()
+        [void]$sb.Clear()
+        Clear-ExakitVsPendingKeys
+        [Console]::Write("`r`n")
         $script:EvtOnScreen += (Get-ExakitVsTuiRows ($Plain.Length + 4))
+        if ($ended) { return $null }
         return $answer
     }
     $answer = [Console]::ReadLine()
@@ -450,6 +934,277 @@ function Confirm-ExakitVsTui {
     $a = [Console]::ReadLine()
     $script:EvtOnScreen += 1
     return ("" + $a -match '^(y|yes)$')
+}
+
+# Get-ExakitVsPasteForms - the connection strings a connector's paste block reads
+# ("a, b or c"), for the question that asks for one; empty when it reads none.
+# Twin of _exakit_vs_paste_forms.
+function Get-ExakitVsPasteForms {
+    param([string]$Connector)
+    $defs = Get-ExakitVsDefs
+    if (-not $defs -or -not $Connector) { return "" }
+    $file = Join-ExakitCorePath $defs "connectors" $Connector "connector.json"
+    if (-not (Test-Path -LiteralPath $file)) { return "" }
+    $doc = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
+    if (-not $doc.PSObject.Properties["paste"] -or -not $doc.paste) { return "" }
+    $forms = @(@($doc.paste.forms) | Where-Object { $_ } | ForEach-Object { "" + $_ })
+    if ($forms.Count -eq 0) { return "" }
+    if ($forms.Count -eq 1) { return $forms[0] }
+    return ((@($forms | Select-Object -First ($forms.Count - 1))) -join ", ") + " or " + $forms[$forms.Count - 1]
+}
+
+# Format-ExakitVsPasteTyped - the engine's paste lines, for a string typed at a
+# prompt: its credential note (a WARN line) ends by saying the string was on the
+# command line, which a typed one was not, so that sentence is dropped. The
+# RESULT line, which repeats the notes, is left whole. Twin of
+# _exakit_vs_paste_typed.
+function Format-ExakitVsPasteTyped {
+    param([string[]]$Lines = @())
+    foreach ($line in $Lines) {
+        if ("" + $line -like "WARN *") { ("" + $line) -replace ' The string was on the command line.*$', '' } else { "" + $line }
+    }
+}
+
+# Read-ExakitVsLineAnswer - one line-by-line answer. With -Marks (someone is
+# answering: not --yes, --dry-run or --json) the question says (required) or
+# (optional), dim, and an empty answer to a required one is refused ("<label> is
+# required") and asked again; without, it is Read-ExakitPrompt as it always was.
+# Twin of _exakit_vs_prompt.
+function Read-ExakitVsLineAnswer {
+    param([string]$Question, [string]$Default = "", [bool]$Required = $false, [bool]$Marks = $false, [string]$Label = "")
+    if (-not $Marks) { return (Read-ExakitPrompt $Question $Default) }
+    $mark = "(optional)"
+    if ($Required) { $mark = "(required)" }
+    if (-not $Label) { $Label = $Question }
+    while ($true) {
+        if (-not (Test-ExakitInteractive)) { return $Default }
+        $v = "" + (Read-ExakitPrompt ("{0} {1}{2}{3}" -f $Question, $script:UiDim, $mark, $script:UiReset) $Default)
+        if ($v -or -not $Required) { return $v }
+        Write-Host ("  {0} {1} is required" -f $script:UiCross, $Label) -ForegroundColor Red
+        Write-ExakitLog "ERROR" "$Label is required"
+    }
+}
+
+# Read-ExakitVsLinePaste - the line-by-line twin of the form's first question: a
+# connection string, read hidden as a password is (it often holds one), to the
+# engine's paste, base64 on its stdin, never an argument; or Enter to type the
+# fields. Returns @{ Sets; Names } for what the string named; only those fields
+# are shown. A string the engine cannot read is said, in its words, and asked
+# again. Twin of _exakit_vs_ask_paste.
+function Read-ExakitVsLinePaste {
+    param([string]$Connector)
+    $answer = @{ Sets = @(); Names = @() }
+    $forms = Get-ExakitVsPasteForms $Connector
+    if (-not $forms) { return $answer }
+    Info ("Paste the source's connection string as it shows it: " + $forms)
+    while ($true) {
+        $url = "" + (Read-ExakitVsHidden "Connection string (Enter to type the fields)")
+        if (-not $url) { return $answer }
+        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Connector, "--base64") -Secret $url
+        $url = $null
+        $res = Show-ExakitVsLines -Lines @(Format-ExakitVsPasteTyped $pasted.Lines)
+        if ($pasted.Code -ne 0) { continue }
+        if ($null -ne $res -and $res.values) {
+            foreach ($p in @($res.values.PSObject.Properties)) {
+                $answer.Sets += @("--set", ("{0}={1}" -f $p.Name, $p.Value)); $answer.Names += $p.Name
+            }
+        }
+        return $answer
+    }
+}
+
+# Read-ExakitVsTuiField - field $Index asked under the panel (with why it is
+# asked again, when there is a reason): its label, (required) or (optional), its
+# notes and its default. Enter takes the default; an optional one with none is
+# left empty, a required one is refused in one line and asked again. The engine
+# checks a typed answer (cli.py field, base64 on its stdin); a credential is
+# hidden, and asked again keeps the one given on Enter. $false at end of input.
+# Twin of _exakit_vs_tui_field.
+function Read-ExakitVsTuiField {
+    param([hashtable]$Form, [int]$Index, [string]$Why = "")
+    Show-ExakitVsTuiPanel -Form $Form -Current $Index
+    if ($Why) { Write-ExakitVsTuiSay $Why }
+    $f = $Form.Fields[$Index]
+    $old = "" + $f.Val
+    $def = $old
+    if (-not $def) { $def = "" + $f.Def }
+    $keep = $false
+    $note = "(optional)"
+    if ($f.Req) { $note = "(required)" }
+    if ($f.Kind -eq "choice") { $note += " (" + ($f.Choices -join (" " + $script:UiMidDot + " ")) + ")" }
+    elseif ($f.Kind -eq "secret") {
+        $def = ""
+        # Given already - typed, or read from --password-file: Enter keeps it.
+        if ($old -or ($f.Done -and $Form.PwFile)) { $keep = $true; $note += " (hidden, Enter keeps the one given)" } else { $note += " (hidden)" }
+    }
+    elseif ($f.Kind -eq "secret-file") { $note += " (the path to the file)" }
+    # An optional answer that differs from its default can be taken back.
+    if (-not $f.Req -and $old -and $old -ne ("" + $f.Def) -and $f.Kind -notin @("secret", "secret-file")) { $note += " (- clears it)" }
+    if ($def) { $note += " [" + (Format-ExakitVsTuiTail $def 32) + "]" }
+    $plain = $f.Label + " " + $note
+    $colour = $script:UiAsk + $f.Label + $script:UiReset + " " + $script:UiDim + $note + $script:UiReset
+    while ($true) {
+        if ($f.Kind -eq "secret") {
+            $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
+            if ($null -eq $a) { return $false }
+            if (-not $a) {
+                if ($keep) { break }
+                if ($f.Req) { Write-ExakitVsTuiSay ("{0} is required; it stays in memory and goes only to the database" -f $f.LabelFull); continue }
+            }
+            $f.Val = "" + $a; $a = $null
+            break
+        }
+        $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
+        if ($null -eq $a) { return $false }
+        if ($a -eq "-" -and -not $f.Req) { $f.Val = ""; break }
+        $v = $a
+        if (-not $v) { $v = $def }
+        if ($v -like "~*") { $v = $HOME + $v.Substring(1) }
+        if (-not $v) {
+            if ($f.Req) { Write-ExakitVsTuiSay ("{0} is required" -f $f.LabelFull); continue }
+            $f.Val = ""
+            break
+        }
+        if ($f.Kind -eq "secret-file") {
+            if (Test-Path -LiteralPath $v -PathType Leaf) { $f.Val = $v; break }
+            Write-ExakitVsTuiSay "$v cannot be read here; give the path to the key file"
+            continue
+        }
+        # The engine's own rule for this input, in the words a scripted connect
+        # would get; the value travels base64 on its stdin, never in argv.
+        $check = Invoke-ExakitVsEngine -Arguments @("field", $Form.Connector, $f.Name, "--base64") -Secret $v
+        if ($check.Code -eq 0) {
+            $res = Get-ExakitVsResultOf $check.Lines
+            if ($null -ne $res) { $v = "" + $res.value }
+            if ($f.Kind -eq "source-name" -and (@($Form.Taken) -contains $v)) {
+                Write-ExakitVsTuiSay "$v is already the name of another source in this list"; continue
+            }
+            $f.Val = $v
+            break
+        }
+        $why = (@($check.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
+        if ($why) { $why = $why.Substring(5) } else { $why = "that value was refused" }
+        Write-ExakitVsTuiSay $why
+    }
+    $f.Done = $true
+    # Changed by hand, it is no longer what the connection string said.
+    if (("" + $f.Val) -ne $old) { $f.From = $false }
+    return $true
+}
+
+# Invoke-ExakitVsTuiWalk - every field not answered yet, in order; $false at end
+# of input. Twin of _exakit_vs_tui_walk.
+function Invoke-ExakitVsTuiWalk {
+    param([hashtable]$Form, [string]$Why = "")
+    for ($i = 0; $i -lt $Form.Fields.Count; $i++) {
+        if ($Form.Fields[$i].Done) { continue }
+        if (-not (Read-ExakitVsTuiField -Form $Form -Index $i -Why $Why)) { return $false }
+    }
+    return $true
+}
+
+# Invoke-ExakitVsTuiReview - the summary before the plan: the panel with every
+# answer numbered (a credential as hidden, a key file by its path), with why it
+# is shown again when a plan refused. A number asks that one field again, then
+# the summary comes back; Enter goes on. Once a plan has refused this source
+# ($Form.Refused), skip leaves it out. Returns "go", "eof" or "skip". Twin of
+# _exakit_vs_tui_review.
+function Invoke-ExakitVsTuiReview {
+    param([hashtable]$Form, [string]$Why = "")
+    $why = $Why
+    $plain = "Number to change, Enter to continue"
+    if ($Form.Refused) { $plain += ", skip to leave this source out" }
+    $colour = $script:UiAsk + "Number to change" + $script:UiReset + $script:UiDim + $plain.Substring(16) + $script:UiReset
+    while ($true) {
+        Show-ExakitVsTuiPanel -Form $Form -Current -1 -Numbered
+        if ($why) { Write-ExakitVsTuiSay $why }
+        $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
+        if ($null -eq $a) { return "eof" }
+        $n = $a -replace ' ', ''
+        if ($n -eq "skip" -and $Form.Refused) { return "skip" }
+        if (-not $n) {
+            # The answers as they stand, ticked again, the question gone.
+            Show-ExakitVsTuiPanel -Form $Form -Current -1
+            return "go"
+        }
+        if ($n -match '^[0-9]{1,2}$') {
+            $k = [int]$n
+            if ($k -ge 1 -and $k -le $Form.Fields.Count) {
+                if (-not (Read-ExakitVsTuiField -Form $Form -Index ($k - 1))) { return "eof" }
+                $why = ""
+                continue
+            }
+        }
+        $why = "give a number from 1 to {0}, or press Enter to continue" -f $Form.Fields.Count
+    }
+}
+
+# Invoke-ExakitVsTuiPaste - the form's first question, for a connector that reads
+# a connection string (its paste block): read hidden, the string goes to the
+# engine's paste, base64 on its stdin, never in argv, and is not kept. What it names is answered,
+# marked "from the string" and not asked; the engine's notes stay under the
+# panel. A string it cannot read is said, in the engine's words, and asked again;
+# Enter types the fields instead. $false at end of input. Twin of
+# _exakit_vs_tui_paste.
+function Invoke-ExakitVsTuiPaste {
+    param([hashtable]$Form)
+    $forms = Get-ExakitVsPasteForms $Form.Connector
+    if (-not $forms) { return $true }
+    $why = ""
+    # Read with echo off, as a password is: the string often holds one. Only the
+    # fields it filled are shown afterwards.
+    $plain = "Connection string (hidden; Enter to type the fields)"
+    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(hidden; Enter to type the fields)" + $script:UiReset
+    while ($true) {
+        Show-ExakitVsTuiPanel -Form $Form -Current -1
+        Write-ExakitVsTuiSay -Text ("Paste the source's connection string as it shows it: " + $forms) -Mark ($script:UiDim + $script:UiBullet + $script:UiReset)
+        if ($why) { Write-ExakitVsTuiSay $why }
+        $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
+        if ($null -eq $a) { return $false }
+        if (-not $a) { return $true }
+        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Form.Connector, "--base64") -Secret $a
+        $a = $null
+        if ($pasted.Code -ne 0) {
+            $why = (@($pasted.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
+            if ($why) { $why = $why.Substring(5) } else { $why = "the connection string could not be read" }
+            continue
+        }
+        $res = Get-ExakitVsResultOf $pasted.Lines
+        if ($null -ne $res -and $res.values) {
+            foreach ($p in @($res.values.PSObject.Properties)) {
+                foreach ($f in $Form.Fields) {
+                    if ($f.Name -eq $p.Name) { $f.Val = "" + $p.Value; $f.Done = $true; $f.From = $true }
+                }
+            }
+        }
+        $Form.Notes = @(Format-ExakitVsPasteTyped @(@($pasted.Lines) | Where-Object { $_ -like "WARN *" -or $_ -like "INFO *" }))
+        return $true
+    }
+}
+
+# Find-ExakitVsTuiNamed - the field a plan's refusal names: its index when it
+# names one, -2 when it names several, -1 when none. Input names count first, as
+# whole words in any case ("host", "tls=verify", "URI"; the source name as
+# "source name", not the bare word); only when none is named, the labels, the
+# same way ("Port" is not "report"). Twin of _exakit_vs_tui_named.
+function Find-ExakitVsTuiNamed {
+    param([hashtable]$Form, [string]$Text = "")
+    $hits = @()
+    $options = [System.Text.RegularExpressions.RegexOptions]::IgnoreCase
+    foreach ($pass in @("name", "label")) {
+        for ($i = 0; $i -lt $Form.Fields.Count; $i++) {
+            $f = $Form.Fields[$i]
+            $word = "" + $f.Name
+            if ($f.Kind -eq "source-name") { $word = "source name" }
+            if ($pass -eq "label") { $word = "" + $f.LabelFull }
+            if (-not $word) { continue }
+            if ([regex]::IsMatch($Text, '(?<![A-Za-z0-9_])' + [regex]::Escape($word) + '(?![A-Za-z0-9_])', $options)) { $hits += $i }
+        }
+        if ($hits.Count -gt 0) { break }
+    }
+    if ($hits.Count -eq 1) { return $hits[0] }
+    if ($hits.Count -gt 1) { return -2 }
+    return -1
 }
 
 # Invoke-ExakitVsTuiForm - one source's panel. Returns its answers as a
@@ -477,8 +1232,8 @@ function Invoke-ExakitVsTuiForm {
     foreach ($spec in @($doc.inputs)) {
         $label = "" + $spec.label
         foreach ($cut in @(" - ", " (", "; ")) { $label = $label.Split(@($cut), [StringSplitOptions]::None)[0] }
-        $f = @{ Name = "" + $spec.name; Label = $label; Kind = "" + $spec.kind; Req = [bool]$spec.required
-                Def = "" + $spec.default; Choices = @($spec.choices); Val = ""; Done = $false }
+        $f = @{ Name = "" + $spec.name; Label = $label; LabelFull = $label; Kind = "" + $spec.kind; Req = [bool]$spec.required
+                Def = "" + $spec.default; Choices = @($spec.choices); Val = ""; Done = $false; From = $false }
         if ($f.Kind -eq "source-name" -and $GivenName) { $f.Val = $GivenName; $f.Done = $true }
         if ($given.ContainsKey($f.Name)) { $f.Val = $given[$f.Name]; $f.Done = $true }
         if ($PasswordFile) {
@@ -490,65 +1245,22 @@ function Invoke-ExakitVsTuiForm {
     }
     if ($lw -gt 30) { $lw = 30 }
     foreach ($f in $fields) { $f.Label = Format-ExakitVsTuiShort $f.Label $lw }
-    $form = @{ Title = ("{0} of {1} {2} {3}" -f $Pos, $Total, $script:UiMidDot, $doc.name); Fields = $fields; LW = $lw; VW = ($script:EvtIn - 7 - $lw - 2) }
+    $form = @{ Title = ("{0} of {1} {2} {3}" -f $Pos, $Total, $script:UiMidDot, $doc.name); Fields = $fields; LW = $lw
+               Connector = $Connector; Taken = @($Taken); Notes = @(); PwFile = $PasswordFile; Refused = $false }
     $pwFile = $PasswordFile
+    $script:EvtOnScreen = 0
+    # 1. A connection string first, when the command line answered nothing but
+    # the name: what it names is answered (and marked so), the rest asked next.
+    $asked = $false
+    foreach ($f in $fields) { if ($f.Done -and $f.Kind -notin @("source-name", "secret", "secret-file")) { $asked = $true } }
+    if (-not $asked) { if (-not (Invoke-ExakitVsTuiPaste -Form $form)) { return "left-out" } }
+    # 2. every field not answered yet
+    if (-not (Invoke-ExakitVsTuiWalk -Form $form)) { return "left-out" }
+    $again = ""
     while ($true) {
-        $script:EvtOnScreen = 0
-        for ($i = 0; $i -lt $fields.Count; $i++) {
-            $f = $fields[$i]
-            if ($f.Done) { continue }
-            Show-ExakitVsTuiPanel -Form $form -Current $i
-            $def = "" + $f.Val
-            if (-not $def) { $def = $f.Def }
-            $note = ""
-            if ($f.Kind -eq "choice") { $note = "(" + ($f.Choices -join (" " + $script:UiMidDot + " ")) + ")" }
-            elseif ($f.Kind -eq "secret") { $note = "(hidden)"; $def = "" }
-            elseif ($f.Kind -eq "secret-file") { $note = "(the path to the file)" }
-            if ($def) { $note = ($note + " [" + (Format-ExakitVsTuiTail $def 32) + "]").Trim() }
-            $plain = $f.Label
-            if ($note) { $plain += " " + $note }
-            $colour = $script:UiAsk + $f.Label + $script:UiReset
-            if ($note) { $colour += " " + $script:UiDim + $note + $script:UiReset }
-            while ($true) {
-                if ($f.Kind -eq "secret") {
-                    $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
-                    if (-not $a) { Write-ExakitVsTuiSay "this one is needed; it stays in memory and goes only to the database"; continue }
-                    $f.Val = $a; $a = $null
-                    break
-                }
-                $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
-                if ($null -eq $a) { return "left-out" }
-                $v = $a
-                if (-not $v) { $v = $def }
-                if ($v -like "~*") { $v = $HOME + $v.Substring(1) }
-                if ($f.Kind -eq "secret-file") {
-                    if ($v -and (Test-Path -LiteralPath $v -PathType Leaf)) { $f.Val = $v; break }
-                    if (-not $v) { $v = "no file" }
-                    Write-ExakitVsTuiSay "$v cannot be read here; give the path to the key file"
-                    continue
-                }
-                if (-not $v) {
-                    # Nothing to send: an empty answer with no default is only
-                    # wrong when the input is required.
-                    if ($f.Req) { Write-ExakitVsTuiSay ("{0} is required ({1})" -f $f.Name, $f.Label); continue }
-                    $f.Val = ""; break
-                }
-                $check = Invoke-ExakitVsEngine -Arguments @("field", $Connector, $f.Name, "--base64") -Secret $v
-                if ($check.Code -eq 0) {
-                    $res = Get-ExakitVsResultOf $check.Lines
-                    if ($null -ne $res) { $v = "" + $res.value }
-                    if ($f.Kind -eq "source-name" -and ($Taken -contains $v)) {
-                        Write-ExakitVsTuiSay "$v is already the name of another source in this list"; continue
-                    }
-                    $f.Val = $v; break
-                }
-                $why = (@($check.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
-                if ($why) { $why = $why.Substring(5) } else { $why = "that value was refused" }
-                Write-ExakitVsTuiSay $why
-            }
-            $f.Done = $true
-        }
-        Show-ExakitVsTuiPanel -Form $form -Current -1
+        # 3. the numbered summary: one answer at a time asked again, then Enter
+        if ((Invoke-ExakitVsTuiReview -Form $form -Why $again) -ne "go") { return "left-out" }
+        $again = ""
         $base = @($Connector)
         foreach ($f in $fields) {
             if ($f.Kind -eq "source-name") { $base += @("--name", $f.Val) }
@@ -558,14 +1270,29 @@ function Invoke-ExakitVsTuiForm {
         $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
         if ($planned.Code -eq 0) { break }
         $why = (@($planned.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
-        if ($why) { Write-ExakitVsTuiSay $why.Substring(5) }
+        if ($why) { $why = $why.Substring(5) } else { $why = "" }
+        $form.Refused = $true
+        # A refusal that names one input goes straight back to that one, its
+        # reason above the question; one that names several opens the summary
+        # with the reason; any other is said, and every answer can be given
+        # again. The summary then offers skip, so no refusal is a dead end.
+        $at = Find-ExakitVsTuiNamed -Form $form -Text $why
+        if ($at -ge 0) {
+            if (-not (Read-ExakitVsTuiField -Form $form -Index $at -Why $why)) { return "left-out" }
+            continue
+        }
+        if ($at -eq -2) { $again = $why; continue }
+        if ($why) { Write-ExakitVsTuiSay $why }
         if (-not (Confirm-ExakitVsTui "Change the answers?")) { return "left-out" }
-        [Console]::Write("`r`n")
         foreach ($f in $fields) { $f.Done = $false }
-        $pwFile = ""
+        $pwFile = ""; $form.PwFile = ""
+        if (-not (Invoke-ExakitVsTuiWalk -Form $form -Why $why)) { return "left-out" }
     }
+    # The plan's own INFO lines (a source on the internet: the public IP it must
+    # allow) are said in the review, as the line-by-line path says them.
+    $planInfo = @(@($planned.Lines) | Where-Object { $_ -like "INFO *" } | ForEach-Object { $_.Substring(5) })
     $src = @{ Id = $Connector; Label = "" + $doc.name; Base = $base; Plan = (Get-ExakitVsResultOf $planned.Lines)
-              Name = ""; Secret = ""; SecretFile = ""; Where = "" }
+              PlanInfo = $planInfo; Name = ""; Secret = ""; SecretFile = ""; Where = "" }
     foreach ($f in $fields) {
         if ($f.Kind -eq "source-name") { $src.Name = $f.Val }
         elseif ($f.Kind -eq "secret") { $src.Secret = $f.Val }
@@ -607,18 +1334,26 @@ function Invoke-ExakitVsTuiRun {
                 "unreachable" = "the source did not answer"; "nohost" = "the host name does not resolve"
                 "dns" = "Java in the database has no DNS"; "denied" = "the account may not read this"
                 "region" = "the region does not match"; "nobucket" = "no such bucket or container"
-                "clock" = "the database clock is wrong" }
+                "clock" = "the database clock is wrong"; "privilege" = "the account lacks a privilege"
+                "missing_or_denied" = "no such object, or not granted" }
     for ($i = 0; $i -lt $Sources.Count; $i++) {
         $s = $Sources[$i]
         $row = $i + 1
         $t0 = Get-Date
         $secret = $s.Secret
+        $unread = ""
         if (-not $secret -and $s.SecretFile) {
-            $secret = ((Get-Content -Raw -LiteralPath $s.SecretFile) -replace "[\r\n]+$", "")
+            $secret = Get-ExakitVsSecretFileText -Path $s.SecretFile
+            if ($null -eq $secret) { $secret = ""; $unread = "" + $s.SecretFile }
         }
         $engineArgs = @("--json", "connect") + $s.Base
         if ($secret) { $engineArgs += "--secret-stdin" }
         for ($try = 1; $try -le 2; $try++) {
+            if ($unread) {
+                # Its row says so, as the engine says a file the shell hands it raw.
+                $run = [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "input" -Problem "cannot read $unread as UTF-8 or UTF-16 text" -Remedy "save the file as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again") }
+                break
+            }
             Set-ExakitTableRow -Row $row -State running -Pct 5 -Ceiling 90 -Secs 30 -Phase "connecting" -Table $Table
             $run = Invoke-ExakitVsEngine -Arguments $engineArgs -Secret $secret
             if ($run.Code -eq 20 -and $try -eq 1) {
@@ -699,8 +1434,8 @@ function Invoke-ExakitVsTui {
         $taken += $src.Name
     }
     if ($sources.Count -eq 0) { Info "Nothing was changed."; return 5 }
-    # 3. review: what each plan downloads and who can read the result, above one
-    # table and one question
+    # 3. review: what each plan downloads and who can read the result, then the
+    # plan's own INFO lines, above one table and one question
     foreach ($s in $sources) {
         $plan = $s.Plan
         if ($null -eq $plan) { continue }
@@ -711,6 +1446,7 @@ function Invoke-ExakitVsTui {
         }
         foreach ($warning in @($plan.warnings)) { if ($warning) { Warn2 ("{0}: {1}" -f $plan.name, $warning) } }
         if ($plan.exposure) { Info ("{0}: {1}" -f $plan.name, ($plan.exposure.Substring(0, 1).ToUpperInvariant() + $plan.exposure.Substring(1))) }
+        foreach ($note in @($s.PlanInfo)) { if ($note) { Info ("{0}: {1}" -f $plan.name, $note) } }
     }
     $plural = "s"; if ($sources.Count -eq 1) { $plural = "" }
     $t = New-ExakitVsTuiTable -Title ("Connect {0} source{1}" -f $sources.Count, $plural) -Sources $sources

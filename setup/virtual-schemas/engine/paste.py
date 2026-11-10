@@ -158,12 +158,17 @@ class Reading(object):
                 value = "/" + value
             self.put(target, value)
         implied = [p.lower() for p in self.block.get("implied", [])]
+        after_secret = False
         for low, name in names.items():
-            if low in mapping or low in implied or low in CONSUMED.get(rule, ()):
-                continue
-            if self.is_secret(name):
-                self.secret = True
-            self.drop(name)
+            secret = self.is_secret(name)
+            if not (low in mapping or low in implied or low in CONSUMED.get(rule, ())):
+                if secret:
+                    self.secret = True
+                # After a credential, a "parameter" may be the rest of a
+                # password whose & or ; was not percent-encoded (password=Abc&Xyz9):
+                # dropped like the rest, counted, never named.
+                self.drop(name if secret or not after_secret else "?")
+            after_secret = after_secret or secret
 
     def result(self):
         values = {}
@@ -172,7 +177,7 @@ class Reading(object):
                 continue
             value, problem = planner.check_value(self.specs[name], self.values[name])
             if problem:
-                if problem != planner.LOOPBACK_ADVICE:
+                if problem != planner.loopback_advice():
                     # Not quoted: a password pasted without its percent-encoding
                     # can be misread as a host or a port.
                     problem = "it is not a valid %s" % self.specs[name]["kind"]
@@ -345,6 +350,11 @@ def style_mongodb(reading, text):
             reading.drop(name)
         else:
             kept.append(segment)
+    # Refused here, not dropped by result() as an invalid uri: the adapter
+    # signs in against admin, so another authSource is a reader that cannot log in.
+    problem = planner.mongo_auth_source("?" + "&".join(kept))
+    if problem:
+        reading.refuse(problem)
     reading.put("uri", "%s://%s%s" % (scheme, authority, "/?" + "&".join(kept) if kept else ""))
 
 

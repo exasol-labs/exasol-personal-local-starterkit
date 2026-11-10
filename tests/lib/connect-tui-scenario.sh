@@ -18,6 +18,8 @@ _require_install() { :; }
 exakit_init_logging() { EXAKIT_LOG_FILE="$TUI_LOG"; }
 personal_slc_dns_repair() { return 0; }
 command -v reject >/dev/null 2>&1 || reject() { printf '%s\n' "$*" >&2; exit 2; }
+# The kit's pyexasol, which the credential reader runs on: here, python3.
+pyexasol_venv_python() { command -v python3; }
 exakit_vs_engine() {
     EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$TUI_STATE" FAKE_VS_EXA="$TUI_EXA" \
         EXAKIT_VS_SETTLE_SECONDS=0 EXAKIT_VS_VISIBLE_TIMEOUT=5 \
@@ -37,6 +39,49 @@ d = json.load(open(sys.argv[1])); d["java"] = True; json.dump(d, open(sys.argv[1
 PY
         ok "Java language container installed"
     }
+fi
+
+# TUI_SLOW_CONNECT=<seconds>: each connect takes at least that long, so a key
+# typed while the live table runs is typed while it runs, however fast the
+# simulated database answers.
+if [ -n "${TUI_SLOW_CONNECT:-}" ]; then
+    eval "_tui_fast_engine() $(declare -f exakit_vs_engine | sed 1d)"
+    exakit_vs_engine() {
+        case " $* " in *" connect "*) sleep "$TUI_SLOW_CONNECT" ;; esac
+        _tui_fast_engine "$@"
+    }
+fi
+
+# TUI_PLAN_FAIL: the form's first plan is refused with this reason - what the
+# engine says of an input the form's own checks let through - and every later
+# plan is the engine's own. One shell: the form runs the plan in this process.
+if [ -n "${TUI_PLAN_FAIL:-}" ]; then
+    eval "_tui_engine() $(declare -f exakit_vs_engine | sed 1d)"
+    exakit_vs_engine() {
+        if [ "$1" = plan ] && [ -z "${_TUI_PLAN_REFUSED:-}" ]; then
+            _TUI_PLAN_REFUSED=1
+            printf 'FAIL %s\n' "$TUI_PLAN_FAIL"
+            return 2
+        fi
+        _tui_engine "$@"
+    }
+fi
+
+# TUI_PLAIN=1: a terminal without the drawn form (a dumb TERM, NO_COLOR), so
+# cmd_connect takes its line-by-line questions. Run with TTY_REPLAY_CTTY=1:
+# those prompts and the hidden one read /dev/tty.
+[ -n "${TUI_PLAIN:-}" ] && UI_FANCY=0
+
+# TUI_SAY_EXIT=1: the exit status is the last line written ("EXIT <n>"), for a
+# refusal the replay could otherwise only see the words of.
+[ -n "${TUI_SAY_EXIT:-}" ] && trap 'printf "EXIT %s\n" "$?"' EXIT
+
+# TUI_STDIN: stdin is a pipe carrying this text, the terminal still behind
+# /dev/tty (run with TTY_REPLAY_CTTY=1) - `printf pw | exakit connect ...`.
+if [ -n "${TUI_STDIN:-}" ]; then
+    # shellcheck disable=SC2086
+    printf '%s' "$TUI_STDIN" | cmd_connect ${TUI_ARGS:-}
+    exit $?
 fi
 
 # TUI_ARGS: what the command line said (a connector, --name, --set ...), word split.

@@ -13,7 +13,10 @@
 #      stopped database are left alone; a pending task reruns the installer
 #      once, pinned to the installed versions, and the pins do not leak.
 #   4. The handover: the new exakit.ps1 runs once, its --json rows are merged
-#      back, and the environment is restored.
+#      back, and the environment is restored. Under --json the new run is a
+#      --json run (a failed updater is a row, the rest are still tried), and
+#      it writes the error and hint fields only to a parent that declared it
+#      reads them, so an older kit's five-field reader keeps its remedy.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tests/core-setup.ps1
 #   pwsh -NoProfile -File tests/core-setup.ps1
@@ -33,6 +36,12 @@ function Has($label, $needle, $haystack) {
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-core-ps-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $isWin = ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)
+# A temp HOME and bin dir for every child process below. Each one dot-sources
+# exakit-common.ps1, which creates the kit's bin dir as it loads; with neither
+# set that was an empty .local/bin in the developer's real home on macOS/Linux.
+$env:HOME = Join-Path $work "userhome"
+$env:EXAKIT_BIN_DIR = Join-Path $work "bin"
+New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
 
 # The kit runs `python`. Where only python3 exists (macOS, many Linux images),
 # a shim directory supplies the name.
@@ -201,8 +210,11 @@ Write-Host ""
 Write-Host "== exakit update: the handover =="
 $handoverCalls = Join-Path $work "handover-calls"
 $fakeExakit = @'
-Add-Content -LiteralPath '__CALLS__' -Value ("new " + ($args -join " ") + " handover=" + $env:EXAKIT_UPDATE_HANDOVER)
-if ($env:EXAKIT_UPDATE_RESULTS_FILE) { Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value "exapump|updated|1.0|2.0|" }
+Add-Content -LiteralPath '__CALLS__' -Value ("new " + ($args -join " ") + " handover=" + $env:EXAKIT_UPDATE_HANDOVER + " rows=" + $env:EXAKIT_UPDATE_ROW_FIELDS)
+if ($env:EXAKIT_UPDATE_RESULTS_FILE) {
+    Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value "exapump|updated|1.0|2.0|"
+    Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value "mcp|failed|1.0|2.0|exakit update mcp|uvx did not answer|the hint"
+}
 exit 3
 '@
 Set-Content -LiteralPath (Join-Path $kitSetup "exakit.ps1") -Value $fakeExakit.Replace("__CALLS__", $handoverCalls) -Encoding ASCII
@@ -210,12 +222,222 @@ $script:ExakitUpdateJson = $true
 $script:ExakitUpdateResults = New-Object System.Collections.ArrayList
 $code = Invoke-ExakitUpdateHandover -Target "all" -AssumeYes $true
 $script:ExakitUpdateJson = $false
-Check "the new exakit.ps1 runs once, with the target and --yes" "new update all --yes handover=1" ((Get-Content -LiteralPath $handoverCalls) -join "|")
+Check "the new exakit.ps1 runs once, with the target, --yes and --json, told this reader takes seven fields" "new update all --yes --json handover=1 rows=7" ((Get-Content -LiteralPath $handoverCalls) -join "|")
 Check "...its exit code comes back" 3 $code
-Check "...its --json rows are merged into this run's" "exapump|updated|1.0|2.0|" (($script:ExakitUpdateResults | ForEach-Object { "$($_.component)|$($_.outcome)|$($_.from)|$($_.to)|$($_.remedy)" }) -join ";")
-Check "...and the handover variables are gone again" "|" ("$env:EXAKIT_UPDATE_HANDOVER|$env:EXAKIT_UPDATE_RESULTS_FILE")
+Check "...a seven-field row keeps its error and hint" "mcp|exakit update mcp|uvx did not answer|the hint" (@($script:ExakitUpdateResults | Where-Object { $_.component -eq "mcp" } | ForEach-Object { "$($_.component)|$($_.remedy)|$($_.error)|$($_.hint)" }) -join ";")
+Check "...its --json rows are merged into this run's" "exapump|updated|1.0|2.0|;mcp|failed|1.0|2.0|exakit update mcp" (($script:ExakitUpdateResults | ForEach-Object { "$($_.component)|$($_.outcome)|$($_.from)|$($_.to)|$($_.remedy)" }) -join ";")
+Check "...and the handover variables are gone again" "||" ("$env:EXAKIT_UPDATE_HANDOVER|$env:EXAKIT_UPDATE_RESULTS_FILE|$env:EXAKIT_UPDATE_ROW_FIELDS")
 Remove-Item -Force -LiteralPath (Join-Path $kitSetup "exakit.ps1")
 Check "no new exakit.ps1: no handover" $true ($null -eq (Invoke-ExakitUpdateHandover -Target "all"))
+
+# The two sides of a handover run different kits. The new run's rows are read
+# by the OLD kit, and kits before the error and hint fields split a row into
+# five and glued the rest onto remedy ("exakit update --yes||"). The real
+# Add-ExakitUpdateNote, in its own process (this suite stubs it above).
+Write-Host ""
+Write-Host "== handover rows: five fields unless the reader declared seven =="
+$rowsScript = Join-Path $work "rows.ps1"
+Set-Content -LiteralPath $rowsScript -Encoding ASCII -Value @'
+param([string]$Repo, [string]$Home2)
+$env:EXAKIT_HOME = $Home2
+New-Item -ItemType Directory -Force -Path $Home2 | Out-Null
+. (Join-Path $Repo "setup/lib/exakit-common.ps1") *> $null
+$script:ExakitUpdateJson = $true
+$script:ExakitUpdateResults = New-Object System.Collections.ArrayList
+Add-ExakitUpdateNote -Component "runtime" -Outcome "deferred" -From "2.3.0" -To "2.4.0" -Remedy "exakit update --yes" -ErrorText "a|b" -Hint "the hint"
+Add-ExakitUpdateNote -Component "uv" -Outcome "updated" -From "0.13.6" -To "0.13.7"
+'@
+$rowsFile = Join-Path $work "rows"
+$savedRowFields = $env:EXAKIT_UPDATE_ROW_FIELDS
+$env:EXAKIT_UPDATE_HANDOVER = "1"
+$env:EXAKIT_UPDATE_RESULTS_FILE = $rowsFile
+foreach ($marker in @("", "7")) {
+    Remove-Item -Force -LiteralPath $rowsFile -ErrorAction SilentlyContinue
+    if ($marker) { $env:EXAKIT_UPDATE_ROW_FIELDS = $marker } else { Remove-Item Env:\EXAKIT_UPDATE_ROW_FIELDS -ErrorAction SilentlyContinue }
+    & ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $rowsScript -Repo $repo -Home2 (Join-Path $work "rows-home") *> $null
+    $lines = @(Get-Content -LiteralPath $rowsFile -ErrorAction SilentlyContinue)
+    if (-not $marker) {
+        Check "no marker: every row has exactly five fields" "5;5" (@($lines | ForEach-Object { @("$_" -split '\|').Count }) -join ";")
+        # The reader of kits before the error and hint fields, verbatim.
+        $oldRemedies = @($lines | ForEach-Object { $parts = "$_" -split '\|', 5; $parts[4] })
+        Check "...and a five-field reader keeps each remedy intact" "exakit update --yes;" ($oldRemedies -join ";")
+    } else {
+        Check "marker 7: error and hint are written, the separator taken out" "runtime|deferred|2.3.0|2.4.0|exakit update --yes|a/b|the hint" $lines[0]
+    }
+}
+$env:EXAKIT_UPDATE_HANDOVER = $null
+$env:EXAKIT_UPDATE_RESULTS_FILE = $null
+$env:EXAKIT_UPDATE_ROW_FIELDS = $savedRowFields
+
+# A run handed over by a --json run is a --json run: the new kit's updater
+# fails, and that is a row with its reason while the rest are still tried.
+# Without it the first Fail ended the new run, no row named it, and every
+# later component was never tried. The REAL Invoke-CmdUpdate and
+# Invoke-ExakitUpdateRun from setup/exakit.ps1, started the way
+# Invoke-ExakitUpdateHandover starts the new kit: the handover environment,
+# and (as a kit before 0.3.0 starts it) no --json on the command line.
+Write-Host ""
+Write-Host "== a handed-over --json run is a --json run =="
+$childScript = Join-Path $work "child.ps1"
+Set-Content -LiteralPath $childScript -Encoding ASCII -Value @'
+param([string]$Repo, [string]$Home2, [string]$Calls)
+$env:EXAKIT_HOME = $Home2
+New-Item -ItemType Directory -Force -Path $Home2 | Out-Null
+. (Join-Path $Repo "setup/lib/exakit-common.ps1") *> $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Repo "setup/exakit.ps1"), [ref]$null, [ref]$null)
+foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent.Parent -eq $ast }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }
+$script:VersionPolicy = "pinned"
+function Assert-ExakitInstalled { param([switch]$Json) }
+function Initialize-ExakitLogging { }
+function Test-ExakitUpdateTarget { param($t) return $true }
+function Get-ExakitUpdateTargets { param([string]$Target) return @("pyexasol", "uv") }
+function Get-ExakitActualTarget { param($c) return $c }
+function Get-ExakitComponentCurrent { param($c) return "1.0" }
+function Get-ExakitComponentAvailable { param($c) return "2.0" }
+function Test-ExakitComponentSupported { param($c) return $true }
+function Test-ExakitComponentAhead { param($c) return $false }
+function Test-ExakitComponentHeavy { param($c) return $false }
+function Get-ExakitComponentMinKit { param($c) return "" }
+function Write-ExakitVersionsSourceLine { }
+function Invoke-ExakitWithSpinner { param([string]$Label, [scriptblock]$Body) & $Body }
+function Invoke-ExakitCoreUpdateCheck { param([string]$Target) Add-Content -LiteralPath $Calls -Value "core-check"; return $true }
+function Update-Pyexasol { Add-Content -LiteralPath $Calls -Value "pyexasol"; throw "pyexasol download failed: HTTP 503" }
+function Update-ExakitUv { Add-Content -LiteralPath $Calls -Value "uv"; return $true }
+Invoke-CmdUpdate -Target "all" -AssumeYes $false -Json $false
+'@
+$childCalls = Join-Path $work "child-calls"
+$env:EXAKIT_UPDATE_HANDOVER = "1"
+$env:EXAKIT_UPDATE_RESULTS_FILE = $rowsFile
+$env:EXAKIT_UPDATE_ROW_FIELDS = "7"
+Remove-Item -Force -LiteralPath $rowsFile, $childCalls -ErrorAction SilentlyContinue
+& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $childScript -Repo $repo -Home2 (Join-Path $work "child-home") -Calls $childCalls *> $null
+$childCode = $LASTEXITCODE
+$env:EXAKIT_UPDATE_HANDOVER = $null
+$env:EXAKIT_UPDATE_RESULTS_FILE = $null
+$env:EXAKIT_UPDATE_ROW_FIELDS = $savedRowFields
+Check "the failed updater did not end the run: the next one ran, then the task check" "pyexasol|uv|core-check" (@(Get-Content -LiteralPath $childCalls -ErrorAction SilentlyContinue) -join "|")
+$childRows = @(Get-Content -LiteralPath $rowsFile -ErrorAction SilentlyContinue)
+Check "...the failure is a row with its reason and remedy" "pyexasol|failed|1.0|2.0|exakit update pyexasol|pyexasol download failed: HTTP 503|" (@($childRows | Where-Object { "$_".StartsWith("pyexasol|") }) -join ";")
+Check "...the next component's row is there too" "uv|updated|1.0|2.0|||" (@($childRows | Where-Object { "$_".StartsWith("uv|") }) -join ";")
+Check "...and the new run exits 1, as a --json run with a failed row does" 1 $childCode
+
+# A KIT SWAP THAT WAS NOT HANDED OVER - on Windows usually staged for the
+# moment the command exits - ends the work on the old code: the components
+# after the kit are deferred to the next `exakit update`, and the new-setup
+# check is not made here (this process holds the OLD task list and would rerun
+# the OLD installer from a kit directory about to be renamed). The same REAL
+# Invoke-CmdUpdate, a plain --json run, with Update-ExakitSelf staging the swap.
+Write-Host ""
+Write-Host "== a kit swap that was not handed over defers the rest and the new-setup check =="
+$swapScript = Join-Path $work "swap.ps1"
+Set-Content -LiteralPath $swapScript -Encoding ASCII -Value ((Get-Content -LiteralPath $childScript -Raw).Replace(
+    'function Get-ExakitUpdateTargets { param([string]$Target) return @("pyexasol", "uv") }',
+    'function Get-ExakitUpdateTargets { param([string]$Target) return @("exakit", "pyexasol") }
+function Update-ExakitSelf { param($Advertised, $Installed) Add-Content -LiteralPath $Calls -Value "exakit"; $script:ExakitKitSwapped = $true }').Replace(
+    'Invoke-CmdUpdate -Target "all" -AssumeYes $false -Json $false',
+    'Invoke-CmdUpdate -Target "all" -AssumeYes $false -Json $true'))
+$swapCalls = Join-Path $work "swap-calls"
+Remove-Item -Force -LiteralPath $swapCalls -ErrorAction SilentlyContinue
+# A Continue window: on 5.1 a native call with redirected stderr under Stop
+# is a terminating error before its output is read.
+$eapSwap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$swapOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $swapScript -Repo $repo -Home2 (Join-Path $work "swap-home") -Calls $swapCalls 2>$null) -join "`n"
+$ErrorActionPreference = $eapSwap
+$swapJson = $null
+try { $swapJson = $swapOut | ConvertFrom-Json } catch { }
+Check "only the kit was updated: nothing ran after it, no new-setup check" "exakit" (@(Get-Content -LiteralPath $swapCalls -ErrorAction SilentlyContinue) -join "|")
+Check "...the next component is deferred to the next run" "pyexasol:exakit update" (@($swapJson.deferred | ForEach-Object { "$($_.component):$($_.remedy)" }) -join ";")
+Check "...and the run says so" "deferred|the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit" ("$($swapJson.status)|$($swapJson.remedy_hint)")
+
+# A HANDED-OVER RUN THAT FAILS OUTSIDE EVERY ROW - a Fail in the run body, or a
+# throw from the new-setup check - still names its reason in the ONE object
+# the parent prints. The new run's own object is discarded with its screen, so
+# the reason travels as a run-level row (no component) in the results file;
+# the parent used to answer only "the updated kit's update run did not finish
+# (exit 1)" with remedy "exakit update". The REAL Invoke-CmdUpdate on both
+# sides and the REAL Invoke-ExakitUpdateHandover between them: an in-place kit
+# swap, `exakit update --json`, and a new kit whose new-setup check fails.
+Write-Host ""
+Write-Host "== a handed-over run that fails outside every row: the parent names the reason =="
+$hoHome = Join-Path $work "handover-home"
+$hoSetup = Join-Path $hoHome (Join-Path "kit" "setup")
+New-Item -ItemType Directory -Force -Path $hoSetup | Out-Null
+$hoCalls = Join-Path $work "handover-run-calls"
+$hoReason = "The database could not start: this WSL kernel cannot create the deployment network. Run: wsl --update"
+$hoPreamble = @'
+. (Join-Path '__REPO__' "setup/lib/exakit-common.ps1") *> $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path '__REPO__' "setup/exakit.ps1"), [ref]$null, [ref]$null)
+foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent.Parent -eq $ast }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }
+. (Join-Path '__REPO__' "setup/lib/core-setup.ps1")
+$script:VersionPolicy = "pinned"
+function Assert-ExakitInstalled { param([switch]$Json) }
+function Initialize-ExakitLogging { }
+function Test-ExakitUpdateTarget { param($t) return $true }
+function Get-ExakitUpdateTargets { param([string]$Target) return @("exakit") }
+function Get-ExakitActualTarget { param($c) return $c }
+function Get-ExakitComponentCurrent { param($c) return "1.0" }
+function Get-ExakitComponentAvailable { param($c) return "2.0" }
+function Test-ExakitComponentSupported { param($c) return $true }
+function Test-ExakitComponentAhead { param($c) return $false }
+function Test-ExakitComponentHeavy { param($c) return $false }
+function Get-ExakitComponentMinKit { param($c) return "" }
+function Write-ExakitVersionsSourceLine { }
+function Invoke-ExakitWithSpinner { param([string]$Label, [scriptblock]$Body) & $Body }
+function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "kit.version") { return "2.0" }; return $null }
+
+'@
+$hoPreamble = $hoPreamble.Replace("__REPO__", $repo)
+# The new kit: the handed-over run skips the kit itself, so no component row
+# is written before its new-setup check fails.
+$hoNew = $hoPreamble + @'
+function Invoke-ExakitCoreUpdateCheck { param([string]$Target) Add-Content -LiteralPath '__CALLS__' -Value "new: core-check"; Fail '__REASON__' }
+Invoke-CmdUpdate -Target $args[1] -AssumeYes ($args -contains "--yes") -Json ($args -contains "--json")
+'@
+Set-Content -LiteralPath (Join-Path $hoSetup "exakit.ps1") -Encoding ASCII -Value $hoNew.Replace("__CALLS__", $hoCalls).Replace("__REASON__", $hoReason)
+# The old kit: it swaps itself in place, then hands the rest of the run over.
+$hoOld = $hoPreamble + @'
+function Update-ExakitSelf { param($Advertised, $Installed) Add-Content -LiteralPath '__CALLS__' -Value "old: exakit" }
+function Invoke-ExakitCoreUpdateCheck { param([string]$Target) Add-Content -LiteralPath '__CALLS__' -Value "old: core-check"; return $true }
+Invoke-CmdUpdate -Target "all" -AssumeYes $false -Json $true
+'@
+$hoParent = Join-Path $work "handover-parent.ps1"
+Set-Content -LiteralPath $hoParent -Encoding ASCII -Value $hoOld.Replace("__CALLS__", $hoCalls)
+Remove-Item -Force -LiteralPath $hoCalls -ErrorAction SilentlyContinue
+$savedHome = $env:EXAKIT_HOME
+$env:EXAKIT_HOME = $hoHome
+# A Continue window: on 5.1 a native call with redirected stderr under Stop
+# is a terminating error before its output is read.
+$eapHo = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$hoOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $hoParent 2>$null) -join "`n"
+$hoCode = $LASTEXITCODE
+$ErrorActionPreference = $eapHo
+$hoJson = $null
+try { $hoJson = $hoOut | ConvertFrom-Json } catch { }
+Check "the old kit swapped itself and handed over; the new kit's check ran, the old one's did not" "old: exakit|new: core-check" (@(Get-Content -LiteralPath $hoCalls -ErrorAction SilentlyContinue) -join "|")
+Check "...the parent's one object fails, with the kit itself updated" "False|failed|exakit|1" ("$($hoJson.ok)|$($hoJson.status)|$(@($hoJson.updated | ForEach-Object { $_.component }) -join ',')|$hoCode")
+Check "...its one failed entry is run-level and carries the new run's reason" ("|" + $hoReason + "|wsl --update") (@($hoJson.failed | ForEach-Object { "$($_.component)|$($_.error)|$($_.remedy)" }) -join ";")
+Has "...with the hint that reason calls for" "this WSL kernel cannot create the deployment network" ("" + @($hoJson.failed)[0].remedy_hint)
+Check "...and the object's remedy and hint are that entry's" ("wsl --update|" + @($hoJson.failed)[0].remedy_hint) ("$($hoJson.remedy)|$($hoJson.remedy_hint)")
+Check "...not the anonymous end of the new run" $false ($hoOut.Contains("did not finish"))
+
+# An older parent never sees that row: every kit before it reads a row only
+# when it names a component, so it still answers with its own "did not finish"
+# entry. The new kit run straight, for a five-field parent.
+$hoRows = Join-Path $work "handover-rows"
+Remove-Item -Force -LiteralPath $hoRows -ErrorAction SilentlyContinue
+$env:EXAKIT_UPDATE_HANDOVER = "1"
+$env:EXAKIT_UPDATE_RESULTS_FILE = $hoRows
+Remove-Item Env:\EXAKIT_UPDATE_ROW_FIELDS -ErrorAction SilentlyContinue
+& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File (Join-Path $hoSetup "exakit.ps1") update all *> $null
+$env:EXAKIT_UPDATE_HANDOVER = $null
+$env:EXAKIT_UPDATE_RESULTS_FILE = $null
+$env:EXAKIT_UPDATE_ROW_FIELDS = $savedRowFields
+$env:EXAKIT_HOME = $savedHome
+$hoLines = @(Get-Content -LiteralPath $hoRows -ErrorAction SilentlyContinue)
+Check "a five-field parent gets the run-level row in five fields, no component" "|failed|||wsl --update" ($hoLines -join ";")
+# The reader of kits before this row, verbatim.
+$hoOldRead = @($hoLines | Where-Object { $parts = @("$_" -split '\|', 7); $parts.Count -ge 5 -and $parts[0] })
+Check "...and an older reader skips it" 0 $hoOldRead.Count
 
 Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue
 Write-Host ""

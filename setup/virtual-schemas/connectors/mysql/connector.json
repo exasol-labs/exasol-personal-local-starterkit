@@ -89,6 +89,7 @@
     "disable": "sslMode=DISABLED"
   },
   "tls_truststore": "sslMode=VERIFY_IDENTITY&trustCertificateKeyStoreUrl=file:{truststore}&trustCertificateKeyStoreType=JKS",
+  "access": "SELECT on the database's tables",
   "vs_properties": {
     "CATALOG_NAME": "{database}"
   },

@@ -4,7 +4,9 @@ The administrator password is read from the file the manifest names
 (runtime.password_file) and never leaves this process. A source credential
 arrives on stdin and is written into the database only inside CREATE /
 ALTER CONNECTION over the encrypted session; every error raised while it is
-in play has it replaced by *** before anything prints or logs it.
+in play has it replaced by *** before anything prints or logs it. Every
+statement is written to the run's log (vslog) before it is sent, redacted
+there the same way.
 
 Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
 `connect(**kwargs)` returns an object with query/execute/close.
@@ -13,6 +15,8 @@ Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
 import importlib.util
 import os
 import re
+
+import vslog
 
 MAX_ERROR = 600
 
@@ -23,10 +27,22 @@ class DbError(Exception):
         self.kind = kind
 
 
+# Java missing from the database, in each database's words. No JAVA alias in
+# SCRIPT_LANGUAGES at all: "No usable script language container". Exasol
+# Personal 2.4 names JAVA=builtin_java on a fresh deployment, yet the Java
+# container's client is not in BucketFS until `exasol slc install java`, and a
+# Java script answers "The required executable '/exaudf/exaudfclient' does not
+# exist in BucketFS" (measured on the 2.4 VM and on Docker). Only that
+# executable, exactly: another file missing from BucketFS (exaudfclient_py3,
+# a script beside it) is not a missing Java. A Rust script runs the same
+# client; Lifecycle.language_kind reads the source's own language.
+NOJAVA = (r"No usable script language container|"
+          r"required executable '[^'\n]*/exaudfclient' does not exist in BucketFS")
+
 # Ordered: the first match names the failure. Messages are the JDBC drivers'
 # and Exasol's own; a generic failure stays "error" rather than guessing.
 _KINDS = (
-    ("nojava", r"No usable script language container"),
+    ("nojava", NOJAVA),
     # A driver naming a property its URL lacks (Simba: "Connection Refused:
     # ... Required Connection Key(s)") is configuration, not the network.
     ("error", r"Required Connection Key\(s\)"),
@@ -51,6 +67,23 @@ _KINDS = (
     ("nobucket", r"NoSuchBucket|The specified bucket does not exist|ContainerNotFound"),
     ("denied", r"AccessDenied|not authorized to perform|AuthorizationPermissionMismatch|AuthorizationFailure|"
                r"PERMISSION_DENIED"),
+    # A database that took the credentials and then refused a statement for a
+    # missing grant, in the driver's words (under Exasol's "JDBC-Client-Error:
+    # Failed to receive MetaData for the given statement: ..." or an adapter's
+    # "Caused by:"). Apart from "denied": an address filter refuses before any
+    # SQL runs, so this fix never names an IP to allow. Ahead of "tls" and
+    # "auth": a table name can carry their words (certificates, auth_log).
+    ("privilege", r"permission denied for \w|"                    # PostgreSQL: for table / schema / database ...
+                  r"command denied to user|"                       # MySQL 1142/1143: SELECT command denied to user
+                  r"permission was denied on|"                     # SQL Server 229/230: The SELECT permission was denied on
+                  r"ORA-01031|ORA-01045|ORA-41900|"                # Oracle: insufficient privileges; lacks CREATE
+                                                                   # SESSION privilege; 23ai: missing READ privilege on
+                  r"SQL access control error|Insufficient privileges to operate on|"   # Snowflake
+                  r"not authorized on \S+ to execute"),            # MongoDB code 13 (Unauthorized)
+    # Words that mean "no such object" and "no grant on it" alike: Oracle and
+    # Snowflake answer for an object the account may not see as if it did not
+    # exist, so the fix names both - never "denied" alone.
+    ("missing_or_denied", r"ORA-00942|does not exist or not authorized"),
     ("dns", r"UnknownHostException|Name or service not known|nodename nor servname|unable to resolve host"),
     ("tls", r"PKIX|certificate|SSLHandshake|SSL connection|ssl_server_dn_match|TLS|SSLException|"
             r"trustAnchors parameter must be non-empty"),
@@ -92,6 +125,11 @@ def classify_raw(summary, raw):
     kind = classify(summary)
     if kind not in ("error", "unreachable"):
         return kind
+    # A Java that cannot start says so wherever the wrapper puts it - past
+    # the summary's line, or past the cut to MAX_ERROR - and nothing reached
+    # the source, so no other class can be the answer.
+    if re.search(NOJAVA, str(raw), re.I):
+        return "nojava"
     causes = classify("\n".join(l for l in str(raw).splitlines() if "Caused by" in l or re.search(r"Exception: ", l)))
     if kind == "unreachable" and causes != "tls":
         return kind
@@ -199,42 +237,75 @@ def summarize(text):
     # The message field is the error; the fields under it describe the session.
     field = re.search(r"^\s*message\s*=>\s*(.+)$", text, re.M)
     if field:
-        line = field.group(1)
+        line, rest = field.group(1), text[field.end():]
     else:
         lines = [l.strip() for l in text.splitlines() if l.strip() and l.strip() not in ("(", ")")]
         line = next((l for l in lines if not l.startswith("message")), lines[0] if lines else text)
+        rest = text[text.find(line) + len(line):] if line in text else ""
+    # A driver message that goes on past a colon is said whole: Snowflake's
+    # "SQL compilation error:" names the object on the next line, which
+    # pyexasol prints bare under the message field - not a field of its own,
+    # and not a stack frame.
+    more = next((l.strip() for l in rest.splitlines() if l.strip()), "")
+    if line.rstrip().endswith(":") and more and not re.match(r"\w+\s*=>|at [\w$.]+\(|\)$", more):
+        line = "%s %s" % (line, more)
     return re.sub(r"\s+", " ", line).strip()
 
 
 def redact(text, secrets):
-    text = summarize(text)
-    for secret in secrets:
-        if secret:
-            for form in (secret, secret.replace("'", "''")):
-                text = text.replace(form, "***")
-    text = re.sub(r"IDENTIFIED BY\s+'(?:[^']|'')*'", "IDENTIFIED BY '***'", text, flags=re.I)
-    text = re.sub(r"\s*\(Session: \d+\)", "", text)
+    """A database error as one line a person may read - on the screen, in the
+    kit's log, in --json's error: every form of the run's secrets and every
+    credential shape gone (vslog.redact) BEFORE it is cut to MAX_ERROR, so a
+    cut never leaves part of a password standing. A text that cannot be
+    redacted is not shown at all."""
+    try:
+        text = re.sub(r"\s*\(Session: \d+\)", "", summarize(text))
+        text = vslog.redact(text, secrets)
+    except Exception:  # noqa: BLE001 - never the clear text
+        return "the database refused the statement (its message could not be made safe to show)"
     return text[:MAX_ERROR]
 
 
 class Database(object):
+    """The session. log is the run's vslog.RunLog: every statement is written
+    to it before it is sent, and the database's answer when it fails - both
+    redacted of the statement's secrets there."""
     def __init__(self, backend, log=None):
         self.backend = backend
-        self.log = log or (lambda text: None)
+        self.log = log if log is not None else vslog.NULL
 
     def query(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
         try:
             return self.backend.query(sql_text)
         except Exception as error:     # the driver's own exception types vary by backend
-            message = redact(error, secrets)
-            raise DbError(message, classify_raw(message, error))
+            raise self._failed(error, secrets) from None
 
     def execute(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
         try:
             self.backend.execute(sql_text)
         except Exception as error:
-            message = redact(error, secrets)
-            raise DbError(message, classify_raw(message, error))
+            raise self._failed(error, secrets) from None
+
+    def _failed(self, error, secrets):
+        """The DbError for a driver's exception, logged. Raised `from None`:
+        the driver's own exception (its query => field holds the statement,
+        secret and all) never rides along to a traceback."""
+        # Every secret the run knows, not only this statement's own: a CREATE
+        # VIRTUAL SCHEMA carries none, yet its adapter can echo the credential
+        # (or a value derived from it) the CONNECTION holds.
+        try:
+            known = set(secrets) | set(self.log.secrets)
+        except Exception:  # noqa: BLE001 - never fewer than the statement's own
+            known = set(secrets)
+        message = redact(error, known)
+        try:
+            kind = classify_raw(message, error)
+        except Exception:  # noqa: BLE001 - a class is never worth the answer
+            kind = "error"
+        self.log.failed(message, kind, error, secrets)
+        return DbError(message, kind)
 
     def close(self):
         try:
@@ -281,12 +352,12 @@ def connect(dsn, user, password_file, log=None):
         with open(password_file, encoding="utf-8") as handle:
             password = handle.read().strip()
     except OSError as error:
-        raise DbError("the administrator password file could not be read: %s" % error, "error")
+        raise DbError("the administrator password file could not be read: %s" % error, "error") from None
     try:
         backend = _Pyexasol(dsn, user, password)
     except ImportError:
-        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error")
+        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error") from None
     except Exception as error:
         message = redact(error, [password])
-        raise DbError("the database did not accept a connection: %s" % message, "unreachable")
+        raise DbError("the database did not accept a connection: %s" % message, "unreachable") from None
     return Database(backend, log)

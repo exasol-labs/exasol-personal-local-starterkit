@@ -25,8 +25,13 @@
     "It is tested in one session before it becomes the database default.",
     "A preprocessor you set up yourself is left alone and reported.",
     "exakit update now finishes setup that only the installer can do.",
-    "From 0.2.2, run exakit update twice; from here on, once is enough.",
+    "From 0.2.2, run exakit update twice; then once is usually enough.",
     "exakit connect: query PostgreSQL, MySQL, SQL Server, Oracle live."
+  ],
+  "0.2.4": [
+    "Exasol Personal 2.4: Linux/Windows installs use Docker if running.",
+    "Podman on WSL or Windows: if exakit start fails, run wsl --update",
+    "To move to Exasol Personal 2.4, run: exakit update personal"
   ],
   "0.2.3": [
     "Security update for uv, the tool that runs the MCP server.",

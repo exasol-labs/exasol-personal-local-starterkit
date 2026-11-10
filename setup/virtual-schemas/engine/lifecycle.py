@@ -30,7 +30,9 @@ import sql
 import tlsca
 import keyfile
 import luaadapter
+import publicip
 import tlshelper
+import vslog
 
 PROBE = "EXAKIT_DNS_PROBE_V2"
 FILES = "EXAKIT_FILES_PROBE_V1"
@@ -47,21 +49,28 @@ SETTLE = float(os.environ.get("EXAKIT_VS_SETTLE_SECONDS", "2"))
 EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 5,
         "dns": 20, "nojava": 21, "unreachable_db": 22, "norust": 23}
 
+# A Java the database cannot run, in the kit's words (sql.NOJAVA has the database's).
+JAVA_MISSING = "Java is not installed in the database (its language container is missing)"
+
 # Status recorded for a failure kind (sql.classify).
 STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreachable", "nohost": "unreachable",
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
               "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
-              "schema_missing": "failed", "external": "access-denied", "managed": "failed"}
+              "schema_missing": "failed", "external": "access-denied", "managed": "failed",
+              "privilege": "access-denied", "missing_or_denied": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
     "tls": "the source's certificate or host name did not verify; fix the server certificate or trust its CA, then: exakit source check {name}",
     "unreachable": "the source did not answer from inside the database: check the host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then: exakit source check {name}",
     "nohost": "the host name no longer resolves: check it (a private name may need a VPN), then: exakit source check {name}",
-    "dns": "Java in the database could not resolve the host name; restart the database with exakit start (it repairs DNS), then: exakit source check {name}",
-    "nojava": "the Java language container is not installed: exakit connect installs it, or run: exasol slc install java",
-    "norust": "the Rust language container is not installed: exakit connect installs it (asked; one restart)",
+    "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS) - then: exakit source check {name}",
+    "nojava": "the Java language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+    "norust": "the Rust language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script",
+    "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "denied": "the account signs in but may not read this data: grant it what the message names ({access}), then: exakit source check {name}",
+    "privilege": "the source took the credentials, but the account lacks a privilege: grant it what the message names ({access}), then: exakit source check {name}",
+    "missing_or_denied": "the source answers that the object the message names does not exist for this account - it was dropped or renamed (then: exakit source refresh {name}), or the account may not see it (grant it {access}); then: exakit source check {name}",
     "region": "the bucket is in another region: exakit source disconnect {name} --yes, then exakit connect <connector> --name {name} --set region=<the bucket's region> with the credential again",
     "nobucket": "the {store} does not exist under that name: check it, then remove and connect again",
     "clock": "the database clock is too far from the store's for a signed request; restart the database (exakit stop, then exakit start), then: exakit source check {name}",
@@ -71,13 +80,35 @@ REMEDY_FOR = {
     "error": "see the log: exakit logs",
 }
 
+def remedy_text(kind, table=None):
+    """The fix for a kind as a template, from table (REMEDY_FOR by default).
+    Java without DNS has one fix on every engine, a stop and a start: Podman
+    and macOS repair the running container after the start, and on Docker the
+    start links the language container image before it mounts it (read-only;
+    setup/lib/personal-slc-dns.py)."""
+    table = REMEDY_FOR if table is None else table
+    return table.get(kind, table["error"])
+
+
+# The one exakit command that IS the fix, for the kinds that have one (--json
+# carries it as `command`, null for the rest). A first connect has no source
+# yet, so the lifecycle commands do not apply to it (connect passes first=True).
+COMMAND_FOR = {"auth": "exakit source reauth {name}", "unreachable_db": "exakit start"}
+
+
+def command_for(kind, name, first=False):
+    if first and kind != "unreachable_db":
+        return None
+    text = COMMAND_FOR.get(kind)
+    return text.format(name=name) if text else None
+
 
 
 def remedy_for(kind, name, connector, message=None):
     """The fix for a failure class, in the words of the connector's store.
     An error_hint given as {"match", "text"} is said only for a message it
     matches; a plain string, for every unclassified failure."""
-    text = REMEDY_FOR.get(kind, REMEDY_FOR["error"]).format(
+    text = remedy_text(kind).format(
         name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"))
     if kind == "auth" and connector.get("auth_hint"):
         text += "; %s" % connector["auth_hint"]
@@ -87,6 +118,32 @@ def remedy_for(kind, name, connector, message=None):
     if kind == "error" and hint:
         text = "%s; %s" % (hint, text)
     return text
+
+
+# Failures an address filter in front of the source causes: no answer at all (a
+# security group or firewall drops the connection), or a refusal - an S3 bucket
+# policy on aws:SourceIp or an Azure storage firewall answers 403, read as
+# denied. Their remedy names this computer's public IP: the address the source
+# sees, since the database's traffic leaves through this computer. Not
+# "privilege" or "missing_or_denied": a database answers those to a statement,
+# after the address was let through and the credentials taken.
+ADDRESS_KINDS = ("unreachable", "denied")
+LISTEN_ADVICE = "(a source on this computer must listen beyond 127.0.0.1)"
+
+
+def allow_ip(remedy, kind, ip):
+    """The remedy, naming the public IP to allow; unchanged without one. For a
+    source on the internet the address replaces the advice for one on this
+    computer."""
+    if not ip or kind not in ADDRESS_KINDS:
+        return remedy
+    clause = "allow this computer's public IP %s in its security group, firewall or IP access list" % ip
+    if LISTEN_ADVICE in remedy:
+        return remedy.replace(LISTEN_ADVICE, "(%s)" % clause)
+    head, sep, tail = remedy.rpartition(", then")
+    if not sep:
+        return "%s; if it filters by address, %s" % (remedy, clause)
+    return "%s and, if it filters by address, %s%s%s" % (head, clause, sep, tail)
 
 # Seconds the database clock may be off this computer's before it is named.
 # Measured on Exasol Personal (macOS): the VM's clock does not catch up after
@@ -169,24 +226,84 @@ def example_query(schema, tables):
     return "SELECT * FROM %s.%s LIMIT 10" % (schema, shown)
 
 
+def source_where(connector, values):
+    """Where a source lives, for its listing: the host it is reached at (a cloud
+    store's names its bucket, account or workspace), or the connector's "where"
+    when every source of its kind shares one API host (BigQuery: the project).
+    The host input as given when the connector's definition is gone."""
+    if not connector:
+        return str(values.get("host") or "")
+    if connector.get("where"):
+        try:
+            return connector["where"].format(**values)
+        except KeyError:
+            return ""
+    hosts = planner.reached_hosts(connector, values)
+    return hosts[0] if hosts else ""
+
+
+# MongoDB URI options that keep TLS on but stop the certificate or host check.
+MONGO_UNCHECKED = ("tlsinsecure", "tlsallowinvalidcertificates", "tlsallowinvalidhostnames")
+
+
+def tls_level(connector, values):
+    """A source's TLS in the tls input's words: verify, require or disable; None
+    when the connector's definition is gone. A connector without that input:
+    a MongoDB URI says it (mongodb+srv:// is TLS unless tls=false, and
+    tlsInsecure and its kin encrypt without checking), an http:// URL input is
+    disable, and every other one reaches its source over HTTPS or TLS only,
+    the certificate checked."""
+    if not connector:
+        return None
+    for spec in connector.get("inputs", []):
+        if spec["name"] == "tls":
+            return values.get("tls") or spec.get("default") or "verify"
+    for spec in connector.get("inputs", []):
+        if spec["kind"] != "mongodb-uri":
+            continue
+        uri = str(values.get(spec["name"]) or "")
+        options = {}
+        for segment in uri.partition("?")[2].split("&"):
+            key, _, value = segment.partition("=")
+            options[key.strip().lower()] = value.strip().lower()
+        on = uri.lower().startswith("mongodb+srv://")
+        for key in ("ssl", "tls"):  # tls, the current spelling, wins
+            if key in options:
+                on = options[key] == "true"
+        if not on:
+            return "disable"
+        return "require" if any(options.get(key) == "true" for key in MONGO_UNCHECKED) else "verify"
+    return "disable" if planner.plain_http(connector, values) else "verify"
+
+
 class Failure(Exception):
-    def __init__(self, message, code, kind="error"):
+    """A failure the engine names. str() is what happened; kind is its class;
+    remedy the fix in words and command the one exakit command that is the
+    fix, when there is one (--json carries all four). said is what a person
+    reads on the FAIL line: the message, or the message and its fix in one
+    sentence, as the kit has always said them."""
+    def __init__(self, message, code, kind="error", remedy=None, command=None, said=None):
         super().__init__(message)
         self.code = code
         self.kind = kind
+        self.remedy = remedy
+        self.command = command
+        self.said = said or message
 
 
 class ScopeFailure(Failure):
-    """The schema check's own answer: complete in its words, so connect adds
-    only that nothing was kept."""
-    def __init__(self, message, kind):
-        super().__init__(message, EXIT["failed"], kind)
+    """The schema check's own answer: what the source has, and the fix, so
+    connect adds only that nothing was kept."""
+    def __init__(self, message, kind, remedy):
+        super().__init__(message, EXIT["failed"], kind, remedy=remedy, said="%s; %s" % (message, remedy))
 
 
 class Engine(object):
-    def __init__(self, args, emit):
+    def __init__(self, args, emit, log=None):
         self.args = args
         self.emit = emit
+        # The run's log (vslog): the session writes every statement to it.
+        self.log = log if log is not None else vslog.NULL
         self.defs = planner.Definitions(args.defs)
         self.store = sources.Store(args.kit_home)
         self.cache = artifacts.Cache(args.kit_home, log=lambda text: emit("INFO", text))
@@ -225,6 +342,19 @@ class Engine(object):
         self.clock()
         return "clock" if abs(getattr(self, "_skew", 0)) >= SIGNED_LIMIT else kind
 
+    def language_kind(self, kind, connector, error):
+        """nojava from a source's own adapter (a database error) is norust
+        when that adapter runs in the Rust container: neither "No usable
+        script language container" nor Exasol Personal 2.4's missing
+        /exaudf/exaudfclient (sql.NOJAVA) says which language is missing, and
+        the Rust one runs the same client. The kit's Java probes answer with
+        a Failure (java_query), which stays Java's. Every path that passes a
+        database error's kind on asks this."""
+        if kind != "nojava" or not isinstance(error, sql.DbError):
+            return kind
+        profile = self.defs.profile(connector["profile"]) if connector.get("profile") else {}
+        return "norust" if (profile.get("slc") or {}).get("language") == "rust" else kind
+
     def warn_clock(self):
         if self.clock():
             self.emit("WARN", "The database clock is %s this computer, and certificates are checked by it - a TLS "
@@ -234,14 +364,32 @@ class Engine(object):
     def db(self):
         if self._db is None:
             try:
-                self._db = sql.connect(self.args.dsn, self.args.user, self.args.password_file)
+                self._db = sql.connect(self.args.dsn, self.args.user, self.args.password_file, log=self.log)
             except sql.DbError as error:
-                raise Failure("the local database is not reachable: %s" % error, EXIT["unreachable_db"])
+                raise Failure("the local database is not reachable: %s" % error, EXIT["unreachable_db"],
+                              "unreachable_db", remedy=REMEDY_FOR["unreachable_db"], command="exakit start")
         return self._db
 
     def close(self):
         if self._db is not None:
             self._db.close()
+
+    # --- this computer's public IP (publicip) ------------------------------------------
+    def egress(self, connector, values, wait=True):
+        """(this computer's public IP, the source's host on the internet) for a
+        source on the internet (planner.public_host); (None, None) for one on
+        this computer or a private network, and the IP None while it is not
+        known. wait=False only starts the lookup."""
+        host = planner.public_host(connector, values)
+        if not host:
+            return None, None
+        self._egress_host = host
+        publicip.start()
+        return (publicip.get() if wait else None), host
+
+    def public_ip(self):
+        """This run's answer for a source on the internet, else None (--json)."""
+        return publicip.get() if getattr(self, "_egress_host", None) else None
 
     def exists(self, kind, *names):
         db = self.db()
@@ -290,8 +438,9 @@ class Engine(object):
                 "/" % (FILES, FILES))
         except sql.DbError as error:
             if error.kind == "nojava":
-                raise Failure("Java is not installed in the database (no usable script language container)",
-                              EXIT["nojava"], "nojava")
+                # Either database's words (sql.NOJAVA): no usable container,
+                # or Personal 2.4's builtin_java without its client in BucketFS.
+                raise Failure(JAVA_MISSING, EXIT["nojava"], "nojava")
             raise Failure("the DNS probe could not be created: %s" % error, EXIT["failed"])
 
     def ensure_language(self, profile):
@@ -310,8 +459,20 @@ class Engine(object):
     def probe(self, host, port):
         """'ok <ip>' | 'dns ...' | 'tcp <ip> ...', from inside the database's Java."""
         self.ensure_probe()
-        rows = self.db().query("SELECT EXAKIT_VS.%s(%s, %d) AS R" % (PROBE, sql.literal(host), int(port)))
+        rows = self.java_query("SELECT EXAKIT_VS.%s(%s, %d) AS R" % (PROBE, sql.literal(host), int(port)))
         return (rows[0].get("R") if rows else "") or ""
+
+    def java_query(self, statement):
+        """One of the kit's own Java scripts (the probes), whose missing Java is
+        Java's whatever the source's adapter runs in: a Failure, which
+        language_kind never reads as Rust. Personal 2.4 creates a Java script
+        with builtin_java and fails only when it runs."""
+        try:
+            return self.db().query(statement)
+        except sql.DbError as error:
+            if error.kind == "nojava":
+                raise Failure(JAVA_MISSING, EXIT["nojava"], "nojava") from None
+            raise
 
     def await_staged(self, used, written, profile):
         """Nothing is created over a file the database does not see yet (the
@@ -332,7 +493,7 @@ class Engine(object):
         self.ensure_probe()
         started = time.time()
         while True:
-            rows = self.db().query("SELECT EXAKIT_VS.%s(%s) AS R" % (FILES, sql.literal("\n".join(paths))))
+            rows = self.java_query("SELECT EXAKIT_VS.%s(%s) AS R" % (FILES, sql.literal("\n".join(paths))))
             missing = [p for p in ((rows[0].get("R") if rows else "") or "").split("\n") if p]
             waited = time.time() - started
             if not missing:
@@ -360,7 +521,9 @@ class Engine(object):
                 return "".join(certs)
             pem = tlsca.choose(certs, values["host"], values.get("port"), connector.get("ca_probe"), values["ca"])
         except tlsca.CaError as error:
-            failure = Failure("%s; nothing was kept" % error, EXIT["failed"], "tls")
+            failure = Failure(str(error), EXIT["failed"], "tls", said="%s; nothing was kept" % error,
+                              remedy="nothing was kept - correct the CA file (--set ca=<PEM file or bundle>), "
+                                     "then connect again")
             failure.complete = True  # it already says what to do
             raise failure
         if len(certs) > 1:
@@ -587,7 +750,10 @@ class Engine(object):
                     current = handle.read()
                 if current != settings and not self.store.consumers(cfg):
                     raise Failure("a loader driver %s is already registered and was not set up by the kit; it was "
-                                  "left unchanged" % etl["drivername"], EXIT["conflict"])
+                                  "left unchanged" % etl["drivername"], EXIT["conflict"], "conflict",
+                                  remedy="the kit does not replace a driver registration it did not make; remove "
+                                         "that one from the database's JDBC drivers if nothing uses it, then "
+                                         "connect again")
             made_jar = artifacts.stage_file(driver_src, os.path.join(loader, driver_pin["asset"]))
             os.makedirs(loader, exist_ok=True)
             made_cfg = not os.path.isfile(cfg)
@@ -622,7 +788,9 @@ class Engine(object):
     def credential(self, connector, values, secret):
         """(url, user, secret, hidden, notes) for the CONNECTION: a JDBC URL with
         the user's password, or - for a document source - an empty URL and
-        user with the credential JSON as the secret."""
+        user with the credential JSON as the secret. Every secret here is the
+        run log's from now on (vslog), whatever writes it next."""
+        self.log.secret(secret)
         if connector.get("secret_as_file"):
             # The key goes to a file in BucketFS, never into the CONNECTION:
             # no user, no password, and the URL names only the file's path.
@@ -632,6 +800,7 @@ class Engine(object):
                 failure = Failure(str(error), EXIT["input"])
                 failure.complete = True
                 raise failure
+            self.log.secret(text, *hidden)
             return None, None, text, hidden, []
         if connector.get("credential"):
             try:
@@ -640,6 +809,7 @@ class Engine(object):
                 failure = Failure(str(error), EXIT["input"])
                 failure.complete = True  # the credential's own problem, named; nothing ran
                 raise failure
+            self.log.secret(text, *hidden)
             # A document adapter names no address; a lakehouse catalog's is its endpoint.
             url = connector["url"].format(**values) if connector.get("url") else ""
             return url, "", text, hidden, notes
@@ -753,14 +923,14 @@ class Engine(object):
             return
         if answer.startswith("case:"):
             other = answer[5:]
-            raise ScopeFailure("the source has no %s %s, but it has %s (%s); give it as the source spells it: "
-                               "--set %s=%s" % (label, value, other, spec.get("case", "names differ in case"),
-                                                spec["input"], other), "schema_missing")
+            raise ScopeFailure("the source has no %s %s, but it has %s (%s)"
+                               % (label, value, other, spec.get("case", "names differ in case")), "schema_missing",
+                               "give it as the source spells it: --set %s=%s" % (spec["input"], other))
         if answer == "denied":
-            raise ScopeFailure("the account may not use %s %s; grant it USAGE on the %s (and SELECT on its tables)"
-                               % (label, value, label), "denied")
-        raise ScopeFailure("the source has no %s %s that this account can see; check the name and that the "
-                           "account has access to it" % (label, value), "schema_missing")
+            raise ScopeFailure("the account may not use %s %s" % (label, value), "privilege",
+                               "grant it USAGE on the %s (and SELECT on its tables)" % label)
+        raise ScopeFailure("the source has no %s %s that this account can see" % (label, value), "schema_missing",
+                           "check the name and that the account has access to it")
 
     def tables(self, schema):
         return [r.get("TABLE_NAME") for r in self.db().query(
@@ -803,14 +973,19 @@ class Engine(object):
 
     # --- operations -----------------------------------------------------------------
     def connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False):
-        if not sources.NAME.match(name or ""):
+        # The gate first, as the shells' own resolve says it: a gated
+        # connector is exit 5 whatever else is wrong with the command.
+        entry = self.defs.entry(connector_id)
+        if entry["status"] == "gated":
+            raise Failure("%s is not available yet: %s" % (entry["name"], entry["gate"]), EXIT["gated"], "gated")
+        if not name:
+            raise Failure("the connection has no name", EXIT["input"], "input",
+                          remedy="give it one with --name (lower case letters, digits and _, a letter first, e.g. sales)")
+        if not sources.NAME.match(name):
             raise Failure("the source name must be lower case letters, digits and _ (start with a letter, at most 40), "
                           "e.g. sales", EXIT["input"])
         connector = self.defs.connector(connector_id)
         profile = self.defs.profile(connector["profile"])
-        entry = self.defs.entry(connector_id)
-        if entry["status"] == "gated":
-            raise Failure("%s is not available yet: %s" % (entry["name"], entry["gate"]), EXIT["gated"])
         if self.store.exists(name):
             current = self.store.config(name)
             if self.store.status(name).get("status") == "disconnected" and current["connector"] == connector_id:
@@ -821,19 +996,28 @@ class Engine(object):
         values = planner.validate_inputs(connector, given)
         names = planner.objects(name, connector)
         description = planner.describe(self.defs, connector_id, name, values, self.runtime, self.cache, self.store)
+        # Asked now, in the background: a plan waits for the answer; a connect
+        # only when its result or a network failure's remedy names it.
+        self.egress(connector, values, wait=False)
         if plan_only or dry_run:
+            ip, host = self.egress(connector, values)
+            description["public_ip"] = ip
+            if ip:
+                self.emit("INFO", publicip.advice(ip, host))
             return description
         reconnect = False
         if self.store.exists(name):
             current = self.store.config(name)
             if self.store.status(name).get("status") != "disconnected" or current["connector"] != connector_id:
-                raise Failure("a source named %s already exists (%s); choose another name or remove it first: "
-                              "exakit source remove %s" % (name, current["connector"], name), EXIT["conflict"])
+                fix = "choose another name or remove it first: exakit source remove %s" % name
+                taken = "a source named %s already exists (%s)" % (name, current["connector"])
+                raise Failure(taken, EXIT["conflict"], "conflict", remedy=fix, said="%s; %s" % (taken, fix))
             reconnect = True
         spec = planner.secret_input(connector)
         if spec and not secret:
             raise Failure("%s needs %s on standard input (it is never taken as an argument)"
-                          % (connector_id, spec["label"].lower()), EXIT["input"])
+                          % (connector_id, spec["label"].lower()), EXIT["input"], "input",
+                          remedy="pipe it on standard input or give it with --password-file <file>")
         created = {"files": [], "connection": False, "script": False, "schema": False}
         journal = {"operation": "reconnect" if reconnect else "connect", "connector": connector_id,
                    "started": sources.now(), "created": created}
@@ -860,7 +1044,8 @@ class Engine(object):
                     for kind, label in (("connection", names["connection"]), ("schema", names["schema"])):
                         if self.exists(kind, label):
                             raise Failure("%s %s already exists in the database and is not a source the kit set up; "
-                                          "it was left unchanged" % (kind, label), EXIT["conflict"])
+                                          "it was left unchanged" % (kind, label), EXIT["conflict"], "conflict",
+                                          remedy="choose another name for the source (--name)")
                 # Checked first: a malformed credential is named here, not as a
                 # Java stack from inside the database after files were staged.
                 url, user, conn_secret, hidden, notes = self.credential(connector, values, secret)
@@ -931,22 +1116,30 @@ class Engine(object):
                 code = getattr(error, "code", EXIT["failed"])
                 if isinstance(error, sql.DbError):
                     code = EXIT["dns"] if kind == "dns" else EXIT["nojava"] if kind == "nojava" else EXIT["failed"]
-                if kind == "nojava" and (profile.get("slc") or {}).get("language") == "rust":
+                if self.language_kind(kind, connector, error) == "norust":
                     kind, code = "norust", EXIT["norust"]
                 # A first connect has no source record yet, so the lifecycle
                 # commands do not apply: nothing was left behind, and the fix is
                 # the same command with corrected input.
                 remedy = remedy_for(kind, name, connector, error)
                 if getattr(error, "complete", False):
+                    # Its own words say what to do; --json still gets the fix as remedy.
+                    if error.remedy is None:
+                        error.remedy = "nothing was kept - correct it, then run the same exakit connect again"
                     raise error
                 if isinstance(error, ScopeFailure):
-                    raise Failure("%s; nothing was kept - connect again with the corrected name" % error, code, kind)
+                    again = "nothing was kept - connect again with the corrected name"
+                    raise Failure(str(error), code, kind, remedy="%s; %s" % (error.remedy, again),
+                                  said="%s; %s" % (error.said, again))
                 specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
                 if specific:
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
                 elif not reconnect and kind in ("auth", "tls", "unreachable", "nohost", "denied", "region", "nobucket",
-                                                "clock", "external", "managed", "schema_missing"):
+                                                "clock", "external", "managed", "schema_missing", "privilege",
+                                                "missing_or_denied"):
                     remedy = {"denied": "the account signs in but may not read this data; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
+                              "privilege": "the source took the credentials, but the account lacks a privilege; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
+                              "missing_or_denied": "the source answers that the object the message names does not exist for this account; nothing was kept - check that name as the source spells it, or grant the account %s, then connect again" % connector.get("access", "read access"),
                               "region": "the bucket is in another region; nothing was kept - connect again with --set region=<the bucket's region>",
                               "nobucket": "nothing was kept - check the %s name, then connect again" % connector.get("store", "bucket"),
                               "clock": "the database clock is too far from the store's for a signed request; nothing was kept - restart the database (exakit stop, then exakit start), then connect again",
@@ -958,11 +1151,20 @@ class Engine(object):
                               "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",
                               "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
+                if kind in ADDRESS_KINDS:
+                    remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
+                command = command_for(kind, name, first=True)
                 if isinstance(error, Failure):
+                    # A failure that names its own fix keeps it.
+                    if error.remedy:
+                        raise Failure(str(error), code, kind, remedy=error.remedy, command=error.command or command,
+                                      said="%s; %s" % (error, error.remedy))
                     # The kit's own words already say what happened (the route
                     # check); only the driver's raw text needs it restated.
-                    raise Failure("%s; %s" % (error, remedy.split("; ", 1)[-1]), code, kind)
-                raise Failure("%s (%s)" % (error, remedy), code, kind)
+                    raise Failure(str(error), code, kind, remedy=remedy, command=command,
+                                  said="%s; %s" % (error, remedy.split("; ", 1)[-1]))
+                raise Failure(str(error), code, kind, remedy=remedy, command=command,
+                              said="%s (%s)" % (error, remedy))
             pins = self.pins(connector)
             record = {"schema_version": 1, "id": name, "connector": connector_id,
                       "profile": connector["profile"], "inputs": values, "objects": names,
@@ -983,7 +1185,8 @@ class Engine(object):
                                                          "empty_tables": empty}})
             self.store.clear_journal(name)
         return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready",
-                "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"])}
+                "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"]),
+                "public_ip": self.egress(connector, values)[0]}
 
     def recover_interrupted(self, name, names):
         """Undo what an interrupted first connect recorded in its journal."""
@@ -1058,7 +1261,7 @@ class Engine(object):
             self.warn_key_readers(connector, name)
             tables, read, how, empty = self.verify(connector, names["schema"])
         except (Failure, sql.DbError) as error:
-            kind = self.signed_kind(getattr(error, "kind", "error"), connector)
+            kind = self.language_kind(self.signed_kind(getattr(error, "kind", "error"), connector), connector, error)
             status = self.record_check(name, "failed", str(error), kind)
             remedy = remedy_for(kind, name, connector, error)
             specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
@@ -1066,11 +1269,14 @@ class Engine(object):
                 remedy = "%s; then: exakit source check %s" % (specific.replace(
                     "give it with --set ca=<file>", "reconnect with it: exakit source disconnect %s --yes, then "
                     "exakit connect %s --name %s --set ca=<file>" % (name, config["connector"], name)), name)
+            if kind in ADDRESS_KINDS:
+                remedy = allow_ip(remedy, kind, self.egress(connector, config["inputs"])[0])
             # Said here, not only in the result: a failed check exits 1, and
             # the reason has to reach a reader who gets no RESULT line.
             self.emit("FAIL", "%s is %s: %s" % (name, status, error))
             self.emit("INFO", "Fix: %s" % remedy)
-            return {"name": name, "status": status, "kind": kind, "error": str(error), "remedy": remedy}
+            return {"name": name, "status": status, "kind": kind, "error": str(error), "remedy": remedy,
+                    "command": command_for(kind, name)}
         evidence = "metadata and %s (%d tables)" % (how, len(tables)) if read else "metadata only (no tables in scope)"
         self.record_check(name, "ok", evidence)
         result = {"name": name, "status": "ready", "evidence": evidence}
@@ -1089,10 +1295,12 @@ class Engine(object):
     def reauth(self, name, secret):
         config = self.store.config(name)
         if self.store.status(name).get("status") == "disconnected":
-            raise Failure("%s is disconnected; reconnect it with: exakit connect %s --name %s"
-                          % (name, config["connector"], name), EXIT["conflict"])
+            fix = "reconnect it with: exakit connect %s --name %s" % (config["connector"], name)
+            raise Failure("%s is disconnected" % name, EXIT["conflict"], "conflict", remedy=fix,
+                          said="%s is disconnected; %s" % (name, fix))
         if not secret:
-            raise Failure("reauth needs the new credential on standard input", EXIT["input"])
+            raise Failure("reauth needs the new credential on standard input", EXIT["input"], "input",
+                          remedy="pipe it on standard input or give it with --password-file <file>")
         connector = self.defs.connector(config["connector"])
         inputs = dict(config["inputs"])
         if connector.get("secret_as_file"):
@@ -1109,7 +1317,7 @@ class Engine(object):
             # source that still works. The new credential goes into a pending
             # CONNECTION, one trivial statement runs through the loader with
             # it, and only an accepted credential replaces the old one.
-            self.try_credential(connector, config["objects"], url, user, secret, inputs)
+            self.try_credential(connector, config["objects"], url, user, secret, inputs, hidden, name)
             try:
                 self.create_connection(config["objects"], url, user, secret, replace=True, hidden=hidden)
             except sql.DbError as error:
@@ -1149,20 +1357,48 @@ class Engine(object):
         self.emit("OK", "Key file replaced for %s" % name)
         return result
 
-    def try_credential(self, connector, names, url, user, secret, values=None):
+    @staticmethod
+    def pending(names):
+        """The objects a reauth tries a new credential through. Named outside
+        the kit's EXAKIT_SRC_ and VS_ names: a source may be called
+        <name>_pending, and its own CONNECTION and virtual schema must never
+        be what a trial for <name> replaces or drops."""
+        return dict(names, connection="EXAKIT_PENDING_" + names["connection"],
+                    schema="EXAKIT_PENDING_" + names["schema"])
+
+    def drop_pending(self, names):
+        """Drop what a reauth trial made, if it is there: after the trial, and
+        wherever a trial killed part way may have left it (the next reauth,
+        disconnect, remove). The schema goes first and without calling its
+        adapter back (FORCE): it runs on the source's adapter script."""
+        pending = self.pending(names)
+        for statement in ("DROP FORCE VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(pending["schema"]),
+                          "DROP CONNECTION IF EXISTS %s" % sql.ident(pending["connection"])):
+            try:
+                self.db().execute(statement)
+            except (sql.DbError, Failure):
+                pass
+
+    def try_credential(self, connector, names, url, user, secret, values=None, hidden=(), name=None):
         if not connector.get("etl"):
             if connector.get("shared_adapter"):
-                self.try_through_schema(connector, names, url, user, secret, values or {})
+                self.try_through_schema(connector, names, url, user, secret, values or {}, hidden)
+            elif any(spec["kind"] == "edml" for spec in connector["inputs"]):
+                # A document source (S3, Azure Blob): its own adapter script,
+                # over the mapping connect staged for it.
+                mapping = self.runtime.bucket_sql("mappings", name)[len("/buckets"):]
+                self.try_through_schema(connector, names, url, user, secret,
+                                        dict(values or {}, mapping_path=mapping), hidden, read=True)
             return      # no loader driver to try it through (a VALUES connector)
-        pending = dict(names, connection=names["connection"] + "_PENDING")
+        pending = self.pending(names)
         try:
-            self.create_connection(pending, url, user, secret, replace=True)
+            self.create_connection(pending, url, user, secret, replace=True, hidden=hidden)
             self.db().query("SELECT * FROM (IMPORT FROM JDBC AT %s STATEMENT %s)"
                             % (sql.ident(pending["connection"]), sql.literal(connector.get("probe_sql", "SELECT 1"))),
-                            secrets=[secret])
+                            secrets=[secret] + list(hidden))
         except sql.DbError as error:
             raise Failure("the source refused the new credential, so the previous one was kept: %s" % error,
-                          EXIT["failed"], error.kind)
+                          EXIT["failed"], self.language_kind(error.kind, connector, error))
         finally:
             try:
                 self.db().execute("DROP CONNECTION IF EXISTS %s" % sql.ident(pending["connection"]))
@@ -1170,26 +1406,30 @@ class Engine(object):
                 pass
         self.emit("OK", "The source accepted the new credential")
 
-    def try_through_schema(self, connector, names, url, user, secret, values):
+    def try_through_schema(self, connector, names, url, user, secret, values, hidden=(), read=False):
         """A native adapter reads metadata when its virtual schema is created
         (measured: MongoDB with a wrong password fails at CREATE), so a
-        throwaway schema on a pending CONNECTION tries the new credential."""
-        pending = dict(names, connection=names["connection"] + "_PENDING", schema=names["schema"] + "_PENDING")
+        throwaway schema on a pending CONNECTION tries the new credential.
+        A document adapter reads no object at CREATE when the mapping names
+        its fields (measured on S3), so with read the throwaway schema is also
+        read - one row from each table, as connect proves a document source."""
+        pending = self.pending(names)
         db = self.db()
+        secrets = [secret] + list(hidden)
+        # What a trial killed part way left (Ctrl-C, a closed lid) goes first.
+        self.drop_pending(names)
         try:
-            self.create_connection(pending, url, user, secret, replace=True)
-            db.execute("DROP VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(pending["schema"]))
-            db.execute(self.vs_sql(connector, pending, values), secrets=[secret])
+            self.create_connection(pending, url, user, secret, replace=True, hidden=hidden)
+            db.execute(self.vs_sql(connector, pending, values), secrets=secrets)
+            if read:
+                for table in self.tables(pending["schema"])[:self.READ_ALL_LIMIT]:
+                    db.query("SELECT * FROM %s.%s LIMIT 1" % (sql.ident(pending["schema"]), sql.ident(table)),
+                             secrets=secrets)
         except sql.DbError as error:
             raise Failure("the source refused the new credential, so the previous one was kept: %s" % error,
-                          EXIT["failed"], error.kind)
+                          EXIT["failed"], self.language_kind(error.kind, connector, error))
         finally:
-            for statement in ("DROP FORCE VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(pending["schema"]),
-                              "DROP CONNECTION IF EXISTS %s" % sql.ident(pending["connection"])):
-                try:
-                    db.execute(statement)
-                except sql.DbError:
-                    pass
+            self.drop_pending(names)
         self.emit("OK", "The source accepted the new credential")
 
     def refresh(self, name):
@@ -1198,7 +1438,9 @@ class Engine(object):
         try:
             self.db().execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(schema))
         except sql.DbError as error:
-            raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"], error.kind)
+            connector = self.defs.connector(config["connector"])
+            raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"],
+                          self.language_kind(error.kind, connector, error))
         count = len(self.tables(schema))
         status = self.store.status(name)
         status.pop("needs_refresh", None)
@@ -1450,6 +1692,9 @@ class Engine(object):
         with self.store.lock():
             if self.exists("connection", connection):
                 self.db().execute("DROP CONNECTION %s" % sql.ident(connection))
+            # A disconnected source keeps no credential: not even one a reauth
+            # killed mid-try left pending.
+            self.drop_pending(config["objects"])
             if config.get("key_file") and os.path.isfile(self.key_file(name)):
                 os.remove(self.key_file(name))
             self.store.update_status(name, status="disconnected", disconnected_at=sources.now())
@@ -1489,6 +1734,9 @@ class Engine(object):
                 # kit-owned schema only.
                 force = "" if connection_present else "FORCE "
                 db.execute("DROP %sVIRTUAL SCHEMA %s CASCADE" % (force, sql.ident(names["schema"])))
+            # A reauth killed mid-try can leave its trial schema, on this
+            # source's adapter script, and its pending credential behind.
+            self.drop_pending(names)
             if own_adapter and self.exists("script", names["script_schema"], names["script"]):
                 db.execute("DROP ADAPTER SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(names["script"])))
             for script in shared if last else []:
@@ -1497,7 +1745,10 @@ class Engine(object):
             if connection_present:
                 db.execute("DROP CONNECTION %s" % sql.ident(names["connection"]))
             # A reauth killed mid-try can leave its pending credential behind.
-            db.execute("DROP CONNECTION IF EXISTS %s" % sql.ident(names["connection"] + "_PENDING"))
+            # An earlier kit named it <connection>_PENDING - the live
+            # CONNECTION of a source called <name>_pending, which stays.
+            if not self.store.exists(name + "_pending"):
+                db.execute("DROP CONNECTION IF EXISTS %s" % sql.ident(names["connection"] + "_PENDING"))
             for path in self.store.release(name):
                 if os.path.isfile(path):
                     os.remove(path)
@@ -1540,13 +1791,21 @@ class Engine(object):
             folder = os.path.dirname(folder)
 
     def listing(self):
+        """One row a source. host is where it lives (source_where), tls its TLS
+        level (tls_level: null when its connector is no longer defined)."""
         rows = []
         for name in self.store.names():
             config = self.store.config(name)
             status = self.store.status(name)
+            try:
+                connector = self.defs.connector(config["connector"])
+            except (OSError, ValueError, planner.PlanError):
+                connector = None
+            values = config.get("inputs") or {}
             rows.append({"name": name, "connector": config["connector"], "schema": config["objects"]["schema"],
                          "status": status.get("status", "unknown"), "last_check": status.get("last_check"),
-                         "needs_refresh": bool(status.get("needs_refresh"))})
+                         "needs_refresh": bool(status.get("needs_refresh")),
+                         "host": source_where(connector, values), "tls": tls_level(connector, values)})
         return rows
 
     def show(self, name):
@@ -1567,7 +1826,8 @@ class Engine(object):
         for row in self.listing():
             if row["status"] == "ready" and row["needs_refresh"] and not status_filter:
                 rows.append(dict(row, remedy="it moved to a new adapter and its metadata is not refreshed yet: "
-                                             "exakit source refresh %s" % row["name"]))
+                                             "exakit source refresh %s" % row["name"],
+                                 command="exakit source refresh %s" % row["name"]))
                 continue
             if row["status"] in ("ready", "disconnected"):
                 continue
@@ -1579,5 +1839,6 @@ class Engine(object):
             except (OSError, ValueError):
                 connector = {}
             rows.append(dict(row, remedy=remedy_for(check.get("kind") or "error", row["name"], connector,
-                                                                check.get("evidence"))))
+                                                                check.get("evidence")),
+                             command=command_for(check.get("kind") or "error", row["name"])))
         return rows

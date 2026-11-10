@@ -96,6 +96,7 @@
     "disable": "encrypt=false"
   },
   "tls_class": "encrypt=true;trustServerCertificate=false;trustManagerClass=exakit.tls.PemTrustManager;trustManagerConstructorArg={tls_arg}",
+  "access": "SELECT on the schema, through a database user mapped to its login (Azure SQL Database: a contained user)",
   "vs_properties": {
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"

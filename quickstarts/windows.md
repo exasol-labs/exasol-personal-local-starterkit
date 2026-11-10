@@ -1,14 +1,14 @@
 # Quickstart: Windows
 
-This guide takes you from Windows to a local Exasol database without leaving **PowerShell**. The database is an **Exasol Personal** local deployment. The Exasol launcher runs it through Podman on the host and installs Podman itself if it is missing.
+This guide takes you from Windows to a local Exasol database without leaving **PowerShell**. The database is an **Exasol Personal** local deployment. The Exasol launcher runs it on Docker Desktop when that is running (Engine 29+, Linux containers), otherwise through Podman on the host, and offers to install Podman itself if neither is there.
 
-Exasol Personal supports Windows **x86_64**. It does not support Windows arm64: the installer says so and exits without changing anything (the notes below say what you can still do on an arm64 machine). If you would rather work inside **WSL**, that is supported too. Follow the [Linux quickstart](linux.md) instead of this one: the kit runs in the distro, and Podman has to be installed there as well.
+Exasol Personal supports Windows **x86_64**. It does not support Windows arm64: the installer says so and exits without changing anything (the notes below say what you can still do on an arm64 machine). If you would rather work inside **WSL**, that is supported too. Follow the [Linux quickstart](linux.md) instead of this one: the kit runs in the distro and uses the engine there. Without Docker Desktop's WSL integration, Podman has to be installed there as well, and the installer can do that for you.
 
 ## What you need
 
 - Windows 10/11 on x86_64
 - 8 GB+ RAM, 20 GB free disk
-- Nothing installed in advance. The database runs through Podman's default machine. If Podman is missing, the Exasol launcher offers to install it with Windows Package Manager. That install may ask for administrator approval, and it is the only step that ever does
+- Nothing installed in advance. The database runs on Docker Desktop when it is running (Engine 29 or newer, Linux containers), otherwise through Podman's default machine. If neither is there, the Exasol launcher offers to install Podman with Windows Package Manager. That install may ask for administrator approval, and it is the only step that ever does
 - You don't need to install Python. The kit uses a system Python 3.11+ if it finds one, and otherwise installs a managed Python for its own use
 
 To check your machine before installing, run the requirements check. It installs **nothing**:
@@ -28,12 +28,18 @@ What happens, in order:
 
 1. A quick machine check runs before anything is downloaded or written
 2. The kit is downloaded to `~\.exasol-starter-kit\kit` and the plan is shown. You can read every script, before or after the run
-3. The Exasol launcher is downloaded and checksum-verified, then deploys the database locally. If Podman is missing, the launcher offers to install it, and this is where the one possible administrator prompt appears. Podman's default machine is prepared, or **left exactly as it is** if one already exists
+3. The Exasol launcher is downloaded and checksum-verified, then deploys the database locally: on Docker Desktop when it is running and usable, otherwise through Podman. If neither is there, the launcher offers to install Podman, and this is where the one possible administrator prompt appears. Podman's default machine is prepared, or **left exactly as it is** if one already exists
 4. The database starts, reachable only from your machine
 5. exapump (the data tool) is installed, and the sample data is loaded and verified
 6. The AI bridge is set up with a read-only database login, and your AI clients are connected
 7. You get a connection panel with the details you need
 
+
+## Docker or Podman
+
+From Exasol Personal 2.4 a new deployment runs on Docker Desktop when its engine is running, is version 29 or newer and is set to Linux containers; otherwise on Podman. A Docker that is installed but not running is offered once: start it and press Enter, or type `p` to use Podman. The choice is made at the first deploy and the deployment keeps it; every later start and `exakit status` follow the record. `$env:EXAKIT_CONTAINER_ENGINE = 'podman'` (or `'docker'`) names the engine before the install. The kit never installs or starts Docker, and never moves an existing deployment: to change its engine, run `exakit uninstall` (this deletes the database and its data) and install again.
+
+Podman's machine runs on the WSL kernel, and Exasol Personal 2.4 needs WSL 2.7 or newer there, unless the machine uses Podman's iptables firewall driver. The kit checks `wsl --version` before a fresh Podman deploy. Below 2.7 it reads the machine's `firewall_driver` through `podman machine ssh`, starting a stopped machine first (`exakit preflight` never starts it, and names `podman machine start` instead): on `iptables` it carries on, otherwise it stops with the fix, `wsl --update` then `wsl --shutdown`. `exakit update` does not check: an existing deployment is updated, and if `exakit start` then fails with the nftables error, the kit names `wsl --update`. See [WSL 2.7 and nftables](podman.md#wsl-27-and-nftables). Docker Desktop is not affected.
 
 ## The Podman machine is shared, and the kit does not manage it
 
@@ -79,6 +85,7 @@ For help with the Podman machine, rootless mode or WSL2 errors, see the [Podman 
 | Issue | Fix |
 |---|---|
 | The Podman install asked for administrator approval | That is Windows Package Manager installing Podman, once, and the installer tells you before it happens. Approve it, or install Podman yourself first (`winget install RedHat.Podman`; you may need to reboot) and re-run. The kit itself never needs admin rights. If you refuse the approval, the kit reports Podman as the cause rather than the database, skips the database step and carries on. Everything that doesn't need a database still installs, and re-running the install command afterwards finishes the job (completed steps are skipped) |
+| "Podman on WSL ... cannot create the network Exasol Personal 2.4 needs" | This WSL kernel has no nftables. Run `wsl --update` in PowerShell, then `wsl --shutdown`, and re-run the command the message names. Nothing was changed. |
 | "Podman is installed, but it cannot run containers" | Podman on Windows is a Linux machine under WSL, and it is off after a reboot. The kit runs `podman info` before deploying and starts the machine if it is only stopped. If Podman still doesn't answer, fix what `podman info` reports (`podman machine start`, or `podman machine init` if there is no machine at all) and re-run the install command |
 | "Port 8563 is already in use" | The launcher picks the deployment's port itself, and the kit uses whichever port it picked. If the port holds a running Exasol Personal that this launcher deployed, the kit adopts it. Anything else is reported: stop that application and re-run |
 | "It answers like an Exasol database this kit did not deploy" | Windows and WSL share one network stack, so an Exasol Personal running **inside a WSL distro** holds port 8563 for Windows too, and the other way round. The kit never adopts a database it cannot log in to. Stop it on the other side first (`exakit stop` in that distro, or in PowerShell when installing into WSL), then re-run |
@@ -87,7 +94,7 @@ For help with the Podman machine, rootless mode or WSL2 errors, see the [Podman 
 | "Reusing the existing Exasol deployment (started)" and then nothing | Fixed. The launcher accepts a start for a deployment it has only initialized and then does nothing. The kit now checks with the database itself instead of the launcher's record, runs the launcher's own deploy when nothing answers, and checks again |
 | Script execution policy complaints | On a normal machine, the installer bypasses the policy for its own scripts only, and nothing changes system-wide. On a **company-managed machine** where Group Policy sets the policy, `-ExecutionPolicy Bypass` is ignored by design. The installer detects this at the start and stops with the fix: `Get-ExecutionPolicy -List` shows the MachinePolicy and UserPolicy rows, and you can ask IT for RemoteSigned |
 | Corporate proxy | Set `$env:HTTPS_PROXY` before running. The installer uses it for every download, with your signed-in Windows credentials for proxies that ask for them (HTTP 407) |
-| After a reboot | Usually nothing to do. A fresh install turns on automatic start, with a Startup entry that runs the launcher. If you turned it off (run `exakit autostart` and answer the question), `exakit start` brings the database back with all its data |
+| After a reboot | Usually nothing to do. A fresh install turns on automatic start, with a Startup entry that runs the launcher. A Docker deployment also needs Docker Desktop running, and the kit never starts it: turn on Docker Desktop's "Start Docker Desktop when you sign in" setting, or start Docker Desktop yourself and then run `exakit start`. Kits 0.2.0 to 0.2.3 recorded it off without asking; that "off" is turned on the next time the installer runs (an "off" you chose under those kits too: run `exakit autostart` again to turn it off), while an "off" you choose from 0.2.4 on stays off. If you turned it off (run `exakit autostart` and answer the question), `exakit start` brings the database back with all its data |
 | Does the installer change my `PATH`? | Yes. It puts `~\.local\bin` at the front of your **user** `PATH` (a per-user registry value, so no admin rights and nothing machine-wide), and `exakit` then works in every new terminal. |
 | I already had the kit, with the database in a container | Re-run the install command. It finds the old installation and asks whether to bring your data across: **Migrate my data** or **Skip and continue**. Neither option deletes the old container or its data volume, but both stop it, because it holds the port the new database needs. The kit's own sample data is not copied, because the install loads it itself. If you skipped the migration or were never asked, `exakit migrate docker-nano` copies the data later, into the running database. It finds the container in Docker Desktop by name. |
 | Windows on ARM (Snapdragon / Copilot+ PC) | Windows arm64 is not supported for local deployments. The installer says so and exits without downloading or changing anything. Run the kit inside WSL2 or a Linux VM instead, where the Linux arm64 build runs |
@@ -95,4 +102,4 @@ For help with the Podman machine, rootless mode or WSL2 errors, see the [Podman 
 | Your security team asks what this is | The kit downloads from `github.com`, `objects.githubusercontent.com`, `pypi.org`, `files.pythonhosted.org` and `astral.sh`. It installs unsigned prebuilt binaries (`exapump.exe` and any add-on you choose) into `~\.local\bin`, and checks each one against a SHA-256 digest published in `versions.json`. The Exasol launcher is checked against its release's checksums file. `exakit update` also starts one short-lived, hidden `powershell.exe -EncodedCommand` child process. Its only job is to replace the kit folder the running script was executing from, after that script has exited. Some EDR products flag this process on sight |
 | I had the old container-based install | It keeps working. An installed kit records which runtime it uses, and every `exakit` command, update and repair follows that record. The Personal default only applies to fresh installs |
 
-To remove everything, run `exakit uninstall`. The database deployment and its data are removed; Podman and its machine stay.
+To remove everything, run `exakit uninstall`. The database deployment and its data are removed; Docker Desktop, Podman and its machine stay.

@@ -78,6 +78,30 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      - name: container engine choice under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-engine-ps.ps1
+      # The language container DNS repair asks the deployment's engine (Docker
+      # or Podman) and passes the deployment id, never an empty argument.
+      - name: language container DNS repair under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-slc-dns-ps.ps1
+      # The WSL 2.7 check against a .cmd stub wsl.exe: the one place the raw
+      # argument wsl.exe receives is visible (a Unix pwsh re-parses it).
+      - name: WSL 2.7 check for Podman under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-wsl-gate-ps.ps1
+      - name: fresh install turns autostart on under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/windows-autostart-default-ps.ps1
+      - name: replaced database rebuilds the profile under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-fresh-password-ps.ps1
       - name: start and stop one service under 5.1
         if: matrix.shard == 2
         shell: powershell

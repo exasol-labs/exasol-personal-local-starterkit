@@ -82,10 +82,69 @@ def resolve_arch(pin):
 # Exasol Personal (macOS): a UDF reaches the internet, the Mac as 192.168.64.1
 # (its resolver's address) and host.containers.internal - which there is the
 # launcher's Linux VM, not the Mac. On Linux Podman it is the host itself.
+#
+# ON DOCKER IT IS NOT PODMAN'S NAME. From Exasol Personal 2.4 a deployment on
+# Linux, WSL or Windows may run on Docker, where host.containers.internal does
+# not exist. The launcher starts the database container on its own bridge
+# network (exasol-db-<id>-services) with no --add-host, so host.docker.internal
+# resolves only where the Docker installation itself provides it (Docker
+# Desktop does; a plain Docker Engine on Linux does not), and without it the
+# address of this computer is that bridge's gateway. Not measured on a live
+# 2.4 deployment, so the advice names both rather than promising one.
 LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "localhost.localdomain")
-LOOPBACK_ADVICE = ("host=localhost would be the database itself, not this computer. For a source running on this "
-                   "computer use the address the database sees it at - on macOS 192.168.64.1, on Linux and WSL "
-                   "host.containers.internal - and make the source listen on that interface, not only on 127.0.0.1")
+THIS_COMPUTER = {
+    "podman": "on macOS 192.168.64.1, on Linux and WSL host.containers.internal",
+    "docker": "on Docker host.docker.internal where the deployment provides it, else the bridge gateway",
+}
+
+# The engine the kit recorded for the deployment (manifest runtime.engine,
+# kit 0.2.4+), read once per run by use_engine. A nano record names the OLD
+# database's engine and is ignored: one whose runtime.container key is there
+# at all, null included, as the shell's manifest_get reads it ("null" is not
+# empty); only "" is no container. Without a usable record, this run's choice
+# (EXAKIT_PERSONAL_ENGINE, which the bridges pass on: an install that has
+# not recorded it yet), then Podman - every deployment before kit 0.2.4. The
+# same order as the shells' personal_slc_dns_engine and
+# Get-PersonalSlcDnsEngine, so the fix --json names and the bridge's own line
+# agree.
+ENGINE = "podman"
+
+
+def on_macos():
+    """macOS: the database is in the launcher's VM, on its Podman, whatever a
+    record says - as the shell repair takes it. EXAKIT_VS_OS overrides the
+    platform (Darwin, Linux, Windows), as EXAKIT_VS_ARCH does the CPU."""
+    return (os.environ.get("EXAKIT_VS_OS") or platform.system()).lower() == "darwin"
+
+
+def recorded_engine(kit_home):
+    engine = None
+    try:
+        with open(os.path.join(kit_home, "manifest.json"), encoding="utf-8-sig") as handle:
+            runtime = json.load(handle).get("runtime")
+        if isinstance(runtime, dict) and not ("container" in runtime and runtime["container"] != ""):
+            engine = runtime.get("engine")
+    except (OSError, ValueError, AttributeError, TypeError):
+        engine = None
+    if engine not in ("docker", "podman"):
+        engine = os.environ.get("EXAKIT_PERSONAL_ENGINE", "")
+    return "docker" if engine == "docker" else "podman"
+
+
+def use_engine(kit_home):
+    global ENGINE
+    ENGINE = "podman" if on_macos() else recorded_engine(kit_home)
+
+
+def this_computer():
+    """Where a source on this computer is, as the database sees it."""
+    return THIS_COMPUTER.get(ENGINE, THIS_COMPUTER["podman"])
+
+
+def loopback_advice():
+    return ("host=localhost would be the database itself, not this computer. For a source running on this "
+            "computer use the address the database sees it at - %s - and make the source listen on that "
+            "interface, not only on 127.0.0.1" % this_computer())
 
 
 def host_scope(host):
@@ -97,8 +156,8 @@ def host_scope(host):
     try:
         ip = ipaddress.ip_address(bare)
     except ValueError:
-        # A single-label name or a private suffix (host.containers.internal) is
-        # not on the internet; any other name is taken to be.
+        # A single-label name or a private suffix (host.containers.internal,
+        # host.docker.internal) is not on the internet; any other name is taken to be.
         return "private" if "." not in bare or bare.endswith(PRIVATE_SUFFIXES) else "public"
     if ip.is_loopback or ip.is_unspecified:
         return "loopback"
@@ -130,13 +189,13 @@ def check_url(name, raw, kind):
     scope = host_scope(host)
     if scope == "loopback":
         return None, ("%s points at %s, which inside the database is the database itself, not this computer. %s"
-                      % (name, host, LOOPBACK_ADVICE.split(". ", 1)[1]))
+                      % (name, host, loopback_advice().split(". ", 1)[1]))
     if scheme == "http" and kind == "https-url":
         return None, "%s must use https: the token would cross the network unencrypted" % name
     if scheme == "http" and scope == "public":
         return None, ("%s is plain http to %s, a public host: the credential and the rows would cross the internet "
-                      "unencrypted - use https. Plain http is accepted only for this computer (on macOS "
-                      "192.168.64.1, on Linux and WSL host.containers.internal) or a private network" % (name, host))
+                      "unencrypted - use https. Plain http is accepted only for this computer (%s) or a private "
+                      "network" % (name, host, this_computer()))
     netloc = "[%s]" % host if ":" in host else host
     return "%s://%s%s%s" % (scheme, netloc, ":" + port if port else "", path), None
 
@@ -148,10 +207,16 @@ def plain_http(connector, values):
 
 
 class PlanError(Exception):
-    def __init__(self, message, code=2, choices=None):
+    """Input the plan refuses. remedy and command, when given, are the fix in
+    words and the one exakit command that is the fix (--json carries them);
+    said is the FAIL line, the message unless the fix belongs in it."""
+    def __init__(self, message, code=2, choices=None, remedy=None, command=None, said=None):
         super().__init__(message)
         self.code = code
         self.choices = choices or []
+        self.remedy = remedy
+        self.command = command
+        self.said = said or message
 
 
 class Definitions(object):
@@ -186,7 +251,9 @@ class Definitions(object):
         q = re.sub(r"[\s_]+", "-", (query or "").strip().lower())
         if not q:
             raise PlanError("name a source to connect, for example: exakit connect postgresql",
-                            choices=[e["id"] for e in self.entries()])
+                            choices=[e["id"] for e in self.entries()],
+                            remedy="name one of the choices; every connector with its aliases: exakit source catalog",
+                            command="exakit source catalog")
         exact = [e for e in self.entries()
                  if q in [e["id"], e["name"].lower().replace(" ", "-")] + [a.lower() for a in e.get("aliases", [])]]
         if len(exact) == 1:
@@ -196,14 +263,17 @@ class Definitions(object):
         if len(partial) == 1:
             return partial[0]["id"]
         if len(partial) > 1:
-            raise PlanError("%s matches more than one source" % query, choices=[e["id"] for e in partial])
+            raise PlanError("%s matches more than one source" % query, choices=[e["id"] for e in partial],
+                            remedy="name one of the choices exactly")
         keys = {}
         for e in self.entries():
             for key in [e["id"], e["name"].lower()] + e.get("aliases", []):
                 keys[key] = e["id"]
         close = difflib.get_close_matches(q, list(keys), n=3, cutoff=0.6)
         raise PlanError("no source matches %s" % query, choices=sorted(set(keys[c] for c in close))
-                        or [e["id"] for e in self.entries()])
+                        or [e["id"] for e in self.entries()],
+                        remedy="name one of the choices; every connector with its aliases: exakit source catalog",
+                        command="exakit source catalog")
 
 
 def objects(name, connector=None):
@@ -213,6 +283,21 @@ def objects(name, connector=None):
     script = (connector or {}).get("shared_adapter") or "ADAPTER_%s" % upper
     return {"connection": "EXAKIT_SRC_%s" % upper, "schema": "VS_%s" % upper,
             "script_schema": "EXAKIT_VS", "script": script}
+
+
+def mongo_auth_source(uri):
+    """The refusal for a MongoDB URI whose authSource is not admin, else None.
+    exasol-mongodb-vs 0.1.3 signs in against admin whatever the URI says (the
+    CONNECTION's user and password replace any authSource), so a reader defined
+    in another database could never log in: said now, not as a refused login at
+    connect. Never quotes the value - it may come from a pasted string."""
+    from urllib.parse import unquote
+    for segment in str(uri).partition("?")[2].split("&"):
+        key, _, value = segment.partition("=")
+        if unquote(key).strip().lower() == "authsource" and unquote(value).strip() not in ("", "admin"):
+            return ("the MongoDB adapter always signs in against the admin database, so an authSource other than "
+                    "admin cannot work: make the reader a user of admin and drop authSource or set it to admin")
+    return None
 
 
 def check_value(spec, raw):
@@ -257,8 +342,10 @@ def check_value(spec, raw):
         return None, "%s=%r is not a valid %s" % (name, raw, kind)
     if kind == "aws-region" and raw.startswith("cn-"):
         return None, "the China regions use other endpoints, which this connector does not reach"
+    if kind == "mongodb-uri" and mongo_auth_source(raw):
+        return None, mongo_auth_source(raw)
     if kind == "host" and raw.strip("[]").lower() in LOOPBACK:
-        return None, LOOPBACK_ADVICE
+        return None, loopback_advice()
     if kind == "host":
         # Stored bare; jdbc_url adds the brackets an IPv6 literal needs in
         # a URL, and the route probe resolves the bare form.
@@ -317,6 +404,48 @@ def source_host(connector, values):
         return template.format(**values)
     except KeyError:
         return ""
+
+
+def reached_hosts(connector, values):
+    """Every host a source is reached at, as given: its host (a template's, or
+    the host of the URL input it names), the host of any other URL input (a
+    storage endpoint) and each host of a MongoDB URI. Empty when it names none."""
+    hosts = [source_host(connector, values)]
+    for spec in connector.get("inputs", []):
+        raw = str(values.get(spec["name"]) or "")
+        if not raw:
+            continue
+        if spec["kind"] in URL_KINDS:
+            m = URL.match(raw)
+            if m:
+                hosts.append(m.group(2))
+        elif spec["kind"] == "mongodb-uri":
+            for item in raw.split("://", 1)[-1].split("/", 1)[0].split(","):
+                hosts.append(item[1:item.find("]")] if item.startswith("[") else item.split(":", 1)[0])
+    seen = []
+    for host in hosts:
+        host = host.strip("[]")
+        if host and host not in seen:
+            seen.append(host)
+    return seen
+
+
+def public_host(connector, values):
+    """The first host of this source that is on the internet, or None when every
+    one is this computer or a private network (host_scope). A source on the
+    internet sees the database's traffic come from this computer's public IP, so
+    that is the address its firewall or IP access list must allow.
+
+    One rule for every connector, read from its connector.json: the hosts a
+    host-based source names, and the fixed host a cloud store's template builds
+    (S3, Azure, Snowflake, BigQuery, Glue) - all public. An Iceberg REST catalog
+    or an S3-compatible endpoint on this computer or a private network is not;
+    one with no endpoint is judged by its catalog alone, since the storage it
+    vends is not known before it is asked."""
+    for host in reached_hosts(connector, values):
+        if host_scope(host) == "public":
+            return host
+    return None
 
 
 def source_port(connector, values):

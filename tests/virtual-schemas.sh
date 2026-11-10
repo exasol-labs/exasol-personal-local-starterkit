@@ -33,6 +33,15 @@ mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
 printf 'kept\n' > "$EXA/jdbc/java.security"
 SECRET='s3cr3t-Pa55'"'"'word'
 NEWSECRET='n3w-T0ken-value'
+# Offline: a plan or connect of a source on the internet would ask
+# checkip.amazonaws.com for this computer's public IP. The tests of that turn
+# the lookup back on against a file:// URL (ipeng, and the two terminal flows).
+export EXAKIT_NO_IP_LOOKUP=1
+# The engine falls back to this when nothing is recorded (plan.py); a value
+# left in the caller's environment must not decide the cases below.
+unset EXAKIT_PERSONAL_ENGINE
+printf '203.0.113.7\n' > "$WORK/public-ip"
+IPURL="file://$WORK/public-ip"
 
 # Small stand-in artifacts with real digests, pinned into the copied
 # definitions and placed in the cache, so nothing is downloaded.
@@ -93,6 +102,8 @@ eng() {
 }
 run() { OUT="$(eng "$@" 2>&1)"; RC=$?; }
 run_secret() { local s="$1"; shift; OUT="$(printf '%s' "$s" | eng "$@" 2>&1)"; RC=$?; }
+# What a reauth trial leaves in the database: nothing, once it is over.
+pending() { dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")] + [v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]'; }
 PG_SET="--set host=pg.example.com --set database=sales --set user=reader"
 
 printf '\n== search and plan ==\n'
@@ -119,6 +130,62 @@ for loop in localhost 127.0.0.1 ::1 LOCALHOST; do
     check "host=$loop is refused (it is the database itself)" "2" "$RC"
 done
 has "...with the address to use instead" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+# Where this computer is follows the deployment's engine, read from the kit's
+# record (runtime.engine, kit 0.2.4+): Docker has no host.containers.internal.
+# Linux, WSL or Windows only: on macOS the database is in the launcher VM's
+# Podman whatever the record says (EXAKIT_VS_OS stands in for the platform).
+DOCKER_HOST_WORDS="on Docker host.docker.internal where the deployment provides it, else the bridge gateway"
+export EXAKIT_VS_OS=Linux
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+check "a Docker deployment: localhost is still refused, exit 2" "2" "$RC"
+has "...with Docker's address for this computer" "$DOCKER_HOST_WORDS" "$OUT"
+lacks "...not Podman's" "host.containers.internal" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
+has "...the same for a catalog URL on localhost" "$DOCKER_HOST_WORDS" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
+has "...and in the plain-http refusal" "accepted only for this computer ($DOCKER_HOST_WORDS) or a private network" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "podman"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "a Podman deployment: Podman's name" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "docker", "container": "exasol-nano"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "a nano record's engine (the OLD database's) is not this deployment's" "host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "docker", "container": null}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...runtime.container null is a nano record too, as the shell reads it" "host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "docker", "container": ""}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...an empty runtime.container is none: Docker's address" "$DOCKER_HOST_WORDS" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+EXAKIT_VS_OS=Darwin run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "macOS: the launcher VM's address whatever the record says" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+lacks "...never Docker's there" "host.docker.internal" "$OUT"
+printf '{"runtime": {"type": "personal"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "no engine recorded (before kit 0.2.4): as before" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+# Then this run's choice, as the shells' personal_slc_dns_engine reads it:
+# the record first, the run's EXAKIT_PERSONAL_ENGINE next, Podman last.
+EXAKIT_PERSONAL_ENGINE=docker run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...nothing recorded, this run chose Docker: Docker's address" "$DOCKER_HOST_WORDS" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "podman"}}\n' > "$HOME_K/manifest.json"
+EXAKIT_PERSONAL_ENGINE=docker run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...the record beats this run's choice" "on Linux and WSL host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "podman", "container": "exasol-nano"}}\n' > "$HOME_K/manifest.json"
+EXAKIT_PERSONAL_ENGINE=docker run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...a nano record is none: this run's choice" "$DOCKER_HOST_WORDS" "$OUT"
+# The bridge hands the engine the shell's own value, exported or not.
+rm -f "$HOME_K/manifest.json"
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    exakit_vs_defs() { printf '%s' "$ROOT/setup/virtual-schemas"; }
+    _exakit_vs_kit_python() { command -v python3; }
+    manifest_get() { return 1; }
+    unset EXAKIT_PERSONAL_ENGINE; EXAKIT_PERSONAL_ENGINE=docker
+    exakit_vs_engine plan postgresql --name sales --set host=localhost --set database=x --set user=u ) 2>&1 )"
+has "...the bridge passes the run's choice on, set in the shell and not exported" "$DOCKER_HOST_WORDS" "$OUT"
+rm -f "$HOME_K/manifest.json"
+unset EXAKIT_VS_OS
 V6="$(python3 - "$ROOT" <<'PYV6'
 import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
 import plan
@@ -176,12 +243,33 @@ for text in [
     "PKIX path building failed: unable to find valid certification path to requested target",
     "No usable script language container is installed for the requested language.",
     "java.net.UnknownHostException: db.example.com",
+    # Measured live on a fresh Exasol Personal 2.4 (VM and Docker):
+    # SCRIPT_LANGUAGES names JAVA=builtin_java, and its client is not there.
+    "VM error: The required executable '/exaudf/exaudfclient' does not exist in BucketFS",
+    # Another file missing from BucketFS is not a missing Java - not even one
+    # whose name starts like the client does (no apostrophe here: bash 3.2
+    # reads quotes inside a heredoc in a command substitution).
+    "The required executable '/buckets/bfsdefault/default/drivers/tool' does not exist in BucketFS",
+    "The required executable '/exaudf/exaudfclient_py3' does not exist in BucketFS",
+    "The required executable '/exaudf/exaudfclient.sh' does not exist in BucketFS",
 ]:
     print(sql.classify(text))
 PYC
 )"
-check "each real message lands in its class" "unreachable|unreachable|unreachable|unreachable|auth|auth|tls|nojava|dns|" \
+check "each real message lands in its class" "unreachable|unreachable|unreachable|unreachable|auth|auth|tls|nojava|dns|nojava|error|error|error|" \
     "$(printf '%s\n' "$CLASSES" | tr '\n' '|')"
+# The 2.4 words on a line under the summary - a wrapper's first line, or past
+# the cut to MAX_ERROR - are still a missing Java, never a generic failure.
+RAW_NOJAVA='Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1127: the script could not be started
+The required executable '"'"'/exaudf/exaudfclient'"'"' does not exist in BucketFS'
+check "the 2.4 message under the summary line: nojava" "nojava" \
+    "$(python3 - "$ROOT" "$RAW_NOJAVA" <<'PYC'
+import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import sql
+raw = sys.argv[2]
+print(sql.classify_raw(sql.summarize(raw), raw))
+PYC
+)"
 # Measured live: a rotated source password. The summary line is the
 # adapter's generic "Unable to create ... reader"; the cause is lines below.
 RAW_AUTH='Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1126: F-UDF-CL-SL-JAVA-1006:
@@ -226,6 +314,135 @@ import sql
 print(" ".join(sql.classify_raw(sql.summarize(raw), raw) for raw in sys.argv[2:4]))
 PYC
 )"
+# An account that signs in but may not read is told what to grant: the
+# connector's "access", the least it needs at the source. A connector without
+# one falls back to the bare words "read access", which name no grant. Read
+# from the catalog, so a new connector is checked the moment it lands.
+check "every connector names the rights it needs at the source, and the denied, privilege and missing_or_denied fixes say them" "ok" \
+    "$(python3 - "$ROOT" <<'PYC'
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle
+root = os.path.join(sys.argv[1], "setup", "virtual-schemas")
+for entry in json.load(open(os.path.join(root, "catalog.json")))["connectors"]:
+    doc = json.load(open(os.path.join(root, "connectors", entry["id"], "connector.json")))
+    access = doc.get("access", "").strip()
+    if not access or "(%s)" % access not in lifecycle.remedy_for("denied", "src", doc) \
+            or "(%s)" % access not in lifecycle.remedy_for("privilege", "src", doc) \
+            or "(grant it %s)" % access not in lifecycle.remedy_for("missing_or_denied", "src", doc):
+        print("bad: " + entry["id"]); break
+else:
+    print("ok")
+PYC
+)"
+# A database refusing a statement for a missing grant, in each driver's own
+# words, as they arrive: pyexasol's wrapper around Exasol's IMPORT error
+# ("JDBC-Client-Error: Failed to receive MetaData for the given statement:"),
+# the driver's text inside it - Snowflake's on a second line, which pyexasol
+# prints bare. Each is "privilege": the remedy names that connector's access,
+# and no public IP, since a database answers it after the address was let in.
+GRANTS="$(python3 - "$ROOT" <<'PYC'
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql
+load = lambda c: json.load(open(os.path.join(sys.argv[1], "setup/virtual-schemas/connectors", c, "connector.json")))
+IMPORT = "JDBC-Client-Error: Failed to receive MetaData for the given statement: "
+for cid, words in [
+    ("postgresql", IMPORT + "ERROR: permission denied for table orders"),
+    ("postgresql", IMPORT + 'FATAL: permission denied for database "sales"\n  Detail: User does not have CONNECT privilege.'),
+    ("mysql", IMPORT + "SELECT command denied to user 'reader'@'203.0.113.7' for table 'orders'"),
+    ("sqlserver", IMPORT + "The SELECT permission was denied on the object 'orders', database 'sales', schema 'dbo'."),
+    ("oracle", IMPORT + "ORA-01031: insufficient privileges\nhttps://docs.oracle.com/error-help/db/ora-01031/"),
+    ("oracle", IMPORT + 'ORA-41900: missing READ privilege on "SALES"."ORDERS"'),
+    ("snowflake", IMPORT + "SQL access control error:\nInsufficient privileges to operate on schema 'PUBLIC'"),
+    ("mongodb", "VM error: F-UDF-CL-RUST-9001: UDF error: Command failed: Error code 13 (Unauthorized): not authorized "
+                'on sales to execute command { find: "orders", $db: "sales" }'),
+]:
+    raw = ("\n(\n    message     =>  %s (Session: 1880237644681707520)\n    dsn         =>  127.0.0.1:8563\n"
+           "    user        =>  sys\n    code        =>  ETL-5\n)\n" % words)
+    line = sql.redact(raw, [])
+    kind = sql.classify_raw(line, raw)
+    doc = load(cid)
+    remedy = lifecycle.remedy_for(kind, "src", doc, line)
+    print("%s %s %s %s %s" % (cid, kind, lifecycle.STATUS_FOR[kind],
+                              "access" if "(%s)" % doc["access"] in remedy else "NO-ACCESS: " + remedy,
+                              "no-ip" if lifecycle.allow_ip(remedy, kind, "203.0.113.7") == remedy else "IP"))
+PYC
+)"
+check "a missing grant, in each driver's words, is privilege: access-denied, the connector's access named, no IP" \
+    "postgresql privilege access-denied access no-ip|postgresql privilege access-denied access no-ip|mysql privilege access-denied access no-ip|sqlserver privilege access-denied access no-ip|oracle privilege access-denied access no-ip|oracle privilege access-denied access no-ip|snowflake privilege access-denied access no-ip|mongodb privilege access-denied access no-ip|" \
+    "$(printf '%s\n' "$GRANTS" | tr '\n' '|')"
+# Oracle and Snowflake answer for an object the account may not see as if it
+# did not exist. Neither cause is certain, so the fix names both: the name
+# (dropped or renamed: refresh) and the grant (the connector's access).
+AMBIG="$(python3 - "$ROOT" <<'PYC'
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql
+load = lambda c: json.load(open(os.path.join(sys.argv[1], "setup/virtual-schemas/connectors", c, "connector.json")))
+IMPORT = "JDBC-Client-Error: Failed to receive MetaData for the given statement: "
+last = ""
+for cid, words in [
+    ("oracle", IMPORT + "ORA-00942: table or view does not exist"),
+    ("oracle", IMPORT + 'ORA-00942: table or view "SALES"."ORDERS" does not exist\nhttps://docs.oracle.com/error-help/db/ora-00942/'),
+    ("snowflake", IMPORT + "SQL compilation error:\nSchema 'SALES.PUBLIC' does not exist or not authorized."),
+    ("snowflake", IMPORT + "SQL compilation error:\nObject 'SALES.PUBLIC.ORDERS' does not exist or not authorized."),
+]:
+    raw = "\n(\n    message     =>  %s (Session: 1)\n    dsn         =>  127.0.0.1:8563\n    code        =>  ETL-5\n)\n" % words
+    line = last = sql.redact(raw, [])
+    kind = sql.classify_raw(line, raw)
+    doc = load(cid)
+    remedy = lifecycle.remedy_for(kind, "src", doc, line)
+    both = "dropped or renamed (then: exakit source refresh src)" in remedy and "(grant it %s)" % doc["access"] in remedy
+    print("%s %s %s %s %s" % (cid, kind, lifecycle.STATUS_FOR[kind], "both" if both else "NOT-BOTH: " + remedy,
+                              "no-ip" if lifecycle.allow_ip(remedy, kind, "203.0.113.7") == remedy else "IP"))
+print(last)
+PYC
+)"
+check "missing or not granted (ORA-00942, Snowflake): missing_or_denied, never denied, the fix names both causes" \
+    "oracle missing_or_denied failed both no-ip|oracle missing_or_denied failed both no-ip|snowflake missing_or_denied failed both no-ip|snowflake missing_or_denied failed both no-ip|" \
+    "$(printf '%s\n' "$AMBIG" | sed '$d' | tr '\n' '|')"
+check "...Snowflake's second line stays in the message: it names the object" \
+    "JDBC-Client-Error: Failed to receive MetaData for the given statement: SQL compilation error: Object 'SALES.PUBLIC.ORDERS' does not exist or not authorized." \
+    "$(printf '%s\n' "$AMBIG" | tail -1)"
+# What was classified before stays so: the new words come after every cloud
+# class, and a sign-in refusal or a network failure has none of them.
+KEPT="$(python3 - "$ROOT" <<'PYC'
+import sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql
+for text in [
+    "AccessDeniedException: User: arn:aws:iam::1:user/reader is not authorized to perform: s3:ListBucket (Service: S3, Status Code: 403)",
+    "AuthorizationFailure: This request is not authorized to perform this operation. (HTTP 403)",
+    "AuthorizationPermissionMismatch: This request is not authorized to perform this operation using this permission.",
+    "[Simba][BigQueryJDBCDriver](100032) PERMISSION_DENIED: Access Denied: Table p:d.t: User does not have permission",
+    'Unity Catalog request failed: HTTP 403: {"error_code":"PERMISSION_DENIED","message":"User does not have EXTERNAL USE SCHEMA on Schema"}',
+    "Access denied for user 'reader'@'203.0.113.7' (using password: YES)",
+    'FATAL: password authentication failed for user "reader"',
+    "Login failed for user 'reader'.",
+    "ORA-01017: invalid username/password; logon denied",
+    "Incorrect username or password was specified.",
+    "PKIX path building failed: unable to find valid certification path to requested target",
+    "Connection refused. Check that the hostname and port are correct",
+    "java.net.UnknownHostException: db.example.com",
+    "RequestTimeTooSkewed: The difference between the request time and the current time is too large.",
+    "NoSuchBucketException: The specified bucket does not exist",
+    "NoSuchNamespaceException: Namespace does not exist: sales (HTTP 404)",
+    'ERROR: relation "orders" does not exist',
+]:
+    print(sql.classify(text))
+print(lifecycle.allow_ip(lifecycle.remedy_for("denied", "src", {"access": "s3:ListBucket"}), "denied", "203.0.113.7"))
+PYC
+)"
+check "every class before is unchanged: cloud refusals denied (Unity's closed schema external), sign-in auth, and the rest" \
+    "denied|denied|denied|denied|external|auth|auth|auth|auth|auth|tls|unreachable|dns|clock|nobucket|schema_missing|error|" \
+    "$(printf '%s\n' "$KEPT" | sed '$d' | tr '\n' '|')"
+has "...and a cloud refusal still names the public IP, since an address filter answers it too" \
+    "allow this computer's public IP 203.0.113.7" "$(printf '%s\n' "$KEPT" | tail -1)"
+MG_NOTES="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["notes"]))' \
+    "$ROOT/setup/virtual-schemas/connectors/mongodb/connector.json")"
+has "MongoDB's notes: the adapter signs in against admin, whatever the URI says" "Keep authSource=admin" "$MG_NOTES"
+has "...and an Atlas access-list entry is permanent, since a temporary one expires" "as a permanent entry" "$MG_NOTES"
 
 printf '\n== connect: the happy path ==\n'
 db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
@@ -313,6 +530,31 @@ import json, sys; d = json.load(open(sys.argv[1])); d["dns"] = False; json.dump(
 PY
 run_secret "$SECRET" connect mysql --name crm --set host=pg.example.com --set database=crm --set user=reader --secret-stdin
 check "Java without DNS: exit 20, for the shell to repair and retry" "20" "$RC"
+# The fix it names is the same on every engine: a stop and a start. Podman
+# (and macOS) repair the running container after the start; Docker mounts the
+# language container read-only, and its start links the image before it
+# mounts it (personal-slc-dns.py). `exakit start` alone does nothing to a
+# running database, so the fix names both.
+dnsfix() { printf '%s' "$SECRET" | eng --json connect mysql --name crm --set host=pg.example.com --set database=crm \
+    --set user=reader --secret-stdin 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"], "|", d["remedy"])'; }
+DNSFIX="dns | Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS)"
+has "...the fix on Podman: a stop and a start" "$DNSFIX" "$(dnsfix)"
+export EXAKIT_VS_OS=Linux
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+OUT="$(dnsfix)"
+has "...on a Docker deployment: the same (its start links the image)" "$DNSFIX" "$OUT"
+lacks "...never the start alone, which does nothing to a running database" "restart the database with exakit start" "$OUT"
+check "...the same words for a failure the engine names no fix for (cli.failure)" "True True" "$(python3 - "$ROOT" <<'PYC'
+import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import cli, lifecycle, plan
+plan.ENGINE = "docker"
+said = "exakit stop, then exakit start (the start gives Java the deployment's DNS)"
+print(said in cli.failure("x", 20)["remedy"], said in cli.failure("x", 20, source="crm")["remedy"])
+PYC
+)"
+has "...on macOS the same" "$DNSFIX" "$(EXAKIT_VS_OS=Darwin dnsfix)"
+rm -f "$HOME_K/manifest.json"
+unset EXAKIT_VS_OS
 python3 - "$STATE" <<'PYDNS'
 import json, sys; d = json.load(open(sys.argv[1])); d["dns"] = True; json.dump(d, open(sys.argv[1], "w"))
 PYDNS
@@ -328,6 +570,12 @@ lacks "...said once, not restated in a second parenthesis" "did not answer from 
 db '{"java": false}'
 run_secret "$SECRET" connect oracle --name erp --set host=ora.example.com --set service=ORCL --set schema=APP --set user=reader --secret-stdin
 check "no Java in the database: exit 21, for the shell to offer the install" "21" "$RC"
+# A fresh Exasol Personal 2.4: JAVA=builtin_java, no client in BucketFS. The
+# first connect of every new user failed here with exit 1 (live test, 2.4.0).
+db '{"java": "builtin"}'
+run_secret "$SECRET" connect oracle --name erp --set host=ora.example.com --set service=ORCL --set schema=APP --set user=reader --secret-stdin
+check "Personal 2.4's builtin_java without its client: exit 21 too, not 1" "21" "$RC"
+has "...said as a missing Java" "Java is not installed in the database" "$OUT"
 
 printf '\n== the first query and the tips ==\n'
 db '{"sources": {"my.example.com": {"tables": ["orders", "actor"]}}}'
@@ -489,7 +737,8 @@ run_secret "typo-$NEWSECRET" reauth sales --secret-stdin
 check "reauth with a credential the source refuses: exit 1" "1" "$RC"
 has "...and says the previous one was kept" "refused the new credential, so the previous one was kept" "$OUT"
 check "...the CONNECTION still holds the previous credential" "$OLDSECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_SALES"]["secret"]')"
-check "...and the pending CONNECTION is gone" "false" "$(dbq '"EXAKIT_SRC_SALES_PENDING" in d["connections"]')"
+check "...and the pending CONNECTION is gone" "[]" "$(pending)"
+has "...it was tried under a name no source can have" 'CREATE OR REPLACE CONNECTION "EXAKIT_PENDING_EXAKIT_SRC_SALES"' "$(dbq '" | ".join(d["statements"])')"
 lacks "...the refused credential is in none of the output" "typo-$NEWSECRET" "$OUT"
 run_secret "$NEWSECRET" reauth sales --secret-stdin
 check "reauth with the new credential: ready again" "0" "$RC"
@@ -538,20 +787,31 @@ bridge() {
       . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/detect.sh"; . "$ROOT/setup/lib/runtime-personal.sh"
       . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { :; }
+      # The credential reader runs on the kit's pyexasol: here, this python3.
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() {
           printf '%s\n' "$*" >> "$B/argv"
           [ -t 0 ] || cat >> "$B/stdin"
+          # What a child of the bridge sees in its environment (item: exported names).
+          env >> "$B/env"
           _n="$(wc -l < "$B/argv" | tr -d ' ')"
           _code="$(sed -n "${_n}p" "$B/codes" 2>/dev/null)"
           if [ "$1" = resolve ] && [ -f "$B/gated" ]; then echo "FAIL BigQuery is not available yet: gated"; return 5; fi
-          case "$1" in check) echo 'RESULT {"checks": []}' ;; remove|disconnect) echo 'RESULT {"name": "sales", "drop": ["virtual schema VS_SALES", "CONNECTION EXAKIT_SRC_SALES"], "keep": [], "delete_files": ["a.jar"], "keep_files": ["b.jar"], "note": "nothing is revoked at the source"}' ;; show) echo "FAIL no source named $2 (see: exakit source list)" ;; resolve) echo 'RESULT {"connector": "postgresql"}' ;; plan) echo 'RESULT {"name": "x", "connector": "postgresql", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;; esac
+          case "$1" in list|issues) cat "$B/rows" 2>/dev/null ;; check) echo 'RESULT {"checks": []}' ;; remove|disconnect) echo 'RESULT {"name": "sales", "drop": ["virtual schema VS_SALES", "CONNECTION EXAKIT_SRC_SALES"], "keep": [], "delete_files": ["a.jar"], "keep_files": ["b.jar"], "note": "nothing is revoked at the source"}' ;; show) echo "FAIL no source named $2 (see: exakit source list)" ;; resolve) echo 'RESULT {"connector": "postgresql"}' ;; plan) echo 'RESULT {"name": "x", "connector": "postgresql", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;; esac
           return "${_code:-0}"
       }
-      personal_slc_dns_repair() { echo "REPAIRED" >> "$B/argv"; return 0; }
+      # B/dnsrc: what the repair answers (2: Docker, linked in the image).
+      personal_slc_dns_repair() { echo "REPAIRED" >> "$B/argv"; return "$(cat "$B/dnsrc" 2>/dev/null || echo 0)"; }
       _exakit_vs_install_java() { echo "JAVA-ASKED" >> "$B/argv"; return 1; }
+      EXAKIT_BIN_DIR="$B/bin"
       "$@" ) 2>&1
 }
-reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes"; printf '%s\n' "$@" > "$B/codes"; }
+# The installed kit's exakit, recording what it was asked.
+mkdir -p "$B/bin"
+printf '#!/bin/sh\necho "EXAKIT $1" >> "%s/argv"\n' "$B" > "$B/bin/exakit"; chmod +x "$B/bin/exakit"
+reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes" "$B/env" "$B/dnsrc"; printf '%s\n' "$@" > "$B/codes"; }
+# The same bridge for a fresh bash started with a given environment (review 5).
+{ printf 'ROOT=%q; B=%q\n' "$ROOT" "$B"; declare -f bridge; } > "$WORK/bridge-fn.sh"
 
 reset_bridge
 OUT="$(bridge cmd_connect pg --name sales --password=hunter2 </dev/null)"; RC=$?
@@ -571,9 +831,31 @@ reset_bridge 0 0 20 0
 OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
 check "exit 20 from the engine: DNS repaired, connect retried once, exit 0" \
     "0 connect|REPAIRED|connect|" "$RC $(grep -E '^(connect|REPAIRED)' "$B/argv" | cut -d' ' -f1 | tr '\n' '|')"
+reset_bridge 0 0 20 0; echo 2 > "$B/dnsrc"
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" --yes </dev/null)"; RC=$?
+check "exit 20 on Docker (the image linked): --yes restarts the database once, then retries" \
+    "0 connect|REPAIRED|EXAKIT stop|EXAKIT start|connect|" "$RC $(grep -E '^(connect|REPAIRED|EXAKIT)' "$B/argv" | cut -d' ' -f1-2 | sed 's/^connect .*/connect/' | tr '\n' '|')"
+reset_bridge 0 0 20 0; echo 2 > "$B/dnsrc"
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
+check "...without --yes and no terminal: no restart, nothing retried, exit 20" "20 0 1" "$RC $(grep -c '^EXAKIT' "$B/argv") $(grep -c '^connect' "$B/argv")"
+has "...and it names the restart that fixes it" "Run: exakit stop, then exakit start - and try again." "$OUT"
+reset_bridge 0 0 20 0; echo 1 > "$B/dnsrc"
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" --yes </dev/null)"; RC=$?
+check "a repair that fails: no restart, nothing retried" "20 0" "$RC $(grep -c '^EXAKIT' "$B/argv")"
 reset_bridge 0 0 21
 OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
 check "exit 21: the Java install is offered; declined, nothing retried" "21 1" "$RC $(grep -c '^connect' "$B/argv")"
+# A repair that fails: the bridge names the stop and start, whose start links
+# the image on Docker and repairs the container elsewhere.
+dnsline() { ( EXAKIT_HOME="$HOME_K"; STUB_OS="$1"; STUB_ENGINE="$2"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    personal_slc_dns_repair() { return 1; }
+    detect_os() { printf '%s' "$STUB_OS"; }
+    personal_slc_dns_engine() { printf '%s' "$STUB_ENGINE"; }
+    _exakit_vs_repair 20; echo "rc=$?" ) 2>&1; }
+for _e in "linux docker" "linux podman" "macos docker"; do
+    has "a failed repair ($_e): the stop and start that fix it" "Restart the database (exakit stop, exakit start) and try again." "$(dnsline $_e)"
+done
 has "...the offer was made" "JAVA-ASKED" "$(cat "$B/argv")"
 reset_bridge 0
 OUT="$(bridge cmd_source remove sales --dry-run </dev/null)"
@@ -598,6 +880,13 @@ OUT="$(bridge cmd_source reauth nosuch --password-file "$B/pw" </dev/null)"; RC=
 check "reauth of a source that does not exist: exit 4, before any credential" "4 show nosuch|" "$RC $(tr '\n' '|' < "$B/argv")"
 check "...nothing reached the engine's stdin" "no" "$([ -s "$B/stdin" ] && echo yes || echo no)"
 has "...and says which name" "no source named nosuch" "$OUT"
+reset_bridge 0 1
+OUT="$(bridge cmd_source reauth docs --password-file "$B/pw" </dev/null)"; RC=$?
+check "reauth: the name is checked, then the engine gets --secret-stdin" "show docs|reauth docs --secret-stdin|" "$(tr '\n' '|' < "$B/argv")"
+check "...the credential reached it on stdin" "pw-from-stdin" "$(cat "$B/stdin")"
+lacks "...and never as an argument" "pw-from-stdin" "$(cat "$B/argv")"
+check "...a refused credential (engine exit 1) exits 1" "1" "$RC"
+lacks "...without saying the source is ready again" "ready again with the new credential" "$OUT"
 reset_bridge 0
 OUT="$(bridge cmd_source check --all </dev/null)"
 has "check --all with no sources says so" "(none)" "$OUT"
@@ -606,6 +895,142 @@ OUT="$(bridge cmd_connect bq --name b </dev/null)"; RC=$?
 check "a gated connector stops the wizard with the engine's exit 5" "5 resolve bq|resolve bq|" "$RC $(tr '\n' '|' < "$B/argv")"
 has "...and the reason is shown" "not available yet" "$OUT"
 rm -f "$B/gated"
+# --password-stdin: ALL of stdin (a JSON key file's line breaks kept), one
+# trailing line ending dropped; nothing on it, or --password-file beside it,
+# refused before anything runs. What the stand-in engine got is compared byte
+# for byte: $( ) would hide the line endings.
+same() { if printf '%s' "$1" | cmp -s - "$2"; then echo same; else echo "differs: $(od -c < "$2" | head -3 | tr -s ' ' | tr '\n' ' ')"; fi; }
+KEYJSON='{
+  "type": "service_account",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIx\n-----END PRIVATE KEY-----\n"
+}'
+reset_bridge 0 0 0
+OUT="$(printf '%s\n' "$KEYJSON" | bridge cmd_connect pg --name sales --set host=db.example.com --set user=reader --password-stdin --yes)"; RC=$?
+check "--password-stdin: exit 0, resolve, plan, then connect with --secret-stdin" \
+    "0 resolve pg|plan postgresql --name sales --set host=db.example.com --set user=reader|connect postgresql --name sales --set host=db.example.com --set user=reader --secret-stdin|" \
+    "$RC $(tr '\n' '|' < "$B/argv")"
+check "...all of stdin reached the engine, its line breaks kept, the trailing one dropped" "same" "$(same "$KEYJSON" "$B/stdin")"
+lacks "...never as an argument" "service_account" "$(cat "$B/argv")"
+lacks "...nor in the output" "service_account" "$OUT"
+reset_bridge 0 0 0
+OUT="$(printf 'pw-crlf\r\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"
+check "--password-stdin: a CRLF ending is one line ending" "same" "$(same 'pw-crlf' "$B/stdin")"
+reset_bridge 0 0 0
+OUT="$(printf 'pw-two\n\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"
+check "--password-stdin: the bridge drops one trailing line ending (the engine the rest: end to end below)" "same" "$(same 'pw-two
+' "$B/stdin")"
+reset_bridge 0 0 0
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-stdin --yes </dev/null)"; RC=$?
+check "--password-stdin with nothing on stdin: exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying so in one line" "--password-stdin read nothing: standard input was empty." "$OUT"
+reset_bridge 0 0 0
+OUT="$(printf 'pw' | bridge cmd_connect pg --name sales --set host=h --password-stdin --password-file "$B/pw" --yes)"; RC=$?
+check "--password-stdin with --password-file: exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying to use one" "--password-stdin and --password-file both give the credential; use one." "$OUT"
+reset_bridge 0 1
+OUT="$(printf 'new-cred\n' | bridge cmd_source reauth docs --password-stdin)"; RC=$?
+check "source reauth --password-stdin: the name is checked, then the engine gets --secret-stdin" "show docs|reauth docs --secret-stdin|" "$(tr '\n' '|' < "$B/argv")"
+check "...the piped credential reached it, its newline dropped" "same" "$(same 'new-cred' "$B/stdin")"
+reset_bridge 0
+OUT="$(bridge cmd_source reauth docs --password-stdin </dev/null)"; RC=$?
+check "source reauth --password-stdin, nothing on stdin: exit 2 after the name check, no reauth" "2 show docs|" "$RC $(tr '\n' '|' < "$B/argv")"
+reset_bridge 0
+OUT="$(printf 'pw' | bridge cmd_source reauth docs --password-stdin --password-file "$B/pw")"; RC=$?
+check "source reauth --password-stdin with --password-file: exit 2, nothing ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+reset_bridge 0
+OUT="$(printf 'pw' | bridge cmd_source check docs --password-stdin)"; RC=$?
+check "--password-stdin on an action that takes no credential: exit 2, nothing ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying where it belongs" "--password-stdin is for exakit source reauth" "$OUT"
+
+# Security review 1: what is not UTF-8 or UTF-16 text is refused BEFORE a shell
+# variable takes it. $( ) drops NUL bytes without a word: UTF-16 with a stray
+# byte, or without its BOM, became another credential (measured: '慰獳', 'pass').
+reset_bridge 0 0 0
+OUT="$(printf '\377\376p\000a\000s\000s\000\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"; RC=$?
+check "review 1: UTF-16 with a stray byte on stdin: exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying it is not UTF-8 or UTF-16 text" "The credential is not UTF-8 or UTF-16 text" "$OUT"
+printf 'p\000a\000s\000s\000\n\000' > "$B/bomless16.pw"
+reset_bridge 0 0 0
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/bomless16.pw" --yes </dev/null)"; RC=$?
+check "review 1: a BOM-less UTF-16 --password-file (NUL bytes): exit 2, no connect" "2 resolve pg|plan postgresql --name sales --set host=h|" "$RC $(tr '\n' '|' < "$B/argv")"
+reset_bridge 0 1
+OUT="$(printf 'p\000w' | bridge cmd_source reauth docs --password-stdin)"; RC=$?
+check "review 1: a NUL on stdin for reauth: exit 2, no reauth" "2 show docs|" "$RC $(tr '\n' '|' < "$B/argv")"
+
+# Security review 2: a credential given as an option is refused by name, on
+# connect and on source, and no option's =value is ever repeated.
+for args in "cmd_connect pg --name sales --password-stdin=hunter2" "cmd_connect pg --name sales --passwd=hunter2" \
+            "cmd_connect pg --name sales --password-file=hunter2" "cmd_source reauth docs --password=hunter2" \
+            "cmd_source reauth docs --secret hunter2" "cmd_source check docs --token=hunter2"; do
+    reset_bridge 0
+    # shellcheck disable=SC2086
+    OUT="$(bridge $args </dev/null)"; RC=$?
+    check "review 2: $(printf '%s' "$args" | sed 's/hunter2/<v>/'): exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+    has "...as a credential given as an argument" "A credential is never taken as an argument" "$OUT"
+    lacks "...without repeating it" "hunter2" "$OUT"
+done
+for args in "cmd_connect pg --name sales --bogus=hunter2" "cmd_source list --bogus=hunter2"; do
+    reset_bridge 0
+    # shellcheck disable=SC2086
+    OUT="$(bridge $args </dev/null)"; RC=$?
+    check "review 2: an unknown option with =value: exit 2 ($args)" "2" "$RC"
+    has "...its name said" "Unknown option '--bogus' for" "$OUT"
+    lacks "...its value not" "hunter2" "$OUT"
+done
+
+# Security review 5: a name that holds the credential, exported (even empty)
+# before exakit ran, stays exported when assigned - every child would see it.
+# The control first: this bash does keep the export.
+check "review 5 control: bash keeps an exported name exported when it is assigned" "1" \
+    "$( (export _evctl=; _evctl=val; env | grep -c '^_evctl=val') )"
+reset_bridge 0 0 0
+OUT="$(printf 'Exp0rted-Val' | env EXAKIT_VS_STDIN_SECRET= _cc_secret= _evx_secret= _erh_value= \
+    bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_connect pg --name sales --set host=h --password-stdin --yes)" 2>/dev/null
+check "review 5: names exported empty: the credential reached the engine on stdin" "same" "$(same 'Exp0rted-Val' "$B/stdin")"
+check "...and is in no child's environment" "0" "$(grep -c 'Exp0rted-Val' "$B/env")"
+reset_bridge 0 0
+OUT="$(printf 'Exp0rted-Val' | env _cs_secret= _evx_secret= bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source reauth docs --password-stdin)" 2>/dev/null
+check "review 5: reauth, _cs_secret exported empty: in no child's environment" "1 0" "$(grep -c '^reauth' "$B/argv") $(grep -c 'Exp0rted-Val' "$B/env")"
+
+# Security review 12: under bash -x the credential is not in the trace.
+traced() { set -x; "$@"; }
+reset_bridge 0 0 0
+OUT="$(printf 'Tr4ced-Val' | bridge traced cmd_connect pg --name sales --set host=h --password-stdin --yes)"
+has "review 12: bash -x was on" "+ cmd_connect" "$OUT"
+lacks "...and the credential is not in its trace" "Tr4ced-Val" "$OUT"
+check "...which still reached the engine" "same" "$(same 'Tr4ced-Val' "$B/stdin")"
+
+# exakit source list: one table, where each source lives and its TLS level,
+# inside the terminal - columns give way rather than wrap.
+LONGHOST="mydb.cluster-abc123def456.eu-west-1.rds.amazonaws.com"
+printf 'RESULT {"sources": [{"name": "sales", "connector": "postgresql", "schema": "VS_SALES", "status": "ready", "last_check": {"at": "2026-11-09T10:22:33Z"}, "needs_refresh": false, "host": "pg.example.com", "tls": "verify"}, {"name": "orders", "connector": "mysql", "schema": "VS_ORDERS", "status": "auth-failed", "last_check": null, "needs_refresh": false, "host": "%s", "tls": "require"}, {"name": "old", "connector": "gone", "schema": "VS_OLD", "status": "ready", "last_check": null, "needs_refresh": false, "host": "", "tls": null}]}\n' "$LONGHOST" > "$B/rows"
+reset_bridge 0
+OUT="$(COLUMNS=200 bridge cmd_source list </dev/null)"
+has "list on a wide terminal: every column, under a heading" "NAME    SOURCE      SCHEMA     HOST" "$OUT"
+has "...a row names its host and TLS level, and when it was last checked" \
+    "sales   postgresql  VS_SALES   pg.example.com" "$(printf '%s\n' "$OUT" | grep '^  sales')"
+has "...TLS, then status" "verify   ready        2026-11-09 10:22" "$(printf '%s\n' "$OUT" | grep '^  sales')"
+has "...a host in full when there is room" "$LONGHOST  require  auth-failed  never" "$OUT"
+has "...a source whose connector is gone: no host, TLS n/a" "old     gone        VS_OLD     -" "$(printf '%s\n' "$OUT" | grep '^  old')"
+has "...n/a" " n/a " "$(printf '%s\n' "$OUT" | grep '^  old')"
+OUT="$(COLUMNS=80 bridge cmd_source list </dev/null)"
+check "on 80 columns: every line fits (79, the last column unwritten)" "0" \
+    "$(printf '%s\n' "$OUT" | awk 'length($0) > 79' | wc -l | tr -d ' ')"
+check "...SCHEMA goes first, then LAST CHECK; HOST and TLS stay" "  NAME    SOURCE      HOST                                 TLS      STATUS" \
+    "$(printf '%s\n' "$OUT" | grep '^  NAME')"
+has "...then a long host is cut, marked ..." "mydb.cluster-abc123def456.eu-wes...  require  auth-failed" "$OUT"
+has "...a short one kept whole" "  sales   postgresql  pg.example.com" "$OUT"
+OUT="$(COLUMNS=60 bridge cmd_source list </dev/null)"
+check "on 60 columns: the host is cut further, every line still fits" "0 1" \
+    "$(printf '%s\n' "$OUT" | awk 'length($0) > 59' | wc -l | tr -d ' ') $(printf '%s\n' "$OUT" | grep -c 'mydb\.cluster\.\.\.  require')"
+printf 'RESULT {"issues": [{"name": "orders", "connector": "mysql", "schema": "VS_ORDERS", "status": "auth-failed", "last_check": {"at": "2026-11-09T10:22:33Z"}, "needs_refresh": false, "host": "my.example.com", "tls": "require", "remedy": "the source rejected the credentials: exakit source reauth orders", "command": "exakit source reauth orders"}]}\n' > "$B/rows"
+OUT="$(COLUMNS=80 bridge cmd_source issues </dev/null)"
+has "issues: the same table, the fix on its own line under the row" \
+    "    fix: the source rejected the credentials: exakit source reauth orders" "$OUT"
+printf 'RESULT {"sources": []}\n' > "$B/rows"
+OUT="$(COLUMNS=80 bridge cmd_source list </dev/null)"
+check "no sources: (none), no heading" "  (none)" "$OUT"
+rm -f "$B/rows"
 
 printf '\n== a private CA (AWS RDS, Azure, a company CA) is trusted, not skipped ==\n'
 # Measured live against RDS PostgreSQL 18 (ap-south-1): tls=verify fails with
@@ -1011,6 +1436,20 @@ run plan mongodb --name mg --set "uri=mongodb://reader:pw@h:27017/" --set databa
 has "a URI carrying user:password@ is refused - the password belongs in the CONNECTION" "the MongoDB URI carries credentials" "$OUT"
 run plan mongodb --name mg --set "uri=postgres://h/" --set database=d --set collection=c --set user=reader
 has "...and a URI that is not MongoDB's" "is not a valid mongodb-uri" "$OUT"
+# The adapter (0.1.3) signs in against admin whatever the URI says: a reader
+# defined in another database could never log in, so its authSource is refused
+# before anything is staged, not left to fail at connect.
+run plan mongodb --name mg --set "uri=mongodb+srv://cluster0.example.net/?retryWrites=true&authSource=sales" \
+    --set database=sample_mflix --set collection=movies --set user=reader
+check "--set uri with authSource=sales: refused, exit 2" "2" "$RC"
+has "...in one line: the adapter signs in against admin, and the fix" \
+    "the MongoDB adapter always signs in against the admin database, so an authSource other than admin cannot work: make the reader a user of admin and drop authSource or set it to admin" "$OUT"
+run plan mongodb --name mg --set "uri=mongodb+srv://cluster0.example.net/?AUTHSOURCE=Sales" --set database=d --set collection=c --set user=reader
+check "...the option's name in any case" "2" "$RC"
+run plan mongodb --name mg $MG_SET --set collection=movies
+check "authSource=admin is accepted" "0" "$RC"
+run plan mongodb --name mg --set "uri=mongodb+srv://cluster0.example.net/" --set database=sample_mflix --set collection=movies --set user=reader
+check "...and so is no authSource" "0" "$RC"
 
 mgdb ', "rust": false'
 run_secret "$SECRET" connect mongodb --name mg $MG_SET --set collection=movies --secret-stdin
@@ -1033,6 +1472,12 @@ has "...the scan UDF too" 'CREATE OR REPLACE RUST SCALAR SCRIPT "EXAKIT_VS"."MON
 has "...the virtual schema names the connection the adapter's way" "MONGODB_CONNECTION = 'EXAKIT_SRC_MG' DATABASE = 'sample_mflix' COLLECTION = 'movies'" \
     "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_MG\"")][-1]')"
 lacks "...the password is not printed" "$SECRET" "$OUT"
+OUT="$(eng --json list 2>/dev/null)"
+check "list --json: every row keeps its keys and adds host and tls, nothing renamed" \
+    "connector host last_check name needs_refresh schema status tls" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(" ".join(sorted(set(k for s in json.load(sys.stdin)["sources"] for k in s))))')"
+check "...a MongoDB source: the URI's host, and verify for mongodb+srv://" "cluster0.example.net verify" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json, sys; s = [s for s in json.load(sys.stdin)["sources"] if s["name"] == "mg"][0]; print(s["host"], s["tls"])')"
 
 run_secret "$SECRET" connect mongodb --name mgt $MG_SET --set collection=theaters --secret-stdin
 check "a second MongoDB source: exit 0, the two scripts shared, not doubled" "0 1 1" \
@@ -1047,11 +1492,28 @@ run_secret "still-the-old-one" reauth mg --secret-stdin
 check "reauth with a password the source refuses: exit 1" "1" "$RC"
 has "...tried on a throwaway schema first, so the old one is kept" "the source refused the new credential, so the previous one was kept" "$OUT"
 check "...nothing pending is left behind" "[] []" \
-    "$(dbq '[c for c in d["connections"] if c.endswith("_PENDING")]') $(dbq '[v for v in d["virtual"] if v.endswith("_PENDING")]')"
+    "$(dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")]') $(dbq '[v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]')"
 check "...and the CONNECTION still holds the old password" "true" "$(dbq 'd["connections"]["EXAKIT_SRC_MG"]["secret"] == "'"$SECRET"'"')"
 run_secret "n3w-secret" reauth mg --secret-stdin
 check "reauth with the password the source accepts: exit 0" "0" "$RC"
 has "...accepted on the trial, then replaced" "The source accepted the new credential" "$OUT"
+# The Rust container runs the same /exaudf/exaudfclient: on Exasol Personal
+# 2.4 a Rust source whose container is gone answers in Java's words. Every
+# path that passes the database's kind on says Rust for a Rust adapter.
+RUST24="VM error: The required executable '/exaudf/exaudfclient' does not exist in BucketFS"
+kindof() { python3 -c 'import json,sys; print(json.load(sys.stdin)["kind"])'; }
+python3 - "$STATE" "$RUST24" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["refresh_fail"] = ["VS_MG"]; d["refresh_error"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PY
+check "a Rust source's refresh, its container gone: norust, not the Java fix" "norust" "$(eng --json refresh mg 2>/dev/null | kindof)"
+python3 - "$STATE" "$RUST24" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("refresh_fail"); d.pop("refresh_error"); d["vs_fail"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PY
+check "...its reauth (a throwaway schema on the Rust adapter): norust too" "norust" \
+    "$(printf '%s' "n3w-secret" | eng --json reauth mg --secret-stdin 2>/dev/null | kindof)"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("vs_fail"); json.dump(d, open(sys.argv[1], "w"))
+PY
 
 run_secret "wrong" connect mongodb --name mgbad $MG_SET --set collection=movies --secret-stdin
 check "a wrong password on first connect: exit 1, nothing of its own kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_MGBAD" in d["connections"]' | tr A-Z a-z)"
@@ -1076,10 +1538,12 @@ print(" ".join(sorted(a for a, p in c["arch"].items() if re.fullmatch(r"[0-9a-f]
 PYR
 )"
 VSRUN="$(sed -n '/^_exakit_vs_run() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
+VSREPAIR="$(sed -n '/^_exakit_vs_repair() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
 VSRUST="$(sed -n '/^_exakit_vs_install_rust() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
-has "bash: exit 23 installs the Rust container, then retries" "23) _exakit_vs_install_rust || break ;;" "$VSRUN"
+has "bash: exit 23 installs the Rust container" "23) _exakit_vs_install_rust ;;" "$VSREPAIR"
+has "...then retries" 'case "$_evx_rc" in 20|21|23) ;; *) break ;; esac' "$VSRUN"
 has "...it checks size and SHA-256 before installing" 'verify_sha256 "$_evr_dir/$_evr_asset" "$_evr_sha"' "$VSRUST"
-has "PowerShell: its twin" "if (-not (Install-ExakitVsRust)) { break }" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
+has "PowerShell: its twin" 'if ($Code -eq 23) { return [bool](Install-ExakitVsRust) }' "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
 
 printf '\n== Databricks (Profile C): a Lua adapter with the kit'"'"'s certificate check ==\n'
 # Measured on Exasol Personal 2.3.0 (adapter 1.0.2, driver 3.4.3, a real
@@ -1192,6 +1656,13 @@ has "...the x86_64 archive on x86_64" '"asset": "lakehouse-engine.tar.gz"' "$OUT
 lkdb ', "rust": false'
 OUT="$(eng connect lakehouse --name lake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
 check "without the Rust container: exit 23, nothing created" "23 {} {}" "$RC $(dbq 'd["connections"]') $(dbq 'd["virtual"]')"
+# Rust there, Java not (a fresh Exasol Personal 2.4 after the Rust install):
+# the kit's own Java DNS probe of the Glue host fails, and that is Java's to
+# install - it was read as Rust's (exit 23) before, which reinstalled Rust.
+lkdb ', "java": "builtin"'
+OUT="$(eng connect lakehouse --name lake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+check "Rust there, Java missing (the DNS probe): exit 21, not 23" "21" "$RC"
+has "...said as a missing Java" "Java is not installed in the database" "$OUT"
 
 lkdb
 OUT="$(eng connect lakehouse --name lake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
@@ -1250,7 +1721,7 @@ OUT="$(eng reauth lake --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
 check "reauth with the key AWS now refuses: exit 1, the old CONNECTION kept" "1 $LK_KEY_ID" \
     "$RC $(dbq '__import__("json").loads(d["connections"]["EXAKIT_SRC_LAKE"]["secret"])["access_key"]')"
 check "...nothing pending left behind" "[] []" \
-    "$(dbq '[c for c in d["connections"] if c.endswith("_PENDING")]') $(dbq '[v for v in d["virtual"] if v.endswith("_PENDING")]')"
+    "$(dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")]') $(dbq '[v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]')"
 OUT="$(printf '{"AccessKey": {"AccessKeyId": "AKIANEWNEWNEWNEWNEW1", "SecretAccessKey": "%s"}}' "$NEWSECRET-0123456789abcdefghijk" \
     | eng reauth lake --secret-stdin 2>&1)"; RC=$?
 check "reauth with the new key: exit 0, replaced" "0 AKIANEWNEWNEWNEWNEW1" \
@@ -1655,7 +2126,73 @@ OUT="$(eng reauth docs --secret-stdin < "$WORK/s3key2.json" 2>&1)"; RC=$?
 check "reauth with a new key file: exit 0" "0" "$RC"
 has "...the CONNECTION holds the new key, the bucket and region kept" '{"awsAccessKeyId": "AKIAEXAMPLEKEYID0002", "awsSecretAccessKey": "AnotherSecretKeyValue0000000000000000000", "awsRegion": "ap-south-1", "s3Bucket": "docs-bucket"}' \
     "$(dbq 'd["connections"]["EXAKIT_SRC_DOCS"]["secret"]')"
+has "...after a throwaway schema on a pending CONNECTION read it" "The source accepted the new credential" "$OUT"
+has "...one row from each table, as connect reads a document source" 'SELECT * FROM "EXAKIT_PENDING_VS_DOCS"."ORDERS" LIMIT 1' \
+    "$(dbq '" | ".join(d["statements"])')"
+check "...nothing pending is left behind" "[]" "$(pending)"
+
+# A typo in the new key: S3 refuses it, so the working one stays. This
+# mapping has a CSV without fields, so the trial schema's CREATE reads already.
+DOCSKEY="$(dbq 'd["connections"]["EXAKIT_SRC_DOCS"]["secret"]')"
+TYPOAWS="AnotherSecretKeyValue000000000000000000O"
+printf '%s' '{"AccessKey": {"AccessKeyId": "AKIAEXAMPLEKEYID0003", "SecretAccessKey": "'"$TYPOAWS"'"}}' > "$WORK/s3typo.json"
+DN0="$(dbq 'len(d["statements"])')"
+OUT="$(eng reauth docs --secret-stdin < "$WORK/s3typo.json" 2>&1)"; RC=$?
+check "reauth with a key S3 refuses: exit 1, as every refused reauth" "1" "$RC"
+has "...it says the previous one was kept" "the source refused the new credential, so the previous one was kept" "$OUT"
+check "...the CONNECTION still holds the working key" "$DOCSKEY" "$(dbq 'd["connections"]["EXAKIT_SRC_DOCS"]["secret"]')"
+check "...nothing pending is left behind" "[]" "$(pending)"
+lacks "...the refused key is in none of the output" "$TYPOAWS" "$OUT"
+check "...nor in any statement but the pending CONNECTION's" "[]" \
+    "$(dbq '[s[:60] for s in d["statements"]['"$DN0"':] if "'"$TYPOAWS"'" in s and not s.startswith("CREATE OR REPLACE CONNECTION \"EXAKIT_PENDING_")]')"
+run check docs; check "...and the source still checks ready" "0" "$RC"
+
+# A mapping that names its fields: CREATE reads no object (measured on S3),
+# so only the trial's read can catch the refused key - and does.
+TYPED="$WORK/edml-typed"; mkdir -p "$TYPED"
+printf '{"$schema": "https://schemas.exasol.com/edml-2.1.0.json", "source": "data/orders/*.jsonl", "destinationTable": "ORDERS", "mapping": {"fields": {"id": {"toDecimalMapping": {}}}}}\n' > "$TYPED/orders.json"
+run_secret "$NEWAWS" connect s3 --name typed --set bucket=docs-bucket --set region=ap-south-1 --set mapping=$TYPED \
+    --set access_key_id=AKIAEXAMPLEKEYID0002 --secret-stdin
+check "a source whose mapping names its fields connects: exit 0" "0" "$RC"
+OUT="$(eng reauth typed --secret-stdin < "$WORK/s3typo.json" 2>&1)"; RC=$?
+check "...reauth with a key S3 refuses: exit 1, though the trial schema was created" "1 true" \
+    "$RC $(dbq 'any(s.startswith("CREATE VIRTUAL SCHEMA \"EXAKIT_PENDING_VS_TYPED\"") for s in d["statements"])')"
+has "...the read through it said no" 'SELECT * FROM "EXAKIT_PENDING_VS_TYPED"."ORDERS" LIMIT 1' "$(dbq '" | ".join(d["statements"])')"
+check "...the working key kept, nothing pending" "AKIAEXAMPLEKEYID0002 []" \
+    "$(dbq '__import__("json").loads(d["connections"]["EXAKIT_SRC_TYPED"]["secret"])["awsAccessKeyId"]') $(pending)"
+run check typed; check "...and the source still checks ready" "0" "$RC"
+run remove typed
+
+# A source may be called <name>_pending: a trial for <name> never touches it.
+run_secret "$NEWAWS" connect s3 --name docs_pending $S3_SET --set access_key_id=AKIAEXAMPLEKEYID0002 --secret-stdin
+check "a source named docs_pending connects beside docs: exit 0" "0" "$RC"
+DPKEY="$(dbq 'd["connections"]["EXAKIT_SRC_DOCS_PENDING"]["secret"]')"
+eng reauth docs --secret-stdin < "$WORK/s3typo.json" >/dev/null 2>&1
+OUT="$(eng reauth docs --secret-stdin < "$WORK/s3key2.json" 2>&1)"; RC=$?
+check "...a refused and an accepted reauth of docs leave its schema alone" "0 true" "$RC $(dbq '"VS_DOCS_PENDING" in d["virtual"]')"
+check "...and its CONNECTION" "$DPKEY" "$(dbq 'd["connections"]["EXAKIT_SRC_DOCS_PENDING"]["secret"]')"
+
+# A reauth killed mid-trial (SIGKILL: no finally runs) leaves its trial schema
+# and pending CONNECTION; disconnect and remove sweep them.
+killed_trial() {
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))
+d["connections"]["EXAKIT_PENDING_EXAKIT_SRC_DOCS"] = dict(d["connections"].get("EXAKIT_SRC_DOCS") or {"url": "", "user": "", "secret": "{}"})
+d["virtual"]["EXAKIT_PENDING_VS_DOCS"] = {"connection": "EXAKIT_PENDING_EXAKIT_SRC_DOCS", "tables": ["ORDERS"]}
+json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+}
+killed_trial
+run disconnect docs
+check "disconnect after a killed trial: exit 0, its pending credential and schema gone" "0 []" "$RC $(pending)"
+killed_trial
+DN0="$(dbq 'len(d["statements"])')"
 run remove docs
+check "remove after a killed trial: exit 0, nothing pending left" "0 []" "$RC $(pending)"
+check "...the trial schema dropped before the adapter script it runs on" "true" \
+    "$(dbq '(lambda s: s.index("DROP FORCE VIRTUAL SCHEMA IF EXISTS \"EXAKIT_PENDING_VS_DOCS\" CASCADE") < s.index("DROP ADAPTER SCRIPT \"EXAKIT_VS\".\"ADAPTER_DOCS\""))(d["statements"]['"$DN0"':])')"
+check "...and docs_pending's CONNECTION and schema are still there" "true true" \
+    "$(dbq '"EXAKIT_SRC_DOCS_PENDING" in d["connections"]') $(dbq '"VS_DOCS_PENDING" in d["virtual"]')"
+run check docs_pending; check "...it still checks ready" "0" "$RC"
+run remove docs_pending
 
 printf '\n== Profile B: Azure Blob Storage document files ==\n'
 # Measured against a real storage account (Exasol Personal 2.3.0, adapter
@@ -1720,6 +2257,14 @@ check "reauth with a SAS that cannot list is refused here, exit 2" "2" "$RC"
 has "...saying which permission is missing" "the SAS lacks list (l) permission" "$OUT"
 lacks "...without sending anyone to the log" "exakit logs" "$OUT"
 has "...and the working key is kept" "AccountKey=$AZKEY" "$(dbq 'd["connections"]["EXAKIT_SRC_AZDOCS"]["secret"]')"
+AZWRONG="$(printf 'QkJC%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21)Qg=="
+run_secret "$AZWRONG" reauth azdocs --secret-stdin
+check "reauth with an account key Azure refuses: exit 1" "1" "$RC"
+has "...it says the previous one was kept" "the source refused the new credential, so the previous one was kept" "$OUT"
+check "...the working key kept, nothing pending" "true []" \
+    "$(dbq '"AccountKey='"$AZKEY"'" in d["connections"]["EXAKIT_SRC_AZDOCS"]["secret"]') $(pending)"
+lacks "...the refused key is not printed" "$AZWRONG" "$OUT"
+run check azdocs; check "...and the source still checks ready" "0" "$RC"
 run remove azkey --dry-run
 lacks "removing one: the shared import script is not in its plan" "IMPORT_FROM_AZURE" "$OUT"
 run remove azkey; run remove azdocs
@@ -1832,17 +2377,58 @@ printf '\n== exakit connect on a terminal: menu, panel, review, live table ==\n'
 TUI_SECRET='tUi-s3cret-Value'
 export TUI_KIT="$HOME_K" TUI_STATE="$STATE" TUI_EXA="$EXA" TUI_DEFS="$DEFS" TUI_DEPLOY="$DEPLOY" TUI_LOG="$WORK/tui.log"
 tui() { # tui <scenario> <title> <boxes> <keys> - the replay's report in TUI_OUT, its verdict in TUI_RC
+    # The stream file (TTY_REPLAY_RAW) is this run's or none: a replay that dies
+    # before writing it must not leave the last scenario's to be asserted on.
+    [ -z "${TTY_REPLAY_RAW:-}" ] || rm -f "$TTY_REPLAY_RAW"
     TUI_OUT="$(TTY_REPLAY_COLS="${TUI_COLS:-100}" python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/$1" "$ROOT" "$2" "$4" "$3" 2>&1)"
     TUI_RC=$?
+    if [ -n "${TTY_REPLAY_RAW:-}" ] && [ ! -f "$TTY_REPLAY_RAW" ]; then
+        fail "the replay of $1 wrote no stream to $TTY_REPLAY_RAW"
+        : > "$TTY_REPLAY_RAW"
+    fi
     TUI_SCREEN="$(printf '%s\n' "$TUI_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
+    # A question that never came is said here, whatever the caller asserts next.
+    case "$TUI_OUT" in
+        *"=== WAIT FAILED"*) fail "the replay of $1 stopped: $(printf '%s\n' "$TUI_OUT" | sed -n 's/^=== WAIT FAILED: \(.*\) ===$/\1/p')"
+                             printf '%s\n' "$TUI_OUT" | sed -n 's/^=== since the last key, the end: \(.*\) ===$/         last written: \1/p' ;;
+    esac
 }
+# when <text> - a wait in the keystrokes: tty-replay.py types nothing more until
+# <text> is on the screen (since the key before). Every question is waited for
+# before it is answered: a key typed while the form is still busy - an engine
+# round trip, a hidden prompt switching the terminal - is lost or answers the
+# wrong question, and the busier the machine, the likelier.
+when() { printf '\\x02%s\\x03' "$1"; }
+# pasted <text> - text that goes in with one write, as a terminal hands over a
+# paste ('\r' in it is a line break); plain ASCII.
+pasted() { printf '\\x0e%s\\x0f' "$1"; }
+# A connection string longer than a canonical terminal line (1023 bytes on
+# macOS): a hidden prompt in canonical mode never saw its Enter.
+LONGX="$(printf '%1450s' '' | tr ' ' x)"
+MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
+Q_PASTE="$(when 'Connection string (hidden; Enter to type the fields):')"
+Q_NAME="$(when 'Name for this connection (required):')"
+Q_HOST="$(when 'Host name or address (required):')"
+Q_PORT="$(when 'Port (optional)')"
+Q_DB="$(when 'Database (required):')"
+Q_SCHEMA="$(when 'Schema (optional) [public]:')"
+Q_USER="$(when 'Reader account (required):')"
+Q_PW="$(when 'Password (required) (hidden')"
+Q_TLS="$(when 'TLS (optional)')"
+Q_CA="$(when 'CA certificate file (optional)')"
+Q_SUM="$(when 'Number to change, Enter to continue')"
+Q_GO="$(when 'now? [y/N]')"
 if command -v python3 >/dev/null 2>&1; then
     db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
     # Space ticks PostgreSQL - the cursor starts on the first connector, there
-    # is no "Select All" above it - then one wrong answer, corrected.
-    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
-        " \rtuione\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
+    # is no "Select All" above it - Enter passes the connection string by, then
+    # one wrong answer, corrected; Enter leaves the summary. The public IP lookup
+    # is on (a file:// URL): the review says the address.
+    EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
+        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
+    has "...the review names this computer's public IP for a source on the internet" \
+        "tuione: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
     has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
     has "...with the adapter version each one pins" "4.1.0" "$TUI_SCREEN"
     has "...and its release" "GA" "$TUI_SCREEN"
@@ -1865,7 +2451,7 @@ PY
     # Two sources at 80 columns, the second unreachable: one row each, and the
     # failure's whole sentence under the table rather than in a cell.
     TUI_COLS=80 tui connect-tui-scenario.sh "Connect 2 sources" 4 \
-        " j \rtuitwo\rpg.example.com\r\rsales\r\rreader\rpw\r\r\rtuimy\rmy.example.com\r\rshop\rreader\rpw\r\r\ry\r"
+        "$MENU ${MENU}j$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuitwo\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$Q_PASTE\r${Q_NAME}tuimy\r${Q_HOST}my.example.com\r$Q_PORT\r${Q_DB}shop\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
     check "two sources: still one table" "0" "$TUI_RC"
     has "...the one that worked" "✓ VS_TUITWO · 1 table" "$TUI_SCREEN"
     has "...the one that did not, in a few words" "✗ the source did not answer" "$TUI_SCREEN"
@@ -1873,26 +2459,32 @@ PY
     check "...nothing kept for the failed one" "no" "$([ -d "$HOME_K/sources/tuimy" ] && echo yes || echo no)"
 
     # Java missing: the row says so, the question comes once below the table, and
-    # an Enter pressed while the table ran does not answer it.
+    # an Enter pressed while the table ran (its bar is up: a "%"; each connect
+    # takes two seconds here) does not answer it.
     python3 - "$STATE" <<'PY'
 import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
 PY
-    TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
-        " \rtuijava\rpg.example.com\r\rsales\r\rreader\rpw\r\r\ry\r\r\x01\x01\x01y\r"
+    TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
+        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r$(when '%')\r$(when 'Install the Java language container now?')y\r"
     check "a missing Java container: one question, then a table of its own" "0" "$TUI_RC"
     has "...the first table says what is missing" "✗ needs Java in the database" "$TUI_SCREEN"
     has "...the answer was the one typed after the question" "Java language container installed" "$TUI_SCREEN"
     has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
 
-    # The command line names the connector and some answers: no menu, those
-    # answers ticked, only the rest asked.
+    # The command line names the connector and some answers: no menu, no
+    # connection string asked for, those answers ticked, only the rest asked. The
+    # credential from --password-file, picked in the summary, is kept on Enter.
     printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
+    TTY_REPLAY_RAW="$WORK/tui.raw" \
     TUI_ARGS="pg --name tuiargs --set host=pg.example.com --set database=sales --set user=reader --password-file $WORK/tui.pw" \
-        tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "\r\r\r\ry\r"
+        tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r${Q_SUM}7\r$Q_PW\r$Q_SUM\r${Q_GO}y\r"
     check "a named connector skips the menu" "0" "$TUI_RC"
     lacks "...no menu" "Connect external sources" "$TUI_SCREEN"
+    lacks "...no connection string asked for" "Connection string" "$(cat "$WORK/tui.raw")"
     has "...the given credential file is used, not asked for" "(read from a file)" "$TUI_SCREEN"
+    has "...picked in the summary, Enter keeps it" "Password (required) (hidden, Enter keeps the one given):" "$(cat "$WORK/tui.raw")"
     has "...and it connects" "✓ VS_TUIARGS · 1 table" "$TUI_SCREEN"
+    check "...with the file's credential" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIARGS"]["secret"]')"
 
     # Skip closes the menu with nothing done.
     # Skip sits below every connector of the catalog (GA and Beta); the cursor
@@ -1902,16 +2494,41 @@ PY
     has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
 
     if command -v pwsh >/dev/null 2>&1; then
-        # The PowerShell twin, under the same terminal model. pwsh starts slower,
-        # hence the pauses (\x01) before the first key.
-        tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
-            "\x01\x01\x01 \rtuips\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
+        # The PowerShell twin, under the same terminal model. pwsh starts slower:
+        # the menu is waited for like every question.
+        EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
+            "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
         check "PowerShell: one menu, one panel, one table" "0" "$TUI_RC"
+        has "...its review names this computer's public IP too" "tuips: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
         has "...and the row ends with the schema" "✓ VS_TUIPS · 1 table" "$TUI_SCREEN"
         lacks "...the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
         check "...it reached the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
     else
         pass "PowerShell terminal flow: skipped (no pwsh)"
+    fi
+
+    # A 1500-character connection string pasted with a second line after it:
+    # read whole at the hidden prompt, the second line answering nothing; then
+    # Ctrl-D at the hidden password prompt is the end of input - the source
+    # left out. Bash, then PowerShell.
+    LONGURL="jdbc:postgresql://pg.example.com:5433/sales?user=reader&ApplicationName=$LONGX"
+    TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
+        "${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuilong\r$Q_SCHEMA\r${Q_PW}\x04"
+    check "a 1500-character paste with a second line, then Ctrl-D: one panel" "0" "$TUI_RC"
+    has "...the long string was read whole: its port" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+    has "...the second line answered nothing: the name is the one typed" "Name for this connection  tuilong" "$TUI_SCREEN"
+    lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
+    has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
+    if command -v pwsh >/dev/null 2>&1; then
+        TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
+            "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
+        check "PowerShell: the same paste and Ctrl-D: one menu, one panel" "0" "$TUI_RC"
+        has "...the long string was read whole" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+        has "...the second line answered nothing" "Name for this connection  tuipslong" "$TUI_SCREEN"
+        lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
+        has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
+    else
+        pass "PowerShell long paste: skipped (no pwsh)"
     fi
 fi
 # The twins carry the same flow.
@@ -2171,6 +2788,20 @@ done
 lacks "a credential never becomes an input value" '"password"' "$VALS"
 pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"
 check "mongodb: the uri keeps no credentials and no path" '{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true", "user": "reader"}' "$VALS"
+pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?retryWrites=true&authSource=sales"
+check "mongodb: a string with authSource=sales is refused, exit 2 - the adapter signs in against admin" "2" "$RC"
+has "...in one line, with the fix" \
+    "the MongoDB adapter always signs in against the admin database, so an authSource other than admin cannot work: make the reader a user of admin and drop authSource or set it to admin" "$OUT"
+lacks "...the value not quoted" "sales" "$OUT"
+pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?authSource=admin"
+check "mongodb: authSource=admin is read" '0 {"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?authSource=admin", "user": "reader"}' "$RC $VALS"
+pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies"
+check "...and so is no authSource" '0 {"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net", "user": "reader"}' "$RC $VALS"
+pst pg 'jdbc:postgresql://h/db?user=r&password=Abc&Xyz9'
+lacks "a password with an unencoded & does not leak its tail as a setting's name" "Xyz9" "$OUT"
+has "...the tail is counted instead" "1 more part of the connection string could not be read" "$OUT"
+pst mysql 'jdbc:mysql://my.example.com/shop?user=r&password=Abc&Xyz9'
+lacks "...MySQL too" "Xyz9" "$OUT"
 pst pg 'jdbc:postgresql://pg.example.com/sales?ApplicationName=report-x9&sslrootcert=/etc/ca.pem&password=zz'
 has "unknown parameters are dropped by name" "Not used from the connection string: ApplicationName, sslrootcert" "$OUT"
 lacks "...never by value" "report-x9" "$OUT"
@@ -2189,6 +2820,12 @@ has "a TLS value the kit does not map is said, not guessed" "sslmode has a value
 pst pg 'jdbc:postgresql://localhost:5432/sales'
 check "localhost from the string is not taken, exit 0" '0 {"database": "sales", "port": "5432"}' "$RC $VALS"
 has "...with the address to use instead" "on macOS 192.168.64.1" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+export EXAKIT_VS_OS=Linux
+pst pg 'jdbc:postgresql://localhost:5432/sales'
+has "...on a Docker deployment, Docker's address, still said in full" "$DOCKER_HOST_WORDS" "$OUT"
+unset EXAKIT_VS_OS
+rm -f "$HOME_K/manifest.json"
 pst pg 'postgres://pg.example.com:99999/sales'
 has "a value that fails its check is named, not quoted" "port from the connection string is not used: it is not a valid port" "$OUT"
 lacks "...(no value in the message)" "99999" "$OUT"
@@ -2221,6 +2858,7 @@ urlsh() {
       . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/url.log"; }
       command -v reject >/dev/null 2>&1 || reject() { printf '%s\n' "$*" >&2; exit 2; }
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/url.argv"; eng "$@"; }
       "$@" ) 2>&1
 }
@@ -2240,6 +2878,8 @@ rm -f "$WORK/url.argv"
 OUT="$(urlsh cmd_connect pg --name urlpg --url=postgres://pg.example.com/sales?sslmode=require --set tls=verify --set user=reader --dry-run </dev/null)"; RC=$?
 check "--url=STRING works too, and --set tls overrides the string's sslmode" "0" "$RC"
 lacks "...so no TLS warning" "does NOT check" "$OUT"
+OUT="$(urlsh cmd_connect pg --name urlamp --url 'jdbc:postgresql://h/db?user=r&password=Abc&Xyz9' --dry-run </dev/null)"
+lacks "--url: a password's unencoded & leaks no name either" "Xyz9" "$OUT"
 OUT="$(urlsh cmd_connect --name urlpg --url postgres://pg.example.com/sales --dry-run </dev/null)"; RC=$?
 check "--url without a connector is refused, exit 2" "2" "$RC"
 has "...saying what it needs" "--url needs the source it is for" "$OUT"
@@ -2255,11 +2895,1326 @@ has "...and the string's inputs are the ones recorded" '"host": "pg.example.com"
 # On a terminal the panel opens with the string's answers in it.
 printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
 TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
-    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "\r\r\r\ry\r"
+    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
 check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
 has "...the panel holds the string's host" "Host name or address      pg.example.com" "$TUI_SCREEN"
 has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
 has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
+
+printf '\n== the connect form: required or optional, a pasted string, one answer changed ==\n'
+# What a person sees on the way (TTY_REPLAY_RAW: the whole stream, colours out)
+# as well as what the screen is left holding. The pasted string carries a
+# password: it is read hidden, not used, the hidden prompt still asks, and the
+# CONNECTION gets the typed one.
+if command -v python3 >/dev/null 2>&1; then
+    URLPW='Url-pa55-zz7'
+    RAW="$WORK/tui.raw"
+    prow() { printf '%-24s  %s' "$1" "$2"; }  # a PostgreSQL panel row: label, value
+    # Enter on a required name is refused; on an optional one with a default
+    # (schema) it takes it, on one without (ca) it leaves it empty; 3 asks the
+    # port again.
+    TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r${Q_PORT}5432\r$Q_SUM\r${Q_GO}y\r"
+    check "a pasted string, a refused Enter, one answer changed: one panel, one table" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "the panel marks a required field" "$(prow 'Host name or address' '(required)')" "$TUI_RAW"
+    has "...and an optional one, with its default" "$(prow Port '(optional) [5432]')" "$TUI_RAW"
+    has "the first question is the connection string, read hidden" "Connection string (hidden; Enter to type the fields):" "$TUI_RAW"
+    has "...its help names the forms the connector reads" "as it shows it: jdbc:postgresql://host:5432/db," "$TUI_RAW"
+    has "...all of them" "postgres://user@host:5432/db or host[:port][/database]" "$TUI_RAW"
+    lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
+    has "the question says (required), dim like the notes" "Name for this connection (required):" "$TUI_RAW"
+    has "...Enter on an empty required field is refused, in one line" "Name for this connection is required" "$TUI_RAW"
+    has "...an optional one says so, with the default Enter takes" "Schema (optional) [public]:" "$TUI_RAW"
+    has "the fields the string filled are marked" "$(prow 'Host name or address' 'pg.example.com (from the string)')" "$TUI_SCREEN"
+    lacks "...and not asked" "Host name or address (required):" "$TUI_RAW"
+    has "a password in the string: the note says it was not used" "(a password, token or key): it was not used." "$TUI_SCREEN"
+    lacks "...without the command-line sentence a typed string does not earn" "The string was on the command line" "$TUI_RAW"
+    has "...and the hidden prompt still asks for it" "Password (required) (hidden):" "$TUI_RAW"
+    has "...whose empty answer is refused too" "Password is required; it stays in memory" "$TUI_RAW"
+    has "the summary numbers every answer" "  3  $(prow Port '5433 (from the string)')" "$TUI_RAW"
+    has "...asks for a number, Enter to go on" "Number to change, Enter to continue:" "$TUI_RAW"
+    has "...the number asked that one field again, which can be taken back" "Port (optional) (- clears it) [5433]:" "$TUI_RAW"
+    has "...and the changed answer is no longer the string's" "$(prow Port '5432      ')" "$TUI_SCREEN"
+    has "an optional field left empty" "$(prow 'CA certificate file' '(none)')" "$TUI_SCREEN"
+    has "...and it connects" "✓ VS_TUIPASTE" "$TUI_SCREEN"
+    has "...with the port as changed" '"port": "5432"' "$(cat "$HOME_K/sources/tuipaste/"*.json 2>/dev/null)"
+    check "the typed credential reached the CONNECTION, not the string's" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPASTE"]["secret"]')"
+    check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+    lacks "...and the credential typed is in none of what was drawn" "$TUI_SECRET" "$TUI_RAW"
+
+    # A string that does not parse is said and asked again; Enter types the
+    # fields. A plan that refuses one input goes straight back to that field.
+    TTY_REPLAY_RAW="$RAW" TUI_PLAN_FAIL="host=old.example.com is not a host this test lets through" TUI_ARGS="pg" \
+        tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
+        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address (required) [old.example.com]:')pg.example.com\r$Q_SUM\r${Q_GO}y\r"
+    check "a garbage string, then a plan refusing the host: one panel, one table" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "a string with a space is refused in the engine's words" "the connection string has a space, line break or control character in it" "$TUI_RAW"
+    has "...so is another connector's" "the kit does not read this as a PostgreSQL connection string; it reads:" "$TUI_RAW"
+    has "the plan's refusal is said above the field it names" "host=old.example.com is not a host this test lets through" "$TUI_RAW"
+    has "...which is asked again, its answer the default" "Host name or address (required) [old.example.com]:" "$TUI_RAW"
+    lacks "...instead of asking to change every answer" "Change the answers?" "$TUI_RAW"
+    has "...and the summary after it offers to leave the source out" "Number to change, Enter to continue, skip to leave this source out" "$TUI_RAW"
+    has "...and the new answer connects" "✓ VS_TUIJUMP" "$TUI_SCREEN"
+    has "...from the corrected host" "$(prow 'Host name or address' 'pg.example.com ')" "$TUI_SCREEN"
+
+    # A refusal naming two inputs (ca needs tls=verify) opens the summary with its
+    # reason; "-" takes the optional CA back; skip leaves the source out. (Root B:
+    # the private-CA tests above move root A away.)
+    TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
+        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}require\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r${Q_CA}-\r${Q_SUM}skip\r"
+    check "a refusal naming two inputs, a cleared answer, skip: one panel" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "...the summary comes back with the reason" "ca is used to verify the server, so it needs tls=verify (not require)" "$TUI_RAW"
+    has "...an optional answer says how to take it back" "CA certificate file (optional) (- clears it)" "$TUI_RAW"
+    has "...and - did" "  9  $(prow 'CA certificate file' '(none)')" "$TUI_RAW"
+    has "...skip left the source out" "Left out: postgresql" "$TUI_SCREEN"
+    has "...with nothing changed" "Nothing was changed." "$TUI_SCREEN"
+    check "...and nothing kept" "no" "$([ -d "$HOME_K/sources/tuica" ] && echo yes || echo no)"
+
+    # 56 columns: a row too narrow for its value and "(from the string)" drops
+    # the mark, never overflows the panel (the replay counts the frames). The
+    # review is declined: this is about the form. The hidden question is exactly
+    # 56 columns wide, on a terminal that holds the wrap (xterm's kind): one row,
+    # counted as one, or the next redraw climbs one line too far.
+    TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
+    check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
+    has "...the value kept" "$(prow 'Host name or address' 'pg.example.com')" "$TUI_SCREEN"
+    lacks "...its mark dropped" "(from the string)" "$TUI_SCREEN"
+    has "...and declined, nothing changed" "Nothing was changed." "$TUI_SCREEN"
+
+    # The line-by-line questions (a terminal without the drawn form), on a pty
+    # that is the scenario's /dev/tty, as a real terminal is.
+    Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) (required)')"
+    Q_LPASTE="$(when 'Connection string (Enter to type the fields) (input hidden):')"
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema (optional) [public]')\r$(when 'TLS (verify/require/disable) (optional) [verify]')\r$(when 'Enter to skip (optional)')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "line by line: the connection string is asked first, hidden" "Connection string (Enter to type the fields) (input hidden):" "$TUI_RAW"
+    lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
+    has "...a garbage string is said and asked again" "the connection string has a space, line break or control character in it" "$TUI_RAW"
+    has "...the password in it noted, not used" "it was not used. The credential is asked for separately" "$TUI_RAW"
+    lacks "...without the command-line sentence" "The string was on the command line" "$TUI_RAW"
+    has "...what it filled is said" "From the connection string: database, host, port, user" "$TUI_RAW"
+    lacks "...and not asked" "Host name or address" "$TUI_RAW"
+    has "...each question says (required)" "Name for this connection (lower case, e.g. sales) (required)" "$TUI_RAW"
+    has "...or (optional), with its default" "Schema (optional) [public]" "$TUI_RAW"
+    has "...an empty required answer is refused" "Name for this connection is required" "$TUI_RAW"
+    has "...and the credential is asked hidden" "Password (input hidden):" "$TUI_RAW"
+    lacks "...a 1500-character paste read whole, its second line answering nothing, never shown" "zz2nd" "$TUI_RAW"
+    check "...the typed one reaches the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPG"]["secret"]')"
+    lacks "...and is never shown" "$TUI_SECRET" "$TUI_RAW"
+    check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+
+    # --dry-run at the same terminal asks as it always did: no marks, no
+    # connection string.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg --name linedry --set host=pg.example.com --dry-run" \
+        tui connect-tui-scenario.sh "none" 0 \
+        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "--dry-run on a terminal: the questions as before" "? Database " "$TUI_RAW"
+    has "...and the plan" "Plan for linedry" "$TUI_RAW"
+    lacks "...no (required)" "(required)" "$TUI_RAW"
+    lacks "...no (optional)" "(optional)" "$TUI_RAW"
+    lacks "...no connection string" "Connection string" "$TUI_RAW"
+
+    # A pipe on stdin with a terminal behind /dev/tty: the questions come from
+    # the terminal as they always did - no marks, no connection string - as on
+    # Windows, where a redirected input is not interactive.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_STDIN=piped \
+        TUI_ARGS="pg --name linepipe --set host=pg.example.com --set database=sales --set user=reader" \
+        tui connect-tui-scenario.sh "none" 0 \
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "stdin a pipe, /dev/tty a terminal: the questions as before" "Schema [public]" "$TUI_RAW"
+    lacks "...no (required)" "(required)" "$TUI_RAW"
+    lacks "...no (optional)" "(optional)" "$TUI_RAW"
+    lacks "...no connection string" "Connection string" "$TUI_RAW"
+    check "...and it connects" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPIPE"]["secret"]')"
+
+    # --password-stdin with the same terminal behind /dev/tty: the pipe is read
+    # whole (without the flag it is read only when no terminal is), so the
+    # hidden prompt never comes; the other questions still do.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_STDIN="$TUI_SECRET
+" \
+        TUI_ARGS="pg --name linestdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
+        tui connect-tui-scenario.sh "none" 0 \
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    lacks "--password-stdin, /dev/tty a terminal: no hidden prompt" "(input hidden)" "$TUI_RAW"
+    has "...the questions from the terminal as before" "Schema [public]" "$TUI_RAW"
+    check "...the piped credential, its newline dropped, reaches the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINESTDIN"]["secret"]')"
+    lacks "...and is never shown" "$TUI_SECRET" "$TUI_RAW"
+
+    # --password-stdin with the terminal ON stdin: refused, nothing asked, nothing done.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_SAY_EXIT=1 \
+        TUI_ARGS="pg --name ttystdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
+        tui connect-tui-scenario.sh "none" 0 ""
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "--password-stdin with a terminal on stdin: refused in one line" "--password-stdin reads the credential from standard input, which is a terminal here" "$TUI_RAW"
+    has "...exit 2" "EXIT 2" "$TUI_RAW"
+    lacks "...nothing asked" "Port [5432]" "$TUI_RAW"
+    check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_TTYSTDIN" in d.get("connections", {})')"
+fi
+# Without a terminal - a pipe, --json - nothing is asked and nothing is marked.
+OUT="$(printf '%s' "$SECRET" | urlsh cmd_connect pg --name pipeform $PG_SET)"; RC=$?
+check "a pipe: the credential on stdin connects as before, exit 0" "0" "$RC"
+lacks "...no marks" "(required)" "$OUT"
+lacks "...no connection string" "Connection string" "$OUT"
+run remove pipeform
+OUT="$(urlsh cmd_connect pg --name jsonform $PG_SET --dry-run --json </dev/null)"; RC=$?
+check "--json: exit 0" "0" "$RC"
+lacks "...no marks" "(optional)" "$OUT"
+lacks "...no connection string" "Connection string" "$OUT"
+# Which field a plan's refusal names: input names first, as whole words; labels
+# only when no name is named, as whole words too; several named is -2 (the
+# summary opens), none -1.
+mkdir -p "$WORK/named"
+printf 'PostgreSQL\nname|Name for this connection|source-name\nhost|Host name or address|host\nport|Port|port\nca|CA certificate file|ca-file\ntls|TLS|choice\nuri|MongoDB URI|mongodb-uri\nuser|Reader account|text\n' > "$WORK/named/fields"
+rows() { ( . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+           _EVT_COLS=56; _exakit_vs_tui_rows "$@" ) 2>/dev/null; }
+check "a line exactly as wide as the terminal is one row: the terminal holds the wrap" "1" "$(rows 56)"
+check "...a readline line that wide is two: readline forces the wrap" "2" "$(rows 56 readline)"
+check "...one character wider is two either way" "2 2" "$(rows 57) $(rows 57 readline)"
+named() { ( . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+            _EVT_DIR="$WORK/named"; _exakit_vs_tui_named "$1" ) 2>/dev/null; }
+check "a refusal naming host goes to host" "1" "$(named 'host is required (Host name or address)')"
+check "...one naming ca and tls opens the summary" "-2" "$(named 'ca is used to verify the server, so it needs tls=verify (not require)')"
+check "...Port is not in report or export" "-1" "$(named 'the report could not be exported')"
+check "...a label counts when no name does, as a whole word in any case" "6" "$(named 'the reader account may not read this')"
+check "...the source name is named as such, not by the bare word name" "0" "$(named 'the source name must be lower case')"
+check "...so a value that is not a valid name names only its input" "2" "$(named "port='x y' is not a valid name")"
+check "...the MongoDB URI with user: names uri and user, not user alone" "-2" \
+    "$(named 'the MongoDB URI carries credentials (user:password@): give the user with --set user=...')"
+for fn in Read-ExakitVsTuiField Invoke-ExakitVsTuiReview Invoke-ExakitVsTuiPaste Find-ExakitVsTuiNamed \
+          Read-ExakitVsLineAnswer Read-ExakitVsLinePaste Get-ExakitVsPasteForms Format-ExakitVsPasteTyped \
+          Read-ExakitVsHidden Format-ExakitVsTuiFit Clear-ExakitVsPendingKeys; do
+    has "PowerShell has $fn" "function $fn" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
+done
+has "Invoke-CmdConnect asks for a connection string line by line" "Read-ExakitVsLinePaste -Connector" "$(cat "$ROOT/setup/exakit.ps1")"
+has "...and marks its questions" "Read-ExakitVsLineAnswer -Question" "$(cat "$ROOT/setup/exakit.ps1")"
+
+printf '\n== this computer'"'"'s public IP, for a source on the internet ==\n'
+# The database's traffic leaves through this computer, so a cloud source's
+# security group, firewall or IP access list must allow this computer's public
+# IP. The engine asks for it once (publicip.py); here it reads a file:// URL.
+ipeng() { EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="${IP_URL:-$IPURL}" eng "$@"; }
+pubip() { python3 -c 'import json,sys; print(json.load(sys.stdin).get("public_ip", "absent"))' 2>/dev/null; }
+IPLINE="This computer's public IP is 203.0.113.7"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+OUT="$(ipeng plan pg --name ipsales $PG_SET 2>/dev/null)"; RC=$?
+check "plan of a host on the internet: exit 0" "0" "$RC"
+has "...one INFO line names the address and the host that must allow it" \
+    "INFO $IPLINE: pg.example.com must allow it if it filters by address (security group, firewall or IP access list)" "$OUT"
+check "...said once" "1" "$(printf '%s\n' "$OUT" | grep -c 'public IP')"
+check "plan --json carries it as public_ip" "203.0.113.7" "$(ipeng --json plan pg --name ipsales $PG_SET 2>/dev/null | pubip)"
+for host in 192.168.64.1 host.containers.internal 10.0.0.5 100.100.1.2 db; do
+    OUT="$(ipeng plan pg --name ipsales --set host=$host --set database=sales --set user=reader 2>&1)"
+    lacks "a host on this computer or a private network ($host): no public IP line" "public IP" "$OUT"
+done
+check "...and public_ip is null, never absent" "None" \
+    "$(ipeng --json plan pg --name ipsales --set host=192.168.64.1 --set database=sales --set user=reader 2>/dev/null | pubip)"
+check "a refused input: public_ip is null too" "2 None" \
+    "$(ipeng --json plan pg --name ipsales --set host=pg.example.com > "$WORK/ip.json" 2>/dev/null; echo "$?") $(pubip < "$WORK/ip.json")"
+
+# One rule for every connector, from its definition: the hosts it names, the
+# host a cloud store's template builds, a MongoDB URI's hosts, a storage endpoint.
+SCOPE="$(python3 - "$ROOT" <<'PYS'
+import sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import plan
+# The shipped catalog: the copy in DEFS carries a test-only gated connector.
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+cases = [("postgresql", {"host": "pg.example.com"}), ("postgresql", {"host": "192.168.64.1"}),
+         ("mysql", {"host": "db.abc.eu-west-1.rds.amazonaws.com"}), ("sqlserver", {"host": "10.1.2.3"}),
+         ("oracle", {"host": "ora.example.com"}),
+         ("s3", {"bucket": "docs-bucket", "region": "ap-south-1"}), ("azure-blob", {"account": "acct", "container": "c"}),
+         ("snowflake", {"account": "myorg-acct1"}), ("bigquery", {"project": "p", "dataset": "d"}),
+         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"region": "eu-west-1"}),
+         ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017,10.0.0.6:27017/"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017,shard.example.com:27017/"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181", "endpoint": "http://192.168.64.1:9000"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181", "endpoint": "https://s3.example.com"}),
+         ("iceberg-rest", {"catalog_url": "https://rest.example.com/api"})]
+for cid, values in cases:
+    print("%s=%s" % (cid, plan.public_host(defs.connector(cid), values)))
+print(sorted(set(e["id"] for e in defs.entries()) - set(c for c, _ in cases)))
+PYS
+)"
+check "public_host decides per connector, from its connector.json" \
+    "postgresql=pg.example.com|postgresql=None|mysql=db.abc.eu-west-1.rds.amazonaws.com|sqlserver=None|oracle=ora.example.com|s3=docs-bucket.s3.ap-south-1.amazonaws.com|azure-blob=acct.blob.core.windows.net|snowflake=myorg-acct1.snowflakecomputing.com|bigquery=www.googleapis.com|databricks=dbc-1.cloud.databricks.com|lakehouse=glue.eu-west-1.amazonaws.com|unity=dbc-1.cloud.databricks.com|mongodb=cluster0.abcd.mongodb.net|mongodb=None|mongodb=shard.example.com|iceberg-rest=None|iceberg-rest=None|iceberg-rest=s3.example.com|iceberg-rest=rest.example.com|" \
+    "$(printf '%s\n' "$SCOPE" | sed '$d' | tr '\n' '|')"
+check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$SCOPE" | tail -1)"
+
+# exakit source list: where each source lives and its TLS level, one rule for
+# every connector - its tls input; a MongoDB URI's own options; http:// is
+# disable; a cloud store's HTTPS is verify; BigQuery is its project.
+WHERE="$(python3 - "$ROOT" <<'PYW'
+import sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+cases = [("postgresql", {"host": "pg.example.com", "tls": "verify"}), ("mysql", {"host": "my.example.com", "tls": "require"}),
+         ("sqlserver", {"host": "sql.example.com", "tls": "disable"}), ("oracle", {"host": "ora.example.com"}),
+         ("s3", {"bucket": "docs-bucket", "region": "ap-south-1"}), ("azure-blob", {"account": "acct", "container": "c"}),
+         ("snowflake", {"account": "myorg-acct1"}), ("bigquery", {"project": "my-project", "dataset": "d"}),
+         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"region": "eu-west-1"}),
+         ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181"}),
+         ("iceberg-rest", {"catalog_url": "https://rest.example.com/api", "endpoint": "http://10.0.0.5:9000"}),
+         ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/?authSource=admin"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017,10.0.0.6:27017/"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017/?tls=true&tlsAllowInvalidCertificates=true"}),
+         ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/?ssl=false"})]
+for cid, values in cases:
+    c = defs.connector(cid)
+    print("%s=%s/%s" % (cid, lifecycle.source_where(c, values), lifecycle.tls_level(c, values)))
+print("gone=%s/%s" % (lifecycle.source_where(None, {"host": "h.example.com"}), lifecycle.tls_level(None, {})))
+print(sorted(set(e["id"] for e in defs.entries()) - set(c for c, _ in cases)))
+PYW
+)"
+check "list: host and tls per connector, from its connector.json" \
+    "postgresql=pg.example.com/verify|mysql=my.example.com/require|sqlserver=sql.example.com/disable|oracle=ora.example.com/verify|s3=docs-bucket.s3.ap-south-1.amazonaws.com/verify|azure-blob=acct.blob.core.windows.net/verify|snowflake=myorg-acct1.snowflakecomputing.com/verify|bigquery=my-project/verify|databricks=dbc-1.cloud.databricks.com/verify|lakehouse=glue.eu-west-1.amazonaws.com/verify|unity=dbc-1.cloud.databricks.com/verify|iceberg-rest=192.168.64.1/disable|iceberg-rest=rest.example.com/disable|mongodb=cluster0.abcd.mongodb.net/verify|mongodb=10.0.0.5/disable|mongodb=10.0.0.5/require|mongodb=cluster0.abcd.mongodb.net/disable|gone=h.example.com/None|" \
+    "$(printf '%s\n' "$WHERE" | sed '$d' | tr '\n' '|')"
+check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$WHERE" | tail -1)"
+check "a cloud store with no host input: the plan names its endpoint" \
+    "INFO $IPLINE: myorg-acct1.snowflakecomputing.com must allow it if it filters by address (security group, firewall or IP access list)" \
+    "$(ipeng plan snowflake --name ipsf $SF_SET 2>/dev/null | grep '^INFO ')"
+
+# The lookup is advice, never a step: it fails silently and never waits past 3 s.
+printf 'not an address\n' > "$WORK/garbage-ip"
+for bad in "an answer that is not an address|file://$WORK/garbage-ip" "no answer at all|file://$WORK/no-such-file"; do
+    label="${bad%%|*}"; IP_URL="${bad#*|}"
+    OUT="$(ipeng plan pg --name ipsales $PG_SET 2>/dev/null)"; RC=$?
+    check "a lookup with $label: plan exit 0" "0" "$RC"
+    lacks "...and nothing is said about it" "public IP" "$OUT"
+    has "...one line goes to the log (stderr)" "public IP lookup:" "$(ipeng plan pg --name ipsales $PG_SET 2>&1 >/dev/null)"
+    check "...public_ip is null" "None" "$(ipeng --json plan pg --name ipsales $PG_SET 2>/dev/null | pubip)"
+done
+unset IP_URL
+python3 - "$WORK/blackhole.port" <<'PYB' &
+import os, socket, sys
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(8)
+open(sys.argv[1] + ".tmp", "w").write(str(s.getsockname()[1]))
+os.rename(sys.argv[1] + ".tmp", sys.argv[1])
+held = []
+while True:
+    held.append(s.accept()[0])        # accepted, never answered
+PYB
+BH_PID=$!
+_bh_wait=0; while [ ! -s "$WORK/blackhole.port" ] && [ "$_bh_wait" -lt 50 ]; do sleep 0.1; _bh_wait=$((_bh_wait + 1)); done
+BH_URL="http://127.0.0.1:$(cat "$WORK/blackhole.port")/"
+_t0="$(date +%s)"; OUT="$(IP_URL="$BH_URL" ipeng plan pg --name ipsales $PG_SET 2>/dev/null)"; RC=$?; _t1="$(date +%s)"
+check "a lookup that never answers: plan exit 0 within the 3 s budget" "0 yes" "$RC $([ $((_t1 - _t0)) -le 6 ] && echo yes || echo no)"
+lacks "...and nothing is said about it" "public IP" "$OUT"
+_t0="$(date +%s)"; OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$BH_URL" eng --json plan pg --name ipsales $PG_SET 2>&1)"; _t1="$(date +%s)"
+check "EXAKIT_NO_IP_LOOKUP=1: nothing is asked (no wait on that same URL)" "yes" "$([ $((_t1 - _t0)) -le 2 ] && echo yes || echo no)"
+lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep -v '"public_ip"')"
+# Assigned first: bash 3.2 brace-expands a sed range with a brace in an
+# address when it is passed straight as an argument (tests/bash32-guard.sh).
+_null_ip="$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
+check "...and public_ip is null" "None" "$_null_ip"
+kill "$BH_PID" 2>/dev/null; wait "$BH_PID" 2>/dev/null
+
+# connect: the lookup runs beside it; a failed one changes nothing.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+OUT="$(printf '%s' "$SECRET" | IP_URL="file://$WORK/garbage-ip" ipeng --json connect pg --name ipfail $PG_SET --secret-stdin 2>/dev/null)"; RC=$?
+check "a connect whose lookup fails proceeds: exit 0, public_ip null" "0 None" "$RC $(printf '%s' "$OUT" | pubip)"
+run remove ipfail
+printf '%s' "$SECRET" | ipeng --json connect pg --name ipok $PG_SET --secret-stdin > "$WORK/ip.json" 2> "$WORK/ip.err"; RC=$?
+check "connect --json carries public_ip" "0 203.0.113.7" "$RC $(pubip < "$WORK/ip.json")"
+lacks "...and does not repeat the plan's line" "public IP" "$(cat "$WORK/ip.err")"
+# exakit source check: the source stops answering.
+python3 - "$STATE" <<'PYU'
+import json, sys; d = json.load(open(sys.argv[1])); d["unreachable"] = ["pg.example.com"]; json.dump(d, open(sys.argv[1], "w"))
+PYU
+OUT="$(ipeng check ipok 2>&1)"; RC=$?
+check "check of a source on the internet that does not answer: exit 1" "1" "$RC"
+has "...its fix names the address to allow" "Fix: the source did not answer from inside the database: check the host, port, firewall and VPN (allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list), then: exakit source check ipok" "$OUT"
+lacks "...not the advice for a source on this computer" "listen beyond 127.0.0.1" "$OUT"
+OUT="$(eng check ipok 2>&1)"
+has "...with the lookup off, the fix is the one it always was" "(a source on this computer must listen beyond 127.0.0.1), then: exakit source check ipok" "$OUT"
+run remove ipok
+# connect: a first connect that cannot reach the source.
+db '{"unreachable": ["slow.example.com", "10.0.0.9"]}'
+OUT="$(printf '%s' "$SECRET" | ipeng connect mysql --name ipslow --set host=slow.example.com --set database=crm --set user=reader --secret-stdin 2>&1)"; RC=$?
+check "connect to a host on the internet that does not answer: exit 1" "1" "$RC"
+has "...its fix names the address to allow" "nothing was kept - check host, port, firewall and VPN (allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list), then connect again" "$OUT"
+lacks "...not the advice for a source on this computer" "listen beyond 127.0.0.1" "$OUT"
+check "...and --json says it as public_ip" "1 203.0.113.7" \
+    "$(printf '%s' "$SECRET" | ipeng --json connect mysql --name ipslow --set host=slow.example.com --set database=crm --set user=reader --secret-stdin > "$WORK/ip.json" 2>/dev/null; echo "$?") $(pubip < "$WORK/ip.json")"
+OUT="$(printf '%s' "$SECRET" | ipeng connect mysql --name ipslow --set host=10.0.0.9 --set database=crm --set user=reader --secret-stdin 2>&1)"; RC=$?
+check "connect to a private host that does not answer: exit 1" "1" "$RC"
+has "...keeps the advice for a source on this computer or a private network" "(a source on this computer must listen beyond 127.0.0.1), then connect again" "$OUT"
+lacks "...and no public IP" "public IP" "$OUT"
+# An address filter on an object store answers 403 (an S3 bucket policy on
+# aws:SourceIp, an Azure storage firewall): denied, not unreachable.
+db '{"sources": {"'"$S3HOST"'": {"fail": "denied"}}}'
+OUT="$(printf '%s' "$AWSSECRET" | ipeng connect s3 --name ipdocs $S3_SET --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "S3 denied: exit 1" "1" "$RC"
+has "...the fix still names the grant" "s3:ListBucket on the mapped prefixes" "$OUT"
+has "...and the address, for a bucket that filters by it" "and, if it filters by address, allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list, then connect again" "$OUT"
+# A database on the internet that refuses the read for a missing grant: it
+# let the address in and took the credentials, so the fix names the grant
+# and never an address to allow.
+PGGRANT="JDBC-Client-Error: Failed to receive MetaData for the given statement: ERROR: permission denied for table orders (Session: 1)"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "read_error": "'"$PGGRANT"'"}}}'
+OUT="$(printf '%s' "$SECRET" | ipeng connect pg --name ipgrant $PG_SET --secret-stdin 2>&1)"; RC=$?
+check "a read PostgreSQL refuses for a missing grant: exit 1" "1" "$RC"
+has "...the fix names the connector's grant" "the source took the credentials, but the account lacks a privilege; nothing was kept - grant it what the message names (CONNECT on the database, USAGE on the schema and SELECT on its tables), then connect again" "$OUT"
+lacks "...and no address to allow" "allow this computer's public IP" "$OUT"
+check "...--json says kind privilege, and still carries public_ip" "1 privilege 203.0.113.7" \
+    "$(printf '%s' "$SECRET" | ipeng --json connect pg --name ipgrant $PG_SET --secret-stdin > "$WORK/grant.json" 2>/dev/null; echo "$?") $(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"], d["public_ip"])' < "$WORK/grant.json")"
+# exakit source check: the grant is revoked after the source was connected.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+printf '%s' "$SECRET" | ipeng connect pg --name ipgrant $PG_SET --secret-stdin >/dev/null 2>&1
+python3 - "$STATE" "$PGGRANT" <<'PYU'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["read_error"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PYU
+OUT="$(ipeng check ipgrant 2>&1)"; RC=$?
+check "check of a source whose grant was revoked: exit 1, recorded access-denied" "1 access-denied" \
+    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/ipgrant/state.json" 2>/dev/null || echo unread)"
+has "...its fix names the grant" "Fix: the source took the credentials, but the account lacks a privilege: grant it what the message names (CONNECT on the database, USAGE on the schema and SELECT on its tables), then: exakit source check ipgrant" "$OUT"
+lacks "...and no address to allow" "allow this computer's public IP" "$OUT"
+run remove ipgrant
+# Snowflake answers for an object the role may not see as for one that is
+# gone: the fix names both - refresh for a dropped table, the grant otherwise.
+SFHOST="myorg-acct1.snowflakecomputing.com"
+db '{"sources": {"'"$SFHOST"'": {"tables": ["ORDERS"]}}}'
+printf '%s' "$SECRET" | ipeng connect snowflake --name ipsfgone $SF_SET --secret-stdin >/dev/null 2>&1
+python3 - "$STATE" "$SFHOST" <<'PYU'
+import json, sys; d = json.load(open(sys.argv[1]))
+d["sources"][sys.argv[2]]["read_error"] = ("JDBC-Client-Error: Failed to receive MetaData for the given statement: SQL compilation "
+                                           "error:\nObject 'SALES.PUBLIC.ORDERS' does not exist or not authorized. (Session: 1)")
+json.dump(d, open(sys.argv[1], "w"))
+PYU
+OUT="$(ipeng check ipsfgone 2>&1)"; RC=$?
+check "check of a Snowflake table gone or not granted: exit 1, recorded failed" "1 failed" \
+    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/ipsfgone/state.json" 2>/dev/null || echo unread)"
+has "...the error names the object, from the driver's second line" "Object 'SALES.PUBLIC.ORDERS' does not exist or not authorized." "$OUT"
+has "...the fix names both causes" "it was dropped or renamed (then: exakit source refresh ipsfgone), or the account may not see it (grant it USAGE on the warehouse" "$OUT"
+lacks "...and no address to allow" "allow this computer's public IP" "$OUT"
+run remove ipsfgone
+
+# The line-by-line path (a pipe, --yes, --dry-run) shows the plan's INFO line;
+# --dry-run --json prints the plan with public_ip.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines $PG_SET --dry-run </dev/null)"; RC=$?
+check "exakit connect --dry-run (bash): exit 0" "0" "$RC"
+has "...the plan's line is shown" "$IPLINE: pg.example.com must allow it" "$OUT"
+OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines $PG_SET --dry-run --json </dev/null)"
+check "exakit connect --dry-run --json (bash): public_ip, the output one object" "203.0.113.7" "$(printf '%s\n' "$OUT" | pubip)"
+OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines --set host=192.168.64.1 --set database=sales --set user=reader --dry-run </dev/null)"
+lacks "...a private host: no line" "public IP" "$OUT"
+
+printf '\n== exakit connect --json: one object on stdout, whatever happens ==\n'
+# For scripts and agents: a real connect, a dry run, and every refusal - the
+# bridge's or the engine's - print exactly one JSON object on stdout, of one
+# failure shape (ok false, error, kind, remedy, command, public_ip), with the
+# documented exit code. Nothing is asked. stderr is kept apart here, so what
+# is asserted is stdout alone.
+jsonsh() { # jsonsh <stdin-file> <args...> - stdout in JOUT, stderr in JERR, exit in JRC
+    _js_in="$1"; shift
+    JOUT="$( ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      pyexasol_venv_python() { command -v python3; }
+      exakit_vs_engine() { eng "$@"; }
+      if [ "${JSON_JAVA_INSTALL:-}" = die ]; then
+          # A download that fails its checksum: die, as verify_sha256 does.
+          _exakit_vs_install_java() { die "The Java language container download did not match its checksum (test)."; }
+      elif [ -n "${JSON_JAVA_INSTALL:-}" ]; then
+          _exakit_vs_install_java() {
+              info "Installing the Java language container (test)"
+              _exakit_vs_confirm "Install the Java language container now?" || return 1
+              python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]=True; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+          }
+      fi
+      cmd_connect "$@" ) < "$_js_in" 2> "$WORK/json.err" )"; JRC=$?
+    JERR="$(cat "$WORK/json.err")"
+}
+# one <python expression over d> - prints it when stdout is exactly one JSON object, else NOT-ONE-OBJECT.
+one() {
+    printf '%s' "$JOUT" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("NOT-ONE-OBJECT"); sys.exit()
+print(eval(sys.argv[1], {"d": d}) if isinstance(d, dict) else "NOT-ONE-OBJECT")' "$1"
+}
+SHAPE='[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d, "public_ip" in d]'
+printf '%s' "$SECRET" > "$WORK/json.secret"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
+jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
+check "a real connect: exit 0, one object - the engine's result" "0 [True, 'jsonok', 'VS_JSONOK', None]" \
+    "$JRC $(one '[d["ok"], d["name"], d["objects"]["schema"], d["public_ip"]]')"
+lacks "...no query hint or Manage line on stdout" "Manage it with" "$JOUT"
+lacks "...and the credential is nowhere in it" "$SECRET" "$JOUT$JERR"
+# A credential kept off disk: --password-file <(pass show db) hands over a
+# pipe, not a regular file. A named pipe stands in for it here (bash 3.2 closes
+# a <(...) of its own as soon as a function it is given to runs a command;
+# exakit, a process of its own, keeps the one its caller passed it).
+mkfifo "$WORK/json.fifo"; ( printf '%s' "$SECRET" > "$WORK/json.fifo" ) & _jw=$!
+jsonsh /dev/null pg --name jsonpipe $PG_SET --json --password-file "$WORK/json.fifo"
+kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
+check "a connect with --password-file a pipe: exit 0, one object" "0 [True, 'jsonpipe']" "$JRC $(one '[d["ok"], d["name"]]')"
+run remove jsonpipe >/dev/null 2>&1
+jsonsh /dev/null pg --name jsondry $PG_SET --dry-run --json
+check "--dry-run --json: exit 0, one object - the plan" "0 [True, 'jsondry', 'GA', None]" \
+    "$JRC $(one '[d["ok"], d["name"], d["tier"], d["public_ip"]]')"
+lacks "...not the rendered plan before it" "Plan for" "$JOUT"
+jsonsh /dev/null pg --name jsonurl --url "postgres://reader@pg.example.com:5433/sales" --dry-run --json
+check "--url with --dry-run --json: one object, the string's host in the plan" "0 ['jsonurl', True]" \
+    "$JRC $(one '[d["name"], "pg.example.com" in str(d["steps"])]')"
+jsonsh /dev/null nosuchdb --name x --json
+check "an unknown connector: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...its error is what happened, its command lists the connectors, the choices kept" \
+    "['no source matches nosuchdb', 'exakit source catalog', True]" "$(one '[d["error"], d["command"], "postgresql" in d["choices"]]')"
+jsonsh /dev/null pg --name jsonnopw $PG_SET --json
+check "no credential (nothing on stdin): exit 2, one failure object, nothing asked" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+has "...its remedy says how to give it" "--password-file" "$(one 'd["remedy"]')"
+jsonsh /dev/null pg --name jsonbad --set host=pg.example.com --set database=sales --set user=reader --set port=70000 --json
+check "a bad input: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
+check "a name already taken: exit 3, one failure object" "3 [False, 'conflict', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...error is what happened, remedy the fix (once in each)" \
+    "['a source named jsonok already exists (postgresql)', 'choose another name or remove it first: exakit source remove jsonok']" \
+    "$(one '[d["error"], d["remedy"]]')"
+jsonsh "$WORK/json.secret" gatedtest --name jsongt --set project=p --set dataset=d --json
+check "a gated connector: exit 5, one failure object" "5 [False, 'gated', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null pg --name x --bogus --json
+check "an unknown option: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null pg --json
+check "no name: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null --json
+check "no source: exit 2, one failure object, never a question" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null pg --name x --password=hunter2 --json
+check "a credential as an argument: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+lacks "...that does not repeat it" "hunter2" "$JOUT$JERR"
+jsonsh /dev/null pg --name x $PG_SET --password-file "$WORK/no-such.pw" --json
+check "an unreadable --password-file: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+# A language container needs a database restart: without --yes, nothing is
+# asked and the engine's answer stands; with --yes, the answer is the retry's.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}, "java": false}'
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonjava $PG_SET --json
+check "Java missing, no --yes: exit 21, one failure object" "21 [False, 'nojava', True, True, True, True]" "$JRC $(one "$SHAPE")"
+has "...whose fix names --yes" "--yes" "$(one 'd["remedy"]')"
+check "...nothing was installed" "false" "$(dbq 'd["java"]')"
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonjava $PG_SET --json --yes
+check "Java missing, --yes: installed, retried, exit 0, one object - the retry's" "0 [True, 'jsonjava']" "$JRC $(one '[d["ok"], d["name"]]')"
+has "...what the bridge said while it installed is on stderr" "Installing the Java language container (test)" "$JERR"
+lacks "...not on stdout" "Installing the Java" "$JOUT"
+# The same on a fresh Exasol Personal 2.4 (builtin_java, no client): the
+# bridge's install path runs, where it used to stop at exit 1.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]="builtin"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonj24 $PG_SET --json
+check "2.4 builtin_java, no --yes: exit 21, one failure object" "21 [False, 'nojava', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...nothing was installed" "builtin" "$(dbq 'd["java"]')"
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonj24 $PG_SET --json --yes
+check "2.4 builtin_java, --yes: installed, retried, exit 0" "0 [True, 'jsonj24'] true" "$JRC $(one '[d["ok"], d["name"]]') $(dbq 'd["java"]')"
+run remove jsonj24 >/dev/null 2>&1
+# The bridge cannot run the engine at all: the same shape.
+JOUT="$( ( EXAKIT_HOME="$HOME_K"; EXAKIT_PYEXASOL_VENV="$WORK/no-such-venv"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/pyexasol.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+    cmd_connect pg --name x $PG_SET --json ) < /dev/null 2>/dev/null )"; JRC=$?
+check "no pyexasol to run the engine: exit 2, one failure object" "2 [False, 'setup', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...its command is the repair" "exakit update pyexasol" "$(one 'd["command"]')"
+# source check answers with the same failure keys. The source now accepts
+# another credential than the one it was connected with.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="rotated"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(eng --json check jsonjava 2>/dev/null)"
+check "source check --json: the same failure keys, its command the reauth" \
+    "[False, 'auth', True, True, 'exakit source reauth jsonjava']" \
+    "$(JOUT="$OUT" one '[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), d["command"]]')"
+OUT="$(eng --json issues 2>/dev/null)"
+has "source issues --json: each row carries the command too" '"command": "exakit source reauth jsonjava"' "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect pg --name jsonauth $PG_SET --secret-stdin 2>"$WORK/json.err")"; RC=$?
+check "a refused credential, engine --json: exit 1, kind auth, a first connect has no lifecycle command" "1 auth None" \
+    "$RC $(JOUT="$OUT" one '" ".join(str(x) for x in [d["kind"], d["command"]])')"
+lacks "...error is the driver's words, the fix is in remedy" "nothing was kept" "$(JOUT="$OUT" one 'd["error"]')"
+has "...remedy" "nothing was kept" "$(JOUT="$OUT" one 'd["remedy"]')"
+has "...the FAIL line on stderr still says both" "nothing was kept" "$(cat "$WORK/json.err")"
+# A repair that dies (a download failing its size or checksum) ends only the
+# repair: the first run's object is the answer, and no temporary file is left.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]=False; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+mkdir -p "$WORK/json-tmp"
+TMPDIR="$WORK/json-tmp" JSON_JAVA_INSTALL=die jsonsh "$WORK/json.secret" pg --name jsondie $PG_SET --json --yes
+check "Java missing, --yes, the install dies: exit 21, one object - the first run's" "21 [False, 'nojava', True, True, True, True]" "$JRC $(one "$SHAPE")"
+has "...the reason is on stderr" "did not match its checksum (test)" "$JERR"
+check "...and no temporary file is left behind" "" "$(ls "$WORK/json-tmp" 2>/dev/null)"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]=True; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+TMPDIR="$WORK/no-such-tmp" jsonsh "$WORK/json.secret" pg --name jsontmp $PG_SET --json
+check "no temporary file can be made: exit 1, one object (kind setup)" "1 [False, 'setup', True, True, True, True]" "$JRC $(one "$SHAPE")"
+# The gate comes before the name, with --json as without: exit 5 both ways.
+jsonsh /dev/null gatedtest --json
+check "a gated connector and no name, --json: exit 5, one object" "5 [False, 'gated', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null gatedtest
+check "...and without --json: exit 5 too" "5" "$JRC"
+jsonsh /dev/null pg --name Bad-Name $PG_SET --json
+check "an invalid name, --json: exit 2, one object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+# Without --json an unreadable --password-file says what it always said.
+: > "$WORK/json.log"
+jsonsh /dev/null pg --name jsonnofile $PG_SET --password-file "$WORK/no-such.pw"
+check "without --json, an unreadable --password-file: exit 2" "2" "$JRC"
+has "...the reader's own line" "Cannot read $WORK/no-such.pw" "$JERR"
+check "...logged as an error, not as a refusal card" "1 0" \
+    "$(grep -c "ERROR Cannot read" "$WORK/json.log") $(grep -c "REJECT Cannot read" "$WORK/json.log")"
+# --password-stdin under --json: the connect's one object, or the refusal's.
+# The source takes any credential for these (the reauth tests below want
+# "rotated" back, and get it after the encodings).
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"].pop("secret", None); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+jsonsh "$WORK/json.secret" pg --name jsonstdin $PG_SET --password-stdin --json
+check "--password-stdin --json: exit 0, one object - the connect" "0 [True, 'jsonstdin']" "$JRC $(one '[d["ok"], d["name"]]')"
+check "...the piped credential is the CONNECTION's" "$SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_JSONSTDIN"]["secret"]')"
+lacks "...and in neither stream" "$SECRET" "$JOUT$JERR"
+run remove jsonstdin >/dev/null 2>&1
+jsonsh /dev/null pg --name jsonstdin $PG_SET --password-stdin --json
+check "--password-stdin --json, nothing on stdin: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...its error says what happened" "--password-stdin was given, but standard input was empty" "$(one 'd["error"]')"
+jsonsh "$WORK/json.secret" pg --name jsonstdin $PG_SET --password-stdin --password-file "$WORK/json.secret" --json
+check "--password-stdin with --password-file, --json: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_JSONSTDIN" in d["connections"]')"
+# Review 10, end to end: every trailing line ending is dropped (the bridge
+# drops one, the engine the rest), whichever way the credential came.
+printf '%s\r\n\n\r\n' "$SECRET" > "$WORK/json.endings"
+jsonsh "$WORK/json.endings" pg --name jsonends $PG_SET --password-stdin --json
+check "review 10: --password-stdin, CRLF LF CRLF after it: the CONNECTION holds the credential alone" "0 $SECRET" \
+    "$JRC $(dbq 'd["connections"]["EXAKIT_SRC_JSONENDS"]["secret"]')"
+run remove jsonends >/dev/null 2>&1
+jsonsh /dev/null pg --name jsonends $PG_SET --password-file "$WORK/json.endings" --json
+check "review 10: --password-file, the same: the credential alone" "0 $SECRET" \
+    "$JRC $(dbq 'd["connections"]["EXAKIT_SRC_JSONENDS"]["secret"]')"
+run remove jsonends >/dev/null 2>&1
+# Review 2 under --json: the one object names the problem, never the value.
+for args in "--password-stdin=hunter2" "--passwd=hunter2" "--bogus=hunter2"; do
+    : > "$WORK/json.log"
+    jsonsh /dev/null pg --name jsonarg $PG_SET "$args" --json
+    check "review 2, --json, $(printf '%s' "$args" | sed 's/hunter2/<v>/'): exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+    lacks "...the value in neither stream nor the log" "hunter2" "$JOUT$JERR$(cat "$WORK/json.log")"
+done
+
+printf '\n== a credential file or pipe: UTF-8 with or without a BOM, UTF-16 by its BOM ==\n'
+# pässwörd€ written three ways; each reaches the CONNECTION as itself, through
+# --password-file and --password-stdin alike. What is neither is refused, not
+# guessed (it once fell back to the locale, which mangles it).
+python3 - "$WORK" <<'PYENC'
+import codecs, os, sys
+pw = "p\u00e4ssw\u00f6rd\u20ac"
+for name, data in (("utf8", (pw + "\n").encode("utf-8")), ("bom", codecs.BOM_UTF8 + (pw + "\r\n").encode("utf-8")),
+                   ("utf16", codecs.BOM_UTF16_LE + (pw + "\r\n").encode("utf-16-le")),
+                   ("latin1", (pw[:-1] + "\n").encode("latin-1"))):
+    open(os.path.join(sys.argv[1], "enc-%s.pw" % name), "wb").write(data)
+open(os.path.join(sys.argv[1], "enc-expected"), "wb").write(pw.encode("utf-8"))
+# Review 1: UTF-16 with a stray byte (an odd count), and UTF-16 without its BOM.
+open(os.path.join(sys.argv[1], "enc-utf16odd.pw"), "wb").write(codecs.BOM_UTF16_LE + "pass".encode("utf-16-le") + b"\n")
+open(os.path.join(sys.argv[1], "enc-bomless16.pw"), "wb").write("pass\n".encode("utf-16-le"))
+PYENC
+ENCPW="$(cat "$WORK/enc-expected")"
+for enc in utf8 bom utf16; do
+    jsonsh /dev/null pg --name "encf$enc" $PG_SET --password-file "$WORK/enc-$enc.pw" --json
+    check "--password-file in $enc: exit 0, the CONNECTION holds pässwörd€" "0 $ENCPW" \
+        "$JRC $(dbq "d['connections']['EXAKIT_SRC_ENCF$(printf '%s' "$enc" | tr a-z A-Z)']['secret']")"
+    jsonsh "$WORK/enc-$enc.pw" pg --name "encs$enc" $PG_SET --password-stdin --json
+    check "--password-stdin in $enc: the same" "0 $ENCPW" \
+        "$JRC $(dbq "d['connections']['EXAKIT_SRC_ENCS$(printf '%s' "$enc" | tr a-z A-Z)']['secret']")"
+    run remove "encf$enc" >/dev/null 2>&1; run remove "encs$enc" >/dev/null 2>&1
+done
+jsonsh /dev/null pg --name enclatin $PG_SET --password-file "$WORK/enc-latin1.pw" --json
+check "a Latin-1 file (neither UTF-8 nor UTF-16): exit 2, one failure object, nothing connected" \
+    "2 [False, 'input', True, True, True, True] false" "$JRC $(one "$SHAPE") $(dbq '"EXAKIT_SRC_ENCLATIN" in d["connections"]')"
+check "...its error says why" "the credential is not UTF-8 or UTF-16 text" "$(one 'd["error"]')"
+# An extra word after the source is never repeated: it may be a credential.
+jsonsh /dev/null pg Xtra-W0rd-Kept-Out --name jsonx $PG_SET --json
+check "connect with an extra word: exit 2" "2" "$JRC"
+lacks "...the word is not repeated" "Xtra-W0rd-Kept-Out" "$JOUT$JERR"
+for enc in utf16odd bomless16; do
+    jsonsh /dev/null pg --name "encf$enc" $PG_SET --password-file "$WORK/enc-$enc.pw" --json
+    check "review 1: --password-file in $enc: exit 2, refused by the shell before \$( ), nothing connected" \
+        "2 ['the credential is not UTF-8 or UTF-16 text', True] false" \
+        "$JRC $(one '[d["error"], d.get("rejected")]') $(dbq "'EXAKIT_SRC_ENCF$(printf '%s' "$enc" | tr a-z A-Z)' in d['connections']")"
+    jsonsh "$WORK/enc-$enc.pw" pg --name "encs$enc" $PG_SET --password-stdin --json
+    check "review 1: --password-stdin in $enc: the same" "2 ['the credential is not UTF-8 or UTF-16 text', True] false" \
+        "$JRC $(one '[d["error"], d.get("rejected")]') $(dbq "'EXAKIT_SRC_ENCS$(printf '%s' "$enc" | tr a-z A-Z)' in d['connections']")"
+    OUT="$(eng --json connect pg --name "ence$enc" $PG_SET --secret-stdin < "$WORK/enc-$enc.pw" 2>/dev/null)"; RC=$?
+    check "review 1: the engine (the terminal form's path) refuses $enc too" "2 the credential is not UTF-8 or UTF-16 text" \
+        "$RC $(JOUT="$OUT" one 'd["error"]')"
+done
+OUT="$(eng connect pg --name enclatin $PG_SET --secret-stdin < "$WORK/enc-utf16.pw" 2>&1)"; RC=$?
+check "the engine itself reads UTF-16 by its BOM (the terminal form hands it the file as it is)" "0 $ENCPW" \
+    "$RC $(dbq 'd["connections"]["EXAKIT_SRC_ENCLATIN"]["secret"]')"
+run remove enclatin >/dev/null 2>&1
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="rotated"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+
+printf '\n== exakit source --json: one object of the same shape ==\n'
+jsonsrc() { # jsonsrc <stdin-file> <args...> - cmd_source; stdout in JOUT, stderr in JERR, exit in JRC
+    _js_in="$1"; shift
+    JOUT="$( ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      pyexasol_venv_python() { command -v python3; }
+      exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/json.argv"; eng "$@"; }
+      cmd_source "$@" ) < "$_js_in" 2> "$WORK/json.err" )"; JRC=$?
+    JERR="$(cat "$WORK/json.err")"
+}
+jsonsrc /dev/null show jsonjava Xtra-W0rd-Kept-Out --json
+check "source with an extra name: exit 2" "2" "$JRC"
+lacks "...the word is not repeated" "Xtra-W0rd-Kept-Out" "$JOUT$JERR"
+printf 'rotated' > "$WORK/json.rotated"; printf 'not-it' > "$WORK/json.wrong"
+rm -f "$WORK/json.argv"; : > "$WORK/json.log"
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.rotated"
+check "reauth --json: exit 0, one object - the engine's" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+check "...the engine was asked with --json once" "--json show jsonjava|--json reauth jsonjava --secret-stdin|" "$(tr '\n' '|' < "$WORK/json.argv")"
+lacks "...its events are not on the terminal" "OK " "$JERR"
+has "...they are in the log" "OK " "$(cat "$WORK/json.log")"
+# The same for a reauth: a pipe as --password-file (see the connect above).
+mkfifo "$WORK/json.fifo"; ( printf 'rotated' > "$WORK/json.fifo" ) & _jw=$!
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.fifo"
+kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
+check "reauth --json, --password-file a pipe: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+jsonsrc "$WORK/json.rotated" reauth jsonjava --json --password-stdin
+check "reauth --json --password-stdin: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+jsonsrc /dev/null reauth jsonjava --json --password-stdin
+check "reauth --json --password-stdin, nothing on stdin: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+: > "$WORK/json.log"; rm -f "$WORK/json.argv"
+jsonsrc /dev/null reauth jsonjava --password=hunter2 --json
+check "review 2: source reauth --password=<v> --json: exit 2, one failure object, the engine never ran" "2 [False, 'input', True, True, True, True] no" \
+    "$JRC $(one "$SHAPE") $([ -f "$WORK/json.argv" ] && echo yes || echo no)"
+check "...the error names the problem" "a credential was given as an argument, where other users can read it in the process list" "$(one 'd["error"]')"
+lacks "...not the value: stdout, stderr, the log" "hunter2" "$JOUT$JERR$(cat "$WORK/json.log")"
+jsonsrc /dev/null list --bogus=hunter2 --json
+check "review 2: source list --bogus=<v> --json: the option's name only" "2 unknown option '--bogus' for source list" "$JRC $(one 'd["error"]')"
+jsonsrc /dev/null --json
+check "source --json (no action): exit 0, the listing's one object" "0 True" "$JRC $(one 'd["ok"]')"
+check "...whose rows carry host and tls" "pg.example.com verify" \
+    "$(one '" ".join([[s["host"], s["tls"]] for s in d["sources"] if s["name"] == "jsonjava"][0])')"
+COLUMNS=120 jsonsrc /dev/null list
+has "source list, the real engine through the shell: the host and TLS level in its row" "pg.example.com  verify" \
+    "$(printf '%s\n' "$JOUT" | grep '^  jsonjava ')"
+# --json never asks, so it never takes silence for consent: a disconnect or
+# remove without --yes changes nothing (exit 5), as without a terminal.
+jsonsrc /dev/null remove jsonjava --json
+check "source remove --json without --yes: exit 5, kind declined, the --yes form named" \
+    "5 [False, 'declined', 'exakit source remove jsonjava --yes --json']" "$JRC $(one '[d["ok"], d["kind"], d["command"]]')"
+jsonsrc /dev/null show jsonjava --json
+check "...and the source is still there" "0 True" "$JRC $(one 'd["ok"]')"
+jsonsrc /dev/null disconnect jsonjava --json
+check "source disconnect --json without --yes: exit 5, kind declined" "5 declined" "$JRC $(one 'd["kind"]')"
+jsonsrc /dev/null show jsonjava --json
+check "...still connected" "0 True" "$JRC $(one 'd["ok"]')"
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.wrong"
+check "reauth --json with a credential the source refuses: one failure object" "[False, 'auth', True, True, True]" \
+    "$(one '[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d]')"
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json-tmp"
+check "reauth --json, a --password-file that cannot be read: exit 2, one object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsrc /dev/null reauth jsonjava --json
+check "reauth --json, no credential: exit 2, one object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsrc /dev/null reauth jsonjava --password-file "$WORK/no-such.pw"
+check "reauth without --json, an unreadable file: exit 2, the reader's own line" "2 1" "$JRC $(printf '%s\n' "$JERR" | grep -c "Cannot read")"
+for args in "bogus --json" "show --json" "check --json" "list --bogus --json" "show a b --json"; do
+    # shellcheck disable=SC2086
+    jsonsrc /dev/null $args
+    check "source $args: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+done
+jsonsrc /dev/null show --json
+check "...a missing name's command lists the sources" "exakit source list" "$(one 'd["command"]')"
+jsonsrc /dev/null show nosuch --json
+check "source show of no such source: exit 4, one object" "4 [False, 'missing', 'exakit source list']" "$JRC $(one '[d["ok"], d["kind"], d["command"]]')"
+
+run remove jsonok
+run remove jsonjava
+
+printf '\n== the engine never answers --json with a traceback ==\n'
+BROKEN="$WORK/broken-defs"; cp -R "$DEFS" "$BROKEN"; printf '{"connectors": [' > "$BROKEN/catalog.json"
+OUT="$(python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$BROKEN" --kit-home "$HOME_K" --json catalog 2>"$WORK/json.err")"; RC=$?
+check "an unexpected exception: exit 1, one object, kind internal" "1 [False, 'internal', True, None]" \
+    "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"], "\n" not in d["error"], d["command"]]')"
+has "...the traceback is on stderr (the shells keep it in the log)" "Traceback (most recent call last)" "$(cat "$WORK/json.err")"
+lacks "...and not on stdout" "Traceback" "$OUT"
+OUT="$(python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$BROKEN" --kit-home "$HOME_K" catalog 2>/dev/null)"; RC=$?
+check "...without --json: one FAIL line for the bridge to render, exit 1" "1 1" "$RC $(printf '%s\n' "$OUT" | grep -c '^FAIL the engine failed unexpectedly: ')"
+OUT="$(python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$BROKEN" --kit-home "$HOME_K" --json no-such-command 2>/dev/null)"; RC=$?
+check "arguments the engine does not take, with --json: exit 2, one object" "2 [False, 'input']" "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"]]')"
+# A copy of the engine with no setup/core beside it (it imports core/state.py).
+mkdir -p "$WORK/lonely/a"; cp -R "$ROOT/setup/virtual-schemas/engine" "$WORK/lonely/a/engine"
+OUT="$(python3 "$WORK/lonely/a/engine/cli.py" --defs x --kit-home y --json list 2>/dev/null)"; RC=$?
+check "an engine that cannot even import (a kit copy updated by halves): exit 1, one object" "1 [False, 'internal']" \
+    "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"]]')"
+
+printf '\n== the day log (exakit logs virtual-schemas): every statement, no secret ==\n'
+# engine/vslog.py: one file a day under <kit home>/logs, owner-only, the files
+# of more than 14 days ago pruned; every statement the engine sends and every
+# event it says, redacted of the run's secrets and of every credential shape.
+# Last in the suite, so the sweep below reads every run above.
+TODAY="$(python3 -c 'import datetime; print(datetime.date.today().strftime("%Y%m%d"))')"
+VSLOG="$HOME_K/logs/virtual-schemas-$TODAY.log"
+check "one file a day under the kit's log folder" "virtual-schemas-$TODAY.log" "$(ls "$HOME_K/logs" | grep '^virtual-schemas-' | tr '\n' ' ' | sed 's/ $//')"
+check "...owner-only (mode 600)" "600" "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$VSLOG")"
+check "...every statement the engine sent: the happy path's CONNECTION, its credential as ***" "yes" \
+    "$(grep -qE "\] connect sales SQL +CREATE CONNECTION \"EXAKIT_SRC_SALES\" TO 'jdbc:postgresql://pg\.example\.com:5432/sales[^']*' USER 'reader' IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+check "...a multi-line statement's further lines marked |" "yes" \
+    "$(grep -qE '\] connect sales \| +%scriptclass com\.exasol\.adapter\.RequestDispatcher;' "$VSLOG" && echo yes || echo no)"
+check "...the engine's own events, as the screen showed them" "yes" \
+    "$(grep -qE '\] connect sales OK +Virtual schema VS_SALES: ' "$VSLOG" && echo yes || echo no)"
+check "...a failed statement's answer, classified" "yes" \
+    "$(grep -qE '\] reauth sales SQLERR \[auth\] ' "$VSLOG" && echo yes || echo no)"
+check "...each run framed by START and END, with its exit code" "yes" \
+    "$(grep -qE '\] reauth sales START +reauth sales --secret-stdin \(dsn 127\.0\.0\.1:8563, user sys\)$' "$VSLOG" && \
+       grep -qE '\] reauth sales END +exit 1, kind auth \(' "$VSLOG" && echo yes || echo no)"
+check "...not the lookups and the form's checks (catalog, resolve, inputs, field)" "0" \
+    "$(grep -cE '\] (catalog|resolve|inputs|field) ' "$VSLOG")"
+# Every credential the suite handed the engine, in every connector's shape:
+# passwords, a quote doubled in SQL, tokens, AWS and Azure keys, a SAS, a
+# service-account key, the refused ones too.
+for needle in s3cr3t n3w-T0ken n3w-secret still-the-old-one AnotherSecretKeyValue wJalrXUtnFEMI QUFBQUFBQUFB \
+              QkJDQkJDQkJD abcSig Hunter2-pa55 hunter2 MIIfakeKEYbody dapi-wrong; do
+    check "no credential of the suite's runs is in it: $needle" "" "$(grep -l -- "$needle" "$HOME_K"/logs/virtual-schemas-*.log 2>/dev/null)"
+done
+
+# A driver's message that quotes credentials the run never knew, in the three
+# shapes a credential takes in SQL and URLs: the patterns catch them.
+python3 - "$STATE" <<'PYECHO'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"], "fail": "echo", "message":
+    "JDBC-Client-Error: Connecting to 'jdbc:postgresql://reader:Leak-Uri-1@pg.example.com:5432/sales"
+    "?password=Leak-Param-2&ssl=true' failed\nCaused by: org.postgresql.util.PSQLException: the session "
+    "ran CREATE USER x IDENTIFIED BY 'Leak-Ident-3' and ;pwd=Leak-Pwd-4;"}}}, open(sys.argv[1], "w"))
+PYECHO
+run_secret "$SECRET" connect postgresql --name leak $PG_SET --secret-stdin
+check "a source whose driver quotes credentials: the connect fails" "1" "$RC"
+for needle in Leak-Uri-1 Leak-Param-2 Leak-Ident-3 Leak-Pwd-4; do
+    lacks "...$needle is in no line of the log" "$needle" "$(cat "$VSLOG")"
+done
+has "...user:password@ keeps the user" "jdbc:postgresql://reader:***@pg.example.com:5432/sales" "$(grep '\] connect leak ' "$VSLOG")"
+has "...?password= keeps the name" "?password=***&ssl=true" "$(grep '\] connect leak ' "$VSLOG")"
+has "...the cause under it is kept, redacted" "IDENTIFIED BY '***' and ;pwd=***;" "$(grep '\] connect leak SQLERR' "$VSLOG")"
+# Review 2: the same message reached the screen's FAIL line, the kit's main
+# log (error -> _exakit_log_file) and --json's error through sql.redact,
+# which knew only IDENTIFIED BY: ;pwd=Leak-Pwd-4; stood.
+for needle in Leak-Uri-1 Leak-Param-2 Leak-Ident-3 Leak-Pwd-4; do
+    lacks "review 2: $needle is not on the screen's FAIL line" "$needle" "$OUT"
+done
+has "review 2: ...which still says what failed" "PSQLException: the session ran CREATE USER x IDENTIFIED BY '***' and ;pwd=***;" "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name leak $PG_SET --secret-stdin 2>/dev/null)"
+check "review 2: --json: the error field holds none of them" "[False, False, False, False]" \
+    "$(JOUT="$OUT" one '[n in d["error"] for n in ("Leak-Uri-1", "Leak-Param-2", "Leak-Ident-3", "Leak-Pwd-4")]')"
+
+# Through the shell, as a person runs it: the credential from --password-file,
+# and the log named once when the command fails.
+logsh() {
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/vslog-setup.log"; }
+      pyexasol_venv_python() { command -v python3; }
+      exakit_vs_engine() { eng "$@"; }
+      "$@" ) 2>&1
+}
+LOGLINE="Log (every SQL statement, secrets redacted): $VSLOG"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "secret": "Right-0ne-pw"}}}'
+printf '%s' 'Pw-File-0nly-9' > "$WORK/vslog-wrong.pw"
+printf '%s' 'Right-0ne-pw' > "$WORK/vslog-right.pw"
+OUT="$(logsh cmd_connect pg --name logpw $PG_SET --password-file "$WORK/vslog-wrong.pw" </dev/null)"; RC=$?
+check "exakit connect, a --password-file the source refuses: exit 1" "1" "$RC"
+check "...the log's path said once" "1" "$(printf '%s\n' "$OUT" | grep -cF "$LOGLINE")"
+check "...as the last line" "$LOGLINE" "$(printf '%s\n' "$OUT" | tail -n 1 | sed 's/^ *[^ ]* //')"
+check "...the run is in it" "yes" "$(grep -qE "\] connect logpw SQL +CREATE CONNECTION .* IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+lacks "...the password from the file is in no log" "Pw-File-0nly-9" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+OUT="$(logsh cmd_connect pg --name logok $PG_SET --password-file "$WORK/vslog-right.pw" </dev/null)"; RC=$?
+check "a connect that succeeds: exit 0, no log line" "0 0" "$RC $(printf '%s\n' "$OUT" | grep -cF 'Log (every SQL')"
+lacks "...its password is in no log either" "Right-0ne-pw" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+OUT="$(logsh cmd_connect nosuchdb --name x </dev/null)"; RC=$?
+check "a refusal the engine never logged (an unknown connector): no log line" "2 0" "$RC $(printf '%s\n' "$OUT" | grep -cF 'Log (every SQL')"
+# The source stops answering; what the database holds stays as it is.
+srcfail() { python3 -c 'import json,sys
+d = json.load(open(sys.argv[1])); s = d["sources"]["pg.example.com"]
+s.update(fail=sys.argv[2]) if sys.argv[2] else s.pop("fail", None)
+json.dump(d, open(sys.argv[1], "w"))' "$STATE" "$1"; }
+srcfail unreachable
+OUT="$(logsh cmd_source check logok </dev/null)"; RC=$?
+check "exakit source check of a source that fails: exit 1, the log's path once" "1 1" "$RC $(printf '%s\n' "$OUT" | grep -cF "$LOGLINE")"
+srcfail ""
+# --json: stdout stays the one object; the path goes to stderr.
+jsonsh /dev/null pg --name logjson $PG_SET --password-file "$WORK/vslog-wrong.pw" --json
+check "connect --json that fails: one object on stdout, the path once on stderr" "1 [False, 'auth'] 1" \
+    "$JRC $(one '[d["ok"], d["kind"]]') $(printf '%s\n' "$JERR" | grep -cF "$LOGLINE")"
+lacks "...and not on stdout" "Log (every SQL" "$JOUT"
+lacks "...the password from the file is in no log" "Pw-File-0nly-9" "$(cat "$HOME_K"/logs/* "$WORK/json.log" 2>/dev/null)"
+run remove logok
+
+# exakit logs: the day log is one of its targets, through the real entry point.
+LOGS_JSON="$(EXAKIT_HOME="$HOME_K" bash "$ROOT/setup/exakit" logs --json 2>/dev/null)"
+check "exakit logs lists it: target virtual-schemas, the newest day file" "$VSLOG" \
+    "$(printf '%s' "$LOGS_JSON" | python3 -c 'import json,sys; print(next((t["path"] for t in json.load(sys.stdin)["targets"] if t["target"] == "virtual-schemas"), ""))' 2>/dev/null)"
+check "...and exakit logs virtual-schemas --path names it" "$VSLOG" "$(EXAKIT_HOME="$HOME_K" bash "$ROOT/setup/exakit" logs virtual-schemas --path 2>/dev/null)"
+
+# The module itself: the shapes, a long statement, the pruning, the mode.
+UNIT="$(python3 - "$ROOT" "$WORK/vslog-unit" <<'PYUNIT'
+import datetime, hashlib, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import vslog
+folder = sys.argv[2]
+os.makedirs(folder)
+today = datetime.date.today()
+def day(days):
+    path = os.path.join(folder, "virtual-schemas-%s.log" % (today - datetime.timedelta(days=days)).strftime("%Y%m%d"))
+    open(path, "w").close()
+    return path
+day(20); day(15); day(14); day(3)
+os.chmod(day(0), 0o644)
+open(os.path.join(folder, "install-20200101-000000.log"), "w").close()
+log = vslog.RunLog(folder, "connect", "unit")
+log.secret("Run-Known-0")
+long_sql = "CREATE LUA ADAPTER SCRIPT X AS\n" + "-- lua\n" * 1000 + "-- the-tail-marker\n/"
+log.statement(long_sql)
+log.statement("CREATE CONNECTION C TO 'jdbc:x://h' USER 'r' IDENTIFIED BY 'Lit-''Pw-1'")
+log.write("INFO", "jdbc:sqlserver://h:1433;databaseName=d;password=Semi-Pw-2;encrypt=true")
+log.write("INFO", "https://acct.blob.core.windows.net/c?sv=1&sig=Sas-Sig-3&sp=r")
+log.write("INFO", "mongodb+srv://reader:Uri-Pw-4@cluster0.example.net/db")
+log.write("INFO", 'CREATE USER u IDENTIFIED BY "Quoted-Pw-5"')
+log.write("INFO", "a token=Tok-6 and AccountKey=Key-7== and the run's own Run-Known-0, as JSON \"Run-Known-0\"")
+log.write("INFO", "s3://bucket/path?X-Amz-Signature=Amz-8&X-Amz-Date=1")
+log.close()
+text = open(log.path).read()
+print("names " + " ".join(sorted(os.listdir(folder))))
+print("mode " + oct(os.stat(log.path).st_mode & 0o777)[2:])
+print("leaks " + " ".join(n for n in ("Lit-", "Pw-1", "Semi-Pw-2", "Sas-Sig-3", "Uri-Pw-4", "Quoted-Pw-5", "Tok-6",
+                                      "Key-7", "Run-Known-0", "Amz-8") if n in text))
+redacted = vslog.redact(long_sql)
+sql_lines = [l for l in text.splitlines() if " connect unit SQL " in l or " connect unit | " in l]
+print("digest %s %s %s" % ("CREATE LUA ADAPTER SCRIPT X AS" in sql_lines[0],
+                           sql_lines[len(redacted[:vslog.HEAD].splitlines()) - 1].endswith(
+                               " ... [%d characters, sha256 %s]" % (len(redacted), hashlib.sha256(redacted.encode()).hexdigest())),
+                           "the-tail-marker" not in text))
+print(text)
+PYUNIT
+)"
+check "the files of more than 14 days ago are pruned, the others kept" \
+    "names install-20200101-000000.log $(python3 -c 'import datetime as d; t=d.date.today(); print(" ".join("virtual-schemas-%s.log" % (t - d.timedelta(days=n)).strftime("%Y%m%d") for n in (14, 3, 0)))')" \
+    "$(printf '%s\n' "$UNIT" | grep '^names ')"
+check "...a day file made with a wider mode is owner-only once written" "mode 600" "$(printf '%s\n' "$UNIT" | grep '^mode ')"
+check "every credential shape and every known secret is redacted" "leaks " "$(printf '%s\n' "$UNIT" | grep '^leaks ')"
+has "...user:password@ in a URI" "mongodb+srv://reader:***@cluster0.example.net/db" "$UNIT"
+has "...IDENTIFIED BY '...', a doubled quote inside" "IDENTIFIED BY '***'" "$UNIT"
+has "...IDENTIFIED BY \"...\"" 'IDENTIFIED BY "***"' "$UNIT"
+has "...;password= and &sig=" ";password=***;encrypt=true" "$UNIT"
+has "...&sig=" "&sig=***&sp=r" "$UNIT"
+has "...X-Amz-Signature=" "X-Amz-Signature=***&X-Amz-Date=1" "$UNIT"
+check "a statement over 4000 characters: its head, then the sha256 of the whole; not the rest" "digest True True True" \
+    "$(printf '%s\n' "$UNIT" | grep '^digest ')"
+
+printf '\n== the day log: the security review'"'"'s findings, each with its own input ==\n'
+# Review 1: a --password-file holding two lines. pyexasol prints a failed
+# statement back in its query => field, IDENTIFIED BY '<both lines>' and all;
+# redacting the driver's text line by line never matched the whole secret.
+python3 - "$STATE" <<'PYML'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"]}},
+           "connection_fail": "insufficient privileges for creating connection"}, open(sys.argv[1], "w"))
+PYML
+printf 'Hunter22\n# rotated 2026-11' > "$WORK/vslog-multiline.pw"
+OUT="$(logsh cmd_connect pg --name multiline $PG_SET --password-file "$WORK/vslog-multiline.pw" </dev/null)"; RC=$?
+check "review 1: a --password-file holding 'Hunter22<newline># rotated 2026-11', CREATE CONNECTION refused: exit 1" "1" "$RC"
+check "review 1: ...the driver's query => field is in the log, the literal as ***" "yes" \
+    "$(grep -qE "\] connect multiline SQLERR +query +=> +CREATE CONNECTION \"EXAKIT_SRC_MULTILINE\" .* IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+for needle in Hunter22 "rotated 2026-11"; do
+    lacks "review 1: ...'$needle' is in no log" "$needle" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+    lacks "review 1: ...nor on the screen" "$needle" "$OUT"
+done
+
+# Review 2 through the shell: the kit's main log (error -> _exakit_log_file).
+python3 - "$STATE" <<'PYECHO2'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"], "fail": "echo", "message":
+    "Caused by: org.postgresql.util.PSQLException: the session ran ;pwd=Leak-Pwd-4; for mongodb://reader:Tr0ub4dor&3xyz@host"}}},
+    open(sys.argv[1], "w"))
+PYECHO2
+: > "$WORK/vslog-setup.log"
+OUT="$(logsh cmd_connect pg --name leakmain $PG_SET --password-file "$WORK/vslog-right.pw" </dev/null)"; RC=$?
+check "review 2: a connect whose driver quotes credentials, through the shell: exit 1" "1" "$RC"
+has "review 2: ...the kit's main log has its FAIL line" "PSQLException" "$(cat "$WORK/vslog-setup.log")"
+for needle in Leak-Pwd-4 Tr0ub4d; do
+    lacks "review 2: ...without $needle (main log, screen)" "$needle" "$(cat "$WORK/vslog-setup.log")$OUT"
+done
+
+# Review 8: a short password replaced only where it stands alone.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "secret": "postgres"}}}'
+run_secret postgres connect postgresql --name pgshort $PG_SET --secret-stdin
+check "review 8: the password 'postgres': connected" "0" "$RC"
+check "review 8: ...jdbc:postgresql:// is whole in the log, the literal ***" "yes" \
+    "$(grep -qE "\] connect pgshort SQL +CREATE CONNECTION \"EXAKIT_SRC_PGSHORT\" TO 'jdbc:postgresql://pg\.example\.com:5432/sales[^']*' USER 'reader' IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+run remove pgshort
+
+# Review 4: START names the --set keys, never their values (validated or not).
+run plan postgresql --name review4 --set "uri=mongodb://u:pa/ssWORD@host/db" --set "uri=mongodb://alice@x.com:SECRWORD@host/db" \
+    --set secret_key=SKWORD --set "catalog_url=https://cat.example.com/api?apikey=KEYWORD" --set user=scott/tigerWORD
+check "review 4: a plan with values that hold credentials: refused, exit 2" "2" "$RC"
+check "review 4: ...START names the keys" "yes" \
+    "$(grep -qE '\] plan review4 START +plan postgresql --name review4 --set uri=\.\.\. --set uri=\.\.\. --set secret_key=\*\*\* --set catalog_url=\.\.\. --set user=\.\.\. \(dsn' "$VSLOG" && echo yes || echo no)"
+lacks "review 4: ...and no value: not one of ssWORD SECRWORD SKWORD KEYWORD tigerWORD" "WORD" "$(grep '\] plan review4 ' "$VSLOG")"
+
+# The module itself, with the review's exact inputs.
+cat > "$WORK/vslog-review.py" <<'PYREVIEW'
+import contextlib, datetime, hashlib, io, os, signal, sys, time, traceback
+engine = sys.argv[1] + "/setup/virtual-schemas/engine"
+sys.path.insert(0, engine)
+import vslog, sql
+base = sys.argv[2]
+os.makedirs(base)
+today = datetime.date.today().strftime("%Y%m%d")
+signal.alarm(60)  # a FIFO that blocked would hang the suite
+
+def logged(name, **secrets_and_calls):
+    folder = os.path.join(base, name)
+    log = vslog.RunLog(folder, "connect", name)
+    return log, folder
+
+def text_of(log):
+    log.close()
+    return open(log.path, encoding="utf-8", errors="surrogateescape").read()
+
+# 1: a multi-line secret, registered, printed back across lines; unregistered
+# (check, refresh: no secret), the open literal across lines; a PEM line by line.
+log, _ = logged("r1")
+log.secret("Hunter22\n# rotated 2026-11")
+log.failed("insufficient privileges", "error", "(\n    message     =>  insufficient privileges\n"
+           "    query       =>  CREATE CONNECTION \"C\" TO 'x' USER 'u' IDENTIFIED BY 'Hunter22\n# rotated 2026-11'\n)")
+log2, _ = logged("r1b")
+log2.failed("insufficient privileges", "error", "query => CREATE CONNECTION \"C\" TO 'x' USER 'u' IDENTIFIED BY "
+            "'Unknown-Line-One\nUnknown-Line-Two'\n)")
+pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----\n"
+log3, _ = logged("r1c")
+log3.secret(pem)
+log3.failed("key rejected", "auth", "key rejected:\n  > MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n  > BKcwggSjAgEAAoIBAQC7\n")
+t1, t2, t3 = text_of(log), text_of(log2), text_of(log3)
+print("r1 " + " ".join(str(n in t) for n, t in (("Hunter22", t1), ("rotated 2026-11", t1), ("Unknown-Line", t2),
+                                                ("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC", t3), ("BKcwggSjAgEAAoIBAQC7", t3))))
+
+# 2: sql.redact - the patterns, before the cut at MAX_ERROR; classify unchanged.
+leak = sql.redact(Exception("Caused by: org.postgresql.util.PSQLException: the session ran ;pwd=Leak-Pwd-4; now"), [])
+cut = sql.redact(Exception("x" * 570 + " mongodb://reader:Tr0ub4dor&3xyz@host/db"), [])
+print("r2 %s %s %s" % ("Leak-Pwd-4" in leak, "Tr0ub4d" in cut, len(cut) <= sql.MAX_ERROR))
+kinds = []
+for message in ('FATAL: password authentication failed for user "reader"',
+                "Access denied for user 'reader'@'10.0.0.9' (using password: YES)",
+                "S3Exception: The request signature we calculated does not match the signature you provided.",
+                "Invalid access token",
+                "Server failed to authenticate the request. https://acct.blob.core.windows.net/c?sv=1&sig=SigVal123&sp=r",
+                "Programmatic access token is invalid: https://h.example.com/api?token=TokVal123"):
+    shown = sql.redact(Exception(message), [])
+    kinds.append("%s=%s%s" % (sql.classify(message), sql.classify(shown),
+                              "!" if "SigVal123" in shown or "TokVal123" in shown else ""))
+print("r2kinds " + " ".join(kinds))
+
+# 3: a driver line over 4000 characters, a registered secret across character 1000.
+log, _ = logged("r3")
+line = "X" * 990 + "Straddle-Pw-0123456789" + "Y" * 4000
+log.failed("too long", "error", line, secrets=["Straddle-Pw-0123456789"])
+text = text_of(log)
+redacted = "X" * 990 + "***" + "Y" * 4000
+print("r3 %s %s %s" % ("Straddle" in text, hashlib.sha256(redacted.encode()).hexdigest() in text,
+                       hashlib.sha256(line.encode()).hexdigest() in text))
+
+# 5: the shapes and the forms the first patterns missed.
+shapes = [("sslpassword=Rv5a", "Rv5a"), ("trustStorePassword=Rv5b", "Rv5b"), ("db_password=Rv5c", "Rv5c"),
+          ("Auth_AccessToken=Rv5d", "Rv5d"), ("private_key_file_pwd=Rv5e", "Rv5e"), ("password:dapiRv5f", "Rv5f"),
+          ('{"password": "Rv5g"}', "Rv5g"), ('"awsSecretAccessKey":"abc\\/defRv5h"', "Rv5h"), ("PWD = Rv5i", "Rv5i"),
+          ("password= Rv5j", "Rv5j"), ("key=Rv5k", "Rv5k"), ("api_key=Rv5l", "Rv5l"), ("credential=id:Rv5m", "Rv5m"),
+          ("jdbc:oracle:thin:scott/tigerRv5n@//h:1521/svc", "Rv5n"), ("password={pa;ssRv5o}", "ssRv5o"),
+          ("mongodb://u:pa/ssRv5p@host/db", "Rv5p"), ("mongodb://alice@x.com:Rv5q@host/db", "Rv5q")]
+missed = [s for s, n in shapes if n in vslog.redact(s)]
+kept = [vslog.redact(s) for s in ("sslpassword=x", "password={pa;ss}", "mongodb://alice@x.com:p@host/db")]
+secret = "Pa  ss/w~rd-16"
+written = ["Pa++ss%2Fw~rd-16", "Pa%20%20ss%2fw~rd-16", "Pa++ss%2Fw%7Erd-16", "Pa  ss\\/w~rd-16", "Pa ss/w~rd-16"]
+missed += [w for w in written if "rd-16" in vslog.redact("x " + w + " y", [secret])]
+print("r5 missed:%s" % "|".join(missed))
+print("r5 kept " + " ".join(kept))
+
+# 6: the day file a link or a FIFO: no log, the target untouched, no wait.
+link = os.path.join(base, "r6link"); os.makedirs(link)
+target = os.path.join(base, "elsewhere.txt"); open(target, "w").write("keep\n"); os.chmod(target, 0o644)
+os.symlink(target, os.path.join(link, "virtual-schemas-%s.log" % today))
+log = vslog.RunLog(link, "connect", "r6"); log.write("INFO", "x"); log.close()
+fifo = os.path.join(base, "r6fifo"); os.makedirs(fifo)
+os.mkfifo(os.path.join(fifo, "virtual-schemas-%s.log" % today))
+started = time.time(); log2 = vslog.RunLog(fifo, "connect", "r6"); log2.write("INFO", "x"); log2.close()
+print("r6 %s %s %s %s %s" % (log.path, oct(os.stat(target).st_mode & 0o777)[2:], open(target).read() == "keep\n",
+                             log2.path, time.time() - started < 2))
+
+# 8: short secrets only where they stand alone.
+log, _ = logged("sales")
+log.secret("postgres", "a")
+log.statement("CREATE CONNECTION \"C\" TO 'jdbc:postgresql://pg.example.com:5432/sales' USER 'reader' IDENTIFIED BY 'postgres'")
+log.write("INFO", "reader sales a postgres")
+text = text_of(log)
+print("r8 %s %s %s" % ("jdbc:postgresql://pg.example.com:5432/sales' USER 'reader' IDENTIFIED BY '***'" in text,
+                       " connect sales INFO   reader sales *** ***" in text, "postgres'" in text))
+
+# 9: a lone surrogate in a long text; the driver's exception never chained.
+log, _ = logged("r9")
+log.statement("SELECT '" + "x" * 5000 + "\udc80'")
+log.failed("m", "error", "E" * 5000 + "\udc80")
+# Built from parts: a traceback prints source lines, and this file's own
+# must not be what a check finds.
+chain9 = "Chain-" + "Pw-9"
+statement9 = "CREATE CONNECTION C TO 'x' USER 'u' IDENTIFIED BY '%s'" % chain9
+class Backend(object):
+    def execute(self, sql_text):
+        raise Exception("E" * 5000 + "\udc80 query => " + sql_text)
+    query = execute
+try:
+    sql.Database(Backend(), log).execute(statement9, [chain9])
+    raised = "nothing"
+except Exception as error:
+    raised = "%s/%s" % (type(error).__name__, error.__suppress_context__)
+    trace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+text = text_of(log)
+print("r9 %s %s %s %s" % (raised, chain9 in trace, "sha256" in text, chain9 in text))
+import cli, lifecycle
+chain7, chain8, run99 = "Chain-" + "Pw-7", "Chain-" + "Pw-8", "Run-" + "Secret-99"
+def boom(self, *args, **kwargs):
+    try:
+        raise Exception("query => CREATE CONNECTION C TO 'x' USER 'u' IDENTIFIED BY '%s' and %s" % (chain7, run99))
+    except Exception:
+        raise RuntimeError("unexpected, password=" + chain8)
+lifecycle.Engine.connect = boom
+kit = os.path.join(base, "r9kit"); os.makedirs(kit)
+sys.stdin = io.TextIOWrapper(io.BytesIO(run99.encode()))
+err, out = io.StringIO(), io.StringIO()
+with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+    code = cli.main(["--defs", sys.argv[3], "--kit-home", kit, "--deployment-dir", base, "--dsn", "127.0.0.1:8563", "--password-file", "/nonexistent",
+                     "connect", "postgresql", "--name", "chain", "--set", "host=pg.example.com", "--set", "database=sales",
+                     "--set", "user=reader", "--secret-stdin"])
+day = open(os.path.join(kit, "logs", "virtual-schemas-%s.log" % today)).read()
+everything = err.getvalue() + out.getvalue() + day
+print("r9cli %d %s %s %s" % (code, "RuntimeError" in err.getvalue(),
+                             "Traceback (most recent call last)" in err.getvalue(),
+                             [n for n in (chain7, chain8, run99) if n in everything]))
+
+# 10: linear time on what a hostile source could send (80k characters each).
+slow = []
+for hostile in ("a." * 40000, "a://" * 20000, "x:y@" * 20000, "password=" * 9000, 'password:"' * 8000, '"' * 80000,
+                "{" * 80000, "pwd={" * 16000, "jdbc:oracle:thin:" * 4800, "IDENTIFIED BY '" * 5400, "a" * 80000):
+    started = time.time()
+    vslog.redact(hostile, ["Hunter22-long-secret", "short"])
+    sql.redact(Exception(hostile), ["Hunter22-long-secret"])
+    if time.time() - started > 1.0:
+        slow.append(hostile[:12])
+print("r10 slow:%s" % "|".join(slow))
+PYREVIEW
+REVIEW="$(python3 "$WORK/vslog-review.py" "$ROOT" "$WORK/vslog-review" "$DEFS" 2>&1)"
+check "review 1: a registered multi-line secret printed across lines; an unregistered literal across lines; a PEM line by line: none in the log" \
+    "r1 False False False False False" "$(printf '%s\n' "$REVIEW" | grep '^r1 ')"
+check "review 2: sql.redact applies the patterns before the cut at 600 (;pwd=Leak-Pwd-4;, mongodb://reader:Tr0ub4dor&3xyz@host)" \
+    "r2 False False True" "$(printf '%s\n' "$REVIEW" | grep '^r2 ')"
+check "review 2: ...and every class is the same after it (password auth, using password: YES, signature, access token, sig=, token=)" \
+    "r2kinds auth=auth auth=auth auth=auth auth=auth auth=auth auth=auth" "$(printf '%s\n' "$REVIEW" | grep '^r2kinds ')"
+check "review 3: a driver line over 4000 characters, a secret across character 1000: redacted before the cut and the sha256" \
+    "r3 False True False" "$(printf '%s\n' "$REVIEW" | grep '^r3 ')"
+check "review 5: sslpassword= trustStorePassword= db_password= Auth_AccessToken= private_key_file_pwd= password: JSON PWD = key= api_key= credential= Oracle braces user@ forms" \
+    "r5 missed:" "$(printf '%s\n' "$REVIEW" | grep '^r5 missed')"
+check "review 5: ...the names kept, braces closed, the user kept" "r5 kept sslpassword=*** password={***} mongodb://alice@x.com:***@host/db" \
+    "$(printf '%s\n' "$REVIEW" | grep '^r5 kept')"
+check "review 6: a day file that is a link: no log, the target's mode and text untouched; a FIFO: no log, no wait" \
+    "r6 None 644 True None True" "$(printf '%s\n' "$REVIEW" | grep '^r6 ')"
+check "review 8: the passwords 'postgres' and 'a': jdbc:postgresql:// and sales/reader whole, the literal and lone words ***" \
+    "r8 True True False" "$(printf '%s\n' "$REVIEW" | grep '^r8 ')"
+check "review 9: a lone surrogate in a long text: the DbError raised, without the driver's exception, logged digested, redacted" \
+    "r9 DbError/True False True False" "$(printf '%s\n' "$REVIEW" | grep '^r9 ')"
+check "review 9: ...an unexpected fault while handling a driver's exception: its traceback unchained and redacted, everywhere" \
+    "r9cli 1 True True []" "$(printf '%s\n' "$REVIEW" | grep '^r9cli ')"
+check "review 10: every pattern linear: 80k hostile characters each under 1 s" "r10 slow:" "$(printf '%s\n' "$REVIEW" | grep '^r10 ')"
+
+printf '\n== the day log: the second review'"'"'s findings, each with its own input ==\n'
+# Second review 5: a CREATE VIRTUAL SCHEMA carries no secret of its own, yet
+# its adapter can echo what the CONNECTION holds. The screen, --json and the
+# log were redacted only with the failing statement's secrets.
+python3 - "$STATE" <<'PYVSFAIL'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"]}},
+           "vs_fail": "E-VSPG-9: the adapter could not log in with <s3cr3t-Pa55'word> as the password"}, open(sys.argv[1], "w"))
+PYVSFAIL
+run_secret "$SECRET" connect postgresql --name vsecho $PG_SET --secret-stdin
+check "second review 5: a CREATE VIRTUAL SCHEMA failure echoing the run's credential: exit 1" "1" "$RC"
+has "second review 5: ...its message is on the screen" "E-VSPG-9: the adapter could not log in with <***> as the password" "$OUT"
+lacks "second review 5: ...without the credential" "s3cr3t" "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name vsecho $PG_SET --secret-stdin 2>/dev/null)"
+check "second review 5: ...nor in --json's error" "[True, False]" "$(JOUT="$OUT" one '["E-VSPG-9" in d["error"], "s3cr3t" in d["error"]]')"
+lacks "second review 5: ...nor in the log" "s3cr3t" "$(cat "$VSLOG")"
+
+cat > "$WORK/vslog-review2.py" <<'PYREVIEW2'
+import datetime, os, sys, time
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import vslog, sql
+base = sys.argv[2]
+os.makedirs(base)
+R = vslog.redact
+
+# 1: a short secret right after an escape is still alone; inside a word it is not.
+texts = ["url=jdbc%3Apostgresql%3A%2F%2Freader%3AHunter2%40host", '{"msg": "line1\\nHunter2\\nline3"}', '"a\\tHunter2"']
+print("s1 leaks:%s" % "|".join(t for t in texts if "Hunter2" in R(t, ["Hunter2"])))
+print("s1 kept %s %s" % ("jdbc%3Apostgresql" in R("url=jdbc%3Apostgresql%3A%2F%2Fpostgres%40h", ["postgres"]),
+                         R("sales reader a", ["a"])))
+
+# 2: the engine names the day in local Gregorian digits; an empty file a
+# bridge made ready in another calendar is pruned, one with lines is kept.
+print("s2 " + vslog.day_name(datetime.date(2026, 11, 9)))
+today = datetime.date.today()
+folder = os.path.join(base, "s2")
+os.makedirs(folder)
+open(os.path.join(folder, "virtual-schemas-%04d%02d%02d.log" % (today.year + 543, today.month, min(today.day, 28))), "w").close()
+with open(os.path.join(folder, "virtual-schemas-%04d%02d%02d.log" % (today.year + 1, 1, 1)), "w") as handle:
+    handle.write("a line\n")
+vslog.RunLog(folder, "list", None).close()
+print("s2 left " + " ".join(sorted(os.listdir(folder))))
+
+# 3: user:password@ with no length cap and up to the last @.
+jwt = "eyJ" + "A" * 700 + "." + "B" * 790 + "Z"
+long_user = "https://" + "u" * 300 + ":Long-User-Pw9@git.example.com/x"
+at_inside = "https://u:" + "p" * 1100 + "@Tail-Of-Pw8@host/x"
+print("s3 leaks:%s" % "|".join(n for n, t in (("jwt", "https://oauth2:%s@git.example.com" % jwt), ("user", long_user),
+                                                ("at", at_inside))
+                                if any(w in R(t) for w in ("AAAA", "Long-User-Pw9", "Tail-Of-Pw8", "pppp"))))
+print("s3 kept " + R("https://oauth2:%s@git.example.com" % jwt))
+
+# 4: CamelCase names, a Python repr, Authorization; error codes and flags kept.
+# Each shape with the value that must go (": tok" - the value, not the name).
+shapes = [("AccessToken: abc123", "abc123"), ("SessionToken: tok", ": tok"), ("ClientSecret: s3cr3t", "s3cr3t"),
+          ("DbPassword: pw1", "pw1"), ("X-Auth-Token: abc123", "abc123"),
+          ("{'password': 'Hunter22', 'token': 'dapi123'}", "Hunter22"), ("{'password': 'Hunter22', 'token': 'dapi123'}", "dapi123"),
+          ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig4", "eyJhbGci"), ("Authorization: Basic dXNlcjpwYXNzd29yZDQ=", "dXNlcjpw")]
+print("s4 leaks:%s" % "|".join(s for s, v in shapes if v in R(s)))
+print("s4 shown " + " ~ ".join(R(s) for s in ("AccessToken: abc123", "{'password': 'Hunter22', 'token': 'dapi123'}",
+                                               "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig4")))
+readable = ["ExpiredToken: The security token included in the request is expired",
+            "InvalidToken: The provided token is malformed", "NoSuchKey: The specified key does not exist.",
+            "Access denied for user 'r'@'h' (using password: YES)", "(using password: NO)"]
+print("s4 changed:%s" % "|".join(r for r in readable if R(r) != r))
+print("s4 thrift " + R("TOpenSessionReq(username:token, password:dapiXYZ)"))
+kinds = []
+for message in ("Access denied for user 'r'@'h' (using password: YES)", "ExpiredToken: The security token included in the request is expired"):
+    kinds.append("%s=%s" % (sql.classify(message), sql.classify(sql.redact(Exception(message), []))))
+print("s4 kinds " + " ".join(kinds))
+
+# 5: a value credential() derived, registered with the run, echoed by a
+# statement that carries no secrets of its own.
+class Backend(object):
+    def execute(self, sql_text):
+        raise Exception("E-VSS3-4: the adapter refused key [" + "Derived-" + "Key-77]")
+log = vslog.RunLog(os.path.join(base, "s5"), "connect", "s5")
+log.secret("Derived-" + "Key-77")
+try:
+    sql.Database(Backend(), log).execute("CREATE VIRTUAL SCHEMA \"VS_S5\" USING X WITH CONNECTION_NAME = 'C'")
+except sql.DbError as error:
+    print("s5 %s" % error)
+
+# The new scanners stay linear (80k characters each).
+slow = []
+for hostile in ("a://b:" * 13000 + "@", "jdbc:oracle:thin:a/" * 4000 + "@", "https://u:" + "p@" * 40000, "Bearer " * 11000,
+                "Authorization: " * 5000, "'password':" * 7000, "AccessToken: " * 6000, "a\\n" * 26000, "%3A" * 26000):
+    started = time.time()
+    R(hostile, ["Hunter2", "Hunter22-long-secret"])
+    if time.time() - started > 1.0:
+        slow.append(hostile[:12])
+print("s6 slow:%s" % "|".join(slow))
+PYREVIEW2
+REVIEW2="$(python3 "$WORK/vslog-review2.py" "$ROOT" "$WORK/vslog-review2" 2>&1)"
+check "second review 1: the short secret Hunter2 after %3A, after \\n, after \\t: redacted" "s1 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s1 leaks')"
+check "second review 1: ...and still not inside a word (postgres in jdbc%3Apostgresql, a in sales and reader)" \
+    "s1 kept True sales reader ***" "$(printf '%s\n' "$REVIEW2" | grep '^s1 kept')"
+check "second review 2: the engine names the day in local Gregorian digits" "s2 virtual-schemas-20261109.log" "$(printf '%s\n' "$REVIEW2" | grep '^s2 virtual')"
+check "second review 2: ...an empty file dated in another calendar is pruned, a written future one kept" \
+    "s2 left $(python3 -c 'import datetime as d; t=d.date.today(); print("virtual-schemas-%04d%02d%02d.log virtual-schemas-%04d0101.log" % (t.year, t.month, t.day, t.year + 1))')" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s2 left')"
+check "second review 3: https://oauth2:<1500-character JWT>@, a 300-character user, a password with @: redacted, no length cap" \
+    "s3 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s3 leaks')"
+check "second review 3: ...the user and host kept" "s3 kept https://oauth2:***@git.example.com" "$(printf '%s\n' "$REVIEW2" | grep '^s3 kept')"
+check "second review 4: AccessToken: SessionToken: ClientSecret: DbPassword: X-Auth-Token: a Python repr, Authorization Bearer and Basic" \
+    "s4 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s4 leaks')"
+check "second review 4: ...the names and the scheme kept" \
+    "s4 shown AccessToken: *** ~ {'password': '***', 'token': '***'} ~ Authorization: Bearer ***" "$(printf '%s\n' "$REVIEW2" | grep '^s4 shown')"
+check "second review 4: ...ExpiredToken: InvalidToken: NoSuchKey: and using password: YES / NO unchanged" "s4 changed:" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s4 changed')"
+check "second review 4: ...a Thrift password:...) keeps its closing )" "s4 thrift TOpenSessionReq(username:token, password:***)" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s4 thrift')"
+check "second review 4: ...and the classes stay" "s4 kinds auth=auth auth=auth" "$(printf '%s\n' "$REVIEW2" | grep '^s4 kinds')"
+check "second review 5: a derived value the run registered, echoed by a statement with no secrets of its own: redacted" \
+    "s5 E-VSS3-4: the adapter refused key [***]" "$(printf '%s\n' "$REVIEW2" | grep '^s5 ')"
+check "second review 3/4: the new scanners stay linear: 80k hostile characters each under 1 s" "s6 slow:" "$(printf '%s\n' "$REVIEW2" | grep '^s6 ')"
+
+printf '\n== the engine runs isolated: python -I ==\n'
+# A module planted on PYTHONPATH named like one the engine imports (argparse,
+# its first) runs inside the process that holds the credential - unless the
+# interpreter is isolated. The control first: without -I it runs.
+PLANT="$WORK/planted"; mkdir -p "$PLANT"
+printf 'import os\nopen(os.environ["EXAKIT_PLANT_MARK"], "w").write("planted")\nraise SystemExit(97)\n' > "$PLANT/argparse.py"
+rm -f "$WORK/plant.mark"
+PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark" python3 "$ROOT/setup/virtual-schemas/engine/cli.py" \
+    --defs "$DEFS" --kit-home "$HOME_K" resolve pg >/dev/null 2>&1; RC=$?
+check "control: without -I a planted argparse on PYTHONPATH runs in the engine" "97 yes" "$RC $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+rm -f "$WORK/plant.mark"
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    pyexasol_venv_python() { command -v python3; }
+    exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+    manifest_get() { return 1; }
+    export PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark"
+    exakit_vs_engine resolve pg ) 2>&1 )"; RC=$?
+check "exakit_vs_engine: the planted module is ignored, the engine still imports its own and answers" \
+    '0 RESULT {"connector": "postgresql"} no' "$RC $OUT $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    pyexasol_venv_python() { command -v python3; }
+    export PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark"
+    printf 'k\n' | _exakit_vs_secret_text ) 2>&1 )"
+check "...and the shell's credential reader is isolated too" "k no" "$OUT $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+check "every engine run goes through exakit_vs_engine: cli.py is named once, run by _exakit_vs_python (-I)" "1 1 1" \
+    "$(grep -c 'engine/cli\.py"' "$ROOT/setup/lib/virtual-schemas.sh") $(grep -c '_exakit_vs_python "$_eve_py" "$_eve_defs/engine/cli.py"' "$ROOT/setup/lib/virtual-schemas.sh") $(grep -c 'exec "$_evy_bin" -I "$@"' "$ROOT/setup/lib/virtual-schemas.sh")"
+
+# Review 3: -I does not cover PYTHONEXECUTABLE. A macOS framework build takes
+# its program path from it, so sys.prefix - and the site-packages whose .pth
+# files run at startup - become a planted venv's. The control first; a Python
+# that ignores the variable (Linux, a non-framework build) cannot show it.
+PYV="$(python3 -c 'import sys; print("python%d.%d" % sys.version_info[:2])')"
+PEX="$WORK/pyexe"; mkdir -p "$PEX/bin" "$PEX/lib/$PYV/site-packages"
+printf 'home = %s\n' "$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.executable)))')" > "$PEX/pyvenv.cfg"
+printf 'import os; open(os.environ["EXAKIT_PLANT_MARK"], "w").write("pth")\n' > "$PEX/lib/$PYV/site-packages/plant.pth"
+rm -f "$WORK/plant.mark"
+PYTHONEXECUTABLE="$PEX/bin/python" EXAKIT_PLANT_MARK="$WORK/plant.mark" python3 -I -c 'pass' 2>/dev/null
+if [ -f "$WORK/plant.mark" ]; then
+    pass "review 3 control: this python3 runs a planted .pth under -I through PYTHONEXECUTABLE"
+    rm -f "$WORK/plant.mark"
+    OUT="$( ( EXAKIT_HOME="$HOME_K"
+        . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+        pyexasol_venv_python() { command -v python3; }
+        exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+        manifest_get() { return 1; }
+        export PYTHONEXECUTABLE="$PEX/bin/python" __PYVENV_LAUNCHER__="$PEX/bin/python" EXAKIT_PLANT_MARK="$WORK/plant.mark"
+        exakit_vs_engine resolve pg; printf 'k' | _exakit_vs_secret_text; printf ' %s' "$PYTHONEXECUTABLE" ) 2>&1 )"; RC=$?
+    check "review 3: the engine and the credential reader run without it: no .pth ran, both answered, the caller keeps it" \
+        "0 RESULT {\"connector\": \"postgresql\"} k $PEX/bin/python no" "$RC $(printf '%s' "$OUT" | tr '\n' ' ' | sed 's/  */ /g') $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+else
+    pass "review 3: this python3 ignores PYTHONEXECUTABLE under -I (not a macOS framework build): nothing to show here"
+fi
+
+# Review 4: the credential reader runs on the kit's pyexasol only. Without it,
+# that is what the command says - never "standard input was empty".
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+    pyexasol_venv_python() { printf '%s\n' "$WORK/no-such-venv/bin/python"; }
+    exakit_vs_engine() { echo "ENGINE RAN" >&2; return 0; }
+    printf 'pw' | cmd_connect pg --name nopy --password-stdin --json ) 2>/dev/null )"; RC=$?
+check "review 4: no kit Python to read the credential: exit 2, one object, kind setup, the repair named" \
+    "2 ['setup', \"the credential is read with the kit's pyexasol, which did not run\", 'exakit update pyexasol']" \
+    "$RC $(JOUT="$OUT" one '[d["kind"], d["error"], d["command"]]')"
+_reader_range='/^_exakit_vs_secret_text()/,/^}/p'
+check "...and the reader never falls back to another Python (no run_python_any)" "0" \
+    "$(sed -n "$_reader_range" "$ROOT/setup/lib/virtual-schemas.sh" | grep -c run_python_any)"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

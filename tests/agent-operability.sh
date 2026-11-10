@@ -19,6 +19,21 @@ has() { case "$3" in *"$2"*) check "$1" present present ;; *) check "$1" present
 lacks() { case "$3" in *"$2"*) check "$1" absent PRESENT ;; *) check "$1" absent absent ;; esac; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# HERMETIC. The --help loop, the allowlist merge and the discovery checks ran
+# setup/exakit and sourced common.sh with no EXAKIT_HOME of their own, so they
+# fell back to the developer's real ~/.exasol-starter-kit and left credentials/
+# and logs/ there. Every call below now defaults into $WORK; a call that names
+# its own EXAKIT_HOME still wins.
+_REAL_KIT_SNAPSHOT="$(ls -A "$HOME/.exasol-starter-kit" 2>/dev/null || echo absent)"
+_REAL_KIT_DIR="$HOME/.exasol-starter-kit"
+export HOME="$WORK/home" EXAKIT_HOME="$WORK/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$WORK/home/bin"
+mkdir -p "$HOME"
+unset XDG_CONFIG_HOME
+# Offline as well. `exakit version` and `exakit update` ask upstream for
+# versions.json, so those calls fetched it from raw.githubusercontent.com (one
+# with PATH reset to the system directories, past any stubbed curl). A non-https
+# URL is refused without a request, as in tests/versions-manifest.sh.
+export EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
 
 # The command surface now lives in setup/help/*.json (one document per
 # component plus one for the CLI), not in a TSV. This prints every command
@@ -721,6 +736,68 @@ has "with the target table" "EXAKIT_DATA_TABLE" \
     "$(sed -n '/^function Import-ExakitLocalFile/,/^}/p' "$ROOT/setup/lib/exapump.ps1")"
 has "the catalog documents EXAKIT_DATA_FILE" "EXAKIT_DATA_FILE" "$(cat "$ROOT/setup/help/exakit.json")"
 has "and EXAKIT_DATA_TABLE" "EXAKIT_DATA_TABLE" "$(cat "$ROOT/setup/help/exakit.json")"
+
+echo "connect's public IP lookup has a documented off switch and a fixed JSON key:"
+# exakit connect asks checkip.amazonaws.com for this computer's public IP when a
+# source is on the internet. An agent on a locked-down network must be able to
+# find the switch that stops it, and read the answer by one key.
+has "the engine reads EXAKIT_NO_IP_LOOKUP" "EXAKIT_NO_IP_LOOKUP" \
+    "$(cat "$ROOT/setup/virtual-schemas/engine/publicip.py")"
+check "the catalog documents it (global list and connect's own)" "2" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum("EXAKIT_NO_IP_LOOKUP" in json.dumps(x) for x in [d["environment"], [c for c in d["commands"] if c["command"] == "connect"][0]]))' "$ROOT/setup/help/exakit.json")"
+has "connect's help names the --json key" "public_ip" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
+has "plan and connect --json always carry it" 'payload.setdefault("public_ip"' \
+    "$(cat "$ROOT/setup/virtual-schemas/engine/cli.py")"
+echo "exakit connect --json is one object on stdout, through the real entry point:"
+# Scripts and agents parse what `exakit connect ... --json` prints. It used to
+# be the rendered plan and event lines (a real connect never asked the engine
+# for JSON at all) - so json.load failed on every path, success included. A
+# hermetic kit: a manifest, the engine run by this python3 as the kit's
+# pyexasol, and the suite's simulated database; nothing is downloaded (a dry
+# run, and refusals that stop before anything is staged).
+_vk="$WORK/vskit"; mkdir -p "$_vk/home" "$_vk/venv/bin" "$_vk/deploy/local/runtime/exa/jdbc"
+printf '{"runtime": {"type": "personal", "deployment_dir": "%s", "dsn": "127.0.0.1:8563", "user": "sys", "password_file": "/nonexistent"}}\n' \
+    "$_vk/deploy" > "$_vk/home/manifest.json"
+printf '#!/bin/sh\nexec python3 "$@"\n' > "$_vk/venv/bin/python"; chmod +x "$_vk/venv/bin/python"
+printf '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}\n' > "$_vk/db.json"
+_vsconnect() { # stdout only; stdin closed
+    env EXAKIT_HOME="$_vk/home" EXAKIT_PYEXASOL_VENV="${_VK_VENV:-$_vk/venv}" PATH="$_HERMETIC_PATH" \
+        EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$_vk/db.json" \
+        FAKE_VS_EXA="$_vk/deploy/local/runtime/exa" EXAKIT_NO_IP_LOOKUP=1 EXAKIT_VS_SETTLE_SECONDS=0 \
+        bash "$ROOT/setup/exakit" connect "$@" < /dev/null 2>/dev/null
+}
+# _vsone <python over d> - the expression when stdout was exactly one JSON object.
+_vsone() { python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("NOT-ONE-OBJECT"); sys.exit()
+print(eval(sys.argv[1], {"d": d}) if isinstance(d, dict) else "NOT-ONE-OBJECT")' "$1"; }
+_vsshape='" ".join(str(x) for x in [d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d, "public_ip" in d])'
+_pg="--set host=pg.example.com --set database=sales --set user=reader"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentdry $_pg --dry-run --json)"; _rc=$?
+check "connect --dry-run --json: exit 0, one object (the plan, public_ip present)" "0 True agentdry True" \
+    "$_rc $(printf '%s' "$_o" | _vsone '" ".join(str(x) for x in [d["ok"], d["name"], "public_ip" in d])')"
+_o="$(_vsconnect nosuchdb --name x --json)"; _rc=$?
+check "an unknown connector: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+check "...and its command is runnable as written" "exakit source catalog" "$(printf '%s' "$_o" | _vsone 'd["command"]')"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentpw $_pg --json)"; _rc=$?
+check "no credential on stdin: exit 2, one failure object, nothing asked" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentbad $_pg --set port=70000 --json)"; _rc=$?
+check "a bad input: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+_o="$(_vsconnect pg --name x --no-such-option --json)"; _rc=$?
+check "an unknown option: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+# shellcheck disable=SC2086
+_o="$(_VK_VENV="$WORK/no-such-venv" _vsconnect pg --name x $_pg --json)"; _rc=$?
+check "no pyexasol to run the engine: exit 2, one failure object" "2 False setup True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+has "connect's help says --json is one object, and its failure keys" '"ok": false, "error"' \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
+has "AGENTS.md documents the connect --json failure shape" '`connect --json` and `source ... --json`' "$(cat "$ROOT/AGENTS.md")"
+
 # The runbook must stop steering agents away from data-load: that sentence
 # described the prompt-only behaviour this contract replaces.
 lacks "AGENTS.md no longer routes agents around data-load" \
@@ -800,6 +877,49 @@ echo "the small promises hold too:"
 # date off line 2, and install.sh's own fail() wrote only line 1.
 has "install.sh dates its failure note" "date '+%Y-%m-%d %H:%M:%S'" "$(cat "$ROOT/install.sh")"
 has "and install.ps1 writes one at all" ".last-failure" "$(cat "$ROOT/install.ps1")"
+# install.sh's own say() and fail() coloured every line, terminal or not:
+# a redirected install log read "[1;34m•[0m Using local kit checkout".
+# They follow ui_detect now - a terminal, no NO_COLOR, no EXAKIT_NO_FANCY=1.
+# A dry run of a local kit that is only install.sh: nothing is fetched, the
+# kit lands in a scratch folder, and the plan falls back to plain text.
+_ik="$WORK/install-kit"; mkdir -p "$_ik" "$WORK/install-tmp"
+cp "$ROOT/install.sh" "$_ik/"
+_inst() { env EXAKIT_HOME="$WORK/install-home" TMPDIR="$WORK/install-tmp" EXAKIT_LOCAL_KIT="$_ik" EXAKIT_DRY_RUN=1 TERM=xterm "$@" sh "$ROOT/install.sh" 2>&1; }
+_esc="$(printf '\033')"
+_out="$(_inst)"
+has "install.sh says its steps when piped" "Using local kit checkout" "$_out"
+lacks "...with no escape sequence in a redirected log" "$_esc" "$_out"
+_out="$(env EXAKIT_HOME="$WORK/install-home" EXAKIT_LOCAL_KIT="$WORK/not-a-kit" TERM=xterm sh "$ROOT/install.sh" 2>&1)"
+has "install.sh's fail() says why when piped" "does not look like a kit checkout" "$_out"
+lacks "...with no escape sequence either" "$_esc" "$_out"
+# Under a terminal (script(1): BSD on macOS, util-linux elsewhere) colour
+# stays, and each opt-out turns it off.
+_pty() {
+    if [ "$(uname -s)" = Darwin ]; then
+        script -q /dev/null "$@" < /dev/null
+    else
+        script -qec "$(printf '%q ' "$@")" /dev/null < /dev/null
+    fi
+}
+if [ -n "$(_pty sh -c '[ -t 1 ] && echo tty' 2>/dev/null)" ]; then
+    _tty() { _pty env EXAKIT_HOME="$WORK/install-home" TMPDIR="$WORK/install-tmp" EXAKIT_LOCAL_KIT="$_ik" EXAKIT_DRY_RUN=1 TERM=xterm "$@" sh "$ROOT/install.sh" 2>&1; }
+    has "on a terminal install.sh still colours its steps" "${_esc}[1;34m" "$(_tty)"
+    lacks "...not with NO_COLOR set" "${_esc}[1;34m" "$(_tty NO_COLOR=1)"
+    lacks "...not with EXAKIT_NO_FANCY=1" "${_esc}[1;34m" "$(_tty EXAKIT_NO_FANCY=1)"
+    lacks "...not on TERM=dumb" "${_esc}[1;34m" "$(_tty TERM=dumb)"
+else
+    check "no pseudo-terminal here: the terminal cases are skipped" "skip" "skip"
+fi
+# install.ps1: Write-Host writes no colour into a redirected stream, but
+# Windows PowerShell 5.1 coloured the console past NO_COLOR and
+# EXAKIT_NO_FANCY=1. Every coloured line goes through one helper that asks both.
+has "install.ps1 asks NO_COLOR and EXAKIT_NO_FANCY before colouring" \
+    '$InstallColour = (-not $env:NO_COLOR) -and ($env:EXAKIT_NO_FANCY -ne "1")' "$(cat "$ROOT/install.ps1")"
+check "...and colours nowhere else" "1" "$(grep -c -- '-ForegroundColor' "$ROOT/install.ps1")"
+# PowerShell hoists the trap, not functions: the helper the trap prints
+# through is defined before the first statement that can fail.
+check "...defined before \$ErrorActionPreference and the trap" "yes" \
+    "$(awk '/^function Write-InstallLine/ && !f {f=NR} /^\$ErrorActionPreference = "Stop"/ && !e {e=NR} /^trap \{/ && !t {t=NR} END {print (f && e && t && f < e && e < t) ? "yes" : "no"}' "$ROOT/install.ps1")"
 # The skill's closing step names this directory; nothing created it.
 has "the workflows directory is created with the home" "EXAKIT_WORKFLOWS_DIR" \
     "$(sed -n '/^manifest_init()/,/^}/p' "$ROOT/setup/lib/common.sh")"
@@ -1406,7 +1526,7 @@ check "gate(linux, podman) passes" \
 # would have to go and buy.
 # The documented promise has to match the gate: a WSL reader is now given the
 # Linux road and the one prerequisite that differs, not an exit.
-has "the README sends WSL down the Linux road" "WSL** is supported" "$(cat "$ROOT/README.md")"
+has "the README sends WSL down the Linux road" "**WSL**: run the same command inside a WSL2 distro" "$(cat "$ROOT/README.md")"
 has "...naming the podman that counts" "Podman has to be installed there as well" "$(cat "$ROOT/quickstarts/windows.md")"
 has "the Linux quickstart claims the WSL path" "also the WSL path" "$(cat "$ROOT/quickstarts/linux.md")"
 has "the Windows quickstart hands WSL over" "supported too" "$(cat "$ROOT/quickstarts/windows.md")"
@@ -1434,8 +1554,16 @@ check "gate(wsl, no podman but installable) carries on" \
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 has "the deployment installs podman before anything else" "personal_install_podman" "$_p2dep"
+# Since 2.4 the step's first act is to settle the ENGINE - none off an engine
+# platform (macOS), an existing deployment keeps its own, a fresh one is chosen
+# for - and the Podman install follows on the Podman branch, still before the
+# launcher is asked for anything.
 _p2first="$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | head -1)"
-has "...as its first act" "personal_install_podman" "$_p2first"
+has "...right after the engine is settled" "personal_engine_platform" "$_p2first"
+_p2pod="$(printf '%s\n' "$_p2dep" | grep -n 'personal_install_podman || return 1' | cut -d: -f1 | head -1)"
+_p2launch="$(printf '%s\n' "$_p2dep" | grep -n '"$(personal_cli)" install local' | cut -d: -f1 | head -1)"
+check "...and before the launcher is asked for anything" yes \
+    "$([ -n "$_p2pod" ] && [ -n "$_p2launch" ] && [ "$_p2pod" -lt "$_p2launch" ] && echo yes || echo no)"
 _p2ins="$(sed -n '/^personal_install_podman()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 # NO QUESTION. The database runs through Podman and the user asked for the
 # database; a y/n whose only sensible answer is yes bought nothing and cost a
@@ -1682,7 +1810,15 @@ lacks "...while Start-Personal stays a nudge" "Wait-PersonalReadyOrDeploy" \
 # ONE FLAG, because it stopped meaning "no podman" the moment a declined reuse
 # and a failed deploy started using it.
 lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
-check "...set by each cause that leaves no database" "9" \
+# Thirteen since 2.4: the nine of old, plus an engine named by
+# EXAKIT_CONTAINER_ENGINE that the machine cannot provide, a Docker deployment
+# whose daemon is down, Podman on a WSL kernel without nftables, and a replace
+# refused by that WSL check before anything is deleted. Fifteen with an
+# existing deployment whose engine nothing can name, and an existing Docker
+# deployment whose daemon is down, stopped before its start and replace.
+# Sixteen with a replace refused because this run's start already failed on
+# the WSL kernel's nftables error (nothing is deleted).
+check "...set by each cause that leaves no database" "16" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \
@@ -1928,10 +2064,18 @@ echo "WSL 1 is refused at the front, as detect_wsl_version says it is:"
 # unprompted - with the real failure arriving minutes later as a raw cgroups
 # error naming neither Podman nor the kernel.
 _wsl_pf() { # _wsl_pf <version> -> the preflight lines that mention WSL 1 or Podman
+    # detect_docker stubbed: a Docker on the machine running this test (the CI
+    # runner has Engine 29+) answered for the distro under test, and the
+    # preflight named Docker where this expects Podman.
+    # curl stubbed, as tests/personal-wsl-gate.sh does for the same function:
+    # the reachability lines otherwise probe github.com,
+    # objects.githubusercontent.com and pypi.org on every call.
     ROOT="$ROOT" V="$1" bash -c '
         . "$ROOT/setup/lib/detect.sh" >/dev/null 2>&1
         detect_os() { echo wsl; }
         detect_wsl_version() { printf "%s\n" "$V"; }
+        detect_docker() { echo none; }
+        curl() { return 0; }
         preflight_report 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 }
 has "WSL 1 is refused, and told how to convert" 'wsl --set-version' "$(_wsl_pf 1)"
@@ -2655,6 +2799,10 @@ has "...and a terminal that cannot hide input is refused" "stty -echo < /dev/tty
 PROFILE_FN="$(sed -n '/^exapump_create_profile() {/,/^}/p' "$ROOT/setup/lib/exapump.sh")"
 has "the database-password prompt uses it" "exakit_read_hidden" "$PROFILE_FN"
 lacks "...and keeps no prompt-then-stty of its own" "stty -echo" "$PROFILE_FN"
+
+echo "the suite stayed out of the real home:"
+check "the real kit home was not touched" "untouched" \
+    "$([ "$(ls -A "$_REAL_KIT_DIR" 2>/dev/null || echo absent)" = "$_REAL_KIT_SNAPSHOT" ] && echo untouched || echo CHANGED)"
 
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

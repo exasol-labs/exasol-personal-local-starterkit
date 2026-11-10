@@ -247,6 +247,16 @@ function Invoke-CmdStatus {
         switch ($type) { "personal" { Get-PersonalStatus } default { "not installed" } }
     }
     $running = "$status".StartsWith("running")
+    # WHICH ENGINE, AND WHETHER IT IS UP. A Docker deployment whose Docker was
+    # down read as plain "stopped" with "exakit start" as its remedy, and that
+    # start then named repair-runtime. Docker is probed only for a stopped
+    # Docker deployment. Twin of _cs_engine / _cs_engine_down in cmd_status.
+    $runtimeEngine = Get-ExakitRuntimeEngine
+    $engineDown = ""
+    if ($runtimeEngine -eq "docker" -and "$status" -eq "stopped" -and -not (Test-PersonalDockerUsable)) {
+        $engineDown = "$($script:PersonalDockerSaid)"
+        if (-not $engineDown) { $engineDown = "Docker is not usable" }
+    }
     $steps = @(Get-ExakitManifestValue "steps_completed")
     # An install in progress is its own state: Begin-ExakitStep records the step
     # and the setup script clears it when done. Twin of the same read in cmd_status.
@@ -260,6 +270,29 @@ function Invoke-CmdStatus {
     # Steps the installer recorded as not finished (a failed data load, a skipped
     # client wiring), each with the command that finishes it.
     $softRecords = Get-ExakitManifestValue "install.soft_failures"
+    # The runtime step's record speaks while its step is missing, like every
+    # record, AND - while the database is not running - when its step is
+    # complete but the record is a start the WSL kernel refused: the
+    # installer's resume arm books a failed start there, and a later step's
+    # note replaces the start's, so status said `exakit start` for a round.
+    # A successful start retires it (Clear-ExakitStartSoftFailure). Any other
+    # record of a completed runtime step is left out here. Twin of rt_record
+    # in cmd_status.
+    $rtRecord = $null
+    if ($softRecords -and $softRecords.PSObject.Properties["runtime"]) {
+        $rtRecord = $softRecords.runtime
+        if (($steps -contains "runtime") -and ($running -or -not (Test-ExakitWslStartRecord -Name "runtime" -Record $rtRecord))) {
+            $rtRecord = $null
+            $keptRecords = New-Object PSObject
+            foreach ($property in @($softRecords.PSObject.Properties)) {
+                if ($property.Name -ne "runtime") {
+                    $keptRecords | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                }
+            }
+            $softRecords = $null
+            if (@($keptRecords.PSObject.Properties).Count -gt 0) { $softRecords = $keptRecords }
+        }
+    }
     $datasets = @(Invoke-ExakitWithSpinner -Quiet:$Json -Label "Checking which datasets are loaded" -Body {
         ,@(Get-ExakitLoadedDatasets)
     })
@@ -333,17 +366,119 @@ function Invoke-CmdStatus {
                 $remedyHints["uv"] = "no uv is installed; the MCP server and the managed Python run through it"
             }
         }
+        # A replace refused because the WSL release could not be read: the
+        # remedy is `wsl --version`, and this is what comes after it. Used by
+        # the database arm and the runtime step's record. Twin of
+        # WSL_UNREAD_HINT in cmd_status.
+        $wslUnreadHint = "If it shows 2.7 or newer, re-run with EXAKIT_WSL_CHECKED=1; otherwise run wsl --update first. The re-run is exakit repair-runtime, which DESTROYS the database and its data - ask the user, then pass --yes"
         if (-not $running) {
             # With NO runtime deployed, "exakit start" has nothing to start and
             # fails identically every time - only the installer creates one.
+            # REFUSED FOR THE WSL KERNEL (Stop-PersonalStartNetworkBlocked, or
+            # the replace check's "older than 2.7" note): the fix is the WSL
+            # update. Checked in the interrupted arm too: repair-runtime there
+            # is refused by the same check after the user consented to deleting
+            # the data. Twin of wsl_refused in cmd_status.
+            #
+            # THE NOTE OR THE RUNTIME STEP'S RECORD ($rtRecord, above): a
+            # later step's note can replace the start's, and the record is
+            # then the only place the refusal survives.
+            $startNote = "" + $failureNote.reason
+            $rtReason = ""
+            if ($rtRecord) { $rtReason = "" + $rtRecord.reason }
+            $wslRefused = ($startNote.Contains("cannot create the deployment network") -and $startNote.Contains("wsl --update")) -or
+                ($rtReason.Contains("cannot create the deployment network") -and $rtReason.Contains("wsl --update"))
+            # The release could not be read: wsl --update may not be needed,
+            # and only EXAKIT_WSL_CHECKED=1 lets the replace through, so the
+            # remedy is the command that reads the release - as repair-runtime
+            # --json answers it.
+            $wslUnread = (-not $wslRefused) -and ($startNote.Contains("WSL release could not be read") -or $rtReason.Contains("WSL release could not be read"))
             if ("$status".StartsWith("interrupted")) {
                 $remedies["database"] = "exakit repair-runtime"
                 $remedyHints["database"] = "this DESTROYS the database and its data - ask the user, then pass --yes"
+                if ($wslRefused) {
+                    $remedies["database"] = "wsl --update"
+                    $remedyHints["database"] = "this WSL kernel cannot create the deployment network, so neither a start nor a rebuild can work. Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and re-run: exakit start"
+                } elseif ($wslUnread) {
+                    # Same remedy as repair-runtime --json's refused object:
+                    # only the user's own read of the release clears this one.
+                    $remedies["database"] = "wsl --version"
+                    $remedyHints["database"] = $wslUnreadHint
+                }
             } elseif ("$status".StartsWith("not installed")) {
                 $remedies["database"] = $installCmd
                 $remedyHints["database"] = "no database is deployed; the installer resumes at the unfinished step"
+            } elseif ($engineDown) {
+                # Docker is down under a Docker deployment: `exakit start`
+                # cannot start it, and no command the kit can name does
+                # (Docker Desktop is an app), so no remedy - the hint says what
+                # to do. Twin of the engine_down arm in cmd_status.
+                $remedyHints["database"] = "the deployment runs on Docker, and ${engineDown}: start Docker Desktop, then run: exakit start"
             } else {
                 $remedies["database"] = "exakit start"
+                # `exakit start` WAS REFUSED FOR THE WSL KERNEL
+                # (Stop-PersonalStartNetworkBlocked, recorded as the failure
+                # note): handing it back as the remedy is a loop. The fix is
+                # the WSL update. Twin of the same arm in cmd_status.
+                if ($wslRefused) {
+                    $remedies["database"] = "wsl --update"
+                    $remedyHints["database"] = "exakit start was refused: this WSL kernel cannot create the deployment network. Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and re-run: exakit start"
+                } elseif ($wslUnread) {
+                    $remedies["database"] = "wsl --version"
+                    $remedyHints["database"] = $wslUnreadHint
+                }
+            }
+        }
+        # A step the installer REFUSED, with a reason, is not "never finished":
+        # re-running the installer meets the same refusal. The reason goes in
+        # the hint for EVERY refusal (an unusable EXAKIT_CONTAINER_ENGINE=docker,
+        # a launcher that cannot be told which engine), not only a WSL one - the
+        # bare installer remedy with the "resumes at the unfinished step" hint
+        # sent an agent straight back into it. A reason whose fix is a WSL update
+        # names that command. Only for an install step still missing, so a
+        # record a later run outlived never speaks. Twin of the soft-record arm
+        # in cmd_status.
+        $softStepIds = @("launcher", "runtime", "exapump", "mcp", "pyexasol", "exakit_helper")
+        $softNote = ""
+        $softAt = ""
+        if ($softRecords -and -not $installing) {
+            foreach ($property in @($softRecords.PSObject.Properties)) {
+                if (-not ($softStepIds -contains $property.Name)) { continue }
+                # A completed step's record stays silent - except the runtime
+                # record $rtRecord kept above (a start the WSL kernel refused).
+                if (($steps -contains $property.Name) -and -not ($property.Name -eq "runtime" -and $rtRecord)) { continue }
+                $softReason = "$($property.Value.reason)"
+                $softRepair = "$($property.Value.repair)"
+                if (-not $softRepair) { $softRepair = $installCmd }
+                if (-not $softNote) {
+                    # The installer's own label for the step ("the local
+                    # database"), as the summary says it; the id only for a
+                    # record an older kit wrote without one.
+                    $softLabel = "$($property.Value.label)"
+                    if (-not $softLabel) { $softLabel = $property.Name }
+                    $softNote = "$softLabel did not finish"
+                    if ($softReason) { $softNote = "$softNote - $($softReason.TrimEnd('.'))" }
+                    $softNote = "$softNote. Retry with: $softRepair"
+                    $softAt = "$($property.Value.at)"
+                }
+                if ($softReason -match 'wsl --update') {
+                    $remedies[$property.Name] = "wsl --update"
+                    $remedyHints[$property.Name] = "$($softReason.TrimEnd('.')). Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and re-run: $softRepair"
+                } elseif ($softReason.Contains("WSL release could not be read")) {
+                    # The replace refused on an unreadable release: re-running
+                    # meets the same refusal (repair-runtime --json, same remedy).
+                    $remedies[$property.Name] = "wsl --version"
+                    $remedyHints[$property.Name] = "$($softReason.TrimEnd('.')). $wslUnreadHint"
+                } elseif ($softReason) {
+                    $remedies[$property.Name] = $softRepair
+                    $remedyHints[$property.Name] = "this step was refused: $($softReason.TrimEnd('.')). Fix that, then run the remedy (it resumes at this step)"
+                }
+                if ($remedies.Contains($property.Name)) {
+                    if ($property.Name -eq "runtime" -and "$status".StartsWith("not installed")) {
+                        $remedies["database"] = $remedies[$property.Name]
+                        $remedyHints["database"] = $remedyHints[$property.Name]
+                    }
+                }
             }
         }
         if ($clockSkewed) {
@@ -394,9 +529,10 @@ function Invoke-CmdStatus {
             }
         }
         $topRemedy = $null
-        if ($remedies.Contains("install")) { $topRemedy = $remedies["install"] }
-        elseif ($remedies.Contains("database")) { $topRemedy = $remedies["database"] }
-        elseif ($stepsMissing.Count -gt 0) { $topRemedy = $remedies[$stepsMissing[0]] }
+        $topHint = $null
+        if ($remedies.Contains("install")) { $topRemedy = $remedies["install"]; $topHint = $remedyHints["install"] }
+        elseif ($remedies.Contains("database") -or $engineDown) { $topRemedy = $remedies["database"]; $topHint = $remedyHints["database"] }
+        elseif ($stepsMissing.Count -gt 0) { $topRemedy = $remedies[$stepsMissing[0]]; $topHint = $remedyHints[$stepsMissing[0]] }
         elseif ($softRecords) {
             foreach ($property in @($softRecords.PSObject.Properties)) {
                 if (-not $topRemedy -and $property.Value.repair) { $topRemedy = "$($property.Value.repair)" }
@@ -408,8 +544,17 @@ function Invoke-CmdStatus {
             installing      = $installing
             install_step    = $(if ($installing -or $installStopped) { $installStep } else { $null })
             remedy          = $topRemedy
+            remedy_hint     = $topHint
             kit_level       = "$(Get-ExakitManifestValue 'kit_level')"
-            runtime         = [ordered]@{ type = $type; status = $status }
+            # engine: the container engine the deployment runs on, null with no
+            # runtime; engine_running is false only for a stopped Docker
+            # deployment whose Docker is down. Twin of cmd_status.
+            runtime         = [ordered]@{
+                type           = $type
+                status         = $status
+                engine         = $(if ($runtimeEngine) { $runtimeEngine } else { $null })
+                engine_running = $(if ($engineDown) { $false } else { $null })
+            }
             running         = $running
             # Seconds the database's clock is from this computer's (negative:
             # behind); null when the database could not be asked.
@@ -442,8 +587,11 @@ function Invoke-CmdStatus {
             # current one, and an undated note that outlived its cause is exactly
             # how a healthy machine comes to look broken - which is why the note
             # carries the timestamp on its second line.
-            last_failure    = $(if ($failureNote.reason) { $failureNote.reason } else { $null })
-            last_failure_at = $(if ($failureNote.at) { $failureNote.at } else { $null })
+            # The note first; with none, the refused step's own record, dated by
+            # its `at` so a months-old refusal never reads as current. Twin of
+            # cmd_status.
+            last_failure    = $(if ($failureNote.reason) { $failureNote.reason } elseif ($softNote) { $softNote } else { $null })
+            last_failure_at = $(if ($failureNote.reason) { $(if ($failureNote.at) { $failureNote.at } else { $null }) } elseif ($softAt) { $softAt } else { $null })
             manifest        = $script:ManifestPath
         }
         # An older kit's container database, as the crossing recorded it. Only
@@ -733,6 +881,9 @@ function Invoke-CmdStatus {
             Write-Host "Free the port: another process is listening on the database port - stop it, then: exakit start"
         } elseif ("$status".StartsWith("not installed")) {
             Write-Host "Deploy it:  $(Get-ExakitInstallCommand)   (it resumes at the unfinished step)"
+        } elseif ($engineDown) {
+            # `exakit start` cannot start Docker. Twin of the 'Start Docker:' row.
+            Write-Host "Start Docker: the deployment runs on Docker, and $engineDown - start Docker Desktop, then: exakit start"
         } else {
             Write-Host "Start it:   exakit start"
         }
@@ -846,12 +997,16 @@ function Test-ExakitAutostartRegistered {
     return $false
 }
 
+# Both write autostart.user_set: they run only on the user's own answer to
+# `exakit autostart`, and that marker is what keeps the installer's default
+# (Enable-ExakitAutostartDefault) from overriding it.
 function Enable-ExakitAutostart {
     $any = $false
     foreach ($id in (Get-ExakitServiceIds)) {
         if (Register-ExakitAutostart -Id $id) { $any = $true }
     }
     Set-ExakitManifestValue "autostart.enabled" $any
+    Set-ExakitManifestValue "autostart.user_set" $true
     # One line, whatever the service count - the twin of the sentence
     # Disable-ExakitAutostart has always printed, and of the one in
     # exakit_autostart_enable.
@@ -861,6 +1016,7 @@ function Enable-ExakitAutostart {
 function Disable-ExakitAutostart {
     foreach ($id in (Get-ExakitServiceIds)) { Unregister-ExakitAutostart -Id $id }
     Set-ExakitManifestValue "autostart.enabled" $false
+    Set-ExakitManifestValue "autostart.user_set" $true
     Ok "Automatic start after a restart is off."
 }
 
@@ -977,8 +1133,15 @@ function Start-ExakitDatabase {
         Confirm-ExakitRuntimeRunning -Deploy
     }
     # The database is up, so a note left by an earlier start that could not is
-    # no longer true. Only a runtime note goes; an install-step note stays.
-    try { if ((Get-ExakitRuntimeStatus) -like "running*") { Clear-ExakitRuntimeFailureNote } } catch { }
+    # no longer true. Only a runtime note goes; an install-step note stays. So
+    # does a start failure an installer re-run booked against the completed
+    # runtime step (Clear-ExakitStartSoftFailure).
+    try {
+        if ((Get-ExakitRuntimeStatus) -like "running*") {
+            Clear-ExakitRuntimeFailureNote
+            Clear-ExakitStartSoftFailure
+        }
+    } catch { }
 }
 
 function Invoke-CmdStart {
@@ -1179,6 +1342,33 @@ function Invoke-CmdRepairRuntime {
             [ordered]@{ ok = $true; status = "repaired"; changed = $true; remedy = $null } |
                 ConvertTo-Json -Compress | Write-Output
             exit 0
+        }
+        # REFUSED BY THE WSL CHECK BEFORE THE DESTROY: nothing was deleted, so
+        # "changed": true told an agent the database was gone, and the
+        # installer remedy meets the same refusal. The check's reason is the
+        # runtime step's soft-failure record (Remove-ExakitStepDone above
+        # cleared any older one). Twin of the same arm in cmd_repair_runtime.
+        $repairWhy = "" + (Get-ExakitManifestValue "install.soft_failures.runtime.reason")
+        #
+        # THE REMEDY BY CAUSE, under remedy_hint like every other object: a
+        # release READ below 2.7 is cleared by the WSL update; a release that
+        # could not be read is not - only the user's own 'wsl --version' and
+        # EXAKIT_WSL_CHECKED=1 clear it, and "wsl --update" there looped an
+        # agent on a WSL already at 2.7. Same remedies as status --json.
+        if ($repairWhy.Contains("WSL release could not be read") -or ($repairWhy.Contains("older than 2.7") -and $repairWhy.Contains("wsl --update"))) {
+            $repairRemedy = "wsl --update"
+            $repairHint = "Nothing was deleted. Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and run: exakit start (if the database still does not come up, re-run: exakit repair-runtime)"
+            if ($repairWhy.Contains("could not be read")) {
+                $repairRemedy = "wsl --version"
+                $repairHint = "If it shows 2.7 or newer, re-run with EXAKIT_WSL_CHECKED=1; otherwise run wsl --update first."
+            }
+            [ordered]@{
+                ok = $false; status = "refused"; changed = $false
+                reason = $repairWhy
+                remedy = $repairRemedy
+                remedy_hint = $repairHint
+            } | ConvertTo-Json -Compress | Write-Output
+            exit 3
         }
         [ordered]@{
             ok = $false; status = "failed"; changed = $true
@@ -2204,6 +2394,13 @@ function Invoke-CmdVersion {
             remedy          = $remedy
             pending         = $pending
             kit             = [ordered]@{ version = "$(Get-ExakitComponentCurrent 'exakit')"; installed_at = "$(Get-ExakitManifestValue 'installed_at')" }
+            # Which runtime, and which container engine its deployment runs on:
+            # the same runtime.engine status --json reports. Twin of the runtime
+            # object in exakit_print_version_table.
+            runtime         = [ordered]@{
+                type   = $(if (Get-RuntimeType) { "$(Get-RuntimeType)" } else { $null })
+                engine = $(if (Get-ExakitRuntimeEngine) { "$(Get-ExakitRuntimeEngine)" } else { $null })
+            }
             versions_source = "$(Get-ExakitVersionsSource)"
             components      = $components
         } | ConvertTo-Json -Depth 5
@@ -2558,9 +2755,13 @@ function Start-ExakitRuntime {
         # database instead of the record and runs the launcher's own deploy
         # when nothing answers. The wait lives here rather than inside
         # Start-Personal, which other callers run as a best-effort nudge.
+        # A deploy that met the WSL kernel ends with the WSL fix named, as a
+        # start that met it does (Stop-PersonalStartNetworkBlocked).
         "personal" {
             Start-Personal
-            [void](Wait-PersonalReadyOrDeploy)
+            if (-not (Wait-PersonalReadyOrDeploy) -and $script:PersonalStartNetworkBlocked) {
+                Stop-PersonalStartNetworkBlocked
+            }
         }
     }
 }
@@ -2712,6 +2913,39 @@ function Invoke-ExakitRuntimeUpdateOffer {
 # EXAKIT_CONFIRM_RUNTIME_UPDATE answer without asking, and an unattended run with
 # neither defers it with the exact command that applies it later.
 # Twin of exakit_update in setup/lib/common.sh.
+# Get-ExakitRuntimeEngine - the container engine the deployment runs on
+# ("docker" or "podman"), or "" with no Personal runtime recorded. Windows is
+# always an engine platform. Twin of exakit_runtime_engine in common.sh.
+function Get-ExakitRuntimeEngine {
+    if ((Get-RuntimeType) -ne "personal") { return "" }
+    if (-not (Get-Command Get-PersonalEngineRecorded -ErrorAction SilentlyContinue)) { return "" }
+    return "" + (Get-PersonalEngineRecorded)
+}
+
+# Add-ExakitUpdateNote (one row of the --json result) lives in
+# lib/exakit-common.ps1: core-setup.ps1 reports through it too.
+
+# Get-ExakitUpdateFailureRemedy <component> <reason> - @{ Remedy; Hint } for a
+# failed update: "exakit update <component>" unless the reason names a fix that
+# re-running cannot reach. A WSL kernel does not change by itself: the update
+# does not check WSL, but it restarts a database that was running once the
+# launcher is swapped, and on WSL older than 2.7 that start fails at the 2.4
+# deployment network (Stop-PersonalStartNetworkBlocked). The launcher WAS
+# updated then, so re-running the update answers "current" and never starts
+# the database: the next step is the WSL fix, then a start. Twin of
+# _exakit_update_failure_remedy.
+function Get-ExakitUpdateFailureRemedy {
+    param([string]$Component = "", [string]$Reason = "")
+    $remedy = "exakit update"
+    if ($Component) { $remedy = "exakit update $Component" }
+    $hint = ""
+    if ("$Reason" -match 'wsl --update') {
+        $remedy = "wsl --update"
+        $hint = "The launcher was updated, but the database could not start: this WSL kernel cannot create the deployment network. Run wsl --update, then wsl --shutdown, then exakit start."
+    }
+    return [pscustomobject]@{ Remedy = $remedy; Hint = $hint }
+}
+
 # Write-ExakitUpdateJsonReport - the one object `exakit update --json` prints:
 # what was updated, deferred, left current, skipped or failed, and the one
 # command that resolves what is left. Twin of _exakit_update_json_report.
@@ -2719,11 +2953,22 @@ function Write-ExakitUpdateJsonReport {
     param([bool]$RunFailed = $false, [string]$RunError = "")
     $updated = @(); $deferred = @(); $blocked = @(); $current = @()
     $skipped = @(); $ahead = @(); $failed = @()
+    $runRow = $null
     foreach ($row in @($script:ExakitUpdateResults)) {
+        # A row with no component is a run-level failure: a handed-over run's
+        # own reason for ending outside every component row (see
+        # Invoke-CmdUpdate). It stands in for the anonymous run entry below,
+        # and like that entry only when no component row failed.
+        if (-not $row.component) {
+            if ($row.outcome -eq "failed" -and $null -eq $runRow) { $runRow = $row }
+            continue
+        }
         $entry = [ordered]@{ component = $row.component }
         $entry.from = $(if ($row.from) { $row.from } else { $null })
         $entry.to = $(if ($row.to) { $row.to } else { $null })
         if ($row.remedy) { $entry.remedy = $row.remedy }
+        if ($row.error) { $entry.error = $row.error }
+        if ($row.hint) { $entry.remedy_hint = $row.hint }
         switch ($row.outcome) {
             "updated"  { $updated += [pscustomobject]$entry }
             "deferred" { $deferred += [pscustomobject]$entry }
@@ -2734,19 +2979,33 @@ function Write-ExakitUpdateJsonReport {
             "failed"   { $failed += [pscustomobject]$entry }
         }
     }
-    if ($RunFailed -and $failed.Count -eq 0) {
+    if ($failed.Count -eq 0 -and $null -ne $runRow) {
+        $runEntry = [ordered]@{ component = $null; from = $null; to = $null
+            remedy = $(if ($runRow.remedy) { $runRow.remedy } else { "exakit update" })
+            error = $(if ($runRow.error) { $runRow.error } else { "the update did not finish (see exakit logs)" }) }
+        if ($runRow.hint) { $runEntry.remedy_hint = $runRow.hint }
+        $failed += [pscustomobject]$runEntry
+    } elseif ($RunFailed -and $failed.Count -eq 0) {
         $msg = $(if ($RunError) { $RunError } else { "the update did not finish (see exakit logs)" })
-        $failed += [pscustomobject]@{ component = $null; from = $null; to = $null; remedy = "exakit update"; error = $msg }
+        $runFix = Get-ExakitUpdateFailureRemedy -Component "" -Reason $RunError
+        $runEntry = [ordered]@{ component = $null; from = $null; to = $null; remedy = $runFix.Remedy; error = $msg }
+        if ($runFix.Hint) { $runEntry.remedy_hint = $runFix.Hint }
+        $failed += [pscustomobject]$runEntry
     }
     $hint = $null
     if ($failed.Count -gt 0) {
         $status = "failed"; $remedy = $(if ($failed[0].remedy) { $failed[0].remedy } else { "exakit update" })
+        if ($failed[0].PSObject.Properties["remedy_hint"]) { $hint = $failed[0].remedy_hint }
     } elseif ($deferred.Count -gt 0) {
         $status = "deferred"; $remedy = $(if ($deferred[0].remedy) { $deferred[0].remedy } else { "exakit update --yes" })
-        # The hint explains the database-change deferral only: new kit setup
-        # that waits for a STOPPED database is deferred too, and its remedy
-        # says so. Twin of the same condition in _exakit_update_json_report.
-        if ($deferred[0].component -ne "core-setup") {
+        # New kit setup that waits for a STOPPED database is deferred too, and
+        # its remedy says so: no hint. Twin of the same condition in
+        # _exakit_update_json_report.
+        if ($deferred[0].component -eq "core-setup") {
+            $hint = $null
+        } elseif ($remedy -eq "exakit update") {
+            $hint = "the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit"
+        } else {
             $hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
         }
     } elseif ($blocked.Count -gt 0) {
@@ -2779,6 +3038,16 @@ function Invoke-CmdUpdate {
     if (-not (Test-ExakitUpdateTarget $Target)) {
         Deny-ExakitInput "Unknown update target '$Target' (see: exakit version)"
     }
+    # A RUN HANDED OVER BY A --json RUN IS A --json RUN. Its rows go to the
+    # parent's results file (Add-ExakitUpdateNote), and only in JSON mode is a
+    # failed updater a failed row with its reason while the rest are still
+    # tried; without it the first Fail ended the run and the parent reported
+    # an anonymous exit code. Kits that hand over without --json still set the
+    # results file, so the file is the signal. Twin of the inherited
+    # EXAKIT_UPDATE_JSON=1 in the shell's handover.
+    if (-not $Json -and $env:EXAKIT_UPDATE_HANDOVER -eq "1" -and $env:EXAKIT_UPDATE_RESULTS_FILE) {
+        $Json = $true
+    }
     if (-not $Json) {
         Invoke-ExakitUpdateRun -Target $Target -AssumeYes $AssumeYes
         return
@@ -2809,6 +3078,20 @@ function Invoke-CmdUpdate {
     } catch {
         $runFailed = $true
         $runError = "" + $_.Exception.Message
+        # A HANDED-OVER RUN'S REASON GOES BACK TO THE RUN THAT STARTED IT. Its
+        # own object is discarded with its screen, so a failure outside every
+        # component row (a Fail in the run body, a throw from the new-setup
+        # check) is written to the parent's results file as a run-level row:
+        # no component, the reason, and the remedy and hint THAT reason calls
+        # for. The parent used to answer only "the updated kit's update run did
+        # not finish". No component is also what keeps older parents safe:
+        # every reader before this one skips a row without one. Bash needs no
+        # row: its parent reads the failure note the new run's die() left
+        # (_exakit_update_note_end).
+        if ($runError -and $env:EXAKIT_UPDATE_HANDOVER -eq "1" -and $env:EXAKIT_UPDATE_RESULTS_FILE) {
+            $runFix = Get-ExakitUpdateFailureRemedy -Component "" -Reason $runError
+            Add-ExakitUpdateNote -Component "" -Outcome "failed" -Remedy $runFix.Remedy -ErrorText $runError -Hint $runFix.Hint
+        }
     }
     Write-ExakitUpdateJsonReport -RunFailed $runFailed -RunError $runError
 }
@@ -2836,13 +3119,27 @@ function Invoke-ExakitUpdateRun {
     Write-ExakitVersionsSourceLine
     $deferred = 0
     $acted = 0
-    foreach ($component in (Get-ExakitUpdateTargets -Target $Target)) {
+    $script:ExakitKitSwapped = $false
+    $targets = @(Get-ExakitUpdateTargets -Target $Target)
+    foreach ($component in $targets) {
         # A run handed over by the previous kit's updater: that run already
         # updated the kit, and listing it again would report it twice.
         if ($component -eq "exakit" -and $env:EXAKIT_UPDATE_HANDOVER -eq "1") { continue }
         $actual = Get-ExakitActualTarget $component
         $current = Get-ExakitComponentCurrent $actual
         $available = Get-ExakitComponentAvailable $actual
+        # THE KIT WAS REPLACED UNDER THIS PROCESS (in place, or staged for the
+        # moment it exits), so nothing after it runs here: every function
+        # below was dot-sourced from the OLD kit, and carrying on ran the old
+        # Update-Personal against the new launcher - a kit release's own update
+        # checks skipped on the very update they were written for. The rest is
+        # deferred to the next `exakit update`, which the new kit runs. This
+        # only protects the hops AFTER the kit that carries it. Twin of the
+        # same arm in _exakit_update_run.
+        if ($script:ExakitKitSwapped) {
+            Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update"
+            continue
+        }
         # No build for this machine: a routine update stays quiet about it (there is
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
@@ -2884,8 +3181,22 @@ function Invoke-ExakitUpdateRun {
                 # [-1]: the verdict is the LAST thing the offer returns. The
                 # updaters it calls can put objects on the pipeline of their own,
                 # and an array is truthy no matter what it holds.
-                $applied = @(Invoke-ExakitRuntimeUpdateOffer -Component $component -Actual $actual `
-                    -Installed $current -Advertised $available -AssumeYes $AssumeYes)[-1]
+                # Under --json a Fail inside the offer (a launcher swap that
+                # failed, or the restart after it meeting the WSL kernel, under
+                # -Yes) is THIS component's failed row with its reason and
+                # remedy, not an anonymous end of run. Twin of the offer
+                # subshell in _exakit_update_run.
+                try {
+                    $applied = @(Invoke-ExakitRuntimeUpdateOffer -Component $component -Actual $actual `
+                        -Installed $current -Advertised $available -AssumeYes $AssumeYes)[-1]
+                } catch {
+                    if (-not $script:ExakitUpdateJson) { throw }
+                    $offerError = "" + $_.Exception.Message
+                    $offerFix = Get-ExakitUpdateFailureRemedy -Component $component -Reason $offerError
+                    Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available `
+                        -Remedy $offerFix.Remedy -ErrorText $offerError -Hint $offerFix.Hint
+                    continue
+                }
                 if ($applied -eq $true) {
                     $acted += 1
                     Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
@@ -2982,7 +3293,14 @@ function Invoke-ExakitUpdateRun {
         } catch {
             if (-not $script:ExakitUpdateJson) { throw }
             $componentFailed = $true
-            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available -Remedy "exakit update $component"
+            # The reason the updater gave, and the remedy THAT reason calls for
+            # (Get-ExakitUpdateFailureRemedy). The row used to carry no error at
+            # all, where the shell twin's row carries the die() reason.
+            $componentError = "" + $_.Exception.Message
+            if (-not $componentError) { $componentError = "the update did not finish (see exakit logs)" }
+            $componentFix = Get-ExakitUpdateFailureRemedy -Component $component -Reason $componentError
+            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available `
+                -Remedy $componentFix.Remedy -ErrorText $componentError -Hint $componentFix.Hint
         }
         if (-not $componentFailed) {
             Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
@@ -3005,16 +3323,28 @@ function Invoke-ExakitUpdateRun {
                     }
                     return
                 }
-                Warn2 "The updated exakit command was not found - finishing this update with the previous one"
+                Warn2 "The updated exakit command was not found - the rest of this update waits for the next 'exakit update'"
             }
+        }
+        # No handover (the new command is missing, or the swap is staged for
+        # the moment this process exits): nothing after the kit runs on the old
+        # code (see the $script:ExakitKitSwapped skip at the top of this loop).
+        # Said once, and only when something is left.
+        if ($component -eq "exakit" -and $script:ExakitKitSwapped -and $targets[-1] -ne $component) {
+            Info "The starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit."
         }
     }
     # CHECK 2: does this kit ask for setup this machine has not completed?
     # Only the installer holds that setup, so a pending task reruns it once.
+    # Not after a kit swap that was not handed over (in place with no new
+    # command, or staged for the moment this process exits): this process
+    # holds the OLD task list and would rerun the OLD installer from a kit
+    # directory the after-exit finisher is about to rename. The next
+    # `exakit update`, which the new kit runs, makes this check itself.
     # Twin of the same check in _exakit_update_run.
     $script:ExakitCoreUpdateActed = $false
     $coreOk = $true
-    if (Get-Command Invoke-ExakitCoreUpdateCheck -ErrorAction SilentlyContinue) {
+    if (-not $script:ExakitKitSwapped -and (Get-Command Invoke-ExakitCoreUpdateCheck -ErrorAction SilentlyContinue)) {
         $coreOk = @(Invoke-ExakitCoreUpdateCheck -Target $Target)[-1]
     }
     if ($acted -eq 0 -and $deferred -eq 0 -and -not $script:ExakitCoreUpdateActed) {
@@ -3077,6 +3407,13 @@ function Get-ExakitLogTargets {
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($setup) {
         $targets += [pscustomobject]@{ Id = "setup"; Label = "Installer and setup runs"; Kind = "file"; Source = $setup.FullName }
+    }
+    # `exakit connect` and `exakit source`: the engine's day log, every SQL
+    # statement it sent and every event, secrets redacted (engine/vslog.py).
+    $vsLog = Get-ChildItem -Path $script:LogDir -Filter "virtual-schemas-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($vsLog) {
+        $targets += [pscustomobject]@{ Id = "virtual-schemas"; Label = "connect and source runs"; Kind = "file"; Source = $vsLog.FullName }
     }
     foreach ($addonId in (Get-ExakitMarketplaceInstalledAddons)) {
         $addon = Get-ExakitMarketplaceAddon $addonId
@@ -3432,46 +3769,73 @@ function Invoke-CmdInfoJson {
 }
 
 # Invoke-CmdConnect - `exakit connect [source] [--name N] [--url STRING]
-# [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]`. Twin of cmd_connect.
+# [--set KEY=VALUE]... [--password-file F | --password-stdin] [--dry-run] [--yes] [--json]`.
+# Twin of cmd_connect.
+# --json: stdout carries one JSON object and nothing else - the engine's plan
+# (--dry-run), its connect result, or a failure of the engine's one shape,
+# whoever refused. It never prompts; the credential comes from --password-file
+# or --password-stdin (all of standard input; a console or nothing on it is
+# refused, Read-ExakitVsStdinSecret). The engine's events go to the log, the
+# bridge's own lines to stderr.
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
+    $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
+    # Known before anything is refused, so every refusal answers in its shape.
+    $script:ExakitVsJson = ((@($Arguments) -contains "--json") -or (@($Arguments) -contains "-j"))
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
         $arg = $Arguments[$i]
         if ($arg -eq "--name") { $i++; $name = "" + $Arguments[$i] }
         elseif ($arg -like "--name=*") { $name = $arg.Substring(7) }
         elseif ($arg -eq "--url" -or $arg -like "--url=*") {
             if ($arg -eq "--url") { $i++; $url = "" + $Arguments[$i] } else { $url = $arg.Substring(6) }
-            if (-not $url) { Deny-ExakitInput "--url takes a connection string (exakit help connect)" }
+            if (-not $url) { Deny-ExakitVsInput "--url takes a connection string (exakit help connect)" "--url was given without a connection string" "give the source's connection string after --url, e.g. --url 'postgres://reader@db.example.com/sales'" }
         }
         elseif ($arg -eq "--set") {
             $i++; $pair = "" + $Arguments[$i]
-            if ($pair -notlike "*=*") { Deny-ExakitInput "--set takes KEY=VALUE (exakit help connect)" }
+            if ($pair -notlike "*=*") { Deny-ExakitVsInput "--set takes KEY=VALUE (exakit help connect)" "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" }
             $sets += @("--set", $pair); $given += $pair.Split("=")[0]
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
+        elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
         elseif ($arg -in @("--dry-run", "-n")) { $dry = $true }
         elseif ($arg -in @("--yes", "-y")) { $script:ExakitVsAssumeYes = $true }
         elseif ($arg -in @("--json", "-j")) { $json = $true }
-        elseif ($arg -like "--password*" -or $arg -like "--secret*" -or $arg -like "--token*") {
-            Deny-ExakitInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt or --password-file."
-        }
-        elseif ($arg -like "-*") { Deny-ExakitInput "Unknown option '$arg' for connect (exakit help connect)." }
-        elseif ($source) { Deny-ExakitInput "connect takes one source; got '$source' and '$arg'." }
+        # After the exact --password-file and --password-stdin: anything else
+        # like a credential option is one given as an argument, and only an
+        # option's name is ever repeated, never what follows an =.
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
+        elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for connect (exakit help connect)." "unknown option '$opt' for connect" "leave it out; the options are listed by: exakit help connect" }
+        # The extra word is not repeated: it may be a credential typed in the wrong place.
+        elseif ($source) { Deny-ExakitVsInput "connect takes one source; got more than one word for it." "connect takes one source; got more than one word for it" "connect one source per command" }
         else { $source = $arg }
     }
+    if ($pwStdin -and $pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    $script:ExakitVsLogMark = Get-ExakitVsLogMark
+    # Read before anything runs or asks: nothing else can take it off stdin,
+    # and a console or nothing on it is refused before any work is done.
+    $stdinSecret = ""
+    if ($pwStdin) { $stdinSecret = Read-ExakitVsStdinSecret }
     # A pasted connection string fills what it names, for every path below. It
     # goes to the engine on stdin (base64, as a secret does), never as an
     # argument; its pairs go BEFORE the command line's --set, so those win.
     if ($url) {
-        if (-not $source) { Deny-ExakitInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
-        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
-        $url = $null
-        $answer = Show-ExakitVsLines -Lines $pasted.Lines
-        if ($pasted.Code -ne 0) { exit $pasted.Code }
+        if (-not $source) { Deny-ExakitVsInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" "--url needs the source it is for" "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
+        if ($json) {
+            # Its notes go to the log; a refusal is the answer, as it stands.
+            $pasted = Invoke-ExakitVsEngine -Arguments @("--json", "paste", $source, "--base64") -Secret $url
+            $url = $null
+            if ($pasted.Code -ne 0) { foreach ($line in $pasted.Lines) { Write-Output $line }; Exit-ExakitVs $pasted.Code }
+            $answer = (@($pasted.Lines) -join "`n") | ConvertFrom-Json
+        } else {
+            $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
+            $url = $null
+            $answer = Show-ExakitVsLines -Lines $pasted.Lines
+            if ($pasted.Code -ne 0) { Exit-ExakitVs $pasted.Code }
+        }
         $urlSets = @()
         if ($answer -and $answer.values) {
             foreach ($p in @($answer.values.PSObject.Properties)) { $urlSets += @("--set", "$($p.Name)=$($p.Value)"); $given += $p.Name }
@@ -3481,57 +3845,90 @@ function Invoke-CmdConnect {
     # A person at a console gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {
-        exit (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
+        Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
     }
-    $interactive = Test-ExakitInteractive
+    # --json never asks: a console is as good as none.
+    $interactive = (-not $json) -and (Test-ExakitInteractive)
+    # Someone answering at a console: each question says (required) or
+    # (optional), and a connection string can stand for the fields. --yes,
+    # --dry-run and --json ask exactly as they always did.
+    $ask = ($interactive -and -not $dry -and -not $json -and -not $script:ExakitVsAssumeYes)
     if (-not $source) {
-        if (-not $interactive) { Deny-ExakitInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." }
+        if (-not $interactive) { Deny-ExakitVsInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" "exakit source catalog" }
         $source = Read-ExakitPrompt "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" ""
     }
-    $resolved = Invoke-ExakitVsEngine -Arguments @("resolve", $source)
-    if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
-    $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
-    if (-not $name) {
-        if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
-        $name = Read-ExakitPrompt "Name for this connection (lower case, e.g. sales)" ""
+    # With --json the plan below resolves the source (an unknown or gated one
+    # is its refusal), so every answer is a plan or connect object.
+    $connector = $source
+    if (-not $json) {
+        $resolved = Invoke-ExakitVsEngine -Arguments @("resolve", $source)
+        if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
+        $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
     }
-    $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
+    if ($ask -and $given.Count -eq 0) {
+        $pasted = Read-ExakitVsLinePaste -Connector $connector
+        $sets = @($pasted.Sets) + $sets; $given += @($pasted.Names)
+    }
+    # With --json a missing name is the plan's refusal, after the gate, as
+    # resolve orders them here without it.
+    if (-not $name -and -not $json) {
+        if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
+        $name = Read-ExakitVsLineAnswer -Question "Name for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name for this connection"
+    }
     if ($interactive) {
+        $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
         foreach ($spec in @($definition.inputs)) {
             if ($spec.kind -in @("secret", "secret-file") -or $given -contains $spec.name) { continue }
             $label = "" + $spec.label
+            $short = $label
+            foreach ($cut in @(" - ", " (", "; ")) { $short = $short.Split(@($cut), [StringSplitOptions]::None)[0] }
             if ($spec.choices) { $label = "$label ($((@($spec.choices)) -join '/'))" }
             $default = ""
             if ($null -ne $spec.default) { $default = "" + $spec.default }
-            $value = Read-ExakitPrompt $label $default
+            $value = Read-ExakitVsLineAnswer -Question $label -Default $default -Required ([bool]$spec.required) -Marks $ask -Label $short
             if ($value) { $sets += @("--set", "$($spec.name)=$value") }
         }
     }
     $base = @($connector, "--name", $name) + $sets
-    $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
-    $plan = Show-ExakitVsLines -Lines $planned.Lines
-    if ($planned.Code -ne 0) { exit $planned.Code }
-    Show-ExakitVsPlan $plan
-    if ($dry) {
-        if ($json) { Write-Output ($plan | ConvertTo-Json -Depth 6) }
-        exit 0
+    if ($json) {
+        # The plan checks every input before the credential is read; a refusal,
+        # or with --dry-run the plan itself, is the answer. --name=VALUE: an
+        # empty name stays one argument (5.1 drops an empty one).
+        $base = @($connector, "--name=$name") + $sets
+        $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base)
+        if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; Exit-ExakitVs $planned.Code }
+        $connector = "" + ((@($planned.Lines) -join "`n") | ConvertFrom-Json).connector
+        $base = @($connector, "--name=$name") + $sets
+    } else {
+        $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
+        $plan = Show-ExakitVsLines -Lines $planned.Lines
+        if ($planned.Code -ne 0) { Exit-ExakitVs $planned.Code }
+        Show-ExakitVsPlan $plan
+        if ($dry) { exit 0 }
     }
     if ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
+    $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
     $secret = ""
     if ($secretSpec) {
-        $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind)
-        if (-not $secret) { Deny-ExakitInput "No $("$($secretSpec.label)".ToLower()) was given (pipe it on standard input or use --password-file)." }
+        $what = ("" + $secretSpec.label).ToLower()
+        if ($pwStdin) { $secret = $stdinSecret }
+        else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }
+        if (-not $secret) { Deny-ExakitVsInput "No $what was given (use --password-file or --password-stdin)." "no $what was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
     } else {
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
     }
-    $secret = $null
+    $secret = $null; $stdinSecret = $null
+    if ($json) {
+        foreach ($line in $script:ExakitVsLastLines) { Write-Output $line }
+        Exit-ExakitVs $code
+    }
     if ($code -eq 0) {
         Show-ExakitVsQueryHints -Result $script:ExakitVsResult -Name $name
         Info "Manage it with: exakit source show $name | check | reauth | refresh | disconnect | remove"
     }
-    exit $code
+    Exit-ExakitVs $code
 }
 
 # Invoke-CmdSource - `exakit source <action> [name] [options]`. Twin of cmd_source.
@@ -3539,10 +3936,15 @@ function Invoke-CmdSource {
     param([string[]]$Arguments = @())
     $action = "list"
     $rest = @($Arguments)
-    if ($rest.Count -gt 0) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
+    # An option where the action goes (`exakit source --json`) means the
+    # default action, list, with that option.
+    if ($rest.Count -gt 0 -and -not ("" + $rest[0]).StartsWith("-")) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
-    $table = ""; $ddl = $false; $into = ""
+    $table = ""; $ddl = $false; $into = ""; $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
+    # --json is known before anything is refused: the bridge's own refusals
+    # and failures then come in the engine's shape, and nothing is asked.
+    $script:ExakitVsJson = ((@($rest) -contains "--json") -or (@($rest) -contains "-j"))
     for ($i = 0; $i -lt $rest.Count; $i++) {
         $arg = $rest[$i]
         if ($arg -in @("--json", "-j")) { $json = $true }
@@ -3551,23 +3953,32 @@ function Invoke-CmdSource {
         elseif ($arg -in @("--all", "-a")) { $all = $true }
         elseif ($arg -eq "--status") { $i++; $status = "" + $rest[$i] }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $rest[$i] }
+        elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -eq "--ddl") { $ddl = $true }
         elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
         elseif ($arg -like "--schema=*") { $into = $arg.Substring(9) }
-        elseif ($arg -like "-*") { Deny-ExakitInput "Unknown option '$arg' for source $action (exakit help source)." }
+        elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for source $action (exakit help source)." "unknown option '$opt' for source $action" "leave it out; the options are listed by: exakit help source" }
         elseif (-not $name) { $name = $arg }
         elseif ($action -eq "describe" -and -not $table) { $table = $arg }
-        else { Deny-ExakitInput "source $action takes one name." }
+        else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got more than one" "name one source per command" }
+    }
+    if ($pwStdin) {
+        # Only reauth takes a credential: a pipe given to another action would
+        # be dropped unread. Twin of cmd_source.
+        if ($action -ne "reauth") { Deny-ExakitVsInput "--password-stdin is for exakit source reauth (and exakit connect)." "--password-stdin was given to source $action, which takes no credential" "leave --password-stdin out" }
+        if ($pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    $script:ExakitVsLogMark = Get-ExakitVsLogMark
     if ($action -notin @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")) {
-        Deny-ExakitInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)."
+        Deny-ExakitVsInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." "unknown source action '$action'" "use one of list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog (exakit help source)"
     }
     if ($action -in @("show", "describe", "reauth", "refresh", "disconnect", "remove") -and -not $name) {
-        Deny-ExakitInput "exakit source $action needs a source name (see: exakit source list)."
+        Deny-ExakitVsInput "exakit source $action needs a source name (see: exakit source list)." "exakit source $action needs a source name" "name the source; the sources are listed by: exakit source list" "exakit source list"
     }
-    if ($action -eq "check" -and -not $name -and -not $all) { Deny-ExakitInput "exakit source check needs a name or --all." }
+    if ($action -eq "check" -and -not $name -and -not $all) { Deny-ExakitVsInput "exakit source check needs a name or --all." "exakit source check needs a name or --all" "name the source, or give --all to check every one" "exakit source check --all" }
     $argv = @()
     if ($json) { $argv += "--json" }
     switch ($action) {
@@ -3584,7 +3995,17 @@ function Invoke-CmdSource {
         { $_ -in @("disconnect", "remove") } {
             $argv += @($action, $name)
             if ($dry) { $argv += "--dry-run" }
-            elseif (-not $json) {
+            elseif ($json) {
+                # --json never asks, and asking is how a person agrees: without
+                # --yes nothing is dropped (exit 5). Twin of cmd_source.
+                if (-not $script:ExakitVsAssumeYes) {
+                    if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "DECLINED" "source $action $($name): --json without --yes" }
+                    Write-Output (New-ExakitVsFailureJson -Kind "declined" -Problem "$action $name was not confirmed; nothing was changed" `
+                        -Remedy "preview it with --dry-run, then confirm it with --yes" -Command "exakit source $action $name --yes --json")
+                    exit 5
+                }
+            }
+            else {
                 $preview = Invoke-ExakitVsEngine -Arguments @($action, $name, "--dry-run")
                 $p = Show-ExakitVsLines -Lines $preview.Lines
                 if ($null -ne $p) {
@@ -3600,22 +4021,34 @@ function Invoke-CmdSource {
             $shown = Invoke-ExakitVsEngine -Arguments ($argv + @("show", $name))
             if ($shown.Code -ne 0) {
                 if ($json) { foreach ($line in $shown.Lines) { Write-Output $line } } else { [void](Show-ExakitVsLines -Lines $shown.Lines) }
-                exit $shown.Code
+                Exit-ExakitVs $shown.Code
             }
             $shownConnector = ""
-            foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownConnector = "" + ("$line".Substring(7) | ConvertFrom-Json).connector } }
-            $secret = Read-ExakitVsSecret -Label "New credential for $name" -PasswordFile $pwFile -Kind (Get-ExakitVsSecretKind -Connector $shownConnector)
-            if (-not $secret) { Deny-ExakitInput "No credential was given." }
+            if ($json) {
+                try { $shownConnector = "" + ((@($shown.Lines) -join "`n") | ConvertFrom-Json).connector } catch { }
+            } else {
+                foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownConnector = "" + ("$line".Substring(7) | ConvertFrom-Json).connector } }
+            }
+            if ($pwStdin) { $secret = Read-ExakitVsStdinSecret }
+            else { $secret = Read-ExakitVsSecret -Label "New credential for $name" -PasswordFile $pwFile -Kind (Get-ExakitVsSecretKind -Connector $shownConnector) }
+            if (-not $secret) { Deny-ExakitVsInput "No credential was given." "no credential was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
+            if ($json) {
+                # Twin of cmd_source: the engine's one object, as it answers.
+                $run = Invoke-ExakitVsEngine -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
+                $secret = $null
+                foreach ($line in $run.Lines) { Write-Output $line }
+                Exit-ExakitVs $run.Code
+            }
             $code = Invoke-ExakitVsRun -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
             $secret = $null
             if ($code -eq 0) { Ok "$name is ready again with the new credential" }
-            exit $code
+            Exit-ExakitVs $code
         }
     }
     if ($json) {
         $run = Invoke-ExakitVsEngine -Arguments $argv
         foreach ($line in $run.Lines) { Write-Output $line }
-        exit $run.Code
+        Exit-ExakitVs $run.Code
     }
     $code = Invoke-ExakitVsRun -Arguments $argv
     if ($action -eq "describe") {
@@ -3638,7 +4071,7 @@ function Invoke-CmdSource {
                 Write-Host ""
             }
         }
-        exit $code
+        Exit-ExakitVs $code
     }
     if ($code -eq 0 -and -not $dry) {
         if ($action -eq "disconnect") { Ok ("$name disconnected: VS_" + $name.ToUpper() + " stays, its queries fail until you connect it again with --name $name"); exit 0 }
@@ -3649,13 +4082,58 @@ function Invoke-CmdSource {
         $rows = $null
         if ($r.PSObject.Properties["sources"]) { $rows = @($r.sources) } elseif ($r.PSObject.Properties["issues"]) { $rows = @($r.issues) }
         if ($null -ne $rows) {
+            # One table inside the console (COLUMNS, else its width, else 80; the
+            # last column left unwritten). Too wide, SCHEMA goes first - it is
+            # always VS_<NAME> - then LAST CHECK (exakit source show has it), then
+            # HOST is cut, never below 10. An issue's fix goes on its own line.
+            # Twin of the rows block of the renderer in cmd_source (virtual-schemas.sh).
             if ($rows.Count -eq 0) { Write-Host "  (none)" }
+            $heads = @("NAME", "SOURCE", "SCHEMA", "HOST", "TLS", "STATUS", "LAST CHECK")
+            $cells = @()
             foreach ($s in $rows) {
-                $at = "never checked"
-                if ($s.last_check -and $s.last_check.at) { $at = $s.last_check.at }
-                $remedy = ""
-                if ($s.PSObject.Properties["remedy"]) { $remedy = " - " + $s.remedy }
-                Write-Host ("  {0,-16} {1,-11} {2,-14} {3,-14} {4}{5}" -f $s.name, $s.connector, $s.schema, $s.status, $at, $remedy)
+                $at = "never"
+                if ($s.last_check -and $s.last_check.at) {
+                    $v = $s.last_check.at
+                    # PowerShell 7's ConvertFrom-Json reads an ISO time as a DateTime; 5.1 keeps the string.
+                    if ($v -is [DateTime]) { $at = $v.ToUniversalTime().ToString("yyyy-MM-dd HH:mm", [Globalization.CultureInfo]::InvariantCulture) }
+                    else { $at = "" + $v; if ($at.Length -gt 16) { $at = $at.Substring(0, 16) }; $at = $at.Replace("T", " ") }
+                }
+                $hostCell = "-"; if ($s.PSObject.Properties["host"] -and $s.host) { $hostCell = "" + $s.host }
+                $tlsCell = "n/a"; if ($s.PSObject.Properties["tls"] -and $s.tls) { $tlsCell = "" + $s.tls }
+                $cells += , @(("" + $s.name), ("" + $s.connector), ("" + $s.schema), $hostCell, $tlsCell, ("" + $s.status), $at)
+            }
+            $width = @()
+            for ($i = 0; $i -lt $heads.Count; $i++) {
+                $w = $heads[$i].Length
+                foreach ($c in $cells) { if ($c[$i].Length -gt $w) { $w = $c[$i].Length } }
+                $width += $w
+            }
+            $cols = 0
+            if ("$env:COLUMNS" -match '^[0-9]+$') { $cols = [int]$env:COLUMNS }
+            if ($cols -lt 20) { try { $cols = [Console]::WindowWidth } catch { $cols = 0 } }
+            if ($cols -lt 20) { $cols = 80 }
+            $shown = New-Object System.Collections.ArrayList
+            foreach ($i in 0..6) { [void]$shown.Add($i) }
+            foreach ($i in @(2, 6)) {
+                $total = 2 * $shown.Count; foreach ($j in $shown) { $total += $width[$j] }
+                if ($total -gt ($cols - 1)) { $shown.Remove($i) }
+            }
+            $total = 2 * $shown.Count; foreach ($j in $shown) { $total += $width[$j] }
+            if ($total -gt ($cols - 1)) { $width[3] = [Math]::Max(10, $width[3] - ($total - ($cols - 1))) }
+            $line = {
+                param($c)
+                $out = @()
+                foreach ($j in $shown) {
+                    $v = $c[$j]
+                    if ($v.Length -gt $width[$j]) { $v = $v.Substring(0, $width[$j] - 3) + "..." }
+                    $out += $v.PadRight($width[$j])
+                }
+                ("  " + ($out -join "  ")).TrimEnd()
+            }
+            if ($rows.Count -gt 0) { Write-Host (& $line $heads) }
+            for ($k = 0; $k -lt $rows.Count; $k++) {
+                Write-Host (& $line $cells[$k])
+                if ($rows[$k].PSObject.Properties["remedy"] -and $rows[$k].remedy) { Write-Host ("    fix: " + $rows[$k].remedy) }
             }
         } elseif ($r.PSObject.Properties["connectors"]) {
             foreach ($c in @($r.connectors)) { Write-Host ("  {0,-12} {1,-18} {2,-5} {3,-10} aliases: {4}" -f $c.id, $c.name, $c.tier, $c.status, (@($c.aliases) -join ", ")) }
@@ -3680,7 +4158,7 @@ function Invoke-CmdSource {
             }
         }
     }
-    exit $code
+    Exit-ExakitVs $code
 }
 
 # Invoke-CmdSql <statement> [-Write] - run one SQL statement and translate the
@@ -3951,7 +4429,7 @@ try {
     switch ($Command) {
         "preflight"    {
             Assert-ExakitKnownOptions -CommandName "preflight" -Allowed @() -Arguments $RestArgs
-            Test-PersonalRequirements
+            Test-PersonalRequirements -Preflight
         }
         "status"       {
             $statusJson = ($RestArgs -contains "--json" -or $RestArgs -contains "-j")
