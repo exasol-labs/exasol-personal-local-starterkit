@@ -356,6 +356,13 @@ Write-Host "a failed fresh deploy says what went wrong:"
 # kernel, refuses the Podman deploy before the launcher runs, and there is no launcher output to show.
 # (tests/personal-wsl-gate-ps.ps1 covers the gate itself; the case below redefines it to record its call.)
 function Test-PersonalWslPodmanNetworkOk { param([string]$Rerun = "", [switch]$Replace, [switch]$Quiet, [switch]$StartMachine) return $true }
+# A PODMAN deploy, whatever the host has. Unpinned, Resolve-PersonalEngine asked the runner's real Docker: a
+# usable one (a Mac with Docker Desktop) took this case down the Docker path, and on windows-latest (Windows
+# containers, so Podman) no podman on PATH sent a failed install to "Podman is still not installed" - before the
+# launcher's lines and their cause are shown. Pinned to Podman here, with a podman on PATH (a stub function, which
+# Get-Command finds), so the case is the one it names on every runner. Both are removed after the case.
+$env:EXAKIT_CONTAINER_ENGINE = "podman"
+function podman { $script:calls.Add("podman: $($args -join ' ')") }
 Reset-Machine
 $script:m.PidsRootless = $true
 $script:m.InstallRc = 1
@@ -368,7 +375,10 @@ Check "no database, softly" $true $script:PersonalNoDatabase
 Check "...the launcher's last lines are shown" $true ($out -like "*last lines from the exasol launcher*Temporary failure in name resolution*")
 Check "...the cause is recognised in them" $true ((Get-ExakitFailureReason) -like "*could not deploy the database locally: Podman's machine cannot resolve registry-1.docker.io*")
 Check "...the deployment is recorded as never booted" $true (Test-PersonalFirstBootPending)
+Check "...on Podman" "podman" $script:PersonalEngine
 $script:LogFile = $null
+Remove-Item Env:EXAKIT_CONTAINER_ENGINE -ErrorAction SilentlyContinue
+Remove-Item Function:podman -ErrorAction SilentlyContinue
 
 Write-Host "a deployment that never booted is offered for replacement, default yes:"
 function Test-PersonalDeploymentExists { return $true }
