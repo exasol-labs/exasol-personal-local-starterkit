@@ -795,7 +795,7 @@ $cases = @(
     @("an unknown connector", 2, "input", @("nosuchdb", "--name", "x", "--json")),
     @("no credential", 2, "input", (@("pg", "--name", "jsonnopw") + $pgSet + @("--json"))),
     @("a bad input", 2, "input", @("pg", "--name", "jsonbad", "--set", "host=pg.example.com", "--set", "database=sales", "--set", "user=reader", "--set", "port=70000", "--json")),
-    @("a name already taken", 3, "conflict", (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))),
+    @("a name another connector holds", 3, "conflict", (@("mysql", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))),
     @("an unknown option", 2, "input", @("pg", "--name", "x", "--bogus", "--json")),
     @("no name", 2, "input", @("pg", "--json")),
     @("a credential as an argument", 2, "input", @("pg", "--name", "x", "--password=hunter2", "--json")))
@@ -806,11 +806,90 @@ foreach ($c in $cases) {
 }
 [void](Invoke-JsonConnect @("nosuchdb", "--name", "x", "--json"))
 Check "the unknown connector's command lists the connectors" "exakit source catalog" $jsonDoc.command
-[void](Invoke-JsonConnect (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json")))
+[void](Invoke-JsonConnect (@("mysql", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json")))
 Check "the taken name's fix names the source" $true ("$($jsonDoc.remedy)".Contains("exakit source remove jsonps"))
-Check "...and its error is what happened, without the fix" "a source named jsonps already exists (postgresql)" $jsonDoc.error
+Check "...and its error is what happened, without the fix" "a source named jsonps already exists (postgresql), so it cannot be connected as mysql" $jsonDoc.error
 [void](Invoke-JsonConnect @("pg", "--name", "x", "--password=hunter2", "--json"))
 Check "a credential given as an argument is not echoed" $false ($jsonText.Contains("hunter2"))
+
+Write-Host ""
+Write-Host "== exakit connect re-points a connected source in place (the twin of the bash cases) =="
+# The source moved: the same connect with the new address and the credential
+# again updates it. The credential is always given again (the database never
+# returns a stored one, and moving a CONNECTION clears it); VS_<NAME> keeps its
+# name; the new address and credential are tried before anything changes;
+# --json without --yes changes nothing (exit 5, declined); the same inputs and
+# no credential are 'unchanged', exit 0.
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db.sources | Add-Member -NotePropertyName "pgnew.example.com" -NotePropertyValue ([pscustomobject]@{ tables = @("ORDERS", "ITEMS"); secret = "Json-Pw-2" }) -Force
+$db.sources | Add-Member -NotePropertyName "pgauth.example.com" -NotePropertyValue ([pscustomobject]@{ tables = @("ORDERS"); secret = "Another-Pw" }) -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+function Get-RepointConn { param([string]$Key) $d = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json; return ("" + $d.connections.EXAKIT_SRC_JSONPS.$Key) }
+function Get-RepointHost { return (Get-Content -Raw -LiteralPath (Join-Path $home2 "sources/jsonps/config.json") | ConvertFrom-Json).inputs.host }
+$jsonPw2 = Join-Path $work "json2.pw"
+Set-Content -LiteralPath $jsonPw2 -Value "Json-Pw-2" -Encoding ASCII -NoNewline
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--json")
+Check "a re-point without --yes or a credential: one object, exit 5, kind declined, no command to run as is, nothing changed" "True 5 declined True pg.example.com" `
+    "$one $jsonCode $($jsonDoc.kind) $($null -eq $jsonDoc.command) $(Get-RepointHost)"
+Check "...its fix names the credential" $true ("$($jsonDoc.remedy)".Contains("--password-file <file> or --password-stdin"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--password-file", $jsonPw2, "--json")
+Check "...with --password-file, no --yes: declined, the --yes form names the file" "True 5 exakit connect postgresql --name jsonps --set host=pgnew.example.com --password-file $jsonPw2 --yes --json" `
+    "$one $jsonCode $($jsonDoc.command)"
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--dry-run", "--json")
+Check "...--dry-run --json: the plan, exit 0, the change and the credential required" "True 0 repoint host pg.example.com pgnew.example.com required" `
+    ("$one $jsonCode $($jsonDoc.action) " + (@($jsonDoc.changes) | ForEach-Object { "$($_.input) $($_.from) $($_.to)" }) + " $($jsonDoc.credential)")
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "user=read,er", "--dry-run", "--json")
+Check "...its command quoted for PowerShell (a comma would split the word there)" "exakit connect postgresql --name jsonps --set 'user=read,er'" $jsonDoc.command
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--yes", "--json")
+Check "...--yes without a credential: exit 2, kind input, nothing changed" "True 2 input pg.example.com" "$one $jsonCode $($jsonDoc.kind) $(Get-RepointHost)"
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--password-file", $jsonPw2, "--yes", "--json")
+Check "...--yes and the credential: exit 0, repointed, replaced" "True 0 repointed replaced" "$one $jsonCode $($jsonDoc.action) $($jsonDoc.credential)"
+Check "...the CONNECTION holds the new host and the credential given; the record follows" "True Json-Pw-2 pgnew.example.com" `
+    ("{0} {1} {2}" -f (Get-RepointConn "url").StartsWith("jdbc:postgresql://pgnew.example.com:5432/"), (Get-RepointConn "secret"), (Get-RepointHost))
+Check "...VS_JSONPS kept its name and reads the new source" "ITEMS ORDERS" ((@((Get-Content -Raw -LiteralPath $state | ConvertFrom-Json).virtual.VS_JSONPS.tables) | Sort-Object) -join " ")
+Check "...no credential in the answer" $false ($jsonText.Contains("Json-Pw-"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--json")
+Check "...the same again, no credential: exit 0, unchanged, ready" "True 0 unchanged ready" "$one $jsonCode $($jsonDoc.action) $($jsonDoc.status)"
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgauth.example.com", "--password-file", $jsonPw2, "--yes", "--json")
+Check "a new host that refuses the credential given: exit 1, kind auth, nothing changed" "True 1 auth True pgnew.example.com" `
+    ("$one $jsonCode $($jsonDoc.kind) " + "$($jsonDoc.remedy)".Contains("nothing was changed") + " $(Get-RepointHost)")
+Check "...the CONNECTION as it was" "True Json-Pw-2" `
+    ("{0} {1}" -f (Get-RepointConn "url").StartsWith("jdbc:postgresql://pgnew.example.com:5432/"), (Get-RepointConn "secret"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=localhost", "--password-file", $jsonPw2, "--yes", "--json")
+Check "a re-point to localhost: exit 2, kind input, the loopback advice" "True 2 input True" `
+    ("$one $jsonCode $($jsonDoc.kind) " + "$($jsonDoc.error)".Contains("would be the database itself"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "password=Hunter-2", "--json")
+Check "a credential given with --set: refused before the engine runs, exit 2, its value never repeated" "True 2 input True False" `
+    "$one $jsonCode $($jsonDoc.kind) $($jsonDoc.rejected) $($jsonText.Contains('Hunter-2'))"
+# Without --json and without a console: the plan says what changes, and only --yes agrees.
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "exakit connect (no --json, no console), a re-point without --yes: exit 5, nothing changed" "5 5432" `
+    "$childCode $((Get-Content -Raw -LiteralPath (Join-Path $home2 "sources/jsonps/config.json") | ConvertFrom-Json).inputs.port)"
+Check "...the plan says what changes and that the credential is required, never kept" "True True False" `
+    ("{0} {1} {2}" -f $text.Contains("port: 5432 -> 5433"), $text.Contains("Credential: required"), $text.Contains("Credential: kept"))
+Check "...and how to agree" $true $text.Contains("Nothing was changed. Confirm it with --yes.")
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 --yes 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+Check "...--yes without a credential: exit 2, nothing changed" "2 5432" `
+    "$childCode $((Get-Content -Raw -LiteralPath (Join-Path $home2 "sources/jsonps/config.json") | ConvertFrom-Json).inputs.port)"
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 --password-file $jsonPw2 --yes 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "...--yes and --password-file: exit 0, re-pointed, said" "0 True" ("$childCode " + $text.Contains("Re-pointed jsonps (port 5432 -> 5433) with the credential given; VS_JSONPS kept its name"))
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "...and again: nothing to change, exit 0, said" "0 True" ("$childCode " + $text.Contains("Nothing to change: jsonps already reads from"))
 # Java missing and no --yes: no question, the engine's nojava answer, exit 21.
 $db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
 $db | Add-Member -NotePropertyName java -NotePropertyValue $false -Force

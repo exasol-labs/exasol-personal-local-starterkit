@@ -94,6 +94,7 @@ function Invoke-ExakitVsEngine {
     $previousExecutable = $env:PYTHONEXECUTABLE
     $previousLauncher = $env:__PYVENV_LAUNCHER__
     $previousEngine = $env:EXAKIT_PERSONAL_ENGINE
+    $previousQuote = $env:EXAKIT_VS_QUOTE
     # This run's engine choice, where Get-PersonalSlcDnsEngine falls back to
     # it, so the engine (plan.py recorded_engine) falls back the same way.
     $runEngine = "" + (Get-Variable -Name PersonalEngine -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
@@ -101,6 +102,8 @@ function Invoke-ExakitVsEngine {
         $ErrorActionPreference = "Continue"
         Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__, Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
         if ($runEngine) { $env:EXAKIT_PERSONAL_ENGINE = $runEngine }
+        # A command the engine names is run from this shell: quoted for it.
+        $env:EXAKIT_VS_QUOTE = "powershell"
         if ($Secret) {
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Secret))
@@ -115,8 +118,9 @@ function Invoke-ExakitVsEngine {
         $OutputEncoding = $previousEncoding
         if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
         if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
-        Remove-Item Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
+        Remove-Item Env:\EXAKIT_PERSONAL_ENGINE, Env:\EXAKIT_VS_QUOTE -ErrorAction SilentlyContinue
         if ($null -ne $previousEngine) { $env:EXAKIT_PERSONAL_ENGINE = $previousEngine }
+        if ($null -ne $previousQuote) { $env:EXAKIT_VS_QUOTE = $previousQuote }
     }
     foreach ($line in @(Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
@@ -746,7 +750,24 @@ function Show-ExakitVsDropPlan {
 function Show-ExakitVsPlan {
     param($Plan)
     if ($null -eq $Plan) { return }
-    Write-Host ("  Plan for {0} ({1}, {2}, {3})" -f $Plan.name, $Plan.connector, $Plan.tier, $Plan.status)
+    $repoint = ($Plan.PSObject.Properties["action"] -and $Plan.action -eq "repoint")
+    $title = "Plan for"
+    if ($repoint) { $title = "Re-point" }
+    Write-Host ("  {0} {1} ({2}, {3}, {4})" -f $title, $Plan.name, $Plan.connector, $Plan.tier, $Plan.status)
+    if ($Plan.PSObject.Properties["changes"]) {
+        foreach ($c in @($Plan.changes)) {
+            if ($null -eq $c) { continue }
+            $from = "(none)"; $to = "(none)"
+            if ($null -ne $c.from) { $from = "" + $c.from }
+            if ($null -ne $c.to) { $to = "" + $c.to }
+            Write-Host ("    {0}: {1} -> {2}" -f $c.input, $from, $to)
+        }
+    }
+    if ($Plan.PSObject.Properties["action"] -and $Plan.action -eq "unchanged") { Write-Host ("  " + $Plan.note) }
+    if ($repoint) {
+        if (@($Plan.changes | Where-Object { $null -ne $_ }).Count -eq 0) { Write-Host "    Address: as it is - only the credential is replaced" }
+        Write-Host "    Credential: required - give it again (the database never returns a stored one); it is tried with the new address before anything changes"
+    }
     foreach ($d in @($Plan.downloads)) {
         $verb = "download"
         if ($d.cached) { $verb = "reuse" }
@@ -756,6 +777,29 @@ function Show-ExakitVsPlan {
     Write-Host "    Exposure: $($Plan.exposure)"
     foreach ($w in @($Plan.warnings)) { if ($w) { Write-Host "    Warning: $w" } }
     if ($Plan.gate) { Write-Host "    Not available yet: $($Plan.gate)" }
+}
+
+# Test-ExakitVsSourceLive - the name is a source the kit connected and has not
+# disconnected: `exakit connect` re-points it in place (or says there is
+# nothing to change), on the line-by-line path. Twin of _exakit_vs_source_live.
+function Test-ExakitVsSourceLive {
+    param([string]$Name)
+    if (-not $Name -or $Name -cnotmatch '^[a-z][a-z0-9_]{0,39}$') { return $false }
+    $folder = Join-Path (Join-Path $script:ExakitHome "sources") $Name
+    if (-not (Test-Path -LiteralPath (Join-Path $folder "config.json") -PathType Leaf)) { return $false }
+    $stateFile = Join-Path $folder "state.json"
+    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) { return $true }
+    $disconnected = @(Get-Content -LiteralPath $stateFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '^  "status": "disconnected"' })
+    return ($disconnected.Count -eq 0)
+}
+
+# Format-ExakitVsWord - the text as one PowerShell word: as it is when it needs
+# no quoting, else in single quotes with each ' doubled. For a command the
+# --json answer names. Twin of _exakit_vs_word, which quotes for a POSIX shell.
+function Format-ExakitVsWord {
+    param([string]$Text)
+    if ($Text -and $Text -cmatch '^[A-Za-z0-9_+=:./\\-]+$') { return $Text }
+    return ("'" + $Text.Replace("'", "''") + "'")
 }
 
 # --- the terminal flow: pick, fill in, review, connect ----------------------------

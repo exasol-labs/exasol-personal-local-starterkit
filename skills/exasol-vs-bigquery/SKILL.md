@@ -114,6 +114,9 @@ Types: `INT64` arrives as `DECIMAL(19,0)`, `FLOAT64` as `DOUBLE`; an `ARRAY` or
   `exakit source reauth bq --password-file ~/.config/exakit/<name>-key.json`;
   a refused one keeps the previous key. Then delete the old key:
   `gcloud iam service-accounts keys delete <key-id> --iam-account=exakit-reader@<project>.iam.gserviceaccount.com`.
+- Another project or dataset: not re-pointed in place - its key is a file staged for
+  the source. `exakit source remove bq --yes`, then connect again with the new values
+  and the key file (`VS_BQ` comes back under the same name).
 - Tables added at the source: `exakit source refresh bq`.
 - `disconnect` and `remove` delete the key file from BucketFS
   (`--dry-run` first, then ask) - see the shared skill.
