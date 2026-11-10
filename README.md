@@ -154,6 +154,7 @@ another file instead.
   - `exakit info` shows where the password is stored.
 - Python: pyexasol is preinstalled in its own environment.
 - Terminal: `exakit sql "SELECT 42"` runs one statement; for a SQL shell, `export EXAPUMP_CONFIG=~/.exasol-starter-kit/exapump/config.toml` then `exapump interactive -p starter-kit`.
+- Other databases and cloud storage: `exakit connect` queries them in place. See the [connector guides](docs/virtual-schemas/README.md).
 
 Run `exakit guide` for the full walkthrough.
 
