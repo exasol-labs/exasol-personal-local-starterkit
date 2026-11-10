@@ -77,6 +77,10 @@ exakit_vs_engine() {
             "virtual schemas run with the kit's pyexasol, which is not installed" \
             "repair it: exakit update pyexasol" "exakit update pyexasol"
         return 2; }
+    # This run's engine choice, passed on even when the shell set it itself:
+    # where personal_slc_dns_engine falls back to it, so does the engine
+    # (plan.py recorded_engine), and --json names the fix the bridge says.
+    EXAKIT_PERSONAL_ENGINE="${EXAKIT_PERSONAL_ENGINE:-}" \
     _exakit_vs_python "$_eve_py" "$_eve_defs/engine/cli.py" --defs "$_eve_defs" --kit-home "$EXAKIT_HOME" \
         --deployment-dir "$(manifest_get runtime.deployment_dir 2>/dev/null || true)" \
         --dsn "$(manifest_get runtime.dsn 2>/dev/null || true)" \
@@ -438,7 +442,15 @@ EOF
 _exakit_vs_repair() {
     case "$1" in
         20) info "Giving the database's language containers the deployment's DNS, then trying again"
-            personal_slc_dns_repair || { error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."; return 1; } ;;
+            personal_slc_dns_repair && return 0
+            # A restart cannot repair it on Docker (lifecycle.DNS_ON_DOCKER):
+            # the failure's own fix says so, and this line does not contradict it.
+            if [ "$(detect_os 2>/dev/null)" != macos ] && [ "$(personal_slc_dns_engine 2>/dev/null)" = docker ]; then
+                error "DNS could not be repaired on this Docker deployment; the failure's fix says why."
+            else
+                error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."
+            fi
+            return 1 ;;
         21) _exakit_vs_install_java ;;
         23) _exakit_vs_install_rust ;;
         *)  return 1 ;;
