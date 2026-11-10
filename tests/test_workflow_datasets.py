@@ -196,7 +196,10 @@ class WorkflowDatasetsTest(unittest.TestCase):
             profiled = profile.profile_rows(columns, reader, table)
 
         def answer(doc):
-            return lambda *args: (0, json.dumps({"status": "draft", "doc": doc, "changed": [], "previous": None}), "")
+            # On a fresh install describe answers with the shipped approved v1 (adopted into the store): the computed
+            # roles, with the target a person chose.
+            doc = dict(doc, version=1, slots=dict(doc["slots"], target=shipped["slots"]["target"]))
+            return lambda *args: (0, json.dumps({"status": "approved", "doc": doc, "changed": [], "previous": 1}), "")
 
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"EXAKIT_HOME": home}):
             checks = live.Checks()
