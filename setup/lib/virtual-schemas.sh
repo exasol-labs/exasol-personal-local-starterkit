@@ -372,6 +372,46 @@ _exakit_vs_read_secret() {
     _exakit_vs_secret_text
 }
 
+# _exakit_vs_interrupted <saved-trap> — after a reader gave the terminal back
+# on Ctrl-C: the trap that stood before it (as trap -p printed it) runs, so
+# the command says what was cancelled; with none, exit 130.
+_exakit_vs_interrupted() {
+    if [ -n "$1" ]; then
+        # "trap -- '<command>' SIGINT": the command is the third word.
+        eval "set -- $1"
+        eval "$3"
+    fi
+    exit 130
+}
+
+# _exakit_vs_cancel_trap — Ctrl-C (or TERM) anywhere in a connect at a
+# terminal: the terminal back (mouse reporting off, the cursor, echo and the
+# stty state saved when the command began), a live table stopped, the work
+# folder gone, one line said, exit 130. A source the live table already
+# connected stays connected, and the line says so. The menus, the live table
+# and the hidden readers give the terminal back themselves and then run this.
+# ⇄ twin: the finally block of Invoke-ExakitVsTui.
+_exakit_vs_cancel_trap() {
+    # Grouped: a failed < /dev/tty is said before a plain 2> would apply.
+    _EVC_STTY="$( { stty -g < /dev/tty; } 2>/dev/null)"
+    trap '_exakit_vs_cancelled' INT TERM
+}
+_exakit_vs_cancelled() {
+    trap - INT TERM
+    command -v ui_table_abort >/dev/null 2>&1 && ui_table_abort
+    command -v ui_restore_cursor >/dev/null 2>&1 && ui_restore_cursor
+    [ -n "${_EVC_STTY:-}" ] && { stty "$_EVC_STTY" < /dev/tty; } 2>/dev/null
+    { stty echo < /dev/tty; } 2>/dev/null
+    printf '\n'
+    if [ -n "${_EVT_OK:-}" ]; then
+        info "Cancelled - the sources marked connected above stay connected; nothing else was."
+    else
+        info "Cancelled - nothing was connected."
+    fi
+    [ -n "${_EVT_DIR:-}" ] && rm -rf "$_EVT_DIR"
+    exit 130
+}
+
 # _exakit_vs_hidden_line <prompt> [err] — one line typed or pasted at a hidden
 # prompt, from stdin (a terminal; the caller redirects /dev/tty to it when it
 # must), into _EVH_LINE. The prompt goes to stdout, or stderr with "err".
@@ -396,7 +436,8 @@ _exakit_vs_hidden_line() {
     stty -echo -icanon min 1 time 0 2>/dev/null || return 2
     # The caller's own traps are put back afterwards, not cleared.
     _evh_prev_int="$(trap -p INT)"; _evh_prev_term="$(trap -p TERM)"
-    trap 'stty "${_evh_saved:-echo icanon}" 2>/dev/null; printf "\n"; exit 130' INT TERM
+    trap 'stty "${_evh_saved:-echo icanon}" 2>/dev/null; printf "\n"; _exakit_vs_interrupted "$_evh_prev_int"' INT
+    trap 'stty "${_evh_saved:-echo icanon}" 2>/dev/null; printf "\n"; _exakit_vs_interrupted "$_evh_prev_term"' TERM
     if [ "${2:-}" = err ]; then printf '%s' "$1" >&2; else printf '%s' "$1"; fi
     _evh_rc=0; _evh_has=0; _evh_next=""
     while :; do
@@ -477,7 +518,8 @@ _exakit_vs_key() {
     _evk_saved="$(stty -g 2>/dev/null)"
     stty -echo -icanon min 1 time 0 2>/dev/null || return 2
     _evk_prev_int="$(trap -p INT)"; _evk_prev_term="$(trap -p TERM)"
-    trap 'stty "${_evk_saved:-echo icanon}" 2>/dev/null; printf "\n"; exit 130' INT TERM
+    trap 'stty "${_evk_saved:-echo icanon}" 2>/dev/null; printf "\n"; _exakit_vs_interrupted "$_evk_prev_int"' INT
+    trap 'stty "${_evk_saved:-echo icanon}" 2>/dev/null; printf "\n"; _exakit_vs_interrupted "$_evk_prev_term"' TERM
     _evk_has=0; _evk_next=""
     while [ -z "$_EVK" ]; do
         if [ "$_evk_has" = 1 ]; then _evk_c="$_evk_next"; _evk_has=0
@@ -549,47 +591,112 @@ _exakit_vs_and() {
     printf '%s' "$_evand_out"
 }
 
+# _exakit_vs_prepare_said — is the database prepared without a question? A
+# person connecting at a terminal (picking the source was the permission) or
+# --yes. Then each step is one spinner line that its tick replaces, under the
+# "Preparing the database" header its caller printed.
+_exakit_vs_prepare_said() {
+    _exakit_vs_interactive || [ "${EXAKIT_VS_ASSUME_YES:-0}" = 1 ]
+}
+
+# _exakit_vs_prep_step <doing> <done> <command...> — one step of preparing the
+# database: the kit's spinner says <doing> while the command runs, its output
+# kept for the log, and a tick line saying <done> replaces it. On failure what
+# the command said is shown instead.
+_exakit_vs_prep_step() {
+    _eps_doing="$1"; _eps_done="$2"; shift 2
+    _eps_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-prep.XXXXXX")" || _eps_out=/dev/null
+    ui_spin_begin "$_eps_doing"
+    ( EXAKIT_QUIET_DETAIL=1; "$@" ) > "$_eps_out" 2>&1
+    _eps_rc=$?
+    ui_spin_end
+    cat "$_eps_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
+    if [ "$_eps_rc" -eq 0 ]; then
+        ok "$_eps_done"
+    else
+        cat "$_eps_out"
+    fi
+    [ "$_eps_out" = /dev/null ] || rm -f "$_eps_out"
+    return "$_eps_rc"
+}
+
+# _exakit_vs_db_restart — the database stopped (add-on services with it) and
+# started again through the kit's own stop/start, which gives the language
+# containers the deployment's DNS. Its words go to the log: the step's tick
+# says "Database restarted".
+_exakit_vs_db_restart() {
+    EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
+    "$EXAKIT_BIN_DIR/exakit" start >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 \
+        || { error "The database did not come back. Run: exakit start"; return 1; }
+}
+
+# _exakit_vs_java_add — the Java language container installed, not yet seen
+# by the database (it restarts next). Docker: the download the start would
+# make, made now, and the image linked to the deployment's DNS before the
+# start mounts it read-only - so that start is the only one
+# (personal_slc_dns_prepare).
+_exakit_vs_java_add() {
+    run_logged "$(personal_cli)" slc install java --no-restart $(personal_auto_approve_flag slc) \
+        || { error "The Java language container did not install. Details: exakit logs"; return 1; }
+    personal_slc_dns_prepare --pull
+}
+
+# _exakit_vs_java_restart — the restart that makes Java usable. An installed
+# kit's start repairs DNS; this kit copy may be newer than it. Exit 2
+# (Docker): linked in the image after an older kit's start mounted it - one
+# more start mounts it.
+_exakit_vs_java_restart() {
+    _exakit_vs_db_restart || return 1
+    _evj_dns=0
+    personal_slc_dns_repair || _evj_dns=$?
+    [ "$_evj_dns" -eq 2 ] || return 0
+    _exakit_vs_db_restart
+}
+
 # _exakit_vs_install_java — the Java language container, with consent: a
 # download of about 250 MiB and one database restart, done through the kit's
 # own stop/start so add-on services come back and DNS is repaired. A person
-# connecting at a terminal gave it by picking the source: one line says what
-# happens and why (_EXAKIT_VS_FOR names the sources), and nothing is asked.
+# connecting at a terminal gave it by picking the source, and --yes gives it:
+# two steps under "Preparing the database", nothing asked. Otherwise asked.
 _exakit_vs_install_java() {
-    if _exakit_vs_interactive; then
-        info "Installing the Java language container for ${_EXAKIT_VS_FOR:-this source}: about 250 MiB, and the database restarts once (add-on services restart with it)."
-    else
+    if ! _exakit_vs_prepare_said; then
         info "Virtual schemas run Java inside the database, and its Java language container is not installed."
         info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
         if ! _exakit_vs_confirm "Install the Java language container now?"; then
-            info "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
+            _exakit_vs_info_cmds "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
             return 1
         fi
     fi
-    run_logged "$(personal_cli)" slc install java --no-restart $(personal_auto_approve_flag slc) \
-        || { error "The Java language container did not install. Details: exakit logs"; return 1; }
-    # Docker: the download the start would make, made now, and the image
-    # linked to the deployment's DNS before the start mounts it read-only -
-    # so this start is the only one (personal_slc_dns_prepare).
-    personal_slc_dns_prepare --pull
-    EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
-    "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back after installing Java. Run: exakit start"; return 1; }
-    # An installed kit's start repairs DNS; this kit copy may be newer than it.
-    # Exit 2 (Docker): linked in the image after an older kit's start mounted
-    # it - one more start mounts it.
-    _evj_dns=0
-    personal_slc_dns_repair || _evj_dns=$?
-    if [ "$_evj_dns" -eq 2 ]; then
-        EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
-        "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back after installing Java. Run: exakit start"; return 1; }
+    _exakit_vs_prep_step "Installing the Java language container (about 250 MiB)" \
+        "Java language container installed" _exakit_vs_java_add || return 1
+    _exakit_vs_prep_step "Restarting the database" "Database restarted" _exakit_vs_java_restart
+}
+
+# _exakit_vs_rust_add — the pinned Rust build (_evr_url, _evr_sha, _evr_size,
+# _evr_asset, set by _exakit_vs_install_rust)
+# downloaded, size- and SHA-256-checked, and registered as the RUST alias;
+# the database sees it from its next start.
+_exakit_vs_rust_add() {
+    _evr_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-rust.XXXXXX")" || return 1
+    fetch "$_evr_url" "$_evr_dir/$_evr_asset"
+    _evr_got="$(wc -c < "$_evr_dir/$_evr_asset" | tr -d ' ')"
+    [ "$_evr_got" = "$_evr_size" ] || { rm -rf "$_evr_dir"; error "The Rust language container download is $_evr_got bytes, not the pinned $_evr_size; nothing was installed."; return 1; }
+    verify_sha256 "$_evr_dir/$_evr_asset" "$_evr_sha"
+    if ! run_logged "$(personal_cli)" slc custom install --source "$_evr_dir/$_evr_asset" --alias RUST --language rust \
+            --no-restart $(personal_auto_approve_flag slc); then
+        rm -rf "$_evr_dir"
+        error "The Rust language container did not install. Details: exakit logs"
+        return 1
     fi
-    ok "Java language container installed"
+    rm -rf "$_evr_dir"
 }
 
 # _exakit_vs_install_rust — the Rust language container a native adapter
-# (Profile D) runs in, with consent (said, not asked, at a terminal, as Java's
-# is): the exasol-labs build pinned for this CPU in profiles/rust-native, size-
-# and SHA-256-checked, registered as the RUST alias, then one database restart
-# through the kit's own stop/start. Twin of Install-ExakitVsRust.
+# (Profile D) runs in, with consent (prepared without a question at a
+# terminal or with --yes, as Java's is): the exasol-labs build pinned for
+# this CPU in profiles/rust-native, size- and SHA-256-checked, registered as
+# the RUST alias, then one database restart through the kit's own
+# stop/start. Twin of Install-ExakitVsRust.
 _exakit_vs_install_rust() {
     _evr_pin="$(run_python_any - "$(exakit_vs_defs)/profiles/rust-native/profile.json" "$(uname -m)" <<'PY'
 import json, sys
@@ -603,9 +710,7 @@ PY
     IFS='|' read -r _evr_url _evr_sha _evr_size _evr_asset _evr_version _evr_upstream <<EOF
 $_evr_pin
 EOF
-    if _exakit_vs_interactive; then
-        info "Installing the Rust language container for ${_EXAKIT_VS_FOR:-this source}: $_evr_upstream $_evr_version, about $((_evr_size / 1048576)) MiB, checksum-pinned, and the database restarts once (add-on services restart with it)."
-    else
+    if ! _exakit_vs_prepare_said; then
         info "This source runs a native adapter inside the database, and its Rust language container is not installed."
         info "Installing it downloads $_evr_upstream $_evr_version (about $((_evr_size / 1048576)) MiB, checksum-pinned) and restarts the database once (add-on services restart with it)."
         if ! _exakit_vs_confirm "Install the Rust language container now?"; then
@@ -613,21 +718,9 @@ EOF
             return 1
         fi
     fi
-    _evr_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-rust.XXXXXX")" || return 1
-    fetch "$_evr_url" "$_evr_dir/$_evr_asset"
-    _evr_got="$(wc -c < "$_evr_dir/$_evr_asset" | tr -d ' ')"
-    [ "$_evr_got" = "$_evr_size" ] || { rm -rf "$_evr_dir"; error "The Rust language container download is $_evr_got bytes, not the pinned $_evr_size; nothing was installed."; return 1; }
-    verify_sha256 "$_evr_dir/$_evr_asset" "$_evr_sha"
-    if ! run_logged "$(personal_cli)" slc custom install --source "$_evr_dir/$_evr_asset" --alias RUST --language rust \
-            --no-restart $(personal_auto_approve_flag slc); then
-        rm -rf "$_evr_dir"
-        error "The Rust language container did not install. Details: exakit logs"
-        return 1
-    fi
-    rm -rf "$_evr_dir"
-    EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
-    "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back after installing Rust. Run: exakit start"; return 1; }
-    ok "Rust language container installed"
+    _exakit_vs_prep_step "Installing the Rust language container ($_evr_upstream $_evr_version, about $((_evr_size / 1048576)) MiB)" \
+        "Rust language container installed" _exakit_vs_rust_add || return 1
+    _exakit_vs_prep_step "Restarting the database" "Database restarted" _exakit_vs_db_restart
 }
 
 # _exakit_vs_dns_restart — Docker: the DNS fix is in the language container
@@ -644,8 +737,7 @@ _exakit_vs_dns_restart() {
             return 1
         fi
     fi
-    EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
-    "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back. Run: exakit start"; return 1; }
+    _exakit_vs_prep_step "Restarting the database" "Database restarted" _exakit_vs_db_restart
 }
 
 # _exakit_vs_repair <engine-exit> — what the bridge does about exit 20 (DNS
@@ -693,6 +785,13 @@ _exakit_vs_run() {
         _evx_rc=$?
         if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
             EXAKIT_VS_RESULT="$(cat "$_evx_out")"
+        elif [ "$_evx_try" -eq 1 ] && { [ "$_evx_rc" -eq 21 ] || [ "$_evx_rc" -eq 23 ]; } && _exakit_vs_prepare_said; then
+            # A language container installed now, without a question, is a
+            # step of the run, not its failure: its FAIL line goes to the log.
+            grep '^FAIL ' "$_evx_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
+            grep -v '^FAIL ' "$_evx_out" > "$_evx_out.said"
+            _exakit_vs_render "$_evx_out.said"; rm -f "$_evx_out.said"
+            exakit_step_heading "Preparing the database"
         else
             _exakit_vs_render "$_evx_out"
         fi
@@ -956,6 +1055,71 @@ print(json.load(sys.stdin).get("public_ip") or "none")' 2>/dev/null)"
     return 0
 }
 
+# _exakit_vs_cmd <command> — a command the reader may type, in the kit's
+# green (the colour the Tip gives the IP); as it is without colour.
+_exakit_vs_cmd() {
+    printf '%s%s%s' "${UI_ACCENT:-}" "$1" "${UI_RESET:-}"
+}
+
+# _exakit_vs_info_cmds <text> — an info line whose "exakit stop" and "exakit
+# start" are green on screen (_exakit_vs_cmd); the log keeps the plain words.
+_exakit_vs_info_cmds() {
+    _eic_t="$1"
+    if [ -n "${UI_ACCENT:-}" ]; then
+        _eic_t="${_eic_t//exakit stop/$(_exakit_vs_cmd "exakit stop")}"
+        _eic_t="${_eic_t//exakit start/$(_exakit_vs_cmd "exakit start")}"
+    fi
+    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+        printf '    %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "$_eic_t"
+    _exakit_log_file "INFO  $1"
+}
+
+# _exakit_vs_clock_hint — how to sync the database clock, its commands green.
+_exakit_vs_clock_hint() {
+    _exakit_vs_info_cmds "To sync the database clock: exakit stop, then exakit start"
+}
+
+# _exakit_vs_clock_warn <text> — the clock's warning, a yellow ! level with
+# the Tip line above it rather than warn()'s outcome indent.
+_exakit_vs_clock_warn() {
+    printf '    %s!%s %s\n' "${UI_WARN:-}" "${UI_RESET:-}" "$1"
+    _exakit_log_file "WARN  $1"
+}
+
+# _exakit_vs_clock_check — the database clock against this computer's, said
+# above the connect menu every time (exakit_db_clock_skew): "in sync", or past
+# EXAKIT_CLOCK_SKEW_LIMIT a warning - TLS and signed S3/Azure requests fail on
+# a wrong clock - and, asked at a terminal (Y by default), the restart that
+# syncs it, through the kit's own stop and start; --yes or no terminal: the
+# warning and the commands, nothing asked. Nothing when the clock cannot be
+# read. ⇄ twin: Show-ExakitVsClockCheck.
+_exakit_vs_clock_check() {
+    command -v exakit_db_clock_skew >/dev/null 2>&1 || return 0
+    _ecc_s="$(exakit_db_clock_skew 2>/dev/null)" || return 0
+    case "$_ecc_s" in ''|-|*[!0-9-]*) return 0 ;; esac
+    if ! exakit_clock_skewed "$_ecc_s"; then
+        info "Database clock: in sync with this computer."
+        return 0
+    fi
+    _exakit_vs_clock_warn "Database clock: $(exakit_clock_skew_words "$_ecc_s") this computer - TLS and S3/Azure connects will fail."
+    if [ "${EXAKIT_VS_ASSUME_YES:-0}" = 1 ] || [ -z "$(_exakit_prompt_tty)" ]; then
+        _exakit_vs_clock_hint
+        return 0
+    fi
+    if ! confirm "Restart the database now to sync its clock?" y; then
+        _exakit_vs_clock_hint
+        return 0
+    fi
+    _exakit_vs_prep_step "Restarting the database" "Database restarted" _exakit_vs_db_restart || return 0
+    _ecc_s="$(exakit_db_clock_skew 2>/dev/null)" || return 0
+    if exakit_clock_skewed "$_ecc_s"; then
+        _exakit_vs_clock_warn "Database clock: still $(exakit_clock_skew_words "$_ecc_s") this computer - TLS and S3/Azure connects will fail."
+        _exakit_vs_clock_hint
+    else
+        info "Database clock: in sync with this computer."
+    fi
+}
+
 # _exakit_vs_pick <work-dir> — the connector menu, under the line that names
 # this computer's public IP (_exakit_vs_catalog). Sets EXAKIT_VS_PICKED to the
 # chosen connector ids, space separated; returns 5 when nothing was chosen.
@@ -998,7 +1162,10 @@ $_evp_id"
     UI_TABLE_TITLE="Connect external sources"
     UI_TABLE_COL1="Source"; UI_TABLE_COL2=""; UI_TABLE_COL3=""
     UI_TABLE_MENU_START=1               # no "Select All" row to step past
+    _exakit_vs_clock_check
+    printf '\n'
     info "Tick one or more sources; the details for each are asked next."
+    printf '\n'
     # The Source column alone: nothing runs in this menu's rows, so it has no
     # Status column either (UI_TABLE_STAT_MIN=0).
     _evp_statmin="${UI_TABLE_STAT_MIN-}"
@@ -1220,7 +1387,7 @@ _exakit_vs_tui_field() {
     _etf_i="$1"
     _exakit_vs_tui_draw "$_evo_title" "$_etf_i"
     [ -n "${2:-}" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$2"
-    _etf_k="${_EVT_KIND[$_etf_i]}"; _etf_lab="${_EVT_LAB[$_etf_i]}"; _etf_req="${_EVT_REQ[$_etf_i]}"
+    _etf_k="${_EVT_KIND[$_etf_i]}"; _etf_lab="${_EVT_LABF[$_etf_i]}"; _etf_req="${_EVT_REQ[$_etf_i]}"
     _etf_old="${_EVT_VAL[$_etf_i]}"
     _etf_def="${_EVT_VAL[$_etf_i]:-${_EVT_DEF[$_etf_i]}}"
     _etf_keep=""
@@ -1490,7 +1657,8 @@ doc = json.loads(sys.argv[1])
 print(doc["name"])
 for f in doc["inputs"]:
     label = f["label"]
-    for cut in (" - ", " (", "; "):
+    # The kit's own "Name (alias) for this connection" is said whole.
+    for cut in (" - ", " (", "; ") if f["kind"] != "source-name" else ():
         label = label.split(cut)[0]
     print("|".join(str(x).replace("|", "/") for x in
                    (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]))))
@@ -1519,7 +1687,11 @@ PY
         [ "$_evo_w" -gt "$_EVT_LW" ] && _EVT_LW=$_evo_w
         _EVT_NF=$(( _EVT_NF + 1 ))
     done < "$_EVT_DIR/fields"
-    [ "$_EVT_LW" -le 32 ] || _EVT_LW=32
+    # 34: the kit's own "Name (alias) for this connection *" whole - on a
+    # narrow terminal less, so a value keeps 18 columns (the question under
+    # the panel says the label whole).
+    _evo_cap=$(( _EVT_IN - 7 - 18 )); [ "$_evo_cap" -le 34 ] || _evo_cap=34; [ "$_evo_cap" -ge 12 ] || _evo_cap=12
+    [ "$_EVT_LW" -le "$_evo_cap" ] || _EVT_LW="$_evo_cap"
     _evo_f=0
     while [ "$_evo_f" -lt "$_EVT_NF" ]; do
         _evo_w="$_EVT_LW"; [ -n "${_EVT_REQ[$_evo_f]}" ] && _evo_w=$(( _EVT_LW - 2 ))
@@ -1600,20 +1772,117 @@ PY
     return 0
 }
 
+# _exakit_vs_tui_dl <cell> <width> — a Downloads cell cut to the width, its
+# size kept: "adapter 4.1.0 · dri… · 3 MB".
+_exakit_vs_tui_dl() {
+    if [ "${#1}" -le "$2" ]; then printf '%s' "$1"; return 0; fi
+    case "$1" in
+        *" · "*) _etd_mb=" · ${1##* · }"
+                 printf '%s%s' "$(_exakit_vs_tui_short "${1% · *}" $(( $2 - ${#_etd_mb} )))" "$_etd_mb" ;;
+        *) _exakit_vs_tui_short "$1" "$2" ;;
+    esac
+}
+
 # _exakit_vs_tui_table <state-file> <title> <indexes...> — a table of finished
 # forms, every row waiting.
 _exakit_vs_tui_table() {
     _ett_state="$1"; _ett_title="$2"; shift 2
     : > "$_ett_state"
+    # The Source cell names where it is too. The Downloads cell is cut to what
+    # the terminal has beside the other columns, one line a row, as Where was
+    # cut to 18; too narrow even for that, the table's own rules wrap it, then
+    # leave it out.
+    _ett_namew=10; _ett_srcw=6; _ett_dlw=9
+    for _ett_i in "$@"; do
+        _ett_src="${_EVT_S_LABEL[$_ett_i]}"
+        [ -n "${_EVT_S_WHERE[$_ett_i]}" ] && _ett_src="$_ett_src · ${_EVT_S_WHERE[$_ett_i]}"
+        _EVT_S_SRC[$_ett_i]="$_ett_src"
+        [ $(( ${#_EVT_S_NAME[$_ett_i]} + 3 )) -gt "$_ett_namew" ] && _ett_namew=$(( ${#_EVT_S_NAME[$_ett_i]} + 3 ))
+        [ "${#_ett_src}" -gt "$_ett_srcw" ] && _ett_srcw="${#_ett_src}"
+        _ett_dl="${_EVT_S_DL[$_ett_i]:-}"
+        [ "${#_ett_dl}" -gt "$_ett_dlw" ] && _ett_dlw="${#_ett_dl}"
+    done
+    # The chrome (12), the name, the source, the Status floor (38), the gaps.
+    _ett_room=$(( $(_ui_term_cols) - 12 - _ett_namew - 2 - _ett_srcw - 2 - 38 - 2 ))
+    [ "$_ett_room" -lt "$_ett_dlw" ] && [ "$_ett_room" -ge 12 ] && _ett_dlw="$_ett_room"
     _ett_k=0
     for _ett_i in "$@"; do
         _ett_k=$(( _ett_k + 1 ))
         _ett_tree=tee; [ "$_ett_k" -eq "$#" ] && _ett_tree=corner
         printf '%s|%s|1|waiting|||||||%s|%s\n' "$_ett_tree" "${_EVT_S_NAME[$_ett_i]}" \
-            "${_EVT_S_LABEL[$_ett_i]}" "${_EVT_S_WHERE[$_ett_i]}" >> "$_ett_state"
+            "${_EVT_S_SRC[$_ett_i]}" "$(_exakit_vs_tui_dl "${_EVT_S_DL[$_ett_i]:-}" "$_ett_dlw")" >> "$_ett_state"
     done
     UI_TABLE_TITLE="$_ett_title"
-    UI_TABLE_COL1="Name"; UI_TABLE_COL2="Source"; UI_TABLE_COL3="Where"
+    UI_TABLE_COL1="Name (alias)"; UI_TABLE_COL2="Source"; UI_TABLE_COL3="Downloads"
+    # As wide as its longest cell, not the add-on descriptions' 44; a Status
+    # floor that holds this table's longest status (34 and its tick), not 44:
+    # the room goes to Downloads.
+    UI_TABLE_COL3_FIXED="$_ett_dlw"; UI_TABLE_COL3_MAX="$_ett_dlw"; UI_TABLE_STAT_MIN=38
+}
+
+# _exakit_vs_tui_table_done — the connect table's headings and widths back to
+# what other tables expect.
+_exakit_vs_tui_table_done() {
+    UI_TABLE_COL2=""; UI_TABLE_COL3=""
+    unset UI_TABLE_COL3_FIXED UI_TABLE_COL3_MAX UI_TABLE_STAT_MIN
+}
+
+# _exakit_vs_tui_footer — the lines under the connect table: every download is
+# checked and cached (_evt_bytes, its total), and, when the kit's MCP
+# read-only user exists, that the AI clients read the new schemas through it.
+# _EVT_FOOT_N is how many rows they took.
+_exakit_vs_tui_footer() {
+    _EVT_FOOT_N=0
+    _etf_mb=$(( (_evt_bytes + 500000) / 1000000 ))
+    if [ "$_evt_bytes" -gt 0 ]; then
+        [ "$_etf_mb" -gt 0 ] || _etf_mb="<1"
+        _etf_say="Every file is SHA-256 checked before it reaches the database. Total $_etf_mb MB, kept in the cache for next time."
+    else
+        _etf_say="Every file is SHA-256 checked before it reaches the database. All of them are in the cache already."
+    fi
+    info "$_etf_say"
+    _EVT_FOOT_N=$(( _EVT_FOOT_N + $(_exakit_vs_tui_rows $(( ${#_etf_say} + 6 ))) ))
+    if [ -n "$_evt_exposed" ] && [ -f "$EXAKIT_CREDS_DIR/mcp_readonly_password" ]; then
+        _etf_say="Your AI clients read these schemas through the kit's read-only MCP user."
+        info "$_etf_say"
+        _EVT_FOOT_N=$(( _EVT_FOOT_N + $(_exakit_vs_tui_rows $(( ${#_etf_say} + 6 ))) ))
+    fi
+}
+
+# _exakit_vs_tui_prepare <lines-on-screen> <language...> — the language
+# containers the picked sources need (java, rust; repeats allowed) that the
+# database lacks, installed before the table runs, under one step header:
+# Java, then its restart, then Rust and its. The review (that many lines) is
+# cleared first, so the live table that follows is the only one. Returns 1
+# when nothing was needed (nothing is printed), or the database could not be
+# asked - a source that then needs one is prepared below the table, as before.
+# _EVT_PREPARED names the languages tried.
+_exakit_vs_tui_prepare() {
+    _etp_over="$1"; shift
+    _etp_need=""
+    for _etp_l in java rust; do
+        case " $* " in *" $_etp_l "*) _etp_need="$_etp_need $_etp_l" ;; esac
+    done
+    [ -n "$_etp_need" ] || return 1
+    # shellcheck disable=SC2086 — language names
+    exakit_vs_engine languages $_etp_need < /dev/null > "$_EVT_DIR/languages" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || return 1
+    _etp_missing="$(_exakit_vs_result "$_EVT_DIR/languages" | run_python_any -c 'import json, sys
+print(" ".join(json.load(sys.stdin).get("missing") or []))' 2>/dev/null)"
+    [ -n "$_etp_missing" ] || return 1
+    if [ "${UI_FANCY:-0}" = 1 ] && [ -t 1 ] && [ "$_etp_over" -gt 0 ]; then
+        printf '\r\033[%dA\033[0J' "$_etp_over"
+    fi
+    exakit_step_heading "Preparing the database"
+    for _etp_l in java rust; do
+        case " $_etp_missing " in *" $_etp_l "*) ;; *) continue ;; esac
+        _EVT_PREPARED="$_EVT_PREPARED $_etp_l"
+        case "$_etp_l" in
+            java) _exakit_vs_install_java ;;
+            rust) _exakit_vs_install_rust ;;
+        esac
+    done
+    printf '\n'
+    return 0
 }
 
 # _exakit_vs_tui_run <state-file> <indexes...> — connect those sources one after
@@ -1730,6 +1999,7 @@ _exakit_vs_tui_live() {
     stty -echo 2>/dev/null
     _etl_live=0
     ui_table_begin "$_etl_state" && _etl_live=1
+    _EVT_LIVE="$_etl_live"
     _exakit_vs_tui_run "$_etl_state" "$@"
     if [ "$_etl_live" = 1 ]; then ui_table_end "$_etl_state"; else ui_table_render "$_etl_state" 0; fi
     run_python_any -c 'import sys, termios; termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)' 2>/dev/null
@@ -1747,9 +2017,9 @@ _exakit_vs_tui() {
     _EVT_IN=$(( _EVT_W - 4 ))
     _EVT_SP=""; _EVT_HR=""; _evt_k=0
     while [ "$_evt_k" -lt 160 ]; do _EVT_SP="$_EVT_SP "; _EVT_HR="$_EVT_HR$UI_HR"; _evt_k=$(( _evt_k + 1 )); done
-    _EVT_S_ID=(); _EVT_S_NAME=(); _EVT_S_LABEL=(); _EVT_S_SETS=(); _EVT_S_SECRET=(); _EVT_S_SFILE=(); _EVT_S_WHERE=()
+    _EVT_S_ID=(); _EVT_S_NAME=(); _EVT_S_LABEL=(); _EVT_S_SETS=(); _EVT_S_SECRET=(); _EVT_S_SFILE=(); _EVT_S_WHERE=(); _EVT_S_DL=(); _EVT_S_SRC=()
     _EVT_COUNT=0; _EVT_TAKEN=""; _EVT_OK=""; _EVT_FAILED=""; _EVT_NEEDS=""; _EVT_RC=0
-    _evt_name="$2"; _evt_pwfile="$3"
+    _evt_name="$2"; _evt_pwfile="$3"; _evt_named="$1"
 
     # 1. which sources
     if [ -n "$1" ]; then
@@ -1788,38 +2058,64 @@ _exakit_vs_tui() {
     _evt_all=""; _evt_i=0
     while [ "$_evt_i" -lt "$_EVT_COUNT" ]; do _evt_all="$_evt_all $_evt_i"; _evt_i=$(( _evt_i + 1 )); done
 
-    # 3. review: what each plan downloads and who can read the result, then the
-    # plan's own INFO lines (a source on the internet: the public IP it must
-    # allow), above one table of the sources and one question
+    # 3. review: each source's warnings and the plan's own INFO lines, above
+    # one table - what each downloads is its Downloads cell - its footer, and
+    # one question. This computer's public IP is the menu's Tip line, said
+    # here once only when no menu was shown.
+    _evt_bytes=0; _evt_exposed=""; _evt_need=""; _evt_ip=""
     for _evt_i in $_evt_all; do
         _exakit_vs_result "$_EVT_DIR/plan.$_evt_i" | run_python_any -c 'import json, sys
 p = json.load(sys.stdin)
 new = [d for d in p["downloads"] if not d["cached"]]
-if new:
-    print("INFO %s downloads %s (%.0f MB)" % (p["name"], ", ".join("%s %s" % (d["role"], d["version"]) for d in new),
-                                           sum(d["bytes"] for d in new) / 1e6))
+size = sum(d["bytes"] for d in new)
+mb = "<1 MB" if 0 < size < 5e5 else "%.0f MB" % (size / 1e6)
+cell = " · ".join(["%s %s" % (d["role"], d["version"]) for d in new] + [mb]) if new else "in the cache"
+print("|".join([cell, str(size), " ".join(p.get("languages") or []), "1" if p.get("exposure") else "",
+                p.get("public_ip") or ""]))
 for w in p["warnings"]:
-    print("WARN %s: %s" % (p["name"], w))
-if p.get("exposure"):
-    print("INFO %s: %s" % (p["name"], p["exposure"][0].upper() + p["exposure"][1:]))' > "$_EVT_DIR/review" 2>/dev/null
+    print("WARN %s: %s" % (p["name"], w))' > "$_EVT_DIR/review" 2>/dev/null
+        IFS='|' read -r _evt_dl _evt_b _evt_l _evt_x _evt_pip < "$_EVT_DIR/review"
+        _EVT_S_DL[$_evt_i]="$_evt_dl"
+        case "$_evt_b" in ''|*[!0-9]*) _evt_b=0 ;; esac
+        _evt_bytes=$(( _evt_bytes + _evt_b ))
+        _evt_need="$_evt_need $_evt_l"
+        [ -n "$_evt_x" ] && _evt_exposed=1
+        [ -n "$_evt_pip" ] && _evt_ip="$_evt_pip"
+        sed 1d "$_EVT_DIR/review" > "$_EVT_DIR/review.say"
         # The name is [a-z0-9_] (the form checked it), safe in a sed replacement.
-        sed -n "s/^INFO /INFO ${_EVT_S_NAME[$_evt_i]}: /p" "$_EVT_DIR/plan.$_evt_i" >> "$_EVT_DIR/review"
-        _exakit_vs_render "$_EVT_DIR/review"
+        # The per-source public IP line is the Tip's: left out.
+        grep -v "^INFO This computer's public IP is " "$_EVT_DIR/plan.$_evt_i" \
+            | sed -n "s/^INFO /INFO ${_EVT_S_NAME[$_evt_i]}: /p" >> "$_EVT_DIR/review.say"
+        _exakit_vs_render "$_EVT_DIR/review.say"
     done
+    [ -n "$_evt_named" ] && [ -n "$_evt_ip" ] && \
+        info "Tip: cloud sources see you as $_evt_ip - allow it if the source has an IP allowlist."
     _evt_state="$_EVT_DIR/sources"
     # shellcheck disable=SC2086 — indexes
     _exakit_vs_tui_table "$_evt_state" "Connect $_EVT_COUNT source$([ "$_EVT_COUNT" = 1 ] || printf s)" $_evt_all
     ui_table_render "$_evt_state" 0
     _evt_lines="$UI_TABLE_LINES"
     _EVT_ON_SCREEN=0
+    _exakit_vs_tui_footer
+    _evt_lines=$(( _evt_lines + _EVT_FOOT_N ))
     if ! _exakit_vs_tui_yes "$(if [ "$_EVT_COUNT" = 1 ]; then printf 'Connect it now?'; else printf 'Connect all %s now?' "$_EVT_COUNT"; fi)"; then
-        UI_TABLE_COL2=""; UI_TABLE_COL3=""
+        _exakit_vs_tui_table_done
         info "Nothing was changed."; rm -rf "$_EVT_DIR"; return 5
     fi
 
-    # 4. connect: the review table comes alive in place, over itself and the question
+    # 4. the database first: a language container a source needs and the
+    # database lacks is installed before the table runs, so no row fails for
+    # one. Picking the sources was the permission: nothing is asked.
+    _evt_over=$(( _evt_lines + _EVT_ON_SCREEN ))
+    _EVT_PREPARED=""
+    _exakit_vs_tui_prepare "$_evt_over" $_evt_need && _evt_over=0
+
+    # 5. connect: the review table comes alive in place, over itself, its
+    # footer and the question - or under what the database was prepared with
     # shellcheck disable=SC2086 — indexes
-    _exakit_vs_tui_live "$_evt_state" $(( _evt_lines + _EVT_ON_SCREEN )) $_evt_all
+    _exakit_vs_tui_live "$_evt_state" "$_evt_over" $_evt_all
+    # The live table drew over the footer.
+    [ "${_EVT_LIVE:-0}" = 1 ] && _exakit_vs_tui_footer
 
     # A language container (a download and a restart), or the restart Docker's
     # DNS repair needs: said once, below the table - picking the sources was the
@@ -1833,6 +2129,11 @@ if p.get("exposure"):
             case "$_evt_n" in "$_evt_lang:"*) _evt_wait="$_evt_wait ${_evt_n#*:}" ;; esac
         done
         [ -n "$_evt_wait" ] || continue
+        # Tried before the table and not installed: those sources failed.
+        case " ${_EVT_PREPARED:-} " in *" $_evt_lang "*)
+            _EVT_FAILED="${_EVT_FAILED:-}$_evt_wait"; [ "$_EVT_RC" -ne 0 ] || _EVT_RC=1
+            continue ;;
+        esac
         # The sources it is for, by the connector's name, each once.
         _evt_for=(); _evt_seen="|"
         for _evt_n in $_evt_wait; do
@@ -1858,7 +2159,7 @@ if p.get("exposure"):
         # shellcheck disable=SC2086 — indexes
         _exakit_vs_tui_live "$_EVT_DIR/again.$_evt_lang" 0 $_evt_wait
     done
-    UI_TABLE_COL2=""; UI_TABLE_COL3=""
+    _exakit_vs_tui_table_done
 
     # What went wrong in the engine's own words, below the finished table.
     printf '\n'
@@ -1867,10 +2168,14 @@ if p.get("exposure"):
         grep -v '^OK \|^RESULT ' "$_EVT_DIR/run.$_evt_i" > "$_EVT_DIR/why" 2>/dev/null
         _exakit_vs_render "$_EVT_DIR/why"
     done
-    for _evt_i in ${_EVT_OK:-}; do
-        _exakit_vs_query_hints "$(cat "$_EVT_DIR/run.$_evt_i.json" 2>/dev/null)" "${_EVT_S_NAME[$_evt_i]}"
-    done
-    [ -n "${_EVT_OK:-}" ] && info "Manage with: exakit source show <name> (every action: exakit help source)"
+    if [ -n "${_EVT_OK:-}" ]; then
+        _evt_n=0; for _evt_i in $_EVT_OK; do _evt_n=$(( _evt_n + 1 )); done
+        for _evt_i in $_EVT_OK; do
+            printf '%s\t%s\n' "${_EVT_S_NAME[$_evt_i]}" "$_EVT_DIR/run.$_evt_i.json"
+        done > "$_EVT_DIR/hints"
+        _exakit_vs_query_list "$_EVT_DIR/hints" "$_evt_n"
+        info "Manage with: exakit source show <name> (every action: exakit help source)"
+    fi
     # Nothing secret outlives the command in this shell.
     for _evt_i in $_evt_all; do _EVT_S_SECRET[$_evt_i]=""; done
     rm -rf "$_EVT_DIR"
@@ -2003,6 +2308,8 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     _require_install "$_cc_json"
     exakit_init_logging
     _exakit_vs_log_mark
+    # A person at a terminal: Ctrl-C gives it back whole, and says so.
+    [ "$_cc_json" = 1 ] || _exakit_vs_cancel_trap
     # Read before anything runs or asks: nothing else can take it off stdin,
     # and a terminal or nothing on it is refused before any work is done.
     [ "$_cc_pwstdin" = 1 ] && _exakit_vs_stdin_secret
@@ -2048,6 +2355,7 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
             "exakit source catalog"
         # The wizard's first line, as above the menu: this computer's public IP.
         _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" && { _exakit_vs_catalog "$_cc_out"; rm -f "$_cc_out"; }
+        _exakit_vs_clock_check
         _cc_source="$(prompt_text "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" "")"
     fi
     # With --json the plan below resolves the source (an unknown or gated one
@@ -2071,7 +2379,7 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     # resolve orders them here without it.
     if [ -z "$_cc_name" ] && [ "$_cc_json" = 0 ]; then
         [ -n "$_cc_tty" ] || reject "Give the connection a name with --name (lower case, e.g. sales)."
-        _cc_name="$(_exakit_vs_prompt "Name for this connection (lower case, e.g. sales)" "" 1 "$_cc_ask" "Name for this connection")"
+        _cc_name="$(_exakit_vs_prompt "Name (alias) for this connection (lower case, e.g. sales)" "" 1 "$_cc_ask" "Name (alias) for this connection")"
         # A name typed here can be a connected source too: re-pointed, not asked again.
         _exakit_vs_source_live "$_cc_name" && _cc_live=1
     fi
@@ -2202,22 +2510,41 @@ _exakit_vs_word() {
     esac
 }
 
-# _exakit_vs_query_hints <connect-result-json> <name> — a first query on one of
-# the source's real tables, quoted as it must be, then how this kind of source
-# names and types what it sends (the connector's tips).
-_exakit_vs_query_hints() {
-    _eqh_lines="$(printf '%s' "$1" | run_python_any -c 'import json, sys
-r = json.load(sys.stdin)
-print("OK Query it like any schema: " + r["example"])
-for t in r.get("tips") or []:
-    print("INFO " + t)' 2>/dev/null)"
-    if [ -z "$_eqh_lines" ]; then
-        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "$2" | tr 'a-z' 'A-Z').<table> LIMIT 10"
-        return 0
+# _exakit_vs_query_list <file> <count> — how to query what was connected: one
+# exakit sql line per source (file: name TAB connect-result-json-file per
+# line), a first query on one of its real tables, as one shell word. How each
+# kind of source names and types what it sends (the connector's tips) is
+# exakit source show's. ⇄ twin: Show-ExakitVsQueryList.
+_exakit_vs_query_list() {
+    if [ "$2" = 1 ]; then info "Query it like any schema:"; else info "Query them like any schema:"; fi
+    while IFS="$(printf '\t')" read -r _eql_name _eql_json; do
+        [ -n "$_eql_name" ] || continue
+        _eql_last="$_eql_name"
+        _eql_q="$(run_python_any -c 'import json, sys
+print(json.load(open(sys.argv[1]))["example"])' "$_eql_json" 2>/dev/null)"
+        [ -n "$_eql_q" ] || _eql_q="SELECT * FROM VS_$(printf '%s' "$_eql_name" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        printf '        exakit sql %s\n' "$(_exakit_vs_quoted "$_eql_q")"
+    done < "$1"
+    if [ "$2" = 1 ]; then
+        info "Type and naming notes for it: exakit source show $_eql_last"
+    else
+        info "Type and naming notes for each source: exakit source show <name>"
     fi
-    printf '%s\n' "$_eqh_lines" > "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
-    _exakit_vs_render "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
-    rm -f "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
+}
+
+# _exakit_vs_quoted <text> — the text in single quotes, each ' in it as '\''.
+_exakit_vs_quoted() {
+    printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+}
+
+# _exakit_vs_query_hints <connect-result-json> <name> — the one source's
+# query line (_exakit_vs_query_list), for the line-by-line connect.
+_exakit_vs_query_hints() {
+    _eqh_file="${TMPDIR:-/tmp}/exakit-vs-hints.$$"
+    printf '%s' "$1" > "$_eqh_file.json"
+    printf '%s\t%s\n' "$2" "$_eqh_file.json" > "$_eqh_file"
+    _exakit_vs_query_list "$_eqh_file" 1
+    rm -f "$_eqh_file" "$_eqh_file.json"
 }
 
 # _exakit_vs_show_plan <plan-json> — what will happen, before it does.
