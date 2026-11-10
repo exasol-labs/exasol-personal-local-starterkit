@@ -2942,25 +2942,17 @@ function Invoke-CmdMarketplace {
         return
     }
     Initialize-ExakitLogging
-    # Was the notebook here before? If this run adds it, the panel that says
-    # how to give it a model follows. Twin of the same lines in cmd_marketplace.
-    $nbBefore = $false
-    try { $nbBefore = [bool](Test-ExakitMarketplaceAddonInstalled notebook) } catch { }
-    try {
-        if ($ids.Count -gt 0) {
-            $previous = $env:EXAKIT_MARKETPLACE_ADDONS
-            try {
-                $env:EXAKIT_MARKETPLACE_ADDONS = ($ids -join ",")
-                Show-ExakitMarketplaceMenu
-            } finally {
-                if ($null -ne $previous) { $env:EXAKIT_MARKETPLACE_ADDONS = $previous }
-                else { Remove-Item Env:\EXAKIT_MARKETPLACE_ADDONS -ErrorAction SilentlyContinue }
-            }
-        } else {
+    if ($ids.Count -gt 0) {
+        $previous = $env:EXAKIT_MARKETPLACE_ADDONS
+        try {
+            $env:EXAKIT_MARKETPLACE_ADDONS = ($ids -join ",")
             Show-ExakitMarketplaceMenu
+        } finally {
+            if ($null -ne $previous) { $env:EXAKIT_MARKETPLACE_ADDONS = $previous }
+            else { Remove-Item Env:\EXAKIT_MARKETPLACE_ADDONS -ErrorAction SilentlyContinue }
         }
-    } finally {
-        if (-not $nbBefore) { try { Write-ExakitModelSetupHint -Mode marketplace } catch { } }
+    } else {
+        Show-ExakitMarketplaceMenu
     }
 }
 

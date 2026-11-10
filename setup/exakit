@@ -2579,18 +2579,11 @@ cmd_marketplace() {
         return $?
     fi
     exakit_init_logging
-    # Was the notebook here before? If this run adds it, the panel that says
-    # how to give it a model follows the install (exakit_model_setup_hint).
-    _cm_nb_before=0
-    exakit_marketplace_addon_installed notebook 2>/dev/null && _cm_nb_before=1
     _cm_rc=0
     if [ -n "$_cm_ids" ]; then
         EXAKIT_MARKETPLACE_ADDONS="$_cm_ids" exakit_marketplace_menu || _cm_rc=$?
     else
         exakit_marketplace_menu || _cm_rc=$?
-    fi
-    if [ "$_cm_nb_before" = 0 ] && command -v exakit_model_setup_hint >/dev/null 2>&1; then
-        exakit_model_setup_hint marketplace
     fi
     return "$_cm_rc"
 }

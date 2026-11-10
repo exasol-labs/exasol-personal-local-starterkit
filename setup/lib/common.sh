@@ -6067,35 +6067,6 @@ exakit_print_ready_line() {
     return 0
 }
 
-# exakit_model_setup_hint — after the persona's add-ons and before the closing
-# panel: how to give the notebooks a model and Langfuse, once, in this terminal.
-# Only when the notebook add-on is installed (nothing else reads these) and no
-# model is set yet. The keys are typed into a hidden prompt, never into a
-# command; nothing is required - without it the AI steps skip and say so.
-# ⇄ twin: Write-ExakitModelSetupHint in exakit-common.ps1.
-exakit_model_setup_hint() {
-    # [installer|marketplace]. The installer shows it only to a Data Scientist
-    # (the persona whose notebooks use a model); `marketplace` is the caller
-    # that has just installed the notebook add-on, for anyone.
-    [ -z "${EXAKIT_MODEL_ID:-}" ] || return 0
-    exakit_marketplace_addon_installed notebook 2>/dev/null || return 0
-    if [ "${1:-installer}" = installer ]; then
-        case ",$(manifest_get persona.id 2>/dev/null || true)," in
-            *,data-scientist,*) ;;
-            *) return 0 ;;
-        esac
-    fi
-    printf '\n'
-    ui_panel_begin "Optional: your AI model for the notebooks"
-    ui_panel_line "Run these here, then: exakit notebook"
-    ui_panel_line '  export EXAKIT_MODEL_ID="claude-opus-5-5"'
-    ui_panel_line '  export EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"'
-    ui_panel_line "  read -rs EXAKIT_PROVIDER_API_KEY; export EXAKIT_PROVIDER_API_KEY"
-    ui_panel_line "Skip it and the notebooks still run; only the AI steps are skipped."
-    ui_panel_line "More, Langfuse included: nb.model_setup() in a notebook"
-    ui_panel_end
-}
-
 exakit_marketplace_offer() {
     # Several checks per add-on and a description fetched for each take
     # seconds: a turning spinner says the install is still going, not stuck.

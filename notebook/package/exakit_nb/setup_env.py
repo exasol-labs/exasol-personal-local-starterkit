@@ -13,6 +13,7 @@ from __future__ import annotations
 import getpass
 import os
 import platform
+import sys
 from pathlib import Path
 from typing import Callable
 
@@ -167,11 +168,58 @@ TERMINAL = {"windows": "Windows: in PowerShell", "mac": "Mac: in Terminal", "lin
             "wsl": "WSL: in the WSL terminal (the Linux one, not PowerShell)"}
 
 
-def model_setup(machine: str | None = None, show: bool = True) -> dict:
-    """What is set for your model and Langfuse, and how to set what is not - here in this kernel, or once for every
-    notebook in the terminal of this machine (Windows, Mac, Linux or WSL), with where the settings file is and what to
-    do next. Prints values, never a key; returns {"machine", "set", "missing", "lines"}."""
+def _in_notebook() -> bool:
+    """True inside a running notebook (JupyterLab or Marimo), where a prompt can be shown; False in a script or test,
+    which must never wait on one."""
+    marimo = sys.modules.get("marimo")
+    if marimo is not None:
+        try:
+            if marimo.running_in_notebook():
+                # Only while someone edits it: `marimo run`, `marimo export` and a script have nobody to answer.
+                return marimo.app_meta().mode == "edit"
+        except Exception:
+            return False
+    try:
+        shell = get_ipython()  # type: ignore[name-defined]  # noqa: F821 - defined only inside IPython
+    except NameError:
+        return False
+    return getattr(shell, "kernel", None) is not None
+
+
+def _ask_missing(read: Ask, secret: Ask) -> list[str]:
+    """Ask for what is not set yet: the model id and address and the Langfuse address as plain text, then the keys in
+    a hidden box (through use_model). Enter skips a value. Returns notes; raises when this front end has no prompt."""
+    model_id = os.environ.get(model_config.MODEL_ID, "")
+    base = os.environ.get(model_config.BASE_URL, "")
+    langfuse = os.environ.get(LANGFUSE_BASE_URL, "")
+    if not model_id:
+        model_id = (read(f"Model ID (Enter to skip; for example {EXAMPLE_MODEL}): ") or "").strip()
+    if model_id and not base:
+        base = (read(f"Model API address (for example {EXAMPLE_URL}; Ollama: its /v1/ address): ") or "").strip()
+    if not langfuse:
+        langfuse = (read(f"Langfuse address (Enter to skip; for example {EXAMPLE_LANGFUSE}): ") or "").strip()
+    if not (model_id or langfuse):
+        return []
+    summary = use_model(model_id, base, langfuse, ask=secret)
+    return list(summary.get("notes") or [])
+
+
+def model_setup(machine: str | None = None, show: bool = True, *, ask: bool | None = None,
+                read: Ask | None = None, secret: Ask | None = None) -> dict:
+    """Set up your model and Langfuse for this kernel, and say how to set them for every notebook. Inside a notebook
+    (JupyterLab or Marimo) it first asks for what is missing - the model id and address, the Langfuse address, then
+    each key in a hidden box; Enter skips one. ``ask=False`` only reports; a script or test never waits on a prompt.
+    Then it prints what is set and, for anything still missing, the terminal lines for this machine (Windows, Mac,
+    Linux or WSL). Prints values, never a key; returns {"machine", "set", "missing", "lines", "asked"}."""
     machine = machine or this_machine()
+    asked = False
+    if (ask if ask is not None else _in_notebook()) and any(not os.environ.get(name) for name in NAMES):
+        try:
+            for note in _ask_missing(read or input, secret or getpass.getpass):
+                print(note)
+            asked = True
+        except Exception as err:                    # a front end without prompts, a headless run
+            print(f"Could not ask here ({type(err).__name__}); the lines below set them instead.")
     state = {name: bool(os.environ.get(name)) for name in NAMES}
     lines = ["Your AI model and Langfuse - what this kernel has:"]
     for name in NAMES:
@@ -189,7 +237,7 @@ def model_setup(machine: str | None = None, show: bool = True) -> dict:
         lines.append("Everything is set. Nothing to do.")
     else:
         lines += ["",
-                  "1. Set them here, in this kernel (gone when it stops) - the cell above does this:",
+                  "1. Set them here, in this kernel (gone when it stops): run nb.model_setup() and answer, or:",
                   f'   nb.use_model("{EXAMPLE_MODEL}", "{EXAMPLE_URL}", "{EXAMPLE_LANGFUSE}")',
                   "   A hidden box asks for each key; Enter skips one. Only the model: leave the Langfuse address out.",
                   "   A server on your own machine (Ollama): its /v1/ address, and Enter at the key.",
@@ -202,12 +250,13 @@ def model_setup(machine: str | None = None, show: bool = True) -> dict:
                   f"   The model's id and address can stay in {_settings_file()} (its {model_config.MODEL_ID} and",
                   f"   {model_config.BASE_URL} lines, remove the '# '); that file takes no key and no LANGFUSE_* name.",
                   "",
-                  "Next: run the cell above (nb.use_model) again - it answers in one line - or run this one to check.",
+                  "Next: run nb.model_setup() again to check.",
                   "Set only what you use: no model means the AI steps skip and say so; no Langfuse means no tracing.",
-                  "starter-kit-notebooks/data-scientist/MODEL-PROVIDERS.md lists the providers (Claude, Ollama, LM Studio, vLLM, Gemini)."]
+                  "MODEL-PROVIDERS.md beside the Data Scientist notebooks lists the providers (Claude, Ollama, LM Studio, vLLM, Gemini)."]
     if show:
         print("\n".join(lines))
-    return {"machine": machine, "set": [name for name in NAMES if state[name]], "missing": missing, "lines": lines}
+    return {"machine": machine, "set": [name for name in NAMES if state[name]], "missing": missing, "lines": lines,
+            "asked": asked}
 
 
 def use_mlflow(tracking_uri: str = "", login: bool = False, *, ask: Ask | None = None) -> dict:

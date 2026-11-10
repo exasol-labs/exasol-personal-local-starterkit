@@ -181,7 +181,7 @@ class CatalogTest(unittest.TestCase):
 
 class NotebookShapeTest(unittest.TestCase):
     def test_each_data_scientist_notebook_shows_its_steps_as_a_picture(self):
-        """The nine steps are drawn, not listed: the first cell carries the strip as an embedded SVG (shown in
+        """The nine steps are drawn as a flow chart, not listed: the first cell carries it as an embedded SVG (shown in
         JupyterLab and Marimo without running anything), with this notebook's steps filled in, and the alt text
         still names them for a screen reader."""
         import base64
@@ -197,11 +197,13 @@ class NotebookShapeTest(unittest.TestCase):
                 self.assertIn("Hand off", match.group(1), "the alt text names the steps")
                 svg = ET.fromstring(base64.b64decode(match.group(2)))
                 ns = "{http://www.w3.org/2000/svg}"
-                texts = [t.text for t in svg.iter(ns + "text")]
-                filled = {texts[i * 2] for i, r in enumerate(r for r in svg.iter(ns + "rect") if r.get("height") == "58")
-                          if r.get("fill") == "#1F6FEB"}
-                self.assertEqual(current, filled)
-                self.assertIn("This notebook", texts)
+                steps = {r.get("data-step"): r.get("data-current") for r in svg.iter(ns + "rect") if r.get("data-step")}
+                self.assertEqual(current, {n for n, on in steps.items() if on == "1"})
+                self.assertEqual({str(n) for n in range(1, 10)} | ({"0"} if "0" in current else set()), set(steps),
+                                 "every step of the journey is drawn, step 0 only where the notebook has it")
+                self.assertEqual(6 + 2 + ("0" in current), len(list(svg.iter(ns + "line"))),
+                                 "arrows: six down within the three stages, one across between each stage")
+                self.assertIn("This notebook", "".join(svg.itertext()))
                 built = json.loads((SOURCES / "data-scientist" / f"{name}.ipynb").read_text(encoding="utf-8"))
                 self.assertEqual(first, "".join(built["cells"][0]["source"]), "the shipped .ipynb carries it")
 
