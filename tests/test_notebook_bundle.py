@@ -29,12 +29,39 @@ class BundleTest(unittest.TestCase):
                     # The README says what the guides did; they and the shared cells (build input) stay in the kit.
                     for left_out in ("MODEL-PROVIDERS.md", "INSTALL-AND-UPDATE.md", "00_shared", "useful-notebooks"):
                         self.assertFalse((base / left_out).exists(), left_out)
+                    # The model guide sits beside the Data Scientist notebooks (JupyterLab only: Marimo would list
+                    # a Markdown file as a notebook of its own).
+                    guide = base / "data-scientist" / "MODEL-PROVIDERS.md"
+                    if front == "jupyter":
+                        self.assertEqual(guide.read_bytes(), (ROOT / "notebook/MODEL-PROVIDERS.md").read_bytes())
+                    else:
+                        self.assertFalse(guide.exists())
                     sample = base / "data-scientist" / doc["notebooks"][0][front]
                     sample.write_text("my notebook")
                     self.assertEqual(bundle.copy(front, ROOT, Path(tmp)), ([], []))
                     self.assertEqual(sample.read_text(), "my notebook")
             readme = Path(tmp) / doc["folders"]["jupyter"] / "README.md"
             self.assertIn("EXAKIT_PROVIDER_BASE_URL", readme.read_text())
+
+    def test_the_model_guide_follows_the_data_scientist_and_stays_the_users_once_edited(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            guide = base / "data-scientist" / "MODEL-PROVIDERS.md"
+            added, problems = bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist"})
+            self.assertEqual(problems, [])
+            self.assertIn("data-scientist/MODEL-PROVIDERS.md", added)
+            self.assertIn("data-scientist/MODEL-PROVIDERS.md", (base / "README.md").read_text())
+            guide.write_text("my notes")                         # edited: the user's from now on
+            self.assertEqual(bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist"}), ([], []))
+            self.assertEqual(guide.read_text(), "my notes")
+            guide.unlink()                                       # deleted: not brought back
+            self.assertEqual(bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist"}), ([], []))
+            self.assertFalse(guide.exists())
+        with tempfile.TemporaryDirectory() as tmp:               # a kit without the Data Scientist gets no guide
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            bundle.copy("jupyter", ROOT, Path(tmp), {"ml-engineer"})
+            self.assertFalse((base / "ml-engineer" / "MODEL-PROVIDERS.md").exists())
+            self.assertFalse((base / "data-scientist").exists())
 
     def test_a_persona_brings_its_own_notebooks_and_one_added_later_joins(self):
         with tempfile.TemporaryDirectory() as tmp:

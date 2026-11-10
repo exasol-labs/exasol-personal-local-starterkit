@@ -240,8 +240,10 @@ id and address (not a key, not the Langfuse names) can stay in `~/.exasol-starte
 (Windows, Mac, Linux, WSL): point a user who asks "how do I set the model" at it. A short version
 appears at the end of a Data Scientist install and right after `exakit marketplace` adds the notebook.
 When an agent sets these for a user, it runs the `read -rs` lines in the user's own terminal
-and never types, echoes or logs a key itself; `notebook/MODEL-PROVIDERS.md` (*Set them once*)
-is the page to point at.
+and never types, echoes or logs a key itself; `MODEL-PROVIDERS.md` (*Set them once*) is the page
+to point at: on the user's machine it is beside the Data Scientist notebooks,
+`~/.exasol-starter-kit/notebooks/starter-kit-notebooks/data-scientist/MODEL-PROVIDERS.md`
+(`notebook/MODEL-PROVIDERS.md` in the kit).
 
 ## AI Lab notebooks on a local database
 

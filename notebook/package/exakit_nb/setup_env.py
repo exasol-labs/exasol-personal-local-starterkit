@@ -204,7 +204,7 @@ def model_setup(machine: str | None = None, show: bool = True) -> dict:
                   "",
                   "Next: run the cell above (nb.use_model) again - it answers in one line - or run this one to check.",
                   "Set only what you use: no model means the AI steps skip and say so; no Langfuse means no tracing.",
-                  "MODEL-PROVIDERS.md in the notebooks folder lists the providers (Claude, Ollama, LM Studio, vLLM, Gemini)."]
+                  "starter-kit-notebooks/data-scientist/MODEL-PROVIDERS.md lists the providers (Claude, Ollama, LM Studio, vLLM, Gemini)."]
     if show:
         print("\n".join(lines))
     return {"machine": machine, "set": [name for name in NAMES if state[name]], "missing": missing, "lines": lines}

@@ -501,6 +501,8 @@ def cmd_file_bytes(text: str) -> bytes:
         try:
             import ctypes
             encoding = f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+        except ImportError:
+            pass                                          # a non-Windows Python told it is "nt" (tests): ASCII
         except (AttributeError, OSError):
             encoding = "mbcs"
     try:

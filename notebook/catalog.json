@@ -15,6 +15,14 @@
     "jupyter": "data_paths.ipynb",
     "marimo": "data_paths.py"
   },
+  "guides": [
+    {
+      "file": "MODEL-PROVIDERS.md",
+      "source": "notebook/MODEL-PROVIDERS.md",
+      "personas": ["data-scientist"],
+      "fronts": ["jupyter"]
+    }
+  ],
   "notebooks": [
     {
       "id": "data-scientist-quickstart",
