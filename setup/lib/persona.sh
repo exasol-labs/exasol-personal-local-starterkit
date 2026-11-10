@@ -192,7 +192,12 @@ exakit_persona_flow() {
     exakit_soft_failed exapump && flags+=(--exapump-failed)
     if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then flags+=(--interactive); fi
     actions="$(_exakit_marketplace_cli installer_flow "${flags[@]}")" || return 1
-    while IFS='|' read -r action key value; do
+    # The actions come in on fd 3, not stdin: what each one runs (the persona
+    # question, the data table, `exakit connect` for the external row) asks the
+    # person at the terminal, and a stdin that is this here-document is no
+    # terminal - the persona question skipped its picker and the connect wizard
+    # took its line-by-line questions at every interactive install.
+    while IFS='|' read -r action key value <&3; do
         case "$action" in
             question) exakit_persona_question; exakit_persona_flow "$root" selected ;;
             set)
@@ -204,7 +209,7 @@ exakit_persona_flow() {
             warning) warn "$key" ;;
             data) exakit_persona_data "$root" ;;
         esac
-    done <<EXAKIT_PERSONA_ACTIONS
+    done 3<<EXAKIT_PERSONA_ACTIONS
 $actions
 EXAKIT_PERSONA_ACTIONS
 }

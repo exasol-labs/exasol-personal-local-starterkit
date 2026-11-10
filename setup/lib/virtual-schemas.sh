@@ -62,6 +62,16 @@ _exakit_vs_cli() {
 # installed command reads the kit home, which the installer's last step
 # refreshes (kit_helper_step). So there the wizard is the command beside this
 # library, as a child: the same kit version as the installer.
+#
+# The child reads the terminal. `exakit connect` draws its menu and panels only
+# when stdin is one (_exakit_vs_tui_ok), and the installer's stdin is not
+# always: its data step runs inside exakit_persona_flow's read loop, whose
+# stdin is that loop's here-document, and a setup script started from a pipe
+# (`curl ... | sh` without install.sh's own </dev/tty) has the pipe. Either way
+# the child took the line-by-line questions instead of the table `exakit
+# connect` and `exakit data-load` show. Only stdin is handed over: stdout is
+# the terminal already wherever the row can be picked, and nothing else is
+# redirected, so the install log is untouched.
 exakit_vs_connect_wizard() {
     if [ "$(type -t _require_install 2>/dev/null)" = function ]; then
         cmd_connect
@@ -71,7 +81,11 @@ exakit_vs_connect_wizard() {
         warn "This kit copy has no exakit command beside its library."
         return 2
     }
-    "${BASH:-bash}" "$_evw_cli" connect
+    if [ ! -t 0 ] && (: < /dev/tty) 2>/dev/null; then
+        "${BASH:-bash}" "$_evw_cli" connect < /dev/tty
+    else
+        "${BASH:-bash}" "$_evw_cli" connect
+    fi
 }
 
 # _exakit_vs_kit_python — the kit's pyexasol interpreter, which the engine and
