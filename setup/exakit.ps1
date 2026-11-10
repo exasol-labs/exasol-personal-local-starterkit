@@ -549,7 +549,7 @@ function Invoke-CmdStatus {
                     $remedyHints[$property.Name] = "this step was refused: $($softReason.TrimEnd('.')). Fix that, then run the remedy (it resumes at this step)"
                 }
                 if ($remedies.Contains($property.Name)) {
-                    if ($property.Name -eq "runtime" -and "$status".StartsWith("not installed")) {
+                    if ($property.Name -eq "runtime" -and ("$status".StartsWith("not installed") -or "$status".StartsWith("not deployed"))) {
                         $remedies["database"] = $remedies[$property.Name]
                         $remedyHints["database"] = $remedyHints[$property.Name]
                     }
@@ -574,6 +574,12 @@ function Invoke-CmdStatus {
         if ($installing) {
             $remedies["install"] = "exakit status --json"
             $remedyHints["install"] = "the installer is still running (step: $installStep) - poll the remedy until status is running"
+            # Nothing else may run under a live installer (audit AGK-03). Twin
+            # of the same lines in cmd_status.
+            if (-not $running) {
+                $remedies["database"] = "exakit status --json"
+                $remedyHints["database"] = "the installer is deploying the database - poll the remedy until status is running"
+            }
         } elseif ($installStopped) {
             $remedies["install"] = $installCmd
             $remedyHints["install"] = "the installer died at step '$installStep' - re-running resumes there"
@@ -2936,18 +2942,26 @@ function Invoke-CmdMarketplace {
         return
     }
     Initialize-ExakitLogging
-    if ($ids.Count -gt 0) {
-        $previous = $env:EXAKIT_MARKETPLACE_ADDONS
-        try {
-            $env:EXAKIT_MARKETPLACE_ADDONS = ($ids -join ",")
+    # Was the notebook here before? If this run adds it, the panel that says
+    # how to give it a model follows. Twin of the same lines in cmd_marketplace.
+    $nbBefore = $false
+    try { $nbBefore = [bool](Test-ExakitMarketplaceAddonInstalled notebook) } catch { }
+    try {
+        if ($ids.Count -gt 0) {
+            $previous = $env:EXAKIT_MARKETPLACE_ADDONS
+            try {
+                $env:EXAKIT_MARKETPLACE_ADDONS = ($ids -join ",")
+                Show-ExakitMarketplaceMenu
+            } finally {
+                if ($null -ne $previous) { $env:EXAKIT_MARKETPLACE_ADDONS = $previous }
+                else { Remove-Item Env:\EXAKIT_MARKETPLACE_ADDONS -ErrorAction SilentlyContinue }
+            }
+        } else {
             Show-ExakitMarketplaceMenu
-        } finally {
-            if ($null -ne $previous) { $env:EXAKIT_MARKETPLACE_ADDONS = $previous }
-            else { Remove-Item Env:\EXAKIT_MARKETPLACE_ADDONS -ErrorAction SilentlyContinue }
         }
-        return
+    } finally {
+        if (-not $nbBefore) { try { Write-ExakitModelSetupHint -Mode marketplace } catch { } }
     }
-    Show-ExakitMarketplaceMenu
 }
 
 
@@ -3381,6 +3395,13 @@ function Write-ExakitUpdateJsonReport {
     } else {
         $status = "current"; $remedy = $null
     }
+    # A component behind its advertised version that was KEPT (not the kit's)
+    # is not "current": the top-level hint names them. Twin of the `kept`
+    # line in _exakit_update_json_report.
+    $kept = @($skipped | Where-Object { $_.PSObject.Properties["remedy_hint"] -and $_.from -and $_.to -and $_.from -ne $_.to })
+    if ($kept.Count -gt 0 -and -not $hint) {
+        $hint = "kept as they are, behind the advertised version: " + (($kept | ForEach-Object { "$($_.component) $($_.from) -> $($_.to)" }) -join ", ") + " - installed outside the kit, so their owner updates them"
+    }
     $payload = [ordered]@{
         ok = ($failed.Count -eq 0); status = $status
         updated = @($updated); deferred = @($deferred); blocked = @($blocked); current = @($current)
@@ -3559,7 +3580,9 @@ function Invoke-ExakitUpdateRun {
         # is. Twin of the same arm in _exakit_update_run.
         if ($current -and $current -ne "not installed" -and -not (Test-ExakitComponentManaged $actual)) {
             Write-ExakitPreservedComponent $actual
-            Add-ExakitUpdateNote -Component $actual -Outcome "skipped" -From $current -To $available
+            # The row says WHY. Twin of the same arm in _exakit_update_run.
+            Add-ExakitUpdateNote -Component $actual -Outcome "skipped" -From $current -To $available `
+                -Hint "kept as it is: installed outside the kit ($(Get-ExakitComponentOwnership $actual)-owned), so its owner updates it"
             continue
         }
         # No build for this machine: a routine update stays quiet about it (there is
@@ -3697,6 +3720,9 @@ function Invoke-ExakitUpdateRun {
                     }
                     if (-not $wasSidecar) { [void](Update-McpClients) }
                     Set-ExakitManifestValue "desired.mcp" $available
+                    # The receipt a 0.2.3 install's move never wrote (audit LCY-04).
+                    # Twin of the same line in mcp_update.
+                    Set-ExakitComponentOwnership "mcp" "kit"
                     Ok "MCP server updated; database data was not changed"
                 }
             }
@@ -4216,6 +4242,12 @@ function Invoke-CmdInfoJson {
             $statusText = "no database"
             $remedyText = (Get-ExakitInstallCommand)
             $remedyHint = "no runtime is recorded yet; the installer resumes at the unfinished step"
+        } elseif ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentWedged)) {
+            # INTERRUPTED, as status says it (audit AGK-01): `exakit start` fails
+            # here every time. Twin of the same arm in cmd_info_json.
+            $statusText = "interrupted"
+            $remedyText = "exakit repair-runtime"
+            $remedyHint = "this DESTROYS the database and its data - ask the user, then pass --yes"
         }
         # The same installing state `status --json` answers. Mid-install this said
         # "database not running - exakit start": the one command that must not
@@ -4231,7 +4263,7 @@ function Invoke-CmdInfoJson {
         $doc | Add-Member -NotePropertyName "status" -NotePropertyValue $statusText -Force
         # Kept for callers written against the older shape, the same way the
         # shell twin keeps it.
-        if ($statusText -eq "stopped") {
+        if ($statusText -in @("stopped", "interrupted", "installing")) {
             $doc | Add-Member -NotePropertyName "database" -NotePropertyValue "not running" -Force
         }
         $doc | Add-Member -NotePropertyName "remedy" -NotePropertyValue $remedyText -Force
@@ -5134,7 +5166,18 @@ try {
                 if ($doctorJson) {
                     # The same three keys every --json state answer carries.
                     # "stopped", matching status --json and the shell twin.
-                    [ordered]@{ installed = $true; status = "stopped"; remedy = "exakit start"; database = "not running" } | ConvertTo-Json
+                    # INSTALLING AND INTERRUPTED as status says them (audit
+                    # AGK-01). Twin of the same arms in cmd_mcp_doctor.
+                    $doctorStep = "$(Get-ExakitManifestValue 'install.current_step')"
+                    if ($doctorStep -ne "" -and (Test-ExakitInstallRunning)) {
+                        [ordered]@{ installed = $true; status = "installing"; remedy = "exakit status --json"; database = "not running"
+                                    remedy_hint = "the installer is still running - poll the remedy until status is running" } | ConvertTo-Json
+                    } elseif ($doctorType -eq "personal" -and (Test-PersonalDeploymentWedged)) {
+                        [ordered]@{ installed = $true; status = "interrupted"; remedy = "exakit repair-runtime"; database = "not running"
+                                    remedy_hint = "this DESTROYS the database and its data - ask the user, then pass --yes" } | ConvertTo-Json
+                    } else {
+                        [ordered]@{ installed = $true; status = "stopped"; remedy = "exakit start"; database = "not running" } | ConvertTo-Json
+                    }
                 } else {
                     Warn2 "The database is not running - fix that first: exakit start"
                     Info "MCP diagnostics need a live database (the read-only user and its grants are checked against it)."

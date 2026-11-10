@@ -18,9 +18,9 @@ def _(mo):
 
     **Dataset:** `amazon_sales`, `fraud_transactions` or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build.
 
-    Builds a Rust UDF from the trained coefficients and checks it scores exactly like Python.
+    Builds a Rust UDF from the trained coefficients and checks that it scores the same as Python.
 
-    **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`) and Docker or Podman running.
+    **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`), and Docker or Podman.
     """)
     return
 
@@ -86,7 +86,7 @@ def _(mo):
     mo.md(r"""
     ## Load the coefficients
 
-    Defaults to the newest finished `01_train` run for this descriptor version, or set `COEFFICIENTS_FILE`. Feature order must match the handoff. Use a new `UDF_NAME` for a new revision.
+    Uses the newest finished `01_train` run for this descriptor version, or `COEFFICIENTS_FILE`. The feature order must match the handoff. Use a new `UDF_NAME` for a new revision.
     """)
     return
 
@@ -130,7 +130,7 @@ def _(mo):
     mo.md(r"""
     ## Build and deploy
 
-    Builds a Linux `.so` and deploys a SQL function. Without a shared bucket, the library goes into the RUST container, which restarts the database: set `ALLOW_DATABASE_RESTART = True` to allow it.
+    Builds a Linux `.so` and deploys a SQL function. Without a shared bucket, the library goes into the RUST container, which restarts the database. Set `ALLOW_DATABASE_RESTART = True` to allow this.
     """)
     return
 
@@ -177,11 +177,7 @@ def _(mo):
     mo.md(r"""
     ## Check parity
 
-    > **Why check parity?** The Rust scorer is a second, faster copy of the same model.
-    > A copy is only safe to use if it gives the same answer as the original on every row.
-    > So both score the same held-out rows, and any difference stops the notebook.
-
-    Scores up to `TEST_ROWS` test rows in Rust and Python. Every label must match and the largest probability gap must be below `1e-9`.
+    The Rust scorer is a faster copy of the model. It must give the same answer on every row. Both score up to `TEST_ROWS` held-out rows. Every label must match, and the largest probability gap must be below `1e-9`. A difference stops the notebook.
     """)
     return
 
@@ -224,7 +220,7 @@ def _(mo):
     mo.md(r"""
     ## Record the run in MLflow
 
-    Logs a Rust run linked to the source Python run, with build hashes and the parity result.
+    Records a Rust run linked to the Python run, with the build hashes and the parity result.
     """)
     return
 

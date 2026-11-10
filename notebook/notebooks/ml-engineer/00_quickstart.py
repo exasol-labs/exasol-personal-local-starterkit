@@ -9,16 +9,16 @@
 # %% [markdown]
 # # ML Engineer quickstart
 #
-# **Dataset:** `amazon_sales` by default; `fraud_transactions` or your own file also work. **How long:** about five minutes once runtimes are installed.
+# **Dataset:** `amazon_sales` by default, `fraud_transactions` or your own file. **How long:** about five minutes after the runtimes are installed.
 #
-# Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
+# Checks the database Python runtime, MLflow and the shared model directory. Then loads and describes the data.
 #
-# **Run first:** `exakit udf-use default` (installs the ML runtime; a container install can restart the database).
+# **Run first:** `exakit udf-use default`. It installs the ML runtime. A container install can restart the database.
 
 # %% [markdown]
 # ## Start a workflow
 #
-# One ID links data, checks and model runs. Train, Rust scoring and scoring continue it on their own: nothing to copy.
+# One ID links the data, the checks and the model runs. The next notebooks continue it.
 
 # %%
 import os
@@ -30,15 +30,11 @@ print(f"Every step below is logged under it: exakit workflow show {workflow_id}"
 # %% [markdown]
 # ## Pick the database Python runtime
 #
-# > **What is a UDF?** A user-defined function: a small program, here in Python, that runs inside the database, next to the data.
-# > Training as a UDF means the rows are not copied out of the database into the notebook first.
-# > The runtime (container) picked below is the set of Python packages that program can use.
+# Training runs as a UDF: Python code that runs inside the database, next to the data. The runtime is the set of packages that code can use.
 #
-# Training runs as a UDF inside Exasol, with its own packages.
-#
-# - `PYTHON3_ML` (`exakit udf-use default`): preferred, has the ML packages.
+# - `PYTHON3_ML` (`exakit udf-use default`): preferred. It has the ML packages.
 # - `PYTHON3` (`exakit udf-setup`): the official alternative.
-# - `EXAKIT_UDF_CONTAINER` picks another installed alias.
+# - `EXAKIT_UDF_CONTAINER` selects another installed alias.
 
 # %%
 CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
@@ -49,7 +45,7 @@ print(f"container alias: {CONTAINER}")
 # %% [markdown]
 # ## Check the runtime packages
 #
-# Runs a small UDF that imports the training packages. On failure, run the command it prints and repeat.
+# Runs a small UDF that imports the training packages. If it fails, run the command it prints and try again.
 
 # %%
 container_ok = nb.check_container(connection, alias=CONTAINER)
@@ -57,13 +53,9 @@ container_ok = nb.check_container(connection, alias=CONTAINER)
 # %% [markdown]
 # ## Check MLflow
 #
-# > **What is MLflow tracking?** A logbook for model training: every run's settings, scores and model file.
-# > With it you can compare two runs side by side and find the exact model a result came from.
-# > By default the runs are kept on this computer, in the kit's own MLflow.
+# MLflow records the settings, scores and model file of each run. By default it is the kit's own MLflow on this computer. For the browser UI: `exakit mlflow start`, then `exakit mlflow url`.
 #
-# Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`.
-#
-# **Optional: another MLflow server.** Fill in `MLFLOW_TRACKING_URI` to record to your team's server instead; `MLFLOW_SERVER_LOGIN = True` asks for its username and password in a hidden box. They stay in this notebook's kernel only - never in this file. Left empty, runs go to the kit's own MLflow.
+# **Optional: your team's MLflow server.** Set `MLFLOW_TRACKING_URI`. `MLFLOW_SERVER_LOGIN = True` asks for the username and password in a hidden box. They stay in this kernel only.
 
 # %%
 MLFLOW_TRACKING_URI = ""     # e.g. "https://mlflow.example.com"; empty: the kit's own MLflow (or the one set before `exakit notebook`)
@@ -74,7 +66,7 @@ mlflow_ok = nb.check_mlflow()
 # %% [markdown]
 # ## Check the shared model directory
 #
-# Tests that a UDF can read the kit's model directory (needed for Python model-file scoring). `exakit model list --json` shows its paths.
+# Checks that a UDF can read the kit's model directory. Python model-file scoring needs it. `exakit model list --json` shows its paths.
 
 # %%
 bucket_ok = nb.check_bucket(connection)
@@ -82,7 +74,7 @@ bucket_ok = nb.check_bucket(connection)
 # %% [markdown]
 # ## Load and describe the data
 #
-# The same cells as the Data Scientist quickstart: pick a dataset, then approve its column map.
+# The same cells as the Data Scientist quickstart: choose a dataset, then approve its column map.
 
 # %% [include] ../00_shared/data_paths.py load
 
@@ -91,7 +83,7 @@ bucket_ok = nb.check_bucket(connection)
 # %% [markdown]
 # ## Check the label
 #
-# How many rows per group and the % where the label is 1. Label 1 means the outcome happened (`CANCELLED`: the order line was cancelled; `ABOVE_STORE_MEDIAN`: the store sold more that week than in its median week), not that it is good. A note under the result says what the numbers mean.
+# Rows per group and the % where the label is 1. Label 1 means the outcome happened (`CANCELLED`: the order line was cancelled), not that it is good.
 
 # %%
 missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
@@ -118,4 +110,5 @@ first_rows
 # %% [markdown]
 # ## Next
 #
-# Open `01_train.ipynb`: it trains from the approved column map above and writes the training handoff the next notebooks use.
+# Open `01_train.ipynb`. It trains from the approved column map and writes the training handoff.
+

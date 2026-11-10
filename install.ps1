@@ -556,6 +556,15 @@ try {
                     Where-Object { $skip -notcontains $_.Name } |
                     ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $localDest -Recurse -Force }
             } else {
+                # THE KIT ITSELF, VERIFIED WHEN A DIGEST IS GIVEN (audit SEC-01).
+                # Twin of the EXAKIT_KIT_SHA256 check in install.sh.
+                if ($env:EXAKIT_KIT_SHA256) {
+                    $kitSum = (Get-FileHash -LiteralPath $tmpZip -Algorithm SHA256).Hash.ToLowerInvariant()
+                    if ($kitSum -ne $env:EXAKIT_KIT_SHA256.Trim().ToLowerInvariant()) {
+                        throw "The downloaded kit ($Repo@$Ref) does not match EXAKIT_KIT_SHA256 (got $kitSum). Nothing was installed."
+                    }
+                    Write-Host "  Kit archive verified against EXAKIT_KIT_SHA256"
+                }
                 Expand-Archive -Path $tmpZip -DestinationPath $incoming
             }
         } catch {

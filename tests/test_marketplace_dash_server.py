@@ -38,6 +38,26 @@ class ProbeTest(unittest.TestCase):
         self.assertEqual((0, "answered"), (result.returncode, result.stdout.strip()))
 
 
+class CmdFileTest(unittest.TestCase):
+    """runtime.cmd_file_bytes (audit WIN-02): a .cmd launcher under a non-ASCII user profile still names a path
+    cmd.exe can open - the profile is folded into %USERPROFILE%, so the bytes stay ASCII - and a path the console
+    code page cannot spell is refused by name, never written wrong."""
+
+    def test_the_profile_folds_to_the_variable(self) -> None:
+        import runtime  # noqa: E402
+        profile = "C:\\Users\\M\u00fcller"
+        with patch.dict(os.environ, {"USERPROFILE": profile}):
+            data = runtime.cmd_file_bytes(f'@echo off\r\n"{profile}\\.exasol-starter-kit\\venv\\python.exe" %*\r\n')
+        self.assertEqual(b'@echo off\r\n"%USERPROFILE%\\.exasol-starter-kit\\venv\\python.exe" %*\r\n', data)
+
+    @unittest.skipIf(os.name == "nt", "off Windows the code page is ASCII, so any non-ASCII byte must be refused")
+    def test_an_unspellable_path_is_refused_by_name(self) -> None:
+        import runtime  # noqa: E402
+        with patch.dict(os.environ, {"USERPROFILE": "C:\\Users\\someone"}), self.assertRaises(AddonFailure) as caught:
+            runtime.cmd_file_bytes('"D:\\Daten \u00e4\\kit\\python.exe" %*')
+        self.assertIn("code page", str(caught.exception))
+
+
 class DashServerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()

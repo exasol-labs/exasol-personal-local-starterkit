@@ -117,6 +117,9 @@ mcp_update() {
         # Clients written by a kit from before still launch the stdio server.
         mcp_refresh_clients || true
     fi
+    # The receipt the move from 0.2.3's own server never wrote (audit LCY-04):
+    # without it every later MCP update read "not the kit's" and was skipped.
+    exakit_record_ownership mcp kit >/dev/null 2>&1 || true
     ok "MCP server updated; database data was not changed"
 }
 

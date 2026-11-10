@@ -132,5 +132,27 @@ try {
     Check 'owned launcher removed' False (Test-Path (Join-Path $script:BinDir 'exasol.exe'))
     Check 'owned custom exapump removed' False (Test-Path $pump)
     Check 'same-named user binary at default path kept' True (Test-Path (Join-Path $script:BinDir 'exapump.exe'))
+    # AN INSTALL FROM BEFORE RECEIPTS (every kit up to 0.2.4, audit LCY-01):
+    # no ownership key, only what the old kit recorded. Twin of the same
+    # block in component-ownership.sh.
+    New-Item -ItemType Directory -Force -Path $script:BinDir, (Join-Path $work 'legacy-deployment') | Out-Null
+    Set-Content -LiteralPath (Join-Path $script:BinDir 'exasol.exe') -Value 'x'
+    Set-Content -LiteralPath (Join-Path $script:BinDir 'exapump.exe') -Value 'x'
+    $script:manifest = @{
+        'runtime.type' = 'personal'; 'runtime.launcher' = (Join-Path $script:BinDir 'exasol.exe')
+        'runtime.deployment_dir' = (Join-Path $work 'legacy-deployment')
+        'components.exapump.path' = (Join-Path $script:BinDir 'exapump.exe'); 'components.mcp_server.version' = '1.9.0'
+    }
+    $script:PersonalDeployDir = Join-Path $work 'legacy-deployment'
+    Remove-Item Env:EXAKIT_EXAPUMP_BIN -ErrorAction SilentlyContinue
+    Check 'pre-receipt: the kit launcher is the kit''s' kit (Get-ExakitComponentOwnership personal)
+    Check 'pre-receipt: the database its launcher deployed is the kit''s' kit (Get-ExakitComponentOwnership database)
+    Check 'pre-receipt: the kit exapump is the kit''s' kit (Get-ExakitComponentOwnership exapump)
+    Check 'pre-receipt: the MCP server it recorded is the kit''s' kit (Get-ExakitComponentOwnership mcp)
+    Set-ExakitReusedOwnership personal (Join-Path $script:BinDir 'exasol.exe')
+    Check 'pre-receipt: an installer re-run writes the kit receipt, never user' kit $script:manifest['components.personal.ownership']
+    $script:manifest = @{ 'runtime.type' = 'personal'; 'runtime.launcher' = (Join-Path $work 'their-own\exasol.exe'); 'runtime.deployment_dir' = (Join-Path $work 'legacy-deployment') }
+    Check 'pre-receipt: a launcher outside the kit bin stays unknown' unknown (Get-ExakitComponentOwnership personal)
+    Check '...and so does the database it deployed' unknown (Get-ExakitComponentOwnership database)
     Write-Host "$script:PASS PowerShell ownership checks passed"
 } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }

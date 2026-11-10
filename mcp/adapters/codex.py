@@ -9,6 +9,8 @@ except ModuleNotFoundError:  # Python < 3.11: tomllib was added in 3.11.
     # imports this adapter unconditionally); Codex operations degrade to a
     # clear finding instead of crashing the subsystem at import time.
     tomllib = None
+import datetime
+import math
 from pathlib import Path
 import re
 
@@ -179,6 +181,7 @@ class CodexAdapter(ClientAdapter):
             content=_dump_toml(document),
             managed_hash=sha256_json(entry),
             entry_name=server_definition.name,
+            expected_document=document,
         )
 
     def render_removal(self, inspection: AdapterInspection, server_name: str) -> RenderResult:
@@ -196,6 +199,7 @@ class CodexAdapter(ClientAdapter):
             managed_hash=None,
             entry_name=server_name,
             remove_file=remove_file,
+            expected_document=None if remove_file else document,
         )
 
     def validate_render(self, rendered: RenderResult) -> list[Finding]:
@@ -206,8 +210,7 @@ class CodexAdapter(ClientAdapter):
             # Codex there, so this path is not reached in practice.
             return []
         try:
-            tomllib.loads(rendered.content or "")
-            return []
+            parsed = tomllib.loads(rendered.content or "")
         except tomllib.TOMLDecodeError as exc:
             return [
                 Finding(
@@ -220,6 +223,21 @@ class CodexAdapter(ClientAdapter):
                     blocking=True,
                 )
             ]
+        if rendered.expected_document is not None and not _same_toml(parsed, rendered.expected_document):
+            # The write would change a value the user (or Codex itself) already
+            # had -- a float turned into a string, a dropped key. Refuse it and
+            # leave their config.toml exactly as it is.
+            return [
+                Finding(
+                    code="lossy_render_output",
+                    severity=Severity.ERROR,
+                    message="Writing the Codex configuration would change settings that are already in it, so it was left untouched.",
+                    scope={"path": str(rendered.path)},
+                    recommended_action="Add the exasol entry to the Codex config by hand, or report this config.toml shape to the starter kit.",
+                    blocking=True,
+                )
+            ]
+        return []
 
     def activation_instructions(self) -> list[NextAction]:
         return [
@@ -245,27 +263,50 @@ def _toml_is_kit_only(path: Path) -> bool:
 
 
 def _dump_toml(document: dict) -> str:
+    """Serialise a parsed Codex config back to TOML without losing a type.
+
+    The kit re-writes the user's whole config.toml to add its own entry, so
+    every value Codex or the user put there has to come back exactly as
+    tomllib read it: a float stays a float (`startup_timeout_sec = 120.0`,
+    never `"120.0"`, which Codex rejects), dates stay dates, and a list of
+    tables stays a list of tables. validate_render re-parses the output and
+    refuses the write if anything differs.
+    """
     lines: list[str] = []
-    _emit_toml_table(lines, document, ())
+    _emit_toml_table(lines, document, (), None)
     return "".join(lines).rstrip() + "\n"
 
 
-def _emit_toml_table(lines: list[str], table: dict, prefix: tuple[str, ...]) -> None:
+def _is_table_array(value: object) -> bool:
+    return isinstance(value, list) and bool(value) and all(isinstance(item, dict) for item in value)
+
+
+def _emit_toml_table(
+    lines: list[str], table: dict, prefix: tuple[str, ...], header: str | None
+) -> None:
     scalar_items = []
     nested_items = []
     for key, value in table.items():
-        if isinstance(value, dict):
+        if isinstance(value, dict) or _is_table_array(value):
             nested_items.append((key, value))
         else:
             scalar_items.append((key, value))
-    if prefix:
-        lines.append(f"[{'.'.join(_toml_key(part) for part in prefix)}]\n")
+    if header is not None:
+        lines.append(header)
     for key, value in scalar_items:
         lines.append(f"{_toml_key(key)} = {_toml_value(value)}\n")
     if scalar_items and nested_items:
         lines.append("\n")
     for index, (key, value) in enumerate(nested_items):
-        _emit_toml_table(lines, value, prefix + (key,))
+        path = prefix + (key,)
+        dotted = ".".join(_toml_key(part) for part in path)
+        if isinstance(value, dict):
+            _emit_toml_table(lines, value, path, f"[{dotted}]\n")
+        else:
+            for item_index, item in enumerate(value):
+                _emit_toml_table(lines, item, path, f"[[{dotted}]]\n")
+                if item_index != len(value) - 1:
+                    lines.append("\n")
         if index != len(nested_items) - 1:
             lines.append("\n")
 
@@ -277,8 +318,22 @@ def _toml_key(value: object) -> str:
     text = str(value)
     if _BARE_TOML_KEY.match(text):
         return text
-    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
+    return _toml_string(text)
+
+
+_TOML_ESCAPES = {"\\": "\\\\", '"': '\\"', "\b": "\\b", "\t": "\\t", "\n": "\\n", "\f": "\\f", "\r": "\\r"}
+
+
+def _toml_string(text: str) -> str:
+    out = []
+    for char in text:
+        if char in _TOML_ESCAPES:
+            out.append(_TOML_ESCAPES[char])
+        elif ord(char) < 0x20 or ord(char) == 0x7F:
+            out.append(f"\\u{ord(char):04X}")
+        else:
+            out.append(char)
+    return '"' + "".join(out) + '"'
 
 
 def _toml_value(value: object) -> str:
@@ -286,7 +341,31 @@ def _toml_value(value: object) -> str:
         return "true" if value else "false"
     if isinstance(value, int):
         return str(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        if math.isinf(value):
+            return "inf" if value > 0 else "-inf"
+        return repr(value)
+    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
+        return value.isoformat()
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
-    text = str(value).replace("\\", "\\\\").replace('"', '\\"')
-    return f"\"{text}\""
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        return "{ " + ", ".join(f"{_toml_key(k)} = {_toml_value(v)}" for k, v in value.items()) + " }"
+    return _toml_string(str(value))
+
+
+def _same_toml(left: object, right: object) -> bool:
+    """Equality of parsed TOML, with nan equal to nan."""
+    if isinstance(left, float) and isinstance(right, float) and math.isnan(left) and math.isnan(right):
+        return True
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(_same_toml(left[k], right[k]) for k in left)
+    if isinstance(left, list):
+        return len(left) == len(right) and all(_same_toml(a, b) for a, b in zip(left, right))
+    return left == right

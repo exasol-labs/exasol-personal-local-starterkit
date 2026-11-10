@@ -167,4 +167,39 @@ check 'owned database teardown called' yes "$([ -e "$WORK/teardown" ] && echo ye
 check 'owned launcher removed' no "$([ -e "$EXAKIT_BIN_DIR/exasol" ] && echo yes || echo no)"
 check 'owned custom exapump removed' no "$([ -e "$EXAKIT_EXAPUMP_BIN" ] && echo yes || echo no)"
 check 'same-named user binary at default path retained' yes "$([ -e "$EXAKIT_BIN_DIR/exapump" ] && echo yes || echo no)"
+# AN INSTALL FROM BEFORE RECEIPTS (every kit up to 0.2.4, audit LCY-01): no
+# `*.ownership` key anywhere, only what the old kit recorded about its own
+# install. Answering "unknown" here made `exakit update` skip the launcher,
+# the database and exapump of every existing install and report "current".
+mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
+printf '{}\n' > "$EXAKIT_MANIFEST"
+manifest_set installed_at fixture
+printf '#!/bin/sh\nexit 0\n' > "$EXAKIT_BIN_DIR/exasol"; chmod +x "$EXAKIT_BIN_DIR/exasol"
+printf '#!/bin/sh\nexit 0\n' > "$EXAKIT_BIN_DIR/exapump"; chmod +x "$EXAKIT_BIN_DIR/exapump"
+unset EXAKIT_EXAPUMP_BIN
+mkdir -p "$HOME/legacy-deployment"
+EXAKIT_PERSONAL_DEPLOY_DIR="$HOME/legacy-deployment"
+manifest_set runtime.type personal
+manifest_set runtime.launcher "$EXAKIT_BIN_DIR/exasol"
+manifest_set runtime.deployment_dir "$HOME/legacy-deployment"
+manifest_set components.exapump.path "$EXAKIT_BIN_DIR/exapump"
+manifest_set components.mcp_server.version 1.9.0
+check 'pre-receipt: the kit launcher is the kit'"'"'s' kit "$(exakit_component_ownership personal)"
+check 'pre-receipt: the database its launcher deployed is the kit'"'"'s' kit "$(exakit_component_ownership database)"
+check 'pre-receipt: the kit exapump is the kit'"'"'s' kit "$(exakit_component_ownership exapump)"
+check 'pre-receipt: the MCP server it recorded is the kit'"'"'s' kit "$(exakit_component_ownership mcp)"
+check 'pre-receipt: so update manages the launcher' yes "$(exakit_component_is_managed personal && echo yes)"
+exakit_reuse_ownership personal "$EXAKIT_BIN_DIR/exasol"
+exakit_reuse_ownership database "$HOME/legacy-deployment"
+check 'pre-receipt: an installer re-run writes the kit receipt, never "user"' kit "$(manifest_get components.personal.ownership)"
+check '...for the database too' kit "$(manifest_get runtime.ownership)"
+# Never by PATH: a launcher the old kit recorded somewhere else is the user's.
+printf '{}\n' > "$EXAKIT_MANIFEST"
+manifest_set runtime.type personal
+manifest_set runtime.launcher "$HOME/their-own/exasol"
+manifest_set runtime.deployment_dir "$HOME/legacy-deployment"
+check 'pre-receipt: a launcher outside the kit bin stays unknown' unknown "$(exakit_component_ownership personal)"
+check '...and so does the database it deployed' unknown "$(exakit_component_ownership database)"
+check 'pre-receipt: an explicit user receipt is never overridden' user "$(manifest_set components.exapump.ownership user; manifest_set components.exapump.path "$EXAKIT_BIN_DIR/exapump"; exakit_component_ownership exapump)"
+
 printf '%s ownership checks passed\n' "$PASS"

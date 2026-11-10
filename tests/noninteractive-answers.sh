@@ -212,6 +212,17 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
         offer) )"
 check "no answers, no terminal: the pending samples, never the wizard" "LOAD tpch;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
 
+echo "every answer is checked before anything is installed (audit AGK-10), external included:"
+# The check refuses an unknown dataset id before step 1. `external` is the data
+# menu's external-source row (exakit connect), an EXAKIT_DATASETS name that
+# loads nothing - refusing it stopped an install the data step accepts.
+_eva() { ( EXAKIT_DATASETS="$1"; unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS
+           exakit_bundled_datasets() { printf 'tpch|TPC-H\nenergy|Energy\n'; }
+           exakit_validate_env_answers >/dev/null 2>&1; printf 'rc=%s' "$?" ); }
+check "EXAKIT_DATASETS=external passes the check" "rc=0" "$(_eva external)"
+check "...beside a dataset too" "rc=0" "$(_eva tpch,external)"
+check "an unknown id is still refused, nothing installed (exit 2)" "rc=2" "$(_eva tpch,nonsense)"
+
 echo ""
 echo "noninteractive-answers: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -9,6 +9,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -378,8 +379,10 @@ class KitContext:
     def pinned_document(self) -> dict:
         """This kit copy's own versions.json: where a SHA-256 a download is verified against comes from (SEC-13).
         versions_document() may be the copy fetched from the main branch, which says what is newest but is not a
-        trust anchor; the kit copy came from a release (exakit update installs the announced tag) and carries the
-        digests that release was reviewed with. A newer version advertised only remotely gets no digest from here."""
+        trust anchor. The kit copy carries the digests its ref was reviewed with; it is itself verified only when the
+        installer was given EXAKIT_KIT_SHA256 (an install from a branch, `main` by default, is not), so it anchors the
+        components exactly as far as that copy can be trusted. A newer version advertised only remotely gets no
+        digest from here."""
         return self._pinned_document
 
     def target_version(self, addon_id: str, default: str) -> str:
@@ -483,6 +486,30 @@ def probe(argv: list[str], *, timeout: float = FIRST_IMPORT_TIMEOUT) -> subproce
         return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         return None
+
+
+def cmd_file_bytes(text: str) -> bytes:
+    """The bytes of a .cmd file cmd.exe reads as written (audit WIN-02): the user's profile folded into %USERPROFILE%
+    (cmd expands it at run time, so the bytes stay ASCII for any user name) and the rest in the console's OEM code
+    page, the one cmd.exe reads a batch file in. UTF-8 and strict ASCII both broke a non-ASCII path. A path the OEM
+    code page cannot spell is refused by name rather than written wrong."""
+    profile = os.environ.get("USERPROFILE", "").rstrip("\\")
+    if profile:
+        text = re.sub(re.escape(profile + "\\"), lambda _m: "%USERPROFILE%\\", text, flags=re.IGNORECASE)
+    encoding = "ascii"
+    if os.name == "nt":
+        try:
+            import ctypes
+            encoding = f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+        except ImportError:
+            pass                                          # a non-Windows Python told it is "nt" (tests): ASCII
+        except (AttributeError, OSError):
+            encoding = "mbcs"
+    try:
+        return text.encode(encoding)
+    except (UnicodeEncodeError, LookupError) as error:
+        raise AddonFailure("A path in this launcher cannot be written for cmd.exe in this console's code page; "
+                           "install the kit under a folder whose name uses plain letters") from error
 
 
 def venv_python(venv: Path) -> Path:

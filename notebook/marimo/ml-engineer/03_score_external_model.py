@@ -16,9 +16,9 @@ def _(mo):
     mo.md(r"""
     # Score a model file in SQL
 
-    **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `fraud_transactions` or a compatible table. **Run time:** about three minutes after setup.
+    **Dataset:** the one you approved last (else `amazon_sales`). Set `DATASET` for `fraud_transactions` or a compatible table. **Run time:** about three minutes after setup.
 
-    Copies a scikit-learn model file to the shared model directory, wraps it in a scoring UDF and checks database scores match local ones.
+    Copies a scikit-learn model file to the shared model directory, wraps it in a scoring UDF and checks that database scores match local scores.
 
     **Needs:** approved roles, the Python ML runtime and a working shared bucket.
     """)
@@ -38,7 +38,7 @@ def _(mo):
     mo.md(r"""
     ## Settings
 
-    Keep `MODEL_FILE = None` to train a small stand-in model. Your own file needs `predict_proba` and the same inputs as the stand-in: `category`, plus `entity` and `text` when the map has them (the printed inputs below).
+    Keep `MODEL_FILE = None` to train a small stand-in model. Your own file needs `predict_proba` and the same inputs as the stand-in: `category`, plus `entity` and `text` when the map has them.
     """)
     return
 
@@ -66,7 +66,7 @@ def _(mo):
     mo.md(r"""
     ## Load the roles
 
-    Prints the role-to-column map the SQL below uses.
+    Prints the role-to-column map that the SQL below uses.
     """)
     return
 
@@ -113,7 +113,7 @@ def _(mo):
     mo.md(r"""
     ## Training rows
 
-    The model's inputs come from the approved map: the category, the entity when there is one, the text when there is one (`amazon_sales` and `fraud_transactions` have no text, so the stand-in learns from the groups only). A fixed hash of the key holds out about one row in five; the stand-in trains on the rest.
+    The inputs are the category, and the entity and text when the map has them. The practice datasets have no text. A fixed hash of the key holds out about one row in five. The stand-in trains on the rest.
     """)
     return
 
@@ -160,7 +160,7 @@ def _(mo):
     mo.md(r"""
     ## Load the model and check versions
 
-    Trains the stand-in or opens `MODEL_FILE`, then checks its scikit-learn version against the database runtime. Only open pickles you trust: loading one can run code.
+    Trains the stand-in or opens `MODEL_FILE`. Then compares its scikit-learn version with the database runtime. Open only pickles you trust: loading a pickle can run code.
     """)
     return
 
@@ -237,7 +237,7 @@ def _(mo):
     mo.md(r"""
     ## Copy the model for the UDF
 
-    `exakit model put` copies the file and prints the UDF-visible path and SHA-256. For your own `MODEL_FILE`, run `exakit model inspect`, then `exakit model put ... --yes`.
+    `exakit model put` copies the file and prints the UDF path and SHA-256. For your own `MODEL_FILE`, run `exakit model inspect`, then `exakit model put ... --yes`.
     """)
     return
 
@@ -290,7 +290,7 @@ def _(mo):
     mo.md(r"""
     ## Create the scoring UDF
 
-    Renders the UDF from the kit's checked template: one argument per input above. It returns the probability that the label is 1.
+    Builds the UDF from the kit's checked template, with one argument per input. It returns the probability that the label is 1.
     """)
     return
 
@@ -329,7 +329,7 @@ def _(mo):
     mo.md(r"""
     ## Compare predictions
 
-    Scores the held-out rows in Exasol and locally. They must match; a skipped comparison is not a pass.
+    Scores the held-out rows in Exasol and locally. They must match. A skipped comparison is not a pass.
     """)
     return
 
@@ -368,7 +368,7 @@ def _(mo):
     mo.md(r"""
     ## Score in a query
 
-    Mean predicted score vs actual label share per category (the first input).
+    Mean predicted score and actual label share per category.
     """)
     return
 
@@ -391,7 +391,7 @@ def _(mo):
     mo.md(r"""
     ## Use your own model
 
-    Set `MODEL_FILE`, adapt the inputs and rerun the checks. Remove the example with `DROP SCRIPT EXAKIT_SCORING.SCORE_STAND_IN_MODEL`.
+    Set `MODEL_FILE`, adapt the inputs and run the checks again. To remove the example: `DROP SCRIPT EXAKIT_SCORING.SCORE_STAND_IN_MODEL`.
     """)
     return
 

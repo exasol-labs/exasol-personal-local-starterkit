@@ -114,8 +114,9 @@ Skip a value in the hidden prompt with Enter: an empty key is the same as none.
 
 In a notebook, `nb.model_setup()` prints this page's essentials for the machine it runs on
 (Windows, Mac, Linux or WSL): the six names with set / not set, the `nb.use_model(...)` way,
-the terminal lines, the restart rule and the settings file. The install's closing screen
-shows the same lines when the notebook add-on is installed.
+the terminal lines, the restart rule and the settings file. A short version of the terminal
+lines appears at the end of a Data Scientist install, and right after `exakit marketplace`
+adds the notebook add-on.
 
 When switching providers, replace or clear both the key and optional headers.
 Existing user notebook copies are preserved by updates: change their settings

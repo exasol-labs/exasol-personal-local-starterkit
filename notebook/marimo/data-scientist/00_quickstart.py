@@ -18,9 +18,9 @@ def _(mo):
 
     **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 
-    **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 1 and 2** (and a step 0: the kit itself, from here).
+    **Steps:** 1 Access, 2 Understand, 3 Prepare, 4 Explore, 5 Model, 6 Validate, 7 Ask with AI, 8 Share, 9 Hand off. **This notebook: steps 0, 1 and 2.**
 
-    You end with a connection, an approved column map and a first grouped result. No AI model needed. Everything the kit does - checking it, updating it, adding an add-on, loading data - runs from these cells, with its log shown here, so you never have to switch to a terminal.
+    At the end you have a connection, an approved column map and a first result. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
     """)
     return
 
@@ -28,10 +28,15 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Step 0 · The kit, from this notebook
+    ## Step 0 · Check the kit
 
-    > **What is this?** The kit is the database on this computer, its add-ons and your notebooks. This cell asks it how it is doing and prints the answer: installed or not, the database, each add-on and where it runs, the datasets loaded.
-    > It changes nothing. Any kit command can be run the same way: `nb.exakit("update")` brings the kit up to date, `nb.exakit("marketplace", "dash-server")` adds an add-on, `nb.exakit("logs")` shows the logs - each prints what the terminal would, as it happens.
+    Shows what is installed and running: the database, each add-on and the loaded datasets. It changes nothing.
+
+    Other kit commands run the same way, with the log in the cell:
+
+    - `nb.exakit("update")` updates the kit.
+    - `nb.exakit("marketplace", "dash-server")` adds an add-on.
+    - `nb.exakit("logs")` shows the logs.
     """)
     return
 
@@ -60,8 +65,7 @@ def _(mo):
     mo.md(r"""
     ## Step 1 · Access the data
 
-    > **What happens here?** The notebook connects to the kit's database with the connection the kit saved (no password in this file), starts a *workflow* - one ID that every query and decision below is logged under - and loads a dataset: one of the kit's three, your own file, or a table from a source you connected.
-    > After this step the data is in the database and this notebook can see it.
+    Connects to the database, starts a workflow and loads a dataset: a practice dataset, your own file or a connected source.
     """)
     return
 
@@ -71,7 +75,7 @@ def _(mo):
     mo.md(r"""
     ### Start a workflow
 
-    Logs your queries and decisions under one ID. Explore, Ask and Share continue it on their own: nothing to copy.
+    The workflow gives one ID to every query and decision below. The next notebooks continue it. You do not copy anything.
     """)
     return
 
@@ -90,7 +94,7 @@ def _(mo):
     mo.md(r"""
     ### Connect
 
-    Uses the kit's saved connection, then lists the schemas. No password in the notebook.
+    Connects with the kit's saved connection and lists the schemas. The notebook holds no password.
     """)
     return
 
@@ -116,11 +120,12 @@ def _(mo):
     mo.md(r"""
     ### Choose a dataset
 
-    > **What is a dataset?** One table of rows to learn from; each row is one thing that happened.
-    > The kit offers two to practise on: `amazon_sales` (online fashion orders, one row per order line) and `fraud_transactions` (card and bank payments with a fraud label, messy on purpose: repeats, gaps and placeholders to find).
-    > We start with one of these known samples so you can try every step before bringing your own data.
+    The kit has two practice datasets:
 
-    Pick one: `SAMPLE = "amazon_sales"` (the default) or `"fraud_transactions"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
+    - `amazon_sales`: online fashion orders, one row per order line.
+    - `fraud_transactions`: card and bank payments with a fraud label. It has repeats, gaps and placeholders on purpose.
+
+    Set `SAMPLE` to one of them. The first run downloads it (internet needed). Later runs reuse it. Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -137,7 +142,7 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing path is skipped.
+    **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing file is skipped.
     """)
     return
 
@@ -172,7 +177,7 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    The data used from here on: the source, else your file, else the sample.
+    The notebook uses the source first, then your file, then the sample.
     """)
     return
 
@@ -189,8 +194,7 @@ def _(mo):
     mo.md(r"""
     ## Step 2 · Understand the data
 
-    > **What happens here?** Before any number is trusted, the notebook describes the table - what each column is, which one is the key, the date, the groups, the outcome - and you approve that description. The kit drafts it from the data and shows why; the columns it was least sure about come first.
-    > Every later step reads this approved map, which is why the same notebooks run on any table.
+    You approve the column map: the key, the date, the groups and the outcome. The kit proposes it and shows the least certain columns first. Every later step reads this map, so the same notebooks run on any table.
     """)
     return
 
@@ -201,32 +205,33 @@ def _(mo):
     mo.md(r"""
     ### Approve the column map
 
-    > **What is the descriptor?** A short map of the table, also called the column map: which column plays which part - the key, the time, the groups to compare (category), the outcome to predict (target).
-    > Every later query is written from this map, so no notebook has your column names typed in.
-    > It is saved with a version number, so each result says which map it came from.
+    The column map (the descriptor) gives each column a role. Every later query is built from it, so no notebook types your column names.
 
-    > **Why approve it?** The kit proposes the map from the data, and a guess can be wrong: in `amazon_sales`, `STATUS` says `Cancelled` on exactly the cancelled lines, so it gives the answer away.
-    > A person checks the map once and approves it before any query runs on it.
-    > That way every number later rests on choices you have seen and agreed to.
+    The kit proposes the map from the data. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away. Check the map before any query uses it.
 
-    The kit suggests the map from the data and shows why. It has two parts.
+    **Roles:** `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes) and `other`.
 
-    **1. A role for every column**, one of eight: `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes, never grouped) and `other`.
-
-    **2. The slots**: the one column the notebooks use for each job - `key` (one row), `time` (trends), `text` (words to explore), `target` (the outcome to predict), `category` (groups to compare) and `entity` (who or what a row is about). The datasets the kit ships with their map approved:
+    **Slots:** the one column each step uses for `key`, `time`, `text`, `target` (the outcome to predict), `category` (groups to compare) and `entity` (who or what a row is about).
 
     | Dataset | `key` | `time` | `text` | `target` | `category` | `entity` |
     |---|---|---|---|---|---|---|
     | Amazon sales | `ORDER_LINE_ID` | `ORDER_DATE` | — | `CANCELLED` | `CATEGORY` | `SHIP_STATE` |
     | Fraud transactions | `ROW_ID` | — | — | `FRAUDULENT` | `TRANSACTION_TYPE` | `LOCATION` |
 
-    Neither has a text column, so the steps that read text skip and say why. Your own file: the picker below proposes its map from the data.
+    Neither dataset has a text column. The text steps skip and say why.
 
-    The **target** matters most: the kit never guesses it, you choose it. Leave a slot as **—** when no column fits.
+    The kit never guesses the **target**. You choose it. Leave a slot as **—** when no column fits.
 
-    **Do now:** the columns the kit was least sure about come first, under *Check these first* - look at those, change what is wrong, click **Approve descriptor**, then run the next cell. If the map is already approved and you change nothing, no click is needed. Approving also checks the data once more (a key that repeats, a target that is not yes/no) and warns about a column that gives the target away.
+    **Do now:**
 
-    Plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
+    1. Look at *Check these first*. These are the columns the kit was least sure about.
+    2. Correct what is wrong.
+    3. Click **Approve descriptor**. No click is needed if the map is already approved and you change nothing.
+    4. Run the next cell.
+
+    Approval checks the data again and warns about a column that gives the target away.
+
+    In plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
     """)
     return
 
@@ -251,7 +256,7 @@ def _(mo):
     mo.md(r"""
     ### A first result
 
-    How many rows per group and, when the column map names a label, the % where it is 1. A note under the result says what the numbers mean. Every query in these notebooks is printed before its result, so you always see the SQL.
+    Rows per group, and the % where the label is 1 when the map has a label. Each query shows its SQL before the result.
     """)
     return
 
@@ -286,7 +291,7 @@ def _(mo):
     mo.md(r"""
     ## Next: steps 3 to 6
 
-    Open `01_explore.ipynb`: prepare the data, explore it, train a small model and validate it. Then `02_ask_your_data.ipynb` (step 7) and `03_share.ipynb` (steps 8 and 9). Nothing to copy: each continues this workflow on its own.
+    Open `01_explore.ipynb` to prepare, explore, model and validate. Then open `02_ask_your_data.ipynb` (step 7) and `03_share.ipynb` (steps 8 and 9). Each one continues this workflow.
     """)
     return
 

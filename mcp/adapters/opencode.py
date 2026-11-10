@@ -177,7 +177,7 @@ class OpenCodeAdapter(ClientAdapter):
         mcp_servers[server_definition.name] = entry
         # No sort_keys: opencode.json is the user's own settings file, so the
         # managed edit is kept minimally invasive (insertion-order preserved).
-        content = json.dumps(document, indent=2) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
@@ -223,7 +223,7 @@ class OpenCodeAdapter(ClientAdapter):
             if not mcp_servers:
                 document.pop("mcp", None)
         # Never delete ~/.config/opencode/opencode.json: it holds unrelated settings.
-        content = json.dumps(document, indent=2) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
