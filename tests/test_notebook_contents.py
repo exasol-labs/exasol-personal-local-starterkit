@@ -180,6 +180,31 @@ class CatalogTest(unittest.TestCase):
 
 
 class NotebookShapeTest(unittest.TestCase):
+    def test_each_data_scientist_notebook_shows_its_steps_as_a_picture(self):
+        """The nine steps are drawn, not listed: the first cell carries the strip as an embedded SVG (shown in
+        JupyterLab and Marimo without running anything), with this notebook's steps filled in, and the alt text
+        still names them for a screen reader."""
+        import base64
+        import xml.etree.ElementTree as ET
+        expected = {"00_quickstart": {"0", "1", "2"}, "01_explore": {"3", "4", "5", "6"},
+                    "02_ask_your_data": {"7"}, "03_share": {"8", "9"}}
+        for name, current in expected.items():
+            with self.subTest(notebook=name):
+                first = "".join(_built_cells(SOURCES / "data-scientist" / f"{name}.py")[0]["source"])
+                self.assertNotIn("journey:", first, "the placeholder is replaced at build time")
+                match = re.search(r"!\[([^\]]+)\]\(data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)\)", first)
+                self.assertIsNotNone(match, "the strip is an embedded SVG image")
+                self.assertIn("Hand off", match.group(1), "the alt text names the steps")
+                svg = ET.fromstring(base64.b64decode(match.group(2)))
+                ns = "{http://www.w3.org/2000/svg}"
+                texts = [t.text for t in svg.iter(ns + "text")]
+                filled = {texts[i * 2] for i, r in enumerate(r for r in svg.iter(ns + "rect") if r.get("height") == "58")
+                          if r.get("fill") == "#1F6FEB"}
+                self.assertEqual(current, filled)
+                self.assertIn("This notebook", texts)
+                built = json.loads((SOURCES / "data-scientist" / f"{name}.ipynb").read_text(encoding="utf-8"))
+                self.assertEqual(first, "".join(built["cells"][0]["source"]), "the shipped .ipynb carries it")
+
     def test_the_first_cell_states_the_dataset_and_no_run_time(self):
         """The first cell says which dataset; a run-time estimate was dropped from the Data Scientist notebooks (it
         depends on the machine and the first download, and reads as a promise)."""
