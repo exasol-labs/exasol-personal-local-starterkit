@@ -3782,6 +3782,10 @@ function Invoke-CmdConnect {
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
     $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
+    # This command's own public IP only: an earlier command's answer reaches
+    # later ones through the processes it started, and could name a network
+    # this computer has left.
+    Remove-Item Env:_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
     # Known before anything is refused, so every refusal answers in its shape.
     $script:ExakitVsJson = ((@($Arguments) -contains "--json") -or (@($Arguments) -contains "-j"))
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
@@ -3950,6 +3954,10 @@ function Invoke-CmdSource {
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
     $table = ""; $ddl = $false; $into = ""; $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
+    # This command's own public IP only: an earlier command's answer reaches
+    # later ones through the processes it started, and could name a network
+    # this computer has left.
+    Remove-Item Env:_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
     # --json is known before anything is refused: the bridge's own refusals
     # and failures then come in the engine's shape, and nothing is asked.
     $script:ExakitVsJson = ((@($rest) -contains "--json") -or (@($rest) -contains "-j"))

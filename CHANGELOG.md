@@ -35,10 +35,10 @@ types change on the way, measured on live sources: a Snowflake `NUMBER(38,0)`
 reads as text, a PostgreSQL domain or vector column cannot be read. `exakit
 source show` lists them too.
 
-**Lakehouse over Iceberg REST and Unity Catalog (Beta).** `exakit connect
+**Lakehouse over Iceberg REST and Unity Catalog.** `exakit connect
 iceberg-rest` and `exakit connect unity` use the same pinned lakehouse engine
-and scripts as the AWS Glue route. Not yet run against a live catalog; the
-plan says so.
+and scripts as the AWS Glue route, and are GA like every other connector.
+Neither has been run against a live catalog yet.
 
 **Snowflake: an optional `role`.**
 

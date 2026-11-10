@@ -251,6 +251,11 @@ _exakit_vs_quiet() {
     case "$-" in *x*) { set +x; } 2>/dev/null ;; esac
     unset EXAKIT_VS_STDIN_SECRET _cc_secret _cs_secret _evx_secret _evo_secret _evo_v _EVH_LINE _EVT_ANSWER \
         _eap_url _etf_v _erh_value
+    # This command's own answers only. A public IP looked up by an earlier
+    # command reaches later ones through the processes it started (a restart's
+    # `exakit start` brings back the add-on services with it), and could name a
+    # network this computer has left. A person's go-ahead is never inherited.
+    unset _EXAKIT_VS_PUBLIC_IP _EXAKIT_VS_INTERACTIVE
 }
 
 # _exakit_vs_stdin_secret — --password-stdin: ALL of standard input, read even
