@@ -362,18 +362,102 @@ def _keep_roles(file: Path, doc: dict[str, Any]) -> None:
     print(f"Roles saved in {beside}: DATASET = {str(file)!r} in a notebook opens this file again.")
 
 
+DEFAULT_SCHEMA = "MY_DATA"                # where your own data loads when no schema is named
+LOADABLE = (".csv", ".parquet", ".json", ".geojson")   # what `exakit data-load` takes from a folder
+
+
+def _sql_name(text: str) -> str:
+    """A folder's or a file's name as a plain SQL name, as `exakit data-load` names a table: upper case, anything but
+    letters, digits and _ as _, no _ at either end or twice in a row; T_ in front when it starts with a digit."""
+    name = re.sub(r"_+", "_", re.sub(r"[^A-Z0-9_]", "_", text.upper())).strip("_")
+    return name if not name or name[0].isalpha() else f"T_{name}"
+
+
+def _schema_and_table(table: str | None, folder: Path | None = None) -> tuple[str, str]:
+    """``table`` as (SCHEMA, TABLE or ""): SCHEMA alone or SCHEMA.TABLE, plain SQL names. Empty means the folder's
+    name (``folder``: the folder loaded, or the one the file is in), else MY_DATA."""
+    default = (_sql_name(folder.resolve().name) if folder is not None else "") or DEFAULT_SCHEMA
+    named = (table or "").strip().upper() or default
+    schema, _, wanted = named.partition(".")
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", schema) or (wanted and not re.fullmatch(r"[A-Z][A-Z0-9_]*", wanted)):
+        raise ValueError(f"'{table}' is not a schema name (letters, digits and _, starting with a letter), "
+                         "for example MY_DATA.")
+    return schema, wanted
+
+
+def _load_folder(folder: Path, table: str | None, conn, replace: bool) -> LoadedTable | None:
+    """A folder goes through `exakit data-load`, the kit's own loader (exapump): every CSV, Parquet and JSON file at
+    its top level becomes one table, named after the file, in the schema (the folder's name when none is named); a file loaded
+    before is skipped, so running the cell again is safe. Returns the table to describe next: the one ``table`` names,
+    else the first file's."""
+    from . import kit_commands
+
+    schema, wanted = _schema_and_table(table, folder)
+    run = kit_commands.exakit("data-load", str(folder), env={"EXAKIT_SCHEMA": schema,
+                                                             "EXAKIT_ON_EXISTING": "replace" if replace else "skip"})
+    if not run.ok:
+        raise RuntimeError(f"exakit data-load {folder} stopped (exit {run.code}); the lines above say why.")
+    if conn is None:
+        from . import connect
+
+        conn = connect()
+    rows = conn.execute("SELECT TABLE_NAME FROM EXA_ALL_TABLES WHERE TABLE_SCHEMA = {schema} ORDER BY TABLE_NAME",
+                        {"schema": schema}).fetchall()
+    tables = {str(row[0]) for row in rows}
+    files = [f for f in sorted(folder.iterdir()) if f.is_file() and f.suffix.lower() in LOADABLE]
+    loaded = [(f, _table_from_file(f)) for f in files if _table_from_file(f) in tables]
+    if wanted:
+        pick = next(((f, t) for f, t in loaded if t == wanted), (folder, wanted) if wanted in tables else None)
+    else:
+        pick = loaded[0] if loaded else None
+    if pick is None:
+        print(f"{schema} has these tables: {', '.join(sorted(tables)) or 'none'}. Nothing from {folder} to describe.")
+        return None
+    source, name = pick
+    if len(loaded) > 1:
+        print(f"Loaded into {schema}: {', '.join(t for _, t in loaded)}. Describing {name} next; to describe "
+              "another, set MY_DATA to its file and run the cell again.")
+    target = f"{schema}.{name}"
+    return LoadedTable(re.sub(r"_+", "_", target.replace(".", "_").lower()).strip("_"), target, source)
+
+
+def _table_from_file(file: Path) -> str:
+    """The table `exakit data-load` names after a file (exakit_table_name_from_path): its name without the extension,
+    upper case, anything but letters, digits and _ as _, no _ at either end or twice in a row."""
+    name = re.sub(r"_+", "_", re.sub(r"[^A-Z0-9_]", "_", file.stem.upper())).strip("_")
+    return name or "MY_TABLE"
+
+
 def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *, conn=None, replace: bool = False,
                   missing_ok: bool = False) -> Dataset | LoadedTable | None:
-    """Load a CSV, Parquet or JSON file into ``table`` (SCHEMA.TABLE) and return it as a Dataset the notebooks run on.
-    ``descriptor`` maps each role to a column of the file (``text`` may name several), or is a descriptor mapping or
-    file (YAML or JSON; its fact_table names the table when ``table`` is None). ``conn`` defaults to a new
-    exakit.nb.connect(). With ``missing_ok``, a path that is not a file says so in one line and returns None."""
+    """Load your own data and return it as a Dataset the notebooks run on (or a LoadedTable whose roles are reviewed
+    next). ``path`` is a CSV, Parquet or JSON file, or a folder of them (loaded by `exakit data-load`, exapump, one
+    table per file). ``table`` is the schema the tables go into (empty: the folder's name), each named after its file; or
+    SCHEMA.TABLE to name the file's table, or the folder's table to describe next.
+    ``descriptor`` (a file only) maps each role to a column of the file (``text`` may name several), or is a
+    descriptor mapping or file (YAML or JSON; its fact_table names the table when ``table`` is None). ``conn``
+    defaults to a new exakit.nb.connect(). With ``missing_ok``, a path that is not there says so in one line and
+    returns None."""
+    if not str(path or "").strip():
+        if missing_ok:
+            print("No file or folder named: nothing of your own loaded.")
+            return None
+        raise ValueError("Name a CSV, Parquet or JSON file, or a folder of them, to load.")
     rules, file = _rules(), Path(path).expanduser()
+    if file.is_dir():
+        if descriptor is not None:
+            raise ValueError("A descriptor describes one file: load the folder without one, then review the roles.")
+        return _load_folder(file, table, conn, replace)
     if not file.is_file():
         if missing_ok:
-            print(f"No file at {file}: set it to your CSV, Parquet or JSON file to load that - skipped.")
+            print(f"Nothing at {file}: set it to your CSV, Parquet or JSON file, or a folder of them - skipped.")
             return None
-        raise ValueError(f"{file} is not a file.")
+        raise ValueError(f"{file} is not a file or a folder.")
+    table = (table or "").strip() or None
+    if descriptor is None and (table is None or "." not in table):
+        # A schema, or nothing: the folder's name. The table is named after the file, as `exakit data-load` does.
+        schema, _ = _schema_and_table(table, file.parent)
+        table = f"{schema}.{_sql_name(file.stem) or 'MY_TABLE'}"
     named = rules.qualified_table(table) if table is not None else None
     if table is not None and named is None:
         raise ValueError(f"'{table}' is not SCHEMA.TABLE (plain SQL names).")

@@ -166,10 +166,19 @@ def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str],
         # no path to open, nor the view an agent reads the roles from.
         path = store.folder(table, home) / f"v{current['version']}.yaml"
         view = _published_view(run, table)
-        return {"status": "unchanged", "version": current["version"], "table": table, "path": str(path),
-                "published": view,
-                "message": f"{table} v{current['version']} already says this; nothing was written. It is stored at "
-                           f"{path}" + (f"; published as {view}" if view else "")}
+        unchanged: dict[str, Any] = {"status": "unchanged", "version": current["version"], "table": table,
+                                     "path": str(path)}
+        if view is None and publish:
+            # Approved but never published: a shipped dataset's descriptor the store adopted, or an approval whose
+            # publish failed. Publish it now, so an agent finds its roles in EXAKIT_SEMANTIC.
+            try:
+                view = publishing.publish(execute, run, current, reader)["view"]
+            except Exception as err:                   # the approval stands; say why it is not published
+                unchanged["reason"] = f"{type(err).__name__}: {err}"
+        unchanged["published"] = view
+        unchanged["message"] = (f"{table} v{current['version']} already says this; nothing was written. It is stored "
+                                f"at {path}" + (f"; published as {view}" if view else ""))
+        return unchanged
     if doc["source"].get("kind") == "virtual":
         checked = {"refused": [], "leaks": [], "unreviewed": reviewing.unreviewed(doc)}
     else:

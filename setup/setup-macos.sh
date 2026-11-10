@@ -209,9 +209,6 @@ if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && \
     command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
     exakit_release_lock
 fi
-# How to give the notebooks a model, before the panel the reader keeps: for a
-# Data Scientist install only (the General persona has no notebooks to feed).
-command -v exakit_model_setup_hint >/dev/null 2>&1 && exakit_model_setup_hint installer
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the
 # trap is already released and every reader inside degrades to silence.
@@ -238,13 +235,7 @@ if [ -z "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
     # Not asked again by an installer an update started to finish new setup: the
     # first install already made that offer.
     if ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
-        _setup_nb_before=0
-        exakit_marketplace_addon_installed notebook 2>/dev/null && _setup_nb_before=1
         ( exakit_marketplace_offer ) || true
-        # The notebook was just added from the offer: how to give it a model, once.
-        if [ "$_setup_nb_before" = 0 ] && command -v exakit_model_setup_hint >/dev/null 2>&1; then
-            exakit_model_setup_hint marketplace
-        fi
     fi
 fi
 # A rule, then a heading: the last line on screen is where the reader is left,

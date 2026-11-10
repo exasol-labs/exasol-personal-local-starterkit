@@ -18,7 +18,7 @@ def _(mo):
 
     **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 
-    ![Steps 0 Kit, 1 Access and 2 Understand of nine: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4ODAnIGhlaWdodD0nOTQnIHZpZXdCb3g9JzAgMCA4ODAgOTQnPjxyZWN0IHg9JzEuMCcgeT0nMScgd2lkdGg9Jzc1LjInIGhlaWdodD0nNTgnIHJ4PScxMCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nMzguNicgeT0nMjYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTgnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyNGRkZGRkYnPjA8L3RleHQ+PHRleHQgeD0nMzguNicgeT0nNDYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTEuNScgZmlsbD0nI0ZGRkZGRic+S2l0PC90ZXh0PjxwYXRoIGQ9J004MC4yIDI0IEw4Ni4yIDMwIEw4MC4yIDM2JyBmaWxsPSdub25lJyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PHJlY3QgeD0nOTAuMicgeT0nMScgd2lkdGg9Jzc1LjInIGhlaWdodD0nNTgnIHJ4PScxMCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nMTI3LjgnIHk9JzI2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzE4JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjRkZGRkZGJz4xPC90ZXh0Pjx0ZXh0IHg9JzEyNy44JyB5PSc0NicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMS41JyBmaWxsPScjRkZGRkZGJz5BY2Nlc3M8L3RleHQ+PHBhdGggZD0nTTE2OS40IDI0IEwxNzUuNCAzMCBMMTY5LjQgMzYnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48cmVjdCB4PScxNzkuNCcgeT0nMScgd2lkdGg9Jzc1LjInIGhlaWdodD0nNTgnIHJ4PScxMCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nMjE3LjAnIHk9JzI2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzE4JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjRkZGRkZGJz4yPC90ZXh0Pjx0ZXh0IHg9JzIxNy4wJyB5PSc0NicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMS41JyBmaWxsPScjRkZGRkZGJz5VbmRlcnN0YW5kPC90ZXh0PjxwYXRoIGQ9J00yNTguNiAyNCBMMjY0LjYgMzAgTDI1OC42IDM2JyBmaWxsPSdub25lJyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PHJlY3QgeD0nMjY4LjYnIHk9JzEnIHdpZHRoPSc3NS4yJyBoZWlnaHQ9JzU4JyByeD0nMTAnIGZpbGw9JyNGMkY0RjcnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9JzMwNi4yJyB5PScyNicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxOCcgZm9udC13ZWlnaHQ9JzcwMCcgZmlsbD0nIzM0NDA1NCc+MzwvdGV4dD48dGV4dCB4PSczMDYuMicgeT0nNDYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTEuNScgZmlsbD0nIzQ3NTQ2Nyc+UHJlcGFyZTwvdGV4dD48cGF0aCBkPSdNMzQ3LjggMjQgTDM1My44IDMwIEwzNDcuOCAzNicgZmlsbD0nbm9uZScgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxyZWN0IHg9JzM1Ny44JyB5PScxJyB3aWR0aD0nNzUuMicgaGVpZ2h0PSc1OCcgcng9JzEwJyBmaWxsPScjRjJGNEY3JyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PSczOTUuNCcgeT0nMjYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTgnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyMzNDQwNTQnPjQ8L3RleHQ+PHRleHQgeD0nMzk1LjQnIHk9JzQ2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzExLjUnIGZpbGw9JyM0NzU0NjcnPkV4cGxvcmU8L3RleHQ+PHBhdGggZD0nTTQzNy4wIDI0IEw0NDMuMCAzMCBMNDM3LjAgMzYnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48cmVjdCB4PSc0NDcuMCcgeT0nMScgd2lkdGg9Jzc1LjInIGhlaWdodD0nNTgnIHJ4PScxMCcgZmlsbD0nI0YyRjRGNycgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNDg0LjYnIHk9JzI2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzE4JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjMzQ0MDU0Jz41PC90ZXh0Pjx0ZXh0IHg9JzQ4NC42JyB5PSc0NicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMS41JyBmaWxsPScjNDc1NDY3Jz5Nb2RlbDwvdGV4dD48cGF0aCBkPSdNNTI2LjIgMjQgTDUzMi4yIDMwIEw1MjYuMiAzNicgZmlsbD0nbm9uZScgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxyZWN0IHg9JzUzNi4yJyB5PScxJyB3aWR0aD0nNzUuMicgaGVpZ2h0PSc1OCcgcng9JzEwJyBmaWxsPScjRjJGNEY3JyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PSc1NzMuOCcgeT0nMjYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTgnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyMzNDQwNTQnPjY8L3RleHQ+PHRleHQgeD0nNTczLjgnIHk9JzQ2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzExLjUnIGZpbGw9JyM0NzU0NjcnPlZhbGlkYXRlPC90ZXh0PjxwYXRoIGQ9J002MTUuNCAyNCBMNjIxLjQgMzAgTDYxNS40IDM2JyBmaWxsPSdub25lJyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMicgc3Ryb2tlLWxpbmVjYXA9J3JvdW5kJyBzdHJva2UtbGluZWpvaW49J3JvdW5kJy8+PHJlY3QgeD0nNjI1LjQnIHk9JzEnIHdpZHRoPSc3NS4yJyBoZWlnaHQ9JzU4JyByeD0nMTAnIGZpbGw9JyNGMkY0RjcnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9JzY2My4wJyB5PScyNicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxOCcgZm9udC13ZWlnaHQ9JzcwMCcgZmlsbD0nIzM0NDA1NCc+NzwvdGV4dD48dGV4dCB4PSc2NjMuMCcgeT0nNDYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTEuNScgZmlsbD0nIzQ3NTQ2Nyc+QXNrIHdpdGggQUk8L3RleHQ+PHBhdGggZD0nTTcwNC42IDI0IEw3MTAuNiAzMCBMNzA0LjYgMzYnIGZpbGw9J25vbmUnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScyJyBzdHJva2UtbGluZWNhcD0ncm91bmQnIHN0cm9rZS1saW5lam9pbj0ncm91bmQnLz48cmVjdCB4PSc3MTQuNicgeT0nMScgd2lkdGg9Jzc1LjInIGhlaWdodD0nNTgnIHJ4PScxMCcgZmlsbD0nI0YyRjRGNycgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNzUyLjInIHk9JzI2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzE4JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjMzQ0MDU0Jz44PC90ZXh0Pjx0ZXh0IHg9Jzc1Mi4yJyB5PSc0NicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMS41JyBmaWxsPScjNDc1NDY3Jz5TaGFyZTwvdGV4dD48cGF0aCBkPSdNNzkzLjggMjQgTDc5OS44IDMwIEw3OTMuOCAzNicgZmlsbD0nbm9uZScgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzInIHN0cm9rZS1saW5lY2FwPSdyb3VuZCcgc3Ryb2tlLWxpbmVqb2luPSdyb3VuZCcvPjxyZWN0IHg9JzgwMy44JyB5PScxJyB3aWR0aD0nNzUuMicgaGVpZ2h0PSc1OCcgcng9JzEwJyBmaWxsPScjRjJGNEY3JyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PSc4NDEuNCcgeT0nMjYnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTgnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyMzNDQwNTQnPjk8L3RleHQ+PHRleHQgeD0nODQxLjQnIHk9JzQ2JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzExLjUnIGZpbGw9JyM0NzU0NjcnPkhhbmQgb2ZmPC90ZXh0PjxyZWN0IHg9JzEuMCcgeT0nNjYnIHdpZHRoPScyNTMuNicgaGVpZ2h0PSc0JyByeD0nMicgZmlsbD0nIzFGNkZFQicvPjx0ZXh0IHg9JzEyNy44JyB5PSc4OCcgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMi41JyBmb250LXdlaWdodD0nNjAwJyBmaWxsPScjMUY2RkVCJz5UaGlzIG5vdGVib29rPC90ZXh0Pjwvc3ZnPg==)
+    ![Steps 0 Check the kit, 1 Access and 2 Understand. All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4ODAnIGhlaWdodD0nMjcwJyB2aWV3Qm94PScwIDAgODgwIDI3MCc+PGRlZnM+PG1hcmtlciBpZD0nYScgdmlld0JveD0nMCAwIDEwIDEwJyByZWZYPSc5JyByZWZZPSc1JyBtYXJrZXJXaWR0aD0nNycgbWFya2VySGVpZ2h0PSc3JyBvcmllbnQ9J2F1dG8nPjxwYXRoIGQ9J00wIDAgTDEwIDUgTDAgMTAgeicgZmlsbD0nIzk4QTJCMycvPjwvbWFya2VyPjwvZGVmcz48cmVjdCB4PScxLjAnIHk9JzEnIHdpZHRoPScxMjguMCcgaGVpZ2h0PScyNDAnIHJ4PScxMicgZmlsbD0nI0Y4RkFGQycgc3Ryb2tlPScjMUY2RkVCJyBzdHJva2Utd2lkdGg9JzEuNScvPjx0ZXh0IHg9JzY1LjAnIHk9JzIyJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEyLjUnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyMxRjZGRUInPlN0YXJ0PC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nMCcgZGF0YS1jdXJyZW50PScxJyB4PScxMy4wJyB5PSczNCcgd2lkdGg9JzEwNC4wJyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nNjUuMCcgeT0nNTcnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyNGRkZGRkYnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz4wPC90c3Bhbj4gIENoZWNrIHRoZSBraXQ8L3RleHQ+PGxpbmUgeDE9JzEzMi4wJyB5MT0nNTIuMCcgeDI9JzE2Mi4wJyB5Mj0nNTIuMCcgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IHg9JzE2NS4wJyB5PScxJyB3aWR0aD0nMjE0LjAnIGhlaWdodD0nMjQwJyByeD0nMTInIGZpbGw9JyNGOEZBRkMnIHN0cm9rZT0nIzFGNkZFQicgc3Ryb2tlLXdpZHRoPScxLjUnLz48dGV4dCB4PScyNzIuMCcgeT0nMjInIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTIuNScgZm9udC13ZWlnaHQ9JzcwMCcgZmlsbD0nIzFGNkZFQic+R2V0IHRoZSBkYXRhPC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nMScgZGF0YS1jdXJyZW50PScxJyB4PScxNzcuMCcgeT0nMzQnIHdpZHRoPScxOTAuMCcgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzI3Mi4wJyB5PSc1NycgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nI0ZGRkZGRic+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjE8L3RzcGFuPiAgQWNjZXNzPC90ZXh0PjxsaW5lIHgxPScyNzIuMCcgeTE9JzcxJyB4Mj0nMjcyLjAnIHkyPSc4NCcgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IGRhdGEtc3RlcD0nMicgZGF0YS1jdXJyZW50PScxJyB4PScxNzcuMCcgeT0nODYnIHdpZHRoPScxOTAuMCcgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzI3Mi4wJyB5PScxMDknIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyNGRkZGRkYnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz4yPC90c3Bhbj4gIFVuZGVyc3RhbmQ8L3RleHQ+PGxpbmUgeDE9JzM4Mi4wJyB5MT0nNTIuMCcgeDI9JzQxMi4wJyB5Mj0nNTIuMCcgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IHg9JzQxNS4wJyB5PScxJyB3aWR0aD0nMjE0LjAnIGhlaWdodD0nMjQwJyByeD0nMTInIGZpbGw9JyNGOEZBRkMnIHN0cm9rZT0nI0QwRDVERCcgc3Ryb2tlLXdpZHRoPScxJy8+PHRleHQgeD0nNTIyLjAnIHk9JzIyJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEyLjUnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyM0NzU0NjcnPlByZXBhcmUgYW5kIG1vZGVsPC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nMycgZGF0YS1jdXJyZW50PScwJyB4PSc0MjcuMCcgeT0nMzQnIHdpZHRoPScxOTAuMCcgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyNGRkZGRkYnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9JzUyMi4wJyB5PSc1NycgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjM8L3RzcGFuPiAgUHJlcGFyZTwvdGV4dD48bGluZSB4MT0nNTIyLjAnIHkxPSc3MScgeDI9JzUyMi4wJyB5Mj0nODQnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzQnIGRhdGEtY3VycmVudD0nMCcgeD0nNDI3LjAnIHk9Jzg2JyB3aWR0aD0nMTkwLjAnIGhlaWdodD0nMzYnIHJ4PSc4JyBmaWxsPScjRkZGRkZGJyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PSc1MjIuMCcgeT0nMTA5JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjMzQ0MDU0Jz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+NDwvdHNwYW4+ICBFeHBsb3JlPC90ZXh0PjxsaW5lIHgxPSc1MjIuMCcgeTE9JzEyMycgeDI9JzUyMi4wJyB5Mj0nMTM2JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPSc1JyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzQyNy4wJyB5PScxMzgnIHdpZHRoPScxOTAuMCcgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyNGRkZGRkYnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9JzUyMi4wJyB5PScxNjEnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyMzNDQwNTQnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz41PC90c3Bhbj4gIE1vZGVsPC90ZXh0PjxsaW5lIHgxPSc1MjIuMCcgeTE9JzE3NScgeDI9JzUyMi4wJyB5Mj0nMTg4JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPSc2JyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzQyNy4wJyB5PScxOTAnIHdpZHRoPScxOTAuMCcgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyNGRkZGRkYnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9JzUyMi4wJyB5PScyMTMnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyMzNDQwNTQnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz42PC90c3Bhbj4gIFZhbGlkYXRlPC90ZXh0PjxsaW5lIHgxPSc2MzIuMCcgeTE9JzUyLjAnIHgyPSc2NjIuMCcgeTI9JzUyLjAnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCB4PSc2NjUuMCcgeT0nMScgd2lkdGg9JzIxNC4wJyBoZWlnaHQ9JzI0MCcgcng9JzEyJyBmaWxsPScjRjhGQUZDJyBzdHJva2U9JyNEMEQ1REQnIHN0cm9rZS13aWR0aD0nMScvPjx0ZXh0IHg9Jzc3Mi4wJyB5PScyMicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMi41JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjNDc1NDY3Jz5Vc2UgYW5kIHNoYXJlPC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nNycgZGF0YS1jdXJyZW50PScwJyB4PSc2NzcuMCcgeT0nMzQnIHdpZHRoPScxOTAuMCcgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyNGRkZGRkYnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9Jzc3Mi4wJyB5PSc1NycgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjc8L3RzcGFuPiAgQXNrIHdpdGggQUk8L3RleHQ+PGxpbmUgeDE9Jzc3Mi4wJyB5MT0nNzEnIHgyPSc3NzIuMCcgeTI9Jzg0JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPSc4JyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzY3Ny4wJyB5PSc4Nicgd2lkdGg9JzE5MC4wJyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nI0ZGRkZGRicgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNzcyLjAnIHk9JzEwOScgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjg8L3RzcGFuPiAgU2hhcmU8L3RleHQ+PGxpbmUgeDE9Jzc3Mi4wJyB5MT0nMTIzJyB4Mj0nNzcyLjAnIHkyPScxMzYnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzknIGRhdGEtY3VycmVudD0nMCcgeD0nNjc3LjAnIHk9JzEzOCcgd2lkdGg9JzE5MC4wJyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nI0ZGRkZGRicgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNzcyLjAnIHk9JzE2MScgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjk8L3RzcGFuPiAgSGFuZCBvZmY8L3RleHQ+PHJlY3QgeD0nMScgeT0nMjUxJyB3aWR0aD0nMTQnIGhlaWdodD0nMTQnIHJ4PSczJyBmaWxsPScjMUY2RkVCJy8+PHRleHQgeD0nMjInIHk9JzI2MicgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMi41JyBmaWxsPScjNDc1NDY3Jz5UaGlzIG5vdGVib29rPC90ZXh0Pjwvc3ZnPg==)
 
     At the end you have a connection, an approved column map and a first result. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
     """)
@@ -32,11 +32,7 @@ def _(mo):
 
     Shows what is installed and running: the database, each add-on and the loaded datasets. It changes nothing.
 
-    Other kit commands run the same way, with the log in the cell:
-
-    - `nb.exakit("update")` updates the kit.
-    - `nb.exakit("marketplace", "dash-server")` adds an add-on.
-    - `nb.exakit("logs")` shows the logs.
+    The next cell lists other kit commands. Each runs here, with its log in the cell.
     """)
     return
 
@@ -54,7 +50,7 @@ def _():
     # Things you would otherwise do in a terminal - take the # off one line and run the cell; its log shows here.
     # nb.exakit("update")                            # bring the kit and its add-ons up to date
     # nb.exakit("marketplace", "dash-server")        # add an add-on (Share, step 8, needs this one)
-    # nb.exakit("data-load", "fraud_transactions")        # load another of the kit's datasets
+    # nb.exakit("data-load", "fraud_transactions")   # load another of the kit's datasets
     # nb.exakit("logs")                              # every log the kit keeps
     # nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})   # connect an AI client to the database
     return
@@ -65,7 +61,7 @@ def _(mo):
     mo.md(r"""
     ## Step 1 · Access the data
 
-    Connects to the database, starts a workflow and loads a dataset: a practice dataset, your own file or a connected source.
+    Starts a workflow, connects to the database and loads a dataset: a practice dataset, your own file or a connected source.
     """)
     return
 
@@ -84,7 +80,7 @@ def _(mo):
 def _(nb):
     import os
     workflow_id = nb.workflow('data-scientist-quickstart', resume=os.environ.get('EXAKIT_WORKFLOW_ID'))
-    print(f'Every step below is logged under it: exakit workflow show {workflow_id}')
+    print(f'Workflow {workflow_id}: every step below is recorded under it.')
     return
 
 
@@ -120,7 +116,7 @@ def _(mo):
     mo.md(r"""
     ### Choose a dataset
 
-    The kit has two practice datasets:
+    These notebooks use two practice datasets:
 
     - `amazon_sales`: online fashion orders, one row per order line.
     - `fraud_transactions`: card and bank payments with a fraud label. It has repeats, gaps and placeholders on purpose.
@@ -142,7 +138,9 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing file is skipped.
+    **Load your own data (optional):** set `MY_DATA` to a CSV, Parquet or JSON file, or to a folder of them. Empty skips it.
+
+    Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded.
     """)
     return
 
@@ -150,9 +148,9 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
-    OWN_TABLE = "MY_DATA.TRANSACTIONS"
-    own_data = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=connection, missing_ok=True)
+    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data"
+    MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
+    own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
     return (own_data,)
 
 
@@ -207,7 +205,7 @@ def _(mo):
 
     The column map (the descriptor) gives each column a role. Every later query is built from it, so no notebook types your column names.
 
-    The kit proposes the map from the data. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away. Check the map before any query uses it.
+    The kit proposes the map from the data. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away. The kit warns about it when you approve, and the model leaves it out. Check the map before any query uses it.
 
     **Roles:** `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes) and `other`.
 
@@ -220,18 +218,18 @@ def _(mo):
 
     Neither dataset has a text column. The text steps skip and say why.
 
-    The kit never guesses the **target**. You choose it. Leave a slot as **—** when no column fits.
+    The kit never guesses the **target**. You choose it. Leave a slot as "—" when no column fits.
 
     **Do now:**
 
     1. Look at *Check these first*. These are the columns the kit was least sure about.
     2. Correct what is wrong.
-    3. Click **Approve descriptor**. No click is needed if the map is already approved and you change nothing.
+    3. Click **Approve column map**. No click is needed if the map is already approved and you change nothing.
     4. Run the next cell.
 
     Approval checks the data again and warns about a column that gives the target away.
 
-    In plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
+    In plain Python: `role_review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
     """)
     return
 
@@ -256,7 +254,7 @@ def _(mo):
     mo.md(r"""
     ### A first result
 
-    Rows per group, and the % where the label is 1 when the map has a label. Each query shows its SQL before the result.
+    Rows per group, and the % where the target is 1 when the map has a target. Each query shows its SQL before the result.
     """)
     return
 
@@ -266,9 +264,9 @@ def _(connection, dataset, nb):
     missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
     GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
     if GROUP_ROLE != "category":
-        print(f"No category role ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
+        print(f"No category ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
     if "label" in missing_roles:
-        print(f"No label role ({missing_roles['label']}): the label rate is left out; the steps that need it later say so.")
+        print(f"No target ({missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
     GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
     LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None   # CANCELLED_PCT
     LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
@@ -289,9 +287,9 @@ def _(connection, dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Next: steps 3 to 6
+    ## Next
 
-    Open `01_explore.ipynb` to prepare, explore, model and validate. Then open `02_ask_your_data.ipynb` (step 7) and `03_share.ipynb` (steps 8 and 9). Each one continues this workflow.
+    Open `01_explore` to prepare, explore, model and validate (steps 3 to 6). Then open `02_ask_your_data` (step 7) and `03_share` (steps 8 and 9). Each one continues this workflow.
     """)
     return
 
