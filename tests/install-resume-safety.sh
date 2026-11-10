@@ -327,7 +327,9 @@ if printf '%s\n' "$_trap" | grep -qF 'check your network or proxy'; then
 else
     pass "the trap does not mention the network at all"
 fi
-if printf '%s\n' "$_trap" | grep -qF 'Fix the issue above and re-run." -ForegroundColor'; then
+# Written through Write-InstallLine (colour only where the rest of the kit's
+# UI would colour), or the plain Write-Host -ForegroundColor it replaced.
+if printf '%s\n' "$_trap" | grep -qE 'Fix the issue above and re-run\." (-ForegroundColor )?Red'; then
     pass "...and every other phase still gets a plain 'fix it and re-run'"
 else
     fail "the trap lost its plain second line, so a non-download failure ends with no advice at all"
