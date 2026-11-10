@@ -244,9 +244,10 @@ esac
 _ucs_out="$(_ucs_multi exapump dbt-exasol --plan)"; _ucs_rc=$?
 [ "$_ucs_rc" -eq 2 ] && pass "an option behind several ids is still refused with exit 2" || fail "ids plus --plan exited $_ucs_rc"
 
-# The kit moves first, then hands the rest to the new kit (#45): the same shell
-# kept the old code and manifest and built a download URL the new release does
-# not have. Only the updaters are stubbed; _exakit_update_run is the real one.
+# The kit moves first and the rest waits for the new kit (#45): this shell kept
+# the old code and manifest, which built a download URL the new release does not
+# have. As on exasol-labs main, the rest is deferred to the next `exakit update`.
+# Only the updaters are stubbed; _exakit_update_run is the real one.
 _ucs_handoff() { # _ucs_handoff <json 0|1> -> what ran in this shell and what the new kit was asked
     _ucs_bin="$(mktemp -d)"
     cat > "$_ucs_bin/exakit" <<'UCS_FAKE'
@@ -269,8 +270,8 @@ UCS_FAKE
 }
 _ucs_out="$(_ucs_handoff 0)"
 case "$_ucs_out" in
-    *"this-shell:exakit"*"new-kit:update exasol-scheduler dbt-exasol"*) pass "after the kit moves, the new kit updates the rest" ;;
-    *) fail "the rest was not handed to the new kit: $_ucs_out" ;;
+    *"this-shell:exakit"*"run 'exakit update' again"*) pass "after the kit moves, it asks for 'exakit update' again for the rest" ;;
+    *) fail "the kit moved but the rest was not left for the next 'exakit update': $_ucs_out" ;;
 esac
 case "$_ucs_out" in
     *"this-shell:exasol-scheduler"*) fail "...and this shell still updated an add-on with the old code" ;;
@@ -278,7 +279,7 @@ case "$_ucs_out" in
 esac
 _ucs_out="$(_ucs_handoff 1)"
 case "$_ucs_out" in
-    *"exasol-scheduler|deferred|||exakit update exasol-scheduler dbt-exasol"*) pass "under --json the rest is deferred with the command that applies it" ;;
+    *"exasol-scheduler|deferred|1.0|2.0|exakit update|"*"dbt-exasol|deferred|1.0|2.0|exakit update|"*) pass "under --json the rest is deferred with the command that applies it" ;;
     *) fail "under --json the rest was not deferred: $_ucs_out" ;;
 esac
 
