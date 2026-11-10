@@ -1327,9 +1327,9 @@ jobs:
       - name: install the kit from this checkout
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
-          EXAKIT_PERSONA: data-scientist   # the ML Engineer is disabled for now; its add-on is named below
+          EXAKIT_PERSONA: data-scientist   # the ML Engineer and udf-devkit are hidden for now
           EXAKIT_DATASETS: tpch,amazon_sales,fraud_transactions
-          EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
+          EXAKIT_MARKETPLACE_ADDONS: notebook
           # One named client so the install creates the read-only MCP user: the
           # matrix below and the notebook runs read as it. EXAKIT_SKIP_MCP=1
           # skipped that user too, and both steps failed with no credential.
@@ -1397,13 +1397,11 @@ jobs:
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
           for recipe in amazon_sales:balanced fraud_transactions:balanced; do
-            # The ML Engineer (disabled for now) takes amazon_sales and fraud_transactions.
-            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
+            # The ML Engineer and udf-devkit are hidden for now: their notebooks run again when they are released.
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \
-                notebook/notebooks/data-scientist/01_explore.py \
-                $ml
+                notebook/notebooks/data-scientist/01_explore.py
           done
       - name: the AI Lab notebook, as the connector ships it, connects from the kit's store
         # AC-DS1.4: first_steps.ipynb from exasol-notebook-connector 3.1.0, a

@@ -29,15 +29,13 @@ jobs:
         run: |
           if [ "$RESTART_APPROVED" = true ]; then export EXAKIT_NOTEBOOK_ALLOW_RESTART=1; fi
           for recipe in amazon_sales:balanced fraud_transactions:balanced; do
-            # The ML Engineer (disabled for now) takes amazon_sales and fraud_transactions.
-            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py notebook/notebooks/ml-engineer/02_rust_score.py notebook/notebooks/ml-engineer/03_score_external_model.py" ;; esac
+            # The ML Engineer and udf-devkit are hidden for now: their notebooks run again when they are released.
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \
                 notebook/notebooks/data-scientist/01_explore.py \
                 notebook/notebooks/data-scientist/02_ask_your_data.py \
-                notebook/notebooks/data-scientist/03_share.py \
-                $ml
+                notebook/notebooks/data-scientist/03_share.py
           done
       - name: Check generated output before uploading
         id: privacy
