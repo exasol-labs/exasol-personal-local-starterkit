@@ -17,9 +17,12 @@ over this one. Load `exasol-sql-dialect` before writing non-trivial SQL.
 
 When the user's request is open ("analyse my data", "show me something",
 "find outliers", "fuse my data"), lead them. Ask one round at a time, with a
-short list of choices (the AskUserQuestion tool in Claude Code; numbered
-choices in chat elsewhere). Look before you ask: never ask what the kit can
-tell you.
+short list of choices: your client's question tool when it has one, else
+numbered choices in your reply. This works the same in every coding assistant
+(Claude Code, Codex, Cursor, Copilot, Gemini CLI, OpenCode, Continue). Run
+commands yourself when your client can; when it cannot, give the user the
+exact command to run and wait for its output. Look before you ask: never ask
+what the kit can tell you.
 
 **Round 0: look first (no question).** Run `exakit status --json`,
 `exakit source list --json` and, in a notebook or through MCP, the data map
@@ -35,7 +38,7 @@ connect an external source?" Allow several.
   tables it made.
 - **Connect a source.** Ask which system (PostgreSQL, MySQL, Snowflake ...),
   then load its `exasol-vs-<connector>` skill and ask only for the inputs it
-  lists that are not secret. The password is never typed into the chat. Offer
+  lists that are not secret. The password is never typed into the conversation. Offer
   two ways, and run the first only after a yes:
   - open a terminal with the kit's wizard, which asks the password hidden:
     macOS `osascript -e 'tell application "Terminal" to do script "exakit connect <connector>"'`,
