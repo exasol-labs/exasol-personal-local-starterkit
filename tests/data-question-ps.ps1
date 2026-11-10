@@ -274,6 +274,10 @@ try {
     function Start-ExakitDataTableRun { }
     function Stop-ExakitDataTableRun { }
     function Import-ExakitLocalFile { Add-Content -LiteralPath $orderFile -Value "local"; return "loaded" }
+    # The real menu again: the data-load dispatch checks above stood it in.
+    $menuAst = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup/lib/exapump.ps1"), [ref]$null, [ref]$null)
+    $menuDef = $menuAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Show-ExakitDataLoadMenu" }, $true)
+    . ([scriptblock]::Create($menuDef.Extent.Text))
     try { Show-ExakitDataLoadMenu } finally { $script:BinDir = $savedBin }
     Check "exakit data-load: the file first, then the connect wizard" "local|connect" ((Get-Content -LiteralPath $orderFile -ErrorAction SilentlyContinue) -join "|")
     $menuText = (Get-Command Show-ExakitDataLoadMenu).Definition
