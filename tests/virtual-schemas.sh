@@ -856,6 +856,68 @@ dnsline() { ( EXAKIT_HOME="$HOME_K"; STUB_OS="$1"; STUB_ENGINE="$2"
 for _e in "linux docker" "linux podman" "macos docker"; do
     has "a failed repair ($_e): the stop and start that fix it" "Restart the database (exakit stop, exakit start) and try again." "$(dnsline $_e)"
 done
+
+printf '\n== preparing the database for a source: said at a terminal, never asked; a script keeps its contract ==\n'
+# The real _exakit_vs_install_java, _exakit_vs_install_rust and _exakit_vs_repair;
+# only what they call is a stand-in: the launcher, the kit's exakit, a download.
+# prep <interactive> <json> <yes> <terminal> <function> [args] - interactive is a
+# person connecting (cmd_connect or the terminal flow set it), terminal whether
+# one is reachable. Every question, launcher call, download and stop/start lands
+# in $WORK/prep.calls.
+mkdir -p "$WORK/prepbin"
+printf '#!/bin/sh\necho "EXAKIT $1" >> "%s/prep.calls"\n' "$WORK" > "$WORK/prepbin/exakit"; chmod +x "$WORK/prepbin/exakit"
+prep() {
+    : > "$WORK/prep.calls"
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+      _EXAKIT_VS_INTERACTIVE="$1"; EXAKIT_VS_JSON="$2"; EXAKIT_VS_ASSUME_YES="$3"; _p_tty="$4"; shift 4
+      _EXAKIT_VS_FOR=PostgreSQL
+      _exakit_prompt_tty() { [ "$_p_tty" = 1 ] && printf '/dev/tty\n'; return 0; }
+      prompt_text() { echo "ASKED $1" >> "$WORK/prep.calls"; printf 'y\n'; }
+      personal_cli() { printf 'exasol\n'; }
+      personal_auto_approve_flag() { :; }
+      personal_slc_dns_prepare() { :; }
+      personal_slc_dns_repair() { return "${PREP_DNS:-0}"; }
+      run_logged() { echo "RUN $*" >> "$WORK/prep.calls"; }
+      fetch() { echo "FETCH" >> "$WORK/prep.calls"; return 1; }
+      EXAKIT_BIN_DIR="$WORK/prepbin"
+      "$@"; echo "rc=$?" ) 2>&1
+}
+calls() { tr '\n' '|' < "$WORK/prep.calls"; }
+OUT="$(prep 1 0 0 1 _exakit_vs_install_java)"
+check "a connect at a terminal, Java missing: installed with no question, one restart" \
+    "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...one line says what it does and why" "Installing the Java language container for PostgreSQL: about 250 MiB, and the database restarts once" "$OUT"
+lacks "...and nothing asked" "ASKED" "$(calls)"
+OUT="$(prep 1 1 0 1 _exakit_vs_install_java)"
+check "--json at the same terminal: the contract - nothing installed, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...and the remedy said" "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start" "$OUT"
+OUT="$(prep 0 0 0 0 _exakit_vs_install_java)"
+check "no terminal, no --yes: nothing installed, nothing asked (exit 21 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+OUT="$(prep 0 0 1 0 _exakit_vs_install_java)"
+check "no terminal, --yes: installed" "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+OUT="$(prep 0 0 0 1 _exakit_vs_install_java)"
+check "a terminal but not a connect (exakit source refresh): still asked, as before" "ASKED Install the Java language container now? [y/N]" \
+    "$(grep '^ASKED' "$WORK/prep.calls")"
+OUT="$(PREP_DNS=2 prep 1 0 0 1 _exakit_vs_repair 20)"
+check "a connect at a terminal, Docker's DNS repair: one restart with no question" "rc=0 EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...one line says what it does and why" "Restarting the database once, so Java in it can resolve host names for PostgreSQL" "$OUT"
+OUT="$(PREP_DNS=2 prep 0 0 0 0 _exakit_vs_repair 20)"
+check "...no terminal, no --yes: no restart, nothing asked (exit 20 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...and the restart named" "Run: exakit stop, then exakit start - and try again." "$OUT"
+OUT="$(PREP_DNS=2 prep 1 1 0 1 _exakit_vs_repair 20)"
+check "...--json at a terminal: no restart, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+OUT="$(prep 1 0 0 1 _exakit_vs_install_rust)"
+check "a connect at a terminal, Rust missing: the download starts with no question" "FETCH|" "$(calls)"
+has "...one line says what it does and why" "Installing the Rust language container for PostgreSQL:" "$OUT"
+OUT="$(prep 0 0 0 0 _exakit_vs_install_rust)"
+check "...no terminal, no --yes: nothing downloaded, nothing asked (exit 23 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...and it says so" "Nothing was installed. Run the same exakit connect again when you are ready." "$OUT"
+# The whole connect, unattended: the engine's exit 21 and its remedy, unchanged.
+reset_bridge 0 0 21
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
+check "unattended connect, Java missing: exit 21, nothing retried" "21 1" "$RC $(grep -c '^connect' "$B/argv")"
 has "...the offer was made" "JAVA-ASKED" "$(cat "$B/argv")"
 reset_bridge 0
 OUT="$(bridge cmd_source remove sales --dry-run </dev/null)"
@@ -991,6 +1053,17 @@ check "...and is in no child's environment" "0" "$(grep -c 'Exp0rted-Val' "$B/en
 reset_bridge 0 0
 OUT="$(printf 'Exp0rted-Val' | env _cs_secret= _evx_secret= bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source reauth docs --password-stdin)" 2>/dev/null
 check "review 5: reauth, _cs_secret exported empty: in no child's environment" "1 0" "$(grep -c '^reauth' "$B/argv") $(grep -c 'Exp0rted-Val' "$B/env")"
+# A public IP or a person's go-ahead from an earlier command (a restart's
+# `exakit start` hands its environment to the add-on services it brings back)
+# is never trusted by a later one: each command starts without them.
+reset_bridge 0 0
+OUT="$(env _EXAKIT_VS_PUBLIC_IP=198.51.100.9 _EXAKIT_VS_INTERACTIVE=1 bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_connect pg --name sales --set host=h --dry-run --json </dev/null)" 2>/dev/null
+check "connect: an inherited public IP and go-ahead reach no engine run" "0 0" \
+    "$(grep -c '^_EXAKIT_VS_PUBLIC_IP=198.51.100.9' "$B/env") $(grep -c '^_EXAKIT_VS_INTERACTIVE=1' "$B/env")"
+reset_bridge 0
+OUT="$(env _EXAKIT_VS_PUBLIC_IP=198.51.100.9 _EXAKIT_VS_INTERACTIVE=1 bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source list --json </dev/null)" 2>/dev/null
+check "source: the same" "1 0 0" \
+    "$(grep -c '^--json list' "$B/argv") $(grep -c '^_EXAKIT_VS_PUBLIC_IP=198.51.100.9' "$B/env") $(grep -c '^_EXAKIT_VS_INTERACTIVE=1' "$B/env")"
 
 # Security review 12: under bash -x the credential is not in the trace.
 traced() { set -x; "$@"; }
@@ -1873,14 +1946,17 @@ PYS
 
 run plan iceberg-rest --name rest1 $IR_SET
 check "plan iceberg-rest: exit 0" "0" "$RC"
-has "...Beta, a candidate" '"tier": "Beta", "status": "candidate"' "$OUT"
-has "...says it is untested live" "not been run against a live Iceberg REST catalog" "$OUT"
+has "...GA, a candidate" '"tier": "GA", "status": "candidate"' "$OUT"
+lacks "...with no Beta caveat any more" "not been run against a live" "$OUT"
 has "...states the MCP exposure" "MCP read-only user can read every table of VS_REST1" "$OUT"
 has "...the scripts shared with every lakehouse engine source" "shared by every lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)" "$OUT"
 PLAN_IR="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
 run plan unity --name uc $UC_SET
 check "plan unity: exit 0" "0" "$RC"
-has "...says it is untested live" "not been run against a live Unity Catalog" "$OUT"
+has "...GA, a candidate" '"tier": "GA", "status": "candidate"' "$OUT"
+lacks "...with no Beta caveat any more" "not been run against a live" "$OUT"
+check "no connector reports Beta: every tier in the catalog is GA" "GA" \
+    "$(eng --json catalog </dev/null 2>/dev/null | python3 -c 'import json,sys; print(" ".join(sorted({c["tier"] for c in json.load(sys.stdin)["connectors"]})))')"
 has "...states the MCP exposure" "MCP read-only user can read every table of VS_UC" "$OUT"
 PLAN_UC="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
 run plan lakehouse --name glake $LK_SET
@@ -2446,15 +2522,15 @@ pasted() { printf '\\x0e%s\\x0f' "$1"; }
 LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
 Q_PASTE="$(when 'Connection string (hidden; Enter to type the fields):')"
-Q_NAME="$(when 'Name for this connection (required):')"
-Q_HOST="$(when 'Host name or address (required):')"
-Q_PORT="$(when 'Port (optional)')"
-Q_DB="$(when 'Database (required):')"
-Q_SCHEMA="$(when 'Schema (optional) [public]:')"
-Q_USER="$(when 'Reader account (required):')"
-Q_PW="$(when 'Password (required) (hidden')"
-Q_TLS="$(when 'TLS (optional)')"
-Q_CA="$(when 'CA certificate file (optional)')"
+Q_NAME="$(when 'Name for this connection *:')"
+Q_HOST="$(when 'Host name or address *:')"
+Q_PORT="$(when 'Port [')"
+Q_DB="$(when 'Database *:')"
+Q_SCHEMA="$(when 'Schema [public]:')"
+Q_USER="$(when 'Reader account *:')"
+Q_PW="$(when 'Password * (hidden')"
+Q_TLS="$(when 'TLS (')"
+Q_CA="$(when 'CA certificate file:')"
 Q_SUM="$(when 'Number to change, Enter to continue')"
 Q_GO="$(when 'now? [y/N]')"
 if command -v python3 >/dev/null 2>&1; then
@@ -2463,17 +2539,22 @@ if command -v python3 >/dev/null 2>&1; then
     # is no "Select All" above it - Enter passes the connection string by, then
     # one wrong answer, corrected; Enter leaves the summary. The public IP lookup
     # is on (a file:// URL): the review says the address.
-    EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
+    TTY_REPLAY_RAW="$WORK/tui.raw" EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
         "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
+    check "the first line is this computer's public IP, before the menu's own line" \
+        "    • This computer's public IP is 203.0.113.7: a source on the internet must allow it.|    • Tick one or more sources; the details for each are asked next." \
+        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print("|".join([l for l in t.split("\n") if l.strip()][:2]))' "$WORK/tui.raw")"
     has "...the review names this computer's public IP for a source on the internet" \
         "tuione: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
     has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
-    has "...with the adapter version each one pins" "4.1.0" "$TUI_SCREEN"
-    has "...and its release" "GA" "$TUI_SCREEN"
-    has "...under the three column heads" "Version" "$TUI_SCREEN"
+    has "...under the Source column" "Source" "$TUI_SCREEN"
+    lacks "...no Version column" "Version" "$TUI_SCREEN"
+    lacks "...no Release column" "Release" "$TUI_SCREEN"
+    lacks "...no adapter version on a row" "4.1.0" "$TUI_SCREEN"
+    lacks "...no tier on a row" " GA " "$TUI_SCREEN"
     lacks "...no Kind column any more" "REST + JDBC" "$TUI_SCREEN"
-    has "...the panel shows every answer" "Host name or address      pg.example.com" "$TUI_SCREEN"
+    has "...the panel shows every answer" "Host name or address *      pg.example.com" "$TUI_SCREEN"
     has "...the credential as given, never its value" "(given, hidden)" "$TUI_SCREEN"
     has "...the review says who can read the result" "MCP read-only user can read every table of VS_TUIONE" "$TUI_SCREEN"
     has "...and the row ends with the schema and its tables" "✓ VS_TUIONE · 2 tables" "$TUI_SCREEN"
@@ -2497,18 +2578,44 @@ PY
     has "...and in the engine's words below the table" "tuimy did not connect:" "$TUI_SCREEN"
     check "...nothing kept for the failed one" "no" "$([ -d "$HOME_K/sources/tuimy" ] && echo yes || echo no)"
 
-    # Java missing: the row says so, the question comes once below the table, and
-    # an Enter pressed while the table ran (its bar is up: a "%"; each connect
-    # takes two seconds here) does not answer it.
+    # Java missing: the row says so, and below the table the kit installs it with
+    # no question - picking the source was the permission - in one line that
+    # says what and why, then the source runs again in a table of its own. The
+    # real _exakit_vs_install_java runs; only the launcher and exakit stop and
+    # start are stand-ins (TUI_FAKE_JAVA_INSTALL). An Enter pressed while the
+    # table ran (its bar is up: a "%"; each connect takes two seconds here) is
+    # thrown away, not typed into anything.
     python3 - "$STATE" <<'PY'
 import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
 PY
-    TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
-        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r$(when '%')\r$(when 'Install the Java language container now?')y\r"
-    check "a missing Java container: one question, then a table of its own" "0" "$TUI_RC"
+    export TUI_FAKE_CALLS="$WORK/fake-calls"
+    TTY_REPLAY_RAW="$WORK/tui.raw" TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
+        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r$(when '%')\r"
+    check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
+    check "...the one y/N was Connect it now?" "1" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "✗ needs Java in the database" "$TUI_SCREEN"
-    has "...the answer was the one typed after the question" "Java language container installed" "$TUI_SCREEN"
+    has "...one line says what the kit does and why" "Installing the Java language container for PostgreSQL: about 250 MiB, and the database restarts once" "$(tr -d '\r' < "$WORK/tui.raw")"
+    lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
+    lacks "...no y/N after the connect question" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
+    has "...the launcher installed it, with no restart of its own" "slc install java --no-restart" "$(cat "$TUI_FAKE_CALLS" 2>/dev/null)"
+    has "...then the kit's own stop and start: the one restart" "exakit stop|exakit start" "$(tr '\n' '|' < "$TUI_FAKE_CALLS" 2>/dev/null)"
+    has "...the install said done" "Java language container installed" "$TUI_SCREEN"
     has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
+
+    # The same at the line-by-line questions (a terminal without the drawn
+    # form): "Connect now?" is the question, and the Java install after it is not.
+    python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
+PY
+    TTY_REPLAY_RAW="$WORK/tui.raw" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_FAKE_JAVA_INSTALL=1 \
+        TUI_ARGS="pg --name linejava --set host=pg.example.com --set database=sales --set user=reader" \
+        tui connect-tui-scenario.sh "none" 0 \
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+    TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+    has "line by line, Java missing: one line says what the kit does and why" "Installing the Java language container for PostgreSQL: about 250 MiB" "$TUI_RAW"
+    lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
+    check "...the one question was Connect now?" "1" "$(printf '%s\n' "$TUI_RAW" | grep -c '\[y/N\]')"
+    check "...and the source connects after it" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEJAVA"]["secret"]')"
 
     # The command line names the connector and some answers: no menu, no
     # connection string asked for, those answers ticked, only the rest asked. The
@@ -2521,16 +2628,24 @@ PY
     lacks "...no menu" "Connect external sources" "$TUI_SCREEN"
     lacks "...no connection string asked for" "Connection string" "$(cat "$WORK/tui.raw")"
     has "...the given credential file is used, not asked for" "(read from a file)" "$TUI_SCREEN"
-    has "...picked in the summary, Enter keeps it" "Password (required) (hidden, Enter keeps the one given):" "$(cat "$WORK/tui.raw")"
+    has "...picked in the summary, Enter keeps it" "Password * (hidden, Enter keeps the one given):" "$(cat "$WORK/tui.raw")"
     has "...and it connects" "✓ VS_TUIARGS · 1 table" "$TUI_SCREEN"
     check "...with the file's credential" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIARGS"]["secret"]')"
 
     # Skip closes the menu with nothing done.
-    # Skip sits below every connector of the catalog (GA and Beta); the cursor
-    # steps over a gated one.
+    # Skip sits below every connector of the catalog; the cursor steps over a
+    # gated one.
     _skip_keys="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated"))' "$DEFS/catalog.json")"
-    tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
+    TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
     has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
+    check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line comes first" \
+        "    • Tick one or more sources; the details for each are asked next." \
+        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print([l for l in t.split("\n") if l.strip()][0])' "$WORK/tui.raw")"
+    lacks "...nothing about the public IP anywhere" "public IP" "$(cat "$WORK/tui.raw")"
+    has "the menu: the Source column alone" "│     Source " "$TUI_SCREEN"
+    lacks "...no Status column in a menu that runs nothing" "Status" "$TUI_SCREEN"
+    lacks "...no Version" "Version" "$TUI_SCREEN"
+    lacks "...no Release" "Release" "$TUI_SCREEN"
 
     if command -v pwsh >/dev/null 2>&1; then
         # The PowerShell twin, under the same terminal model. pwsh starts slower:
@@ -2554,16 +2669,16 @@ PY
     TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
         "${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuilong\r$Q_SCHEMA\r${Q_PW}\x04"
     check "a 1500-character paste with a second line, then Ctrl-D: one panel" "0" "$TUI_RC"
-    has "...the long string was read whole: its port" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
-    has "...the second line answered nothing: the name is the one typed" "Name for this connection  tuilong" "$TUI_SCREEN"
+    has "...the long string was read whole: its port" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+    has "...the second line answered nothing: the name is the one typed" "Name for this connection *  tuilong" "$TUI_SCREEN"
     lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
     has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
     if command -v pwsh >/dev/null 2>&1; then
         TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
             "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
         check "PowerShell: the same paste and Ctrl-D: one menu, one panel" "0" "$TUI_RC"
-        has "...the long string was read whole" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
-        has "...the second line answered nothing" "Name for this connection  tuipslong" "$TUI_SCREEN"
+        has "...the long string was read whole" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+        has "...the second line answered nothing" "Name for this connection *  tuipslong" "$TUI_SCREEN"
         lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
         has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
     else
@@ -2936,11 +3051,11 @@ printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
 TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
     tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
 check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
-has "...the panel holds the string's host" "Host name or address      pg.example.com" "$TUI_SCREEN"
+has "...the panel holds the string's host" "Host name or address *      pg.example.com" "$TUI_SCREEN"
 has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
 has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
 
-printf '\n== the connect form: required or optional, a pasted string, one answer changed ==\n'
+printf '\n== the connect form: a red * for a required field, a pasted string, one answer changed ==\n'
 # What a person sees on the way (TTY_REPLAY_RAW: the whole stream, colours out)
 # as well as what the screen is left holding. The pasted string carries a
 # password: it is read hidden, not used, the hidden prompt still asks, and the
@@ -2948,32 +3063,38 @@ printf '\n== the connect form: required or optional, a pasted string, one answer
 if command -v python3 >/dev/null 2>&1; then
     URLPW='Url-pa55-zz7'
     RAW="$WORK/tui.raw"
-    prow() { printf '%-24s  %s' "$1" "$2"; }  # a PostgreSQL panel row: label, value
+    # A PostgreSQL panel row: label, value. The label column holds a required
+    # field's " *" (26: "Name for this connection *").
+    prow() { printf '%-26s  %s' "$1" "$2"; }
     # Enter on a required name is refused; on an optional one with a default
     # (schema) it takes it, on one without (ca) it leaves it empty; 3 asks the
     # port again.
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r${Q_PORT}5432\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
     check "a pasted string, a refused Enter, one answer changed: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
-    has "the panel marks a required field" "$(prow 'Host name or address' '(required)')" "$TUI_RAW"
-    has "...and an optional one, with its default" "$(prow Port '(optional) [5432]')" "$TUI_RAW"
+    has "the panel marks a required field with a star after its label" "│     Host name or address *      " "$TUI_RAW"
+    has "...an optional one has no star, and keeps its default" "$(prow Port '[5432]')" "$TUI_RAW"
+    lacks "...no star on an optional one" "Port *" "$TUI_RAW"
+    has "...one legend line in the box says what the star means" "│     * required " "$TUI_RAW"
+    lacks "...and the words are gone" "(required)" "$TUI_RAW"
+    lacks "...both of them" "(optional)" "$TUI_RAW"
     has "the first question is the connection string, read hidden" "Connection string (hidden; Enter to type the fields):" "$TUI_RAW"
     has "...its help names the forms the connector reads" "as it shows it: jdbc:postgresql://host:5432/db," "$TUI_RAW"
     has "...all of them" "postgres://user@host:5432/db or host[:port][/database]" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
-    has "the question says (required), dim like the notes" "Name for this connection (required):" "$TUI_RAW"
+    has "the question ends in the star too" "Name for this connection *:" "$TUI_RAW"
     has "...Enter on an empty required field is refused, in one line" "Name for this connection is required" "$TUI_RAW"
-    has "...an optional one says so, with the default Enter takes" "Schema (optional) [public]:" "$TUI_RAW"
-    has "the fields the string filled are marked" "$(prow 'Host name or address' 'pg.example.com (from the string)')" "$TUI_SCREEN"
-    lacks "...and not asked" "Host name or address (required):" "$TUI_RAW"
+    has "...an optional one shows the default Enter takes, no star" "Schema [public]:" "$TUI_RAW"
+    has "the fields the string filled are marked" "$(prow 'Host name or address *' 'pg.example.com (from the string)')" "$TUI_SCREEN"
+    lacks "...and not asked" "Host name or address *:" "$TUI_RAW"
     has "a password in the string: the note says it was not used" "(a password, token or key): it was not used." "$TUI_SCREEN"
     lacks "...without the command-line sentence a typed string does not earn" "The string was on the command line" "$TUI_RAW"
-    has "...and the hidden prompt still asks for it" "Password (required) (hidden):" "$TUI_RAW"
+    has "...and the hidden prompt still asks for it" "Password * (hidden):" "$TUI_RAW"
     has "...whose empty answer is refused too" "Password is required; it stays in memory" "$TUI_RAW"
     has "the summary numbers every answer" "  3  $(prow Port '5433 (from the string)')" "$TUI_RAW"
     has "...asks for a number, Enter to go on" "Number to change, Enter to continue:" "$TUI_RAW"
-    has "...the number asked that one field again, which can be taken back" "Port (optional) (- clears it) [5433]:" "$TUI_RAW"
+    has "...the number asked that one field again, which can be taken back" "Port (- clears it) [5433]:" "$TUI_RAW"
     has "...and the changed answer is no longer the string's" "$(prow Port '5432      ')" "$TUI_SCREEN"
     has "an optional field left empty" "$(prow 'CA certificate file' '(none)')" "$TUI_SCREEN"
     has "...and it connects" "✓ VS_TUIPASTE" "$TUI_SCREEN"
@@ -2986,27 +3107,27 @@ if command -v python3 >/dev/null 2>&1; then
     # fields. A plan that refuses one input goes straight back to that field.
     TTY_REPLAY_RAW="$RAW" TUI_PLAN_FAIL="host=old.example.com is not a host this test lets through" TUI_ARGS="pg" \
         tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address (required) [old.example.com]:')pg.example.com\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address * [old.example.com]:')pg.example.com\r$Q_SUM\r${Q_GO}y\r"
     check "a garbage string, then a plan refusing the host: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "a string with a space is refused in the engine's words" "the connection string has a space, line break or control character in it" "$TUI_RAW"
     has "...so is another connector's" "the kit does not read this as a PostgreSQL connection string; it reads:" "$TUI_RAW"
     has "the plan's refusal is said above the field it names" "host=old.example.com is not a host this test lets through" "$TUI_RAW"
-    has "...which is asked again, its answer the default" "Host name or address (required) [old.example.com]:" "$TUI_RAW"
+    has "...which is asked again, its answer the default" "Host name or address * [old.example.com]:" "$TUI_RAW"
     lacks "...instead of asking to change every answer" "Change the answers?" "$TUI_RAW"
     has "...and the summary after it offers to leave the source out" "Number to change, Enter to continue, skip to leave this source out" "$TUI_RAW"
     has "...and the new answer connects" "✓ VS_TUIJUMP" "$TUI_SCREEN"
-    has "...from the corrected host" "$(prow 'Host name or address' 'pg.example.com ')" "$TUI_SCREEN"
+    has "...from the corrected host" "$(prow 'Host name or address *' 'pg.example.com ')" "$TUI_SCREEN"
 
     # A refusal naming two inputs (ca needs tls=verify) opens the summary with its
     # reason; "-" takes the optional CA back; skip leaves the source out. (Root B:
     # the private-CA tests above move root A away.)
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
-        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}require\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r${Q_CA}-\r${Q_SUM}skip\r"
+        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}require\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r$(when 'CA certificate file (- clears it)')-\r${Q_SUM}skip\r"
     check "a refusal naming two inputs, a cleared answer, skip: one panel" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "...the summary comes back with the reason" "ca is used to verify the server, so it needs tls=verify (not require)" "$TUI_RAW"
-    has "...an optional answer says how to take it back" "CA certificate file (optional) (- clears it)" "$TUI_RAW"
+    has "...an optional answer says how to take it back" "CA certificate file (- clears it)" "$TUI_RAW"
     has "...and - did" "  9  $(prow 'CA certificate file' '(none)')" "$TUI_RAW"
     has "...skip left the source out" "Left out: postgresql" "$TUI_SCREEN"
     has "...with nothing changed" "Nothing was changed." "$TUI_SCREEN"
@@ -3020,16 +3141,16 @@ if command -v python3 >/dev/null 2>&1; then
     TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
         "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
     check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
-    has "...the value kept" "$(prow 'Host name or address' 'pg.example.com')" "$TUI_SCREEN"
+    has "...the value kept" "$(prow 'Host name or address *' 'pg.example.com')" "$TUI_SCREEN"
     lacks "...its mark dropped" "(from the string)" "$TUI_SCREEN"
     has "...and declined, nothing changed" "Nothing was changed." "$TUI_SCREEN"
 
     # The line-by-line questions (a terminal without the drawn form), on a pty
     # that is the scenario's /dev/tty, as a real terminal is.
-    Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) (required)')"
+    Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) *')"
     Q_LPASTE="$(when 'Connection string (Enter to type the fields) (input hidden):')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema (optional) [public]')\r$(when 'TLS (verify/require/disable) (optional) [verify]')\r$(when 'Enter to skip (optional)')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the connection string is asked first, hidden" "Connection string (Enter to type the fields) (input hidden):" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
@@ -3038,8 +3159,12 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...without the command-line sentence" "The string was on the command line" "$TUI_RAW"
     has "...what it filled is said" "From the connection string: database, host, port, user" "$TUI_RAW"
     lacks "...and not asked" "Host name or address" "$TUI_RAW"
-    has "...each question says (required)" "Name for this connection (lower case, e.g. sales) (required)" "$TUI_RAW"
-    has "...or (optional), with its default" "Schema (optional) [public]" "$TUI_RAW"
+    has "...one legend line above the questions says what the star means" "    * required" "$TUI_RAW"
+    has "...a required question ends in the star" "Name for this connection (lower case, e.g. sales) *" "$TUI_RAW"
+    has "...an optional one shows its default, no star" "Schema [public]" "$TUI_RAW"
+    lacks "...no star on it" "Schema *" "$TUI_RAW"
+    lacks "...and the words are gone" "(required)" "$TUI_RAW"
+    lacks "...both of them" "(optional)" "$TUI_RAW"
     has "...an empty required answer is refused" "Name for this connection is required" "$TUI_RAW"
     has "...and the credential is asked hidden" "Password (input hidden):" "$TUI_RAW"
     lacks "...a 1500-character paste read whole, its second line answering nothing, never shown" "zz2nd" "$TUI_RAW"
@@ -3055,8 +3180,8 @@ if command -v python3 >/dev/null 2>&1; then
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "--dry-run on a terminal: the questions as before" "? Database " "$TUI_RAW"
     has "...and the plan" "Plan for linedry" "$TUI_RAW"
-    lacks "...no (required)" "(required)" "$TUI_RAW"
-    lacks "...no (optional)" "(optional)" "$TUI_RAW"
+    lacks "...no star" "Database *" "$TUI_RAW"
+    lacks "...no legend" "* required" "$TUI_RAW"
     lacks "...no connection string" "Connection string" "$TUI_RAW"
 
     # A pipe on stdin with a terminal behind /dev/tty: the questions come from
@@ -3068,8 +3193,8 @@ if command -v python3 >/dev/null 2>&1; then
         "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "stdin a pipe, /dev/tty a terminal: the questions as before" "Schema [public]" "$TUI_RAW"
-    lacks "...no (required)" "(required)" "$TUI_RAW"
-    lacks "...no (optional)" "(optional)" "$TUI_RAW"
+    lacks "...no star" "Port *" "$TUI_RAW"
+    lacks "...no legend" "* required" "$TUI_RAW"
     lacks "...no connection string" "Connection string" "$TUI_RAW"
     check "...and it connects" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPIPE"]["secret"]')"
 
@@ -3097,15 +3222,48 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...nothing asked" "Port [5432]" "$TUI_RAW"
     check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_TTYSTDIN" in d.get("connections", {})')"
 fi
+# The star itself: red from the palette's own UI_ERR where there is colour, a
+# plain * where there is none (NO_COLOR here; EXAKIT_NO_FANCY and no terminal
+# load the same plain palette). The real panel and the real line-by-line
+# question, a PostgreSQL-like form of one required and one optional field.
+starform() { # starform <colour:1|0> - the panel, the question, the legend; ESC shown as <E>
+    ( if [ "$1" = 1 ]; then unset NO_COLOR; else NO_COLOR=1; export NO_COLOR; fi
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      [ "$1" = 1 ] && UI_ERR=$'\033[1;31m' UI_RESET=$'\033[0m'
+      _EVT_COLS=80; _EVT_IN=72; _EVT_SP="$(printf '%160s' '')"; _EVT_HR="$(printf '%160s' '' | tr ' ' '-')"
+      _EVT_NF=2; _EVT_LW=22; _EVT_NOTES=""
+      _EVT_LAB=("Host name or address" "Port"); _EVT_KIND=(host port); _EVT_REQ=(1 ""); _EVT_DEF=("" 5432)
+      _EVT_VAL=("" ""); _EVT_DONE=("" ""); _EVT_FROM=("" "")
+      _exakit_vs_tui_frame "1 of 1" -1; printf '%s' "$_EVT_BUF"
+      _exakit_prompt_tty() { printf 'stdin\n'; }
+      prompt_text() { printf 'ASK %s [%s]\n' "$1" "$2" >&2; printf 'x\n'; }
+      _exakit_vs_prompt "Host name or address" "" 1 1 >/dev/null
+      _exakit_vs_prompt "Port" "5432" "" 1 >/dev/null
+      _exakit_vs_legend ) 2>&1 | sed $'s/\033/<E>/g'
+}
+OUT="$(starform 0)"
+has "no colour: a required field's label ends in a plain *" "|     Host name or address *" "$OUT"
+has "...an optional one keeps its default, no star" "$(printf '|     %-22s  [5432]' Port)" "$OUT"
+has "...the legend in the box" "|     * required" "$OUT"
+has "...the question ends in the plain * too" "ASK Host name or address * []" "$OUT"
+has "...an optional question: its default, no star" "ASK Port [5432]" "$OUT"
+has "...and the line-by-line legend" "    * required" "$OUT"
+lacks "...no colour code anywhere" "<E>" "$OUT"
+lacks "...no (required) or (optional)" "(required)" "$OUT"
+OUT="$(starform 1)"
+has "colour: the star is the palette's red (UI_ERR)" "Host name or address<E>[0m <E>[1;31m*<E>[0m" "$OUT"
+has "...in the question too" "ASK Host name or address <E>[1;31m*<E>[0m []" "$OUT"
+has "...and the legend's" "<E>[1;31m*<E>[0m" "$OUT"
+
 # Without a terminal - a pipe, --json - nothing is asked and nothing is marked.
 OUT="$(printf '%s' "$SECRET" | urlsh cmd_connect pg --name pipeform $PG_SET)"; RC=$?
 check "a pipe: the credential on stdin connects as before, exit 0" "0" "$RC"
-lacks "...no marks" "(required)" "$OUT"
+lacks "...no marks" "* required" "$OUT"
 lacks "...no connection string" "Connection string" "$OUT"
 run remove pipeform
 OUT="$(urlsh cmd_connect pg --name jsonform $PG_SET --dry-run --json </dev/null)"; RC=$?
 check "--json: exit 0" "0" "$RC"
-lacks "...no marks" "(optional)" "$OUT"
+lacks "...no marks" "* required" "$OUT"
 lacks "...no connection string" "Connection string" "$OUT"
 # Which field a plan's refusal names: input names first, as whole words; labels
 # only when no name is named, as whole words too; several named is -2 (the
@@ -3258,6 +3416,21 @@ lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep 
 # address when it is passed straight as an argument (tests/bash32-guard.sh).
 _null_ip="$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
 check "...and public_ip is null" "None" "$_null_ip"
+# The connect menu's first line: catalog --public-ip asks once, says it as one
+# INFO line, and its answer is handed on to the rest of the command
+# (_EXAKIT_VS_PUBLIC_IP), so a later plan does not ask again.
+OUT="$(ipeng catalog --public-ip </dev/null 2>&1)"
+check "catalog --public-ip: the menu's line, first" "INFO This computer's public IP is 203.0.113.7: a source on the internet must allow it." \
+    "$(printf '%s\n' "$OUT" | head -n 1)"
+check "...and --json carries it" "203.0.113.7" "$(ipeng --json catalog --public-ip </dev/null 2>/dev/null | pubip)"
+OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$IPURL" eng catalog --public-ip </dev/null 2>&1)"
+lacks "EXAKIT_NO_IP_LOOKUP=1: the menu says nothing about it" "public IP" "$OUT"
+lacks "a catalog without --public-ip asks nothing" "public IP" "$(ipeng catalog </dev/null 2>&1)"
+OUT="$(_EXAKIT_VS_PUBLIC_IP=198.51.100.9 IP_URL="file://$WORK/no-such-file" ipeng plan pg --name ipsales $PG_SET 2>&1)"
+has "an answer handed on: the plan says it without asking (its URL would fail)" "This computer's public IP is 198.51.100.9: pg.example.com must allow it" "$OUT"
+_t0="$(date +%s)"; OUT="$(_EXAKIT_VS_PUBLIC_IP=none IP_URL="$BH_URL" ipeng --json plan pg --name ipsales $PG_SET 2>/dev/null)"; _t1="$(date +%s)"
+check "...a lookup that failed earlier: not asked again (no wait on a URL that never answers), public_ip null" "yes None" \
+    "$([ $((_t1 - _t0)) -le 2 ] && echo yes || echo no) $(printf '%s\n' "$OUT" | pubip)"
 kill "$BH_PID" 2>/dev/null; wait "$BH_PID" 2>/dev/null
 
 # connect: the lookup runs beside it; a failed one changes nothing.

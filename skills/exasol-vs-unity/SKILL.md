@@ -1,9 +1,9 @@
 ---
 name: exasol-vs-unity
-description: Connect a Unity Catalog schema (Databricks or OSS) to local Exasol with exakit connect unity, its tables read straight from your own cloud storage by the lakehouse engine with no warehouse - Beta, not yet run against a live Unity Catalog. Covers the inputs to collect (workspace URL, catalog.schema, the bucket's region, a personal access token), finding them with the Databricks CLI, External Data Access and the EXTERNAL USE SCHEMA grant, when to use the databricks connector instead, the unattended connect line, and the Unity-specific failures. Connector id unity, aliases uc and oss-unity-catalog, tier Beta. Triggers — "read Unity Catalog tables without a warehouse", "Unity Catalog external data access for Exasol", "EXTERNAL USE SCHEMA for exakit", "query Unity Catalog tables from storage in Exasol", "exakit connect unity".
+description: Connect a Unity Catalog schema (Databricks or OSS) to local Exasol with exakit connect unity, its tables read straight from your own cloud storage by the lakehouse engine with no warehouse. Covers the inputs to collect (workspace URL, catalog.schema, the bucket's region, a personal access token), finding them with the Databricks CLI, External Data Access and the EXTERNAL USE SCHEMA grant, when to use the databricks connector instead, the unattended connect line, and the Unity-specific failures. Connector id unity, aliases uc and oss-unity-catalog, tier GA. Triggers — "read Unity Catalog tables without a warehouse", "Unity Catalog external data access for Exasol", "EXTERNAL USE SCHEMA for exakit", "query Unity Catalog tables from storage in Exasol", "exakit connect unity".
 ---
 
-# Unity Catalog via the lakehouse engine → local Exasol (Beta)
+# Unity Catalog via the lakehouse engine → local Exasol
 
 Shared rules (credential handling, the lakehouse engine, the `--json` answer and
 failure kinds, disconnect versus remove) live in
@@ -14,8 +14,7 @@ skill adds only what is the Unity route's own.
 
 A Unity Catalog schema whose tables sit on the user's own cloud storage, read
 by the same pinned engine and scripts as the Glue route, inside this database:
-nothing runs on Databricks compute. One schema is one source. **Beta: this route
-has not been run against a live Unity Catalog yet - tell the user.**
+nothing runs on Databricks compute. One schema is one source.
 
 Use `exasol-vs-databricks` (through a SQL warehouse) instead when the schema is
 on Databricks Default Storage (never readable from outside), when External Data
@@ -85,8 +84,8 @@ exakit connect unity --name uc_sales --set workspace_url=https://<workspace-host
   --password-file ~/.config/exakit/<name>.pat --yes --json
 ```
 
-The first lakehouse source installs the Rust language container after asking
-(`--yes` consents: tell the user - one restart). The tables appear as
+The first lakehouse source installs the Rust language container - at once at a
+terminal, with `--yes` in a script (tell the user first - one restart). The tables appear as
 `VS_UC_SALES`.
 
 ## 7. Verify

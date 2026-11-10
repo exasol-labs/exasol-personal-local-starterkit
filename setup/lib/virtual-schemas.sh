@@ -10,8 +10,13 @@
 # reports but cannot fix from inside the database:
 #
 #   exit 20  Java in the database has no DNS resolver -> personal_slc_dns_repair, retry once
-#            (Docker: the fix is in the image - one restart, asked, then the retry)
-#   exit 21  the Java language container is missing   -> `exasol slc install java` (asked), retry once
+#            (Docker: the fix is in the image - one restart, then the retry)
+#   exit 21  the Java language container is missing   -> `exasol slc install java`, retry once
+#
+# A person connecting at a terminal is not asked before either: picking the
+# source was the permission, so the step is said and made (_exakit_vs_interactive).
+# A script (--json, or no terminal) keeps its contract: --yes, else the exit
+# code and its remedy.
 
 # exakit_vs_defs — the folder that holds catalog.json, profiles/, connectors/.
 exakit_vs_defs() {
@@ -294,6 +299,11 @@ _exakit_vs_quiet() {
     case "$-" in *x*) { set +x; } 2>/dev/null ;; esac
     unset EXAKIT_VS_STDIN_SECRET _cc_secret _cs_secret _evx_secret _evo_secret _evo_v _EVH_LINE _EVT_ANSWER \
         _eap_url _etf_v _erh_value
+    # This command's own answers only. A public IP looked up by an earlier
+    # command reaches later ones through the processes it started (a restart's
+    # `exakit start` brings back the add-on services with it), and could name a
+    # network this computer has left. A person's go-ahead is never inherited.
+    unset _EXAKIT_VS_PUBLIC_IP _EXAKIT_VS_INTERACTIVE
 }
 
 # _exakit_vs_stdin_secret — --password-stdin: ALL of standard input, read even
@@ -425,15 +435,52 @@ _exakit_vs_confirm() {
     case "$(prompt_text "$1 [y/N]" "N")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
 
+# _exakit_vs_interactive — is a person connecting at a terminal? Set by
+# cmd_connect (a terminal reachable, no --json) and the terminal flow
+# (_EXAKIT_VS_INTERACTIVE). Picking the source was their permission to prepare
+# the database for it, so a language container or a restart is said and made,
+# never asked. Anything else keeps _exakit_vs_confirm: --yes, a y at a terminal
+# (exakit source), and no for --json or no terminal - the exit code and remedy.
+_exakit_vs_interactive() {
+    [ "${_EXAKIT_VS_INTERACTIVE:-0}" = 1 ] && [ "${EXAKIT_VS_JSON:-0}" != 1 ]
+}
+
+# _exakit_vs_label <connector> — its name in the catalog ("PostgreSQL"), for the
+# line that says what a step is for; the id when the catalog cannot be read.
+_exakit_vs_label() {
+    run_python_any -c 'import json, sys
+print(next((e["name"] for e in json.load(open(sys.argv[1]))["connectors"] if e["id"] == sys.argv[2]), sys.argv[2]))' \
+        "$(exakit_vs_defs)/catalog.json" "$1" 2>/dev/null || printf '%s\n' "$1"
+}
+
+# _exakit_vs_and <word...> — "a", "a and b", "a, b and c": the sources a step
+# is for, in the line that says it.
+_exakit_vs_and() {
+    _evand_out=""
+    while [ "$#" -gt 0 ]; do
+        if [ -z "$_evand_out" ]; then _evand_out="$1"
+        elif [ "$#" -eq 1 ]; then _evand_out="$_evand_out and $1"
+        else _evand_out="$_evand_out, $1"; fi
+        shift
+    done
+    printf '%s' "$_evand_out"
+}
+
 # _exakit_vs_install_java — the Java language container, with consent: a
 # download of about 250 MiB and one database restart, done through the kit's
-# own stop/start so add-on services come back and DNS is repaired.
+# own stop/start so add-on services come back and DNS is repaired. A person
+# connecting at a terminal gave it by picking the source: one line says what
+# happens and why (_EXAKIT_VS_FOR names the sources), and nothing is asked.
 _exakit_vs_install_java() {
-    info "Virtual schemas run Java inside the database, and its Java language container is not installed."
-    info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
-    if ! _exakit_vs_confirm "Install the Java language container now?"; then
-        info "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
-        return 1
+    if _exakit_vs_interactive; then
+        info "Installing the Java language container for ${_EXAKIT_VS_FOR:-this source}: about 250 MiB, and the database restarts once (add-on services restart with it)."
+    else
+        info "Virtual schemas run Java inside the database, and its Java language container is not installed."
+        info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
+        if ! _exakit_vs_confirm "Install the Java language container now?"; then
+            info "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
+            return 1
+        fi
     fi
     run_logged "$(personal_cli)" slc install java --no-restart $(personal_auto_approve_flag slc) \
         || { error "The Java language container did not install. Details: exakit logs"; return 1; }
@@ -456,10 +503,10 @@ _exakit_vs_install_java() {
 }
 
 # _exakit_vs_install_rust — the Rust language container a native adapter
-# (Profile D) runs in, with consent: the exasol-labs build pinned for this CPU
-# in profiles/rust-native, size- and SHA-256-checked, registered as the RUST
-# alias, then one database restart through the kit's own stop/start. Twin of
-# Install-ExakitVsRust.
+# (Profile D) runs in, with consent (said, not asked, at a terminal, as Java's
+# is): the exasol-labs build pinned for this CPU in profiles/rust-native, size-
+# and SHA-256-checked, registered as the RUST alias, then one database restart
+# through the kit's own stop/start. Twin of Install-ExakitVsRust.
 _exakit_vs_install_rust() {
     _evr_pin="$(run_python_any - "$(exakit_vs_defs)/profiles/rust-native/profile.json" "$(uname -m)" <<'PY'
 import json, sys
@@ -473,11 +520,15 @@ PY
     IFS='|' read -r _evr_url _evr_sha _evr_size _evr_asset _evr_version _evr_upstream <<EOF
 $_evr_pin
 EOF
-    info "This source runs a native adapter inside the database, and its Rust language container is not installed."
-    info "Installing it downloads $_evr_upstream $_evr_version (about $((_evr_size / 1048576)) MiB, checksum-pinned) and restarts the database once (add-on services restart with it)."
-    if ! _exakit_vs_confirm "Install the Rust language container now?"; then
-        info "Nothing was installed. Run the same exakit connect again when you are ready."
-        return 1
+    if _exakit_vs_interactive; then
+        info "Installing the Rust language container for ${_EXAKIT_VS_FOR:-this source}: $_evr_upstream $_evr_version, about $((_evr_size / 1048576)) MiB, checksum-pinned, and the database restarts once (add-on services restart with it)."
+    else
+        info "This source runs a native adapter inside the database, and its Rust language container is not installed."
+        info "Installing it downloads $_evr_upstream $_evr_version (about $((_evr_size / 1048576)) MiB, checksum-pinned) and restarts the database once (add-on services restart with it)."
+        if ! _exakit_vs_confirm "Install the Rust language container now?"; then
+            info "Nothing was installed. Run the same exakit connect again when you are ready."
+            return 1
+        fi
     fi
     _evr_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-rust.XXXXXX")" || return 1
     fetch "$_evr_url" "$_evr_dir/$_evr_asset"
@@ -496,6 +547,24 @@ EOF
     ok "Rust language container installed"
 }
 
+# _exakit_vs_dns_restart — Docker: the DNS fix is in the language container
+# image, and the database mounts an image only when it starts - one restart.
+# Said and made for a person connecting at a terminal; otherwise asked
+# (_exakit_vs_confirm: --yes makes it, --json and no terminal do not).
+_exakit_vs_dns_restart() {
+    if _exakit_vs_interactive; then
+        info "Restarting the database once, so Java in it can resolve host names for ${_EXAKIT_VS_FOR:-this source} (add-on services restart with it)."
+    else
+        info "The database sees it from its next start: one restart (add-on services restart with it)."
+        if ! _exakit_vs_confirm "Restart the database now?"; then
+            error "Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again."
+            return 1
+        fi
+    fi
+    EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
+    "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back. Run: exakit start"; return 1; }
+}
+
 # _exakit_vs_repair <engine-exit> — what the bridge does about exit 20 (DNS
 # repaired), 21 (Java installed) or 23 (Rust installed) before its one retry;
 # non-zero when it could not, or was not allowed to.
@@ -506,15 +575,7 @@ _exakit_vs_repair() {
             personal_slc_dns_repair || _evrp_dns=$?
             case "$_evrp_dns" in
                 0) : ;;
-                # Docker: the fix is in the language container image, and the
-                # database mounts an image only when it starts.
-                2) info "The database sees it from its next start: one restart (add-on services restart with it)."
-                   if ! _exakit_vs_confirm "Restart the database now?"; then
-                       error "Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again."
-                       return 1
-                   fi
-                   EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
-                   "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back. Run: exakit start"; return 1; } ;;
+                2) _exakit_vs_dns_restart || return 1 ;;
                 *) error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."; return 1 ;;
             esac ;;
         21) _exakit_vs_install_java ;;
@@ -570,27 +631,34 @@ _exakit_vs_run() {
 
 # _exakit_vs_prompt <question> <default> <required:1|""> <marks:1|""> [label] —
 # one line-by-line answer on stdout. With marks (someone is answering: not
-# --yes, --dry-run or --json) the question says (required) or (optional), dim,
-# and an empty answer to a required one is refused ("<label> is required") and
-# asked again; without, it is prompt_text as it always was. ⇄ twin:
+# --yes, --dry-run or --json) a required question ends in a red * (a plain *
+# without colour; _exakit_vs_legend says what it means), and an empty answer to
+# it is refused ("<label> is required") and asked again; an optional one shows
+# only its default. Without marks, it is prompt_text as it always was. ⇄ twin:
 # Read-ExakitVsLineAnswer.
 _exakit_vs_prompt() {
     [ -n "$4" ] || { prompt_text "$1" "$2"; return 0; }
-    _evq_mark="(optional)"; [ -n "$3" ] && _evq_mark="(required)"
+    _evq_mark=""; [ -n "$3" ] && _evq_mark=" ${UI_ERR:-}*${UI_RESET:-}"
     while :; do
         # Nobody to ask after all (no terminal reachable from here): the
         # default, as prompt_text would answer, never a loop.
         [ -n "$(_exakit_prompt_tty)" ] || { printf '%s\n' "$2"; return 0; }
-        _evq_v="$(prompt_text "$1 ${UI_DIM:-}$_evq_mark${UI_RESET:-}" "$2")"
+        _evq_v="$(prompt_text "$1$_evq_mark" "$2")"
         if [ -n "$_evq_v" ] || [ -z "$3" ]; then printf '%s\n' "$_evq_v"; return 0; fi
         error "${5:-$1} is required"
     done
 }
 
+# _exakit_vs_legend — the line above the marked questions that says what their
+# star means, as the panel's legend does. ⇄ twin: Write-ExakitVsLegend.
+_exakit_vs_legend() {
+    printf '    %s*%s %srequired%s\n' "${UI_ERR:-}" "${UI_RESET:-}" "${UI_DIM:-}" "${UI_RESET:-}" >&2
+}
+
 # _exakit_vs_ask_inputs <connector> [marks] — prompt for each input the caller
 # did not set, defaults offered; appends --set KEY=VALUE pairs to
-# EXAKIT_VS_SETS. marks: each question says (required) or (optional), and a
-# required one is not left empty (_exakit_vs_prompt).
+# EXAKIT_VS_SETS. marks: a required question ends in a red *, and is not left
+# empty (_exakit_vs_prompt).
 _exakit_vs_ask_inputs() {
     _evi_lines="$(run_python_any - "$(exakit_vs_defs)/connectors/$1/connector.json" <<'PY'
 import json, sys
@@ -668,8 +736,8 @@ _exakit_vs_ask_paste() {
 #   1. pick    the marketplace's own table (ui_table_menu): one row per connector,
 #              the sources already connected named in its Description; skipped
 #              when the command named a connector;
-#   2. fill    one panel per picked source, every field visible with (required)
-#              or (optional) and its default; first a connection string, read
+#   2. fill    one panel per picked source, every field visible with its default,
+#              a required one with a red *; first a connection string, read
 #              hidden (cli.py paste, on its stdin), that answers what it names,
 #              or Enter to type the fields; each answer checked by the engine
 #              where it was typed (cli.py field, the value on its stdin); a
@@ -728,53 +796,71 @@ _exakit_vs_tui_tail() {
     if [ "${#1}" -le "$2" ]; then printf '%s' "$1"; else printf '…%s' "${1:$(( ${#1} - $2 + 1 ))}"; fi
 }
 
-# _exakit_vs_pick <work-dir> — the connector menu. Sets EXAKIT_VS_PICKED to the
+# _exakit_vs_catalog <out-file> — the connector catalog (engine catalog), and with
+# it this computer's public IP: its line is said first when it is known (a
+# source on the internet must allow it), and nothing when the lookup is off
+# (EXAKIT_NO_IP_LOOKUP=1) or failed - publicip.py's own rules and timeout. The
+# answer is kept for the rest of this command (_EXAKIT_VS_PUBLIC_IP), so each
+# source's plan says it again without asking again. The catalog's RESULT is in
+# EXAKIT_VS_RESULT. ⇄ twin: Get-ExakitVsCatalog.
+_exakit_vs_catalog() {
+    exakit_vs_engine catalog --public-ip < /dev/null > "$1" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    _exakit_vs_render "$1"
+    _evk_ip="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+print(json.load(sys.stdin).get("public_ip") or "none")' 2>/dev/null)"
+    [ -n "$_evk_ip" ] && { _EXAKIT_VS_PUBLIC_IP="$_evk_ip"; export _EXAKIT_VS_PUBLIC_IP; }
+    return 0
+}
+
+# _exakit_vs_pick <work-dir> — the connector menu, under the line that names
+# this computer's public IP (_exakit_vs_catalog). Sets EXAKIT_VS_PICKED to the
 # chosen connector ids, space separated; returns 5 when nothing was chosen.
 _exakit_vs_pick() {
     _evp_dir="$1"
-    exakit_vs_engine catalog < /dev/null > "$_evp_dir/catalog" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-    # id|label|version|release|gate: the connector, the adapter version it
-    # pins, and GA or Beta. GA first, then Beta, each in the catalog's order.
-    run_python_any - "$(_exakit_vs_result "$_evp_dir/catalog")" > "$_evp_dir/rows" <<'PY'
+    _exakit_vs_catalog "$_evp_dir/catalog"
+    # id|label|gate, in the catalog's order: each source by its name and nothing
+    # more - the adapter version and tier are `exakit source catalog`'s.
+    run_python_any - "$EXAKIT_VS_RESULT" > "$_evp_dir/rows" <<'PY'
 import json, sys
 catalog = json.loads(sys.argv[1] or "{}").get("connectors", [])
-for e in sorted(catalog, key=lambda e: e.get("tier") != "GA"):
+for e in catalog:
     gate = e.get("gate", "") if e.get("status") == "gated" else ""
-    print("|".join(x.replace("|", "/") for x in
-                   (e["id"], e["name"], e.get("version", ""), e.get("tier", ""), gate)))
+    print("|".join(x.replace("|", "/") for x in (e["id"], e["name"], gate)))
 PY
     [ -s "$_evp_dir/rows" ] || { error "The connector catalog could not be read. Details: exakit logs"; return 2; }
     _evp_state="$_evp_dir/menu"
     : > "$_evp_state"
     _evp_n="$(grep -c . "$_evp_dir/rows")"
     _evp_i=0; _evp_ids=""
-    while IFS='|' read -r _evp_id _evp_label _evp_kind _evp_text _evp_gate; do
-        # _evp_kind is the adapter version, _evp_text the release (GA or Beta).
+    while IFS='|' read -r _evp_id _evp_label _evp_gate; do
         _evp_i=$(( _evp_i + 1 ))
         _evp_tree=tee; [ "$_evp_i" -eq "$_evp_n" ] && _evp_tree=corner
         # kind|label|tick|state|pct|ceiling|secs|t0|phase|final|col2|col3; a
-        # gated connector is shown, never pickable, with its gate as the reason
-        # (the marketplace's own disabled-row shape).
+        # gated connector is shown, never pickable, its reason read on from its
+        # name: the menu has no Status column to say it in.
         if [ -n "$_evp_gate" ]; then
-            printf '%s|%s|0|disabled||||||%s|%s|%s\n' "$_evp_tree" "$_evp_label" \
-                "not available yet" "$_evp_kind" "$_evp_text, not available yet" >> "$_evp_state"
+            printf '%s|%s|0|disabled||||||||\n' "$_evp_tree" "$_evp_label - not available yet" >> "$_evp_state"
         else
-            printf '%s|%s|0|idle|||||||%s|%s\n' "$_evp_tree" "$_evp_label" "$_evp_kind" "$_evp_text" >> "$_evp_state"
+            printf '%s|%s|0|idle||||||||\n' "$_evp_tree" "$_evp_label" >> "$_evp_state"
         fi
         _evp_ids="$_evp_ids
 $_evp_id"
     done < "$_evp_dir/rows"
-    printf 'plain|Skip|0|idle||||||| | \n' >> "$_evp_state"
+    printf 'plain|Skip|0|idle||||||||\n' >> "$_evp_state"
     _evp_skip=$(( _evp_n + 1 ))
     EXAKIT_TABLE_DEFAULTS=""            # nothing ticked: a connect is always a choice
     EXAKIT_TABLE_GROUP=""
     EXAKIT_TABLE_EXCLUSIVE="$_evp_skip"
     UI_TABLE_TITLE="Connect external sources"
-    UI_TABLE_COL1="Source"; UI_TABLE_COL2="Version"; UI_TABLE_COL3="Release"
+    UI_TABLE_COL1="Source"; UI_TABLE_COL2=""; UI_TABLE_COL3=""
     UI_TABLE_MENU_START=1               # no "Select All" row to step past
     info "Tick one or more sources; the details for each are asked next."
+    # The Source column alone: nothing runs in this menu's rows, so it has no
+    # Status column either (UI_TABLE_STAT_MIN=0).
+    _evp_statmin="${UI_TABLE_STAT_MIN-}"
+    UI_TABLE_STAT_MIN=0
     ui_table_menu "$_evp_state"
-    UI_TABLE_COL2=""; UI_TABLE_COL3=""
+    if [ -n "$_evp_statmin" ]; then UI_TABLE_STAT_MIN="$_evp_statmin"; else unset UI_TABLE_STAT_MIN; fi
     EXAKIT_TABLE_EXCLUSIVE=""
     EXAKIT_VS_PICKED=""
     [ "${EXAKIT_TABLE_CONFIRMED:-0}" = 1 ] || return 5
@@ -789,11 +875,12 @@ $_evp_id"
 }
 
 # _exakit_vs_tui_frame <title> <current-field> [numbered] — the panel, built into
-# _EVT_BUF with its height in _EVT_BUF_N. A field still to answer is dim, with
-# (required) or (optional) and its default; an answered one is ticked - or, in
-# the summary (numbered), numbered for the reader to pick - and says so when a
-# pasted connection string gave it. What the engine said about that string
-# (_EVT_NOTES) stays under the panel while the form is open.
+# _EVT_BUF with its height in _EVT_BUF_N. A required field's label ends in a red
+# * (a plain * without colour), which the legend under the fields explains; a
+# field still to answer is dim, with its default; an answered one is ticked -
+# or, in the summary (numbered), numbered for the reader to pick - and says so
+# when a pasted connection string gave it. What the engine said about that
+# string (_EVT_NOTES) stays under the panel while the form is open.
 _exakit_vs_tui_frame() {
     _EVT_BUF=""; _EVT_BUF_N=0
     _evf_t=" $1 "
@@ -802,17 +889,20 @@ _exakit_vs_tui_frame() {
     _EVT_BUF_N=1
     # What a row's value may take: the panel's inside less the mark and label.
     _evf_room=$(( _EVT_IN - 7 - _EVT_LW ))
-    _evf_i=0
+    _evf_i=0; _evf_anyreq=""
     while [ "$_evf_i" -lt "$_EVT_NF" ]; do
         _evf_lab="${_EVT_LAB[$_evf_i]}"
-        _evf_lab="$_evf_lab${_EVT_SP:0:$(( _EVT_LW - ${#_evf_lab} ))}"
+        # The label column holds " *" after a required one (_EVT_LW counts it).
+        _evf_star=""; _evf_sw=0
+        if [ -n "${_EVT_REQ[$_evf_i]}" ]; then _evf_star=" $UI_ERR*$UI_RESET"; _evf_sw=2; _evf_anyreq=1; fi
+        _evf_star="$_evf_star${_EVT_SP:0:$(( _EVT_LW - ${#_evf_lab} - _evf_sw ))}"
         _evf_kind="${_EVT_KIND[$_evf_i]}"
         _evf_lead=""
         if [ "$_evf_i" -eq "$2" ]; then
-            _evf_mark="$UI_ACCENT$UI_ARROW$UI_RESET"; _evf_shown="$UI_BOLD$_evf_lab$UI_RESET"
+            _evf_mark="$UI_ACCENT$UI_ARROW$UI_RESET"; _evf_shown="$UI_BOLD$_evf_lab$UI_RESET$_evf_star"
             _evf_plain=""; _evf_val=""
         elif [ -n "${_EVT_DONE[$_evf_i]:-}" ]; then
-            _evf_mark="$UI_OK$UI_TICK$UI_RESET"; _evf_shown="$_evf_lab"
+            _evf_mark="$UI_OK$UI_TICK$UI_RESET"; _evf_shown="$_evf_lab$_evf_star"
             # The summary's number takes the tick's place, in as many columns.
             [ -n "${3:-}" ] && printf -v _evf_lead ' %s%2d%s  ' "$UI_ACCENT" $(( _evf_i + 1 )) "$UI_RESET"
             _evf_val="${_EVT_VAL[$_evf_i]}"
@@ -828,16 +918,15 @@ _exakit_vs_tui_frame() {
             _evf_val="$_evf_plain"
             if [ -n "$_evf_from" ]; then _evf_val="$_evf_val$UI_DIM$_evf_from$UI_RESET"; _evf_plain="$_evf_plain$_evf_from"; fi
         else
-            _evf_mark=" "; _evf_shown="$UI_DIM$_evf_lab$UI_RESET"
-            _evf_req="(optional)"; [ -n "${_EVT_REQ[$_evf_i]}" ] && _evf_req="(required)"
+            _evf_mark=" "; _evf_shown="$UI_DIM$_evf_lab$UI_RESET$_evf_star"
             _evf_val="${_EVT_VAL[$_evf_i]:-${_EVT_DEF[$_evf_i]}}"
             case "$_evf_kind" in secret|secret-file) _evf_val="" ;; esac
-            _evf_plain="$_evf_req"; [ -n "$_evf_val" ] && _evf_plain="$_evf_req [$_evf_val]"
+            _evf_plain=""; [ -n "$_evf_val" ] && _evf_plain="[$_evf_val]"
             if [ "${#_evf_plain}" -gt "$_evf_room" ]; then
-                # Too narrow: the mark goes first, then the default is cut,
-                # then it goes too (the question says both again).
+                # Too narrow: the default is cut, then it goes too (the
+                # question says it again).
                 _evf_plain=""
-                [ -n "$_evf_val" ] && [ "$_evf_room" -ge 6 ] && _evf_plain="[$(_exakit_vs_tui_fit "$_evf_val" $(( _evf_room - 2 )))]"
+                [ "$_evf_room" -ge 6 ] && _evf_plain="[$(_exakit_vs_tui_fit "$_evf_val" $(( _evf_room - 2 )))]"
             fi
             _evf_val="$UI_DIM$_evf_plain$UI_RESET"
         fi
@@ -847,6 +936,12 @@ _exakit_vs_tui_frame() {
         _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
         _evf_i=$(( _evf_i + 1 ))
     done
+    # The legend, one dim line under the fields: what the star means.
+    if [ -n "$_evf_anyreq" ]; then
+        _evf_pad=$(( _EVT_IN - 15 )); [ "$_evf_pad" -ge 0 ] || _evf_pad=0
+        _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_VB$UI_RESET     $UI_ERR*$UI_RESET$UI_DIM required$UI_RESET${_EVT_SP:0:$_evf_pad}$UI_ACCENT$UI_VB$UI_RESET"$'\n'
+        _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
+    fi
     _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_BL${_EVT_HR:0:$_EVT_IN}$UI_BR$UI_RESET"$'\n'
     _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
     [ -n "${_EVT_NOTES:-}" ] || return 0
@@ -970,8 +1065,8 @@ EOF
 }
 
 # _exakit_vs_tui_field <i> [why] — field i asked under the panel (with why it is
-# asked again, when there is a reason): its label, (required) or (optional), its
-# notes and its default. Enter takes the default; an optional one with none is
+# asked again, when there is a reason): its label, a red * when it is required,
+# its notes and its default. Enter takes the default; an optional one with none is
 # left empty, a required one is refused in one line and asked again. The engine
 # checks a typed answer (cli.py field, the value on its stdin, never in argv); a
 # credential is hidden, and asked again keeps the one given on Enter. Returns 1
@@ -984,26 +1079,30 @@ _exakit_vs_tui_field() {
     _etf_old="${_EVT_VAL[$_etf_i]}"
     _etf_def="${_EVT_VAL[$_etf_i]:-${_EVT_DEF[$_etf_i]}}"
     _etf_keep=""
-    _etf_note="(optional)"; [ -n "$_etf_req" ] && _etf_note="(required)"
+    _etf_note=""
     case "$_etf_k" in
-        choice) _etf_note="$_etf_note ($(printf '%s' "${_EVT_CH[$_etf_i]}" | sed 's/ / · /g'))" ;;
+        choice) _etf_note="($(printf '%s' "${_EVT_CH[$_etf_i]}" | sed 's/ / · /g'))" ;;
         secret) _etf_def=""
                 # Given already - typed, or read from --password-file: Enter keeps it.
                 if [ -n "$_etf_old" ] || { [ -n "${_EVT_DONE[$_etf_i]}" ] && [ -n "$_evo_pwfile" ]; }; then
-                    _etf_keep=1; _etf_note="$_etf_note (hidden, Enter keeps the one given)"
-                else _etf_note="$_etf_note (hidden)"; fi ;;
-        secret-file) _etf_note="$_etf_note (the path to the file)" ;;
+                    _etf_keep=1; _etf_note="(hidden, Enter keeps the one given)"
+                else _etf_note="(hidden)"; fi ;;
+        secret-file) _etf_note="(the path to the file)" ;;
     esac
     # An optional answer that differs from its default can be taken back.
     if [ -z "$_etf_req" ] && [ -n "$_etf_old" ] && [ "$_etf_old" != "${_EVT_DEF[$_etf_i]}" ]; then
-        case "$_etf_k" in secret|secret-file) ;; *) _etf_note="$_etf_note (- clears it)" ;; esac
+        case "$_etf_k" in secret|secret-file) ;; *) _etf_note="${_etf_note:+$_etf_note }(- clears it)" ;; esac
     fi
-    [ -n "$_etf_def" ] && _etf_note="$_etf_note [$(_exakit_vs_tui_tail "$_etf_def" 32)]"
-    _etf_plain="$_etf_lab $_etf_note"
+    [ -n "$_etf_def" ] && _etf_note="${_etf_note:+$_etf_note }[$(_exakit_vs_tui_tail "$_etf_def" 32)]"
+    # A required one: the label's red * (a plain * without colour), as in the panel.
+    _etf_star=""; [ -n "$_etf_req" ] && _etf_star=" *"
+    _etf_plain="$_etf_lab$_etf_star${_etf_note:+ $_etf_note}"
     if [ "$_etf_k" = secret ]; then
-        _etf_deco="$UI_ASK$_etf_lab$UI_RESET $UI_DIM$_etf_note$UI_RESET"
+        _etf_deco="$UI_ASK$_etf_lab$UI_RESET${_etf_star:+ $UI_ERR*$UI_RESET}${_etf_note:+ $UI_DIM$_etf_note$UI_RESET}"
     else
-        _etf_deco=$'\001'"$UI_ASK"$'\002'"$_etf_lab"$'\001'"$UI_RESET"$'\002'" "$'\001'"$UI_DIM"$'\002'"$_etf_note"$'\001'"$UI_RESET"$'\002'
+        _etf_deco=$'\001'"$UI_ASK"$'\002'"$_etf_lab"$'\001'"$UI_RESET"$'\002'
+        [ -n "$_etf_star" ] && _etf_deco="$_etf_deco "$'\001'"$UI_ERR"$'\002'"*"$'\001'"$UI_RESET"$'\002'
+        [ -n "$_etf_note" ] && _etf_deco="$_etf_deco "$'\001'"$UI_DIM"$'\002'"$_etf_note"$'\001'"$UI_RESET"$'\002'
     fi
     while :; do
         if [ "$_etf_k" = secret ]; then
@@ -1220,13 +1319,16 @@ PY
                 secret-file) _EVT_VAL[$_EVT_NF]="$_evo_pwfile"; _EVT_DONE[$_EVT_NF]=1 ;;
             esac
         fi
-        [ "${#_evo_l}" -gt "$_EVT_LW" ] && _EVT_LW=${#_evo_l}
+        # The label column holds a required one's " *" too (_exakit_vs_tui_frame).
+        _evo_w=${#_evo_l}; [ -n "$_evo_r" ] && _evo_w=$(( _evo_w + 2 ))
+        [ "$_evo_w" -gt "$_EVT_LW" ] && _EVT_LW=$_evo_w
         _EVT_NF=$(( _EVT_NF + 1 ))
     done < "$_EVT_DIR/fields"
-    [ "$_EVT_LW" -le 30 ] || _EVT_LW=30
+    [ "$_EVT_LW" -le 32 ] || _EVT_LW=32
     _evo_f=0
     while [ "$_evo_f" -lt "$_EVT_NF" ]; do
-        _EVT_LAB[$_evo_f]="$(_exakit_vs_tui_short "${_EVT_LAB[$_evo_f]}" "$_EVT_LW")"
+        _evo_w="$_EVT_LW"; [ -n "${_EVT_REQ[$_evo_f]}" ] && _evo_w=$(( _EVT_LW - 2 ))
+        _EVT_LAB[$_evo_f]="$(_exakit_vs_tui_short "${_EVT_LAB[$_evo_f]}" "$_evo_w")"
         _evo_f=$(( _evo_f + 1 ))
     done
     _evo_title="$_evo_pos of $_evo_total · $_evo_label"
@@ -1322,7 +1424,8 @@ _exakit_vs_tui_table() {
 # _exakit_vs_tui_run <state-file> <indexes...> — connect those sources one after
 # another while the table on screen follows. One at a time on purpose: parallel
 # connects contend for the same database objects. Collects _EVT_OK, _EVT_FAILED,
-# _EVT_NEEDS (sources waiting for a language container) and _EVT_RC.
+# _EVT_NEEDS (sources waiting for a language container, or for the restart
+# Docker's DNS repair needs) and _EVT_RC.
 _exakit_vs_tui_run() {
     _etr_state="$1"; shift
     _etr_row=0
@@ -1331,7 +1434,7 @@ _exakit_vs_tui_run() {
         _etr_out="$_EVT_DIR/run.$_etr_i"
         _etr_args="$(_exakit_vs_tui_source_args "$_etr_i")"
         _etr_t0="$(date +%s 2>/dev/null || echo 0)"
-        _etr_try=0
+        _etr_try=0; _etr_restart=""
         while :; do
             _etr_try=$(( _etr_try + 1 ))
             ui_table_set "$_etr_state" "$_etr_row" running 2 18 8 "starting"
@@ -1363,9 +1466,14 @@ _exakit_vs_tui_run() {
             wait "$_etr_pid"; _etr_rc=$?
             cat "$_etr_out" "$_etr_out.json" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
             # Java without DNS needs no question: repaired, then tried once more.
+            # On Docker the repair is seen from the database's next start: that
+            # restart is made below the table, as a language container is.
             if [ "$_etr_rc" -eq 20 ] && [ "$_etr_try" -eq 1 ]; then
                 ui_table_set "$_etr_state" "$_etr_row" running 30 60 20 "repairing DNS"
-                personal_slc_dns_repair >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 && continue
+                _etr_dns=0
+                personal_slc_dns_repair >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || _etr_dns=$?
+                [ "$_etr_dns" -eq 0 ] && continue
+                [ "$_etr_dns" -eq 2 ] && _etr_restart=1
             fi
             break
         done
@@ -1404,6 +1512,11 @@ PY
             case "$_etr_rc" in
                 21) _etr_say="needs Java in the database"; _EVT_NEEDS="${_EVT_NEEDS:-} java:$_etr_i" ;;
                 23) _etr_say="needs Rust in the database"; _EVT_NEEDS="${_EVT_NEEDS:-} rust:$_etr_i" ;;
+                20) if [ -n "$_etr_restart" ]; then
+                        _etr_say="needs a database restart"; _EVT_NEEDS="${_EVT_NEEDS:-} dns:$_etr_i"
+                    else
+                        _EVT_FAILED="${_EVT_FAILED:-} $_etr_i"; [ "$_EVT_RC" -ne 0 ] || _EVT_RC="$_etr_rc"
+                    fi ;;
                 *)  _EVT_FAILED="${_EVT_FAILED:-} $_etr_i"
                     [ "$_EVT_RC" -ne 0 ] || _EVT_RC="$_etr_rc" ;;
             esac
@@ -1431,6 +1544,8 @@ _exakit_vs_tui_live() {
 # _exakit_vs_tui <source-or-empty> <name-or-empty> <password-file-or-empty> — the
 # whole terminal flow; returns cmd_connect's exit code.
 _exakit_vs_tui() {
+    # A person at a terminal: what the picked sources need is said, not asked.
+    _EXAKIT_VS_INTERACTIVE=1
     _EVT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/exakit-connect.XXXXXX")" || { error "Could not create a temporary folder."; return 1; }
     _EVT_COLS="$(_ui_term_cols)"
     _EVT_W=$(( _EVT_COLS - 2 )); [ "$_EVT_W" -le 96 ] || _EVT_W=96
@@ -1511,20 +1626,37 @@ if p.get("exposure"):
     # shellcheck disable=SC2086 — indexes
     _exakit_vs_tui_live "$_evt_state" $(( _evt_lines + _EVT_ON_SCREEN )) $_evt_all
 
-    # A language container is a download and a restart: asked once, below the
-    # table, and those sources then run again in a table of their own.
-    for _evt_lang in java rust; do
+    # A language container (a download and a restart), or the restart Docker's
+    # DNS repair needs: said once, below the table - picking the sources was the
+    # permission, so nothing is asked - and those sources then run again in a
+    # table of their own. A restart made for a language container is the one
+    # the DNS repair needed too.
+    _evt_restarted=""
+    for _evt_lang in java rust dns; do
         _evt_wait=""
         for _evt_n in ${_EVT_NEEDS:-}; do
             case "$_evt_n" in "$_evt_lang:"*) _evt_wait="$_evt_wait ${_evt_n#*:}" ;; esac
         done
         [ -n "$_evt_wait" ] || continue
+        # The sources it is for, by the connector's name, each once.
+        _evt_for=(); _evt_seen="|"
+        for _evt_n in $_evt_wait; do
+            case "$_evt_seen" in *"|${_EVT_S_LABEL[$_evt_n]}|"*) continue ;; esac
+            _evt_seen="$_evt_seen${_EVT_S_LABEL[$_evt_n]}|"
+            _evt_for+=("${_EVT_S_LABEL[$_evt_n]}")
+        done
+        _EXAKIT_VS_FOR="$(_exakit_vs_and "${_evt_for[@]}")"
         printf '\n'
-        if [ "$_evt_lang" = java ]; then _exakit_vs_install_java; else _exakit_vs_install_rust; fi
+        case "$_evt_lang" in
+            java) _exakit_vs_install_java ;;
+            rust) _exakit_vs_install_rust ;;
+            dns)  [ -n "$_evt_restarted" ] || _exakit_vs_dns_restart ;;
+        esac
         if [ $? -ne 0 ]; then
             _EVT_FAILED="${_EVT_FAILED:-}$_evt_wait"; [ "$_EVT_RC" -ne 0 ] || _EVT_RC=1
             continue
         fi
+        [ "$_evt_lang" = dns ] || _evt_restarted=1
         printf '\n'
         # shellcheck disable=SC2086 — indexes
         _exakit_vs_tui_table "$_EVT_DIR/again.$_evt_lang" "Connect again" $_evt_wait
@@ -1674,8 +1806,13 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     # --json never asks: a terminal is as good as none.
     _cc_tty=""
     [ "$_cc_json" = 1 ] || _cc_tty="$(_exakit_prompt_tty)"
-    # Someone answering at a terminal: each question says (required) or
-    # (optional), and a connection string can stand for the fields. A pipe on
+    # A person at a terminal (asked "Connect now?" below, or gave --yes): what
+    # the source needs first - a language container, a restart - is said, not
+    # asked (_exakit_vs_interactive). Without one, the contract stands.
+    _EXAKIT_VS_INTERACTIVE=0
+    [ -n "$_cc_tty" ] && _EXAKIT_VS_INTERACTIVE=1
+    # Someone answering at a terminal: a required question ends in a red *
+    # (the legend says so), and a connection string can stand for the fields. A pipe on
     # stdin (even with a terminal behind /dev/tty), --yes, --dry-run and --json
     # ask exactly as they always did - as Test-ExakitInteractive has it.
     _cc_ask=""
@@ -1686,6 +1823,8 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
         [ -n "$_cc_tty" ] || _exakit_vs_refuse 2 "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." \
             "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" \
             "exakit source catalog"
+        # The wizard's first line, as above the menu: this computer's public IP.
+        _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" && { _exakit_vs_catalog "$_cc_out"; rm -f "$_cc_out"; }
         _cc_source="$(prompt_text "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" "")"
     fi
     # With --json the plan below resolves the source (an unknown or gated one
@@ -1702,7 +1841,9 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
             exit "$_cc_rc"
         fi
     fi
+    [ -n "$_cc_tty" ] && _EXAKIT_VS_FOR="$(_exakit_vs_label "$_cc_resolved")"
     [ -n "$_cc_ask" ] && [ -z "$EXAKIT_VS_GIVEN" ] && _exakit_vs_ask_paste "$_cc_resolved"
+    [ -n "$_cc_ask" ] && _exakit_vs_legend
     # With --json a missing name is the plan's refusal, after the gate, as
     # resolve orders them here without it.
     if [ -z "$_cc_name" ] && [ "$_cc_json" = 0 ]; then

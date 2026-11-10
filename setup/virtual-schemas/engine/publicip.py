@@ -14,6 +14,11 @@ address - leaves it unknown, with one line to the log and nothing on screen.
 
 EXAKIT_NO_IP_LOOKUP=1 skips the question. EXAKIT_PUBLIC_IP_URL asks another
 URL instead; the test suite points it at a file:// URL.
+
+One command is several engine runs (the connect menu's catalog, each source's
+plan, each connect). The first one that asks hands its answer on in
+_EXAKIT_VS_PUBLIC_IP (the shells export it): an address, or anything else for
+"not known", and a later run of the same command takes it without asking.
 """
 
 import ipaddress
@@ -27,6 +32,8 @@ URL = "https://checkip.amazonaws.com"
 TIMEOUT = 3.0
 # The answer is one address and a newline; anything longer is not one.
 MAX_BYTES = 64
+# This command's answer, from an earlier engine run of it (see above).
+KNOWN = "_EXAKIT_VS_PUBLIC_IP"
 
 _state = {}
 
@@ -58,8 +65,9 @@ def _ask(url, answer):
 
 
 def start():
-    """Ask in the background; get() collects the answer. Once per run."""
-    if "thread" in _state or disabled():
+    """Ask in the background; get() collects the answer. Once per run, and
+    not at all when an earlier run of this command already asked."""
+    if "thread" in _state or disabled() or os.environ.get(KNOWN) is not None:
         return
     answer = {}
     thread = threading.Thread(target=_ask, args=(os.environ.get("EXAKIT_PUBLIC_IP_URL") or URL, answer))
@@ -76,6 +84,10 @@ def get():
         return _state["ip"]
     if disabled():
         return None
+    known = os.environ.get(KNOWN)
+    if known is not None:
+        _state["ip"] = parse(known.encode("ascii", "replace"))
+        return _state["ip"]
     start()
     _state["thread"].join(max(0.0, TIMEOUT - (time.time() - _state["started"])))
     answer = _state["answer"]
@@ -96,7 +108,10 @@ def get():
     return ip
 
 
-def advice(ip, host):
-    """The plan's line for a source on the internet."""
+def advice(ip, host=None):
+    """The plan's line for a source on the internet; without a host, the
+    connect menu's first line, for any source on the internet."""
+    if not host:
+        return "This computer's public IP is %s: a source on the internet must allow it." % ip
     return ("This computer's public IP is %s: %s must allow it if it filters by address (security group, "
             "firewall or IP access list)" % (ip, host))

@@ -248,7 +248,7 @@ $vsText = Get-Content -Raw -LiteralPath (Join-Path $repo "setup/lib/virtual-sche
 $javaText = $vsText.Substring($vsText.IndexOf("function Install-ExakitVsJava"))
 $javaText = $javaText.Substring(0, $javaText.IndexOf("function Restart-ExakitVsDatabase"))
 Check "the Java install pulls and links before its restart" "True" ($javaText.IndexOf("Initialize-PersonalSlcDns -Pull") -gt 0 -and $javaText.IndexOf("Initialize-PersonalSlcDns -Pull") -lt $javaText.IndexOf("Restart-ExakitVsDatabase"))
-Check "exit 20 on Docker asks before it restarts" "True" ($vsText.Contains('if (-not (Confirm-ExakitVs "Restart the database now?")) {'))
+Check "exit 20 on Docker, unattended: the restart still waits for a yes (--yes)" "True" ($vsText.Contains('if (-not (Confirm-ExakitVs "Restart the database now?")) {'))
 
 Remove-Item -Recurse -Force -Path $work -ErrorAction SilentlyContinue
 Write-Host ""
