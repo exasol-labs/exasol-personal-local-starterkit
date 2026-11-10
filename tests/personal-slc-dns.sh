@@ -45,12 +45,14 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # at /exa/slc/F; `create`, `cp` in and out of a created container (its own
 # /etc, or an image mounted at a target), `commit --change LABEL`, `rm`,
 # `image inspect`, `image rm`, `inspect` (the mounts) and `pull` (from
-# $WORK/registry) work on them. FAKE_COMMIT_FAILS=1 fails a commit. Each call
-# appends "<cli> <verb> <container or image>" to $WORK/calls.
+# $WORK/registry) work on them. FAKE_COMMIT_FAILS=1 fails a commit,
+# FAKE_COMMIT_SLEEP=N makes it take N seconds. A created container keeps its
+# --label, and `ps -a -q --filter label=K` lists the ones that carry K. Each
+# call appends "<cli> <verb> <container or image>" to $WORK/calls.
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/podman" <<EOF
 #!/usr/bin/env python3
-import io, json, os, shutil, sys, tarfile
+import io, json, os, shutil, sys, tarfile, time
 W = "$WORK"
 root = W + "/ctr"
 cli = os.path.basename(sys.argv[0])
@@ -72,6 +74,13 @@ def put(tar_bytes, dest):
 def stream(path):
     if not os.path.isdir(path): sys.exit(1)
     with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as t: t.add(path, arcname="etc")
+    sys.exit(0)
+if a[:3] == ["ps", "-a", "-q"] and cli == "docker":
+    log("-a")
+    want = a[a.index("--filter") + 1].split("=", 1)[1]
+    for name in sorted(os.listdir(W + "/cont")) if os.path.isdir(W + "/cont") else []:
+        lf = os.path.join(cont(name), "label")
+        if os.path.exists(lf) and open(lf).read() == want: print(name)
     sys.exit(0)
 if a[0] == "ps":
     log("-")
@@ -95,12 +104,23 @@ if a[0] == "inspect":
     for flavor in sorted(os.listdir(root)) if os.path.isdir(root) else []:
         mounts.append({"Type": "image", "Source": "docker.io/exa/slc:" + flavor, "Target": "/exa/slc/" + flavor})
     print(json.dumps(mounts)); sys.exit(0)
+def tags(ident):
+    """The image keys whose id is ident; None when no image has it."""
+    found = [k for k in (os.listdir(W + "/img") if os.path.isdir(W + "/img") else [])
+             if open(os.path.join(W, "img", k, "id")).read() == ident]
+    return found if found or os.path.isdir(os.path.join(W, "dangling", ident)) else None
+if a[:2] == ["image", "inspect"] and a[-1].startswith("sha256:"):
+    log(a[-1])
+    t = tags(a[-1])
+    if t is None: sys.exit(1)
+    print(json.dumps(t)); sys.exit(0)
 if a[:2] == ["image", "inspect"]:
     log(a[-1])
     if not os.path.isdir(img(a[-1])): sys.exit(1)
     print('"%s" %s' % (open(img(a[-1]) + "/id").read(), open(img(a[-1]) + "/labels.json").read())); sys.exit(0)
 if a[:2] == ["image", "rm"]:
-    log(a[2]); sys.exit(0)
+    with open(W + "/calls", "a") as f: f.write("docker rmi %s\n" % a[2])
+    shutil.rmtree(os.path.join(W, "dangling", a[2]), ignore_errors=True); sys.exit(0)
 if a[0] == "pull":
     log(a[-1])
     src = os.path.join(W, "registry", key(a[-1]))
@@ -112,6 +132,7 @@ if a[0] == "create":
     if not os.path.isdir(img(ref)): sys.exit(1)
     os.makedirs(cont(name) + "/etc")
     open(cont(name) + "/ref", "w").write(ref)
+    if "--label" in a: open(cont(name) + "/label", "w").write(a[a.index("--label") + 1])
     with open(W + "/creates", "a") as f: f.write("%s %s\n" % (name.rsplit("-", 1)[1], "mount" if "--mount" in a else "nomount"))
     if "--mount" in a:
         spec = dict(x.split("=", 1) for x in a[a.index("--mount") + 1].split(","))
@@ -132,6 +153,7 @@ if a[0] == "commit":
     name, ref = a[-2], a[-1]
     log(ref)
     if os.environ.get("FAKE_COMMIT_FAILS") == "1": sys.exit(1)
+    time.sleep(float(os.environ.get("FAKE_COMMIT_SLEEP", "0")))
     base = open(cont(name) + "/ref").read()
     new = os.path.join(W, "img-new")
     shutil.copytree(img(base), new, symlinks=True)
@@ -143,16 +165,25 @@ if a[0] == "commit":
     k, v = a[a.index("--change") + 1].split(" ", 1)[1].split("=", 1)
     labels[k] = v
     json.dump(labels, open(new + "/labels.json", "w"))
-    open(new + "/id", "w").write(open(new + "/id").read() + "d")
-    shutil.rmtree(img(ref), ignore_errors=True)
-    shutil.move(new, img(ref)); sys.exit(0)
+    old = open(img(ref) + "/id").read()
+    open(new + "/id", "w").write(old + "d")
+    shutil.move(img(ref), os.path.join(W, "img-old"))
+    shutil.move(new, img(ref))
+    # The image the tag named before: dangling, unless another tag names it.
+    if tags(old) is None or not tags(old):
+        os.makedirs(W + "/dangling", exist_ok=True)
+        shutil.move(os.path.join(W, "img-old"), os.path.join(W, "dangling", old))
+    shutil.rmtree(os.path.join(W, "img-old"), ignore_errors=True)
+    sys.exit(0)
 if a[0] == "rm":
-    log(a[-1]); shutil.rmtree(cont(a[-1]), ignore_errors=True); sys.exit(0)
+    for name in [x for x in a[1:] if x != "-f"]:
+        log(name); shutil.rmtree(cont(name), ignore_errors=True)
+    sys.exit(0)
 sys.exit(2)
 EOF
 chmod +x "$WORK/bin/podman"
 cp "$WORK/bin/podman" "$WORK/bin/docker"
-ctr() { rm -rf "$WORK/ctr" "$WORK/img" "$WORK/cont" "$WORK/registry"; mkdir -p "$WORK/ctr/java-17/etc" "$WORK/ctr/python-3.12/etc" "$WORK/cont"; : > "$WORK/ctr/java-17/etc/resolv.conf"; : > "$WORK/ctr/java-17/etc/hosts"; printf 'nameserver 9.9.9.9\n' > "$WORK/ctr/python-3.12/etc/resolv.conf"; mkimg java-17 img; mkimg python-3.12 img; printf 'nameserver 9.9.9.9\n' > "$WORK/img/docker.io_exa_slc_python-3.12/etc/resolv.conf"; : > "$WORK/calls"; : > "$WORK/writes"; : > "$WORK/creates"; }
+ctr() { rm -rf "$WORK/ctr" "$WORK/img" "$WORK/cont" "$WORK/registry" "$WORK/dangling"; mkdir -p "$WORK/ctr/java-17/etc" "$WORK/ctr/python-3.12/etc" "$WORK/cont"; : > "$WORK/ctr/java-17/etc/resolv.conf"; : > "$WORK/ctr/java-17/etc/hosts"; printf 'nameserver 9.9.9.9\n' > "$WORK/ctr/python-3.12/etc/resolv.conf"; mkimg java-17 img; mkimg python-3.12 img; printf 'nameserver 9.9.9.9\n' > "$WORK/img/docker.io_exa_slc_python-3.12/etc/resolv.conf"; : > "$WORK/calls"; : > "$WORK/writes"; : > "$WORK/creates"; }
 # mkimg <flavor> <img|registry> - docker.io/exa/slc:<flavor>, as shipped: the
 # two files empty, a hostname, no label.
 mkimg() { _d="$WORK/$2/docker.io_exa_slc_$1"; rm -rf "$_d"; mkdir -p "$_d/etc"; : > "$_d/etc/resolv.conf"; : > "$_d/etc/hosts"; printf 'build-host\n' > "$_d/etc/hostname"; printf 'sha256:%s' "$1" > "$_d/id"; printf '{"org.opencontainers.image.version": "22.04"}' > "$_d/labels.json"; }
@@ -244,7 +275,7 @@ check "an empty file under Docker: derived, exit 0" "EXAKIT_SLC_DNS java-17 deri
 check "...the image's two files point at /conf" "/conf/resolv.conf /conf/hosts" "$(ilink java-17 resolv.conf) $(ilink java-17 hosts)"
 check "...its hostname kept, not Docker's empty placeholder" "build-host" "$(cat "$IMG_J/etc/hostname")"
 check "...committed under the tag the database mounts, labelled" "conf-links" "$(ilabel java-17)"
-check "...the image it replaced removed by id" "1" "$(grep -c '^docker image sha256:java-17$' "$WORK/calls")"
+check "...the image it replaced removed by id, once no tag names it" "1 0" "$(grep -c '^docker rmi sha256:java-17$' "$WORK/calls") $(ls "$WORK/dangling" 2>/dev/null | wc -l | tr -d ' ')"
 check "...the read-only mount never written to" "" "$(cat "$WORK/writes")"
 check "...the database container itself unchanged until it starts again" "regular" "$(link java-17 resolv.conf)"
 check "...no container left behind" "0" "$(ls "$WORK/cont" | wc -l | tr -d ' ')"
@@ -255,22 +286,64 @@ check "...the reading container has the mount, the writing one none" "r mount|w 
 : > "$WORK/calls"; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"
 check "the database still started before the link: derived again (a restart), no second commit" "EXAKIT_SLC_DNS java-17 derived 0" "$OUT $(grep -c ' commit ' "$WORK/calls")"
 restart java-17; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"
-check "after a start that mounts it: ok, nothing created" "EXAKIT_SLC_DNS java-17 ok docker-ps docker-cp" "$OUT $(verbs)"
+check "after a start that mounts it: ok, nothing created (the listing, the sweep's listing, the read)" "EXAKIT_SLC_DNS java-17 ok docker-ps docker-ps docker-cp" "$OUT $(verbs)"
 ctr; OUT="$(FAKE_COMMIT_FAILS=1 FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"; RC=$?
 check "a commit that fails: failed, exit 1, no container left" "EXAKIT_SLC_DNS java-17 failed 1 0" "$OUT $RC $(ls "$WORK/cont" | wc -l | tr -d ' ')"
 check "...the image untouched" "regular none" "$(ilink java-17 resolv.conf) $(ilabel java-17)"
 ctr; rm -rf "$IMG_J"; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"; RC=$?
 check "the mounted image gone: failed, exit 1" "EXAKIT_SLC_DNS java-17 failed 1" "$OUT $RC"
 
+printf '\n== Docker: a stopped or killed run leaves no container ==\n'
+# The runner's SIGTERM used to skip Python's finally: rc 143, the writer left
+# in Created, and the image it replaced never removed. Stopped mid-commit here.
+ctr; FAKE_COMMIT_SLEEP=30 FAKE_PS="exasol-db-$ID" PATH="$WORK/bin:$PATH" python3 "$HELPER" --engine docker --deployment-id "$ID" java-17 > "$WORK/term.out" 2>&1 &
+_hp=$!
+_n=0; until grep -q ' commit ' "$WORK/calls" 2>/dev/null || [ "$_n" -ge 100 ]; do sleep 0.1; _n=$((_n + 1)); done
+check "...(the run reached its commit)" "1" "$(grep -c ' commit ' "$WORK/calls")"
+_t0="$(date +%s)"; kill -TERM "$_hp"; wait "$_hp"; RC=$?
+check "SIGTERM during the commit: exit 143, at once" "143 yes" "$RC $([ $(( $(date +%s) - _t0 )) -lt 10 ] && echo yes || echo no)"
+check "...no container left behind" "0" "$(ls "$WORK/cont" | wc -l | tr -d ' ')"
+check "...both removed by name" "exakit-slc-dns-$_hp-r exakit-slc-dns-$_hp-w" "$(awk '$2 == "rm" { print $3 }' "$WORK/calls" | tr '\n' ' ' | sed 's/ $//')"
+check "...the image untouched: not committed, not removed" "regular none 0" "$(ilink java-17 resolv.conf) $(ilabel java-17) $(grep -c ' rmi ' "$WORK/calls")"
+# A run killed outright (SIGKILL: no finally) leaves its containers; the next
+# Docker run removes every one that carries the label, and nothing else.
+ctr; mkdir -p "$WORK/cont/exakit-slc-dns-4242-w" "$WORK/cont/someone-else" "$WORK/cont/from-linked"
+printf 'com.exasol.starter-kit.slc-dns=probe' > "$WORK/cont/exakit-slc-dns-4242-w/label"
+printf 'com.example.other=1' > "$WORK/cont/someone-else/label"
+# A container someone created from a linked image inherits its label, valued
+# conf-links: not one of these.
+printf 'com.exasol.starter-kit.slc-dns=conf-links' > "$WORK/cont/from-linked/label"
+OUT="$(FAKE_PS="exasol-db-$ID" helper --engine docker --deployment-id "$ID" java-17)"
+check "a killed run's labelled container is removed by the next run, nothing else" "EXAKIT_SLC_DNS java-17 derived from-linked someone-else" "$OUT $(ls "$WORK/cont" | tr '\n' ' ' | sed 's/ $//')"
+check "...listed by the label, before anything is created" "docker-ps docker-ps docker-rm" "$(verbs | cut -d' ' -f1-3)"
+ctr; mkdir -p "$WORK/cont/exakit-slc-dns-4242-r"; printf 'com.exasol.starter-kit.slc-dns=probe' > "$WORK/cont/exakit-slc-dns-4242-r/label"
+OUT="$(helper --engine docker --prepare "$WORK/state.json" java-17 2>/dev/null; ls "$WORK/cont" | wc -l | tr -d ' ')"
+check "...the same before a start (--prepare)" "0" "$(printf '%s\n' "$OUT" | tail -1)"
+# The image the tag named before is removed only when no tag names it: by id,
+# Docker deletes an image its one remaining tag names (measured on Docker 29,
+# where it took the official tag a test tag shared).
+ctr; cp -R "$WORK/img/docker.io_exa_slc_java-17" "$WORK/img/other_tag"
+OUT="$(FAKE_PS="exasol-db-$ID" helper --engine docker --deployment-id "$ID" java-17)"
+check "the replaced image still named by another tag: kept" "EXAKIT_SLC_DNS java-17 derived 0 regular" \
+    "$OUT $(grep -c ' rmi ' "$WORK/calls") $(readlink "$WORK/img/other_tag/etc/resolv.conf" 2>/dev/null || echo regular)"
+# THE BUDGET keeps the run inside the bound its caller puts on it: a commit
+# that would take 30 s gets what is left of 2, fails, and still cleans up.
+ctr; _t0="$(date +%s)"
+OUT="$(FAKE_COMMIT_SLEEP=30 FAKE_PS="exasol-db-$ID" helper --engine docker --deployment-id "$ID" --budget 2 java-17)"; RC=$?
+check "--budget 2, a 30 s commit: failed, exit 1, within the budget" "EXAKIT_SLC_DNS java-17 failed 1 yes" "$OUT $RC $([ $(( $(date +%s) - _t0 )) -lt 8 ] && echo yes || echo no)"
+check "...its containers still removed" "0" "$(ls "$WORK/cont" | wc -l | tr -d ' ')"
+check "...the bounds the shells put on it cover the budgets they give it" "1 1 1 1" \
+    "$(grep -c -F '_psdp_out="$(exakit_run_bounded 300 "${_EXAKIT_PY_ANY[@]}"' "$ROOT/setup/lib/runtime-personal.sh") $(grep -c -F -- '--engine docker --prepare "$_psdp_state" --budget 240 2>&1)"' "$ROOT/setup/lib/runtime-personal.sh") $(grep -c -F -- '--budget $((_psdr_bound - 60))' "$ROOT/setup/lib/runtime-personal.sh") $(grep -c -F '[ "$_psdr_engine" = docker ] && _psdr_bound=300' "$ROOT/setup/lib/runtime-personal.sh")"
+
 printf '\n== Docker, before a start: --prepare ==\n'
 STATE="$WORK/state.json"
 printf '{"deploymentId": "%s", "installedSlcs": [{"language": "java", "flavor": "java-17", "image": "docker.io/exa/slc:java-17"}, {"flavor": "python-3.12", "image": "docker.io/exa/slc:python-3.12"}]}\n' "$ID" > "$STATE"
 ctr; OUT="$(helper --engine docker --prepare "$STATE")"; RC=$?
 check "every SLC the launcher state lists: java linked, python already had DNS" "EXAKIT_SLC_DNS java-17 derived|EXAKIT_SLC_DNS python-3.12 ok|0" "$(printf '%s\n' "$OUT" | tr '\n' '|')$RC"
-check "...without a database container (nothing listed, nothing read)" "0" "$(grep -c -e '-ps ' -e ' ps ' "$WORK/calls")"
+check "...without a database container (nothing listed, nothing read)" "0" "$(grep -c ' ps -$' "$WORK/calls")"
 check "...python, with DNS of its own, is not committed" "1" "$(grep -c ' commit ' "$WORK/calls")"
 : > "$WORK/calls"; OUT="$(helper --engine docker --prepare "$STATE" java-17)"
-check "a linked image: ok from its label, one inspect and nothing else" "EXAKIT_SLC_DNS java-17 ok docker-image" "$OUT $(verbs)"
+check "a linked image: ok from its label - the sweep's listing, one inspect, nothing else" "EXAKIT_SLC_DNS java-17 ok docker-ps docker-image" "$OUT $(verbs)"
 ctr; rm -rf "$IMG_J"; OUT="$(helper --engine docker --prepare "$STATE" java-17)"
 check "an image not pulled yet: absent (the start pulls it), nothing pulled" "EXAKIT_SLC_DNS java-17 absent 0" "$OUT $(grep -c ' pull ' "$WORK/calls")"
 ctr; rm -rf "$IMG_J"; mkimg java-17 registry; OUT="$(helper --engine docker --prepare "$STATE" --pull java-17)"
@@ -282,10 +355,10 @@ check "an image that ships the link itself (fixed upstream): ok, not committed" 
 ctr; OUT="$(helper --engine podman --prepare "$STATE")"; RC=$?
 check "podman: nothing before the start (its mount is writable)" "|0|" "$OUT|$RC|$(cat "$WORK/calls")"
 ctr; OUT="$(helper --engine docker --prepare "$WORK/no-such-state.json")"; RC=$?
-check "no state file: nothing, exit 0" "|0" "$OUT|$RC"
+check "no state file: nothing to link, said, exit 0 (the sweep's listing only)" "EXAKIT_SLC_DNS - none|0|docker ps -a" "$OUT|$RC|$(cat "$WORK/calls")"
 printf '{"installedSlcs": [{"flavor": "java-17"}, "x", {"image": "i"}]}\n' > "$WORK/odd.json"
 ctr; OUT="$(helper --engine docker --prepare "$WORK/odd.json")"
-check "rows without a flavor and an image are skipped" "" "$OUT"
+check "rows without a flavor and an image are skipped" "EXAKIT_SLC_DNS - none" "$OUT"
 check "a flavor is still required without --prepare" "2" "$(helper --engine docker >/dev/null 2>&1; echo $?)"
 
 printf '\n== the sh script for the launcher VM (macOS) ==\n'
@@ -354,7 +427,7 @@ repair() {
         EXAKIT_HOME="$WORK/home"; export EXAKIT_HOME
         . "$1/setup/lib/common.sh"; . "$1/setup/lib/detect.sh"; . "$1/setup/lib/runtime-personal.sh"
         detect_os() { printf "%s" "${STUB_OS:-linux}"; }
-        personal_slc_installed_flavors() { printf "java-17"; }
+        personal_slc_installed_flavors() { printf "%s" "${FLAVORS:-java-17}"; }
         personal_cli() { printf "%s" "$WORK/launcher"; }
         manifest_get() {
             case "$1" in
@@ -488,7 +561,7 @@ printf '{"deploymentId": "%s", "installedSlcs": [{"flavor": "java-17", "image": 
 ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
 check "Docker: the state file's images linked before the start, and said" \
     "INFO Gave the java-17 language container image the deployment's DNS|rc=0|conf-links" "$(printf '%s\n' "$OUT" | tr '\n' '|')$(ilabel java-17)"
-check "...no database container asked (it is not running yet)" "0" "$(grep -c -e ' ps ' -e ' inspect ' "$WORK/calls")"
+check "...no database container asked (it is not running yet)" "0" "$(grep -c -e ' ps -$' -e ' inspect ' "$WORK/calls")"
 ctr; rm -rf "$WORK/img/docker.io_exa_slc_java-17"; mkimg java-17 registry
 OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-st" CALL='personal_slc_dns_prepare --pull')"
 check "--pull reaches the helper: pulled, then linked" "rc=0 1 conf-links" "$(printf '%s\n' "$OUT" | tail -1) $(grep -c ' pull ' "$WORK/calls") $(ilabel java-17)"
@@ -503,6 +576,24 @@ ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep" CALL=personal_s
 check "nothing before the start - no launcher state file" "rc=0||none" "$OUT|$(cat "$WORK/calls")|$(ilabel java-17)"
 ctr; OUT="$(repair "$WORK/podman-only" REC_ENGINE=docker DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
 check "...no docker on PATH: nothing, exit 0" "rc=0|" "$OUT|$(cat "$WORK/calls")"
+
+# It always answers, so silence is a run that did not happen: logged, as the
+# repair's is. Nothing installed answers "- none", and is no warning.
+ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-st" SHOW_LOG=1 PY_DIR="$WORK/badpy" CALL=personal_slc_dns_prepare)"
+check "a prepare that did not run: one WARN line naming exit and reason, never a failed start" \
+    "LOG WARN  language container DNS before the start did not run (exit 2): python3: no such helper|rc=0|" "$(printf '%s\n' "$OUT" | tr '\n' '|')"
+mkdir -p "$WORK/dep-none"; printf '{"deploymentId": "%s"}\n' "$ID" > "$WORK/dep-none/.exasolLauncherState.json"
+ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-none" SHOW_LOG=1 CALL=personal_slc_dns_prepare)"
+check "...nothing installed: said, no warning" "LOG INFO  language container DNS (before the start): -:none|rc=0|" "$(printf '%s\n' "$OUT" | tr '\n' '|')"
+
+printf '\n== a linked image beside a flavor that failed ==\n'
+# Java linked, python's mounted image gone: the restart Java needs still
+# happens (exit 2), and python's failure is its own WARN line.
+ctr; : > "$WORK/ctr/python-3.12/etc/resolv.conf"; rm -rf "$WORK/img/docker.io_exa_slc_python-3.12"
+OUT="$(repair "$WORK/bin" REC_ENGINE=docker FLAVORS="java-17 python-3.12" SHOW_LOG=1 FAKE_PS="$PS_24")"
+check "derived and failed: exit 2, not 1" "rc=2" "$(printf '%s\n' "$OUT" | tail -1)"
+check "...the failed flavor named in a WARN line" "1" "$(printf '%s\n' "$OUT" | grep -c '^LOG WARN  language container DNS could not be given to python-3.12$')"
+check "...java linked" "conf-links" "$(ilabel java-17)"
 
 printf '\n== the start (personal_start) ==\n'
 # start_run <bin dir> [VAR=value ...] - personal_start with the launcher
@@ -580,7 +671,8 @@ ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/d7" FAKE_PS="$PS_24"
 check "no id and two exasol-db-* listed: nothing written, exit 1" "rc=1 " "$(printf '%s\n' "$OUT" | tail -1) $(target)"
 
 printf '\n== wiring ==\n'
-check "every start repairs (bash)" "1" "$(sed -n '/^personal_start()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '^ *personal_slc_dns_repair || true')"
+check "every start repairs (bash): the call after the start, its exit kept" "1" "$(sed -n '/^personal_start()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '^ *personal_slc_dns_repair || _pst_dns=\$?$')"
+check "...and once more after a Docker restart" "1" "$(sed -n '/^personal_start()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '^ *personal_slc_dns_repair || true$')"
 check "every start repairs (PowerShell; again after a Docker restart)" "2" "$(sed -n '/^function Start-Personal/,/^function Get-PersonalSlcInstalledFlavors/p' "$ROOT/setup/lib/runtime-personal.ps1" | grep -c 'try { \[void\](Repair-PersonalSlcDns) }')"
 check "macOS feeds the VM shell inside the bounded command (stdin survives a background job)" "1" \
     "$(grep -c "exakit_run_bounded 90 sh -c 'exec \"\$0\" shell container < \"\$1\"'" "$ROOT/setup/lib/runtime-personal.sh")"

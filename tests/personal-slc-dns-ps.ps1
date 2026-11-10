@@ -90,29 +90,29 @@ Set-DeploymentId "exa-7f3a"
 $script:PersonalEngine = ""
 Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
 Check "Docker recorded: the helper runs with --engine docker and the deployment id" `
-    "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...and says what it repaired" "INFO Gave the java-17 language container the deployment's DNS" ($script:shown -join "|")
 Set-Record ', "runtime": {"type": "personal", "engine": "podman"}'
-Check "Podman recorded: --engine podman" "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "Podman recorded: --engine podman" "True | personal-slc-dns.py --engine podman --budget 30 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"type": "personal"}'
 Check "no engine recorded (before kit 0.2.4): podman, as before" `
-    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine podman --budget 30 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"engine": "docker", "container": "exasol-nano"}'
 Check "a nano record's engine is the OLD database's: podman" `
-    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine podman --budget 30 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"engine": "docker", "container": null}'
 Check "...runtime.container null is a nano record too (as the shell reads it)" `
-    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine podman --budget 30 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"engine": "docker", "container": ""}'
 Check "...an empty runtime.container is none: the record's docker" `
-    "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"type": "personal"}'
 $script:PersonalEngine = "docker"
 Check "nothing recorded: this run's choice (an install not recorded yet)" `
-    "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"type": "personal", "engine": "podman"}'
 Check "the record beats this run's choice" `
-    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine podman --budget 30 --deployment-id=exa-7f3a java-17" (Repair $both)
 $script:PersonalEngine = ""
 
 Write-Host ""
@@ -129,7 +129,7 @@ Write-Host "== a helper that never answered =="
 # Every caller ignores the result, so the log line is all a reader gets.
 Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
 $script:helperCode = 2; $script:helperLines = @()
-Check "no EXAKIT_SLC_DNS line: false" "False | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "no EXAKIT_SLC_DNS line: false" "False | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...and one WARN line with the exit code" "WARN language container DNS repair did not run (exit 2): no output (its stderr is in the PY lines above)" ($script:logged -join "|")
 $script:helperLines = @("Traceback (most recent call last):")
 [void](Repair $both)
@@ -140,7 +140,7 @@ Write-Host ""
 Write-Host "== the deployment id =="
 Set-DeploymentId ""
 Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
-Check "no id to read: no --deployment-id at all" "True | personal-slc-dns.py --engine docker java-17" (Repair $both)
+Check "no id to read: no --deployment-id at all" "True | personal-slc-dns.py --engine docker --budget 240 java-17" (Repair $both)
 Check "...and no empty argument (5.1 drops it and shifts the rest)" 0 $script:emptyArgument
 Set-DeploymentId "exa-7f3a"
 
@@ -155,7 +155,7 @@ function Set-State([string]$State, [string]$Deployment) {
 }
 Set-State '{"currentWorkflowState": {"running": {}}, "deploymentId": "  exa-7f3a "}' '{"deploymentId": "local"}'
 Check "the launcher's state file first, trimmed; deployment.json's local ignored" "exa-7f3a" (Get-PersonalSlcContainerId)
-Check "...and that id reaches the helper" "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "...and that id reaches the helper" "True | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-State '{"deploymentId": "aaaa1111"}' '{"deploymentId": "bbbb2222"}'
 Check "state and deployment.json disagree: the state's id" "aaaa1111" (Get-PersonalSlcContainerId)
 Set-State '{"nested": {"deploymentId": "nested-id"}, "deploymentId": "top-id", "x": {"deploymentId": "later-id"}}' "-"
@@ -169,31 +169,36 @@ Check "a blank id is none" "" (Get-PersonalSlcContainerId)
 Set-State "-" "-"
 Check "no state at all: none" "" (Get-PersonalSlcContainerId)
 Set-State '{"deploymentId": "-x7"}' "-"
-Check "an id starting with - goes in the = form" "True | personal-slc-dns.py --engine docker --deployment-id=-x7 java-17" (Repair $both)
+Check "an id starting with - goes in the = form" "True | personal-slc-dns.py --engine docker --budget 240 --deployment-id=-x7 java-17" (Repair $both)
 Set-State "-" "-"
 Set-DeploymentId "exa-7f3a"
 
 Write-Host ""
 Write-Host "== what the helper says =="
 $script:helperLines = @("EXAKIT_SLC_DNS - nocontainer")
-Check "no database container: false" "False | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "no database container: false" "False | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...logged" "INFO language container DNS: -:nocontainer" ($script:logged -join "|")
 $script:helperLines = @("EXAKIT_SLC_DNS java-17 ok")
-Check "already repaired: true, nothing said" "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "already repaired: true, nothing said" "True | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...nothing shown" "" ($script:shown -join "|")
 Check "...nothing for the next start to do" "False" $script:PersonalSlcDnsNeedsStart
 
 Write-Host ""
 Write-Host "== Docker: the image linked (derived) =="
 $script:helperLines = @("EXAKIT_SLC_DNS java-17 derived")
-Check "linked in the image: false, for now" "False | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "linked in the image: false, for now" "False | personal-slc-dns.py --engine docker --budget 240 --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...the next start is what it needs" "True" $script:PersonalSlcDnsNeedsStart
 Check "...and says so" "INFO Gave the java-17 language container image the deployment's DNS; the database sees it from its next start" ($script:shown -join "|")
 $script:helperLines = @("EXAKIT_SLC_DNS java-17 ok")
 [void](Repair $both)
 Check "a repair after it starts afresh: nothing pending" "False" $script:PersonalSlcDnsNeedsStart
-$script:helperLines = @("EXAKIT_SLC_DNS java-17 derived", "EXAKIT_SLC_DNS - nocontainer")
-Check "derived beside a failure: false, and no restart offered for it" "False | False" ("$((Repair $both).Split('|')[0].Trim()) | $script:PersonalSlcDnsNeedsStart")
+# Java linked, another flavor failed (the helper exits 1): the restart Java
+# needs still happens, and the failure is its own WARN line.
+$script:helperLines = @("EXAKIT_SLC_DNS java-17 derived", "EXAKIT_SLC_DNS python-3.12 failed")
+$script:helperCode = 1
+Check "derived beside a failed flavor: false, and the restart still asked for" "False | True" ("$((Repair $both).Split('|')[0].Trim()) | $script:PersonalSlcDnsNeedsStart")
+Check "...the failed flavor named in a WARN line" $true ($script:logged -contains "WARN language container DNS could not be given to python-3.12")
+$script:helperCode = 0
 
 Write-Host ""
 Write-Host "== Docker, before a start (Initialize-PersonalSlcDns) =="
@@ -210,10 +215,19 @@ function Prepare([string]$Dir, [switch]$Pull) {
 Set-Content -LiteralPath $stateFile -Encoding Ascii -Value '{"deploymentId": "exa-7f3a", "installedSlcs": [{"flavor": "java-17", "image": "docker.io/exa/slc:java-17"}]}'
 $script:helperLines = @("EXAKIT_SLC_DNS java-17 derived")
 Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
-Check "Docker: the helper links the images the launcher state lists" "personal-slc-dns.py --engine docker --prepare $stateFile" (Prepare $both)
+Check "Docker: the helper links the images the launcher state lists, within its budget" "personal-slc-dns.py --engine docker --prepare $stateFile --budget 240" (Prepare $both)
 Check "...and says so" "INFO Gave the java-17 language container image the deployment's DNS" ($script:shown -join "|")
 Check "...logged" "INFO language container DNS (before the start): java-17:derived" ($script:logged -join "|")
-Check "-Pull: the helper pulls a missing image first" "personal-slc-dns.py --engine docker --prepare $stateFile --pull" (Prepare $both -Pull)
+Check "-Pull: the helper pulls a missing image first" "personal-slc-dns.py --engine docker --prepare $stateFile --pull --budget 240" (Prepare $both -Pull)
+$script:helperLines = @("Traceback (most recent call last):")
+$script:helperCode = 1
+[void](Prepare $both)
+Check "a prepare that did not answer: one WARN line naming exit and reason" "WARN language container DNS before the start did not run (exit 1): Traceback (most recent call last):" ($script:logged -join "|")
+$script:helperLines = @("EXAKIT_SLC_DNS - none")
+$script:helperCode = 0
+[void](Prepare $both)
+Check "...nothing installed: said, no warning" "INFO language container DNS (before the start): -:none" ($script:logged -join "|")
+$script:helperLines = @("EXAKIT_SLC_DNS java-17 derived")
 Set-Record ', "runtime": {"type": "personal", "engine": "podman"}'
 Check "Podman: nothing (its mount is writable, repaired after the start)" "none" (Prepare $both)
 Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'

@@ -551,19 +551,26 @@ function Install-ExakitVsJava {
     # linked to the deployment's DNS before the start mounts it read-only - so
     # this start is the only one (Initialize-PersonalSlcDns).
     try { Initialize-PersonalSlcDns -Pull } catch { }
-    Restart-ExakitVsDatabase
+    if (-not (Restart-ExakitVsDatabase)) {
+        Write-Host ("  {0} The database did not come back after installing Java. Run: exakit start" -f $script:UiCross) -ForegroundColor Red
+        return $false
+    }
     # An installed kit's start repairs DNS; this kit copy may be newer than it.
     # Docker: linked in the image after an older kit's start mounted it - one
     # more start mounts it.
     try { [void](Repair-PersonalSlcDns) } catch { }
-    if ($script:PersonalSlcDnsNeedsStart) { Restart-ExakitVsDatabase }
+    if ($script:PersonalSlcDnsNeedsStart -and -not (Restart-ExakitVsDatabase)) {
+        Write-Host ("  {0} The database did not come back after installing Java. Run: exakit start" -f $script:UiCross) -ForegroundColor Red
+        return $false
+    }
     Ok "Java language container installed"
     return $true
 }
 
 # Restart-ExakitVsDatabase - exakit stop (add-on services with it), then
 # exakit start, through the installed kit: its start brings add-on services
-# back and gives the language containers the deployment's DNS.
+# back and gives the language containers the deployment's DNS. $true when
+# that start succeeded: a caller must not go on with a database that is down.
 function Restart-ExakitVsDatabase {
     $exakit = Join-Path $script:BinDir "exakit.cmd"
     $previousStop = $env:EXAKIT_STOP_ADDONS
@@ -573,6 +580,7 @@ function Restart-ExakitVsDatabase {
     } finally { $env:EXAKIT_STOP_ADDONS = $previousStop }
     # Write-Host, not Out-Host: with --json, Invoke-ExakitVsAside moves these lines to stderr.
     & $exakit start | ForEach-Object { Write-Host "$_" }
+    return ($LASTEXITCODE -eq 0)
 }
 
 # Repair-ExakitVsForRetry - what the bridge does about exit 20 (DNS repaired),
@@ -591,7 +599,10 @@ function Repair-ExakitVsForRetry {
                 Write-Host "  Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again." -ForegroundColor Red
                 return $false
             }
-            Restart-ExakitVsDatabase
+            if (-not (Restart-ExakitVsDatabase)) {
+                Write-Host "  The database did not come back. Run: exakit start" -ForegroundColor Red
+                return $false
+            }
             return $true
         }
         Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red

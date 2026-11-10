@@ -1,7 +1,7 @@
 """Give Exasol Personal's language containers the deployment's DNS.
 
-    personal-slc-dns.py [--engine CLI] [--deployment-id=ID] FLAVOR [FLAVOR ...]
-    personal-slc-dns.py --engine docker --prepare STATE [--pull] [FLAVOR ...]
+    personal-slc-dns.py [--engine CLI] [--deployment-id=ID] [--budget S] FLAVOR [FLAVOR ...]
+    personal-slc-dns.py --engine docker --prepare STATE [--pull] [--budget S] [FLAVOR ...]
 
 A language container (SLC) is its own filesystem, and the official ones ship
 etc/resolv.conf and etc/hosts EMPTY. The database mounts the deployment's real
@@ -61,6 +61,11 @@ the links, for the same reason: the commit would otherwise keep the
 placeholder. The image this replaces is removed by id when nothing else holds
 it; its layers stay, shared with the linked one.
 
+The containers it creates are never started, carry PROBE_LABEL, and are
+removed before it returns - also when it is stopped (SIGTERM). A run that was
+killed outright leaves them behind, and the next Docker run removes them
+first. --budget keeps the whole run inside the bound its caller puts on it.
+
 Prints one "EXAKIT_SLC_DNS <flavor> repaired|derived|ok|absent|failed" line per
 flavor (or "EXAKIT_SLC_DNS - nocontainer"). Exit 0 unless a repair failed.
 """
@@ -69,9 +74,11 @@ import argparse
 import io
 import json
 import os
+import signal
 import subprocess
 import sys
 import tarfile
+import time
 
 LINKS = (("resolv.conf", "/conf/resolv.conf"), ("hosts", "/conf/hosts"))
 
@@ -85,6 +92,30 @@ LABEL_VALUE = "conf-links"
 
 # Where a probe container sees its own image, untouched by Docker's /etc.
 PROBE_MOUNT = "/exakit-slc"
+
+# The label on the containers this helper creates (and never starts), so a
+# run that was killed before it removed them has them removed by the next:
+# LABEL's own key, valued "probe". A commit copies a container's labels into
+# the image, and the writer's commit sets LABEL=LABEL_VALUE over it - so the
+# linked image carries no probe mark, and a container someone else creates
+# from it (LABEL=conf-links) is never taken for one of these.
+PROBE_LABEL = LABEL + "=probe"
+
+# THE RUN'S BUDGET (--budget seconds). The caller bounds this helper
+# (exakit_run_bounded), and a kill skips the cleanup; so every engine call
+# gets what is left of the budget, at most its own cap, and the helper ends
+# - its containers removed - before the bound does. Removing a container,
+# and the old image after a commit, is exempt and gets CLEANUP seconds; so is
+# a --pull, whose time is added to the budget. None: no budget.
+DEADLINE = None
+CLEANUP = 20
+
+
+def left(cap):
+    """The timeout an engine call gets: its cap, or what is left of the budget."""
+    if DEADLINE is None:
+        return cap
+    return max(0.0, min(cap, DEADLINE - time.monotonic()))
 
 
 DB_PREFIX = "exasol-db-"
@@ -120,7 +151,7 @@ def pick(names, deployment_id=""):
 
 def container(engine, deployment_id=""):
     out = subprocess.run([engine, "ps", "--format", "{{.Names}}"],
-                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
+                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=left(60))
     # Docker joins a container's several names with commas.
     names = out.stdout.decode("utf-8", "replace").replace(",", " ").split()
     return pick(names, deployment_id)
@@ -148,7 +179,7 @@ def classify(data):
 def state(engine, ctr, flavor):
     """absent | ok | empty: what etc/resolv.conf is in that container."""
     done = subprocess.run([engine, "cp", "%s:%s%s/etc" % (ctr, SLC_ROOT, flavor), "-"],
-                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120)
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=left(120))
     if done.returncode != 0:
         return "absent"
     return classify(done.stdout)[0]
@@ -178,8 +209,13 @@ def is_docker(engine):
     return os.path.basename(engine).lower() in ("docker", "docker.exe")
 
 
-def run(argv, timeout, data=None):
-    """(returncode, stdout bytes) of an engine call; never raises for one."""
+def run(argv, timeout, data=None, own=False):
+    """(returncode, stdout bytes) of an engine call; never raises for one.
+    The timeout is left(timeout) unless own (a cleanup, a pull): see DEADLINE."""
+    if not own:
+        timeout = left(timeout)
+        if timeout <= 0:
+            return 1, b""
     try:
         done = subprocess.run(argv, input=data, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL, timeout=timeout)
@@ -207,14 +243,22 @@ def read_etc(engine, ref):
     """classify() of the image's own etc/, read through an image mount of
     itself in a container that is created and never started."""
     probe = "exakit-slc-dns-%d-r" % os.getpid()
-    if run([engine, "create", "--name", probe, "--network", "none", "--mount",
-            "type=image,source=%s,target=%s" % (ref, PROBE_MOUNT), ref], 120)[0] != 0:
-        run([engine, "rm", "-f", probe], 60)
-        return "failed", None
     try:
+        if run([engine, "create", "--name", probe, "--label", PROBE_LABEL, "--network", "none",
+                "--mount", "type=image,source=%s,target=%s" % (ref, PROBE_MOUNT), ref], 120)[0] != 0:
+            return "failed", None
         return classify(run([engine, "cp", "%s:%s/etc" % (probe, PROBE_MOUNT), "-"], 120)[1])
     finally:
-        run([engine, "rm", "-f", probe], 60)
+        run([engine, "rm", "-f", probe], CLEANUP, own=True)
+
+
+def untagged(engine, ident):
+    """True when no tag names the image any more."""
+    code, out = run([engine, "image", "inspect", "--format", "{{json .RepoTags}}", "--", ident], CLEANUP, own=True)
+    try:
+        return code == 0 and not json.loads(out.decode("utf-8", "replace").strip() or "null")
+    except ValueError:
+        return False
 
 
 def derive(engine, ref):
@@ -231,22 +275,37 @@ def derive(engine, ref):
     # A second container, with no mount: the probe's mount point would be
     # committed with it as an empty directory at the image's root.
     writer = "exakit-slc-dns-%d-w" % os.getpid()
-    if run([engine, "create", "--name", writer, "--network", "none", ref], 120)[0] != 0:
-        run([engine, "rm", "-f", writer], 60)
-        return "failed"
+    committed = False
     try:
+        if run([engine, "create", "--name", writer, "--label", PROBE_LABEL, "--network", "none",
+                ref], 120)[0] != 0:
+            return "failed"
         if run([engine, "cp", "-", "%s:/etc/" % writer], 120, links_tar(hostname))[0] != 0:
             return "failed"
         if run([engine, "commit", "--change", "LABEL %s=%s" % (LABEL, LABEL_VALUE), writer, ref], 600)[0] != 0:
             return "failed"
+        committed = True
     finally:
-        run([engine, "rm", "-f", writer], 60)
+        run([engine, "rm", "-f", writer], CLEANUP, own=True)
+        # The image the tag named before, once the commit moved the tag - and
+        # only when no other tag names it: `image rm <id>` deletes an image a
+        # single remaining tag names (measured, Docker 29), so another tag on
+        # it keeps it. Without -f, so a container that runs from it keeps it
+        # too. Here, so a stop after the commit still removes it.
+        if committed and untagged(engine, ident):
+            run([engine, "image", "rm", ident], CLEANUP, own=True)
     if image_label(engine, ref)[1] != LABEL_VALUE:
         return "failed"
-    # The image the tag named before: nothing names it now. Without -f, so an
-    # image another tag names, or a container runs from, is kept.
-    run([engine, "image", "rm", ident], 120)
     return "derived"
+
+
+def sweep(engine):
+    """Remove the containers a killed run of this helper left behind: they
+    carry PROBE_LABEL and were never started. Every Docker run starts here."""
+    code, out = run([engine, "ps", "-a", "-q", "--filter", "label=" + PROBE_LABEL], 60)
+    ids = out.decode("utf-8", "replace").split() if code == 0 else []
+    if ids:
+        run([engine, "rm", "-f"] + ids, CLEANUP, own=True)
 
 
 def mounted_image(engine, ctr, flavor):
@@ -287,12 +346,22 @@ def prepare(engine, path, flavors, pull=False):
     """Link every installed official SLC image before a start (Docker only:
     Podman's writable mount is repaired after the start). With pull, an image
     that is not here yet is pulled first - the pull the start would make."""
+    global DEADLINE
     failed = False
     if not is_docker(engine):
         return 0
-    for flavor, image in installed_images(path, flavors):
+    sweep(engine)
+    images = installed_images(path, flavors)
+    if not images:
+        # Said, so a caller tells "nothing installed" from "did not run".
+        print("EXAKIT_SLC_DNS - none")
+        return 0
+    for flavor, image in images:
         if pull and image_label(engine, image)[0] is None:
-            run([engine, "pull", "--quiet", image], 1800)
+            began = time.monotonic()
+            run([engine, "pull", "--quiet", image], 1800, own=True)
+            if DEADLINE is not None:
+                DEADLINE += time.monotonic() - began
         result = derive(engine, image)
         print("EXAKIT_SLC_DNS %s %s" % (flavor, result))
         failed = failed or result == "failed"
@@ -306,8 +375,15 @@ def main(argv=None):
     parser.add_argument("--deployment-id", default="")
     parser.add_argument("--prepare", metavar="STATE", default="")
     parser.add_argument("--pull", action="store_true")
+    parser.add_argument("--budget", type=float, default=None)
     parser.add_argument("flavors", nargs="*")
     args = parser.parse_args(argv)
+    global DEADLINE
+    if args.budget is not None:
+        DEADLINE = time.monotonic() + max(args.budget, 0.0)
+    # A stop (the runner's SIGTERM) raises SystemExit here: the finally blocks
+    # run, and the containers this run created are removed.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     if args.prepare:
         return prepare(args.engine, args.prepare, args.flavors, args.pull)
     if not args.flavors:
@@ -319,6 +395,8 @@ def main(argv=None):
     if not ctr:
         print("EXAKIT_SLC_DNS - nocontainer")
         return 0
+    if is_docker(args.engine):
+        sweep(args.engine)
     failed = False
     for flavor in args.flavors:
         try:
@@ -338,7 +416,7 @@ def main(argv=None):
                 continue
             done = subprocess.run([args.engine, "cp", "-", "%s:%s%s/etc/" % (ctr, SLC_ROOT, flavor)],
                                   input=links_tar(), stdout=subprocess.DEVNULL,
-                                  stderr=subprocess.DEVNULL, timeout=120)
+                                  stderr=subprocess.DEVNULL, timeout=left(120))
             ok = done.returncode == 0 and state(args.engine, ctr, flavor) == "ok"
         except (OSError, subprocess.SubprocessError):
             ok = False

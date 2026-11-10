@@ -3134,19 +3134,22 @@ personal_slc_dns_prepare() {
     _psdp_state="$EXAKIT_PERSONAL_DEPLOY_DIR/.exasolLauncherState.json"
     [ -f "$_psdp_state" ] || return 0
     # The interpreter as an executable (exakit_python_any_argv): the runner
-    # refuses a shell function. Bounded, except a --pull: a download of the
-    # image can take minutes, and the helper bounds each engine call itself
-    # (the pull at 30 minutes).
+    # refuses a shell function. Bounded at 300 s, and the helper's --budget
+    # (240 s) keeps it inside that bound: it ends, its containers removed,
+    # before the runner would kill it. Except a --pull: a download of the
+    # image can take minutes, so that run is not under the runner; the pull
+    # is capped at 30 minutes and the rest keeps the same budget.
     if ! exakit_python_any_argv; then
-        _exakit_log_file "WARN  language container DNS before the start did not run: no Python to run it with"
-        return 0
-    fi
-    if [ "${1:-}" = "--pull" ]; then
+        _psdp_out="no Python to run it with"
+        _psdp_ran=1
+    elif [ "${1:-}" = "--pull" ]; then
         _psdp_out="$("${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" --engine docker \
-            --prepare "$_psdp_state" --pull 2>&1)"
+            --prepare "$_psdp_state" --pull --budget 240 2>&1)"
+        _psdp_ran=$?
     else
-        _psdp_out="$(exakit_run_bounded 180 "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
-            --engine docker --prepare "$_psdp_state" 2>&1)"
+        _psdp_out="$(exakit_run_bounded 300 "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
+            --engine docker --prepare "$_psdp_state" --budget 240 2>&1)"
+        _psdp_ran=$?
     fi
     for _psdp_line in $(printf '%s\n' "$_psdp_out" | sed -n 's/^EXAKIT_SLC_DNS \([^ ]*\) \([a-z]*\)$/\1:\2/p'); do
         _exakit_log_file "INFO  language container DNS (before the start): $_psdp_line"
@@ -3154,6 +3157,14 @@ personal_slc_dns_prepare() {
             *:derived) info "Gave the ${_psdp_line%%:*} language container image the deployment's DNS" ;;
         esac
     done
+    if ! printf '%s\n' "$_psdp_out" | grep -q '^EXAKIT_SLC_DNS '; then
+        # It always answers (`- none` when nothing is installed): silence is a
+        # run that did not happen, timed out or died - one line with the
+        # reason, as personal_slc_dns_repair leaves. ⇄ twin: the same line in
+        # Initialize-PersonalSlcDns.
+        _psdp_why="$(printf '%s\n' "$_psdp_out" | grep -m 1 . | cut -c1-200)"
+        _exakit_log_file "WARN  language container DNS before the start did not run (exit $_psdp_ran): ${_psdp_why:-no output}"
+    fi
     return 0
 }
 
@@ -3162,9 +3173,10 @@ personal_slc_dns_prepare() {
 # no container, a launcher without `slc` or a VM shell that does not answer is
 # logged and returns 1, and never fails the caller - the virtual schema check
 # reports a database without DNS on its own. Returns 2 on Docker when an image
-# was linked (or found linked) under a database started before it was: the
-# fix is in the image, and the database sees it from its next start - the
-# caller restarts it, or says so. ⇄ twin: Repair-PersonalSlcDns.
+# was linked (or found linked) under a database started before it was - also
+# beside another flavor that failed: the fix is in the image, and the
+# database sees it from its next start - the caller restarts it, or says so.
+# ⇄ twin: Repair-PersonalSlcDns.
 personal_slc_dns_repair() {
     _psdr_flavors="$(personal_slc_installed_flavors)"
     [ -n "$_psdr_flavors" ] || return 0
@@ -3198,10 +3210,17 @@ personal_slc_dns_repair() {
             # THE INTERPRETER AS AN EXECUTABLE, not run_python_any: timeout(1)
             # execs its command, and a shell function was "failed to run
             # command", exit 127 - the repair never ran on Linux or WSL.
+            # Docker links the image (containers created, copied into,
+            # committed): 300 s, against 90 for a write into a container. The
+            # helper's --budget, 60 s inside the bound, ends it - its
+            # containers removed - before the runner would kill it.
+            _psdr_bound=90
+            [ "$_psdr_engine" = docker ] && _psdr_bound=300
             if exakit_python_any_argv; then
                 # shellcheck disable=SC2086 -- one argument per flavor
-                _psdr_out="$(exakit_run_bounded 90 "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
-                    --engine "$_psdr_engine" ${_psdr_id:+"--deployment-id=$_psdr_id"} $_psdr_flavors 2>&1)"
+                _psdr_out="$(exakit_run_bounded "$_psdr_bound" "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
+                    --engine "$_psdr_engine" --budget $((_psdr_bound - 60)) \
+                    ${_psdr_id:+"--deployment-id=$_psdr_id"} $_psdr_flavors 2>&1)"
                 _psdr_ran=$?
             else
                 _psdr_out="no Python to run the repair with"
@@ -3220,7 +3239,9 @@ personal_slc_dns_repair() {
             *:repaired) info "Gave the ${_psdr_line%%:*} language container the deployment's DNS" ;;
             *:derived) _psdr_derived=1
                        info "Gave the ${_psdr_line%%:*} language container image the deployment's DNS; the database sees it from its next start" ;;
-            *:failed|*:nocontainer|*:nopodman|*:nodocker) _psdr_rc=1 ;;
+            *:failed) _psdr_rc=1
+                      _exakit_log_file "WARN  language container DNS could not be given to ${_psdr_line%%:*}" ;;
+            *:nocontainer|*:nopodman|*:nodocker) _psdr_rc=1 ;;
         esac
     done
     if ! printf '%s\n' "$_psdr_out" | grep -q '^EXAKIT_SLC_DNS '; then
@@ -3232,7 +3253,9 @@ personal_slc_dns_repair() {
         _exakit_log_file "WARN  language container DNS repair did not run (exit $_psdr_ran): ${_psdr_why:-no output}"
         _psdr_rc=1
     fi
-    [ "$_psdr_rc" = 0 ] && [ "$_psdr_derived" = 1 ] && _psdr_rc=2
+    # A linked image wins over another flavor's failure: only a start mounts
+    # it, and without that restart Java has no DNS (the failure is logged).
+    [ "$_psdr_derived" = 1 ] && _psdr_rc=2
     return "$_psdr_rc"
 }
 

@@ -2081,12 +2081,27 @@ function Initialize-PersonalSlcDns {
     $helper = Join-Path $PSScriptRoot "personal-slc-dns.py"
     $helperArgs = @("--engine", "docker", "--prepare", $state)
     if ($Pull) { $helperArgs += "--pull" }
+    # The helper's own budget: nothing bounds it from outside on Windows, and
+    # it ends - its containers removed - within it (a pull is outside it).
+    $helperArgs += @("--budget", "240")
     $result = Invoke-ExakitPythonFile -Path $helper -Arguments $helperArgs
+    $answered = $false
     foreach ($line in @($result.Lines)) {
         if ($line -match '^EXAKIT_SLC_DNS (\S+) (\S+)$') {
+            $answered = $true
             Write-ExakitLog "INFO" "language container DNS (before the start): $($Matches[1]):$($Matches[2])"
             if ($Matches[2] -eq "derived") { Info "Gave the $($Matches[1]) language container image the deployment's DNS" }
         }
+    }
+    # It always answers ("- none" when nothing is installed): silence is a run
+    # that did not happen or died - one line with the reason, as the repair
+    # leaves. Twin of the same line in personal_slc_dns_prepare.
+    if (-not $answered) {
+        $first = @(@($result.Lines) | Where-Object { "$_".Trim() }) | Select-Object -First 1
+        if (-not $first) { $first = "no output (its stderr is in the PY lines above)" }
+        $first = "$first"
+        if ($first.Length -gt 200) { $first = $first.Substring(0, 200) }
+        Write-ExakitLog "WARN" "language container DNS before the start did not run (exit $($result.Code)): $first"
     }
 }
 
@@ -2101,7 +2116,8 @@ function Initialize-PersonalSlcDns {
 # lone exasol-db-* that is not a sidecar. Every start rebuilds the
 # containers, so this runs after every start. Best effort: returns $false and
 # logs when it cannot. On Docker, an image linked (or found linked) under a
-# database started before it was returns $false and sets
+# database started before it was - also beside another flavor that failed -
+# returns $false and sets
 # $script:PersonalSlcDnsNeedsStart: the fix is in the image, and the database
 # sees it from its next start - the caller restarts it, or says so. Twin of
 # personal_slc_dns_repair (its exit 2).
@@ -2117,7 +2133,12 @@ function Repair-PersonalSlcDns {
     $helper = Join-Path $PSScriptRoot "personal-slc-dns.py"
     # No empty argument: Windows PowerShell 5.1 drops it on the way to python.
     # The id in the = form: one that starts with "-" is still a value.
-    $helperArgs = @("--engine", $engine)
+    # The helper's own budget, the shell's bound (300 s Docker, 90 s Podman)
+    # less 60: Docker links an image (240 s), Podman writes into the
+    # container (30 s).
+    $budget = "30"
+    if ($engine -eq "docker") { $budget = "240" }
+    $helperArgs = @("--engine", $engine, "--budget", $budget)
     $id = "" + (Get-PersonalSlcContainerId)
     if ($id) { $helperArgs += @("--deployment-id=$id") }
     $result = Invoke-ExakitPythonFile -Path $helper -Arguments (@($helperArgs) + @($flavors))
@@ -2133,6 +2154,7 @@ function Repair-PersonalSlcDns {
                 $derived = $true
                 Info "Gave the $($Matches[1]) language container image the deployment's DNS; the database sees it from its next start"
             }
+            if ($Matches[2] -eq "failed") { Write-ExakitLog "WARN" "language container DNS could not be given to $($Matches[1])" }
             if ($Matches[2] -eq "nocontainer") { $ok = $false }
         }
     }
@@ -2146,7 +2168,9 @@ function Repair-PersonalSlcDns {
         Write-ExakitLog "WARN" "language container DNS repair did not run (exit $($result.Code)): $first"
         $ok = $false
     }
-    if ($ok -and $derived) {
+    # A linked image wins over another flavor's failure: only a start mounts
+    # it, and without that restart Java has no DNS (the failure is logged).
+    if ($derived) {
         $script:PersonalSlcDnsNeedsStart = $true
         return $false
     }
