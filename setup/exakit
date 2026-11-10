@@ -1287,6 +1287,14 @@ _service_scope() {
 # start` promises a running database). Shared by the bare form and by
 # `exakit start database`, so the two cannot drift.
 _start_database() {
+    # Asked for (exakit start): the stopped database is started, not healed.
+    EXAKIT_START_ASKED=1
+    _start_database_run
+    _sd_rc=$?
+    EXAKIT_START_ASKED=0
+    return "$_sd_rc"
+}
+_start_database_run() {
     case "$(_runtime_type)" in
         personal)
             if personal_deployment_running 2>/dev/null; then

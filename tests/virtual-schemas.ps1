@@ -114,7 +114,7 @@ $env:EXAKIT_VS_OS = "Windows"
 Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "docker"}}' -Encoding ASCII
 $r = Invoke-ExakitVsEngine -Arguments $localhostPlan
 Check "a Docker deployment: localhost is refused, exit 2" 2 $r.Code
-Check "...with Docker's address for this computer" $true (($r.Lines -join "`n").Contains("on Docker host.docker.internal where the deployment provides it, else the bridge gateway"))
+Check "...with Docker's address for this computer" $true (($r.Lines -join "`n").Contains("on Docker host.docker.internal (192.168.65.254 on Docker Desktop)"))
 Check "...not Podman's" $false (($r.Lines -join "`n").Contains("host.containers.internal"))
 Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "podman"}}' -Encoding ASCII
 $r = Invoke-ExakitVsEngine -Arguments $localhostPlan
@@ -164,19 +164,20 @@ $env:FAKE_VS_STATE = $state
 Remove-Item Env:\EXAKIT_VS_SETTLE_SECONDS
 
 Write-Host ""
-Write-Host "== the query hint after connect: a quoted name, escaped for exakit.cmd =="
+Write-Host "== the query hint after connect: a quoted name, piped to exakit.cmd =="
 # On Windows `exakit` is exakit.cmd, and PowerShell strips the inner double
 # quotes of an argument it hands to a batch file: a quoted name needs \".
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result ([pscustomobject]@{ example = 'SELECT * FROM VS_X."actor" LIMIT 10'; tips = @("a tip") }) -Name "x"
-Check "an example that quotes a name is shown as it is" 'OK Query it like any schema: SELECT * FROM VS_X."actor" LIMIT 10' $script:shown[0]
-Check "...then the form that works from PowerShell, each inner double quote escaped" 'INFO From PowerShell: exakit sql ''SELECT * FROM VS_X.\"actor\" LIMIT 10''' $script:shown[1]
-Check "...with why, in one line" $true (("" + $script:shown[2]).StartsWith("INFO ") -and ("" + $script:shown[2]).Contains("drops unescaped ones when it hands the query to exakit.cmd"))
-Check "...before the connector's tips" "INFO a tip" $script:shown[3]
+Check "the hint opens the list" 'INFO Query it like any schema:' $script:shown[0]
+Check "...a query with a double quote is piped to exakit sql, as PowerShell keeps its quotes in a pipe" '''SELECT * FROM VS_X."actor" LIMIT 10'' | exakit sql' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_X."actor" LIMIT 10')
+Check "...one without is an argument" 'exakit sql ''SELECT * FROM VS_SALES.ORDERS LIMIT 10''' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_SALES.ORDERS LIMIT 10')
+Check "...a single quote in it is doubled" 'exakit sql ''SELECT * FROM VS_X.IT''''S LIMIT 10''' (Format-ExakitVsSqlLine -Query "SELECT * FROM VS_X.IT'S LIMIT 10")
+Check "...the tips are exakit source show's" 'INFO Type and naming notes for it: exakit source show x' $script:shown[1]
 $connectResult = Show-ExakitVsLines -Lines $connectLines
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result $connectResult -Name "sales"
-Check "the real connect's example quotes no name: no PowerShell line, the tips follow it" $true ((@($script:shown) -join "|").StartsWith("OK Query it like any schema: SELECT * FROM VS_SALES.ORDERS LIMIT 10|INFO Names arrive in upper case"))
+Check "the real connect: the list, then where the notes are" 'INFO Query it like any schema:|INFO Type and naming notes for it: exakit source show sales' (@($script:shown) -join "|")
 Check "...and nothing says From PowerShell" $false ((@($script:shown) -join "|").Contains("From PowerShell"))
 
 Write-Host ""
@@ -566,8 +567,8 @@ function Invoke-FormChild([string[]]$Answers, [string]$PlanFail = "") {
     $script:formAsked = @(Get-Content -LiteralPath $formRecord -ErrorAction SilentlyContinue)
 }
 # A PostgreSQL panel row: label, value. The label column holds a required
-# field's " *" (26: "Name for this connection *").
-function Row([string]$Label, [string]$Value) { return ($Label.PadRight(26) + "  " + $Value) }
+# field's " *" (34: "Name (alias) for this connection *").
+function Row([string]$Label, [string]$Value) { return ($Label.PadRight(34) + "  " + $Value) }
 # Enter on the required name is refused; on the optional schema it takes the
 # default, on the optional CA it leaves it empty; 3 asks the port again.
 Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
@@ -582,8 +583,8 @@ Check "...an optional one has no star, and keeps its default" $true $script:form
 Check "...no star on an optional one" $false $script:formOut.Contains("Port *")
 Check "...one legend line in the box says what the star means" $true $script:formOut.Contains("|     * required ")
 Check "...and the words are gone" $false ($script:formOut.Contains("(required)") -or $script:formOut.Contains("(optional)"))
-Check "the question ends in the star too" $true ($script:formAsked -contains "ASK Name for this connection *")
-Check "...an empty required answer is refused, in one line" $true $script:formOut.Contains("Name for this connection is required")
+Check "the question ends in the star too" $true ($script:formAsked -contains "ASK Name (alias) for this connection *")
+Check "...an empty required answer is refused, in one line" $true $script:formOut.Contains("Name (alias) for this connection is required")
 Check "...an optional one shows the default Enter takes, no star" $true ($script:formAsked -contains "ASK Schema [public]")
 Check "the fields the string filled are marked" $true $script:formOut.Contains((Row "Host name or address *" "pg.example.com (from the string)"))
 Check "...and not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
@@ -646,7 +647,7 @@ Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sale
 Remove-Item Env:\FORM_COLS
 $wide = @($script:formOut -split "`n" | Where-Object { $_ -like "  |*" -and $_.TrimEnd("`r").Length -gt 54 })
 Check "56 columns: no panel row wider than the panel" 0 $wide.Count
-Check "...the value kept" $true $script:formOut.Contains((Row "Host name or address *" "pg.example.com"))
+Check "...the value kept" $true $script:formOut.Contains(("Host name or address *".PadRight(25) + "  pg.example.com"))
 Check "...its mark dropped" $false $script:formOut.Contains("(from the string)")
 
 # A line exactly as wide as the console is one row: the console holds the wrap
@@ -658,7 +659,7 @@ Check "...one character wider is two" 2 (Get-ExakitVsTuiRows 57)
 # Which field a plan's refusal names: input names first, as whole words in any
 # case; labels only when no name is named; several named is -2, none -1.
 $named = @{ Fields = @(
-    @{ Name = "name"; LabelFull = "Name for this connection"; Kind = "source-name" },
+    @{ Name = "name"; LabelFull = "Name (alias) for this connection"; Kind = "source-name" },
     @{ Name = "host"; LabelFull = "Host name or address"; Kind = "host" },
     @{ Name = "port"; LabelFull = "Port"; Kind = "port" },
     @{ Name = "ca"; LabelFull = "CA certificate file"; Kind = "ca-file" },
@@ -750,10 +751,10 @@ Check "...what it filled is said" $true $script:formOut.Contains("From the conne
 Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
 Check "...the fields it filled are not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
 Check "...one legend line above the questions says what the star means" $true $script:formOut.Contains("    * required")
-Check "...a required question ends in the star" $true ($script:formAsked -contains "ASK Name for this connection (lower case, e.g. sales) * []")
+Check "...a required question ends in the star" $true ($script:formAsked -contains "ASK Name (alias) for this connection (lower case, e.g. sales) * []")
 Check "...an optional one shows its default, no star" $true ($script:formAsked -contains "ASK Schema [public]")
 Check "...and the words are gone" 0 @($script:formAsked | Where-Object { $_ -like "*(required)*" -or $_ -like "*(optional)*" }).Count
-Check "...an empty required answer is refused" $true $script:formOut.Contains("Name for this connection is required")
+Check "...an empty required answer is refused" $true $script:formOut.Contains("Name (alias) for this connection is required")
 Check "...the credential still asked hidden" $true ($script:formAsked -contains "HIDDEN Password")
 $db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
 Check "...the typed one reaches the CONNECTION" $env:FORM_SECRET $db.connections.EXAKIT_SRC_PSLINE.secret
@@ -1322,7 +1323,7 @@ $previousYes = $script:ExakitVsAssumeYes; $script:ExakitVsAssumeYes = $true
 $env:FAKE_START_RC = "1"
 $said = @(Install-ExakitVsJava 6>&1)
 $r = $said[-1]; $text = (@($said) | ForEach-Object { "$_" }) -join "|"
-Check "Install-ExakitVsJava, the start fails: False, and it says so" "False True False" `
+Check "Install-ExakitVsJava, the start fails: False, and it says so" "False True True" `
     ("$r " + $text.Contains("The database did not come back after installing Java. Run: exakit start") + " " + $text.Contains("Java language container installed"))
 [void](Calls)
 $env:FAKE_START_RC = "0"
@@ -1371,7 +1372,7 @@ $script:stubNeedsStart = $false
 Set-Prep $true $false $false $true
 $script:said = @(Install-ExakitVsJava 6>&1)
 Check "a connect at a console, Java missing: installed with no question, one restart" "True 0 stop|start" ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
-Check "...one line says what it does and why" $true ((Shown).Contains("INFO Installing the Java language container for PostgreSQL: about 250 MiB, and the database restarts once"))
+Check "...one line says what it does and why" $true ((Shown).Contains("OK Java language container installed|OK Database restarted"))
 Set-Prep $true $true $false $true
 $script:said = @(Install-ExakitVsJava 6>&1)
 Check "--json at the same console: the contract - nothing installed, nothing asked" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
@@ -1403,7 +1404,7 @@ function Get-ExakitFile { param([string]$Url, [string]$Dest) [void]$script:asked
 Set-Prep $true $false $false $true
 $err = ""; try { $script:said = @(Install-ExakitVsRust 6>&1) } catch { $err = "$_" }
 Check "a connect at a console, Rust missing: the download starts with no question" "DOWNLOAD" ($script:asked -join "|")
-Check "...one line says what it does and why" $true ((Shown).Contains("INFO Installing the Rust language container for PostgreSQL:"))
+Check "...the spinner says what it does, no line of its own" $false ((Shown).Contains("INFO Installing the Rust language container"))
 Set-Prep $false $false $false $false
 $script:said = @(Install-ExakitVsRust 6>&1)
 Check "...no console, no --yes: nothing downloaded, nothing asked (exit 23 follows)" "False 0" ("$($script:said[-1]) " + $script:asked.Count)

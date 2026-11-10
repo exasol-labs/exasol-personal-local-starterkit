@@ -11319,7 +11319,12 @@ exakit_ensure_runtime_running() {
             command -v personal_deployment_running >/dev/null 2>&1 || return 0
             personal_deployment_running && return 0
             if personal_deployment_exists; then
-                info "Self-heal: the database is deployed but not running — starting it"
+                # Asked for (exakit start, _start_database): a start, not a heal.
+                if [ "${EXAKIT_START_ASKED:-0}" = 1 ]; then
+                    info "Starting the database"
+                else
+                    info "Self-heal: the database is deployed but not running — starting it"
+                fi
                 personal_start
                 # The same repair the install uses: a start the launcher took
                 # without acting on is finished by its own deploy.
