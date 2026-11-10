@@ -2533,7 +2533,7 @@ pasted() { printf '\\x0e%s\\x0f' "$1"; }
 # macOS): a hidden prompt in canonical mode never saw its Enter.
 LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
-Q_PASTE="$(when 'Connection string (not shown while you paste; Enter to type the fields):')"
+Q_PASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
 # The question after a string was read and shown back masked: Enter uses it.
 Q_USE="$(when 'Esc/n to type the fields instead')"
 Q_NAME="$(when 'Name for this connection *:')"
@@ -3188,7 +3188,7 @@ if command -v python3 >/dev/null 2>&1; then
     has "...one legend line in the box says what the star means" "│     * required " "$TUI_RAW"
     lacks "...and the words are gone" "(required)" "$TUI_RAW"
     lacks "...both of them" "(optional)" "$TUI_RAW"
-    has "the first question is the connection string, read hidden" "Connection string (not shown while you paste; Enter to type the fields):" "$TUI_RAW"
+    has "the first question is the connection string, read hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
     has "...its hint says what to paste" "    • Paste the source's connection string, for example:" "$TUI_RAW"
     has "...then each form the connector reads on its own line, indented under the text" "$(printf '        %s\n' 'jdbc:postgresql://host:5432/db' 'postgres://user@host:5432/db' 'host[:port][/database]')" "$TUI_RAW"
     lacks "...no list run together any more" "as it shows it:" "$TUI_RAW"
@@ -3262,11 +3262,11 @@ if command -v python3 >/dev/null 2>&1; then
     # The line-by-line questions (a terminal without the drawn form), on a pty
     # that is the scenario's /dev/tty, as a real terminal is.
     Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) *')"
-    Q_LPASTE="$(when 'Connection string (not shown while you paste; Enter to type the fields):')"
+    Q_LPASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
         "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
-    has "line by line: the connection string is asked first, hidden" "Connection string (not shown while you paste; Enter to type the fields):" "$TUI_RAW"
+    has "line by line: the connection string is asked first, hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
     has "...under the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db' '        postgres://user@host:5432/db' '        host[:port][/database]')" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
     has "...shown back masked: the password, and what followed it unencoded" "    • Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****&****" "$TUI_RAW"

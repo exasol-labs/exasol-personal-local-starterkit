@@ -571,7 +571,7 @@ function Row([string]$Label, [string]$Value) { return ($Label.PadRight(26) + "  
 # Enter on the required name is refused; on the optional schema it takes the
 # default, on the optional CA it leaves it empty; 3 asks the port again.
 Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
-Check "the first question is the connection string, read hidden" "HIDDEN Connection string (not shown while you paste; Enter to type the fields)" $script:formAsked[0]
+Check "the first question is the connection string, read hidden" "HIDDEN Connection string (not shown while you paste, Enter to type the fields)" $script:formAsked[0]
 Check "...its hint says what to paste" $true $script:formOut.Contains("Paste the source's connection string, for example:")
 Check "...then one form per line, indented under the text" $true $script:formOut.Contains("        jdbc:postgresql://host:5432/db`n        postgres://user@host:5432/db`n        host[:port][/database]")
 Check "...the string is shown back, its password masked by the engine" $true $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales")
@@ -740,7 +740,7 @@ function Invoke-LineChild([string[]]$Answers, [string[]]$CliArgs) {
 }
 Invoke-LineChild @("garbage string", ("jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=" + $pastePw), "", "psline", "", "", "", "y") @("pg")
 Check "line by line: exit 0" 0 $script:lineCode
-Check "...the connection string is asked first, hidden" "HIDDEN Connection string (not shown while you paste; Enter to type the fields)" $script:formAsked[0]
+Check "...the connection string is asked first, hidden" "HIDDEN Connection string (not shown while you paste, Enter to type the fields)" $script:formAsked[0]
 Check "...under the hint" $true $script:formOut.Contains("INFO Paste the source's connection string, for example:")
 Check "...shown back masked" $true $script:formOut.Contains("INFO Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****")
 Check "...then one key decides, Enter used it" 1 @($script:formAsked | Where-Object { $_ -eq "KEY enter" }).Count

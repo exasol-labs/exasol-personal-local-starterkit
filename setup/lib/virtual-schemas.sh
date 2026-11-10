@@ -838,7 +838,7 @@ _exakit_vs_ask_paste() {
     [ -n "$_eap_forms" ] || return 0
     _exakit_vs_paste_hint "$_eap_forms"
     while :; do
-        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (not shown while you paste; Enter to type the fields): " err < /dev/tty \
+        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (not shown while you paste, Enter to type the fields): " err < /dev/tty \
             || { printf '\n' >&2; return 0; }
         printf '\n' >&2
         _eap_url="$_EVH_LINE"; _EVH_LINE=""
@@ -1391,8 +1391,8 @@ _exakit_vs_tui_paste() {
     _etp_why=""
     # Read with echo off, as a password is: the string often holds one. What
     # was read is shown back masked, and the fields it filled.
-    _etp_q="Connection string (not shown while you paste; Enter to type the fields)"
-    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(not shown while you paste; Enter to type the fields)$UI_RESET"
+    _etp_q="Connection string (not shown while you paste, Enter to type the fields)"
+    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(not shown while you paste, Enter to type the fields)$UI_RESET"
     _etp_c="$(_exakit_vs_paste_choice_text)"
     # Where there is room, the question says a field can still be changed.
     _etp_more=" $( [ "${UI_BULLET:-}" = '-' ] && printf '%s' '-' || printf '%s' '·' ) every field can be changed in the summary"

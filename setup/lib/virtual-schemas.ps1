@@ -1333,7 +1333,7 @@ function Read-ExakitVsLinePaste {
     if ($forms.Count -eq 0) { return $answer }
     Write-ExakitVsPasteHint -Forms $forms
     while ($true) {
-        $url = "" + (Read-ExakitVsHidden "Connection string" "not shown while you paste; Enter to type the fields")
+        $url = "" + (Read-ExakitVsHidden "Connection string" "not shown while you paste, Enter to type the fields")
         if (-not $url) { return $answer }
         $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Connector, "--base64") -Secret $url
         $url = $null
@@ -1529,8 +1529,8 @@ function Invoke-ExakitVsTuiPaste {
     $why = ""
     # Read with echo off, as a password is: the string often holds one. What was
     # read is shown back masked, and the fields it filled.
-    $plain = "Connection string (not shown while you paste; Enter to type the fields)"
-    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(not shown while you paste; Enter to type the fields)" + $script:UiReset
+    $plain = "Connection string (not shown while you paste, Enter to type the fields)"
+    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(not shown while you paste, Enter to type the fields)" + $script:UiReset
     $choice = Get-ExakitVsPasteChoiceText
     # Where there is room, the question says a field can still be changed.
     $more = " " + $script:UiMidDot + " every field can be changed in the summary"
