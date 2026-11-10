@@ -105,34 +105,56 @@ def _cells(source: str, where: Path | None = None) -> list[Cell]:
 
 
 JOURNEY = ("Access", "Understand", "Prepare", "Explore", "Model", "Validate", "Ask with AI", "Share", "Hand off")
+STAGES = (("Get the data", (1, 2)), ("Prepare and model", (3, 4, 5, 6)), ("Use and share", (7, 8, 9)))
 JOURNEY_LINK = re.compile(r"\]\(journey:([0-9,]+)\)")
 
 
 def journey_svg(current: set[int]) -> str:
-    """The Data Scientist's nine steps as one strip of boxes, this notebook's filled in and underlined. Step 0 (the
-    kit check) is drawn only where a notebook has it. Opaque boxes, so it reads on a light or a dark theme."""
-    steps = ([(0, "Kit")] if 0 in current else []) + list(enumerate(JOURNEY, 1))
-    gap, width = 14, 880
-    box = (width - 2 - gap * (len(steps) - 1)) / len(steps)
+    """The Data Scientist's nine steps as a flow chart: three stages side by side, each a card with its steps stacked
+    and arrows between them, this notebook's steps filled in. Step 0 (the kit check) comes first where a notebook has
+    it. Opaque cards and boxes, so it reads on a light or a dark theme. Each step box carries data-step and
+    data-current for the tests."""
+    blue, grey, line, ink, sub, card = "#1F6FEB", "#D0D5DD", "#98A2B3", "#344054", "#475467", "#F8FAFC"
     font = "font-family='system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif'"
-    parts, xs = [], []
-    for index, (number, label) in enumerate(steps):
-        x = 1 + index * (box + gap)
-        on = number in current
-        fill, stroke, ink, sub = ("#1F6FEB", "#1F6FEB", "#FFFFFF", "#FFFFFF") if on else ("#F2F4F7", "#D0D5DD", "#344054", "#475467")
-        parts.append(f"<rect x='{x:.1f}' y='1' width='{box:.1f}' height='58' rx='10' fill='{fill}' stroke='{stroke}'/>")
-        parts.append(f"<text x='{x + box / 2:.1f}' y='26' text-anchor='middle' {font} font-size='18' font-weight='700' fill='{ink}'>{number}</text>")
-        parts.append(f"<text x='{x + box / 2:.1f}' y='46' text-anchor='middle' {font} font-size='11.5' fill='{sub}'>{label}</text>")
-        if index < len(steps) - 1:
-            mid = x + box + gap / 2
-            parts.append(f"<path d='M{mid - 3:.1f} 24 L{mid + 3:.1f} 30 L{mid - 3:.1f} 36' fill='none' stroke='#98A2B3' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/>")
-        if on:
-            xs.append(x)
-    left, right = min(xs), max(xs) + box
-    parts.append(f"<rect x='{left:.1f}' y='66' width='{right - left:.1f}' height='4' rx='2' fill='#1F6FEB'/>")
-    parts.append(f"<text x='{(left + right) / 2:.1f}' y='88' text-anchor='middle' {font} font-size='12.5' font-weight='600' fill='#1F6FEB'>This notebook</text>")
-    return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='94' viewBox='0 0 {width} 94'>"
-            + "".join(parts) + "</svg>")
+    width, gap, top, step_h, step_gap = 880, 36, 34, 36, 16
+    stages = ([("Start", (0,))] if 0 in current else []) + list(STAGES)
+    narrow = 128 if 0 in current else 0
+    wide = (width - 2 - narrow - gap * (len(stages) - 1)) / (len(stages) - (1 if narrow else 0))
+    rows = max(len(steps) for _, steps in stages)
+    card_h = top + rows * step_h + (rows - 1) * step_gap + 14
+    labels = {0: "Check the kit", **{number: label for number, label in enumerate(JOURNEY, 1)}}
+    parts, x = [], 1.0
+    marker = (f"<defs><marker id='a' viewBox='0 0 10 10' refX='9' refY='5' markerWidth='7' markerHeight='7' "
+              f"orient='auto'><path d='M0 0 L10 5 L0 10 z' fill='{line}'/></marker></defs>")
+    for index, (title, steps) in enumerate(stages):
+        w = narrow if (narrow and index == 0) else wide
+        on_card = any(n in current for n in steps)
+        parts.append(f"<rect x='{x:.1f}' y='1' width='{w:.1f}' height='{card_h}' rx='12' fill='{card}' "
+                     f"stroke='{blue if on_card else grey}' stroke-width='{1.5 if on_card else 1}'/>")
+        parts.append(f"<text x='{x + w / 2:.1f}' y='22' text-anchor='middle' {font} font-size='12.5' "
+                     f"font-weight='700' fill='{blue if on_card else sub}'>{title}</text>")
+        for row, number in enumerate(steps):
+            y = top + row * (step_h + step_gap)
+            on = number in current
+            fill, stroke, text = (blue, blue, "#FFFFFF") if on else ("#FFFFFF", grey, ink)
+            parts.append(f"<rect data-step='{number}' data-current='{int(on)}' x='{x + 12:.1f}' y='{y}' "
+                         f"width='{w - 24:.1f}' height='{step_h}' rx='8' fill='{fill}' stroke='{stroke}'/>")
+            parts.append(f"<text x='{x + w / 2:.1f}' y='{y + 23}' text-anchor='middle' {font} font-size='13' "
+                         f"fill='{text}'><tspan font-weight='700'>{number}</tspan>  {labels[number]}</text>")
+            if row < len(steps) - 1:
+                parts.append(f"<line x1='{x + w / 2:.1f}' y1='{y + step_h + 1}' x2='{x + w / 2:.1f}' "
+                             f"y2='{y + step_h + step_gap - 2}' stroke='{line}' stroke-width='1.5' marker-end='url(#a)'/>")
+        if index < len(stages) - 1:
+            mid = top + step_h / 2
+            parts.append(f"<line x1='{x + w + 3:.1f}' y1='{mid}' x2='{x + w + gap - 3:.1f}' y2='{mid}' "
+                         f"stroke='{line}' stroke-width='1.5' marker-end='url(#a)'/>")
+        x += w + gap
+    legend_y = card_h + 22
+    parts.append(f"<rect x='1' y='{legend_y - 11}' width='14' height='14' rx='3' fill='{blue}'/>")
+    parts.append(f"<text x='22' y='{legend_y}' {font} font-size='12.5' fill='{sub}'>This notebook</text>")
+    height = legend_y + 8
+    return (f"<svg xmlns='http://www.w3.org/2000/svg' width='{width}' height='{height}' viewBox='0 0 {width} {height}'>"
+            + marker + "".join(parts) + "</svg>")
 
 
 def _journey(line: str) -> str:

@@ -40,7 +40,7 @@ __all__ = ["ApprovalNeeded", "RoleReview", "review_roles"]
 
 AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"
 FORCE = "force"
-DEFAULT_SCHEMA = "MY_DATA"             # where a data file named by a notebook's assignment loads, as the quickstart's OWN_TABLE
+DEFAULT_SCHEMA = "MY_DATA"             # where a data file named by a notebook's assignment loads, as the quickstart's MY_SCHEMA
 NONE_LABEL = "—"                  # the slot dropdown's entry for a slot left empty
 ROLE_PURPOSES = {
     "key": "unique for every row: it identifies the record",
@@ -197,7 +197,7 @@ class RoleReview:
                 "A rule's confidence says how close the evidence is to its line; it is not a probability that the "
                 "business meaning is correct. The columns drafted at low confidence come first: those are where the "
                 "draft guessed, so check them before the rest. Keep useful suggestions, change the others, and leave a "
-                "slot empty (—) when no column fits. Approve descriptor saves this column map for the next notebooks.")
+                "slot empty (—) when no column fits. Approve column map saves this column map for the next notebooks.")
 
     def explanations(self) -> dict[str, str]:
         """Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied."""
@@ -337,7 +337,7 @@ class RoleReview:
         if self.approved is None and self.draft.status == "approved":
             self.approved = dataset(self.conn, self.file if self.file is not None else self.draft.id)
             print(f"Using the approved roles of {self.approved.id} v{self.approved.version}. To change them, set the "
-                  "dropdowns above, click Approve descriptor and run this cell again.")
+                  "dropdowns above, click Approve column map and run this cell again.")
         return self.approved
 
     def dataset(self, draft_ok: bool = False) -> Dataset:
@@ -349,7 +349,7 @@ class RoleReview:
             return self.approved
         if draft_ok or self.headless == "draft":
             return self._draft_dataset()
-        raise ApprovalNeeded("Not approved yet: check the dropdowns above, click Approve descriptor, then run this cell "
+        raise ApprovalNeeded("Not approved yet: check the dropdowns above, click Approve column map, then run this cell "
                              "again (plain Python: review.approve({...})).")
 
     # --- the front ends ------------------------------------------------------------------------------------------------
@@ -412,7 +412,7 @@ class RoleReview:
             slot_pickers[slot] = picker
             hint = SLOT_PURPOSES[slot] + (f" (empty: {reasons[slot]})" if column is None and reasons.get(slot) else "")
             rows.append(widgets.VBox([picker, widgets.HTML(f"<small>{escape(hint)}</small>")]))
-        button = widgets.Button(description="Approve descriptor", button_style="success")
+        button = widgets.Button(description="Approve column map", button_style="success")
         output = widgets.Output()
 
         def clicked(_):
@@ -455,7 +455,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
                               for slot, column in self.slot_suggestions().items()}
             mo.ui.dictionary.__init__(self, {"roles": mo.ui.dictionary(dropdowns),
                                              "slots": mo.ui.dictionary(slot_dropdowns),
-                                             "approve": mo.ui.run_button(label="Approve descriptor")},
+                                             "approve": mo.ui.run_button(label="Approve column map")},
                                       label=f"Roles of {draft.table}" + (f" - the {len(low)} drafted at low "
                                                                           "confidence come first" if low else ""))
 
@@ -477,7 +477,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
                 return self.approved
             if draft_ok or self.headless == "draft":
                 return self._draft_dataset()
-            mo.stop(True, mo.md("Check the role of each column and the slots above, then click **Approve descriptor**; the "
+            mo.stop(True, mo.md("Check the role of each column and the slots above, then click **Approve column map**; the "
                                 "cells below run then."))
             raise RuntimeError("Approve the roles first.")          # not reached: mo.stop raises
 
@@ -518,7 +518,7 @@ def _open(conn, name: str):
     if given.is_file() and given.suffix.lower() in DATA_FILES and descriptor_beside(given) is None:
         table = _default_table(given)
         print(f"{given.name} has no descriptor beside it: loading it into {table} and proposing its roles here. "
-              "(The quickstart's OWN_FILE cell does the same with a table name of your choice.)")
+              "(The quickstart's MY_DATA cell does the same, into the schema MY_SCHEMA names.)")
         return load_own_file(given, table, conn=conn), False
     return dataset(conn, name), True
 
@@ -543,7 +543,7 @@ def review_roles(conn, source: Any) -> RoleReview:
         else:
             review.headless = "draft"
             print(f"{source.id} v{source.version} is a draft: the cells run on its proposed roles. To approve them run the "
-                  f"quickstart's OWN_FILE cell with this file, or: exakit describe {source.id} --approve")
+                  f"quickstart's MY_DATA cell with this file, or: exakit describe {source.id} --approve")
         return review
     proposal = describe(source.fact_table, conn=conn, id=source.id)
     log_event(DESCRIBE_DRAFT, descriptor_id=proposal.id, table=proposal.table, roles=proposal.roles,

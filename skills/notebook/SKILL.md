@@ -113,6 +113,7 @@ names, checked against the database first:
 ds = nb.dataset(conn, "amazon_sales")                 # or a descriptor.yaml path, or a data file with one beside it
 nb.sql(conn, f"SELECT {ds.col('category')}, AVG({ds.col('label')}) FROM {ds.fact_table} GROUP BY 1")
 nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", ...})   # CSV, Parquet or JSON
+nb.load_own_file("~/data/claims/", "MY_DATA")   # a folder: exakit data-load, one table per file, named after it
 ```
 
 `data-scientist/01_explore` starts with the two checks a result should pass before anyone trusts it,
@@ -236,9 +237,10 @@ PowerShell: `$env:NAME = "value"` for the plain values and
 for each key. A server already running read its environment at start: `exakit notebook stop`,
 then `exakit notebook`, from that terminal; a kernel restart does not re-read it. The model's
 id and address (not a key, not the Langfuse names) can stay in `~/.exasol-starter-kit/exakit.env`.
-`nb.model_setup()` in a cell prints what is set and these lines for the machine it runs on
-(Windows, Mac, Linux, WSL): point a user who asks "how do I set the model" at it. A short version
-appears at the end of a Data Scientist install and right after `exakit marketplace` adds the notebook.
+`nb.model_setup()` in a cell (JupyterLab or Marimo) asks for anything missing, each key in a hidden
+box, then prints what is set and these lines for the machine it runs on
+(Windows, Mac, Linux, WSL): point a user who asks "how do I set the model" at it. The install
+prints no model setup.
 When an agent sets these for a user, it runs the `read -rs` lines in the user's own terminal
 and never types, echoes or logs a key itself; `MODEL-PROVIDERS.md` (*Set them once*) is the page
 to point at: on the user's machine it is beside the Data Scientist notebooks,

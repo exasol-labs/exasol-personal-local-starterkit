@@ -29,13 +29,9 @@ class BundleTest(unittest.TestCase):
                     # The README says what the guides did; they and the shared cells (build input) stay in the kit.
                     for left_out in ("MODEL-PROVIDERS.md", "INSTALL-AND-UPDATE.md", "00_shared", "useful-notebooks"):
                         self.assertFalse((base / left_out).exists(), left_out)
-                    # The model guide sits beside the Data Scientist notebooks (JupyterLab only: Marimo would list
-                    # a Markdown file as a notebook of its own).
+                    # The model guide sits beside the Data Scientist notebooks, in JupyterLab's folder and Marimo's.
                     guide = base / "data-scientist" / "MODEL-PROVIDERS.md"
-                    if front == "jupyter":
-                        self.assertEqual(guide.read_bytes(), (ROOT / "notebook/MODEL-PROVIDERS.md").read_bytes())
-                    else:
-                        self.assertFalse(guide.exists())
+                    self.assertEqual(guide.read_bytes(), (ROOT / "notebook/MODEL-PROVIDERS.md").read_bytes())
                     sample = base / "data-scientist" / doc["notebooks"][0][front]
                     sample.write_text("my notebook")
                     self.assertEqual(bundle.copy(front, ROOT, Path(tmp)), ([], []))

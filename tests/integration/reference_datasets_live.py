@@ -207,15 +207,17 @@ def check_draft(c: Checks, dataset: str, shipped: dict[str, Any]) -> bool:
         c.fail(f"{dataset}: exakit describe printed no JSON: {broken}")
         return False
     doc = found["doc"]
-    c.check(found.get("status") == "draft" and doc.get("dataset") == dataset,
-            f"{dataset}: describe drafted '{doc.get('dataset')}' v{doc.get('version')} ({found.get('status')})",
-            "expected a draft of this id on a fresh install")
+    # A dataset the kit ships starts from its shipped approved descriptor (adopted into the store, 9d07902), so a
+    # review begins on the approved roles - the target among them - instead of a draft.
+    c.check(found.get("status") == "approved" and doc.get("dataset") == dataset and doc.get("version") == 1,
+            f"{dataset}: describe opens the shipped approved v{doc.get('version')} of '{doc.get('dataset')}' ({found.get('status')})",
+            "expected the shipped approved v1 of this id on a fresh install")
     want = {name: (e["role"], bool(e.get("sensitive"))) for name, e in shipped["columns"].items()}
     got = {name: (e["role"], bool(e.get("sensitive"))) for name, e in doc["columns"].items()}
     differ = [f"{n}: shipped {want.get(n)}, drafted {got.get(n)}" for n in list(want) + [n for n in got if n not in want]
               if want.get(n) != got.get(n)]
     c.check(list(want) == list(doc["columns"]) and not differ,
-            f"{dataset}: the draft gives all {len(got)} columns the roles descriptor.yaml ships, in table order",
+            f"{dataset}: it gives all {len(got)} columns the roles descriptor.yaml ships, in table order",
             "; ".join(differ) or f"column order {list(doc['columns'])}")
     for slot in COMPARED_SLOTS:
         c.check(doc["slots"].get(slot) == shipped["slots"].get(slot),
@@ -224,8 +226,9 @@ def check_draft(c: Checks, dataset: str, shipped: dict[str, Any]) -> bool:
     for slot in ("category", "entity"):                              # drafted from approximate counts: a note, not a gate
         if doc["slots"].get(slot) != shipped["slots"].get(slot):
             print(f"note {dataset}: slot {slot} drafted {doc['slots'].get(slot)}, shipped {shipped['slots'].get(slot)}")
-    c.check(doc["slots"].get("target") is None, f"{dataset}: target is not drafted",
-            f"drafted {doc['slots'].get('target')}")
+    c.check(doc["slots"].get("target") == shipped["slots"].get("target"),
+            f"{dataset}: the target is the shipped one, {doc['slots'].get('target')} (a person chose it; never drafted)",
+            f"shipped {shipped['slots'].get('target')}")
     live, ship = doc["source"].get("schema_digest"), shipped["source"].get("schema_digest")
     if not c.check(live == ship, f"{dataset}: source.schema_digest {live} is the shipped one",
                    f"shipped {ship} (computed from the CREATE TABLE types)"):
@@ -251,14 +254,15 @@ def check_approve(c: Checks, pump, dataset: str, shipped: dict[str, Any]) -> Non
     result = first_json(out)
     schema, name = table.split(".", 1)
     view = f"{SEMANTIC}.{schema}__{name}"
-    c.check(result.get("status") == "approved" and result.get("version") == 1,
-            f"{dataset}: approved v{result.get('version')} with target {target}", f"status {result.get('status')}: "
-            f"{result.get('reason') or result.get('message') or ''}")
+    # The adopted v1 already says this, so nothing new is written - but it is published now if it was not yet.
+    c.check(result.get("status") in ("approved", "unchanged") and result.get("version") == 1,
+            f"{dataset}: v{result.get('version')} approved with target {target} ({result.get('status')})",
+            f"status {result.get('status')}: {result.get('reason') or result.get('message') or ''}")
     c.check(result.get("published") == view, f"{dataset}: published as {view}",
             f"published {result.get('published')!r}, reason {result.get('reason')!r}")
     store = home() / "descriptors" / table
-    c.check(all((store / f).is_file() for f in ("v1.yaml", "current.yaml", "v1.profile.json")) and not (store / "draft.yaml").exists(),
-            f"{dataset}: the store holds v1.yaml, current.yaml and v1.profile.json, and no draft",
+    c.check(all((store / f).is_file() for f in ("v1.yaml", "current.yaml")) and not (store / "draft.yaml").exists(),
+            f"{dataset}: the store holds v1.yaml and current.yaml, and no draft",
             ", ".join(sorted(p.name for p in store.iterdir())) if store.is_dir() else f"no folder {store}")
     current = read_yaml(store / "current.yaml") if (store / "current.yaml").is_file() else {}
     c.check(current.get("status") == "approved" and (current.get("slots") or {}).get("target") == target,
