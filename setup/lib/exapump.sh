@@ -1718,7 +1718,10 @@ _exakit_json_tables_ensure() {
     # once: the folder's bar says so instead of sitting still on the file's name.
     [ -n "${_blf_state:-}" ] && ui_progress_phase "$_blf_state" \
         "installing the JSON engine (first JSON file only, about a minute)"
-    if ! _exakit_marketplace_install_one json-tables >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
+    # The download writes how far it is ("downloading the JSON engine, 6 of 15
+    # MB") into the bar's label through this file, so a slow line is not a hang.
+    if ! EXAKIT_PROGRESS_PHASE_FILE="${_blf_state:-}" \
+            _exakit_marketplace_install_one json-tables >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
         _EXAKIT_JSON_TABLES_BLOCKED="The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
         warn "The JSON engine could not be installed, so this file was not loaded."
         info "Everything already in the database is untouched. Details: exakit logs"

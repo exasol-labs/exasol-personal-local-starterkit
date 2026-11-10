@@ -9,6 +9,7 @@ import platform
 import re
 import shlex
 import shutil
+import time
 import subprocess
 import sys
 import tarfile
@@ -161,6 +162,55 @@ def _api_asset_url(repo: str, tag: str, name: str, headers: dict[str, str]) -> s
     return url
 
 
+PHASE_FILE = "EXAKIT_PROGRESS_PHASE_FILE"     # the running progress bar's label: data-load's bar, both shells
+_CHUNK = 1 << 16
+
+
+def _what(key: str) -> str:
+    return "the JSON Tables package" if key == "wheel" else "the JSON engine"
+
+
+def _show_phase(text: str) -> None:
+    """Put ``text`` on the bar that is running, if one is. The shell's bar reads its label from the file named by
+    EXAKIT_PROGRESS_PHASE_FILE: bash keeps a state record there (``a|b|c|d|label``, only the label changes), the
+    PowerShell bar a plain line. No file: nothing (the install's own lines say what it does)."""
+    path = os.environ.get(PHASE_FILE)
+    if not path:
+        return
+    try:
+        current = Path(path).read_text(encoding="utf-8").strip()
+        parts = current.split("|")
+        line = "|".join(parts[:4] + [text]) if len(parts) >= 5 else text
+        Path(path).write_text(line + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _copy_with_progress(response, output, what: str) -> None:
+    """Copy a download, saying how far it is - "downloading the JSON engine, 6 of 15 MB" - at most twice a
+    second, so a slow line reads as progress rather than a hang. Without a known size it counts what arrived."""
+    try:
+        total = int(response.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError, AttributeError):
+        total = 0
+    done, shown = 0, 0.0
+    while True:
+        block = response.read(_CHUNK)
+        if not block:
+            break
+        output.write(block)
+        done += len(block)
+        now = time.monotonic()
+        if now - shown >= 0.5:
+            shown = now
+            mb = done / 1e6
+            _show_phase(f"downloading {what}, {mb:.0f} of {total / 1e6:.0f} MB" if total
+                        else f"downloading {what}, {mb:.0f} MB")
+    if total and total >= 1e6:
+        _show_phase(f"downloading {what}, {total / 1e6:.0f} of {total / 1e6:.0f} MB")
+
+
+
 def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict,
            api_assets: dict[str, dict] | None, destination: Path) -> None:
     digest = pins.get("sha256", {}).get(key)
@@ -196,7 +246,7 @@ def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict
                     destination.open("wb") as output:
                 if not response.url.startswith("https://"):
                     raise AddonFailure(f"JSON Tables asset {name} redirected away from HTTPS")
-                shutil.copyfileobj(response, output)
+                _copy_with_progress(response, output, _what(key))
             last = None
             break
         except (OSError, AddonFailure) as error:

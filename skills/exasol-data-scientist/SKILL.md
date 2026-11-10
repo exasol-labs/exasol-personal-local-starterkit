@@ -1,7 +1,7 @@
 ---
 name: exasol-data-scientist
 persona: data-scientist
-description: "Work as a senior data scientist on the local Exasol database the starter kit runs - framing a question as a prediction or an experiment, loading a file, a folder or an external source, profiling and cleaning the data in SQL, approving the column map, engineering features where the data lives, training and validating a model in the kit's notebooks, testing a difference properly, and sharing the result as a dashboard and a hand-off bundle. It routes each step to the kit's own tool (exakit data-load, exakit connect and virtual schemas, the exasol MCP server, exakit describe, the exakit.nb notebook helpers and the Exasol Notebook Connector, Dash Server) and keeps the guardrails: read-only queries through MCP, SQL shown before it runs, writes only with the user's yes, no rows sent to a model. Triggers - \"I am a data scientist\", \"analyse this data\", \"explore this dataset\", \"build a model\", \"predict churn\", \"predict fraud\", \"train a classifier\", \"which features matter\", \"feature engineering\", \"is this difference significant\", \"A/B test\", \"design an experiment\", \"clean this data\", \"find data quality problems\", \"is there leakage\", \"join my external source with local data\", \"use my Postgres data for a model\", \"score new rows\", \"make a data science notebook\", \"share my findings\", \"fuse my data\", \"combine my sources\", \"find outliers in my data\", \"show me what my data says\"."
+description: "Work as a senior data scientist on the local Exasol database the starter kit runs - framing a question as a prediction or an experiment, loading a file, a folder or an external source, profiling and cleaning the data in SQL, approving the column map, engineering features where the data lives, training and validating a model in the kit's notebooks, testing a difference properly, and sharing the result as a dashboard and a hand-off bundle. It routes each step to the kit's own tool (exakit data-load, exakit connect and virtual schemas, the exasol MCP server, exakit describe, the exakit.nb notebook helpers and the Exasol Notebook Connector, Dash Server) and keeps the guardrails: read-only queries through MCP, SQL shown before it runs, writes only with the user's yes, no rows sent to a model. Triggers - \"I am a data scientist\", \"analyse this data\", \"explore this dataset\", \"build a model\", \"predict churn\", \"predict fraud\", \"train a classifier\", \"which features matter\", \"feature engineering\", \"is this difference significant\", \"A/B test\", \"design an experiment\", \"clean this data\", \"find data quality problems\", \"is there leakage\", \"join my external source with local data\", \"use my Postgres data for a model\", \"score new rows\", \"make a data science notebook\", \"share my findings\", \"fuse my data\", \"combine my sources\", \"find outliers in my data\", \"show me what my data says\", \"look into my exasol database\", \"what does my data say\", \"find insights across my sources\", \"what do my external sources and local data say\"."
 ---
 
 # Exasol data scientist
@@ -28,6 +28,43 @@ what the kit can tell you.
 `exakit source list --json` and, in a notebook or through MCP, the data map
 (`nb.data_map(conn)`). Say in three lines what is there: sample datasets,
 the user's loaded tables, connected sources.
+
+**Round 0, first: the column maps.** Read `EXAKIT_SEMANTIC` as the `exakit`
+skill says (section 3), and use the roles found there over anything you infer.
+Warn about every table you will use that has no approved map, give the
+`exakit describe` commands for it, and ask whether to go on with your reading
+or wait for the user to approve. A prediction needs an approved map with a
+target: without one, stop and ask for it.
+
+**Round 0, continued: find what connects the sources.** Before you describe
+any table, look for columns that two or more schemas share. Compare names
+without case: a MySQL or JSON source keeps `category` lower case while a
+sample says `CATEGORY`.
+
+```sql
+SELECT UPPER(COLUMN_NAME) AS SHARED_COLUMN,
+       COUNT(DISTINCT COLUMN_SCHEMA) AS SCHEMAS,
+       GROUP_CONCAT(DISTINCT COLUMN_SCHEMA || '.' || COLUMN_TABLE || '."' || COLUMN_NAME || '"'
+                    ORDER BY 1 SEPARATOR ', ') AS WHERE_FOUND
+FROM SYS.EXA_ALL_COLUMNS
+WHERE COLUMN_SCHEMA NOT LIKE 'EXAKIT%' AND COLUMN_SCHEMA NOT LIKE 'PREPROC%'
+  AND COLUMN_SCHEMA NOT IN ('SYS', 'EXA_STATISTICS')
+GROUP BY UPPER(COLUMN_NAME)
+HAVING COUNT(DISTINCT COLUMN_SCHEMA) > 1
+ORDER BY SCHEMAS DESC;
+```
+
+Each shared state, region, category or period is a way to compare sources:
+aggregate each side to that level, join on it, and measure the relation
+(`CORR`, a rate per group, a before-and-after). Quote a lower-case name
+(`"VS_CATALOG"."inventory_weekly"."category"`) and cast numeric text before
+you compute (`CAST("AVG_DELIVERY_DAYS" AS DECIMAL(6,2))`).
+
+**Lead with what spans sources.** A summary of each source on its own is not
+the answer: the user asked what the data says together. Report findings that
+use two or more sources first, each with its correlation or effect size and
+the number of groups it rests on. Then the single-source findings. When no
+column links two sources, say so plainly.
 
 **Round 1: the data.** "Use the data already in Exasol, load more data, or
 connect an external source?" Allow several.

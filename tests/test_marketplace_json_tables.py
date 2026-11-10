@@ -158,3 +158,45 @@ class AssetSourceTest(unittest.TestCase):
             seen, error = self._fetch(None, None)
         self.assertEqual(1, len(seen), "only the kit's own repository is tried")
         self.assertIn("needs GITHUB_TOKEN", error)
+
+
+class DownloadProgressTest(unittest.TestCase):
+    """A slow download reads as progress on the bar that is running, in either shell's format."""
+
+    class Slow:
+        def __init__(self, size, length=True):
+            self.left, self.headers = size, ({"Content-Length": str(size)} if length else {})
+
+        def read(self, n):
+            if self.left <= 0:
+                return b""
+            block = min(n, self.left)
+            self.left -= block
+            return b"x" * block
+
+    def run_copy(self, first_line, length=True):
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            phase = Path(tmp) / "phase"
+            phase.write_text(first_line, encoding="utf-8")
+            out = io.BytesIO()
+            with patch.dict(os.environ, {"EXAKIT_PROGRESS_PHASE_FILE": str(phase)}), \
+                    patch.object(json_tables.time, "monotonic", side_effect=[float(i) for i in range(10_000)]):
+                json_tables._copy_with_progress(self.Slow(15_000_000, length), out, "the JSON engine")
+            self.assertEqual(15_000_000, len(out.getvalue()))
+            return phase.read_text(encoding="utf-8").strip()
+
+    def test_bash_state_keeps_its_fields_and_gets_the_megabytes(self):
+        self.assertEqual("1|2|3|4|downloading the JSON engine, 15 of 15 MB", self.run_copy("1|2|3|4|installing\n"))
+
+    def test_the_powershell_bar_gets_a_plain_line(self):
+        self.assertEqual("downloading the JSON engine, 15 of 15 MB", self.run_copy(""))
+
+    def test_an_unknown_size_counts_what_arrived(self):
+        self.assertRegex(self.run_copy("", length=False), r"^downloading the JSON engine, \d+ MB$")
+
+    def test_no_bar_no_file_written(self):
+        import io
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXAKIT_PROGRESS_PHASE_FILE", None)
+            json_tables._copy_with_progress(self.Slow(1000), io.BytesIO(), "the JSON engine")
