@@ -9,8 +9,13 @@
 # cannot fix from inside the database:
 #
 #   exit 20  Java in the database has no DNS resolver -> Repair-PersonalSlcDns, retry once
-#            (Docker: the fix is in the image - one restart, asked, then the retry)
-#   exit 21  the Java language container is missing   -> `exasol slc install java` (asked), retry once
+#            (Docker: the fix is in the image - one restart, then the retry)
+#   exit 21  the Java language container is missing   -> `exasol slc install java`, retry once
+#
+# A person connecting at a console is not asked before either: picking the
+# source was the permission, so the step is said and made
+# (Test-ExakitVsInteractive). A script (--json, or no console) keeps its
+# contract: --yes, else the exit code and its remedy.
 
 function Get-ExakitVsDefs {
     $root = Get-ExakitRepoRoot
@@ -589,13 +594,55 @@ function Confirm-ExakitVs {
     return ($answer -match '^(y|yes)$')
 }
 
+# Test-ExakitVsInteractive - is a person connecting at a console? Set by
+# Invoke-CmdConnect (a console, no --json) and the terminal flow
+# ($script:ExakitVsInteractive). Picking the source was their permission to
+# prepare the database for it, so a language container or a restart is said
+# and made, never asked. Anything else keeps Confirm-ExakitVs: --yes, a y at a
+# console (exakit source), and no for --json or no console - the exit code and
+# remedy. Twin of _exakit_vs_interactive.
+function Test-ExakitVsInteractive {
+    return ([bool]$script:ExakitVsInteractive -and -not $script:ExakitVsJson)
+}
+
+# Join-ExakitVsAnd - "a", "a and b", "a, b and c": the sources a step is for, in
+# the line that says it. Twin of _exakit_vs_and.
+function Join-ExakitVsAnd {
+    param([string[]]$Words = @())
+    $w = @($Words | Where-Object { $_ })
+    if ($w.Count -le 1) { return ($w -join "") }
+    return ((@($w[0..($w.Count - 2)]) -join ", ") + " and " + $w[$w.Count - 1])
+}
+
+# Get-ExakitVsLabel - a connector's name in the catalog ("PostgreSQL"), for the
+# line that says what a step is for; the id when the catalog cannot be read.
+# Twin of _exakit_vs_label.
+function Get-ExakitVsLabel {
+    param([string]$Connector)
+    try {
+        $file = Join-ExakitCorePath (Get-ExakitVsDefs) "catalog.json"
+        $entry = @((Get-Content -Raw -LiteralPath $file | ConvertFrom-Json).connectors) | Where-Object { $_.id -eq $Connector } | Select-Object -First 1
+        if ($entry -and $entry.name) { return "" + $entry.name }
+    } catch { }
+    return $Connector
+}
+
+# Get-ExakitVsFor - what $script:ExakitVsFor names, or "this source".
+function Get-ExakitVsFor {
+    if ($script:ExakitVsFor) { return "" + $script:ExakitVsFor }
+    return "this source"
+}
+
 # Install-ExakitVsJava - the Java language container, with consent: about 250
 # MiB and one restart, through the exakit command's own stop/start so add-on
-# services come back. Twin of _exakit_vs_install_java.
+# services come back. A person connecting at a console gave it by picking the
+# source: one line says what happens and why, and nothing is asked. Twin of
+# _exakit_vs_install_java.
 # Install-ExakitVsRust - the Rust language container a native adapter
-# (Profile D) runs in, with consent: the exasol-labs build pinned for this CPU
-# in profiles\rust-native, size- and SHA-256-checked, registered as the RUST
-# alias, then one restart. Twin of _exakit_vs_install_rust.
+# (Profile D) runs in, with consent (said, not asked, at a console, as Java's
+# is): the exasol-labs build pinned for this CPU in profiles\rust-native, size-
+# and SHA-256-checked, registered as the RUST alias, then one restart. Twin of
+# _exakit_vs_install_rust.
 function Install-ExakitVsRust {
     $defs = Get-ExakitVsDefs
     $custom = (Get-Content -Raw -LiteralPath (Join-ExakitCorePath $defs "profiles" "rust-native" "profile.json") | ConvertFrom-Json).slc.custom
@@ -603,11 +650,15 @@ function Install-ExakitVsRust {
     if ("$env:PROCESSOR_ARCHITECTURE" -eq "ARM64") { $arch = "aarch64" }
     $pin = $custom.arch.$arch
     if (-not $pin) { Write-Host "  There is no Rust language container build for this CPU ($arch)." -ForegroundColor Red; return $false }
-    Info "This source runs a native adapter inside the database, and its Rust language container is not installed."
-    Info ("Installing it downloads {0} {1} (about {2} MiB, checksum-pinned) and restarts the database once (add-on services restart with it)." -f $custom.upstream, $custom.version, [int]([double]$pin.size / 1048576))
-    if (-not (Confirm-ExakitVs "Install the Rust language container now?")) {
-        Info "Nothing was installed. Run the same exakit connect again when you are ready."
-        return $false
+    if (Test-ExakitVsInteractive) {
+        Info ("Installing the Rust language container for {0}: {1} {2}, about {3} MiB, checksum-pinned, and the database restarts once (add-on services restart with it)." -f (Get-ExakitVsFor), $custom.upstream, $custom.version, [int]([double]$pin.size / 1048576))
+    } else {
+        Info "This source runs a native adapter inside the database, and its Rust language container is not installed."
+        Info ("Installing it downloads {0} {1} (about {2} MiB, checksum-pinned) and restarts the database once (add-on services restart with it)." -f $custom.upstream, $custom.version, [int]([double]$pin.size / 1048576))
+        if (-not (Confirm-ExakitVs "Install the Rust language container now?")) {
+            Info "Nothing was installed. Run the same exakit connect again when you are ready."
+            return $false
+        }
     }
     $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-rust-" + [guid]::NewGuid().ToString("N"))
     $file = Join-Path $dir $pin.asset
@@ -645,11 +696,15 @@ function Install-ExakitVsRust {
 }
 
 function Install-ExakitVsJava {
-    Info "Virtual schemas run Java inside the database, and its Java language container is not installed."
-    Info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
-    if (-not (Confirm-ExakitVs "Install the Java language container now?")) {
-        Info "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
-        return $false
+    if (Test-ExakitVsInteractive) {
+        Info ("Installing the Java language container for {0}: about 250 MiB, and the database restarts once (add-on services restart with it)." -f (Get-ExakitVsFor))
+    } else {
+        Info "Virtual schemas run Java inside the database, and its Java language container is not installed."
+        Info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
+        if (-not (Confirm-ExakitVs "Install the Java language container now?")) {
+            Info "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
+            return $false
+        }
     }
     $slcArgs = @("slc", "install", "java", "--no-restart")
     $flag = Get-PersonalAutoApproveFlag "slc"
@@ -694,6 +749,28 @@ function Restart-ExakitVsDatabase {
     return ($LASTEXITCODE -eq 0)
 }
 
+# Restart-ExakitVsForDns - Docker: the DNS fix is in the language container
+# image, and the database mounts an image only when it starts - one restart.
+# Said and made for a person connecting at a console; otherwise asked
+# (Confirm-ExakitVs: --yes makes it, --json and no console do not). $true when
+# the database came back. Twin of _exakit_vs_dns_restart.
+function Restart-ExakitVsForDns {
+    if (Test-ExakitVsInteractive) {
+        Info ("Restarting the database once, so Java in it can resolve host names for {0} (add-on services restart with it)." -f (Get-ExakitVsFor))
+    } else {
+        Info "The database sees it from its next start: one restart (add-on services restart with it)."
+        if (-not (Confirm-ExakitVs "Restart the database now?")) {
+            Write-Host "  Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again." -ForegroundColor Red
+            return $false
+        }
+    }
+    if (-not (Restart-ExakitVsDatabase)) {
+        Write-Host "  The database did not come back. Run: exakit start" -ForegroundColor Red
+        return $false
+    }
+    return $true
+}
+
 # Repair-ExakitVsForRetry - what the bridge does about exit 20 (DNS repaired),
 # 21 (Java installed) or 23 (Rust installed) before its one retry; $false when
 # it could not, or was not allowed to. Twin of _exakit_vs_repair.
@@ -702,20 +779,7 @@ function Repair-ExakitVsForRetry {
     if ($Code -eq 20) {
         Info "Giving the database's language containers the deployment's DNS, then trying again"
         if (Repair-PersonalSlcDns) { return $true }
-        if ($script:PersonalSlcDnsNeedsStart) {
-            # Docker: the fix is in the language container image, and the
-            # database mounts an image only when it starts.
-            Info "The database sees it from its next start: one restart (add-on services restart with it)."
-            if (-not (Confirm-ExakitVs "Restart the database now?")) {
-                Write-Host "  Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again." -ForegroundColor Red
-                return $false
-            }
-            if (-not (Restart-ExakitVsDatabase)) {
-                Write-Host "  The database did not come back. Run: exakit start" -ForegroundColor Red
-                return $false
-            }
-            return $true
-        }
+        if ($script:PersonalSlcDnsNeedsStart) { return [bool](Restart-ExakitVsForDns) }
         Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red
         return $false
     }
@@ -907,28 +971,49 @@ function Get-ExakitVsTuiRows {
     return [int][Math]::Floor(($Chars - 1) / $script:EvtCols) + 1
 }
 
-# Invoke-ExakitVsPick - the connector menu. Returns the chosen connector ids;
+# Get-ExakitVsCatalog - the connector catalog (engine catalog), and with it this
+# computer's public IP: its line is said first when it is known (a source on
+# the internet must allow it), and nothing when the lookup is off
+# (EXAKIT_NO_IP_LOOKUP=1) or failed - publicip.py's own rules and timeout. The
+# answer is kept for the rest of this command ($env:_EXAKIT_VS_PUBLIC_IP), so
+# each source's plan says it again without asking again. Returns the catalog,
+# or $null. Twin of _exakit_vs_catalog.
+function Get-ExakitVsCatalog {
+    $run = Invoke-ExakitVsEngine -Arguments @("catalog", "--public-ip")
+    $catalog = Show-ExakitVsLines -Lines $run.Lines
+    if ($null -ne $catalog) {
+        $ip = "none"
+        if ($catalog.PSObject.Properties["public_ip"] -and $catalog.public_ip) { $ip = "" + $catalog.public_ip }
+        $env:_EXAKIT_VS_PUBLIC_IP = $ip
+    }
+    return $catalog
+}
+
+# Invoke-ExakitVsPick - the connector menu, under the line that names this
+# computer's public IP (Get-ExakitVsCatalog). Returns the chosen connector ids;
 # none when nothing was chosen. Twin of _exakit_vs_pick.
 function Invoke-ExakitVsPick {
-    $catalog = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("catalog")).Lines
+    $catalog = Get-ExakitVsCatalog
     if ($null -eq $catalog) { Write-Host ("  {0} The connector catalog could not be read. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red; return @() }
-    # Source, the adapter version it pins, and GA or Beta: GA first, then Beta.
-    # Twin of _exakit_vs_pick.
-    $entries = @(@($catalog.connectors) | Where-Object { $_.tier -eq "GA" }) + @(@($catalog.connectors) | Where-Object { $_.tier -ne "GA" })
-    $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source" -Col2 "Version" -Col3 "Release"
+    # Each source by its name and nothing more, in the catalog's order: the
+    # adapter version and tier are `exakit source catalog`'s. Twin of _exakit_vs_pick.
+    $entries = @($catalog.connectors)
+    $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source"
+    # The Source column alone: nothing runs in this menu's rows, so it has no
+    # Status column either.
+    $t.StatMin = 0
     $ids = @()
     for ($i = 0; $i -lt $entries.Count; $i++) {
         $e = $entries[$i]
         $tree = "tee"
         if ($i -eq $entries.Count - 1) { $tree = "corner" }
-        $kind = "" + $e.version
-        $text = "" + $e.tier
         $label = "" + $e.name
         if ("" + $e.status -eq "gated") {
-            $row = Add-ExakitTableRow -Kind $tree -Label $label -Col2 $kind -Col3 ($text + ", not available yet") -Table $t
-            Disable-ExakitTableRow -Row $row -Note "not available yet" -Table $t
+            # Its reason read on from its name: there is no Status column to say it in.
+            $row = Add-ExakitTableRow -Kind $tree -Label ($label + " - not available yet") -Table $t
+            Disable-ExakitTableRow -Row $row -Table $t
         } else {
-            [void](Add-ExakitTableRow -Kind $tree -Label $label -Col2 $kind -Col3 $text -Table $t)
+            [void](Add-ExakitTableRow -Kind $tree -Label $label -Table $t)
         }
         $ids += ("" + $e.id)
     }
@@ -943,10 +1028,11 @@ function Invoke-ExakitVsPick {
 }
 
 # Show-ExakitVsTuiPanel - one source's panel over what the form drew last
-# ($script:EvtOnScreen lines), in one write. A field still to answer is dim, with
-# (required) or (optional) and its default; an answered one is ticked - or, with
-# -Numbered (the summary), numbered - and says so when a pasted connection string
-# gave it. The engine's notes on that string ($Form.Notes) stay under the panel.
+# ($script:EvtOnScreen lines), in one write. A required field's label ends in a
+# red * (a plain * without colour), which the legend under the fields explains;
+# a field still to answer is dim, with its default; an answered one is ticked -
+# or, with -Numbered (the summary), numbered - and says so when a pasted
+# connection string gave it. The engine's notes on that string ($Form.Notes) stay under the panel.
 # Twin of _exakit_vs_tui_draw and _exakit_vs_tui_frame.
 function Show-ExakitVsTuiPanel {
     param([hashtable]$Form, [int]$Current, [switch]$Numbered)
@@ -959,15 +1045,20 @@ function Show-ExakitVsTuiPanel {
     $lines = 1
     # What a row's value may take: the panel's inside less the mark and label.
     $room = $in - 7 - $Form.LW
+    $anyReq = $false
     for ($i = 0; $i -lt $Form.Fields.Count; $i++) {
         $f = $Form.Fields[$i]
-        $lab = $f.Label.PadRight($Form.LW)
+        $lab = $f.Label
+        # The label column holds " *" after a required one ($Form.LW counts it).
+        $star = ""; $starW = 0
+        if ($f.Req) { $star = " " + $script:UiErr + "*" + $script:UiReset; $starW = 2; $anyReq = $true }
+        $star += (" " * [Math]::Max(0, $Form.LW - $lab.Length - $starW))
         $lead = ""
         if ($i -eq $Current) {
-            $mark = $script:UiAccent + $script:UiArrow + $script:UiReset; $shown = $script:UiBold + $lab + $script:UiReset
+            $mark = $script:UiAccent + $script:UiArrow + $script:UiReset; $shown = $script:UiBold + $lab + $script:UiReset + $star
             $plain = ""; $val = ""
         } elseif ($f.Done) {
-            $mark = $script:UiOk + $script:UiTick + $script:UiReset; $shown = $lab
+            $mark = $script:UiOk + $script:UiTick + $script:UiReset; $shown = $lab + $star
             # The summary's number takes the tick's place, in as many columns.
             if ($Numbered) { $lead = " " + $script:UiAccent + ("{0,2}" -f ($i + 1)) + $script:UiReset + "  " }
             $v = "" + $f.Val
@@ -983,25 +1074,29 @@ function Show-ExakitVsTuiPanel {
             $val = $plain
             if ($from) { $val = $val + $script:UiDim + $from + $script:UiReset; $plain = $plain + $from }
         } else {
-            $mark = " "; $shown = $script:UiDim + $lab + $script:UiReset
-            $req = "(optional)"
-            if ($f.Req) { $req = "(required)" }
+            $mark = " "; $shown = $script:UiDim + $lab + $script:UiReset + $star
             $v = "" + $f.Val
             if (-not $v) { $v = "" + $f.Def }
             if ($f.Kind -in @("secret", "secret-file")) { $v = "" }
-            $plain = $req
-            if ($v) { $plain = $req + " [" + $v + "]" }
+            $plain = ""
+            if ($v) { $plain = "[" + $v + "]" }
             if ($plain.Length -gt $room) {
-                # Too narrow: the mark goes first, then the default is cut, then
-                # it goes too (the question says both again).
+                # Too narrow: the default is cut, then it goes too (the question
+                # says it again).
                 $plain = ""
-                if ($v -and $room -ge 6) { $plain = "[" + (Format-ExakitVsTuiFit $v ($room - 2)) + "]" }
+                if ($room -ge 6) { $plain = "[" + (Format-ExakitVsTuiFit $v ($room - 2)) + "]" }
             }
             $val = $script:UiDim + $plain + $script:UiReset
         }
         if (-not $lead) { $lead = "  " + $mark + "  " }
         $pad = [Math]::Max(0, $in - 7 - $Form.LW - $plain.Length)
         [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $lead + $shown + "  " + $val + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
+        $lines++
+    }
+    # The legend, one dim line under the fields: what the star means.
+    if ($anyReq) {
+        $pad = [Math]::Max(0, $in - 15)
+        [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + "     " + $script:UiErr + "*" + $script:UiReset + $script:UiDim + " required" + $script:UiReset + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
         $lines++
     }
     [void]$sb.Append("  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $in) + $script:UiBR + $script:UiReset + "`r`n")
@@ -1117,23 +1212,30 @@ function Format-ExakitVsPasteTyped {
 }
 
 # Read-ExakitVsLineAnswer - one line-by-line answer. With -Marks (someone is
-# answering: not --yes, --dry-run or --json) the question says (required) or
-# (optional), dim, and an empty answer to a required one is refused ("<label> is
-# required") and asked again; without, it is Read-ExakitPrompt as it always was.
-# Twin of _exakit_vs_prompt.
+# answering: not --yes, --dry-run or --json) a required question ends in a red *
+# (a plain * without colour; Write-ExakitVsLegend says what it means), and an
+# empty answer to it is refused ("<label> is required") and asked again; an
+# optional one shows only its default. Without marks, it is Read-ExakitPrompt as
+# it always was. Twin of _exakit_vs_prompt.
 function Read-ExakitVsLineAnswer {
     param([string]$Question, [string]$Default = "", [bool]$Required = $false, [bool]$Marks = $false, [string]$Label = "")
     if (-not $Marks) { return (Read-ExakitPrompt $Question $Default) }
-    $mark = "(optional)"
-    if ($Required) { $mark = "(required)" }
+    $mark = ""
+    if ($Required) { $mark = " " + $script:UiErr + "*" + $script:UiReset }
     if (-not $Label) { $Label = $Question }
     while ($true) {
         if (-not (Test-ExakitInteractive)) { return $Default }
-        $v = "" + (Read-ExakitPrompt ("{0} {1}{2}{3}" -f $Question, $script:UiDim, $mark, $script:UiReset) $Default)
+        $v = "" + (Read-ExakitPrompt ($Question + $mark) $Default)
         if ($v -or -not $Required) { return $v }
         Write-Host ("  {0} {1} is required" -f $script:UiCross, $Label) -ForegroundColor Red
         Write-ExakitLog "ERROR" "$Label is required"
     }
+}
+
+# Write-ExakitVsLegend - the line above the marked questions that says what their
+# star means, as the panel's legend does. Twin of _exakit_vs_legend.
+function Write-ExakitVsLegend {
+    Write-Host ("    {0}*{1} {2}required{1}" -f $script:UiErr, $script:UiReset, $script:UiDim)
 }
 
 # Read-ExakitVsLinePaste - the line-by-line twin of the form's first question: a
@@ -1165,8 +1267,8 @@ function Read-ExakitVsLinePaste {
 }
 
 # Read-ExakitVsTuiField - field $Index asked under the panel (with why it is
-# asked again, when there is a reason): its label, (required) or (optional), its
-# notes and its default. Enter takes the default; an optional one with none is
+# asked again, when there is a reason): its label, a red * when it is required,
+# its notes and its default. Enter takes the default; an optional one with none is
 # left empty, a required one is refused in one line and asked again. The engine
 # checks a typed answer (cli.py field, base64 on its stdin); a credential is
 # hidden, and asked again keeps the one given on Enter. $false at end of input.
@@ -1180,20 +1282,23 @@ function Read-ExakitVsTuiField {
     $def = $old
     if (-not $def) { $def = "" + $f.Def }
     $keep = $false
-    $note = "(optional)"
-    if ($f.Req) { $note = "(required)" }
-    if ($f.Kind -eq "choice") { $note += " (" + ($f.Choices -join (" " + $script:UiMidDot + " ")) + ")" }
+    $notes = @()
+    if ($f.Kind -eq "choice") { $notes += "(" + ($f.Choices -join (" " + $script:UiMidDot + " ")) + ")" }
     elseif ($f.Kind -eq "secret") {
         $def = ""
         # Given already - typed, or read from --password-file: Enter keeps it.
-        if ($old -or ($f.Done -and $Form.PwFile)) { $keep = $true; $note += " (hidden, Enter keeps the one given)" } else { $note += " (hidden)" }
+        if ($old -or ($f.Done -and $Form.PwFile)) { $keep = $true; $notes += "(hidden, Enter keeps the one given)" } else { $notes += "(hidden)" }
     }
-    elseif ($f.Kind -eq "secret-file") { $note += " (the path to the file)" }
+    elseif ($f.Kind -eq "secret-file") { $notes += "(the path to the file)" }
     # An optional answer that differs from its default can be taken back.
-    if (-not $f.Req -and $old -and $old -ne ("" + $f.Def) -and $f.Kind -notin @("secret", "secret-file")) { $note += " (- clears it)" }
-    if ($def) { $note += " [" + (Format-ExakitVsTuiTail $def 32) + "]" }
-    $plain = $f.Label + " " + $note
-    $colour = $script:UiAsk + $f.Label + $script:UiReset + " " + $script:UiDim + $note + $script:UiReset
+    if (-not $f.Req -and $old -and $old -ne ("" + $f.Def) -and $f.Kind -notin @("secret", "secret-file")) { $notes += "(- clears it)" }
+    if ($def) { $notes += "[" + (Format-ExakitVsTuiTail $def 32) + "]" }
+    $note = $notes -join " "
+    # A required one: the label's red * (a plain * without colour), as in the panel.
+    $plain = $f.Label
+    $colour = $script:UiAsk + $f.Label + $script:UiReset
+    if ($f.Req) { $plain += " *"; $colour += " " + $script:UiErr + "*" + $script:UiReset }
+    if ($note) { $plain += " " + $note; $colour += " " + $script:UiDim + $note + $script:UiReset }
     while ($true) {
         if ($f.Kind -eq "secret") {
             $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
@@ -1391,11 +1496,18 @@ function Invoke-ExakitVsTuiForm {
             if ($f.Kind -eq "secret") { $f.Done = $true }
             if ($f.Kind -eq "secret-file") { $f.Val = $PasswordFile; $f.Done = $true }
         }
-        if ($label.Length -gt $lw) { $lw = $label.Length }
+        # The label column holds a required one's " *" too (Show-ExakitVsTuiPanel).
+        $w = $label.Length
+        if ($f.Req) { $w += 2 }
+        if ($w -gt $lw) { $lw = $w }
         [void]$fields.Add($f)
     }
-    if ($lw -gt 30) { $lw = 30 }
-    foreach ($f in $fields) { $f.Label = Format-ExakitVsTuiShort $f.Label $lw }
+    if ($lw -gt 32) { $lw = 32 }
+    foreach ($f in $fields) {
+        $w = $lw
+        if ($f.Req) { $w = $lw - 2 }
+        $f.Label = Format-ExakitVsTuiShort $f.Label $w
+    }
     $form = @{ Title = ("{0} of {1} {2} {3}" -f $Pos, $Total, $script:UiMidDot, $doc.name); Fields = $fields; LW = $lw
                Connector = $Connector; Taken = @($Taken); Notes = @(); PwFile = $PasswordFile; Refused = $false }
     $pwFile = $PasswordFile
@@ -1475,8 +1587,9 @@ function New-ExakitVsTuiTable {
 }
 
 # Invoke-ExakitVsTuiRun - connect those sources one after another while the
-# table animates; each source's Outcome is set (ok, failed, java, rust). Twin of
-# _exakit_vs_tui_run and _exakit_vs_tui_live together.
+# table animates; each source's Outcome is set (ok, failed, java, rust, or dns:
+# the restart Docker's DNS repair needs). Twin of _exakit_vs_tui_run and
+# _exakit_vs_tui_live together.
 function Invoke-ExakitVsTuiRun {
     param([hashtable]$Table, [object[]]$Sources, [int]$OnScreen = 0)
     $Table.Lines = $OnScreen
@@ -1499,6 +1612,7 @@ function Invoke-ExakitVsTuiRun {
         }
         $engineArgs = @("--json", "connect") + $s.Base
         if ($secret) { $engineArgs += "--secret-stdin" }
+        $restart = $false
         for ($try = 1; $try -le 2; $try++) {
             if ($unread) {
                 # Its row says so, as the engine says a file the shell hands it raw.
@@ -1512,6 +1626,9 @@ function Invoke-ExakitVsTuiRun {
                 $repaired = $false
                 try { $repaired = [bool](Repair-PersonalSlcDns 6> $null) } catch { }
                 if ($repaired) { continue }
+                # Docker: seen from the database's next start - that restart is
+                # made below the table, as a language container is.
+                if ($script:PersonalSlcDnsNeedsStart) { $restart = $true }
             }
             break
         }
@@ -1530,6 +1647,7 @@ function Invoke-ExakitVsTuiRun {
             $why = ""
             if ($run.Code -eq 21) { $why = "needs Java in the database"; $s.Outcome = "java" }
             elseif ($run.Code -eq 23) { $why = "needs Rust in the database"; $s.Outcome = "rust" }
+            elseif ($run.Code -eq 20 -and $restart) { $why = "needs a database restart"; $s.Outcome = "dns" }
             else {
                 $s.Outcome = "failed"; $s.Code = $run.Code
                 if ($null -ne $doc -and $short.ContainsKey("" + $doc.kind)) { $why = $short["" + $doc.kind] }
@@ -1552,6 +1670,8 @@ function Invoke-ExakitVsTuiRun {
 # Twin of _exakit_vs_tui.
 function Invoke-ExakitVsTui {
     param([string]$Source = "", [string]$Name = "", [string]$PasswordFile = "", [string[]]$Sets = @())
+    # A person at a console: what the picked sources need is said, not asked.
+    $script:ExakitVsInteractive = $true
     $script:EvtCols = 80
     try { $script:EvtCols = [Console]::WindowWidth } catch { }
     $w = [Math]::Min($script:EvtCols - 2, 96)
@@ -1609,15 +1729,25 @@ function Invoke-ExakitVsTui {
     if (-not (Confirm-ExakitVsTui $question)) { Info "Nothing was changed."; return 5 }
     # 4. connect: the review table comes alive in place, over itself and the question
     Invoke-ExakitVsTuiRun -Table $t -Sources $sources -OnScreen ($lines + $script:EvtOnScreen)
-    # A language container is a download and a restart: asked once, below the
-    # table, then those sources run again in a table of their own.
-    foreach ($lang in @("java", "rust")) {
+    # A language container (a download and a restart), or the restart Docker's
+    # DNS repair needs: said once, below the table - picking the sources was the
+    # permission, so nothing is asked - then those sources run again in a table
+    # of their own. A restart made for a language container is the one the DNS
+    # repair needed too.
+    $restarted = $false
+    foreach ($lang in @("java", "rust", "dns")) {
         $wait = @($sources | Where-Object { $_.Outcome -eq $lang })
         if ($wait.Count -eq 0) { continue }
+        # The sources it is for, by the connector's name, each once.
+        $script:ExakitVsFor = Join-ExakitVsAnd @($wait | ForEach-Object { "" + $_.Label } | Select-Object -Unique)
         [Console]::Write("`r`n")
         $installed = $false
-        if ($lang -eq "java") { $installed = Install-ExakitVsJava } else { $installed = Install-ExakitVsRust }
+        if ($lang -eq "java") { $installed = Install-ExakitVsJava }
+        elseif ($lang -eq "rust") { $installed = Install-ExakitVsRust }
+        elseif ($restarted) { $installed = $true }
+        else { $installed = Restart-ExakitVsForDns }
         if (-not $installed) { foreach ($s in $wait) { $s.Outcome = "failed"; $s.Code = 1 }; continue }
+        if ($lang -ne "dns") { $restarted = $true }
         [Console]::Write("`r`n")
         $again = New-ExakitVsTuiTable -Title "Connect again" -Sources $wait
         Invoke-ExakitVsTuiRun -Table $again -Sources $wait -OnScreen 0

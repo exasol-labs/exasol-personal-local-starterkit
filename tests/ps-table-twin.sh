@@ -181,6 +181,10 @@ lacks "...nor a reserve"                   'UI_TABLE_RESERVE' "$UI_SH"
 # the first row started.
 has "the status floor is conditional"   'if ($Table.Col2 -or $Table.Col3) {' "$UI_PS1"
 has "the status column has a floor"     '$statW = 44'                        "$UI_PS1"
+# A pick-only menu (the connect menu) has no Status column at all: the table's
+# StatMin, twin of UI_TABLE_STAT_MIN.
+has "...which a pick-only menu can drop"  'if ($Table.ContainsKey("StatMin") -and $null -ne $Table.StatMin) { $statW = [int]$Table.StatMin }' "$UI_PS1"
+has "...as the shell's UI_TABLE_STAT_MIN" 'UI_TABLE_STAT_W="${UI_TABLE_STAT_MIN:-44}"' "$UI_SH"
 has "...and the shell gates it the same way" 'if [ -n "${UI_TABLE_COL2:-}" ] || [ -n "${UI_TABLE_COL3:-}" ]; then' "$UI_SH"
 
 # Two optional columns, last in the row format so every row written in the old

@@ -901,13 +901,18 @@ function Get-ExakitTableWidths {
     # beside a description squeezed to fit around it. A name-and-status menu has
     # nothing else holding the width, so it keeps its floor: withhold Status
     # there and the box shrinks to barely wider than the longest name, then
-    # doubles the moment the first row starts.
-    # Twin of the same block in ui_table_widths (ui.sh).
+    # doubles the moment the first row starts. A table whose StatMin is 0 is a
+    # pick-only menu that never runs anything in its rows (the connect menu): no
+    # Status column at all.
+    # Twin of the same block in ui_table_widths (ui.sh), and StatMin of its
+    # UI_TABLE_STAT_MIN.
     $statW = 44
+    if ($Table.ContainsKey("StatMin") -and $null -ne $Table.StatMin) { $statW = [int]$Table.StatMin }
+    $statMin = $statW
     if ($Table.Col2 -or $Table.Col3) {
         $statW = 0
         foreach ($r in $Table.Rows.ToArray()) {
-            if ($r.State -and $r.State -ne "idle" -and $r.State -ne "disabled") { $statW = 44; break }
+            if ($r.State -and $r.State -ne "idle" -and $r.State -ne "disabled") { $statW = $statMin; break }
         }
     }
     # Zero unless a heading names the column, so a table that asks for neither

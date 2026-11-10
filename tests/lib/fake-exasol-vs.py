@@ -53,6 +53,9 @@ database and inspect it afterwards:
                 (schema inference), and a failure there is wrapped in E-VSD-102
     connections {NAME: {"url", "user", "secret"}}    what the engine created
     schemas, scripts, virtual {VS: {"connection", "tables"}}
+                a CREATE ... SCRIPT into a schema not in schemas fails as
+                Exasol answers it (SQL state 42000, "schema <X> not found"):
+                the engine makes EXAKIT_VS itself, nothing makes it for it
     statements  every statement, secrets included, so a test can prove where
                 they went (into CONNECTION DDL) and where they did not
     stage_lag   how many staged-files probes see nothing before the files
@@ -98,6 +101,13 @@ def _load():
 def _save(doc):
     with open(os.environ["FAKE_VS_STATE"], "w") as handle:
         json.dump(doc, handle, indent=1)
+
+
+def _query_error(message, sql):
+    # pyexasol's ExaQueryError as the engine reads it: the database's message,
+    # then the session's fields, the statement last (code is the SQL state).
+    return Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
+                     "    code        =>  42000\n    query       =>  %s\n)" % (message, sql))
 
 
 def _host(url):
@@ -552,6 +562,10 @@ class Fake(object):
             return
         m = re.match(r"CREATE OR REPLACE (JAVA|RUST|LUA) (SCALAR|ADAPTER|SET) SCRIPT (?:\"?)([\w]+)(?:\"?)\.(?:\"?)([\w]+)", sql)
         if m:
+            if m.group(3) not in doc["schemas"]:
+                # Exasol resolves the name first: a script needs its schema to exist.
+                column = m.start(3) + (0 if sql[m.start(3) - 1] == '"' else 1)
+                raise _query_error("schema %s not found [line 1, column %d]" % (m.group(3), column), sql)
             if not doc[m.group(1).lower()]:
                 raise Exception("No usable script language container is installed for the requested language.")
             if m.group(1) == "JAVA" and doc["java"] == "builtin":
@@ -565,8 +579,7 @@ class Fake(object):
         m = re.match(r"CREATE (OR REPLACE )?CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'(?: USER '((?:[^']|'')*)' IDENTIFIED BY '((?:[^']|'')*)')?$", sql)
         if m:
             if doc.get("connection_fail"):
-                raise Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
-                                "    code        =>  42000\n    query       =>  %s\n)" % (doc["connection_fail"], sql))
+                raise _query_error(doc["connection_fail"], sql)
             if not m.group(1) and m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
             if m.group(2) in doc.get("create_fail", []):
