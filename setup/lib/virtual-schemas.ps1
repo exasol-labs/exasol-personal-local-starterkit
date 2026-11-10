@@ -972,15 +972,38 @@ function Get-ExakitVsTuiRows {
 }
 
 # Get-ExakitVsCatalog - the connector catalog (engine catalog), and with it this
-# computer's public IP: its line is said first when it is known (a source on
-# the internet must allow it), and nothing when the lookup is off
+# computer's public IP: its tip is said first when it is known (cloud sources
+# see this address; the address in green), and nothing when the lookup is off
 # (EXAKIT_NO_IP_LOOKUP=1) or failed - publicip.py's own rules and timeout. The
 # answer is kept for the rest of this command ($env:_EXAKIT_VS_PUBLIC_IP), so
 # each source's plan says it again without asking again. Returns the catalog,
 # or $null. Twin of _exakit_vs_catalog.
 function Get-ExakitVsCatalog {
     $run = Invoke-ExakitVsEngine -Arguments @("catalog", "--public-ip")
-    $catalog = Show-ExakitVsLines -Lines $run.Lines
+    # The engine's tip names the IP; on screen the address is green (the log
+    # keeps the plain words). Every other line renders as it always has.
+    $known = ""
+    foreach ($line in @($run.Lines)) {
+        if ("$line" -like "RESULT *") {
+            try { $r = ("$line").Substring(7) | ConvertFrom-Json; if ($r.PSObject.Properties["public_ip"] -and $r.public_ip) { $known = "" + $r.public_ip } } catch { }
+        }
+    }
+    $rest = @()
+    foreach ($line in @($run.Lines)) {
+        if ($known -and ("$line" -like "INFO *") -and ("$line".Contains($known))) {
+            $text = ("$line").Substring(5)
+            $at = $text.IndexOf($known)
+            if (-not $script:UiAccent) { Info $text }
+            else {
+                if (-not $script:ExakitQuietDetail) {
+                    $shown = $text.Substring(0, $at) + $script:UiAccent + $known + $script:UiReset + $text.Substring($at + $known.Length)
+                    Write-Host ("    {0}{1}{2} {3}" -f $script:UiDim, $script:UiBullet, $script:UiReset, $shown)
+                }
+                Write-ExakitLog "INFO" $text
+            }
+        } else { $rest += $line }
+    }
+    $catalog = Show-ExakitVsLines -Lines $rest
     if ($null -ne $catalog) {
         $ip = "none"
         if ($catalog.PSObject.Properties["public_ip"] -and $catalog.public_ip) { $ip = "" + $catalog.public_ip }

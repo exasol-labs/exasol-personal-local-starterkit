@@ -797,17 +797,39 @@ _exakit_vs_tui_tail() {
 }
 
 # _exakit_vs_catalog <out-file> — the connector catalog (engine catalog), and with
-# it this computer's public IP: its line is said first when it is known (a
-# source on the internet must allow it), and nothing when the lookup is off
+# it this computer's public IP: its tip is said first when it is known (cloud
+# sources see this address; the address in green), and nothing when the lookup is off
 # (EXAKIT_NO_IP_LOOKUP=1) or failed - publicip.py's own rules and timeout. The
 # answer is kept for the rest of this command (_EXAKIT_VS_PUBLIC_IP), so each
 # source's plan says it again without asking again. The catalog's RESULT is in
 # EXAKIT_VS_RESULT. ⇄ twin: Get-ExakitVsCatalog.
 _exakit_vs_catalog() {
     exakit_vs_engine catalog --public-ip < /dev/null > "$1" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-    _exakit_vs_render "$1"
-    _evk_ip="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+    _evk_ip="$(sed -n 's/^RESULT //p' "$1" | run_python_any -c 'import json, sys
 print(json.load(sys.stdin).get("public_ip") or "none")' 2>/dev/null)"
+    # The engine's tip names the IP; on screen the address is green (the log
+    # keeps the plain words). Every other line renders as it always has.
+    case "$_evk_ip" in
+        ""|none) _exakit_vs_render "$1" ;;
+        *)
+            while IFS= read -r _evk_line || [ -n "$_evk_line" ]; do
+                case "$_evk_line" in
+                    "INFO "*"$_evk_ip"*)
+                        _evk_text="${_evk_line#INFO }"
+                        if [ -z "${UI_ACCENT:-}" ]; then
+                            info "$_evk_text"
+                        else
+                            [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+                                printf '    %s%s%s %s%s%s%s%s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" \
+                                    "${_evk_text%%"$_evk_ip"*}" "$UI_ACCENT" "$_evk_ip" "${UI_RESET:-}" "${_evk_text#*"$_evk_ip"}"
+                            _exakit_log_file "INFO  $_evk_text"
+                        fi ;;
+                    *) printf '%s\n' "$_evk_line" >> "$1.rest" ;;
+                esac
+            done < "$1"
+            _exakit_vs_render "$1.rest" 2>/dev/null || EXAKIT_VS_RESULT=""
+            rm -f "$1.rest" ;;
+    esac
     [ -n "$_evk_ip" ] && { _EXAKIT_VS_PUBLIC_IP="$_evk_ip"; export _EXAKIT_VS_PUBLIC_IP; }
     return 0
 }
