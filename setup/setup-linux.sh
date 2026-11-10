@@ -75,7 +75,14 @@ _kit_version="$(exakit_kit_version_at "$KIT_ROOT" 2>/dev/null || true)"
 exakit_resolve_install_versions
 # A persona (EXAKIT_PERSONA) answers every question the user did not answer
 # explicitly; an unknown one stops here, before anything is installed.
-command -v exakit_persona_apply_env >/dev/null 2>&1 && exakit_persona_apply_env
+# Not in an installer an update started to finish new setup: the first
+# install's answers stand, and nothing is recorded, offered, installed or
+# started on a persona's strength - not even one named in exakit.env.
+if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
+    unset EXAKIT_PERSONA_ACTIVE
+elif command -v exakit_persona_apply_env >/dev/null 2>&1; then
+    exakit_persona_apply_env
+fi
 
 # --- step 0: an installation this kit cannot manage -------------------------
 # An older kit could put the database in a container. This asks what to do with
@@ -182,7 +189,9 @@ exakit_finish
 # what was asked for, so they are offered first, and the connection panel and
 # the ready line are what the reader is left with. Without a persona the
 # marketplace stays the optional extra it always was, after the panel.
-if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+# Never in an update-started rerun, which asks and installs nothing new.
+if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && \
+   ! { command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; }; then
     # exakit_finish released the install lock, and the personas' add-ons install
     # after it - minutes, for a UDF container. Held again through them: without
     # it a second setup run started meanwhile ran beside this one, and the one

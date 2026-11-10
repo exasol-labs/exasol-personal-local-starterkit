@@ -51,7 +51,14 @@ $script:ExakitRecordFailureNotes = $true
 Resolve-ExakitInstallVersions
 # A persona (EXAKIT_PERSONA) answers every question the user did not answer
 # explicitly; an unknown one stops here, before anything is installed.
-if (Get-Command Set-ExakitPersonaEnv -ErrorAction SilentlyContinue) { Set-ExakitPersonaEnv }
+# Not in an installer an update started to finish new setup: the first
+# install's answers stand, and nothing is recorded, offered, installed or
+# started on a persona's strength. Twin of setup-macos.sh / setup-linux.sh.
+if ((Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)) {
+    Remove-Item Env:\EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
+} elseif (Get-Command Set-ExakitPersonaEnv -ErrorAction SilentlyContinue) {
+    Set-ExakitPersonaEnv
+}
 
 if ($env:EXAKIT_BANNER_SHOWN -ne "1") { Write-ExakitBanner "Personal Local Starter Kit" }
 
@@ -526,7 +533,8 @@ try {
     # and the ready line are what the reader is left with. Without a persona the
     # marketplace stays the optional extra it always was, after the panel. Twin
     # of setup-macos.sh / setup-linux.sh.
-    if ($env:EXAKIT_PERSONA_ACTIVE) {
+    # Never in an update-started rerun, which asks and installs nothing new.
+    if ($env:EXAKIT_PERSONA_ACTIVE -and -not $coreRerun) {
         Invoke-ExakitClosingOffer
         Invoke-ExakitMarketplaceCli -Script installer_flow -AllowFailure -CmdArgs @('--phase', 'services', '--cli',
             (Join-Path $PSScriptRoot 'exakit.ps1'), '--host', (Get-Process -Id $PID).Path)

@@ -382,7 +382,15 @@ printf '\n== the installer: seven steps, the database step fourth ==\n'
 for _s in setup/setup-macos.sh setup/setup-linux.sh; do
     check "$_s delegates steps 3-7" "1" "$(grep -c 'kit_shared_steps 3 7 ' "$ROOT/$_s")"
     check "$_s loads core-setup.sh" "1" "$(grep -c 'LIB_DIR/core-setup.sh' "$ROOT/$_s" | awk '{print ($1 > 0)}')"
-    has "$_s keeps the marketplace offer out of an update rerun" "exakit_core_rerun_active" "$(grep -B3 'exakit_marketplace_offer )' "$ROOT/$_s")"
+    # EVERY offer, not the first one grep finds: the persona close and the
+    # plain close each make one.
+    _offers="$(grep -c 'exakit_marketplace_offer )' "$ROOT/$_s")"
+    _guarded=0
+    for _ln in $(grep -n 'exakit_marketplace_offer )' "$ROOT/$_s" | cut -d: -f1); do
+        _from=$((_ln - 12)); [ "$_from" -ge 1 ] || _from=1
+        sed -n "${_from},${_ln}p" "$ROOT/$_s" | grep -q 'exakit_core_rerun_active' && _guarded=$((_guarded + 1))
+    done
+    check "$_s keeps every marketplace offer out of an update rerun" "$_offers" "$_guarded"
     lacks "$_s has no step counted out of six" "/6  " "$(cat "$ROOT/$_s")"
 done
 _win="$(cat "$ROOT/setup/setup-windows.ps1")"
@@ -453,6 +461,36 @@ for _s in setup/setup-macos.sh setup/setup-linux.sh; do
 done
 has "Windows keeps the persona question out of an update rerun" 'if ($coreRerun) {' \
     "$(grep -B3 'Invoke-ExakitPersonaFlow -KitRoot' "$ROOT/setup/setup-windows.ps1")"
+
+# THE PERSONA'S ANSWERS ARE NOT APPLIED IN A RERUN EITHER. EXAKIT_PERSONA in
+# exakit.env (or the environment) reached an update-started rerun: the persona
+# was recorded again, its add-ons went through the scripted offer without a
+# question, its services were started, and a persona switched off since made
+# every update die. The two blocks are lifted out of each script and run with
+# every call they make stood in for, a rerun and a first install side by side.
+_persona_probe() { # _persona_probe <script> <rerun 0|1> -> what ran, and ACTIVE
+    _pp_apply="$(awk '/^if command -v exakit_core_rerun_active .* exakit_core_rerun_active; then$/{p=1} p{print} p&&/^fi$/{exit}' "$ROOT/$1")"
+    _pp_close="$(awk '/^if \[ -n "\$\{EXAKIT_PERSONA_ACTIVE:-\}" \] && \\$/{p=1} p{print} p&&/^fi$/{exit}' "$ROOT/$1")"
+    ( exakit_core_rerun_active() { [ "$PP_RERUN" = 1 ]; }
+      exakit_persona_apply_env() { printf 'apply|'; EXAKIT_PERSONA_ACTIVE=1; }
+      exakit_acquire_lock() { :; }; exakit_release_lock() { :; }
+      exakit_autostart_default_on() { printf 'autostart|'; }
+      exakit_marketplace_offer() { printf 'offer|'; }
+      _exakit_marketplace_cli() { printf 'services|'; }
+      exakit_persona_marketplace_note() { :; }
+      PP_RERUN="$2"; EXAKIT_PERSONA_ACTIVE=1
+      eval "$_pp_apply"; eval "$_pp_close"
+      printf 'ACTIVE=%s' "${EXAKIT_PERSONA_ACTIVE:-}" )
+}
+for _s in setup/setup-macos.sh setup/setup-linux.sh; do
+    check "$_s: a rerun applies no persona, offers and starts nothing" "ACTIVE=" "$(_persona_probe "$_s" 1)"
+    check "$_s: a first install applies the persona, then offers and starts its add-ons" \
+        "apply|autostart|offer|services|ACTIVE=1" "$(_persona_probe "$_s" 0)"
+done
+has "Windows applies no persona in a rerun" 'Remove-Item Env:\EXAKIT_PERSONA_ACTIVE' \
+    "$(grep -B4 -A2 'Set-ExakitPersonaEnv$' "$ROOT/setup/setup-windows.ps1")"
+has "...and its persona close (offer and services) is not reached in one" 'EXAKIT_PERSONA_ACTIVE -and -not $coreRerun' \
+    "$(grep -B2 'Script installer_flow' "$ROOT/setup/setup-windows.ps1")"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
