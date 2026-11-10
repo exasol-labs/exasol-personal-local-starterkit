@@ -391,7 +391,13 @@ if has "$head" 'USERPROFILE'; then
 else
     fail "the Windows kit home is still derived from PowerShell's \$HOME"
 fi
-if has "$head" 'EXAKIT_HOME to a folder on a local drive'; then
+# The notice is read from the block that detects the non-local home - the
+# module's top-level `if ... Test-ExakitLocalPath ... { ... }` - not from a
+# fixed count of lines from the top: the ownership helpers added above it in
+# f8f02ac moved it from line 284 to 323, past the 300 lines read above.
+notice="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" |
+    awk '/^if .*Test-ExakitLocalPath/ { on = 1 } on { print } on && /^}/ { exit }')")"
+if has "$notice" 'EXAKIT_HOME to a folder on a local drive'; then
     pass "a non-local home is detected and EXAKIT_HOME is named as the fix"
 else
     fail "a non-local home is never named, so the fix is never offered"

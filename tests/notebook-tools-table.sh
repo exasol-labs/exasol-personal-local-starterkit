@@ -50,6 +50,19 @@ replay() {
 row() { printf '%s\n' "$SCREEN" | grep -- "$1" | head -1; }
 # A row's Description with its continuation line: the cell folds long text.
 said() { printf '%s\n' "$SCREEN" | grep -A1 -- "$1" | head -2 | tr -s ' │|\n' '    ' | tr -s ' '; }
+# described <label> — a row's WHOLE Description: the row's line and every line
+# folded under it (an empty tick cell, "│     │"), joined. said() takes one
+# continuation line; a cell holding a path folds over several, and where it
+# folds depends on the path's length (a macOS runner's /var/folders/... temp
+# dir against a Linux runner's /tmp/tmp.XXXXXXXXXX), so a phrase can straddle
+# a fold on one runner and not on another.
+described() {
+    printf '%s\n' "$SCREEN" | awk -v label="$1" '
+        found && /^ *│     │/ { print; next }
+        found { exit }
+        index($0, label) { found = 1; print }
+    ' | tr -s ' │|\n' '    ' | tr -s ' '
+}
 # widest — the widest line on the screen, in characters.
 widest() { printf '%s\n' "$SCREEN" | python3 -c 'import sys; print(max(len(l.rstrip("\n")) for l in sys.stdin))'; }
 
@@ -78,7 +91,7 @@ else
 
     echo "the descriptions say what was found:"
     replay '\r' NBT_STOP=menu NBT_JUPYTER=own NBT_POSITRON=yes
-    has "a JupyterLab on PATH is used as it is"          "is used as it is" "$SCREEN"
+    has "a JupyterLab on PATH is used as it is"          "is used as it is" "$(described '├─ JupyterLab')"
     lacks "a Positron on this machine is still not offered" "Positron"     "$SCREEN"
 
     echo "the persona closing offer shows the same children, under a corner:"

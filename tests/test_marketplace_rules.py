@@ -199,8 +199,11 @@ class IntegrationIdempotencyTest(unittest.TestCase):
                 self.assertTrue(integration.register_autostart(ctx, "dash-server", module))
             self.assertEqual(first_bytes, entry.read_bytes())
             # The second run only asks whether the entry is loaded; it never unloads, loads or reloads anything.
+            # On Linux it first asks whether a systemd --user session exists at all (show-environment, a read-only
+            # probe that every run makes before it touches the unit directory), then whether the unit is enabled.
             probe = {"darwin": [("launchctl", "list", "com.exasol.exakit.dash-server")],
-                     "win32": []}.get(sys.platform, [("systemctl", "--user", "is-enabled", entry.name)])
+                     "win32": []}.get(sys.platform, [("systemctl", "--user", "show-environment"),
+                                                     ("systemctl", "--user", "is-enabled", entry.name)])
             self.assertEqual(probe, calls[len(first_calls):], "an unchanged entry is not reloaded (that would restart the service)")
 
 
