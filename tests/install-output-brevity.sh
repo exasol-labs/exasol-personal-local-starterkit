@@ -579,9 +579,13 @@ has "...and runs it after the table ends" 'if [ "$_menu_has_local" = 1 ]; then' 
 # PowerShell already stopped its table on both paths; keep it that way.
 # The PAIRING, not a bare count: Stop-ExakitDataTableRun also appears in the
 # finally blocks and in its own definition, so counting the name says nothing
-# about whether the table is stopped before the prompt.
+# about whether the table is stopped before the prompt. The installer's path
+# asks through Invoke-ExakitOfferLocalFile, which is Import-ExakitLocalFile and
+# the notes on what it answered.
 check "both PowerShell paths stop the table before prompting" "2" \
-    "$(grep -A1 'Stop-ExakitDataTableRun$' "$ROOT/setup/lib/exapump.ps1" | grep -c 'Import-ExakitLocalFile')"
+    "$(grep -A1 'Stop-ExakitDataTableRun$' "$ROOT/setup/lib/exapump.ps1" | grep -cE 'Import-ExakitLocalFile|Invoke-ExakitOfferLocalFile')"
+check "...and the installer's helper is the prompt itself" "1" \
+    "$(grep -A1 '^function Invoke-ExakitOfferLocalFile' "$ROOT/setup/lib/exapump.ps1" | grep -c 'Import-ExakitLocalFile')"
 
 printf '\n== the connection panel fits an 80-column terminal ==\n'
 # ui_panel_end sizes to its longest LINE and never consults the terminal width,

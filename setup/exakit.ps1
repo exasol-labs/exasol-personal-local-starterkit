@@ -4077,6 +4077,7 @@ function Invoke-CmdDataLoad {
         $pendingIds = @(Get-ExakitPendingDatasets | ForEach-Object { $_.Id })
         $any = $false
         $failed = $false
+        $external = $false
         foreach ($id in ($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
             if ($known -ccontains $id) {
                 $any = $true
@@ -4086,11 +4087,17 @@ function Invoke-CmdDataLoad {
                 } else {
                     Ok "Dataset '$id' is already loaded - nothing to do (replace it with: exakit data-load --force $id, which drops and rebuilds its tables)"
                 }
+            } elseif ($id -ceq "external") {
+                # The menu's external-source row, named. An answer, never the
+                # wizard: that asks its own questions. Twin of cmd_data_load.
+                $any = $true
+                $external = $true
             } else {
                 Warn2 "Unknown dataset id '$id' in EXAKIT_DATASETS (available: $($known -join ', '))."
             }
         }
         if (-not $any) { Fail "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was loaded." }
+        if ($external) { Write-ExakitDataExternalHint }
         if ($failed) { exit 1 }
     } else {
         Show-ExakitDataLoadMenu

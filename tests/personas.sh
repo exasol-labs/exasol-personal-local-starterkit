@@ -110,12 +110,12 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
             "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the persona's row ticked, the file and external rows after the datasets, each described in the Description column" \
-    "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;Orders, customers, parts;Online orders;;;;" "$out"
+    "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip;~;Orders, customers, parts;Online orders;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\namazon_sales|Amazon sales (Amazon.in fashion orders, Apr-Jun 2022, ~129k lines)\n'; }
         EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=amazon_sales; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
 check "a persona picked: only its datasets under Sample datasets, then upload, external and Skip" \
-    "1,2~Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;" "$out"
+    "1,2~Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; _exakit_prompt_tty() { :; }
         exakit_data_load_select Skip >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
 check "without a terminal the pending samples are the answer" "tpch" "$out"
@@ -146,6 +146,36 @@ out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAK
         export EXAKIT_SKIP_MCP=1 EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s' "${EXAKIT_MCP_CLIENTS:-unset}") )"
 check "EXAKIT_SKIP_MCP=1 wins over the persona's clients" "unset" "$out"
+
+echo "a persona and a file of your own: both load, the file after the datasets:"
+# EXAKIT_PERSONA answers through EXAKIT_DATASETS, and that answer used to
+# return before EXAKIT_DATA_FILE was looked at: the file was dropped without a
+# word. The real persona answers and the real installer step; the loaders are
+# stubs that say what they were asked to load.
+out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
+        export EXAKIT_PERSONA=data-scientist EXAKIT_DATA_FILE="$WORK/mine.csv"
+        exakit_persona_apply_env >/dev/null 2>&1
+        exakit_load_dataset() { printf 'LOAD %s\n' "$2"; }
+        exakit_load_local_file() { printf 'FILE %s\n' "$EXAKIT_DATA_FILE"; }
+        exakit_maybe_offer_data_load "$ROOT" </dev/null 2>&1 | grep -E '^(LOAD|FILE) ' | tr '\n' ';') )"
+check "EXAKIT_PERSONA plus EXAKIT_DATA_FILE: the persona's datasets, then the file" \
+    "LOAD amazon_sales;LOAD fraud_transactions;FILE $WORK/mine.csv;" "$out"
+# The persona picked at the install's question (EXAKIT_PERSONA_ACTIVE, its
+# datasets in EXAKIT_DATASETS_PRESELECT): a file named in the environment skips
+# the table, and the persona's datasets still to load are loaded before it.
+sel() { # sel — the data question's answer with a file named, no terminal
+    (
+        exakit_pending_datasets() { printf 'tpch|TPC-H\namazon_sales|Amazon sales\nfraud_transactions|Fraud\n'; }
+        EXAKIT_DATA_FILE="$WORK/mine.csv" exakit_data_load_select Skip </dev/null >/dev/null 2>&1
+        printf '%s' "$EXAKIT_DATA_LOAD_SELECTION"
+    )
+}
+check "a persona picked at the question, and a file: its datasets, then the file" "amazon_sales,fraud_transactions,local" \
+    "$(EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=amazon_sales,fraud_transactions sel)"
+check "...only the ones still to load" "amazon_sales,local" \
+    "$(EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=amazon_sales,weather sel)"
+check "a persona that wants no samples, and a file: the file" "local" "$(EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=none sel)"
+check "no persona, and a file: the file, as always" "local" "$(EXAKIT_DATASETS_PRESELECT=tpch sel)"
 
 echo "an unknown persona stops the run; a known one is recorded:"
 out="$( (EXAKIT_PERSONA=nope exakit_persona_apply_env) 2>&1)"; rc=$?

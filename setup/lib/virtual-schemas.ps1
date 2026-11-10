@@ -32,6 +32,49 @@ function Test-ExakitVsAvailable {
     return (Test-Path -LiteralPath (Get-PyexasolVenvPython))
 }
 
+# Get-ExakitVsUnavailableReason - why Test-ExakitVsAvailable said no, in the few
+# words the data table's disabled row has room for (the whole label stays
+# inside the name column of an 80-column table). Twin of
+# exakit_vs_unavailable_reason.
+function Get-ExakitVsUnavailableReason {
+    if (-not (Get-ExakitVsDefs)) { return "unavailable" }
+    return "no pyexasol"
+}
+
+# Get-ExakitVsCli - the kit's own command beside this library (setup\exakit.ps1).
+# It loads THIS library (its lib\ comes first), so it is the same kit version as
+# the installer that dot-sourced it, whatever the kit home holds yet. Twin of
+# _exakit_vs_cli.
+function Get-ExakitVsCli {
+    $cli = Join-Path (Split-Path -Parent $PSScriptRoot) "exakit.ps1"
+    if (Test-Path -LiteralPath $cli) { return $cli }
+    return $null
+}
+
+# Invoke-ExakitVsConnectWizard - the data-load row: `exakit connect` asking for
+# everything, the same as typed with no arguments. Always a child: the command
+# exits when it is done, and the installer does not have Invoke-CmdConnect at
+# all. The child is the command beside this library, on the PowerShell running
+# this one, started straight on this console (nothing redirected) rather than
+# through the pipeline: a caller that captures output - the installer's data
+# step runs inside [void](...) - would redirect the child's output, and ui.ps1
+# then turns its menus off (IsOutputRedirected). Returns its exit code. Twin of
+# exakit_vs_connect_wizard.
+function Invoke-ExakitVsConnectWizard {
+    $cli = Get-ExakitVsCli
+    if (-not $cli) {
+        Warn2 "This kit copy has no exakit command beside its library."
+        return 2
+    }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = (Get-Process -Id $PID).Path
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$cli`" connect"
+    $psi.UseShellExecute = $false
+    $child = [System.Diagnostics.Process]::Start($psi)
+    $child.WaitForExit()
+    return $child.ExitCode
+}
+
 # Invoke-ExakitVsEngine - the engine with this installation's context. The
 # secret, when there is one, goes to its stdin base64-encoded (and
 # --secret-stdin becomes --secret-stdin-base64): Windows PowerShell 5.1

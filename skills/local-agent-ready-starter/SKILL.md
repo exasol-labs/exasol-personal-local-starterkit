@@ -79,7 +79,11 @@ releases:
   comma-separated to combine): a named set of the answers below; an answer you set yourself
   wins for that one variable (it replaces the persona's: name the persona's add-ons too to keep them)
 - which data to load → `EXAKIT_DATASETS=tpch,weather` (bundled dataset ids; wins over
-  `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip data)
+  `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip the samples);
+  `EXAKIT_DATA_FILE=/abs/path.csv` loads the user's own file after them (a persona's
+  datasets included). `external` in `EXAKIT_DATASETS` never starts the connect wizard
+  unattended: it prints the `exakit connect` hint, so connect a source afterwards with
+  `exakit connect <connector> ...` (`exasol-virtual-schemas`)
 - on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)
 
 Example: `curl -fsSL <install.sh URL> | EXAKIT_MCP_CLIENTS=claude EXAKIT_DATASETS=tpch sh` —

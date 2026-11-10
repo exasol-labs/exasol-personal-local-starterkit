@@ -102,6 +102,44 @@ try {
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip" 6> $null)
     Check "selection is none, not local" "none" $chosen
     Check "...and says how to load a file unattended" "True" (($infoSeen -join " ").Contains("name it with EXAKIT_DATA_FILE"))
+
+    Write-Host "the install's data answers - each row its own, in the table's order:"
+    # The real installer step (Request-ExakitDataLoadOffer) with the loaders as
+    # stubs: what ran, in order, then whether it threw. `external` names the
+    # external-source row: unattended it is only ever the command to run - the
+    # wizard (a stub here that says CONNECT) is never started. Twin of the same
+    # block in the bash test.
+    function Get-ExakitBundledDatasets { return @("tpch", "energy", "amazon_sales") | ForEach-Object { [pscustomobject]@{ Id = $_; Label = $_ } } }
+    function Invoke-ExakitDatasetLoad { param($KitRoot, $Id, [switch]$Force) [void]$script:Ran.Add("LOAD $Id") }
+    function Invoke-ExakitSampleDataLoad { param($KitRoot, [switch]$Force) [void]$script:Ran.Add("LOAD tpch(sample)") }
+    function Import-ExakitLocalFile { [void]$script:Ran.Add("FILE $($env:EXAKIT_DATA_FILE)"); return "loaded" }
+    function Invoke-ExakitVsConnectWizard { [void]$script:Ran.Add("CONNECT"); return 0 }
+    function Warn2([string]$M) { [void]$infoSeen.Add($M) }
+    function Fail([string]$M) { throw "FAIL: $M" }
+    function Offer([hashtable]$Answers) {
+        $script:Ran = New-Object System.Collections.ArrayList
+        $infoSeen.Clear()
+        foreach ($k in $Answers.Keys) { [Environment]::SetEnvironmentVariable($k, $Answers[$k], 'Process') }
+        $threw = ""
+        try { Request-ExakitDataLoadOffer -KitRoot $tmp } catch { $threw = "THREW" }
+        foreach ($k in @("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_DATA_FILE")) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+        return "$($script:Ran -join ';')~$threw"
+    }
+    $mine = Join-Path $tmp "mine.csv"
+    Check "EXAKIT_DATASETS=tpch,external: the dataset loads, the wizard does not start" "LOAD tpch~" (Offer @{ EXAKIT_DATASETS = "tpch,external" })
+    Check "...the external row is one line naming the command" "True" (($infoSeen -join " ").Contains("needs a terminal. Connect one any time with: exakit connect"))
+    Check "...and external is not an unknown id" "False" (($infoSeen -join " ").Contains("Unknown dataset id 'external'"))
+    Check "EXAKIT_DATASETS=external alone: an answer, nothing loaded, nothing failed" "~" (Offer @{ EXAKIT_DATASETS = "external" })
+    Check "an id the kit does not ship still fails the step" "~THREW" (Offer @{ EXAKIT_DATASETS = "nope" })
+    Check "EXAKIT_DATASETS and EXAKIT_DATA_FILE: the datasets, then the file" "LOAD amazon_sales;FILE $mine~" (Offer @{ EXAKIT_DATASETS = "amazon_sales,external"; EXAKIT_DATA_FILE = $mine })
+    Check "...then the external row's command, last" "True" (($infoSeen[$infoSeen.Count - 1]).Contains("Connect one any time with: exakit connect"))
+    Check "EXAKIT_LOAD_SAMPLE=0 and a file: the samples are skipped, the file loads" "FILE $mine~" (Offer @{ EXAKIT_LOAD_SAMPLE = "0"; EXAKIT_DATA_FILE = $mine })
+    Check "EXAKIT_LOAD_SAMPLE=1 and a file: the sample, then the file" "LOAD tpch(sample);FILE $mine~" (Offer @{ EXAKIT_LOAD_SAMPLE = "1"; EXAKIT_DATA_FILE = $mine })
+    [void](Offer @{ EXAKIT_LOAD_SAMPLE = "0" })
+    Check "EXAKIT_LOAD_SAMPLE=0 alone still skips everything, as it said" "True" (($infoSeen -join " ").Contains("Skipping data loading (EXAKIT_LOAD_SAMPLE=0)"))
+    function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H"; Description = "" }) }
+    function Test-ExakitVsAvailable { return $true }
+    Check "no answers, no console: the pending samples, never the wizard" "LOAD tpch~" (Offer @{})
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue

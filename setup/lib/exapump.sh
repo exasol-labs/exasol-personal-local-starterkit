@@ -3792,10 +3792,12 @@ exakit_load_dataset_dir() {
 #   [x] Sample datasets              <- the parent: ticks every dataset under it
 #   [x] ├─ <each dataset not loaded yet>          For: the personas it is for
 #   [ ] Upload a file or folder: CSV/Parquet/JSON
-#   [ ] Connect an external source (...)  <- `exakit connect`, after the load;
-#                                            shown disabled ("coming soon")
-#                                            where the module cannot run
+#   [ ] Connect an external source   <- `exakit connect`, after the file;
+#                                       shown disabled, with the reason,
+#                                       where the module cannot run
 #   [ ] <final_label>                <- mutually exclusive opt-out (Skip)
+#
+# The rows run in this order: the datasets, then the file, then the source.
 #
 # Already-loaded datasets are not offered; when every one is in, the parent
 # stays on screen, disabled, saying so. The personas picked tick their own
@@ -3814,6 +3816,14 @@ exakit_data_load_select() {
     if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
         info "Loading a local file (EXAKIT_DATA_FILE)."
         EXAKIT_DATA_LOAD_SELECTION="local"
+        # The personas picked at the install's question keep their datasets:
+        # the file loads after them, not instead of them. (EXAKIT_PERSONA in the
+        # environment answers through EXAKIT_DATASETS, and the installer loads
+        # the file after that answer too.)
+        if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+            _dls_mine="$(_exakit_data_persona_pending)"
+            [ -n "$_dls_mine" ] && EXAKIT_DATA_LOAD_SELECTION="$_dls_mine,local"
+        fi
         return 0
     fi
     # ONE SCREEN: "Sample datasets" is the parent row with the datasets under
@@ -3824,6 +3834,17 @@ exakit_data_load_select() {
     exakit_data_samples_select "$_dls_final_label" || return 1
     [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || EXAKIT_DATA_LOAD_SELECTION="none"
     return 0
+}
+
+# _exakit_data_persona_pending — the picked personas' datasets that are still to
+# load (EXAKIT_DATASETS_PRESELECT against what is pending), as a csv in the
+# table's order. Empty for none.
+_exakit_data_persona_pending() {
+    case "${EXAKIT_DATASETS_PRESELECT:-}" in ''|none) return 0 ;; esac
+    exakit_pending_datasets 2>/dev/null | while IFS='|' read -r _dpp_id _dpp_rest; do
+        [ -n "$_dpp_id" ] || continue
+        case ",$EXAKIT_DATASETS_PRESELECT," in *",$_dpp_id,"*) printf '%s\n' "$_dpp_id" ;; esac
+    done | tr '\n' ',' | sed 's/,$//'
 }
 
 # exakit_data_samples_select <final-label> — the table of the data question
@@ -3896,6 +3917,50 @@ exakit_data_table_release() {
     rm -f "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_STATE.new" "$EXAKIT_TABLE_STATE.lines" \
           "$EXAKIT_TABLE_STATE.stop" "$EXAKIT_TABLE_STATE.fatal"
     EXAKIT_TABLE_STATE=""
+    return 0
+}
+
+# What an unattended run says for the external row. The wizard asks questions
+# only a person can answer (its inputs are not read from the environment), so
+# without one it is never started: the command is named instead.
+EXAKIT_DATA_EXTERNAL_HINT="Connecting an external source asks its own questions, so it needs a terminal. Connect one any time with: exakit connect"
+exakit_data_external_hint() {
+    info "$EXAKIT_DATA_EXTERNAL_HINT"
+}
+
+# exakit_data_external_run — the "Connect an external source" row, run last,
+# after the datasets and the file: `exakit connect` with no arguments
+# (exakit_vs_connect_wizard). Only a person who ticked the row at a terminal
+# gets the wizard; anything else is told the command. It never fails its
+# caller: a connect that failed or was cancelled is said, with the command that
+# retries it, and the data load carries on. What it has to say is left in
+# EXAKIT_DATA_EXTERNAL_NOTE as kind|text, for the caller's closing notes.
+EXAKIT_DATA_EXTERNAL_NOTE=""
+exakit_data_external_run() {
+    EXAKIT_DATA_EXTERNAL_NOTE=""
+    if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ] || [ -z "$(_exakit_prompt_tty)" ]; then
+        EXAKIT_DATA_EXTERNAL_NOTE="info|$EXAKIT_DATA_EXTERNAL_HINT"
+        return 0
+    fi
+    if ! command -v exakit_vs_connect_wizard >/dev/null 2>&1; then
+        EXAKIT_DATA_EXTERNAL_NOTE="warn|This kit copy cannot connect an external source. Update it (exakit update), then run: exakit connect"
+        return 0
+    fi
+    printf '\n'
+    # Ctrl+C in the wizard ends the wizard, not this run. The trap does nothing
+    # and is not an ignore: an ignored INT would be inherited by the wizard,
+    # which then could not be interrupted at all.
+    _der_int="$(trap -p INT)"
+    trap ':' INT
+    ( exakit_vs_connect_wizard )
+    _der_rc=$?
+    if [ -n "$_der_int" ]; then eval "$_der_int"; else trap - INT; fi
+    _exakit_log_file "INFO  data load: exakit connect (the external-source row) exited $_der_rc"
+    case "$_der_rc" in
+        0)     ;;
+        5|130) EXAKIT_DATA_EXTERNAL_NOTE="info|No external source was connected. Connect one any time with: exakit connect" ;;
+        *)     EXAKIT_DATA_EXTERNAL_NOTE="warn|Connecting the external source did not finish (see above). Retry any time with: exakit connect" ;;
+    esac
     return 0
 }
 
@@ -4017,16 +4082,19 @@ exakit_data_table_build() {
         _dtb_n=$(( _dtb_n + 1 ))
         EXAKIT_TABLE_ROW_LOCAL="$_dtb_n"
         # An external source stays where it is and is queried through a virtual
-        # schema - the same wizard as `exakit connect`. Pickable only where it
-        # can work: the module is loaded and the kit's pyexasol, which runs it,
-        # is installed. Elsewhere (the installer, which does not load the
-        # module) the row is shown and cannot be picked.
+        # schema - the same wizard as `exakit connect`. Pickable wherever it can
+        # work: the module is loaded (the installers load it too) and the kit's
+        # pyexasol, which runs it, is installed. Elsewhere the row is shown,
+        # cannot be picked, and says why.
         if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
-            printf 'plain|Connect an external source (PostgreSQL, MySQL, SQL Server, Oracle, Snowflake)|0|idle|||||| \n' >> "$_dtb_f"
+            printf 'plain|Connect an external source|0|idle|||||| \n' >> "$_dtb_f"
             EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}external
 "
         else
-            printf 'plain|Connect an external source - coming soon|0|disabled|||||| \n' >> "$_dtb_f"
+            _dtb_why="unavailable"
+            command -v exakit_vs_unavailable_reason >/dev/null 2>&1 && \
+                _dtb_why="$(exakit_vs_unavailable_reason)"
+            printf 'plain|Connect an external source - %s|0|disabled|||||| \n' "$_dtb_why" >> "$_dtb_f"
             EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS
 "
         fi
@@ -4203,9 +4271,12 @@ exakit_data_load_menu() {
             _menu_status="$_local_status"
         fi
     fi
+    # The external source last: the table's order. A connect that failed or was
+    # cancelled is said and does not change this command's exit status - the
+    # loads above it are what it reports on.
     if [ "$_menu_has_external" = 1 ]; then
-        printf '\n'
-        ( exakit_vs_connect_wizard ) || _menu_notes="${_menu_notes}info|Connect an external source any time with: exakit connect
+        exakit_data_external_run
+        [ -n "$EXAKIT_DATA_EXTERNAL_NOTE" ] && _menu_notes="${_menu_notes}$EXAKIT_DATA_EXTERNAL_NOTE
 "
     fi
     while IFS='|' read -r _mn_kind _mn_text; do

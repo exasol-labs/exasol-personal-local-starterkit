@@ -239,9 +239,14 @@ class LoadWiringTests(unittest.TestCase):
         # one-table data question renamed the row on both sides together.
         self.assertIn("plain|Upload a file or folder: CSV/Parquet/JSON|", bash)
         self.assertIn('-Label "Upload a file or folder: CSV/Parquet/JSON"', ps1)
-        # The same table shows an external source, never pickable, on both.
-        self.assertIn("plain|Connect an external source - coming soon|0|disabled|", bash)
-        self.assertIn('-Label "Connect an external source - coming soon"', ps1)
+        # The same table shows an external source on both: pickable where the
+        # virtual-schema module can run, else disabled with the reason.
+        self.assertIn("plain|Connect an external source|0|idle|", bash)
+        self.assertIn("plain|Connect an external source - %s|0|disabled|", bash)
+        self.assertIn('-Label "Connect an external source"', ps1)
+        self.assertIn('-Label "Connect an external source - $why"', ps1)
+        for text in (bash, ps1):
+            self.assertNotIn("coming soon", text)
         self.assertIn("Import-ExakitLocalJson -Path $path -Target $target", ps1)
         for text, name in ((bash, "exapump.sh"), (ps1, "exapump.ps1")):
             with self.subTest(menu=name):

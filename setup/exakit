@@ -2256,6 +2256,7 @@ $_dl_path
         _dl_pending=" $(exakit_pending_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
         _dl_any=0
         _dl_failed=0
+        _dl_external=0
         for _dl_id in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
             case "$_dl_known" in
                 *" $_dl_id "*)
@@ -2269,12 +2270,20 @@ $_dl_path
                     esac
                     ;;
                 *)
-                    warn "Unknown dataset id '$_dl_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_dl_known" | sed 's/ *$//'))."
+                    # `external` is the menu's external-source row, named. An
+                    # answer, never the wizard: that asks its own questions.
+                    if [ "$_dl_id" = external ]; then
+                        _dl_any=1
+                        _dl_external=1
+                    else
+                        warn "Unknown dataset id '$_dl_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_dl_known" | sed 's/ *$//'))."
+                    fi
                     ;;
             esac
         done
         [ "$_dl_any" -eq 1 ] || \
             die "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset — nothing was loaded."
+        [ "$_dl_external" = 1 ] && exakit_data_external_hint
         return "$_dl_failed"
     else
         command -v exakit_data_load_menu >/dev/null 2>&1 || \

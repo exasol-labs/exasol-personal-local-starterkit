@@ -6,12 +6,18 @@
 # What it pins:
 #   - the data question is ONE table, "Data to load": the "Sample datasets"
 #     parent with the pending datasets under it, your own file or folder, an
-#     external source (shown disabled, coming soon) and Skip - drawn once
+#     external source (pickable where virtual schemas can run, else disabled
+#     with the reason) and Skip - drawn once
 #   - under a real pty: Enter keeps what is ticked, Enter on Skip answers none,
 #     Up past the first row wraps to Skip, the cursor steps over the disabled
 #     external row, ticking the file row with the samples answers "<ids>,local",
 #     ticking the parent ticks every dataset; Enter on the exclusive row of ANY
-#     checkbox menu answers that row alone
+#     checkbox menu answers that row alone; with virtual schemas available the
+#     external row is picked like any other
+#   - the external row runs `exakit connect` (the real wizard entry point, a
+#     stub command): after the file, in both entry points; a connect that
+#     failed or was cancelled is said and the load carries on; without a
+#     person at the table it is only ever the command to run
 #   - with every sample in, the parent is a disabled row that says so and your
 #     own file is the default
 #   - a persona's datasets are the rows ticked (the parent only when they are
@@ -122,9 +128,25 @@ if command -v python3 >/dev/null 2>&1; then
     has "the description is shown in full" "Online orders" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
     has "nor your own file" "Upload a file or folder: CSV/Parquet/JSON" "$out"
-    has "nor the external source" "Connect an external source - coming soon" "$out"
+    has "nor the external source" "Connect an external source - unavailable" "$out"
     lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Data to load ─/,/╰/p')"
     has "the persona's dataset is the one picked" "SELECTION=amazon_sales" "$out"
+
+    echo "the external row, where virtual schemas can run (a real pty):"
+    out="$(replay 'jjjj \r' DQ_VS=1)"
+    has "the cursor stops on it, Space ticks it, it answers external" "SELECTION=tpch,energy,amazon_sales,external" "$out"
+    has "...under its own name" "Connect an external source" "$out"
+    lacks "...with no reason after it" "Connect an external source -" "$out"
+    # The installer's own step, picked at the table: the real wizard entry
+    # point runs the command beside the library - here a stub - with nothing
+    # after `connect`, the same as typing `exakit connect`.
+    out="$(replay 'k jjjjj \r' DQ_SCENE=offer)"
+    has "the installer runs exakit connect, nothing after it" "STUB exakit connect" "$out"
+    check "...no argument was added" "STUB exakit connect" "$(printf '%s\n' "$out" | grep -o 'STUB exakit connect.*' | head -n 1 | sed 's/ *$//')"
+    has "...and the data step ends well" "RC=0 SELECTION=external" "$out"
+    out="$(replay 'jjjj \r' DQ_SCENE=offer DQ_STUB_RC=1)"
+    has "the datasets, then a connect that fails: the step still ends well" "RC=0 SELECTION=tpch,energy,amazon_sales,external" "$out"
+    has "...and says so" "Connecting the external source did not finish" "$out"
 else
     check "pty replays need python3" "skipped" "skipped"
 fi
@@ -140,10 +162,10 @@ rows() { # rows <pending-ids...> — kind|label|state per row, then the id per r
     )
 }
 check "parent, datasets, your file, external (disabled), Skip" \
-    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
+    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - unavailable|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
     "$(rows tpch energy)"
 check "every sample loaded: the parent is a disabled row that says so" \
-    "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,local,,," \
+    "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - unavailable|disabled;plain|Skip|idle;~,local,,," \
     "$(rows)"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\nenergy|Energy\n'; }; exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s~%s' "$(exakit_data_table_row energy)" "$(exakit_data_table_row local)" "$EXAKIT_TABLE_GROUP" "$EXAKIT_TABLE_EXCLUSIVE") )"
@@ -207,7 +229,8 @@ echo "after the table: your own file, then the external source (both entry point
 _order_of() { # _order_of <function> — what ran after the table, in order
     (
         manifest_get() { printf 'admin\n'; }
-        exakit_data_load_select() { EXAKIT_DATA_LOAD_SELECTION="external,local"; EXAKIT_TABLE_STATE=""; }
+        exakit_data_load_select() { EXAKIT_DATA_LOAD_SELECTION="external,local"; EXAKIT_TABLE_STATE=""; EXAKIT_TABLE_CONFIRMED=1; }
+        _exakit_prompt_tty() { printf '/dev/tty\n'; }
         exakit_load_local_file() { printf 'local|'; }
         exakit_vs_connect_wizard() { printf 'connect|'; }
         unset EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATA_FILE
@@ -220,12 +243,79 @@ check "EXAKIT_DATA_FILE bypasses the table" "local~" \
     "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATA_FILE="$WORK" exakit_data_load_select Skip >/dev/null 2>&1
         printf '%s~%s' "$EXAKIT_DATA_LOAD_SELECTION" "$EXAKIT_TABLE_STATE") )"
 
+echo "the external row: picked where virtual schemas can run, else disabled with the reason:"
+vs_rows() { # vs_rows <pyexasol:yes|no> [defs:yes|no] — the external row's label|state, and its id
+    (
+        . "$ROOT/setup/lib/virtual-schemas.sh"
+        if [ "$1" = yes ]; then pyexasol_venv_python() { printf '/bin/sh\n'; }
+        else pyexasol_venv_python() { printf '%s\n' "$WORK/no-such-python"; }; fi
+        [ "${2:-yes}" = no ] && exakit_vs_defs() { return 1; }
+        exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
+        exakit_data_table_build "$WORK/table"
+        printf '%s~%s' "$(sed -n 4p "$WORK/table" | cut -d'|' -f2,4)" "$(printf '%s' "$EXAKIT_TABLE_IDS" | sed -n 4p)"
+    )
+}
+check "the module and the kit's pyexasol: pickable, under its own name" "Connect an external source|idle~external" "$(vs_rows yes)"
+check "no pyexasol: disabled, and says so" "Connect an external source - no pyexasol|disabled~" "$(vs_rows no)"
+check "no definitions in this kit copy: disabled, and says so" "Connect an external source - unavailable|disabled~" "$(vs_rows yes no)"
+check "the module not loaded at all: disabled" "Connect an external source - unavailable|disabled~" \
+    "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; exakit_data_table_build "$WORK/table"
+        printf '%s~%s' "$(sed -n 4p "$WORK/table" | cut -d'|' -f2,4)" "$(printf '%s' "$EXAKIT_TABLE_IDS" | sed -n 4p)") )"
+for _setup in setup-macos.sh setup-linux.sh; do
+    has "$_setup loads the module, so the install's table can offer the row" '. "$LIB_DIR/virtual-schemas.sh"' "$(cat "$ROOT/setup/$_setup")"
+done
+
+echo "the external row runs exakit connect, after the file, and never stops the load:"
+# A kit copy laid out as the installer has it: setup/lib/virtual-schemas.sh and,
+# beside the library, the command - here a stub that logs its arguments and
+# exits STUB_RC. The real exakit_vs_connect_wizard and the real entry points run.
+mkdir -p "$WORK/fakekit/setup/lib"
+cp "$ROOT/setup/lib/virtual-schemas.sh" "$WORK/fakekit/setup/lib/"
+printf '#!/bin/sh\nprintf "connect|%%s\\n" "$*" >> "$STUB_LOG"\nexit "${STUB_RC:-0}"\n' > "$WORK/fakekit/setup/exakit"
+ext() { # ext <offer|menu> <stub-rc> [terminal:1|0] [confirmed:1|0] — what ran~status~what was said
+    (
+        _ext_entry="$1"; _ext_tty="${3:-1}"; _ext_conf="${4:-1}"
+        STUB_RC="$2"; STUB_LOG="$WORK/stub.log"; export STUB_RC STUB_LOG; : > "$STUB_LOG"
+        . "$WORK/fakekit/setup/lib/virtual-schemas.sh"
+        manifest_get() { printf 'admin\n'; }
+        exakit_data_load_select() { EXAKIT_DATA_LOAD_SELECTION="external,local"; EXAKIT_TABLE_STATE=""; EXAKIT_TABLE_CONFIRMED="$_ext_conf"; }
+        if [ "$_ext_tty" = 1 ]; then _exakit_prompt_tty() { printf '/dev/tty\n'; }; else _exakit_prompt_tty() { :; }; fi
+        exakit_load_local_file() { printf 'local|\n' >> "$STUB_LOG"; }
+        unset EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATA_FILE
+        if [ "$_ext_entry" = menu ]; then exakit_data_load_menu > "$WORK/ext.out" 2>&1
+        else exakit_maybe_offer_data_load "$ROOT" > "$WORK/ext.out" 2>&1; fi
+        _ext_rc=$?
+        printf '%s~rc=%s~%s' "$(tr '\n' ';' < "$STUB_LOG")" "$_ext_rc" "$(tr '\n' ' ' < "$WORK/ext.out")"
+    )
+}
+check "outside exakit the wizard is the command beside the library" "$ROOT/setup/exakit" \
+    "$( (. "$ROOT/setup/lib/virtual-schemas.sh"; _exakit_vs_cli) )"
+check "inside exakit it is cmd_connect itself, with no arguments" "cmd_connect:[]" \
+    "$( (. "$ROOT/setup/lib/virtual-schemas.sh"; _require_install() { :; }; cmd_connect() { printf 'cmd_connect:[%s]' "$*"; }; exakit_vs_connect_wizard) )"
+for _entry in offer menu; do
+    out="$(ext "$_entry" 0)"
+    check "$_entry: the file, then exakit connect with nothing after it" "local|;connect|connect;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+    out="$(ext "$_entry" 1)"
+    check "$_entry: a connect that fails does not fail the load" "local|;connect|connect;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+    has "$_entry: ...it is said, with the command" "Connecting the external source did not finish (see above). Retry any time with: exakit connect" "$out"
+    out="$(ext "$_entry" 5)"
+    has "$_entry: a connect cancelled in the wizard (exit 5) is said" "No external source was connected. Connect one any time with: exakit connect" "$out"
+    check "$_entry: ...and the load ends well" "rc=0" "$(printf '%s' "$out" | cut -d'~' -f2)"
+    out="$(ext "$_entry" 130)"
+    has "$_entry: Ctrl+C in the wizard (130) is a cancel, not a failure" "No external source was connected" "$out"
+    out="$(ext "$_entry" 0 0)"
+    check "$_entry: no terminal: the wizard is never started" "local|;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+    has "$_entry: ...the command is named instead" "needs a terminal. Connect one any time with: exakit connect" "$out"
+    out="$(ext "$_entry" 0 1 0)"
+    check "$_entry: nobody pressed Enter on the table: never started either" "local|;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+done
+
 echo "what each dataset is goes in a column, not on the name:"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\namazon_sales|Amazon sales (Amazon.in fashion orders, Apr-Jun 2022, ~129k lines)\n'; }
         exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_DESC" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the descriptions go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;Orders, customers, parts;Online orders;;;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip;~;Orders, customers, parts;Online orders;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'not_a_dataset|A dataset with no conf\n'; }
         exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_DESC") )"
 check "no description, no Description column" "0" "$out"
@@ -269,6 +359,13 @@ has "two targets are refused" "REJECT: data-load takes one file, folder or datas
 has "--force with a file is refused, with the file's own answer" "EXAKIT_ON_EXISTING=replace" "$(dl tpch --force "$WORK")"
 has "an unknown option is refused" "REJECT: Unknown option '--nope'" "$(dl tpch --nope)"
 check "a dataset id is matched exactly" "yes" "$(dl tpch TPCH | grep -q 'No such file, folder or dataset' && echo yes || echo no)"
+out="$(EXAKIT_DATASETS=tpch,external dl tpch)"
+check "EXAKIT_DATASETS names the external row: the datasets load" "LOAD tpch " "$(printf '%s\n' "$out" | grep '^LOAD')"
+has "...and the external row is only the command to run" "needs a terminal. Connect one any time with: exakit connect" "$out"
+lacks "...it is not an unknown id" "Unknown dataset id 'external'" "$out"
+out="$(EXAKIT_DATASETS=external dl tpch; printf 'rc=%s' "$?")"
+has "external alone is an answer, not 'matched no bundled dataset'" "rc=0" "$out"
+lacks "...and loads nothing" "LOAD" "$out"
 lacks "the old hint without a dataset is gone" "replace it with: exakit data-load --force," "$(cat "$ROOT/setup/exakit")"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
