@@ -112,6 +112,6 @@ def advice(ip, host=None):
     """The plan's line for a source on the internet; without a host, the
     connect menu's first line, for any source on the internet."""
     if not host:
-        return "This computer's public IP is %s: a source on the internet must allow it." % ip
+        return "Tip: cloud sources see you as %s - allow it if the source has an IP allowlist." % ip
     return ("This computer's public IP is %s: %s must allow it if it filters by address (security group, "
             "firewall or IP access list)" % (ip, host))
