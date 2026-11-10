@@ -286,7 +286,7 @@ check "install.ps1: the same refusal" "yes" \
 echo "the personas' add-ons install under the install lock (no second setup run beside them):"
 for _os in macos linux; do
     check "setup-$_os.sh takes the lock again before the add-on offer and releases it after" "acquire offer release" \
-        "$(awk '/EXAKIT_PERSONA_ACTIVE:-}" \]; then/{p=1} p&&/exakit_acquire_lock/{printf "acquire "} p&&/exakit_marketplace_offer \)/{printf "offer "} p&&/exakit_release_lock/{printf "release"; exit}' "$ROOT/setup/setup-$_os.sh")"
+        "$(awk '/^if \[ -n "\$\{EXAKIT_PERSONA_ACTIVE:-\}" \]/{p=1} p&&/exakit_acquire_lock/{printf "acquire "} p&&/exakit_marketplace_offer \)/{printf "offer "} p&&/exakit_release_lock/{printf "release"; exit}' "$ROOT/setup/setup-$_os.sh")"
 done
 
 echo "exakit persona add with no id: the persona question, then the newly ticked:"
