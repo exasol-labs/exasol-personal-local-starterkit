@@ -386,6 +386,9 @@ _exakit_vs_read_secret() {
 #   - What is still pending after Enter - the rest of a multi-line paste - is
 #     discarded, so it answers no later question; what arrives within a tenth
 #     of a second counts as pending.
+#   - A key that sends an escape sequence (an arrow, Home, End, Delete) does
+#     nothing: the whole sequence is read and dropped (_exakit_vs_esc_rest), so
+#     a stray "[D" never joins the line; a lone Esc is dropped too.
 #   - The terminal's own state comes back, on Ctrl-C too.
 _exakit_vs_hidden_line() {
     _EVH_LINE=""
@@ -395,20 +398,23 @@ _exakit_vs_hidden_line() {
     _evh_prev_int="$(trap -p INT)"; _evh_prev_term="$(trap -p TERM)"
     trap 'stty "${_evh_saved:-echo icanon}" 2>/dev/null; printf "\n"; exit 130' INT TERM
     if [ "${2:-}" = err ]; then printf '%s' "$1" >&2; else printf '%s' "$1"; fi
-    _evh_rc=0
+    _evh_rc=0; _evh_has=0; _evh_next=""
     while :; do
-        # One character; the newline Enter sends is read's delimiter: empty.
-        IFS= read -r -n 1 _evh_c || { _evh_rc=1; break; }
+        # One character; the newline Enter sends is read's delimiter: empty. A
+        # key that followed a lone Esc is taken as typed.
+        if [ "$_evh_has" = 1 ]; then _evh_c="$_evh_next"; _evh_has=0
+        else IFS= read -r -n 1 _evh_c || { _evh_rc=1; break; }; fi
         case "$_evh_c" in
-            '') break ;;
+            ''|$'\n'|$'\r') break ;;
             $'\004') if [ -z "$_EVH_LINE" ]; then _evh_rc=1; break; fi ;;
+            $'\033') _exakit_vs_esc_rest; _evh_next="$_EVE_NEXT"; _evh_has="$_EVE_HAS" ;;
             $'\177'|$'\010') _EVH_LINE="${_EVH_LINE%?}" ;;
             $'\025') _EVH_LINE="" ;;
             [[:cntrl:]]) ;;
             *) _EVH_LINE="$_EVH_LINE$_evh_c" ;;
         esac
     done
-    _evh_c=""
+    _evh_c=""; _evh_next=""; _EVE_NEXT=""
     # The rest of the paste: read until a tenth of a second passes with nothing
     # (VMIN 0, VTIME 1 - a read then returns empty, and cat stops).
     stty min 0 time 1 2>/dev/null && cat > /dev/null 2>&1
@@ -417,6 +423,83 @@ _exakit_vs_hidden_line() {
     [ -n "$_evh_prev_int" ] && eval "$_evh_prev_int"
     [ -n "$_evh_prev_term" ] && eval "$_evh_prev_term"
     return "$_evh_rc"
+}
+
+# _exakit_vs_esc_byte — the next byte on stdin (the terminal, out of canonical
+# mode), into _EVE_B, waiting at most a tenth of a second: empty when none came.
+# Not read -n: bash puts VMIN back to 1 for it, and a lone Esc would wait for
+# the next key.
+_exakit_vs_esc_byte() {
+    stty min 0 time 1 2>/dev/null
+    _EVE_B="$(dd bs=1 count=1 2>/dev/null; printf x)"; _EVE_B="${_EVE_B%x}"
+    stty min 1 time 0 2>/dev/null
+}
+
+# _exakit_vs_esc_rest — after an Esc read by a key-by-key reader: the rest of the
+# key's escape sequence, read and dropped. CSI is ESC [, parameter and
+# intermediate bytes, one final byte (an arrow ESC [ D, Delete ESC [ 3 ~,
+# Ctrl-Left ESC [ 1 ; 5 D); SS3 is ESC O and one byte (an arrow in application
+# mode). An Esc with nothing after it within a tenth of a second is a lone Esc:
+# _EVE_LONE=1, and nothing waits for another key. Any other key right after it
+# begins no sequence: it is handed back in _EVE_NEXT (_EVE_HAS=1), to be taken
+# as typed.
+_exakit_vs_esc_rest() {
+    _EVE_LONE=0; _EVE_NEXT=""; _EVE_HAS=0
+    _exakit_vs_esc_byte
+    case "$_EVE_B" in
+        '') _EVE_LONE=1 ;;
+        '[')
+            while :; do
+                _exakit_vs_esc_byte
+                case "$_EVE_B" in
+                    [0-9]|';'|':'|'<'|'='|'>'|'?'|' '|'!'|'"'|'#'|'$'|'%'|'&'|"'"|'('|')'|'*'|'+'|','|'-'|'.'|'/') ;;
+                    # Another Esc: this sequence was cut short, a new one begins.
+                    $'\033') _EVE_NEXT="$_EVE_B"; _EVE_HAS=1; break ;;
+                    *) break ;;
+                esac
+            done ;;
+        O) _exakit_vs_esc_byte ;;
+        *) _EVE_NEXT="$_EVE_B"; _EVE_HAS=1 ;;
+    esac
+    _EVE_B=""
+}
+
+# _exakit_vs_key — one key from stdin (a terminal; the caller redirects
+# /dev/tty to it when it must), nothing echoed, into _EVK: enter, esc, eof
+# (Ctrl-D, or the terminal gone), or the character typed. An arrow or another
+# key that sends an escape sequence is not a key here: it is dropped and the
+# next one read. What is still pending after the key - the rest of a paste
+# typed at the question - is discarded. Returns 2, reading nothing, when the
+# terminal cannot leave canonical mode. The terminal's own state comes back, on
+# Ctrl-C too.
+_exakit_vs_key() {
+    _EVK=""
+    _evk_saved="$(stty -g 2>/dev/null)"
+    stty -echo -icanon min 1 time 0 2>/dev/null || return 2
+    _evk_prev_int="$(trap -p INT)"; _evk_prev_term="$(trap -p TERM)"
+    trap 'stty "${_evk_saved:-echo icanon}" 2>/dev/null; printf "\n"; exit 130' INT TERM
+    _evk_has=0; _evk_next=""
+    while [ -z "$_EVK" ]; do
+        if [ "$_evk_has" = 1 ]; then _evk_c="$_evk_next"; _evk_has=0
+        else IFS= read -r -n 1 _evk_c || { _EVK=eof; break; }; fi
+        case "$_evk_c" in
+            ''|$'\n'|$'\r') _EVK=enter ;;
+            $'\004') _EVK=eof ;;
+            $'\033')
+                _exakit_vs_esc_rest
+                if [ "$_EVE_LONE" = 1 ]; then _EVK=esc; else _evk_next="$_EVE_NEXT"; _evk_has="$_EVE_HAS"; fi ;;
+            [[:cntrl:]]) ;;
+            *) _EVK="$_evk_c" ;;
+        esac
+    done
+    _evk_c=""; _evk_next=""; _EVE_NEXT=""
+    # What is still pending - the rest of a paste typed here - answers nothing.
+    stty min 0 time 1 2>/dev/null && cat > /dev/null 2>&1
+    stty "${_evk_saved:-echo icanon}" 2>/dev/null
+    trap - INT TERM
+    [ -n "$_evk_prev_int" ] && eval "$_evk_prev_int"
+    [ -n "$_evk_prev_term" ] && eval "$_evk_prev_term"
+    return 0
 }
 
 # _exakit_vs_secret_kind <connector> — the kind of its credential input
@@ -688,13 +771,48 @@ EOF
 }
 
 # _exakit_vs_paste_forms <connector> — the connection strings its paste block
-# reads ("a, b or c"), for the question that asks for one; empty when the
-# connector reads none. ⇄ twin: Get-ExakitVsPasteForms.
+# reads, one per line, for the examples above the question that asks for one;
+# empty when the connector reads none. ⇄ twin: Get-ExakitVsPasteForms.
 _exakit_vs_paste_forms() {
     run_python_any -c 'import json, sys
-f = (json.load(open(sys.argv[1])).get("paste") or {}).get("forms") or []
-print(", ".join(f[:-1]) + " or " + f[-1] if len(f) > 1 else "".join(f))' \
+for f in (json.load(open(sys.argv[1])).get("paste") or {}).get("forms") or []:
+    print(f)' \
         "$(exakit_vs_defs)/connectors/$1/connector.json" 2>/dev/null
+}
+
+# _exakit_vs_paste_hint <forms> — the line-by-line hint above the question: what
+# to paste, then each form (one per line, _exakit_vs_paste_forms) on its own
+# line, indented under the hint's text and dim; one wider than the terminal is
+# wrapped at the same indent. ⇄ twin: Write-ExakitVsPasteHint.
+_exakit_vs_paste_hint() {
+    info "Paste the source's connection string, for example:"
+    _eph_w=$(( $(_ui_term_cols) - 10 ))
+    [ "$_eph_w" -ge 10 ] || _eph_w=10
+    while IFS= read -r _eph_f; do
+        [ -n "$_eph_f" ] || continue
+        _ui_wrap "$_eph_f" "$_eph_w"
+        _eph_k=0
+        while [ "$_eph_k" -lt "$_UI_WRAP_N" ]; do
+            printf '        %s%s%s\n' "${UI_DIM:-}" "${_UI_WRAP[$_eph_k]}" "${UI_RESET:-}"
+            _eph_k=$(( _eph_k + 1 ))
+        done
+    done <<EOF
+$1
+EOF
+}
+
+# _exakit_vs_paste_choice_text — the question after a pasted string was read:
+# its three answers, with the palette's separator. ⇄ twin:
+# Get-ExakitVsPasteChoiceText.
+_exakit_vs_paste_choice_text() {
+    _epc_dot='·'; [ "${UI_BULLET:-}" = '-' ] && _epc_dot='-'
+    printf 'Enter to use it %s e to paste it again %s Esc/n to type the fields instead' "$_epc_dot" "$_epc_dot"
+}
+
+# _exakit_vs_paste_masked <engine-output-file> — the string the engine read, its
+# credentials masked by the engine (paste.py masked), from its RESULT line.
+_exakit_vs_paste_masked() {
+    _exakit_vs_result "$1" | run_python_any -c 'import json, sys; print(json.load(sys.stdin).get("masked") or "")' 2>/dev/null
 }
 
 # _exakit_vs_paste_typed — the engine's paste lines on stdin, for a string typed
@@ -709,23 +827,26 @@ _exakit_vs_paste_typed() {
 # _exakit_vs_ask_paste <connector> — the line-by-line twin of the form's first
 # question: a connection string, or Enter to type the fields. It is read with
 # echo off, as a password is (it often holds one), out of canonical mode, so a
-# long one is read whole (_exakit_vs_hidden_line): only the fields it filled
-# are shown afterwards. What it names is not asked again (_exakit_vs_paste); a
-# string the engine cannot read is said, in its words, and asked again. A
-# terminal that cannot hide input is not asked at all. ⇄ twin:
-# Read-ExakitVsLinePaste.
+# long one is read whole (_exakit_vs_hidden_line). Then it is shown back, its
+# credentials masked by the engine ("Read: ..."), and one key decides: Enter
+# uses it, e asks for it again, Esc or n types the fields instead
+# (_exakit_vs_paste). What it names is not asked again; a string the engine
+# cannot read is said, in its words, and asked again. A terminal that cannot
+# hide input is not asked at all. ⇄ twin: Read-ExakitVsLinePaste.
 _exakit_vs_ask_paste() {
     _eap_forms="$(_exakit_vs_paste_forms "$1")"
     [ -n "$_eap_forms" ] || return 0
-    info "Paste the source's connection string as it shows it: $_eap_forms"
+    _exakit_vs_paste_hint "$_eap_forms"
     while :; do
-        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (Enter to type the fields) (input hidden): " err < /dev/tty \
+        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (not shown while you paste, Enter to type the fields): " err < /dev/tty \
             || { printf '\n' >&2; return 0; }
         printf '\n' >&2
         _eap_url="$_EVH_LINE"; _EVH_LINE=""
         [ -n "$_eap_url" ] || return 0
-        if _exakit_vs_paste "$1" "$_eap_url" typed; then _eap_url=""; return 0; fi
+        _exakit_vs_paste "$1" "$_eap_url" typed; _eap_rc=$?
         _eap_url=""
+        # 0 used, 6 the fields instead; anything else (refused, or e) asks again.
+        case "$_eap_rc" in 0|6) return 0 ;; esac
     done
 }
 
@@ -738,8 +859,9 @@ _exakit_vs_ask_paste() {
 #              when the command named a connector;
 #   2. fill    one panel per picked source, every field visible with its default,
 #              a required one with a red *; first a connection string, read
-#              hidden (cli.py paste, on its stdin), that answers what it names,
-#              or Enter to type the fields; each answer checked by the engine
+#              hidden (cli.py paste, on its stdin) and shown back masked, that
+#              answers what it names once Enter takes it (e pastes again, Esc
+#              or n types the fields), or Enter to type the fields; each answer checked by the engine
 #              where it was typed (cli.py field, the value on its stdin); a
 #              credential is a hidden prompt (or a key file's path) and stays in
 #              this shell's memory until it goes down the engine's stdin; then a
@@ -1016,7 +1138,8 @@ _exakit_vs_tui_say() {
 _exakit_vs_tui_ask() {
     if [ "$3" = 1 ]; then
         # Echo off before the prompt shows, out of canonical mode, the rest of
-        # a multi-line paste discarded (_exakit_vs_hidden_line).
+        # a multi-line paste discarded, an arrow key's escape sequence dropped
+        # (_exakit_vs_hidden_line).
         _EVT_ANSWER=""
         _exakit_vs_hidden_line "  $2: "; _eva_rc=$?
         if [ "$_eva_rc" = 2 ]; then
@@ -1225,26 +1348,67 @@ _exakit_vs_tui_review() {
     done
 }
 
+# _exakit_vs_tui_example <text> — one example under the hint, indented under its
+# text and dim; one wider than the terminal is wrapped at the same indent, and
+# every line is counted for the next redraw.
+_exakit_vs_tui_example() {
+    _ui_wrap "$1" $(( _EVT_COLS - 10 ))
+    _ete_k=0
+    while [ "$_ete_k" -lt "$_UI_WRAP_N" ]; do
+        printf '        %s%s%s\n' "$UI_DIM" "${_UI_WRAP[$_ete_k]}" "$UI_RESET"
+        _ete_k=$(( _ete_k + 1 ))
+    done
+    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + _UI_WRAP_N ))
+}
+
+# _exakit_vs_tui_choose <plain> <colour> — the question after a pasted string,
+# answered by one key (_exakit_vs_key): Enter, e, n or Esc into _EVK, eof at end
+# of input; any other key is no answer. A terminal that cannot read single keys
+# uses the string (enter), as before the question existed.
+_exakit_vs_tui_choose() {
+    printf '  %s ' "$2"
+    while :; do
+        _exakit_vs_key || { _EVK=enter; break; }
+        case "$_EVK" in enter|esc|eof|e|E|n|N) break ;; esac
+    done
+    printf '\n'
+    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 3 ))) ))
+}
+
 # _exakit_vs_tui_paste — the form's first question, for a connector that reads a
-# connection string (its paste block): read hidden, the string goes to the
-# engine's paste on stdin, never in argv, and is not kept. What it names is answered, marked "from
-# the string" and not asked; the engine's notes (a credential in it ignored, to
-# be asked for hidden) stay under the panel. A string it cannot read is said, in
-# the engine's words, and asked again; Enter types the fields instead. Returns 1
-# at end of input. Twin of Invoke-ExakitVsTuiPaste.
+# connection string (its paste block), under a hint and one example per line:
+# read hidden, the string goes to the engine's paste on stdin, never in argv,
+# and is not kept. It is shown back with its credentials masked by the engine
+# ("Read: ..."), and one key decides: Enter uses it, e asks for it again, Esc or
+# n types the fields instead. What it names is answered, marked "from the
+# string" and not asked; the engine's notes (a credential in it ignored, to be
+# asked for hidden) and the masked string stay under the panel. A string it
+# cannot read is said, in the engine's words, and asked again; Enter types the
+# fields instead. Returns 1 at end of input. Twin of Invoke-ExakitVsTuiPaste.
 _exakit_vs_tui_paste() {
     _etp_forms="$(_exakit_vs_paste_forms "$_evo_id")"
     [ -n "$_etp_forms" ] || return 0
     _etp_why=""
-    # Read with echo off, as a password is: the string often holds one. Only
-    # the fields it filled are shown afterwards.
-    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(hidden; Enter to type the fields)$UI_RESET"
+    # Read with echo off, as a password is: the string often holds one. What
+    # was read is shown back masked, and the fields it filled.
+    _etp_q="Connection string (not shown while you paste, Enter to type the fields)"
+    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(not shown while you paste, Enter to type the fields)$UI_RESET"
+    _etp_c="$(_exakit_vs_paste_choice_text)"
+    # Where there is room, the question says a field can still be changed.
+    _etp_more=" $( [ "${UI_BULLET:-}" = '-' ] && printf '%s' '-' || printf '%s' '·' ) every field can be changed in the summary"
+    [ $(( ${#_etp_c} + ${#_etp_more} + 3 )) -lt "$_EVT_COLS" ] && _etp_c="$_etp_c$_etp_more"
     while :; do
         _exakit_vs_tui_draw "$_evo_title" -1
-        _exakit_vs_tui_say "$UI_DIM$UI_BULLET$UI_RESET" "Paste the source's connection string as it shows it: $_etp_forms"
+        _exakit_vs_tui_say "$UI_DIM$UI_BULLET$UI_RESET" "Paste the source's connection string, for example:"
+        while IFS= read -r _etp_f; do
+            [ -n "$_etp_f" ] && _exakit_vs_tui_example "$_etp_f"
+        done <<EOF
+$_etp_forms
+EOF
         [ -n "$_etp_why" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etp_why"
+        _etp_why=""
         _EVT_NOHIDE=""
-        if ! _exakit_vs_tui_ask "Connection string (hidden; Enter to type the fields)" "$_etp_deco" 1; then
+        if ! _exakit_vs_tui_ask "$_etp_q" "$_etp_deco" 1; then
             # A terminal that cannot hide input is not asked: the fields are.
             [ -n "$_EVT_NOHIDE" ] && return 0
             return 1
@@ -1258,6 +1422,14 @@ _exakit_vs_tui_paste() {
             [ -n "$_etp_why" ] || _etp_why="the connection string could not be read"
             continue
         fi
+        _etp_masked="$(_exakit_vs_paste_masked "$_EVT_DIR/paste")"
+        _exakit_vs_tui_say "$UI_DIM$UI_BULLET$UI_RESET" "Read: $_etp_masked"
+        _exakit_vs_tui_choose "$_etp_c" "$UI_ASK$_etp_c$UI_RESET"
+        case "$_EVK" in
+            e|E) rm -f "$_EVT_DIR/paste"; continue ;;
+            n|N|esc) rm -f "$_EVT_DIR/paste"; return 0 ;;
+            eof) rm -f "$_EVT_DIR/paste"; return 1 ;;
+        esac
         _etp_pairs="$(_exakit_vs_result "$_EVT_DIR/paste" | run_python_any -c 'import json, sys
 for k, v in json.load(sys.stdin)["values"].items():
     print("%s=%s" % (k, v))')"
@@ -1273,7 +1445,8 @@ for k, v in json.load(sys.stdin)["values"].items():
         done <<EOF
 $_etp_pairs
 EOF
-        _EVT_NOTES="$(grep -E '^(WARN|INFO) ' "$_EVT_DIR/paste" | _exakit_vs_paste_typed)"
+        _EVT_NOTES="INFO Read: $_etp_masked
+$(grep -E '^(WARN|INFO) ' "$_EVT_DIR/paste" | _exakit_vs_paste_typed)"
         rm -f "$_EVT_DIR/paste"
         return 0
     done
@@ -1710,7 +1883,10 @@ if p.get("exposure"):
 # notes shown, as --set pairs put BEFORE the command line's own in EXAKIT_VS_SETS
 # - the engine's pairs() keeps the last, so an explicit --set wins - and their
 # names added to EXAKIT_VS_GIVEN, so they are not asked for again. typed: the
-# string was typed at a prompt, not given with --url (_exakit_vs_paste_typed).
+# string was typed at a prompt, not given with --url (_exakit_vs_paste_typed):
+# it is shown back first, its credentials masked by the engine ("Read: ..."),
+# and one key at the terminal decides - Enter uses it, e returns 7 (paste it
+# again), Esc or n returns 6 (type the fields instead), nothing used.
 _exakit_vs_paste() {
     _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || {
         _exakit_vs_no_tmp && return 1
@@ -1725,6 +1901,20 @@ _exakit_vs_paste() {
         printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _evp_rc=$?
         if [ -n "${3:-}" ]; then
+            if [ "$_evp_rc" -eq 0 ]; then
+                info "Read: $(_exakit_vs_paste_masked "$_evp_out")"
+                printf '    %s?%s %s ' "${UI_ASK:-}" "${UI_RESET:-}" "$(_exakit_vs_paste_choice_text)" >&2
+                while :; do
+                    # A terminal that cannot read single keys uses the string.
+                    _exakit_vs_key < /dev/tty || { _EVK=enter; break; }
+                    case "$_EVK" in enter|esc|eof|e|E|n|N) break ;; esac
+                done
+                printf '\n' >&2
+                case "$_EVK" in
+                    e|E) rm -f "$_evp_out"; return 7 ;;
+                    n|N|esc|eof) rm -f "$_evp_out"; return 6 ;;
+                esac
+            fi
             _exakit_vs_render <(_exakit_vs_paste_typed < "$_evp_out")
         else
             _exakit_vs_render "$_evp_out"
