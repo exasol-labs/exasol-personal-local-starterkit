@@ -260,22 +260,35 @@ function Install-ExakitVsJava { [void]$script:calls.Add("JAVA"); return $false }
 $script:codes.AddRange(@(20, 0)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "exit 20: DNS repaired, retried once, exit 0" "0 connect|REPAIR|connect" ("$code " + ($script:calls -join "|"))
+# Docker: linked in the image, so the database needs a start to see it.
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); $script:PersonalSlcDnsNeedsStart = $true; return $false }
+function Restart-ExakitVsDatabase { [void]$script:calls.Add("RESTART"); return $true }
+$script:ExakitVsAssumeYes = $true
+$script:codes.AddRange(@(20, 0)); $script:calls.Clear()
+$code = Invoke-ExakitVsRun -Arguments @("connect")
+Check "exit 20 on Docker, --yes: one restart, then the retry" "0 connect|REPAIR|RESTART|connect" ("$code " + ($script:calls -join "|"))
+$script:ExakitVsAssumeYes = $false
+$previousJson = $script:ExakitVsJson; $script:ExakitVsJson = $true
+$script:codes.AddRange(@(20)); $script:calls.Clear()
+$code = Invoke-ExakitVsRun -Arguments @("connect") 6> $null
+Check "...without --yes (--json never asks): no restart, no retry" "20 --json|REPAIR" ("$code " + ($script:calls -join "|"))
+$script:ExakitVsJson = $previousJson
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); $script:PersonalSlcDnsNeedsStart = $false; return $true }
 $script:codes.AddRange(@(21)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "exit 21: Java offered; declined, not retried" "21 connect|JAVA" ("$code " + ($script:calls -join "|"))
 $script:codes.AddRange(@(1)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "any other failure: no retry" "1 connect" ("$code " + ($script:calls -join "|"))
-# A repair that fails: the bridge's own line must not promise the restart
-# the engine's fix rules out on Docker (lifecycle.DNS_ON_DOCKER).
-function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $false }
+# A repair that fails: the bridge names the stop and start, whose start links
+# the image on Docker and repairs the container elsewhere.
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); $script:PersonalSlcDnsNeedsStart = $false; return $false }
 function Get-PersonalSlcDnsEngine { return $script:stubEngine }
-$script:stubEngine = "docker"
-$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
-Check "a failed repair on Docker: no restart promised" "True False" ("{0} {1}" -f $said.Contains("DNS could not be repaired on this Docker deployment; the failure's fix says why."), $said.Contains("Restart the database"))
-$script:stubEngine = "podman"
-$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
-Check "...on Podman: the restart, as before" $true ($said.Contains("Restart the database (exakit stop, exakit start) and try again."))
+foreach ($stubEngine in @("docker", "podman")) {
+    $script:stubEngine = $stubEngine
+    $said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
+    Check "a failed repair ($stubEngine): the stop and start that fix it" $true ($said.Contains("Restart the database (exakit stop, exakit start) and try again."))
+}
 function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $true }
 
 Write-Host ""
@@ -1096,6 +1109,72 @@ $out = & $pwsh -NoProfile -File $exitChild (J @("setup", "lib", "virtual-schemas
 $childCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 Check "review 7: ...a day file made ready but never written: a failure names no log" "1 False" ("$childCode " + ((@($out) | ForEach-Object { "$_" }) -join "`n").Contains("Log ("))
+
+Write-Host ""
+Write-Host "== a restart whose start fails is not a running database =="
+# The real functions, over every stand-in above; a stand-in exakit.cmd whose
+# start exits FAKE_START_RC. Twin of the bash bridge's "did not come back".
+$vsAst = [System.Management.Automation.Language.Parser]::ParseFile((J @("setup", "lib", "virtual-schemas.ps1")), [ref]$null, [ref]$null)
+foreach ($def in @($vsAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and
+        (@("Restart-ExakitVsDatabase", "Install-ExakitVsJava", "Repair-ExakitVsForRetry") -contains $n.Name) }, $true))) {
+    . ([scriptblock]::Create($def.Extent.Text))
+}
+$fakeBin = Join-Path $work "fakebin"; New-Item -ItemType Directory -Force -Path $fakeBin | Out-Null
+$fakeExakit = Join-Path $fakeBin "exakit.cmd"
+$fakeCalls = Join-Path $work "exakit-calls.txt"
+if ($env:OS -like "*Windows*") {
+    Set-Content -LiteralPath $fakeExakit -Encoding Ascii -Value @("@echo off", "echo %1>>""$fakeCalls""",
+        "if ""%1""==""start"" exit /b %FAKE_START_RC%", "exit /b 0")
+} else {
+    Set-Content -LiteralPath $fakeExakit -Encoding Ascii -Value @("#!/bin/sh", "echo `"`$1`" >> '$fakeCalls'",
+        "[ `"`$1`" = start ] && exit `${FAKE_START_RC:-0}", "exit 0")
+    chmod +x $fakeExakit
+}
+$previousBin = $script:BinDir
+$script:BinDir = $fakeBin
+function Calls { if (Test-Path -LiteralPath $fakeCalls) { $c = (@(Get-Content -LiteralPath $fakeCalls) | ForEach-Object { "$_".Trim() }) -join "|"; Remove-Item -LiteralPath $fakeCalls; return $c }; return "" }
+$env:FAKE_START_RC = "1"
+$r = Restart-ExakitVsDatabase 6> $null
+Check "Restart-ExakitVsDatabase: a start that fails is False" "False stop|start" ("$r " + (Calls))
+$env:FAKE_START_RC = "0"
+$r = Restart-ExakitVsDatabase 6> $null
+Check "...a start that succeeds is True" "True stop|start" ("$r " + (Calls))
+# The Java install around it, with the launcher and the DNS steps replaced.
+function Ok([string]$M) { Write-Host "OK $M" }
+function Get-PersonalCli { return "exasol" }
+function Get-PersonalAutoApproveFlag { return "" }
+function Invoke-ExakitLogged { return 0 }
+function Initialize-PersonalSlcDns { param([switch]$Pull) }
+function Repair-PersonalSlcDns { $script:PersonalSlcDnsNeedsStart = $script:stubNeedsStart; return (-not $script:stubNeedsStart) }
+$script:stubNeedsStart = $false
+$previousYes = $script:ExakitVsAssumeYes; $script:ExakitVsAssumeYes = $true
+$env:FAKE_START_RC = "1"
+$said = @(Install-ExakitVsJava 6>&1)
+$r = $said[-1]; $text = (@($said) | ForEach-Object { "$_" }) -join "|"
+Check "Install-ExakitVsJava, the start fails: False, and it says so" "False True False" `
+    ("$r " + $text.Contains("The database did not come back after installing Java. Run: exakit start") + " " + $text.Contains("Java language container installed"))
+[void](Calls)
+$env:FAKE_START_RC = "0"
+$said = @(Install-ExakitVsJava 6>&1)
+Check "...the start succeeds: True, installed" "True True stop|start" ("$($said[-1]) " + ((@($said) | ForEach-Object { "$_" }) -join "|").Contains("Java language container installed") + " " + (Calls))
+# Docker, an older installed kit: the second restart is checked too.
+$script:stubNeedsStart = $true
+$env:FAKE_START_RC = "1"
+$said = @(Install-ExakitVsJava 6>&1)
+Check "...the second restart (an older kit's start) fails: False" "False" "$($said[-1])"
+[void](Calls)
+# Exit 20 on Docker, --yes: the bridge must not retry a database that is down.
+$env:FAKE_START_RC = "1"
+$said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
+Check "Repair-ExakitVsForRetry 20 on Docker, the restart's start fails: False, said as bash says it" "False True" `
+    ("$($said[-1]) " + ((@($said) | ForEach-Object { "$_" }) -join "|").Contains("The database did not come back. Run: exakit start"))
+[void](Calls)
+$env:FAKE_START_RC = "0"
+$said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
+Check "...the start succeeds: True, retried" "True stop|start" ("$($said[-1]) " + (Calls))
+$script:ExakitVsAssumeYes = $previousYes
+$script:BinDir = $previousBin
+Remove-Item Env:\FAKE_START_RC
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }

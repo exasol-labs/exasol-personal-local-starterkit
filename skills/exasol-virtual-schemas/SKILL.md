@@ -169,7 +169,8 @@ does not guarantee the source does little work: keep remote queries selective.
 The other kinds (`region`, `nobucket`, `clock`, `schema_missing`, `external`, `managed`,
 `dns`, `setup`, `error`) are connector-specific: `remedy` says the fix, and the connector
 skills name the ones they meet. The kit repairs Java without a DNS resolver (exit 20)
-itself and retries once. `exakit source list` and `issues` show a failing source's status
+itself and retries once; on a Docker deployment that repair takes one database restart,
+asked on a terminal and made by `--yes`. `exakit source list` and `issues` show a failing source's status
 instead: `auth-failed`, `tls-failed`, `unreachable`, `dns-failed`, `access-denied`
 (`denied`, `privilege`, `external`) or `failed`.
 
