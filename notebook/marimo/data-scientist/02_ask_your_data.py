@@ -18,11 +18,11 @@ def _(mo):
 
     **Dataset:** the one you approved last (else `amazon_sales`), `fraud_transactions` or your own approved descriptor.
 
-    **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → **7 Ask with AI** → 8 Share → 9 Hand off. **This notebook: step 7.**
+    **Steps:** 1 Access, 2 Understand, 3 Prepare, 4 Explore, 5 Model, 6 Validate, **7 Ask with AI**, 8 Share, 9 Hand off. **This notebook: step 7.**
 
-    Ask a question in plain English, review the SQL proposed for it, approve it, then run it read-only. It continues the quickstart's workflow log on its own.
+    Ask a question in plain English. Read the proposed SQL, approve it, then run it read-only.
 
-    Optional: `DRAFT_WITH_MODEL = True` lets your model draft the SQL from the approved column map: every column with its role, evidence and note (no rows are sent). Set the model up in the cell *Your AI model and Langfuse* below - an external one (Claude, OpenAI, ...) or one running on your own machine (Ollama) both work.
+    Optional: set `DRAFT_WITH_MODEL = True` to let your model write the SQL. The model gets the column map only, never rows.
     """)
     return
 
@@ -48,9 +48,14 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Step 7 · Ask your data with AI
+    ## Step 7 · Ask your data
 
-    > **What happens here?** You ask in words; the notebook (or your AI model) turns the question into SQL from the approved column map; you read that SQL and approve it; only then does it run, with read-only rights. The model never sees your rows - only the column map - and every call can be recorded in Langfuse so you can see what was sent, what came back and what it cost.
+    1. You ask a question.
+    2. The starter SQL or your model writes the query from the column map.
+    3. You read and approve the query.
+    4. The query runs with read-only rights.
+
+    With Langfuse set up, each model call is traced: what was sent, the answer and the cost.
     """)
     return
 
@@ -60,13 +65,11 @@ def _(mo):
     mo.md(r"""
     ### Your AI model and Langfuse (optional)
 
-    Only the AI steps need this (the SQL draft, with `DRAFT_WITH_MODEL = True`). Skip it and everything else runs.
+    Only `DRAFT_WITH_MODEL = True` needs this.
 
-    - **Plain values go in the cell:** `MODEL_ID`, `PROVIDER_BASE_URL` (any Chat Completions endpoint: Claude, OpenAI, or Ollama on your own machine - `MODEL-PROVIDERS.md` lists them) and `LANGFUSE_BASE_URL` (where the calls are recorded: what was sent, the answer, the cost).
-    - **Secrets never go in the cell.** When you run it, a hidden box asks for the model's API key and the two Langfuse keys (Enter skips one). They live in this kernel only - not in this file, its outputs or on disk - and are gone when the kernel stops.
-    - **Or once for every notebook:** `nb.model_setup()` prints the few lines to run in a terminal on this machine.
-
-    The cell answers in one line: the model, whether it has a key, and whether Langfuse is tracing.
+    - **In the cell:** `MODEL_ID`, `PROVIDER_BASE_URL` (any Chat Completions endpoint, listed in `MODEL-PROVIDERS.md`) and `LANGFUSE_BASE_URL` (where calls are traced).
+    - **Not in the cell:** the API key and the two Langfuse keys. A hidden box asks for them. They stay in this kernel only.
+    - **For every notebook:** run `nb.model_setup()`. It prints the terminal lines for this machine.
     """)
     return
 
@@ -85,7 +88,7 @@ def _(mo):
     mo.md(r"""
     ### Review the proposal
 
-    Read the SQL, what the model assumed and what it says to check. With the starter SQL (`DRAFT_WITH_MODEL = False`), changing `QUESTION` alone changes nothing; edit the SQL instead: `proposal.edit("SELECT ...")`.
+    Read the SQL, the model's assumptions and its checks. With the starter SQL (`DRAFT_WITH_MODEL = False`), a new `QUESTION` does not change the SQL. Edit the SQL instead: `proposal.edit("SELECT ...")`.
     """)
     return
 
@@ -107,13 +110,12 @@ def _(mo):
     mo.md(r"""
     ### Approve and run
 
-    > **Why approve a query?** A query written for you, by the starter SQL or by a model, can be subtly wrong: the wrong column, a missing filter.
-    > You read it and say yes first; only that exact text then runs.
-    > It runs with read-only rights, so it can never change your data.
+    A proposed query can be wrong: a wrong column, a missing filter. Read it before you approve it.
 
-    Nothing runs while `APPROVE_SQL = False`. After review, set `APPROVE_SQL = True` and rerun.
+    1. Set `APPROVE_SQL = True`.
+    2. Run the cell again.
 
-    Only the exact approved SQL runs, as the read-only user. `proposal.edit(...)` clears the approval.
+    Only the exact approved SQL runs, as the read-only user. `proposal.edit(...)` removes the approval.
     """)
     return
 
@@ -137,7 +139,7 @@ def _(mo):
     mo.md(r"""
     ## Next: steps 8 and 9
 
-    Open `03_share.ipynb`: publish a dashboard others can open, then hand the whole piece of work off in one bundle.
+    Open `03_share.ipynb` to publish a dashboard and hand off the work.
     """)
     return
 

@@ -11,15 +11,20 @@
 #
 # **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 #
-# **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 1 and 2** (and a step 0: the kit itself, from here).
+# **Steps:** 1 Access, 2 Understand, 3 Prepare, 4 Explore, 5 Model, 6 Validate, 7 Ask with AI, 8 Share, 9 Hand off. **This notebook: steps 0, 1 and 2.**
 #
-# You end with a connection, an approved column map and a first grouped result. No AI model needed. Everything the kit does - checking it, updating it, adding an add-on, loading data - runs from these cells, with its log shown here, so you never have to switch to a terminal.
+# At the end you have a connection, an approved column map and a first result. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
 
 # %% [markdown]
-# ## Step 0 · The kit, from this notebook
+# ## Step 0 · Check the kit
 #
-# > **What is this?** The kit is the database on this computer, its add-ons and your notebooks. This cell asks it how it is doing and prints the answer: installed or not, the database, each add-on and where it runs, the datasets loaded.
-# > It changes nothing. Any kit command can be run the same way: `nb.exakit("update")` brings the kit up to date, `nb.exakit("marketplace", "dash-server")` adds an add-on, `nb.exakit("logs")` shows the logs - each prints what the terminal would, as it happens.
+# Shows what is installed and running: the database, each add-on and the loaded datasets. It changes nothing.
+#
+# Other kit commands run the same way, with the log in the cell:
+#
+# - `nb.exakit("update")` updates the kit.
+# - `nb.exakit("marketplace", "dash-server")` adds an add-on.
+# - `nb.exakit("logs")` shows the logs.
 
 # %%
 import exakit.nb as nb
@@ -37,13 +42,12 @@ kit_state = nb.kit_check()
 # %% [markdown]
 # ## Step 1 · Access the data
 #
-# > **What happens here?** The notebook connects to the kit's database with the connection the kit saved (no password in this file), starts a *workflow* - one ID that every query and decision below is logged under - and loads a dataset: one of the kit's three, your own file, or a table from a source you connected.
-# > After this step the data is in the database and this notebook can see it.
+# Connects to the database, starts a workflow and loads a dataset: a practice dataset, your own file or a connected source.
 
 # %% [markdown]
 # ### Start a workflow
 #
-# Logs your queries and decisions under one ID. Explore, Ask and Share continue it on their own: nothing to copy.
+# The workflow gives one ID to every query and decision below. The next notebooks continue it. You do not copy anything.
 
 # %%
 import os
@@ -59,15 +63,14 @@ print(f"Every step below is logged under it: exakit workflow show {workflow_id}"
 # %% [markdown]
 # ## Step 2 · Understand the data
 #
-# > **What happens here?** Before any number is trusted, the notebook describes the table - what each column is, which one is the key, the date, the groups, the outcome - and you approve that description. The kit drafts it from the data and shows why; the columns it was least sure about come first.
-# > Every later step reads this approved map, which is why the same notebooks run on any table.
+# You approve the column map: the key, the date, the groups and the outcome. The kit proposes it and shows the least certain columns first. Every later step reads this map, so the same notebooks run on any table.
 
 # %% [include] ../00_shared/data_paths.py review
 
 # %% [markdown]
 # ### A first result
 #
-# How many rows per group and, when the column map names a label, the % where it is 1. A note under the result says what the numbers mean. Every query in these notebooks is printed before its result, so you always see the SQL.
+# Rows per group, and the % where the label is 1 when the map has a label. Each query shows its SQL before the result.
 
 # %%
 missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
@@ -94,4 +97,5 @@ first_rows
 # %% [markdown]
 # ## Next: steps 3 to 6
 #
-# Open `01_explore.ipynb`: prepare the data, explore it, train a small model and validate it. Then `02_ask_your_data.ipynb` (step 7) and `03_share.ipynb` (steps 8 and 9). Nothing to copy: each continues this workflow on its own.
+# Open `01_explore.ipynb` to prepare, explore, model and validate. Then open `02_ask_your_data.ipynb` (step 7) and `03_share.ipynb` (steps 8 and 9). Each one continues this workflow.
+

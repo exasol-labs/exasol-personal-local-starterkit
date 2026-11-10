@@ -9,13 +9,13 @@
 # %% [markdown]
 # # Train in Exasol
 #
-# **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `fraud_transactions` or your own approved file. **How long:** about five minutes after setup.
+# **Dataset:** the one you approved last (else `amazon_sales`). Set `DATASET` for `fraud_transactions` or your own approved file. **How long:** about five minutes after setup.
 #
-# Trains a model inside Exasol from the approved column map and records it in MLflow. No LLM needed.
+# Trains a model inside Exasol from the approved column map and records it in MLflow. No LLM is needed.
 #
 # **Run first:**
-# - an approved column map with a label (the quickstart's review step, or `exakit describe <id> --approve`)
-# - a Python ML runtime: `exakit udf-use default` (`PYTHON3_ML`) or `exakit udf-setup` (`PYTHON3`); `EXAKIT_UDF_CONTAINER` picks another alias
+# - an approved column map with a label (the quickstart's review, or `exakit describe <id> --approve`)
+# - a Python ML runtime: `exakit udf-use default` (`PYTHON3_ML`) or `exakit udf-setup` (`PYTHON3`). `EXAKIT_UDF_CONTAINER` selects another alias.
 # - `exakit mlflow start` for the MLflow UI
 
 # %%
@@ -29,11 +29,9 @@ dataset_id = nb.chosen_dataset(DATASET)
 nb.continue_workflow("train-" + dataset_id)   # the quickstart's workflow, or the last one: nothing to paste
 
 # %% [markdown]
-# ## Optional: another MLflow server
+# ## Optional: your team's MLflow server
 #
-# > **What is this?** Where this notebook records the training run (MLflow: the settings, scores and model file of every run).
-# > By default that is the kit's own MLflow on this computer. Fill in `MLFLOW_TRACKING_URI` to record to your team's server instead; `MLFLOW_SERVER_LOGIN = True` asks for its username and password in a hidden box.
-# > They stay in this notebook's kernel only - never in this file. Left empty, the cell changes nothing.
+# By default the run goes to the kit's own MLflow. Set `MLFLOW_TRACKING_URI` to use your team's server. `MLFLOW_SERVER_LOGIN = True` asks for the username and password in a hidden box. They stay in this kernel only. Left empty, this cell changes nothing.
 
 # %%
 MLFLOW_TRACKING_URI = ""     # e.g. "https://mlflow.example.com"; empty: the kit's own MLflow (or the one set before `exakit notebook`)
@@ -43,11 +41,9 @@ nb.use_mlflow(MLFLOW_TRACKING_URI, MLFLOW_SERVER_LOGIN)
 # %% [markdown]
 # ## Load the handoff
 #
-# > **What is the handoff?** One small file that pins down what the model is trained on: the approved map, the features, the outcome (label) and how rows are split into training and test.
-# > Written down once, the same training can be repeated later and gives the same model.
-# > If the table or the map changes, the handoff no longer matches and is refused instead of being used silently.
+# The handoff fixes what the model trains on: the map version, a data fingerprint, the features, the label and the split. The same handoff gives the same model. If there is none, this cell writes it from the approved map. A stale handoff is refused.
 #
-# The handoff fixes what is trained on: the approved map version, a data fingerprint, the features, the label and the split. With none yet, it is written here from the approved map; a stale one is refused. Check the printed ID and split. No date role? Set `SPLIT = "random"`.
+# Check the printed ID and split. No date role? Set `SPLIT = "random"`.
 
 # %%
 SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet
@@ -62,11 +58,9 @@ print(f"data digest: {handoff['data_digest']}")
 # %% [markdown]
 # ## Build features and the training UDF
 #
-# > **What is the feature view?** A SQL view that turns each row into numbers a model can use: year, month and weekday from the date, one 0/1 column per common category value, how common the entity is.
-# > It is plain SQL, so you can read every feature, and the Rust scorer later reads the very same view.
-# > It is built from the approved map only, so a column that gives the answer away (like `STATUS` in `amazon_sales`) never becomes a feature.
+# Creates a SQL feature view and a training UDF. The view turns each row into numbers: year, month and weekday, one 0/1 column per common category, and the entity's frequency. The Rust scorer reads the same view. A column that gives the answer away (`STATUS` in `amazon_sales`) never becomes a feature.
 #
-# Creates a SQL feature view and a training UDF. Check the label is not among the printed features.
+# Make sure the label is not in the printed features.
 
 # %%
 UDF_SCHEMA = "EXASOL_MLFLOW"
@@ -87,15 +81,11 @@ print(plan.training_sql)
 # %% [markdown]
 # ## Train and compare with the baseline
 #
-# > **What is the baseline?** The score of a "model" that always predicts the most common outcome (in `amazon_sales`: never cancelled).
-# > A trained model has to beat it; if it does not, it has learned nothing useful yet.
-# > The score is macro-F1, which weighs both outcomes equally, so always answering "not cancelled" cannot look good.
+# The baseline always predicts the most common outcome. The model must beat it. The score is macro-F1, which weighs both outcomes equally.
 #
-# Compare macro-F1 with `baseline_macro_f1` (always predicting the most common class). `CLASS_WEIGHT = "balanced"` helps when the label is rare (`amazon_sales`: 14.2% cancelled); with an even label it changes little, and `None` is fine.
+# Compare macro-F1 with `baseline_macro_f1`. Use `CLASS_WEIGHT = "balanced"` when the label is rare (`amazon_sales`: 14.2% cancelled). For an even label, `None` is fine.
 #
-# The run is recorded in MLflow: its settings, scores and model file, tagged with the map version and handoff it came from.
-#
-# If MLflow fails after training, replay with `exakit mlflow replay`.
+# MLflow records the run with the map version and the handoff. If MLflow fails after training, run `exakit mlflow replay`.
 
 # %%
 EXPERIMENT = "exasol-starter-kit"
@@ -115,7 +105,7 @@ print("beats baseline" if f1 > baseline else "does not beat baseline; inspect fe
 # %% [markdown]
 # ## Model files
 #
-# `model/model.pkl` is the fitted pipeline. `coefficients.json` holds the weights, also saved beside the handoff for the Rust scorer.
+# `model/model.pkl` is the fitted pipeline. `coefficients.json` holds the weights. A copy goes beside the handoff for the Rust scorer.
 
 # %%
 from urllib.parse import unquote, urlparse
@@ -132,4 +122,5 @@ print(f"coefficients beside the handoff: {coefficients_path}")
 #
 # - `02_rust_score.ipynb`: check a Rust scorer against this model.
 # - `03_score_external_model.ipynb`: score a model file in SQL.
-# - To experiment, change one setting (e.g. `REGULARIZATION_C`) and compare runs in MLflow.
+# - To experiment, change one setting (for example `REGULARIZATION_C`) and compare the runs in MLflow.
+
