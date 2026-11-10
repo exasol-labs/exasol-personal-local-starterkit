@@ -47,6 +47,16 @@ for cid in ("postgresql",):
         os.makedirs(folder, exist_ok=True)
         open(os.path.join(folder, doc[role]["asset"]), "wb").write(data)
     json.dump(doc, open(path, "w"), indent=2)
+# MongoDB: one adapter build a CPU and no driver, for the MongoDB-first case.
+path = os.path.join(defs, "connectors", "mongodb", "connector.json")
+doc = json.load(open(path))
+for arch, pin in doc["adapter"]["arch"].items():
+    data = ("adapter-mongodb-" + arch).encode()
+    pin["size"], pin["sha256"] = len(data), hashlib.sha256(data).hexdigest()
+    folder = os.path.join(home, "cache", "virtual-schemas", pin["sha256"])
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, pin["asset"]), "wb").write(data)
+json.dump(doc, open(path, "w"), indent=2)
 '@
 $seedFile = Join-Path $work "seed.py"; Set-Content -LiteralPath $seedFile -Value $seed -Encoding ASCII
 & $python $seedFile $defs $home2
@@ -128,6 +138,29 @@ Check "...and the caller's environment is put back" "docker" $env:EXAKIT_PERSONA
 Remove-Item Env:\EXAKIT_PERSONAL_ENGINE
 Remove-Item Env:\EXAKIT_VS_OS
 Remove-Item -LiteralPath $engineRecord -Force
+
+Write-Host ""
+Write-Host "== MongoDB first on a fresh database: EXAKIT_VS is made before its scripts =="
+# A MongoDB source asks no Java probe (it has no host, and its Rust profile
+# needs no DNS), which was all that made EXAKIT_VS: on a fresh database its
+# adapter script went into a schema that did not exist, and the simulated
+# database refuses that as Exasol does.
+$freshState = Join-Path $work "db-fresh.json"
+Set-Content -LiteralPath $freshState -Value '{"sources": {"cluster0.example.net": {"tables": ["MOVIES"]}}}' -Encoding ASCII
+$env:FAKE_VS_STATE = $freshState
+$env:EXAKIT_VS_SETTLE_SECONDS = "0"
+$r = Invoke-ExakitVsEngine -Arguments @("connect", "mongodb", "--name", "mgfirst", "--set", "uri=mongodb+srv://cluster0.example.net/", "--set", "database=sample_mflix", "--set", "collection=movies", "--set", "user=reader", "--secret-stdin") -Secret "mg-pass"
+$freshDb = Get-Content -Raw -LiteralPath $freshState -Encoding UTF8 | ConvertFrom-Json
+$freshSql = @($freshDb.statements)
+$schemaAt = [array]::IndexOf($freshSql, "CREATE SCHEMA EXAKIT_VS")
+$adapterAt = -1
+for ($i = 0; $i -lt $freshSql.Count; $i++) { if (("" + $freshSql[$i]).StartsWith('CREATE OR REPLACE RUST ADAPTER SCRIPT "EXAKIT_VS"')) { $adapterAt = $i; break } }
+Check "connect mongodb through the bridge on a fresh database: exit 0" 0 $r.Code
+Check "...EXAKIT_VS made first, then the adapter script in it" $true (($schemaAt -ge 0) -and ($schemaAt -lt $adapterAt))
+$r = Invoke-ExakitVsEngine -Arguments @("remove", "mgfirst")
+Check "...and removed again, so the cases below see the kit as it was" 0 $r.Code
+$env:FAKE_VS_STATE = $state
+Remove-Item Env:\EXAKIT_VS_SETTLE_SECONDS
 
 Write-Host ""
 Write-Host "== the query hint after connect: a quoted name, escaped for exakit.cmd =="
