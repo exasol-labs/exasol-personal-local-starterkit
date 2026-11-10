@@ -192,8 +192,8 @@ main() {
         printf '    %-14s %s (%s)\n' "Platform" "$platform" "$arch"
         printf '    %-14s %s\n' "Database" "$target"
         printf '    %-14s %s\n' "Kit home" "$EXAKIT_HOME"
-        printf '    %-14s %s\n' "Steps" "1 Exasol launcher, 2 the local database, 3 exapump, 4 AI bridge (MCP),"
-        printf '    %-14s %s\n' "" "5 pyexasol, then your persona's data, 6 the exakit command"
+        printf '    %-14s %s\n' "Steps" "1 Exasol launcher, 2 the local database, 3 exapump, 4 database features,"
+        printf '    %-14s %s\n' "" "5 AI bridge (MCP), 6 pyexasol, then your persona's data, 7 the exakit command"
         _plan_answers=""
         if [ -n "${_personas:-}" ] && command -v python3 >/dev/null 2>&1; then
             _plan_answers="$(python3 "$kit_dir/setup/lib/persona_service.py" "$kit_dir" answers "$_personas" 2>/dev/null)"
@@ -416,8 +416,15 @@ main() {
         for _persona in $EXAKIT_PERSONA; do
             _persona="$(printf '%s' "$_persona" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
             [ -n "$_persona" ] || continue
+            # The letters spelled out, not a-z: in most locales a range collates
+            # upper case in between (a A b B ...), and a case-insensitive file
+            # system (macOS) then found ML-ENGINEER.json as ml-engineer.json.
             case "$_persona" in
-                [a-z0-9]*) case "$_persona" in *[!a-z0-9_-]*) _persona_ok=0 ;; *) _persona_ok=1 ;; esac ;;
+                [abcdefghijklmnopqrstuvwxyz0123456789]*)
+                    case "$_persona" in
+                        *[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) _persona_ok=0 ;;
+                        *) _persona_ok=1 ;;
+                    esac ;;
                 *) _persona_ok=0 ;;
             esac
             if [ "$_persona_ok" = 0 ] || [ ! -f "$kit_dir/personas/$_persona.json" ]; then

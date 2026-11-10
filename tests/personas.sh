@@ -271,6 +271,8 @@ contains "install.sh: spaces around the ids are fine" "Persona: data-scientist,m
 echo "the dry run shows the plan, not only the banner (audit MAC-07):"
 out="$(dry ml-engineer)"
 contains "install.sh: the steps" "1 Exasol launcher, 2 the local database" "$out"
+contains "install.sh: seven steps, the database features fourth" "3 exapump, 4 database features," "$out"
+contains "...and the exakit command last, after the persona's data" "6 pyexasol, then your persona's data, 7 the exakit command" "$out"
 contains "install.sh: the persona's add-ons" "notebook,udf-devkit (the persona's)" "$out"
 out="$(EXAKIT_DATASETS=tpch dry ml-engineer)"
 contains "install.sh: an answer you set is yours, and wins" "tpch (yours)" "$out"

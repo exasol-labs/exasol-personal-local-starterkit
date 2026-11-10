@@ -156,7 +156,8 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $Repo "setup/lib/exakit-common.ps1")
 $tokens = $null; $errors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $Repo "setup/exakit.ps1"), [ref]$tokens, [ref]$errors)
-$wanted = @("Invoke-CmdStatus", "Invoke-CmdTlsPin", "Assert-ExakitInstalled", "Get-ExakitPlatformName", "Write-ExakitNotInstalledAnswer")
+# Get-ExakitRuntimeEngine too: Invoke-CmdStatus reads the engine the deployment runs on.
+$wanted = @("Invoke-CmdStatus", "Invoke-CmdTlsPin", "Assert-ExakitInstalled", "Get-ExakitPlatformName", "Write-ExakitNotInstalledAnswer", "Get-ExakitRuntimeEngine")
 foreach ($d in @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $n.Name) }, $true))) {
     . ([scriptblock]::Create($d.Extent.Text))
 }

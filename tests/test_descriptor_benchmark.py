@@ -27,7 +27,8 @@ class BenchmarkTest(unittest.TestCase):
 
     def test_the_kits_datasets_and_the_synthetic_tables(self):
         self.check(self.tuned)
-        self.assertEqual((19, 183), (self.tuned["tables"], self.tuned["columns"]))
+        # 18 tables, 173 columns since the Walmart weekly-sales set left the kit (705d2f2).
+        self.assertEqual((18, 173), (self.tuned["tables"], self.tuned["columns"]))
 
     def test_the_held_out_tables(self):
         self.check(self.held_out)
