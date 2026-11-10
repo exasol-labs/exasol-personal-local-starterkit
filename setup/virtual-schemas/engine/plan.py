@@ -98,11 +98,15 @@ THIS_COMPUTER = {
 }
 
 # The engine the kit recorded for the deployment (manifest runtime.engine,
-# kit 0.2.4+), read once per run by use_engine. Podman when the record names
-# none - every deployment before kit 0.2.4 - as personal_engine_recorded
-# answers. A nano record names the OLD database's engine and is ignored: one
-# whose runtime.container key is there at all, null included, as the shell's
-# manifest_get reads it ("null" is not empty); only "" is no container.
+# kit 0.2.4+), read once per run by use_engine. A nano record names the OLD
+# database's engine and is ignored: one whose runtime.container key is there
+# at all, null included, as the shell's manifest_get reads it ("null" is not
+# empty); only "" is no container. Without a usable record, this run's choice
+# (EXAKIT_PERSONAL_ENGINE, which the bridges pass on: an install that has
+# not recorded it yet), then Podman - every deployment before kit 0.2.4. The
+# same order as the shells' personal_slc_dns_engine and
+# Get-PersonalSlcDnsEngine, so the fix --json names and the bridge's own line
+# agree.
 ENGINE = "podman"
 
 
@@ -114,17 +118,17 @@ def on_macos():
 
 
 def recorded_engine(kit_home):
-    if not kit_home:
-        return "podman"
+    engine = None
     try:
         with open(os.path.join(kit_home, "manifest.json"), encoding="utf-8-sig") as handle:
             runtime = json.load(handle).get("runtime")
-    except (OSError, ValueError, AttributeError):
-        return "podman"
-    if not isinstance(runtime, dict) or ("container" in runtime and runtime["container"] != ""):
-        return "podman"
-    engine = runtime.get("engine")
-    return engine if engine in ("docker", "podman") else "podman"
+        if isinstance(runtime, dict) and not ("container" in runtime and runtime["container"] != ""):
+            engine = runtime.get("engine")
+    except (OSError, ValueError, AttributeError, TypeError):
+        engine = None
+    if engine not in ("docker", "podman"):
+        engine = os.environ.get("EXAKIT_PERSONAL_ENGINE", "")
+    return "docker" if engine == "docker" else "podman"
 
 
 def use_engine(kit_home):

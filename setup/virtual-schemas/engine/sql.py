@@ -27,10 +27,22 @@ class DbError(Exception):
         self.kind = kind
 
 
+# Java missing from the database, in each database's words. No JAVA alias in
+# SCRIPT_LANGUAGES at all: "No usable script language container". Exasol
+# Personal 2.4 names JAVA=builtin_java on a fresh deployment, yet the Java
+# container's client is not in BucketFS until `exasol slc install java`, and a
+# Java script answers "The required executable '/exaudf/exaudfclient' does not
+# exist in BucketFS" (measured on the 2.4 VM and on Docker). Only that
+# executable, exactly: another file missing from BucketFS (exaudfclient_py3,
+# a script beside it) is not a missing Java. A Rust script runs the same
+# client; Lifecycle.language_kind reads the source's own language.
+NOJAVA = (r"No usable script language container|"
+          r"required executable '[^'\n]*/exaudfclient' does not exist in BucketFS")
+
 # Ordered: the first match names the failure. Messages are the JDBC drivers'
 # and Exasol's own; a generic failure stays "error" rather than guessing.
 _KINDS = (
-    ("nojava", r"No usable script language container"),
+    ("nojava", NOJAVA),
     # A driver naming a property its URL lacks (Simba: "Connection Refused:
     # ... Required Connection Key(s)") is configuration, not the network.
     ("error", r"Required Connection Key\(s\)"),
@@ -113,6 +125,11 @@ def classify_raw(summary, raw):
     kind = classify(summary)
     if kind not in ("error", "unreachable"):
         return kind
+    # A Java that cannot start says so wherever the wrapper puts it - past
+    # the summary's line, or past the cut to MAX_ERROR - and nothing reached
+    # the source, so no other class can be the answer.
+    if re.search(NOJAVA, str(raw), re.I):
+        return "nojava"
     causes = classify("\n".join(l for l in str(raw).splitlines() if "Caused by" in l or re.search(r"Exception: ", l)))
     if kind == "unreachable" and causes != "tls":
         return kind

@@ -42,6 +42,20 @@
 #   $env:EXAKIT_NO_UPDATE_NOTICE = "1"  never print the once-a-day update
 #                               notice that other exakit commands can show
 
+# Colour on the terms ui.ps1 sets for the rest of the kit: NO_COLOR or
+# EXAKIT_NO_FANCY=1 asks for none. Write-Host puts no colour into a
+# redirected stream, so a log is plain either way; Windows PowerShell 5.1
+# coloured the console even when told not to. Twin of install.sh's say().
+# FIRST, before anything can fail: PowerShell hoists the trap below to the
+# whole script but defines a function only when it reaches it, and the trap
+# prints through this one - a trap that cannot is the raw error, no
+# .last-failure note and no exit code.
+$InstallColour = (-not $env:NO_COLOR) -and ($env:EXAKIT_NO_FANCY -ne "1")
+function Write-InstallLine {
+    param([string]$Text, [string]$Colour = "")
+    if ($InstallColour -and $Colour) { Write-Host $Text -ForegroundColor $Colour } else { Write-Host $Text }
+}
+
 $ErrorActionPreference = "Stop"
 # EXIT WOULD CLOSE THE USER'S TERMINAL. The documented way to run this file is
 #   irm https://.../install.ps1 | iex
@@ -73,11 +87,11 @@ $InstallPhase = "requirements"
 # script-scope trap is the simplest top-level guard.
 trap {
     Write-Host ""
-    Write-Host "  Installation failed: $($_.Exception.Message)" -ForegroundColor Red
+    Write-InstallLine "  Installation failed: $($_.Exception.Message)" Red
     if ($InstallPhase -eq "download") {
-        Write-Host "  Fix the issue above and re-run. If it keeps happening, check your network or proxy." -ForegroundColor Red
+        Write-InstallLine "  Fix the issue above and re-run. If it keeps happening, check your network or proxy." Red
     } else {
-        Write-Host "  Fix the issue above and re-run." -ForegroundColor Red
+        Write-InstallLine "  Fix the issue above and re-run." Red
     }
     # Record the reason before exiting, the way install.sh does. This runs before
     # the kit's own logging exists, so a failure here used to leave NOTHING
@@ -378,19 +392,19 @@ function Write-ExakitRequirementReport {
     foreach ($check in $Checks) {
         if ($check.State -eq "bad") {
             $failures = $failures + 1
-            Write-Host "  x $($check.Text)" -ForegroundColor Red
+            Write-InstallLine "  x $($check.Text)" Red
         } elseif ($check.State -eq "note") {
-            Write-Host "  - $($check.Text)" -ForegroundColor Yellow
+            Write-InstallLine "  - $($check.Text)" Yellow
         } else {
-            Write-Host "  + $($check.Text)" -ForegroundColor Green
+            Write-InstallLine "  + $($check.Text)" Green
         }
     }
     Write-Host ""
     if ($failures -eq 0) {
-        Write-Host "  All checks passed - this machine can run the starter kit." -ForegroundColor Green
+        Write-InstallLine "  All checks passed - this machine can run the starter kit." Green
         Write-Host "  Re-run without `$env:EXAKIT_PREFLIGHT to install it."
     } else {
-        Write-Host "  $failures requirement(s) missing - fix the items marked x above and re-run." -ForegroundColor Red
+        Write-InstallLine "  $failures requirement(s) missing - fix the items marked x above and re-run." Red
     }
     Write-Host ""
     return $failures
@@ -416,14 +430,14 @@ foreach ($check in $RequirementChecks) {
         # Refusing it would take away the one way to
         # inspect the kit on a machine that cannot run it, so the finding is
         # reported and the run carries on to the plan.
-        Write-Host "  ! $($check.Text)" -ForegroundColor Yellow
+        Write-InstallLine "  ! $($check.Text)" Yellow
         continue
     }
     Write-Host ""
     $firstDetail = $true
     foreach ($line in $check.Detail) {
         if ($firstDetail) {
-            Write-Host "  x $line" -ForegroundColor Red
+            Write-InstallLine "  x $line" Red
             $firstDetail = $false
         } else {
             Write-Host "    $line"
@@ -448,9 +462,9 @@ if ($LocalKit) {
         throw "EXAKIT_LOCAL_KIT does not look like a kit checkout (no setup\exakit.ps1 in it): $LocalKit"
     }
     $LocalKit = (Resolve-Path $LocalKit).Path
-    Write-Host "  * Using local kit checkout: $LocalKit" -ForegroundColor Blue
+    Write-InstallLine "  * Using local kit checkout: $LocalKit" Blue
 } else {
-    Write-Host "  * Downloading the starter kit ($Repo@$Ref)" -ForegroundColor Blue
+    Write-InstallLine "  * Downloading the starter kit ($Repo@$Ref)" Blue
 }
 $tmpZip = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-src-$([System.Guid]::NewGuid().ToString('N')).zip"
 $urls = @(
@@ -659,11 +673,11 @@ try {
             $personaIds += $personaId
         }
         if ($personaIds.Count -eq 0) { throw "EXAKIT_PERSONA names no persona (available: $known). Nothing was installed." }
-        Write-Host "  * Persona: $($personaIds -join ',') - it answers every choice you did not set yourself." -ForegroundColor Blue
+        Write-InstallLine "  * Persona: $($personaIds -join ',') - it answers every choice you did not set yourself." Blue
     }
 
     if ($env:EXAKIT_DRY_RUN -eq "1") {
-        Write-Host "  * Dry run requested (EXAKIT_DRY_RUN=1) - nothing was installed, and nothing under $ExakitHome was changed." -ForegroundColor Blue
+        Write-InstallLine "  * Dry run requested (EXAKIT_DRY_RUN=1) - nothing was installed, and nothing under $ExakitHome was changed." Blue
         if ($env:EXAKIT_DRY_RUN_KEEP -eq "1") {
             $keepDryRun = $true
             Write-Host "    The kit is kept for inspection in a temporary folder (EXAKIT_DRY_RUN_KEEP=1); delete it when done: $KitDir"
@@ -692,14 +706,14 @@ $InstallPhase = "setup"
 $setupScript = Join-Path $KitDir "setup\setup-windows.ps1"
 if (-not (Test-Path $setupScript)) {
     Write-Host ""
-    Write-Host "  x This installer and the kit it downloaded do not match." -ForegroundColor Red
+    Write-InstallLine "  x This installer and the kit it downloaded do not match." Red
     Write-Host "    The kit came from $Repo@$Ref and has no setup\setup-windows.ps1 in it."
     Write-Host ""
     Write-Host "    The installer is read from a URL, but the kit is taken from EXAKIT_REPO,"
     Write-Host "    which is '$Repo' unless you say otherwise. If you fetched this installer"
     Write-Host "    from a fork or a branch, name it for the kit as well:"
     Write-Host ""
-    Write-Host "      `$env:EXAKIT_REPO = 'owner/name'; `$env:EXAKIT_REF = 'branch'" -ForegroundColor Cyan
+    Write-InstallLine "      `$env:EXAKIT_REPO = 'owner/name'; `$env:EXAKIT_REF = 'branch'" Cyan
     Write-Host ""
     Write-Host "    Nothing was installed. The download is at $KitDir."
     Write-Host ""
@@ -707,7 +721,7 @@ if (-not (Test-Path $setupScript)) {
     $global:LASTEXITCODE = 1
     return
 }
-Write-Host "  * Starting setup: setup\setup-windows.ps1" -ForegroundColor Blue
+Write-InstallLine "  * Starting setup: setup\setup-windows.ps1" Blue
 Write-Host ""
 # We already showed the banner above; tell the setup script to skip its own so
 # the wordmark appears exactly once through the installer. A direct

@@ -87,9 +87,14 @@ function Invoke-ExakitVsEngine {
     $previousEncoding = $OutputEncoding
     $previousExecutable = $env:PYTHONEXECUTABLE
     $previousLauncher = $env:__PYVENV_LAUNCHER__
+    $previousEngine = $env:EXAKIT_PERSONAL_ENGINE
+    # This run's engine choice, where Get-PersonalSlcDnsEngine falls back to
+    # it, so the engine (plan.py recorded_engine) falls back the same way.
+    $runEngine = "" + (Get-Variable -Name PersonalEngine -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
     try {
         $ErrorActionPreference = "Continue"
-        Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__ -ErrorAction SilentlyContinue
+        Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__, Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
+        if ($runEngine) { $env:EXAKIT_PERSONAL_ENGINE = $runEngine }
         if ($Secret) {
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Secret))
@@ -104,6 +109,8 @@ function Invoke-ExakitVsEngine {
         $OutputEncoding = $previousEncoding
         if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
         if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
+        Remove-Item Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
+        if ($null -ne $previousEngine) { $env:EXAKIT_PERSONAL_ENGINE = $previousEngine }
     }
     foreach ($line in @(Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
@@ -559,8 +566,17 @@ function Repair-ExakitVsForRetry {
     param([int]$Code)
     if ($Code -eq 20) {
         Info "Giving the database's language containers the deployment's DNS, then trying again"
-        if (-not (Repair-PersonalSlcDns)) { Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red; return $false }
-        return $true
+        if (Repair-PersonalSlcDns) { return $true }
+        # A restart cannot repair it on Docker (lifecycle.DNS_ON_DOCKER): the
+        # failure's own fix says so, and this line does not contradict it.
+        $engine = ""
+        try { $engine = "" + (Get-PersonalSlcDnsEngine) } catch { }
+        if ($engine -eq "docker") {
+            Write-Host "  DNS could not be repaired on this Docker deployment; the failure's fix says why." -ForegroundColor Red
+        } else {
+            Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red
+        }
+        return $false
     }
     if ($Code -eq 21) { return [bool](Install-ExakitVsJava) }
     if ($Code -eq 23) { return [bool](Install-ExakitVsRust) }

@@ -7,7 +7,11 @@ database and inspect it afterwards:
                 like java false (the custom container is not installed)
     lua         always true: Lua is built into the database
     java        false -> creating a JAVA script fails like a deployment with no
-                container ("No usable script language container ...")
+                container ("No usable script language container ...");
+                "builtin" -> it fails like a fresh Exasol Personal 2.4, whose
+                SCRIPT_LANGUAGES names JAVA=builtin_java but whose BucketFS
+                has no Java client yet ("The required executable ... does not
+                exist in BucketFS")
     dns         false -> the DNS probe answers "nodns ..." (no resolver at all);
                 a host ending in .invalid answers "dns ..." (no such name)
     unreachable host names whose TCP probe fails
@@ -56,8 +60,8 @@ database and inspect it afterwards:
                 them (the share's delay on Exasol Personal); stage_never
                 true -> they never are. files_probes counts the probes.
     refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
-                cannot reach its source); script_fail scripts (SCHEMA.NAME)
-                whose CREATE OR REPLACE fails
+                cannot reach its source, or refresh_error's words when set);
+                script_fail scripts (SCHEMA.NAME) whose CREATE OR REPLACE fails
     vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
                 adapter that echoes what the CONNECTION holds)
     connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
@@ -535,6 +539,8 @@ class Fake(object):
         if m:
             if not doc[m.group(1).lower()]:
                 raise Exception("No usable script language container is installed for the requested language.")
+            if m.group(1) == "JAVA" and doc["java"] == "builtin":
+                raise Exception("VM error: The required executable '/exaudf/exaudfclient' does not exist in BucketFS")
             name = "%s.%s" % (m.group(3), m.group(4))
             if name in doc.get("script_fail", []):
                 raise Exception("VM error: could not create script %s" % name)
@@ -599,7 +605,7 @@ class Fake(object):
         if m:
             vs = doc["virtual"][m.group(1)]
             if m.group(1) in doc.get("refresh_fail", []):
-                raise Exception("Connection refused. Check that the hostname and port are correct")
+                raise Exception(doc.get("refresh_error") or "Connection refused. Check that the hostname and port are correct")
             src = _source_for(doc, vs["connection"])
             if "tables" in src:
                 vs["tables"] = list(src["tables"])

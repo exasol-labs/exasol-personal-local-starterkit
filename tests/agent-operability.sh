@@ -870,6 +870,49 @@ echo "the small promises hold too:"
 # date off line 2, and install.sh's own fail() wrote only line 1.
 has "install.sh dates its failure note" "date '+%Y-%m-%d %H:%M:%S'" "$(cat "$ROOT/install.sh")"
 has "and install.ps1 writes one at all" ".last-failure" "$(cat "$ROOT/install.ps1")"
+# install.sh's own say() and fail() coloured every line, terminal or not:
+# a redirected install log read "[1;34m•[0m Using local kit checkout".
+# They follow ui_detect now - a terminal, no NO_COLOR, no EXAKIT_NO_FANCY=1.
+# A dry run of a local kit that is only install.sh: nothing is fetched, the
+# kit lands in a scratch folder, and the plan falls back to plain text.
+_ik="$WORK/install-kit"; mkdir -p "$_ik" "$WORK/install-tmp"
+cp "$ROOT/install.sh" "$_ik/"
+_inst() { env EXAKIT_HOME="$WORK/install-home" TMPDIR="$WORK/install-tmp" EXAKIT_LOCAL_KIT="$_ik" EXAKIT_DRY_RUN=1 TERM=xterm "$@" sh "$ROOT/install.sh" 2>&1; }
+_esc="$(printf '\033')"
+_out="$(_inst)"
+has "install.sh says its steps when piped" "Using local kit checkout" "$_out"
+lacks "...with no escape sequence in a redirected log" "$_esc" "$_out"
+_out="$(env EXAKIT_HOME="$WORK/install-home" EXAKIT_LOCAL_KIT="$WORK/not-a-kit" TERM=xterm sh "$ROOT/install.sh" 2>&1)"
+has "install.sh's fail() says why when piped" "does not look like a kit checkout" "$_out"
+lacks "...with no escape sequence either" "$_esc" "$_out"
+# Under a terminal (script(1): BSD on macOS, util-linux elsewhere) colour
+# stays, and each opt-out turns it off.
+_pty() {
+    if [ "$(uname -s)" = Darwin ]; then
+        script -q /dev/null "$@" < /dev/null
+    else
+        script -qec "$(printf '%q ' "$@")" /dev/null < /dev/null
+    fi
+}
+if [ -n "$(_pty sh -c '[ -t 1 ] && echo tty' 2>/dev/null)" ]; then
+    _tty() { _pty env EXAKIT_HOME="$WORK/install-home" TMPDIR="$WORK/install-tmp" EXAKIT_LOCAL_KIT="$_ik" EXAKIT_DRY_RUN=1 TERM=xterm "$@" sh "$ROOT/install.sh" 2>&1; }
+    has "on a terminal install.sh still colours its steps" "${_esc}[1;34m" "$(_tty)"
+    lacks "...not with NO_COLOR set" "${_esc}[1;34m" "$(_tty NO_COLOR=1)"
+    lacks "...not with EXAKIT_NO_FANCY=1" "${_esc}[1;34m" "$(_tty EXAKIT_NO_FANCY=1)"
+    lacks "...not on TERM=dumb" "${_esc}[1;34m" "$(_tty TERM=dumb)"
+else
+    check "no pseudo-terminal here: the terminal cases are skipped" "skip" "skip"
+fi
+# install.ps1: Write-Host writes no colour into a redirected stream, but
+# Windows PowerShell 5.1 coloured the console past NO_COLOR and
+# EXAKIT_NO_FANCY=1. Every coloured line goes through one helper that asks both.
+has "install.ps1 asks NO_COLOR and EXAKIT_NO_FANCY before colouring" \
+    '$InstallColour = (-not $env:NO_COLOR) -and ($env:EXAKIT_NO_FANCY -ne "1")' "$(cat "$ROOT/install.ps1")"
+check "...and colours nowhere else" "1" "$(grep -c -- '-ForegroundColor' "$ROOT/install.ps1")"
+# PowerShell hoists the trap, not functions: the helper the trap prints
+# through is defined before the first statement that can fail.
+check "...defined before \$ErrorActionPreference and the trap" "yes" \
+    "$(awk '/^function Write-InstallLine/ && !f {f=NR} /^\$ErrorActionPreference = "Stop"/ && !e {e=NR} /^trap \{/ && !t {t=NR} END {print (f && e && t && f < e && e < t) ? "yes" : "no"}' "$ROOT/install.ps1")"
 # The skill's closing step names this directory; nothing created it.
 has "the workflows directory is created with the home" "EXAKIT_WORKFLOWS_DIR" \
     "$(sed -n '/^manifest_init()/,/^}/p' "$ROOT/setup/lib/common.sh")"

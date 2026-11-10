@@ -111,6 +111,20 @@ Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", 
 $env:EXAKIT_VS_OS = "Darwin"
 $r = Invoke-ExakitVsEngine -Arguments $localhostPlan
 Check "macOS: the launcher VM's address whatever the record says" $true (($r.Lines -join "`n").Contains("on macOS 192.168.64.1"))
+# Nothing recorded yet (an install that has not written it): this run's
+# choice, as Get-PersonalSlcDnsEngine falls back to it - $script:PersonalEngine,
+# which the bridge hands the engine; a stray environment value is not it.
+$env:EXAKIT_VS_OS = "Windows"
+Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal"}}' -Encoding ASCII
+$script:PersonalEngine = "docker"
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "no engine recorded, this run chose Docker: Docker's address" $true (($r.Lines -join "`n").Contains("on Docker host.docker.internal"))
+$script:PersonalEngine = ""
+$env:EXAKIT_PERSONAL_ENGINE = "docker"
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "...no choice made (a stray EXAKIT_PERSONAL_ENGINE ignored, as the bridge ignores it): Podman's" $true (($r.Lines -join "`n").Contains("on Linux and WSL host.containers.internal"))
+Check "...and the caller's environment is put back" "docker" $env:EXAKIT_PERSONAL_ENGINE
+Remove-Item Env:\EXAKIT_PERSONAL_ENGINE
 Remove-Item Env:\EXAKIT_VS_OS
 Remove-Item -LiteralPath $engineRecord -Force
 
@@ -252,6 +266,17 @@ Check "exit 21: Java offered; declined, not retried" "21 connect|JAVA" ("$code "
 $script:codes.AddRange(@(1)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "any other failure: no retry" "1 connect" ("$code " + ($script:calls -join "|"))
+# A repair that fails: the bridge's own line must not promise the restart
+# the engine's fix rules out on Docker (lifecycle.DNS_ON_DOCKER).
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $false }
+function Get-PersonalSlcDnsEngine { return $script:stubEngine }
+$script:stubEngine = "docker"
+$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
+Check "a failed repair on Docker: no restart promised" "True False" ("{0} {1}" -f $said.Contains("DNS could not be repaired on this Docker deployment; the failure's fix says why."), $said.Contains("Restart the database"))
+$script:stubEngine = "podman"
+$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
+Check "...on Podman: the restart, as before" $true ($said.Contains("Restart the database (exakit stop, exakit start) and try again."))
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $true }
 
 Write-Host ""
 Write-Host "== exakit connect refuses a credential argument =="
@@ -738,6 +763,16 @@ Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding
 $one = Invoke-JsonConnect (@("pg", "--name", "jsonjava") + $pgSet + @("--password-file", $jsonPw, "--json"))
 Check "a Java container that is missing, without --yes: one object, exit 21" "True 21 nojava" "$one $jsonCode $($jsonDoc.kind)"
 Check "...whose fix names --yes" $true ("$($jsonDoc.remedy)".Contains("--yes"))
+# A fresh Exasol Personal 2.4: JAVA=builtin_java, no client in BucketFS - the
+# same missing Java, where the engine used to answer exit 1.
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db | Add-Member -NotePropertyName java -NotePropertyValue "builtin" -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+$one = Invoke-JsonConnect (@("pg", "--name", "jsonj24") + $pgSet + @("--password-file", $jsonPw, "--json"))
+Check "Personal 2.4's builtin_java without its client, without --yes: one object, exit 21" "True 21 nojava" "$one $jsonCode $($jsonDoc.kind)"
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db | Add-Member -NotePropertyName java -NotePropertyValue $false -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
 # A --password-file that cannot be read: one object, never a PowerShell error.
 $one = Invoke-JsonConnect (@("pg", "--name", "jsondir") + $pgSet + @("--password-file", $work, "--json"))
 Check "a --password-file that is a folder: one object, exit 2, kind input" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"

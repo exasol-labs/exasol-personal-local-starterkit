@@ -138,6 +138,7 @@ REMEDY_FOR_KIND = {
     "conflict": "choose another name, or remove what holds this one first",
     "missing": "name a source that exists; they are listed by: exakit source list",
     "gated": "connect another source; the ones available are listed by: exakit source catalog",
+    # On a Docker deployment lifecycle.DNS_ON_DOCKER instead (remedy_text).
     "dns": "Java in the database could not resolve the host name; restart the database with exakit start "
            "(it repairs DNS), then try again",
     "nojava": "the Java language container is not installed: exakit connect installs it with one database "
@@ -195,15 +196,24 @@ def run_log(args, argv):
     return log
 
 
+def kind_remedy(kind):
+    """REMEDY_FOR_KIND's fix, as lifecycle.remedy_text words it for the
+    deployment's engine - except in an engine that could not start, where
+    lifecycle may not be there to ask."""
+    if BROKEN is None:
+        return lifecycle.remedy_text(kind, REMEDY_FOR_KIND)
+    return REMEDY_FOR_KIND.get(kind, REMEDY_FOR_KIND["error"])
+
+
 def failure(message, code, kind=None, remedy=None, command=None, source=None):
     """The one shape every --json failure has (see the module docstring)."""
     if not kind or kind == "error":
         kind = KIND_FOR_CODE.get(code, "error")
     if source and not remedy and kind != "error" and kind in lifecycle.REMEDY_FOR:
-        remedy = lifecycle.REMEDY_FOR[kind].format(name=source, access="read access", store="bucket")
+        remedy = lifecycle.remedy_text(kind).format(name=source, access="read access", store="bucket")
         command = command or lifecycle.command_for(kind, source)
     return {"ok": False, "error": str(message), "kind": kind,
-            "remedy": remedy or REMEDY_FOR_KIND.get(kind, REMEDY_FOR_KIND["error"]),
+            "remedy": remedy or kind_remedy(kind),
             "command": command if command else COMMAND_FOR_KIND.get(kind)}
 
 

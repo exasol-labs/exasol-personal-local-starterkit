@@ -58,8 +58,9 @@ function Invoke-ExakitPythonFile {
     param([string]$Path, [string[]]$Arguments = @(), [switch]$Live)
     [void]$script:helperCalls.Add(((Split-Path -Leaf $Path) + " " + ($Arguments -join " ")))
     $script:emptyArgument = @($Arguments | Where-Object { "$_" -eq "" }).Count
-    return [pscustomobject]@{ Code = 0; Lines = $script:helperLines }
+    return [pscustomobject]@{ Code = $script:helperCode; Lines = $script:helperLines }
 }
+$script:helperCode = 0
 $script:logged = New-Object System.Collections.ArrayList
 function Write-ExakitLog { param($Level, $Message) [void]$script:logged.Add("$Level $Message") }
 $script:shown = New-Object System.Collections.ArrayList
@@ -122,6 +123,18 @@ Check "...logged by name" "WARN language container DNS: no docker on PATH" ($scr
 Set-Record ', "runtime": {"type": "personal"}'
 Check "no engine at all: false, as before" "False | none" (Repair $none)
 Check "...logged by name" "WARN language container DNS: no podman on PATH" ($script:logged -join "|")
+
+Write-Host ""
+Write-Host "== a helper that never answered =="
+# Every caller ignores the result, so the log line is all a reader gets.
+Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
+$script:helperCode = 2; $script:helperLines = @()
+Check "no EXAKIT_SLC_DNS line: false" "False | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "...and one WARN line with the exit code" "WARN language container DNS repair did not run (exit 2): no output (its stderr is in the PY lines above)" ($script:logged -join "|")
+$script:helperLines = @("Traceback (most recent call last):")
+[void](Repair $both)
+Check "...or the first line it printed" "WARN language container DNS repair did not run (exit 2): Traceback (most recent call last):" ($script:logged -join "|")
+$script:helperCode = 0; $script:helperLines = @("EXAKIT_SLC_DNS java-17 repaired")
 
 Write-Host ""
 Write-Host "== the deployment id =="

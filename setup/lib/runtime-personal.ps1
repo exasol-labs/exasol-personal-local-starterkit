@@ -2436,12 +2436,24 @@ function Repair-PersonalSlcDns {
     if ($id) { $helperArgs += @("--deployment-id=$id") }
     $result = Invoke-ExakitPythonFile -Path $helper -Arguments (@($helperArgs) + @($flavors))
     $ok = ($result.Code -eq 0)
+    $answered = $false
     foreach ($line in @($result.Lines)) {
         if ($line -match '^EXAKIT_SLC_DNS (\S+) (\S+)$') {
+            $answered = $true
             Write-ExakitLog "INFO" "language container DNS: $($Matches[1]):$($Matches[2])"
             if ($Matches[2] -eq "repaired") { Info "Gave the $($Matches[1]) language container the deployment's DNS" }
             if ($Matches[2] -eq "nocontainer") { $ok = $false }
         }
+    }
+    # A repair that never answered leaves one line with the reason: every
+    # caller ignores the result. Twin of the same line in personal_slc_dns_repair.
+    if (-not $answered) {
+        $first = @(@($result.Lines) | Where-Object { "$_".Trim() }) | Select-Object -First 1
+        if (-not $first) { $first = "no output (its stderr is in the PY lines above)" }
+        $first = "$first"
+        if ($first.Length -gt 200) { $first = $first.Substring(0, 200) }
+        Write-ExakitLog "WARN" "language container DNS repair did not run (exit $($result.Code)): $first"
+        $ok = $false
     }
     return $ok
 }

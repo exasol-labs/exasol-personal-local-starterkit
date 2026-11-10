@@ -3447,6 +3447,7 @@ personal_slc_dns_repair() {
     # a lone exasol-db-* that is not a sidecar is taken.
     _psdr_id="$(personal_slc_container_id)"
     _psdr_script=""
+    _psdr_ran=0
     if [ "$(detect_os 2>/dev/null)" = "macos" ]; then
         _psdr_script="$(mktemp "${TMPDIR:-/tmp}/exakit-slc-dns.XXXXXX")" || return 1
         # The launcher VM's engine is Podman whatever runs elsewhere.
@@ -3458,6 +3459,7 @@ personal_slc_dns_repair() {
         # command runs as a background job, and a background job's stdin is
         # /dev/null, so a redirect on the outside never reached it.
         _psdr_out="$(exakit_run_bounded 90 sh -c 'exec "$0" shell container < "$1"' "$(personal_cli)" "$_psdr_script" 2>&1)"
+        _psdr_ran=$?
     else
         # THE DEPLOYMENT'S ENGINE, NOT PODMAN BY DEFAULT. From kit 0.2.4 a new
         # deployment runs on Docker wherever Docker Engine 29+ runs, and
@@ -3468,9 +3470,18 @@ personal_slc_dns_repair() {
             # The host's own engine owns the container (Linux, WSL): the shared
             # helper the Windows twin runs too. The id in the = form: one that
             # starts with "-" is still a value, not an option.
-            # shellcheck disable=SC2086 -- one argument per flavor
-            _psdr_out="$(exakit_run_bounded 90 run_python_any "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
-                --engine "$_psdr_engine" ${_psdr_id:+"--deployment-id=$_psdr_id"} $_psdr_flavors 2>&1)"
+            # THE INTERPRETER AS AN EXECUTABLE, not run_python_any: timeout(1)
+            # execs its command, and a shell function was "failed to run
+            # command", exit 127 - the repair never ran on Linux or WSL.
+            if exakit_python_any_argv; then
+                # shellcheck disable=SC2086 -- one argument per flavor
+                _psdr_out="$(exakit_run_bounded 90 "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
+                    --engine "$_psdr_engine" ${_psdr_id:+"--deployment-id=$_psdr_id"} $_psdr_flavors 2>&1)"
+                _psdr_ran=$?
+            else
+                _psdr_out="no Python to run the repair with"
+                _psdr_ran=1
+            fi
         else
             _psdr_out="EXAKIT_SLC_DNS - no$_psdr_engine"
         fi
@@ -3484,7 +3495,15 @@ personal_slc_dns_repair() {
             *:failed|*:nocontainer|*:nopodman|*:nodocker) _psdr_rc=1 ;;
         esac
     done
-    printf '%s\n' "$_psdr_out" | grep -q '^EXAKIT_SLC_DNS ' || _psdr_rc=1
+    if ! printf '%s\n' "$_psdr_out" | grep -q '^EXAKIT_SLC_DNS '; then
+        # The repair never answered (it did not run, or died first): one line
+        # with the reason, because every caller ignores this exit code and
+        # the reader otherwise sees only "DNS could not be repaired".
+        # ⇄ twin: the same line in Repair-PersonalSlcDns.
+        _psdr_why="$(printf '%s\n' "$_psdr_out" | grep -m 1 . | cut -c1-200)"
+        _exakit_log_file "WARN  language container DNS repair did not run (exit $_psdr_ran): ${_psdr_why:-no output}"
+        _psdr_rc=1
+    fi
     return "$_psdr_rc"
 }
 
