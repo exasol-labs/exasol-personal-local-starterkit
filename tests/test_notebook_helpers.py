@@ -1477,3 +1477,92 @@ class MissingRoleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FolderLoadTest(unittest.TestCase):
+    """A folder of files loads through `exakit data-load` (exapump), one table per file in MY_SCHEMA (empty: MY_DATA)."""
+
+    class _Conn:
+        def __init__(self, tables):
+            self.tables, self.asked = tables, []
+
+        def execute(self, sql, params=None):
+            self.asked.append((sql, params))
+            return types.SimpleNamespace(fetchall=lambda: [(t,) for t in self.tables])
+
+    def _load(self, folder, table, tables, code=0, replace=False):
+        from exakit_nb import kit_commands
+        run = kit_commands.KitRun(["exakit", "data-load", str(folder)], code)
+        conn = self._Conn(tables)
+        with mock.patch.object(kit_commands, "exakit", return_value=run) as kit, redirect_stdout(io.StringIO()) as out:
+            loaded = exakit_nb.load_own_file(folder, table, conn=conn, replace=replace)
+        return loaded, kit, conn, out.getvalue()
+
+    def test_a_folder_runs_data_load_with_the_schema_and_returns_the_named_table(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            (folder / "sales 2026.csv").write_text("A\n1\n", encoding="utf-8")
+            (folder / "stores.parquet").write_bytes(b"x")
+            loaded, kit, conn, _ = self._load(folder, "my_data.sales_2026", ["SALES_2026", "STORES"])
+        self.assertEqual("MY_DATA.SALES_2026", loaded.fact_table)
+        self.assertEqual("sales 2026.csv", loaded.path.name, "the table points at the file it came from")
+        args, kwargs = kit.call_args
+        self.assertEqual(("data-load", str(folder)), args)
+        self.assertEqual({"EXAKIT_SCHEMA": "MY_DATA", "EXAKIT_ON_EXISTING": "skip"}, kwargs["env"])
+        self.assertEqual({"schema": "MY_DATA"}, conn.asked[0][1], "the schema is a bound value, not pasted into SQL")
+
+    def test_replace_is_passed_on_and_one_table_needs_no_name(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "orders.parquet").write_bytes(b"x")
+            loaded, kit, _, _ = self._load(Path(tmp), "MY_DATA", ["ORDERS"], replace=True)
+        self.assertEqual("MY_DATA.ORDERS", loaded.fact_table)
+        self.assertEqual("replace", kit.call_args.kwargs["env"]["EXAKIT_ON_EXISTING"])
+
+    def test_several_files_describe_the_first_and_say_how_to_pick_another(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp) / "shop data-2026"
+            folder.mkdir()
+            (folder / "orders.csv").write_text("A\n1\n", encoding="utf-8")
+            (folder / "stores.json").write_text("[]", encoding="utf-8")
+            (folder / "notes.txt").write_text("x", encoding="utf-8")
+            loaded, kit, _, out = self._load(folder, "", ["ORDERS", "OLD_TABLE", "STORES"])
+        self.assertEqual("SHOP_DATA_2026.ORDERS", loaded.fact_table, "no schema named: the folder's; the first file's table")
+        self.assertEqual("SHOP_DATA_2026", kit.call_args.kwargs["env"]["EXAKIT_SCHEMA"])
+        self.assertIn("ORDERS, STORES", out)
+        self.assertNotIn("OLD_TABLE", out, "only this folder's tables are named")
+        self.assertIn("set MY_DATA to its file", out)
+
+    def test_an_empty_path_skips_in_one_line(self):
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertIsNone(exakit_nb.load_own_file("", "", conn=object(), missing_ok=True))
+        self.assertIn("nothing of your own loaded", out.getvalue())
+        with self.assertRaises(ValueError):
+            exakit_nb.load_own_file("  ", None, conn=object())
+
+    def test_a_file_is_named_after_itself_in_a_schema_named_after_its_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "my-data").mkdir()
+            source = Path(tmp) / "my-data" / "2026 sales.csv"
+            source.write_text("A\n1\n", encoding="utf-8")
+            for schema, table in (("", "MY_DATA.T_2026_SALES"), ("crm", "CRM.T_2026_SALES"), ("CRM.X", "CRM.X")):
+                with self.subTest(schema=schema), \
+                        mock.patch("exakit_nb.own_file._read", return_value=object()), \
+                        mock.patch("exakit_nb.own_file._prepare", return_value=[("A", "DECIMAL(18,0)")]), \
+                        mock.patch("exakit_nb.own_file._comment", return_value=None), \
+                        mock.patch("exakit_nb.own_file._load"):
+                    self.assertEqual(table, exakit_nb.load_own_file(source, schema, conn=object()).fact_table)
+
+    def test_a_failed_load_says_so_and_a_bad_name_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "exit 5"):
+                self._load(Path(tmp), "MY_DATA", [], code=5)
+            with self.assertRaisesRegex(ValueError, "not a schema name"):
+                self._load(Path(tmp), "my-data; DROP", [])
+            with self.assertRaisesRegex(ValueError, "describes one file"):
+                exakit_nb.load_own_file(tmp, "MY_DATA", {"entity": "A"}, conn=object())
+
+    def test_the_table_name_follows_data_load(self):
+        from exakit_nb.own_file import _table_from_file
+        for name, table in (("sales 2026.csv", "SALES_2026"), ("__x--y__.parquet", "X_Y"), ("-.csv", "MY_TABLE")):
+            with self.subTest(name=name):
+                self.assertEqual(table, _table_from_file(Path(name)))

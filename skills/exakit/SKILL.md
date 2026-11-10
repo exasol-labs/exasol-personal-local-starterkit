@@ -167,7 +167,7 @@ start from an empty notebook or write connection code by hand.
   import exakit.nb as nb
   conn = nb.connect()                         # the kit's connection; no host, user or password in a cell
   df = nb.sql(conn, "SELECT ...")
-  nb.load_own_file("~/data/x.csv", "MY_DATA.X", {...})   # loading from a notebook
+  nb.load_own_file("~/data/x.csv", "MY_DATA.X", {...})   # loading from a notebook (a folder: exakit data-load)
   ```
 - **Never** put a host, user, password or token in a notebook cell, its
   output, or a file beside it.

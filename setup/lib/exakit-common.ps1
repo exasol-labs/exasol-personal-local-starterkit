@@ -7281,32 +7281,6 @@ function Write-ExakitReadyLine {
     }
 }
 
-# Write-ExakitModelSetupHint - after the persona's add-ons and before the closing
-# panel: how to give the notebooks a model and Langfuse, once, in this terminal.
-# Only when the notebook add-on is installed and no model is set yet. The keys
-# are typed into a hidden prompt, never into a command. Twin of
-# exakit_model_setup_hint in common.sh.
-function Write-ExakitModelSetupHint {
-    # -Mode installer|marketplace. The installer shows it only to a Data
-    # Scientist; `marketplace` is the caller that has just installed the
-    # notebook add-on, for anyone. Twin of exakit_model_setup_hint.
-    param([string]$Mode = "installer")
-    if ($env:EXAKIT_MODEL_ID) { return }
-    try { if (-not (Test-ExakitMarketplaceAddonInstalled notebook)) { return } } catch { return }
-    if ($Mode -eq "installer" -and ((",$(Get-ExakitManifestValue 'persona.id')," -notlike "*,data-scientist,*"))) { return }
-    Write-Host ""
-    Start-ExakitPanel "Optional: your AI model for the notebooks"
-    Write-ExakitPanelLine "Run these here, then: exakit notebook"
-    Write-ExakitPanelLine '  $env:EXAKIT_MODEL_ID = "claude-opus-5-5"'
-    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"'
-    Write-ExakitPanelLine '  $k = Read-Host "Model API key" -AsSecureString'
-    Write-ExakitPanelLine '  $c = [Net.NetworkCredential]::new("", $k)'
-    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_API_KEY = $c.Password'
-    Write-ExakitPanelLine "Skip it and the notebooks still run; only the AI steps are skipped."
-    Write-ExakitPanelLine "More, Langfuse included: nb.model_setup() in a notebook"
-    Complete-ExakitPanel
-}
-
 function Request-ExakitMarketplaceOffer {
     # Several checks per add-on and a description fetched for each take
     # seconds: a turning spinner says the install is still going, not stuck.

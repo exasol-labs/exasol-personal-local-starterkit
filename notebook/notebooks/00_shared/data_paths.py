@@ -42,12 +42,14 @@ SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
 sample_data = nb.load_sample(connection, SAMPLE)
 
 # %% [markdown] tags=["load"]
-# **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing file is skipped.
+# **Load your own data (optional):** set `MY_DATA` to a CSV, Parquet or JSON file, or to a folder of them. Empty skips it.
+#
+# Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded.
 
 # %% tags=["load"]
-OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
-OWN_TABLE = "MY_DATA.TRANSACTIONS"
-own_data = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=connection, missing_ok=True)
+MY_DATA = ""     # a file or a folder, e.g. "~/my-data/sales.csv" or "~/my-data"
+MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/my-data -> MY_DATA)
+own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
 
 # %% [markdown] tags=["load"]
 # **A connected source (optional):** set `SOURCE = "SCHEMA.TABLE"` for a virtual-schema table. `None` skips it.
@@ -80,7 +82,7 @@ chosen_data = nb.first(source_data, own_data, sample_data)
 #
 # Neither dataset has a text column. The text steps skip and say why.
 #
-# The kit never guesses the **target**. You choose it. Leave a slot as **—** when no column fits.
+# The kit never guesses the **target**. You choose it. Leave a slot as "—" when no column fits.
 #
 # **Do now:**
 #

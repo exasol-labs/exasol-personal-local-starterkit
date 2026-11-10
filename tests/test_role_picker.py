@@ -388,7 +388,7 @@ class OpenByNameTest(unittest.TestCase):
         with mock.patch.object(role_picker, "dataset", return_value=ds), redirect_stdout(io.StringIO()) as out:
             review = review_roles(object(), "sales.descriptor.yaml")
         self.assertIn("exakit describe my_data_sales --approve", out.getvalue())
-        self.assertIn("OWN_FILE", out.getvalue())
+        self.assertIn("MY_DATA cell", out.getvalue())
         self.assertIs(review.dataset(draft_ok=True), ds)
 
     def test_a_file_without_roles_is_loaded_profiled_and_its_draft_saved_beside_it(self):
@@ -406,7 +406,7 @@ class OpenByNameTest(unittest.TestCase):
             self.assertEqual(profiled.call_args.kwargs["id"], "my_data_new_sales_2026")
             self.assertEqual(save.call_args.args[1], source.parent / "new sales-2026.descriptor.yaml")
             self.assertIn("Proposed roles (a draft) saved beside", out.getvalue())
-            self.assertIn("OWN_FILE", out.getvalue())
+            self.assertIn("MY_DATA cell", out.getvalue())
             self.assertEqual(review.file, source)
             with mock.patch.object(role_picker, "dataset", return_value="opened by the file") as opened:
                 self.assertEqual(review.dataset(draft_ok=True), "opened by the file")

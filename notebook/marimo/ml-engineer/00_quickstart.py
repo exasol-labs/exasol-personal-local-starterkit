@@ -183,7 +183,9 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing file is skipped.
+    **Load your own data (optional):** set `MY_DATA` to a CSV, Parquet or JSON file, or to a folder of them. Empty skips it.
+
+    Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded.
     """)
     return
 
@@ -191,9 +193,9 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
-    OWN_TABLE = "MY_DATA.TRANSACTIONS"
-    own_data = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=connection, missing_ok=True)
+    MY_DATA = ""     # a file or a folder, e.g. "~/my-data/sales.csv" or "~/my-data"
+    MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/my-data -> MY_DATA)
+    own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
     return (own_data,)
 
 
@@ -251,7 +253,7 @@ def _(mo):
 
     Neither dataset has a text column. The text steps skip and say why.
 
-    The kit never guesses the **target**. You choose it. Leave a slot as **—** when no column fits.
+    The kit never guesses the **target**. You choose it. Leave a slot as "—" when no column fits.
 
     **Do now:**
 

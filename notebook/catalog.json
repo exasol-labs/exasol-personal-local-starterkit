@@ -20,7 +20,7 @@
       "file": "MODEL-PROVIDERS.md",
       "source": "notebook/MODEL-PROVIDERS.md",
       "personas": ["data-scientist"],
-      "fronts": ["jupyter"]
+      "fronts": ["jupyter", "marimo"]
     }
   ],
   "notebooks": [

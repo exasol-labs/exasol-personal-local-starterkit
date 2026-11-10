@@ -40,7 +40,7 @@ __all__ = ["ApprovalNeeded", "RoleReview", "review_roles"]
 
 AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"
 FORCE = "force"
-DEFAULT_SCHEMA = "MY_DATA"             # where a data file named by a notebook's assignment loads, as the quickstart's OWN_TABLE
+DEFAULT_SCHEMA = "MY_DATA"             # where a data file named by a notebook's assignment loads, as the quickstart's MY_SCHEMA
 NONE_LABEL = "—"                  # the slot dropdown's entry for a slot left empty
 ROLE_PURPOSES = {
     "key": "unique for every row: it identifies the record",
@@ -518,7 +518,7 @@ def _open(conn, name: str):
     if given.is_file() and given.suffix.lower() in DATA_FILES and descriptor_beside(given) is None:
         table = _default_table(given)
         print(f"{given.name} has no descriptor beside it: loading it into {table} and proposing its roles here. "
-              "(The quickstart's OWN_FILE cell does the same with a table name of your choice.)")
+              "(The quickstart's MY_DATA cell does the same, into the schema MY_SCHEMA names.)")
         return load_own_file(given, table, conn=conn), False
     return dataset(conn, name), True
 
@@ -543,7 +543,7 @@ def review_roles(conn, source: Any) -> RoleReview:
         else:
             review.headless = "draft"
             print(f"{source.id} v{source.version} is a draft: the cells run on its proposed roles. To approve them run the "
-                  f"quickstart's OWN_FILE cell with this file, or: exakit describe {source.id} --approve")
+                  f"quickstart's MY_DATA cell with this file, or: exakit describe {source.id} --approve")
         return review
     proposal = describe(source.fact_table, conn=conn, id=source.id)
     log_event(DESCRIBE_DRAFT, descriptor_id=proposal.id, table=proposal.table, roles=proposal.roles,
