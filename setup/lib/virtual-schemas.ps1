@@ -437,11 +437,13 @@ function Read-ExakitVsSecret {
 }
 
 # Read-ExakitVsHidden - one line from the console, never echoed: the
-# credential, and the connection string (it often holds one). Twin of
-# exakit_read_hidden.
+# credential, and the connection string (it often holds one). The prompt ends
+# in its note, "(input hidden)" unless the caller says another. A key that
+# sends an escape sequence (an arrow, Delete) is no character here: the host's
+# secure read takes none. Twin of exakit_read_hidden.
 function Read-ExakitVsHidden {
-    param([string]$Label)
-    Write-Host ("    {0}?{1} {2} (input hidden): " -f $script:UiAsk, $script:UiReset, $Label) -NoNewline
+    param([string]$Label, [string]$Note = "input hidden")
+    Write-Host ("    {0}?{1} {2} ({3}): " -f $script:UiAsk, $script:UiReset, $Label, $Note) -NoNewline
     $secure = Read-Host -AsSecureString
     # The rest of a multi-line paste answers no later question.
     Clear-ExakitVsPendingKeys
@@ -462,6 +464,30 @@ function Clear-ExakitVsPendingKeys {
             while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true); $any = $true }
         } while ($any)
     } catch { }
+}
+
+# Read-ExakitVsKey - one key from the console, nothing echoed: "enter", "esc",
+# "eof" (Ctrl-D, or Ctrl-Z, the Windows console's) or the character typed. An
+# arrow or another key with no character (KeyChar 0) is not a key here: the
+# next one is read. What is still pending after it - the rest of a paste typed
+# at the question - is discarded. A console that cannot read single keys
+# answers "enter". Twin of _exakit_vs_key.
+function Read-ExakitVsKey {
+    try {
+        while ($true) {
+            $key = [Console]::ReadKey($true)
+            $code = [int]$key.KeyChar
+            $answer = ""
+            if ($key.Key -eq [ConsoleKey]::Enter -or $code -eq 13 -or $code -eq 10) { $answer = "enter" }
+            elseif ($key.Key -eq [ConsoleKey]::Escape -or $code -eq 27) { $answer = "esc" }
+            elseif ($code -eq 4 -or $code -eq 26) { $answer = "eof" }
+            elseif ($code -ge 32) { $answer = "" + $key.KeyChar }
+            if ($answer) {
+                Clear-ExakitVsPendingKeys
+                return $answer
+            }
+        }
+    } catch { return "enter" }
 }
 
 # Get-ExakitVsSecretKind - the kind of a connector's credential input (secret
@@ -1057,7 +1083,9 @@ function Read-ExakitVsTuiAnswer {
         # reading garbage on pwsh for Unix after an empty answer (measured).
         # Twin of _exakit_vs_hidden_line: Backspace and Ctrl-U edit, Ctrl-D (or
         # Ctrl-Z, the Windows console's) on an empty line is the end of input,
-        # and what is still pending after Enter is discarded.
+        # and what is still pending after Enter is discarded. An arrow, Home,
+        # End or Delete arrives as one key with no character (KeyChar 0) and a
+        # lone Esc as 27: below 32, neither joins the line.
         $sb = New-Object System.Text.StringBuilder
         $ended = $false
         while ($true) {
@@ -1098,21 +1126,50 @@ function Confirm-ExakitVsTui {
     return ("" + $a -match '^(y|yes)$')
 }
 
-# Get-ExakitVsPasteForms - the connection strings a connector's paste block reads
-# ("a, b or c"), for the question that asks for one; empty when it reads none.
-# Twin of _exakit_vs_paste_forms.
+# Get-ExakitVsPasteForms - the connection strings a connector's paste block
+# reads, one per item, for the examples above the question that asks for one;
+# none when it reads none. Twin of _exakit_vs_paste_forms.
 function Get-ExakitVsPasteForms {
     param([string]$Connector)
     $defs = Get-ExakitVsDefs
-    if (-not $defs -or -not $Connector) { return "" }
+    if (-not $defs -or -not $Connector) { return @() }
     $file = Join-ExakitCorePath $defs "connectors" $Connector "connector.json"
-    if (-not (Test-Path -LiteralPath $file)) { return "" }
+    if (-not (Test-Path -LiteralPath $file)) { return @() }
     $doc = Get-Content -Raw -LiteralPath $file | ConvertFrom-Json
-    if (-not $doc.PSObject.Properties["paste"] -or -not $doc.paste) { return "" }
-    $forms = @(@($doc.paste.forms) | Where-Object { $_ } | ForEach-Object { "" + $_ })
-    if ($forms.Count -eq 0) { return "" }
-    if ($forms.Count -eq 1) { return $forms[0] }
-    return ((@($forms | Select-Object -First ($forms.Count - 1))) -join ", ") + " or " + $forms[$forms.Count - 1]
+    if (-not $doc.PSObject.Properties["paste"] -or -not $doc.paste) { return @() }
+    return @(@($doc.paste.forms) | Where-Object { $_ } | ForEach-Object { "" + $_ })
+}
+
+# Write-ExakitVsPasteHint - the line-by-line hint above the question: what to
+# paste, then each form on its own line, indented under the hint's text and dim;
+# one wider than the console (or -Cols) is wrapped at the same indent. Twin of
+# _exakit_vs_paste_hint.
+function Write-ExakitVsPasteHint {
+    param([string[]]$Forms = @(), [int]$Cols = 0)
+    Info "Paste the source's connection string, for example:"
+    $width = 70
+    if ($Cols -gt 0) { $width = $Cols - 10 }
+    else { try { $width = [Console]::WindowWidth - 10 } catch { } }
+    if ($width -lt 10) { $width = 10 }
+    # Split-ExakitWrap is ui.ps1's; without it (ui.ps1 failed to load) a form is
+    # printed whole and the console wraps it.
+    $canWrap = [bool](Get-Command Split-ExakitWrap -ErrorAction SilentlyContinue)
+    foreach ($form in $Forms) {
+        $parts = @($form)
+        if ($canWrap) { $parts = @(Split-ExakitWrap -Text $form -Width $width) }
+        foreach ($part in $parts) {
+            Write-Host ("        " + $script:UiDim + $part + $script:UiReset)
+        }
+    }
+}
+
+# Get-ExakitVsPasteChoiceText - the question after a pasted string was read: its
+# three answers, with the palette's separator. Twin of
+# _exakit_vs_paste_choice_text.
+function Get-ExakitVsPasteChoiceText {
+    $dot = $script:UiMidDot
+    if (-not $dot) { $dot = "-" }
+    return ("Enter to use it {0} e to paste it again {0} Esc/n to type the fields instead" -f $dot)
 }
 
 # Format-ExakitVsPasteTyped - the engine's paste lines, for a string typed at a
@@ -1157,20 +1214,34 @@ function Write-ExakitVsLegend {
 # Read-ExakitVsLinePaste - the line-by-line twin of the form's first question: a
 # connection string, read hidden as a password is (it often holds one), to the
 # engine's paste, base64 on its stdin, never an argument; or Enter to type the
-# fields. Returns @{ Sets; Names } for what the string named; only those fields
-# are shown. A string the engine cannot read is said, in its words, and asked
-# again. Twin of _exakit_vs_ask_paste.
+# fields. It is shown back, its credentials masked by the engine ("Read: ..."),
+# and one key decides: Enter uses it, e asks for it again, Esc or n types the
+# fields instead. Returns @{ Sets; Names } for what the string named; only
+# those fields are shown. A string the engine cannot read is said, in its
+# words, and asked again. Twin of _exakit_vs_ask_paste.
 function Read-ExakitVsLinePaste {
     param([string]$Connector)
     $answer = @{ Sets = @(); Names = @() }
-    $forms = Get-ExakitVsPasteForms $Connector
-    if (-not $forms) { return $answer }
-    Info ("Paste the source's connection string as it shows it: " + $forms)
+    $forms = @(Get-ExakitVsPasteForms $Connector)
+    if ($forms.Count -eq 0) { return $answer }
+    Write-ExakitVsPasteHint -Forms $forms
     while ($true) {
-        $url = "" + (Read-ExakitVsHidden "Connection string (Enter to type the fields)")
+        $url = "" + (Read-ExakitVsHidden "Connection string" "not shown while you paste, Enter to type the fields")
         if (-not $url) { return $answer }
         $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Connector, "--base64") -Secret $url
         $url = $null
+        if ($pasted.Code -eq 0) {
+            $read = Get-ExakitVsResultOf $pasted.Lines
+            $masked = ""
+            if ($null -ne $read -and $read.PSObject.Properties["masked"]) { $masked = "" + $read.masked }
+            Info ("Read: " + $masked)
+            Write-Host ("    {0}?{1} {2} " -f $script:UiAsk, $script:UiReset, (Get-ExakitVsPasteChoiceText)) -NoNewline
+            $key = ""
+            while ($key -notin @("enter", "esc", "eof", "e", "n")) { $key = ("" + (Read-ExakitVsKey)).ToLowerInvariant() }
+            Write-Host ""
+            if ($key -eq "e") { continue }
+            if ($key -ne "enter") { return $answer }
+        }
         $res = Show-ExakitVsLines -Lines @(Format-ExakitVsPasteTyped $pasted.Lines)
         if ($pasted.Code -ne 0) { continue }
         if ($null -ne $res -and $res.values) {
@@ -1311,26 +1382,58 @@ function Invoke-ExakitVsTuiReview {
     }
 }
 
+# Write-ExakitVsTuiExample - one example under the hint, indented under its text
+# and dim; one wider than the terminal is wrapped at the same indent, and every
+# line is counted for the next redraw. Twin of _exakit_vs_tui_example.
+function Write-ExakitVsTuiExample {
+    param([string]$Text)
+    $parts = @(Split-ExakitWrap -Text $Text -Width ($script:EvtCols - 10))
+    foreach ($part in $parts) { [Console]::Write("        " + $script:UiDim + $part + $script:UiReset + "`r`n") }
+    $script:EvtOnScreen += $parts.Count
+}
+
+# Read-ExakitVsTuiChoice - the question after a pasted string, answered by one
+# key (Read-ExakitVsKey): "enter", "e", "n", "esc" or "eof"; any other key is no
+# answer. Twin of _exakit_vs_tui_choose.
+function Read-ExakitVsTuiChoice {
+    param([string]$Plain, [string]$Colour)
+    [Console]::Write("  " + $Colour + " ")
+    $key = ""
+    while ($key -notin @("enter", "esc", "eof", "e", "n")) { $key = ("" + (Read-ExakitVsKey)).ToLowerInvariant() }
+    [Console]::Write("`r`n")
+    $script:EvtOnScreen += (Get-ExakitVsTuiRows ($Plain.Length + 3))
+    return $key
+}
+
 # Invoke-ExakitVsTuiPaste - the form's first question, for a connector that reads
-# a connection string (its paste block): read hidden, the string goes to the
-# engine's paste, base64 on its stdin, never in argv, and is not kept. What it names is answered,
-# marked "from the string" and not asked; the engine's notes stay under the
-# panel. A string it cannot read is said, in the engine's words, and asked again;
-# Enter types the fields instead. $false at end of input. Twin of
+# a connection string (its paste block), under a hint and one example per line:
+# read hidden, the string goes to the engine's paste, base64 on its stdin, never
+# in argv, and is not kept. It is shown back with its credentials masked by the
+# engine ("Read: ..."), and one key decides: Enter uses it, e asks for it again,
+# Esc or n types the fields instead. What it names is answered, marked "from the
+# string" and not asked; the engine's notes and the masked string stay under the
+# panel. A string it cannot read is said, in the engine's words, and asked
+# again; Enter types the fields instead. $false at end of input. Twin of
 # _exakit_vs_tui_paste.
 function Invoke-ExakitVsTuiPaste {
     param([hashtable]$Form)
-    $forms = Get-ExakitVsPasteForms $Form.Connector
-    if (-not $forms) { return $true }
+    $forms = @(Get-ExakitVsPasteForms $Form.Connector)
+    if ($forms.Count -eq 0) { return $true }
     $why = ""
-    # Read with echo off, as a password is: the string often holds one. Only the
-    # fields it filled are shown afterwards.
-    $plain = "Connection string (hidden; Enter to type the fields)"
-    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(hidden; Enter to type the fields)" + $script:UiReset
+    # Read with echo off, as a password is: the string often holds one. What was
+    # read is shown back masked, and the fields it filled.
+    $plain = "Connection string (not shown while you paste, Enter to type the fields)"
+    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(not shown while you paste, Enter to type the fields)" + $script:UiReset
+    $choice = Get-ExakitVsPasteChoiceText
+    # Where there is room, the question says a field can still be changed.
+    $more = " " + $script:UiMidDot + " every field can be changed in the summary"
+    if (($choice.Length + $more.Length + 3) -lt $script:EvtCols) { $choice = $choice + $more }
     while ($true) {
         Show-ExakitVsTuiPanel -Form $Form -Current -1
-        Write-ExakitVsTuiSay -Text ("Paste the source's connection string as it shows it: " + $forms) -Mark ($script:UiDim + $script:UiBullet + $script:UiReset)
+        Write-ExakitVsTuiSay -Text "Paste the source's connection string, for example:" -Mark ($script:UiDim + $script:UiBullet + $script:UiReset)
+        foreach ($f in $forms) { Write-ExakitVsTuiExample $f }
         if ($why) { Write-ExakitVsTuiSay $why }
+        $why = ""
         $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
         if ($null -eq $a) { return $false }
         if (-not $a) { return $true }
@@ -1342,6 +1445,13 @@ function Invoke-ExakitVsTuiPaste {
             continue
         }
         $res = Get-ExakitVsResultOf $pasted.Lines
+        $masked = ""
+        if ($null -ne $res -and $res.PSObject.Properties["masked"]) { $masked = "" + $res.masked }
+        Write-ExakitVsTuiSay -Text ("Read: " + $masked) -Mark ($script:UiDim + $script:UiBullet + $script:UiReset)
+        $key = Read-ExakitVsTuiChoice -Plain $choice -Colour ($script:UiAsk + $choice + $script:UiReset)
+        if ($key -eq "e") { continue }
+        if ($key -eq "eof") { return $false }
+        if ($key -ne "enter") { return $true }
         if ($null -ne $res -and $res.values) {
             foreach ($p in @($res.values.PSObject.Properties)) {
                 foreach ($f in $Form.Fields) {
@@ -1349,7 +1459,7 @@ function Invoke-ExakitVsTuiPaste {
                 }
             }
         }
-        $Form.Notes = @(Format-ExakitVsPasteTyped @(@($pasted.Lines) | Where-Object { $_ -like "WARN *" -or $_ -like "INFO *" }))
+        $Form.Notes = @(@("INFO Read: " + $masked) + @(Format-ExakitVsPasteTyped @(@($pasted.Lines) | Where-Object { $_ -like "WARN *" -or $_ -like "INFO *" })))
         return $true
     }
 }

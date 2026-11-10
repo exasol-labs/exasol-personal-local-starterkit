@@ -1242,13 +1242,48 @@ _exakit_prompt_tty() {
     fi
 }
 
+# exakit_drop_key_escapes <text> — the text without the escape sequences keys
+# send, into _EKE_OUT: CSI (ESC [, parameter and intermediate bytes, a final
+# byte - an arrow ESC [ D, Delete ESC [ 3 ~, Ctrl-Left ESC [ 1 ; 5 D), SS3
+# (ESC O and one byte) and a lone ESC. A hidden line read in canonical mode
+# takes an arrow pressed in it as those bytes, so a password would end in
+# "[D"; with nothing echoed, nobody sees why it is refused.
+exakit_drop_key_escapes() {
+    _eke_esc="$(printf '\033')"
+    _eke_in="$1"; _EKE_OUT=""
+    while :; do
+        case "$_eke_in" in
+            *"$_eke_esc"*) ;;
+            *) _EKE_OUT="$_EKE_OUT$_eke_in"; break ;;
+        esac
+        _EKE_OUT="$_EKE_OUT${_eke_in%%"$_eke_esc"*}"
+        _eke_in="${_eke_in#*"$_eke_esc"}"
+        case "$_eke_in" in
+            '['*)
+                _eke_in="${_eke_in#?}"
+                while [ -n "$_eke_in" ]; do
+                    case "${_eke_in:0:1}" in
+                        [0-9]|';'|':'|'<'|'='|'>'|'?'|' '|'!'|'"'|'#'|'$'|'%'|'&'|"'"|'('|')'|'*'|'+'|','|'-'|'.'|'/')
+                            _eke_in="${_eke_in#?}" ;;
+                        "$_eke_esc") break ;;
+                        *) _eke_in="${_eke_in#?}"; break ;;
+                    esac
+                done ;;
+            O?*) _eke_in="${_eke_in#??}" ;;
+        esac
+    done
+    _eke_in=""
+}
+
 # exakit_read_hidden <label> — one line from the terminal with echo off, on
 # stdout. Call it in $( ): the trap below is then that subshell's own and never
 # replaces the caller's. Echo goes off BEFORE the prompt is printed - in the
 # other order, whatever arrived the moment the prompt appeared (a paste, a
 # password manager typing) was echoed in clear; measured. The terminal's exact
 # previous state comes back afterwards, on Ctrl-C too. Where echo cannot be
-# turned off nothing is read: a credential is never taken in clear.
+# turned off nothing is read: a credential is never taken in clear. A key that
+# sends an escape sequence (an arrow, Delete) does nothing
+# (exakit_drop_key_escapes).
 exakit_read_hidden() {
     _erh_saved="$(stty -g < /dev/tty 2>/dev/null)"
     stty -echo < /dev/tty 2>/dev/null || return 1
@@ -1260,7 +1295,9 @@ exakit_read_hidden() {
     stty "${_erh_saved:-echo}" < /dev/tty 2>/dev/null
     trap - INT TERM
     printf '\n' > /dev/tty
-    printf '%s' "$_erh_value"
+    exakit_drop_key_escapes "$_erh_value"
+    printf '%s' "$_EKE_OUT"
+    _EKE_OUT=""
 }
 
 prompt_text() {
