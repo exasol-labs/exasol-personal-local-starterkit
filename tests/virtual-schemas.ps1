@@ -1382,7 +1382,7 @@ $env:EXAKIT_PUBLIC_IP_URL = $ipUrl
 $script:shown.Clear()
 $picked = @(Invoke-ExakitVsPick)
 Check "the menu's first line is this computer's public IP, then its own, then the table" `
-    "INFO This computer's public IP is 203.0.113.7: a source on the internet must allow it.|INFO Tick one or more sources; the details for each are asked next.|MENU" `
+    "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|INFO Tick one or more sources; the details for each are asked next.|MENU" `
     ((@($script:shown) | Select-Object -First 3) -join "|")
 Check "...the answer is kept for the rest of the command" "203.0.113.7" $env:_EXAKIT_VS_PUBLIC_IP
 $t = $script:menuTable

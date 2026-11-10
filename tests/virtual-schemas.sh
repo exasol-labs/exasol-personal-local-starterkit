@@ -2547,7 +2547,7 @@ if command -v python3 >/dev/null 2>&1; then
         "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
     check "the first line is this computer's public IP, before the menu's own line" \
-        "    • This computer's public IP is 203.0.113.7: a source on the internet must allow it.|    • Tick one or more sources; the details for each are asked next." \
+        "    • Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|    • Tick one or more sources; the details for each are asked next." \
         "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print("|".join([l for l in t.split("\n") if l.strip()][:2]))' "$WORK/tui.raw")"
     has "...the review names this computer's public IP for a source on the internet" \
         "tuione: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
@@ -3424,9 +3424,27 @@ check "...and public_ip is null" "None" "$_null_ip"
 # INFO line, and its answer is handed on to the rest of the command
 # (_EXAKIT_VS_PUBLIC_IP), so a later plan does not ask again.
 OUT="$(ipeng catalog --public-ip </dev/null 2>&1)"
-check "catalog --public-ip: the menu's line, first" "INFO This computer's public IP is 203.0.113.7: a source on the internet must allow it." \
+check "catalog --public-ip: the menu's line, first" "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." \
     "$(printf '%s\n' "$OUT" | head -n 1)"
 check "...and --json carries it" "203.0.113.7" "$(ipeng --json catalog --public-ip </dev/null 2>/dev/null | pubip)"
+# On a colour screen the tip shows the address in green (UI_ACCENT); the log
+# and a screen without colour keep the plain words. <G> and </G> stand in for
+# the colour codes.
+_tipshow() { ( EXAKIT_HOME="$WORK/tiphome"; mkdir -p "$EXAKIT_HOME"
+    . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    exakit_vs_engine() { printf '%s\n' "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." \
+        'RESULT {"connectors": [], "public_ip": "203.0.113.7"}'; }
+    UI_ACCENT="$1"; UI_RESET="$2"; UI_DIM=""; UI_BULLET="-"; EXAKIT_LOG_FILE="$WORK/tip.log"; : > "$EXAKIT_LOG_FILE"
+    _exakit_vs_catalog "$WORK/tipcat"; printf 'KEPT=%s RESULT=%s\n' "${_EXAKIT_VS_PUBLIC_IP:-}" "$EXAKIT_VS_RESULT" ) 2>&1; }
+OUT="$(_tipshow '<G>' '</G>')"
+check "the tip: the address in green on a colour screen" \
+    "    -</G> Tip: cloud sources see you as <G>203.0.113.7</G> - allow it if the source has an IP allowlist." "$(printf '%s\n' "$OUT" | head -n 1)"
+has "...the catalog is still read, the address kept" 'KEPT=203.0.113.7 RESULT={"connectors": [], "public_ip": "203.0.113.7"}' "$OUT"
+lacks "...the log has the plain words" "<G>" "$(cat "$WORK/tip.log" 2>/dev/null)"
+has "...and the tip" "Tip: cloud sources see you as 203.0.113.7" "$(cat "$WORK/tip.log" 2>/dev/null)"
+OUT="$(_tipshow '' '')"
+check "...plain without colour" \
+    "    - Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." "$(printf '%s\n' "$OUT" | head -n 1)"
 OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$IPURL" eng catalog --public-ip </dev/null 2>&1)"
 lacks "EXAKIT_NO_IP_LOOKUP=1: the menu says nothing about it" "public IP" "$OUT"
 lacks "a catalog without --public-ip asks nothing" "public IP" "$(ipeng catalog </dev/null 2>&1)"
