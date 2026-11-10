@@ -129,8 +129,9 @@ document's ObjectId.
 - New password: `exakit source reauth movies --password-file <file>` - tried on
   a throwaway schema first; a refused one keeps the old.
 - The cluster moved, or another collection: `exakit connect mongodb --name movies
-  --set uri=<new URI> --yes` (`--dry-run` first). The password and `VS_MOVIES` are
-  kept; tried on a throwaway schema before anything changes - see the shared skill.
+  --set uri=<new URI> --password-file <file> --yes` (`--dry-run` first). The password
+  is given again; `VS_MOVIES` keeps its name, and the change is tried on a throwaway
+  schema before anything changes - see the shared skill.
 - The collection's shape changed: `exakit source refresh movies` (columns come
   from a sample).
 - Stop: `exakit source disconnect movies` or `exakit source remove movies`

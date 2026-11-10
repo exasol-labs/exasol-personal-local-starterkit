@@ -140,9 +140,10 @@ Adapter limits (measured on live sources):
   (shared recipe), then `exakit source reauth sales --password-file ~/.config/exakit/sales.pw`
   (tried first; a refused one keeps the old).
 - The server moved (a new host, port or database - a failover, an RDS restore, a
-  migration): `exakit connect postgresql --name sales --set host=<new host> --yes`
-  (`--dry-run` first). The credential and `VS_SALES` are kept; the new address is
-  tried before anything changes - see the shared skill.
+  migration): `exakit connect postgresql --name sales --set host=<new host>
+  --password-file ~/.config/exakit/sales.pw --yes` (`--dry-run` first). The password
+  is given again, every time; `VS_SALES` keeps its name, and the new address is tried
+  before anything changes - see the shared skill.
 - Tables added at the source: `exakit source refresh sales`.
 - Stop: `exakit source disconnect sales` or `exakit source remove sales`
   (`--dry-run` first, then ask) - see the shared skill.

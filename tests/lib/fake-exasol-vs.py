@@ -64,9 +64,14 @@ database and inspect it afterwards:
                 script_fail scripts (SCHEMA.NAME) whose CREATE OR REPLACE fails
     vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
                 adapter that echoes what the CONNECTION holds)
-    alter_clears true -> ALTER CONNECTION ... TO '<address>' drops the user and
-                password the connection held; altered lists every ALTERed one
-    set_fail    a message: ALTER VIRTUAL SCHEMA ... SET fails with it
+    ALTER CONNECTION ... TO '<address>' without USER/IDENTIFIED BY clears the
+                user and the password the connection held - measured on Exasol
+                2026.2.0-nano.8 (USER_NAME NULL, the password empty); altered
+                lists every ALTERed one
+    set_fail    a message: ALTER VIRTUAL SCHEMA ... SET fails with it;
+                set_fail_when a text: only a SET whose statement holds it fails
+    rename_fail connection names: a RENAME CONNECTION to one of them fails
+    create_fail connection names: a CREATE CONNECTION of one of them fails
     connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
                 its query => field printing the statement back, secret and
                 all, across as many lines as the statement has
@@ -564,26 +569,27 @@ class Fake(object):
                                 "    code        =>  42000\n    query       =>  %s\n)" % (doc["connection_fail"], sql))
             if not m.group(1) and m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
+            if m.group(2) in doc.get("create_fail", []):
+                raise Exception("could not create connection %s (test)" % m.group(2))
             doc["connections"][m.group(2)] = {"url": m.group(3), "user": (m.group(4) or "").replace("''", "'"),
                                               "secret": (m.group(5) or "").replace("''", "'")}
             return
         m = re.match(r"ALTER CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'$", sql)
         if m:
-            # The address alone. alter_clears: this database's ALTER drops the
-            # user and password a connection held (the semantics the kit
-            # checks on a throwaway connection before it relies on keeping them).
+            # The address alone: the user and password go with it (measured).
             con = doc["connections"].get(m.group(1))
             if con is None:
                 raise Exception("connection %s not found" % m.group(1))
             con["url"] = m.group(2)
-            if doc.get("alter_clears"):
-                con["user"], con["secret"] = "", ""
+            con["user"], con["secret"] = "", ""
             doc.setdefault("altered", []).append(m.group(1))
             return
         m = re.match(r'RENAME CONNECTION "([^"]+)" TO "([^"]+)"$', sql)
         if m:
             if m.group(1) not in doc["connections"]:
                 raise Exception("connection %s not found" % m.group(1))
+            if m.group(2) in doc.get("rename_fail", []):
+                raise Exception("could not rename connection %s (test)" % m.group(1))
             if m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists" % m.group(2))
             doc["connections"][m.group(2)] = doc["connections"].pop(m.group(1))
@@ -593,8 +599,8 @@ class Fake(object):
             # The adapter reads the source's metadata again with the new
             # properties (set_fail: it fails, as an adapter that cannot).
             vs = doc["virtual"][m.group(1)]
-            if doc.get("set_fail"):
-                raise Exception(doc["set_fail"])
+            if doc.get("set_fail") or (doc.get("set_fail_when") and doc["set_fail_when"] in sql):
+                raise Exception(doc.get("set_fail") or "adapter refused the properties (test)")
             src = _source_for(doc, vs["connection"])
             vs.setdefault("properties", {}).update(re.findall(r"(\w+) = '((?:[^']|'')*)'", m.group(2)))
             if "tables" in src:

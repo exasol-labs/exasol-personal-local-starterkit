@@ -196,6 +196,7 @@ function Invoke-ExakitVsEngine {
     $previousExecutable = $env:PYTHONEXECUTABLE
     $previousLauncher = $env:__PYVENV_LAUNCHER__
     $previousEngine = $env:EXAKIT_PERSONAL_ENGINE
+    $previousQuote = $env:EXAKIT_VS_QUOTE
     # This run's engine choice, where Get-PersonalSlcDnsEngine falls back to
     # it, so the engine (plan.py recorded_engine) falls back the same way.
     $runEngine = "" + (Get-Variable -Name PersonalEngine -Scope Script -ValueOnly -ErrorAction SilentlyContinue)
@@ -203,6 +204,8 @@ function Invoke-ExakitVsEngine {
         $ErrorActionPreference = "Continue"
         Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__, Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
         if ($runEngine) { $env:EXAKIT_PERSONAL_ENGINE = $runEngine }
+        # A command the engine names is run from this shell: quoted for it.
+        $env:EXAKIT_VS_QUOTE = "powershell"
         if ($Secret) {
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Secret))
@@ -217,8 +220,9 @@ function Invoke-ExakitVsEngine {
         $OutputEncoding = $previousEncoding
         if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
         if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
-        Remove-Item Env:\EXAKIT_PERSONAL_ENGINE -ErrorAction SilentlyContinue
+        Remove-Item Env:\EXAKIT_PERSONAL_ENGINE, Env:\EXAKIT_VS_QUOTE -ErrorAction SilentlyContinue
         if ($null -ne $previousEngine) { $env:EXAKIT_PERSONAL_ENGINE = $previousEngine }
+        if ($null -ne $previousQuote) { $env:EXAKIT_VS_QUOTE = $previousQuote }
     }
     foreach ($line in @(Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
@@ -802,9 +806,10 @@ function Show-ExakitVsPlan {
             Write-Host ("    {0}: {1} -> {2}" -f $c.input, $from, $to)
         }
     }
+    if ($Plan.PSObject.Properties["action"] -and $Plan.action -eq "unchanged") { Write-Host ("  " + $Plan.note) }
     if ($repoint) {
-        if ($Plan.credential -eq "kept") { Write-Host "    Credential: kept - the one in the database stays, nothing is asked" }
-        else { Write-Host "    Credential: replaced by the one given, after it is tried" }
+        if (@($Plan.changes | Where-Object { $null -ne $_ }).Count -eq 0) { Write-Host "    Address: as it is - only the credential is replaced" }
+        Write-Host "    Credential: required - give it again (the database never returns a stored one); it is tried with the new address before anything changes"
     }
     foreach ($d in @($Plan.downloads)) {
         $verb = "download"
@@ -831,12 +836,12 @@ function Test-ExakitVsSourceLive {
     return ($disconnected.Count -eq 0)
 }
 
-# Format-ExakitVsWord - the text as one shell word: as it is when it needs no
-# quoting, else in single quotes. For a command the --json answer names. Twin
-# of _exakit_vs_word.
+# Format-ExakitVsWord - the text as one PowerShell word: as it is when it needs
+# no quoting, else in single quotes with each ' doubled. For a command the
+# --json answer names. Twin of _exakit_vs_word, which quotes for a POSIX shell.
 function Format-ExakitVsWord {
     param([string]$Text)
-    if ($Text -and $Text -cmatch '^[A-Za-z0-9_@%+=:,./-]+$') { return $Text }
+    if ($Text -and $Text -cmatch '^[A-Za-z0-9_+=:./\\-]+$') { return $Text }
     return ("'" + $Text.Replace("'", "''") + "'")
 }
 

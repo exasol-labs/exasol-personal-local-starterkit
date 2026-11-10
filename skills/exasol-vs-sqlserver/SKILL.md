@@ -142,8 +142,9 @@ Types: `datetime` arrives as `TIMESTAMP(3)`, `bit` as `BOOLEAN`, `money` as
   `ALTER USER exakit_reader WITH PASSWORD = '@PW@'`) with a fresh file, then
   `exakit source reauth erp --password-file ~/.config/exakit/erp.pw`.
 - The server moved (a new host, port or database): `exakit connect sqlserver --name erp
-  --set host=<new host> --yes` (`--dry-run` first). The credential and `VS_ERP` are
-  kept; the new address is tried before anything changes - see the shared skill.
+  --set host=<new host> --password-file ~/.config/exakit/erp.pw --yes` (`--dry-run`
+  first). The password is given again; `VS_ERP` keeps its name, and the new address
+  is tried before anything changes - see the shared skill.
 - Tables added at the source: `exakit source refresh erp`.
 - Stop: `exakit source disconnect erp` or `exakit source remove erp`
   (`--dry-run` first, then ask) - see the shared skill.

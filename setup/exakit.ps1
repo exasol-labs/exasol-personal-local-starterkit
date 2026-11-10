@@ -4306,7 +4306,13 @@ function Invoke-CmdConnect {
         elseif ($arg -eq "--set") {
             $i++; $pair = "" + $Arguments[$i]
             if ($pair -notlike "*=*") { Deny-ExakitVsInput "--set takes KEY=VALUE (exakit help connect)" "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" }
-            $sets += @("--set", $pair); $given += $pair.Split("=")[0]
+            # A connector's credential input by name: refused before anything
+            # runs, the value never repeated (engine: plan.py).
+            $key = $pair.Split("=")[0]
+            if ($key -in @("password", "passwd", "pwd", "secret", "token", "key_file")) {
+                Deny-ExakitVsInput "--set $key=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." "--set $key gives a credential as an argument, where other users can read it in the process list" "give it with --password-file <file> or pipe it in with --password-stdin"
+            }
+            $sets += @("--set", $pair); $given += $key
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
@@ -4405,7 +4411,8 @@ function Invoke-CmdConnect {
         }
     }
     $base = @($connector, "--name", $name) + $sets
-    # A re-point's plan says whether a credential replaces the stored one.
+    # A connected source with nothing else given and a credential to come is a
+    # re-point of the credential alone, not "unchanged": the plan is told.
     $givenFlag = @()
     if ($live -and ($pwStdin -or $pwFile)) { $givenFlag = @("--secret-given") }
     $action = ""
@@ -4419,18 +4426,21 @@ function Invoke-CmdConnect {
         $planDoc = (@($planned.Lines) -join "`n") | ConvertFrom-Json
         $connector = "" + $planDoc.connector
         if ($planDoc.PSObject.Properties["action"]) { $action = "" + $planDoc.action }
-        # Nothing to change: the plan is the answer, and nothing runs.
-        if ($action -eq "unchanged") { foreach ($line in $planned.Lines) { Write-Output $line }; exit 0 }
         if ($action -eq "repoint" -and -not $script:ExakitVsAssumeYes) {
             # --json never asks, and asking is how a person agrees: without
             # --yes nothing changes (exit 5), as source disconnect and remove.
+            # The --yes form is named only with the credential it needs.
             $cmd = "" + $planDoc.command
             if (-not $cmd) { $cmd = "exakit connect $connector --name $name" }
-            if ($pwFile) { $cmd = "$cmd --password-file " + (Format-ExakitVsWord $pwFile) }
-            elseif ($pwStdin) { $cmd = "$cmd --password-stdin" }
+            $fix = "preview it with --dry-run, then confirm it with --yes"
+            if ($pwFile) { $cmd = "$cmd --password-file " + (Format-ExakitVsWord $pwFile) + " --yes --json" }
+            elseif ($pwStdin) { $cmd = "$cmd --password-stdin --yes --json" }
+            else {
+                $cmd = ""
+                $fix = "preview it with --dry-run, then run it with --yes and the credential (--password-file <file> or --password-stdin): a re-point always takes it again"
+            }
             if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "DECLINED" "connect $($name): a re-point, --json without --yes" }
-            Write-Output (New-ExakitVsFailureJson -Kind "declined" -Problem "re-pointing $name was not confirmed; nothing was changed" `
-                -Remedy "preview it with --dry-run, then confirm it with --yes" -Command "$cmd --yes --json")
+            Write-Output (New-ExakitVsFailureJson -Kind "declined" -Problem "re-pointing $name was not confirmed; nothing was changed" -Remedy $fix -Command $cmd)
             exit 5
         }
         $base = @($connector, "--name=$name") + $sets
@@ -4439,10 +4449,17 @@ function Invoke-CmdConnect {
         $plan = Show-ExakitVsLines -Lines $planned.Lines
         if ($planned.Code -ne 0) { Exit-ExakitVs $planned.Code }
         if ($null -ne $plan -and $plan.PSObject.Properties["action"]) { $action = "" + $plan.action }
-        # Nothing to change: the engine's line said so, and nothing runs.
-        if ($action -eq "unchanged") { exit 0 }
-        Show-ExakitVsPlan $plan
+        # Nothing to change: the connect below says so, without the plan.
+        if (-not ($action -eq "unchanged" -and -not $dry)) { Show-ExakitVsPlan $plan }
         if ($dry) { exit 0 }
+    }
+    if ($action -eq "unchanged") {
+        # Nothing to change and no credential: connect settles what an
+        # interrupted re-point left, then answers with the source's real
+        # state (exit 1 when it is not ready). Nothing is asked.
+        $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
+        if ($json) { foreach ($line in $script:ExakitVsLastLines) { Write-Output $line } }
+        Exit-ExakitVs $code
     }
     if ($action -eq "repoint") {
         # Asked at a console (no by default); without one only --yes agrees.
@@ -4450,19 +4467,10 @@ function Invoke-CmdConnect {
     } elseif ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
     $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
+    # A re-point takes the credential as a connect does: the database never
+    # returns a stored one, and moving a CONNECTION clears it.
     $secret = ""
-    if ($action -eq "repoint") {
-        # The stored credential is kept: none is asked for. Only one given with
-        # --password-file or --password-stdin replaces it, tried first like
-        # the new address.
-        if ($pwStdin) { $secret = $stdinSecret }
-        elseif ($pwFile) {
-            $secret = Read-ExakitVsSecretFile -Path $pwFile
-            if (-not $secret) { Deny-ExakitVsInput "$pwFile holds no credential." "$pwFile holds no credential" "give a file that holds the credential, or leave --password-file out to keep the stored one" }
-        }
-        if ($secret) { $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret }
-        else { $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base) }
-    } elseif ($secretSpec) {
+    if ($secretSpec) {
         $what = ("" + $secretSpec.label).ToLower()
         if ($pwStdin) { $secret = $stdinSecret }
         else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }

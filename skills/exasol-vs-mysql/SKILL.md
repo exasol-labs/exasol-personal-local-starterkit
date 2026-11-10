@@ -130,8 +130,9 @@ Query rules (adapter 6.1.0):
 - New password: `ALTER USER 'exakit_reader'@'%' IDENTIFIED BY '@PW@'` with a
   fresh file (shared recipe), then `exakit source reauth shop --password-file ~/.config/exakit/shop.pw`.
 - The server moved (a new host, port or database): `exakit connect mysql --name shop
-  --set host=<new host> --yes` (`--dry-run` first). The credential and `VS_SHOP`
-  are kept; the new address is tried before anything changes - see the shared skill.
+  --set host=<new host> --password-file ~/.config/exakit/shop.pw --yes` (`--dry-run`
+  first). The password is given again; `VS_SHOP` keeps its name, and the new address
+  is tried before anything changes - see the shared skill.
 - Tables added at the source: `exakit source refresh shop`.
 - Stop: `exakit source disconnect shop` or `exakit source remove shop`
   (`--dry-run` first, then ask) - see the shared skill.

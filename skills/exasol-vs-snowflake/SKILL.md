@@ -133,8 +133,9 @@ exakit sql "SELECT * FROM VS_SF_SALES.CUSTOMER LIMIT 10"   # names arrive upper 
 - The token expires (`DAYS_TO_EXPIRY`): add a new one (section 4), then
   `exakit source reauth sf_sales --password-file ~/.config/exakit/<name>.pat`.
 - Another account, database or warehouse: `exakit connect snowflake --name sf_sales
-  --set database=<new> --yes` (`--dry-run` first). The token and `VS_SF_SALES` are
-  kept, and the change is tried before anything changes - see the shared skill.
+  --set database=<new> --password-file ~/.config/exakit/<name>.pat --yes` (`--dry-run`
+  first). The token is given again; `VS_SF_SALES` keeps its name, and the change is
+  tried before anything changes - see the shared skill.
 - Tables added at the source: `exakit source refresh sf_sales`.
 - Stop: `exakit source disconnect sf_sales` or `exakit source remove sf_sales`
   (`--dry-run` first, then ask) - see the shared skill.

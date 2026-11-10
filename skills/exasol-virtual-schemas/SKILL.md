@@ -1,6 +1,6 @@
 ---
 name: exasol-virtual-schemas
-description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and a private CA, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, the credential kept), disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
+description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and a private CA, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, with the credential again), disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
 ---
 
 # Virtual schemas — the shared rules
@@ -193,35 +193,41 @@ named, with `exakit source refresh <name>`).
 ## Re-point a source that moved
 
 When a source moves to a new host, port or database, run the same connect with the
-source's name and only what changed - not `remove` and connect again:
+source's name, only what changed, and its credential - not `remove` and connect again:
 
 ```bash
 exakit connect <id> --name <name> --set host=<new host> [--set port=...] [--set database=...] --dry-run --json
-exakit connect <id> --name <name> --set host=<new host> --yes --json
+exakit connect <id> --name <name> --set host=<new host> --password-file <file> --yes --json
 ```
 
 - The recorded inputs stand; what is given replaces them. The plan (`action: repoint`)
-  lists `changes`, each `{input, from, to}`, and `credential`: `kept`. Show it to the user.
-- **The stored credential is kept**: it stays in the CONNECTION, nothing asks for it, and
-  stdin is not read (no `< /dev/null` needed). `--password-file <file>` or
-  `--password-stdin` replaces it in the same step (`credential: replaced`).
+  lists `changes`, each `{input, from, to}`, and `credential: required`. Show it to the user.
+- **The credential is always given again**, as for a first connect (a hidden prompt on a
+  terminal, `--password-file` or `--password-stdin` unattended): the database never
+  returns a stored one, and changing a CONNECTION's address clears it (measured on
+  Exasol 2026.2). Without it: exit 2, `kind: input`, nothing changed. Never try to read
+  it back out of the database.
 - `VS_<NAME>` keeps its name, so saved queries and views keep working; it is refreshed in
   place for the new address's tables.
-- **Tried first**: the new address is checked from inside the database, then read once
-  with the credential, before the record changes. Any failure (`unreachable`, `nohost`,
-  `tls`, `auth`, `privilege`, ...) leaves the source as it was - the `remedy` says
-  "nothing was changed" - and nothing needs undoing. The CONNECTION points at the new
-  address only for that one read when no credential is given, and back if it fails.
+- **Tried first**: the new address is checked from inside the database, then the new
+  address and credential are tried on a pending connection, before the source changes.
+  Then the source's CONNECTION is swapped (the old one kept aside until the re-point is
+  verified). Any failure (`unreachable`, `nohost`, `tls`, `auth`, `privilege`, ...) puts
+  everything back, the CONNECTION first - the `remedy` says "nothing was changed". If
+  something cannot be put back, the source is marked `failed`, and the next command on it
+  (`exakit source check <name>`) tries again; so does one after a re-point interrupted
+  part way (a plan then has `interrupted: true`).
 - Unattended it needs `--yes`: without it `--json` changes nothing (exit 5, `kind:
-  declined`, `command` the `--yes` form). A terminal asks, No by default.
-- The same inputs and no credential: `action: unchanged`, exit 0, nothing sent.
+  declined`; `command` is the `--yes` form when a credential flag was given, else null).
+  A terminal asks, No by default.
+- The same inputs and no credential: `action: unchanged`, exit 0 - or exit 1 with the
+  source's own fix when it is not `ready`. A credential and nothing else: only the
+  credential is replaced (as `exakit source reauth` does).
 - Refused, nothing changed (exit 2): `localhost` (the rule above), a mapping, CA or TLS
-  level (disconnect and connect again with them), a new `user` without its credential,
-  and any change to S3, Azure Blob or a lakehouse route without the credential - those
-  keep their bucket, region or warehouse inside the credential. A name another connector
-  holds is a `conflict` (exit 3).
-- A database whose `ALTER CONNECTION` would not keep a credential is found out on a
-  throwaway connection first; then the re-point needs the credential given (exit 2).
+  level (disconnect and connect again with them), a BigQuery source (its key is a file
+  staged for it: remove and connect again), and a credential given with `--set`. A name
+  another connector holds is a `conflict` (exit 3), and so is a source another command
+  changed while this one ran (run it again).
 
 ## Disconnect versus remove
 

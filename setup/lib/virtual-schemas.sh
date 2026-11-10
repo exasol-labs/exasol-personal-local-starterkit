@@ -1612,6 +1612,12 @@ cmd_connect() {
                     "give the source's connection string after --url, e.g. --url 'postgres://reader@db.example.com/sales'" ;;
             --set) case "${2:-}" in *=*) ;; *) _exakit_vs_refuse 2 "--set takes KEY=VALUE (exakit help connect)" \
                        "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" ;; esac
+                   # A connector's credential input by name: refused before
+                   # anything runs, the value never repeated (engine: plan.py).
+                   case "${2%%=*}" in password|passwd|pwd|secret|token|key_file)
+                       _exakit_vs_refuse 2 "--set ${2%%=*}=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." \
+                           "--set ${2%%=*} gives a credential as an argument, where other users can read it in the process list" \
+                           "give it with --password-file <file> or pipe it in with --password-stdin" ;; esac
                    EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
 $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
@@ -1712,7 +1718,8 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done <<EOF
 $EXAKIT_VS_SETS
 EOF
-    # A re-point's plan says whether a credential replaces the stored one.
+    # A connected source with nothing else given and a credential to come is a
+    # re-point of the credential alone, not "unchanged": the plan is told.
     _cc_given=""
     if [ -n "$_cc_live" ] && { [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ]; }; then _cc_given="--secret-given"; fi
     _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp && exit 1; die "Could not create a temporary file."; }
@@ -1726,19 +1733,22 @@ EOF
         # The connector it resolved to, and what the plan is, by its own top-level keys.
         _cc_resolved="$(sed -n 's/^  "connector": "\([a-z0-9-]*\)",*$/\1/p' "$_cc_out" | head -n 1)"
         _cc_action="$(sed -n 's/^  "action": "\([a-z]*\)",*$/\1/p' "$_cc_out" | head -n 1)"
-        # Nothing to change: the plan is the answer, and nothing runs.
-        if [ "$_cc_action" = unchanged ]; then cat "$_cc_out"; rm -f "$_cc_out"; exit 0; fi
         if [ "$_cc_action" = repoint ] && [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ]; then
             # --json never asks, and asking is how a person agrees: without
             # --yes nothing changes (exit 5), as source disconnect and remove.
+            # The --yes form is named only with the credential it needs.
             _cc_cmd="$(run_python_any -c 'import json, sys; print(json.load(open(sys.argv[1])).get("command") or "")' "$_cc_out" 2>/dev/null)"
             rm -f "$_cc_out"
             [ -n "$_cc_cmd" ] || _cc_cmd="exakit connect $_cc_resolved --name $_cc_name"
-            if [ -n "$_cc_pwfile" ]; then _cc_cmd="$_cc_cmd --password-file $(_exakit_vs_word "$_cc_pwfile")"
-            elif [ "$_cc_pwstdin" = 1 ]; then _cc_cmd="$_cc_cmd --password-stdin"; fi
+            _cc_fix="preview it with --dry-run, then confirm it with --yes"
+            if [ -n "$_cc_pwfile" ]; then _cc_cmd="$_cc_cmd --password-file $(_exakit_vs_word "$_cc_pwfile") --yes --json"
+            elif [ "$_cc_pwstdin" = 1 ]; then _cc_cmd="$_cc_cmd --password-stdin --yes --json"
+            else
+                _cc_cmd=""
+                _cc_fix="preview it with --dry-run, then run it with --yes and the credential (--password-file <file> or --password-stdin): a re-point always takes it again"
+            fi
             _exakit_log_file "DECLINED connect $_cc_name: a re-point, --json without --yes"
-            _exakit_vs_json_failure declined "re-pointing $_cc_name was not confirmed; nothing was changed" \
-                "preview it with --dry-run, then confirm it with --yes" "$_cc_cmd --yes --json"
+            _exakit_vs_json_failure declined "re-pointing $_cc_name was not confirmed; nothing was changed" "$_cc_fix" "$_cc_cmd"
             exit 5
         fi
         rm -f "$_cc_out"
@@ -1749,10 +1759,16 @@ EOF
         _exakit_vs_render "$_cc_out"; rm -f "$_cc_out"
         [ "$_cc_rc" -eq 0 ] || _exakit_vs_exit "$_cc_rc"
         _cc_action="$(printf '%s' "$EXAKIT_VS_RESULT" | sed -n 's/.*"action": "\([a-z]*\)".*/\1/p' | head -n 1)"
-        # Nothing to change: the engine's line said so, and nothing runs.
-        [ "$_cc_action" = unchanged ] && exit 0
-        _exakit_vs_show_plan "$EXAKIT_VS_RESULT"
+        # Nothing to change: the connect below says so, without the plan.
+        [ "$_cc_action" = unchanged ] && [ "$_cc_dry" = 0 ] || _exakit_vs_show_plan "$EXAKIT_VS_RESULT"
         [ "$_cc_dry" = 1 ] && exit 0
+    fi
+    if [ "$_cc_action" = unchanged ]; then
+        # Nothing to change and no credential: connect settles what an
+        # interrupted re-point left, then answers with the source's real
+        # state (exit 1 when it is not ready). Nothing is asked.
+        _exakit_vs_run "" connect "$@"
+        _exakit_vs_exit $?
     fi
     if [ "$_cc_action" = repoint ]; then
         # Asked at a terminal (no by default); without one only --yes agrees.
@@ -1765,24 +1781,9 @@ EOF
     fi
     _cc_label="$(run_python_any -c 'import json,sys; c=json.load(open(sys.argv[1])); print(next((s.get("label","password") for s in c["inputs"] if s["kind"] in ("secret","secret-file")), ""))' \
         "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
+    # A re-point takes the credential as a connect does: the database never
+    # returns a stored one, and moving a CONNECTION clears it.
     unset _cc_secret; _cc_secret=""
-    if [ "$_cc_action" = repoint ]; then
-        # The stored credential is kept: none is asked for, and stdin is not
-        # read. Only one given with --password-file or --password-stdin
-        # replaces it, tried first like the new address.
-        _cc_label=""
-        if [ "$_cc_pwstdin" = 1 ]; then
-            _cc_secret="$EXAKIT_VS_STDIN_SECRET"
-        elif [ -n "$_cc_pwfile" ]; then
-            if [ "$_cc_json" = 1 ] && { [ -d "$_cc_pwfile" ] || [ ! -r "$_cc_pwfile" ]; }; then
-                _exakit_vs_refuse 2 "Cannot read $_cc_pwfile" "cannot read $_cc_pwfile" \
-                    "give a file this user can read with --password-file, or pipe the credential in with --password-stdin"
-            fi
-            _cc_secret="$(_exakit_vs_read_secret "credential" "$_cc_pwfile")" || _exakit_vs_secret_failed $?
-            [ -n "$_cc_secret" ] || _exakit_vs_refuse 2 "$_cc_pwfile holds no credential." "$_cc_pwfile holds no credential" \
-                "give a file that holds the credential, or leave --password-file out to keep the stored one"
-        fi
-    fi
     if [ -n "$_cc_label" ]; then
         _cc_what="$(printf '%s' "$_cc_label" | tr 'A-Z' 'a-z')"
         # With --json an unreadable file is the one object; without, the
@@ -1859,9 +1860,12 @@ repoint = p.get("action") == "repoint"
 print("  %s %s (%s, %s, %s)" % ("Re-point" if repoint else "Plan for", p["name"], p["connector"], p["tier"], p["status"]))
 for c in p.get("changes") or []:
     print("    %s: %s -> %s" % (c["input"], "(none)" if c["from"] is None else c["from"], "(none)" if c["to"] is None else c["to"]))
+if p.get("action") == "unchanged":
+    print("  " + p["note"])
 if repoint:
-    print("    Credential: " + ("kept - the one in the database stays, nothing is asked" if p["credential"] == "kept"
-                               else "replaced by the one given, after it is tried"))
+    if not p.get("changes"):
+        print("    Address: as it is - only the credential is replaced")
+    print("    Credential: required - give it again (the database never returns a stored one); it is tried with the new address before anything changes")
 for d in p["downloads"]:
     print("    %s %s %s (%.1f MB%s)" % ("reuse" if d["cached"] else "download", d["role"], d["version"], d["bytes"] / 1e6, ", " + d["license"]))
 for s in p["steps"]:

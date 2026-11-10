@@ -19,13 +19,17 @@
 
 plan and connect for a name that is a connected source of the same connector
 re-point it in place (lifecycle.Engine.repoint): the recorded inputs with the
-given ones over them, the stored credential kept unless one is given, and
-VS_<NAME> kept. Their answer has "action": the plan's is connect, reconnect,
-repoint or unchanged (nothing would change: the same inputs and no
-credential), the result's connected, reconnected, repointed or unchanged; a
-re-point's adds "changes" ([{input, from, to}]) and "credential" (kept or
-replaced), and its plan "command", the connect that makes it, without --yes.
-A name taken by another connector is a conflict (exit 3).
+given ones over them, VS_<NAME> kept, and the credential given again - always
+(the database never returns a stored one, and moving a CONNECTION clears it).
+Their answer has "action": the plan's is connect, reconnect, repoint or
+unchanged (nothing would change: the same inputs and no credential), the
+result's connected, reconnected, repointed or unchanged. A re-point's adds
+"changes" ([{input, from, to}]) and "credential" ("required" in the plan,
+"replaced" in the result), and its plan "command", the connect that makes it
+without its credential or --yes; "interrupted" is true when an earlier
+re-point left its journal. An unchanged source that is not ready answers exit
+1 with its error, kind, remedy and command. A name taken by another connector
+is a conflict (exit 3).
 
 A secret is read from standard input only (--secret-stdin), never from an
 argument: arguments are visible to every local user through the process table.
@@ -115,7 +119,9 @@ def parse(argv):
         cmd.add_argument("--secret-stdin-base64", action="store_true")
         cmd.add_argument("--dry-run", action="store_true")
         # A credential will come with the connect (the shell knows before it
-        # reads one): the plan of a re-point then says it is replaced, not kept.
+        # reads one): the plan of a connected source with no other change is
+        # then a re-point that replaces only the credential, not "unchanged" -
+        # a given --password-file is never dropped unread.
         cmd.add_argument("--secret-given", action="store_true")
     sub.add_parser("list")
     sub.add_parser("issues").add_argument("--status", default="")
@@ -437,6 +443,11 @@ def main(argv=None):
                 result = engine.connect(connector, args.name, pairs(args.set), secret_of(args),
                                         dry_run=args.dry_run, plan_only=args.command == "plan",
                                         secret_given=args.secret_given)
+                if args.command == "connect" and result.get("action") == "unchanged" and \
+                        result.get("status") != "ready":
+                    # Nothing to change, but not working either: a failure,
+                    # with the source's own fix.
+                    code = 1
             elif args.command == "list":
                 result = {"sources": engine.listing()}
             elif args.command == "issues":
