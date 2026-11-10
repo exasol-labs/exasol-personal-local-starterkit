@@ -3813,16 +3813,23 @@ exakit_data_load_select() {
     # choosing the file row, so the table never draws.
     # The path (and EXAKIT_DATA_TABLE) are consumed by exakit_load_local_file
     # as its two answers.
+    EXAKIT_DATA_FILE_ANNOUNCE=0
     if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
-        info "Loading a local file (EXAKIT_DATA_FILE)."
         EXAKIT_DATA_LOAD_SELECTION="local"
         # The personas picked at the install's question keep their datasets:
-        # the file loads after them, not instead of them. (EXAKIT_PERSONA in the
-        # environment answers through EXAKIT_DATASETS, and the installer loads
-        # the file after that answer too.)
+        # the file loads after them, not instead of them - and is announced
+        # just before it loads (exakit_data_file_announce), not ahead of their
+        # datasets. (EXAKIT_PERSONA in the environment answers through
+        # EXAKIT_DATASETS, and the installer loads the file after that answer
+        # too.)
         if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
             _dls_mine="$(_exakit_data_persona_pending)"
             [ -n "$_dls_mine" ] && EXAKIT_DATA_LOAD_SELECTION="$_dls_mine,local"
+        fi
+        if [ "$EXAKIT_DATA_LOAD_SELECTION" = local ]; then
+            info "Loading a local file (EXAKIT_DATA_FILE)."
+        else
+            EXAKIT_DATA_FILE_ANNOUNCE=1
         fi
         return 0
     fi
@@ -3920,12 +3927,30 @@ exakit_data_table_release() {
     return 0
 }
 
-# What an unattended run says for the external row. The wizard asks questions
-# only a person can answer (its inputs are not read from the environment), so
-# without one it is never started: the command is named instead.
-EXAKIT_DATA_EXTERNAL_HINT="Connecting an external source asks its own questions, so it needs a terminal. Connect one any time with: exakit connect"
+# exakit_data_external_hint_text — what a run that does not start the wizard
+# says for the external row. The wizard asks questions only a person can answer
+# (its inputs are not read from the environment). Without a terminal that is
+# the reason; with one, the row was named in EXAKIT_DATASETS or nobody
+# confirmed the table, and it is for later. Twin: Get-ExakitDataExternalHint.
+exakit_data_external_hint_text() {
+    if [ -z "$(_exakit_prompt_tty)" ]; then
+        printf '%s\n' "Connecting an external source asks its own questions, so it needs a terminal. Connect one any time with: exakit connect"
+    else
+        printf '%s\n' "Connecting an external source asks its own questions, which this run does not ask. Run it later: exakit connect"
+    fi
+}
 exakit_data_external_hint() {
-    info "$EXAKIT_DATA_EXTERNAL_HINT"
+    info "$(exakit_data_external_hint_text)"
+}
+
+# exakit_data_file_announce — "Loading a local file (EXAKIT_DATA_FILE)." just
+# before the file loads, when a persona's datasets went first (see
+# exakit_data_load_select). Twin: Write-ExakitDataFileAnnounce.
+EXAKIT_DATA_FILE_ANNOUNCE=0
+exakit_data_file_announce() {
+    [ "${EXAKIT_DATA_FILE_ANNOUNCE:-0}" = 1 ] || return 0
+    EXAKIT_DATA_FILE_ANNOUNCE=0
+    info "Loading a local file (EXAKIT_DATA_FILE)."
 }
 
 # exakit_data_external_run — the "Connect an external source" row, run last,
@@ -3939,7 +3964,7 @@ EXAKIT_DATA_EXTERNAL_NOTE=""
 exakit_data_external_run() {
     EXAKIT_DATA_EXTERNAL_NOTE=""
     if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ] || [ -z "$(_exakit_prompt_tty)" ]; then
-        EXAKIT_DATA_EXTERNAL_NOTE="info|$EXAKIT_DATA_EXTERNAL_HINT"
+        EXAKIT_DATA_EXTERNAL_NOTE="info|$(exakit_data_external_hint_text)"
         return 0
     fi
     if ! command -v exakit_vs_connect_wizard >/dev/null 2>&1; then
@@ -4252,6 +4277,7 @@ exakit_data_load_menu() {
     # the datasets above have already finished and been drawn.
     if [ "$_menu_has_local" = 1 ]; then
         printf '\n'
+        exakit_data_file_announce
         ( exakit_load_local_file )
         _local_status=$?
         if [ "$_local_status" -eq 2 ]; then
@@ -4274,20 +4300,16 @@ exakit_data_load_menu() {
     # The external source last: the table's order. A connect that failed or was
     # cancelled is said and does not change this command's exit status - the
     # loads above it are what it reports on.
+    # What the loads above left to say is said before the wizard starts, so a
+    # "see above" stays next to what it points at.
     if [ "$_menu_has_external" = 1 ]; then
+        exakit_print_notes "$_menu_notes"
+        _menu_notes=""
         exakit_data_external_run
         [ -n "$EXAKIT_DATA_EXTERNAL_NOTE" ] && _menu_notes="${_menu_notes}$EXAKIT_DATA_EXTERNAL_NOTE
 "
     fi
-    while IFS='|' read -r _mn_kind _mn_text; do
-        [ -n "$_mn_text" ] || continue
-        case "$_mn_kind" in
-            warn) warn "$_mn_text" ;;
-            *)    info "$_mn_text" ;;
-        esac
-    done <<EXAKIT_MENU_NOTES_EOF
-$_menu_notes
-EXAKIT_MENU_NOTES_EOF
+    exakit_print_notes "$_menu_notes"
     return "$_menu_status"
 }
 

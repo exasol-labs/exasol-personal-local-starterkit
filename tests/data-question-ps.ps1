@@ -225,6 +225,8 @@ try {
     Has "an unknown option is refused" "REJECT: Unknown option '--nope'" (DataLoad @("tpch") @("--nope"))
     Has "a dataset id is matched case-sensitively" "No such file, folder or dataset: TPCH" (DataLoad @("tpch") @("TPCH"))
     Has "the one-argument form still works" "LOAD amazon_sales True|" ($(Set-Pending @("tpch"); $script:Did = @(); Invoke-CmdDataLoad -Argument "--force" -Arguments @("amazon_sales") 6>$null; "$($script:Did -join ';')|"))
+    # No console: the hint says so (with one it says to run it later).
+    function Test-ExakitInteractive { return $false }
     $env:EXAKIT_DATASETS = "tpch,external"
     $out = DataLoad @("tpch") @()
     Has "EXAKIT_DATASETS names the external row: the dataset loads" "LOAD tpch False|" $out
@@ -234,6 +236,20 @@ try {
     $out = DataLoad @("tpch") @()
     Lacks "external alone is an answer, not 'matched no bundled dataset'" "matched no bundled dataset" $out
     Lacks "...and loads nothing" "LOAD" $out
+    $env:EXAKIT_DATASETS = "tpch,external"
+    $out = DataLoad @("tpch") @("-Force")
+    Has "-Force with tpch,external reloads tpch" "LOAD tpch True|" $out
+    Has "...and the external row is the command to run" "Connect one any time with: exakit connect" $out
+    Lacks "...not an unknown id" "Unknown dataset id 'external'" $out
+    $env:EXAKIT_DATASETS = "external"
+    $out = DataLoad @("tpch") @("-Force")
+    Lacks "-Force with external alone: no failure, as plain data-load" "matched no bundled dataset" $out
+    Has "...the hint" "Connect one any time with: exakit connect" $out
+    $env:EXAKIT_DATASETS = "tpch"
+    $out = DataLoad @("tpch") @($work)
+    Has "a file named with EXAKIT_DATASETS set: the file, as always" "MENU $work|" $out
+    Has "...and it says the datasets were not loaded" "EXAKIT_DATASETS is ignored when a file is named; load them with a separate exakit data-load" $out
+    Lacks "a file alone: no such line" "EXAKIT_DATASETS is ignored" (DataLoad @("tpch") @($work))
 
     Write-Host "a scripted add-on that does not run here is skipped, the rest install:"
     function Get-ExakitMarketplaceAddonDescription { return "desc" }
@@ -288,10 +304,12 @@ try {
     function Start-ExakitDataTableRun { }
     function Stop-ExakitDataTableRun { }
     function Test-ExakitInteractive { return $true }
-    $script:LocalThrows = $false
+    # ok, refused (the loader's real refusal) or failed (Fail, stood in above).
+    $script:FileMode = "ok"
     function Import-ExakitLocalFile {
         Add-Content -LiteralPath $orderFile -Value "local"
-        if ($script:LocalThrows) { throw "the file was refused" }
+        if ($script:FileMode -eq "refused") { Stop-ExakitLocalFileRefused "File not found or empty: mine.csv" }
+        if ($script:FileMode -eq "failed") { Fail "the file failed" }
         return "loaded"
     }
     $script:Said = New-Object System.Collections.ArrayList
@@ -306,6 +324,7 @@ try {
         $script:Said.Clear()
         $env:STUB_RC = "$Rc"
         $script:PickConfirmed = $Confirmed
+        $script:PendingExitCode = 0
         $threw = ""
         try {
             if ($Entry -eq "menu") { Show-ExakitDataLoadMenu } else { Request-ExakitDataLoadOffer -KitRoot $repo }
@@ -325,12 +344,69 @@ try {
         Lacks "$($entry): ...and nothing throws" "THREW" $out
         $out = Ext $entry 0 $false
         Check "$($entry): nobody pressed Enter on the table: the wizard is never started" "local~" (($out -split '~')[0..1] -join '~')
-        Has "$($entry): ...the command is named instead" "needs a terminal. Connect one any time with: exakit connect" $out
+        Has "$($entry): ...with a console there, it is for later" "which this run does not ask. Run it later: exakit connect" $out
     }
-    $script:LocalThrows = $true
+    # A refused or failed file still lets the external source have its turn,
+    # in exakit data-load as in the installer - the shell twin runs the file in
+    # a subshell. Refused: exit 2 for data-load, a warning for the installer.
+    # Failed: the error, once the wizard has run.
+    $script:FileMode = "refused"
+    $out = Ext "menu" 0
+    Check "data-load: a refused file, then the wizard, nothing thrown" "local|exakit connect~" (($out -split '~')[0..1] -join '~')
+    Check "...and the command ends with exit 2, as bash's (bad input)" "2" "$($script:PendingExitCode)"
     $out = Ext "offer" 0
-    Check "the installer: a refused file still lets the external source have its turn, then the step fails" "local|exakit connect~THREW the file was refused" (($out -split '~')[0..1] -join '~')
-    $script:LocalThrows = $false
+    Check "the installer: a refused file, then the wizard, not booked" "local|exakit connect~" (($out -split '~')[0..1] -join '~')
+    Has "...a warning, as the shell twin's note" "WARN The local file was refused (see above). Load another any time with: exakit data-load" $out
+    $script:FileMode = "failed"
+    # Fail as the real one behaves for its callers: the reason is recorded
+    # (Set-ExakitFailureReason) and said once, then thrown.
+    function Fail([string]$Msg) { Set-ExakitFailureReason $Msg; throw "FAIL: $Msg" }
+    $out = Ext "menu" 0
+    Check "data-load: a failed file, then the wizard, then its error (exit 1)" "local|exakit connect~THREW FAIL: the file failed" (($out -split '~')[0..1] -join '~')
+    $out = Ext "offer" 0
+    Check "the installer: a failed file, then the wizard, then the step fails with its reason, not said twice" "local|exakit connect~THREW the file failed" (($out -split '~')[0..1] -join '~')
+    $script:FileMode = "ok"
+    Check "a refusal reaches the command's top level as exit 2" "True" "$(try { Stop-ExakitLocalFileRefused 'x' 6>$null } catch { Test-ExakitRefusal $_ })"
+    Has "...which exakit.ps1 answers with exit 2" 'if (Test-ExakitRefusal $_) { exit 2 }' (Get-Content -Raw (Join-Path $repo "setup/exakit.ps1"))
+    Lacks "the loader no longer ends the whole process on a refusal" "exit 2" ((Get-Command Import-ExakitLocalFile).Definition)
+
+    Write-Host "Ctrl+C in the wizard ends the wizard, not the install:"
+    $guard = Get-ExakitVsCtrlC
+    # Read through a function: "$x::" in a string reads as a drive to 5.1.
+    function GuardHeld { return [string](('ExakitConnectCtrlC' -as [type])::Held) }
+    Check "the guard compiles here" "ExakitConnectCtrlC" "$guard"
+    Check "...and holds nothing until the wizard runs" "False" (GuardHeld)
+    $script:HeldDuring = $null
+    function Start-ExakitVsChild { param([string]$Cli) $script:HeldDuring = ('ExakitConnectCtrlC' -as [type])::Held; return $script:ChildCode }
+    $script:ChildCode = -1073741510
+    $code = Invoke-ExakitVsConnectWizard
+    Check "while the child runs, Ctrl+C is held for this process" "True" "$($script:HeldDuring)"
+    Check "...and released when it returns" "False" (GuardHeld)
+    Check "the child's Ctrl+C exit comes back as it is" "-1073741510" "$code"
+    Check "0xC000013A (Ctrl+C on a Windows console) is a cancel" "True" "$(Test-ExakitConnectCancelled -Code -1073741510)"
+    Check "...as 5 and 130 are" "True|True|False" "$(Test-ExakitConnectCancelled -Code 5)|$(Test-ExakitConnectCancelled -Code 130)|$(Test-ExakitConnectCancelled -Code 1)"
+    $out = Ext "offer" 0
+    Has "the installer: a Ctrl+C in the wizard is said as a cancel" "INFO No external source was connected" $out
+    Lacks "...not as a failure" "did not finish" $out
+    function Start-ExakitVsChild { param([string]$Cli) throw "cannot start" }
+    Check "a child that cannot be started: exit 1, nothing thrown" "1" "$(Invoke-ExakitVsConnectWizard)"
+    Check "...and the hold is released" "False" (GuardHeld)
+    $out = Ext "offer" 0
+    Has "...said as a connect that did not finish" "WARN Connecting the external source did not finish" $out
+    Lacks "...and the data step is not failed" "THREW" $out
+    $out = & {
+        function Invoke-ExakitVsConnectWizard { throw "boom" }
+        Ext "menu" 0
+    }
+    Has "even a wizard that throws is a connect that did not finish" "WARN Connecting the external source did not finish" $out
+    Lacks "...nothing escapes to data-load" "THREW" $out
+    Remove-Item Function:\Start-ExakitVsChild
+    . (Join-Path $fake "setup/lib/virtual-schemas.ps1")
+    Write-Host "the hint: needs a terminal only when there is none:"
+    $hintNoConsole = & { function Test-ExakitInteractive { return $false }; Get-ExakitDataExternalHint }
+    $hintConsole = & { function Test-ExakitInteractive { return $true }; Get-ExakitDataExternalHint }
+    Has "no console: it needs a terminal" "so it needs a terminal. Connect one any time with: exakit connect" $hintNoConsole
+    Has "a console: run it later" "which this run does not ask. Run it later: exakit connect" $hintConsole
     $menuText = (Get-Command Show-ExakitDataLoadMenu).Definition
     Lacks "...and the wizard is not piped" "connect | Out-Host" $menuText
     Lacks "...nor run through the shim on PATH" "exakit.cmd" $menuText

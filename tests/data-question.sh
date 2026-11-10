@@ -267,26 +267,30 @@ done
 
 echo "the external row runs exakit connect, after the file, and never stops the load:"
 # A kit copy laid out as the installer has it: setup/lib/virtual-schemas.sh and,
-# beside the library, the command - here a stub that logs its arguments and
-# exits STUB_RC. The real exakit_vs_connect_wizard and the real entry points run.
+# beside the library, the command - here a stub that logs its arguments, says
+# STUB-CONNECT where the wizard would draw, and exits STUB_RC. The real
+# exakit_vs_connect_wizard and the real entry points run.
 mkdir -p "$WORK/fakekit/setup/lib"
 cp "$ROOT/setup/lib/virtual-schemas.sh" "$WORK/fakekit/setup/lib/"
-printf '#!/bin/sh\nprintf "connect|%%s\\n" "$*" >> "$STUB_LOG"\nexit "${STUB_RC:-0}"\n' > "$WORK/fakekit/setup/exakit"
-ext() { # ext <offer|menu> <stub-rc> [terminal:1|0] [confirmed:1|0] — what ran~status~what was said
+printf '#!/bin/sh\nprintf "connect|%%s\\n" "$*" >> "$STUB_LOG"\necho STUB-CONNECT\nexit "${STUB_RC:-0}"\n' > "$WORK/fakekit/setup/exakit"
+ext() { # ext <offer|menu> <stub-rc> [terminal:1|0] [confirmed:1|0] [file-rc] — what ran~status~what was said
     (
-        _ext_entry="$1"; _ext_tty="${3:-1}"; _ext_conf="${4:-1}"
+        _ext_entry="$1"; _ext_tty="${3:-1}"; _ext_conf="${4:-1}"; _ext_file_rc="${5:-0}"
         STUB_RC="$2"; STUB_LOG="$WORK/stub.log"; export STUB_RC STUB_LOG; : > "$STUB_LOG"
         . "$WORK/fakekit/setup/lib/virtual-schemas.sh"
         manifest_get() { printf 'admin\n'; }
         exakit_data_load_select() { EXAKIT_DATA_LOAD_SELECTION="external,local"; EXAKIT_TABLE_STATE=""; EXAKIT_TABLE_CONFIRMED="$_ext_conf"; }
         if [ "$_ext_tty" = 1 ]; then _exakit_prompt_tty() { printf '/dev/tty\n'; }; else _exakit_prompt_tty() { :; }; fi
-        exakit_load_local_file() { printf 'local|\n' >> "$STUB_LOG"; }
+        exakit_load_local_file() { printf 'local|\n' >> "$STUB_LOG"; return "$_ext_file_rc"; }
         unset EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATA_FILE
         if [ "$_ext_entry" = menu ]; then exakit_data_load_menu > "$WORK/ext.out" 2>&1
         else exakit_maybe_offer_data_load "$ROOT" > "$WORK/ext.out" 2>&1; fi
         _ext_rc=$?
         printf '%s~rc=%s~%s' "$(tr '\n' ';' < "$STUB_LOG")" "$_ext_rc" "$(tr '\n' ' ' < "$WORK/ext.out")"
     )
+}
+before() { # before <first> <second> <text> — yes when <first> is said before <second>
+    case "$3" in *"$1"*"$2"*) echo yes ;; *) echo no ;; esac
 }
 check "outside exakit the wizard is the command beside the library" "$ROOT/setup/exakit" \
     "$( (. "$ROOT/setup/lib/virtual-schemas.sh"; _exakit_vs_cli) )"
@@ -305,10 +309,65 @@ for _entry in offer menu; do
     has "$_entry: Ctrl+C in the wizard (130) is a cancel, not a failure" "No external source was connected" "$out"
     out="$(ext "$_entry" 0 0)"
     check "$_entry: no terminal: the wizard is never started" "local|;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
-    has "$_entry: ...the command is named instead" "needs a terminal. Connect one any time with: exakit connect" "$out"
+    has "$_entry: ...the command is named, and why: no terminal" "needs a terminal. Connect one any time with: exakit connect" "$out"
     out="$(ext "$_entry" 0 1 0)"
     check "$_entry: nobody pressed Enter on the table: never started either" "local|;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+    has "$_entry: ...with a terminal there, it is for later" "which this run does not ask. Run it later: exakit connect" "$out"
+    lacks "$_entry: ...not 'needs a terminal'" "needs a terminal" "$out"
 done
+# What the file left to say comes before the wizard starts, so "see above" is
+# next to what it points at: a refused file (3) in the installer, a file the
+# person backed out of (2) in exakit data-load.
+out="$(ext offer 0 1 1 3)"
+check "offer: a refused file is not booked, and the wizard still runs" "local|;connect|connect;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+check "offer: ...its note is said before the wizard starts" "yes" "$(before 'The local file was refused (see above)' STUB-CONNECT "$out")"
+out="$(ext menu 0 1 1 2)"
+check "menu: the note of a file backed out of is said before the wizard starts" "yes" "$(before 'Local file load skipped' STUB-CONNECT "$out")"
+out="$(ext menu 0 1 1 3)"
+check "menu: a refused file, then the wizard, then exit 2 (bad input)" "local|;connect|connect;~rc=2" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+out="$(ext offer 0 1 1 1)"
+check "offer: a failed file is booked, the wizard still runs" "local|;connect|connect;~rc=1" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+
+echo "the installer's own Ctrl+C trap is back as it was after the wizard:"
+# The runner holds INT with a trap that does nothing while the wizard runs, so
+# Ctrl+C ends only the wizard. Whatever the shell had before is restored - a
+# trap of its own, or none - on a cancel and on a failure alike.
+# A shell started in the background without job control ignores INT, and an
+# ignored signal cannot be trapped - so the check runs in a bash of its own,
+# started with INT at its default (python3 resets it before the exec).
+cat > "$WORK/int-trap.sh" <<'EXAKIT_INT_TRAP_EOF'
+ROOT="$1"; WORK="$2"; STUB_RC="$3"; STUB_LOG="$WORK/stub.log"; export STUB_RC STUB_LOG
+HOME="$WORK/home"; EXAKIT_HOME="$WORK/kit"; EXAKIT_BIN_DIR="$WORK/bin"
+. "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/exapump.sh"
+. "$WORK/fakekit/setup/lib/virtual-schemas.sh"
+EXAKIT_LOG_FILE="$WORK/log"
+_exakit_prompt_tty() { printf '/dev/tty\n'; }
+EXAKIT_TABLE_CONFIRMED=1
+if [ "$4" = - ]; then trap - INT; else trap "$4" INT; fi
+_it_before="$(trap -p INT)"
+exakit_data_external_run >/dev/null 2>&1
+printf '%s~%s' "$_it_before" "$(trap -p INT)"
+EXAKIT_INT_TRAP_EOF
+int_trap() { # int_trap <stub-rc> <trap-before|-> — "before~after" of trap -p INT
+    python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execv(sys.argv[1], sys.argv[1:])' \
+        /bin/bash "$WORK/int-trap.sh" "$ROOT" "$WORK" "$1" "$2"
+}
+for _rc in 5 1; do
+    out="$(int_trap "$_rc" 'echo held')"
+    check "exit $_rc: the shell's own INT trap is restored" "trap -- 'echo held' SIGINT~trap -- 'echo held' SIGINT" "$out"
+    out="$(int_trap "$_rc" -)"
+    check "exit $_rc: no INT trap before, none after" "~" "$out"
+done
+
+echo "a persona's datasets and a file: the file is announced when it loads:"
+out="$( (exakit_pending_datasets() { printf 'amazon_sales|Amazon sales\nfraud_transactions|Fraud\n'; }
+        exakit_load_dataset() { printf 'LOAD %s\n' "$2"; }
+        exakit_load_local_file() { printf 'FILE\n'; }
+        _exakit_prompt_tty() { :; }
+        unset EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE
+        EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=amazon_sales,fraud_transactions EXAKIT_DATA_FILE="$WORK/mine.csv" \
+            exakit_maybe_offer_data_load "$ROOT" 2>&1 | grep -E '^(LOAD|FILE)|Loading a local file' | sed 's/.*Loading a local file.*/ANNOUNCE/' | tr '\n' ';') )"
+check "the persona's datasets, then the announcement, then the file" "LOAD amazon_sales;LOAD fraud_transactions;ANNOUNCE;FILE;" "$out"
 
 echo "what each dataset is goes in a column, not on the name:"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\namazon_sales|Amazon sales (Amazon.in fashion orders, Apr-Jun 2022, ~129k lines)\n'; }
@@ -344,6 +403,7 @@ dl() { # dl <pending-ids> <args...> — what cmd_data_load does, stubbed below t
         exakit_load_sample_data() { printf 'LOAD tpch(sample) %s\n' "${2:-}"; }
         exakit_pending_datasets() { for _i in $_dl_pend; do printf '%s|x\n' "$_i"; done; }
         exakit_data_load_menu() { printf 'MENU FILE=%s\n' "${EXAKIT_DATA_FILE:-}"; }
+        _exakit_prompt_tty() { :; }
         cmd_data_load "$@"
     ) 2>&1
 }
@@ -366,6 +426,18 @@ lacks "...it is not an unknown id" "Unknown dataset id 'external'" "$out"
 out="$(EXAKIT_DATASETS=external dl tpch; printf 'rc=%s' "$?")"
 has "external alone is an answer, not 'matched no bundled dataset'" "rc=0" "$out"
 lacks "...and loads nothing" "LOAD" "$out"
+out="$(EXAKIT_DATASETS=tpch,external dl tpch --force)"
+check "--force with tpch,external reloads tpch" "LOAD tpch --force" "$(printf '%s\n' "$out" | grep '^LOAD')"
+has "...and the external row is the command to run" "needs a terminal. Connect one any time with: exakit connect" "$out"
+lacks "...not an unknown id" "Unknown dataset id 'external'" "$out"
+out="$(EXAKIT_DATASETS=external dl tpch --force; printf 'rc=%s' "$?")"
+has "--force with external alone: the hint, exit 0, as plain data-load" "rc=0" "$out"
+has "...the hint" "Connect one any time with: exakit connect" "$out"
+lacks "...not 'matched no bundled dataset'" "matched no bundled dataset" "$out"
+out="$(EXAKIT_DATASETS=tpch dl tpch "$WORK")"
+check "a file named with EXAKIT_DATASETS set: the file, as always" "MENU FILE=$WORK" "$(printf '%s\n' "$out" | grep '^MENU')"
+has "...and it says the datasets were not loaded" "EXAKIT_DATASETS is ignored when a file is named; load them with a separate exakit data-load" "$out"
+lacks "a file alone: no such line" "EXAKIT_DATASETS is ignored" "$(dl tpch "$WORK")"
 lacks "the old hint without a dataset is gone" "replace it with: exakit data-load --force," "$(cat "$ROOT/setup/exakit")"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"

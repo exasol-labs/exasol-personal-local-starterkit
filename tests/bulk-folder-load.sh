@@ -792,6 +792,8 @@ check "...and nothing was touched" "0" "$(grep -c . "$LOADED")"
 # each status in turn. A grep for the `-eq 5` line passed a mutant that booked
 # the decline as a failure right under it; this does not.
 _ucs_branch="$(awk '/^_exakit_offer_local_file\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$ROOT/setup/lib/common.sh")"
+# ...with the helper that books a failure, which keeps every reason.
+_ucs_fail="$(awk '/^_exakit_offer_fail\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$ROOT/setup/lib/common.sh")"
 check "the installer's local-load branch was lifted" "yes" "$(printf '%s' "$_ucs_branch" | grep -q '_local_status" -eq 5' && echo yes || echo no)"
 check "...and both installer paths to a file run it" "2" "$(grep -c '^ *_exakit_offer_local_file$' "$ROOT/setup/lib/common.sh")"
 _installer_books() { # _installer_books <loader exit status> -> "failed=<0|1> noted=<n> notes=<text>"
@@ -800,6 +802,7 @@ _installer_books() { # _installer_books <loader exit status> -> "failed=<0|1> no
         exakit_load_local_file() { return '"$1"'; }
         exakit_note_failure() { _noted=$((_noted + 1)); }
         error() { :; }; printf() { command printf "$@"; }
+        '"$_ucs_fail"'
         '"$_ucs_branch"'
         _exakit_offer_local_file
         command printf "failed=%s noted=%s notes=%s" "$_data_failed" "$_noted" "$(command printf "%s" "$_data_notes" | tr "\n" " ")"' 2>/dev/null

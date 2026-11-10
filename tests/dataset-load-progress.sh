@@ -400,7 +400,7 @@ has "...and stops it"                  'ui_table_end "$EXAKIT_TABLE_STATE"'   "$
 # A warning printed into a frame that is still being repainted lands inside the
 # box, so the installer collects them and speaks after the table has stopped.
 has "warnings wait for the table"      '_data_notes="${_data_notes}warn|'      "$COMMON_SH"
-has "...and are said afterwards"       'EXAKIT_DATA_NOTES_EOF'                "$COMMON_SH"
+has "...and are said afterwards"       'exakit_print_notes "$_data_notes"'    "$COMMON_SH"
 
 printf '\n== under a REAL terminal, one table is left, not three ==\n'
 

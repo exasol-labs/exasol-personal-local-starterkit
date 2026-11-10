@@ -2226,6 +2226,7 @@ $_dl_path
             _dl_known=" $(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ' ') "
             _dl_any=0
             _dl_failed=0
+            _dl_external=0
             for _dl_id in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
                 case "$_dl_known" in
                     *" $_dl_id "*)
@@ -2234,12 +2235,20 @@ $_dl_path
                         exakit_load_dataset "$_kit_root" "$_dl_id" "--force" || _dl_failed=1
                         ;;
                     *)
-                        warn "Unknown dataset id '$_dl_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_dl_known" | sed 's/ *$//'))."
+                        # The menu's external-source row: nothing to reload, and
+                        # never the wizard. As plain data-load: the hint, exit 0.
+                        if [ "$_dl_id" = external ]; then
+                            _dl_any=1
+                            _dl_external=1
+                        else
+                            warn "Unknown dataset id '$_dl_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_dl_known" | sed 's/ *$//'))."
+                        fi
                         ;;
                 esac
             done
             [ "$_dl_any" -eq 1 ] || \
                 die "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset — nothing was reloaded."
+            [ "$_dl_external" = 1 ] && exakit_data_external_hint
             return "$_dl_failed"
         fi
         info "Reloading the bundled sample dataset (log: ${EXAKIT_LOG_FILE:-none})"
@@ -2288,6 +2297,13 @@ $_dl_path
     else
         command -v exakit_data_load_menu >/dev/null 2>&1 || \
             die "The exapump data-loading module is not available in this kit build."
+        # A file named (the argument or EXAKIT_DATA_FILE) is the whole answer:
+        # loading datasets too would make every `exakit data-load <path>` also
+        # load an EXAKIT_DATASETS left in the shell or exakit.env. Said, not
+        # silent.
+        if [ -n "${EXAKIT_DATASETS:-}" ] && [ -n "${EXAKIT_DATA_FILE:-}" ]; then
+            warn "EXAKIT_DATASETS is ignored when a file is named; load them with a separate exakit data-load"
+        fi
         exakit_data_load_menu
     fi
 }

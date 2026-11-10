@@ -11793,10 +11793,21 @@ exakit_maybe_offer_mcp_setup() {
     fi
 }
 
+# _exakit_offer_fail <reason> — book the installer's data step as failed and
+# keep EVERY reason: a dataset and the file can both fail, and the failure note
+# holds one line that the closing summary quotes (a later note replaced an
+# earlier one, so the first reason was lost).
+_exakit_offer_fail() {
+    _data_failed=1
+    _data_reasons="${_data_reasons:+$_data_reasons; }$1"
+    exakit_note_failure "$_data_reasons"
+}
+
 # _exakit_offer_local_file — the installer's local-file load (the file row, or
 # EXAKIT_DATA_FILE), once nothing on screen animates any more. What it has to
 # say goes into the caller's _data_notes, a failure into its _data_failed.
 _exakit_offer_local_file() {
+    command -v exakit_data_file_announce >/dev/null 2>&1 && exakit_data_file_announce
     ( exakit_load_local_file )
     _local_status=$?
     if [ "$_local_status" -eq 2 ]; then
@@ -11817,24 +11828,29 @@ _exakit_offer_local_file() {
     elif [ "$_local_status" -ne 0 ]; then
         _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
 "
-        exakit_note_failure "loading the local file did not finish (see the log)"
-        _data_failed=1
+        _exakit_offer_fail "loading the local file did not finish (see the log)"
     fi
     return 0
 }
 
-# _exakit_offer_notes — the notes the loads left in _data_notes, said once,
-# after all of them.
-_exakit_offer_notes() {
-    while IFS='|' read -r _dn_kind _dn_text; do
-        [ -n "$_dn_text" ] || continue
-        case "$_dn_kind" in
-            warn) warn "$_dn_text" ;;
-            *)    info "$_dn_text" ;;
+# exakit_print_notes <notes> — kind|text lines, said as warn or info, in order.
+exakit_print_notes() {
+    while IFS='|' read -r _pn_kind _pn_text; do
+        [ -n "$_pn_text" ] || continue
+        case "$_pn_kind" in
+            warn) warn "$_pn_text" ;;
+            *)    info "$_pn_text" ;;
         esac
-    done <<EXAKIT_DATA_NOTES_EOF
-$_data_notes
-EXAKIT_DATA_NOTES_EOF
+    done <<EXAKIT_PRINT_NOTES_EOF
+$1
+EXAKIT_PRINT_NOTES_EOF
+}
+
+# _exakit_offer_notes — the notes the loads left in _data_notes, said once, and
+# cleared, so a later flush does not repeat them.
+_exakit_offer_notes() {
+    exakit_print_notes "$_data_notes"
+    _data_notes=""
 }
 
 # _exakit_offer_answered_rest <external-named:0|1> — after an unattended answer
@@ -11850,7 +11866,7 @@ _exakit_offer_answered_rest() {
         _exakit_offer_local_file
     fi
     if [ "$1" = 1 ]; then
-        _data_notes="${_data_notes}info|${EXAKIT_DATA_EXTERNAL_HINT:-Connect an external source any time with: exakit connect}
+        _data_notes="${_data_notes}info|$(exakit_data_external_hint_text 2>/dev/null || printf 'Connect an external source any time with: exakit connect')
 "
     fi
     _exakit_offer_notes
@@ -11894,6 +11910,7 @@ exakit_maybe_offer_data_load() {
     # install whose database is already up.
     _data_failed=0
     _data_notes=""
+    _data_reasons=""
     if [ -n "${EXAKIT_DATASETS:-}" ]; then
         _known_ids=" $(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ' ') "
         _valid_any=0
@@ -11905,8 +11922,7 @@ exakit_maybe_offer_data_load() {
                     info "Loading dataset '$_env_id' (EXAKIT_DATASETS)."
                     if ! ( exakit_load_dataset "$_kit_root" "$_env_id" ); then
                         warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-                        exakit_note_failure "loading dataset '$_env_id' did not finish (see the log)"
-                        _data_failed=1
+                        _exakit_offer_fail "loading dataset '$_env_id' did not finish (see the log)"
                     fi
                     ;;
                 *)
@@ -11924,8 +11940,7 @@ exakit_maybe_offer_data_load() {
         done
         if [ "$_valid_any" -ne 1 ]; then
             error "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset — nothing was loaded."
-            exakit_note_failure "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset"
-            _data_failed=1
+            _exakit_offer_fail "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset"
         fi
         _exakit_offer_answered_rest "$_data_external_named"
         return "$_data_failed"
@@ -11947,8 +11962,7 @@ exakit_maybe_offer_data_load() {
         info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
         if ! ( exakit_load_sample_data "$_kit_root" ); then
             warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-            exakit_note_failure "the bundled sample data did not finish loading (see the log)"
-            _data_failed=1
+            _exakit_offer_fail "the bundled sample data did not finish loading (see the log)"
         fi
         _exakit_offer_answered_rest 0
         return "$_data_failed"
@@ -12003,8 +12017,7 @@ exakit_maybe_offer_data_load() {
                 if ! ( ui_table_detach; exakit_load_dataset "$_kit_root" "$_data_id" ); then
                     _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
 "
-                    exakit_note_failure "loading dataset '$_data_id' did not finish (see the log)"
-                    _data_failed=1
+                    _exakit_offer_fail "loading dataset '$_data_id' did not finish (see the log)"
                 fi
                 ;;
         esac
@@ -12039,8 +12052,11 @@ exakit_maybe_offer_data_load() {
     fi
     # The external source last, the table's order: `exakit connect` asking for
     # everything. A connect that failed or was cancelled is said, with the
-    # command, and is not a failed data step: the install carries on.
+    # command, and is not a failed data step: the install carries on. What the
+    # loads above left to say is said first, so a "see above" stays next to
+    # what it points at.
     if [ "$_data_has_external" = 1 ]; then
+        _exakit_offer_notes
         exakit_data_external_run
         [ -n "$EXAKIT_DATA_EXTERNAL_NOTE" ] && _data_notes="${_data_notes}$EXAKIT_DATA_EXTERNAL_NOTE
 "

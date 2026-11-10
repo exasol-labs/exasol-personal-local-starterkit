@@ -61,7 +61,10 @@ def _query(prefix: list[str], command: str, args: list[str], env: dict[str, str]
 
 def _requested_datasets(root: Path, value: str) -> list[str]:
     known = set(persona_service.bundled_datasets(root))
-    ids = [part.strip() for part in value.split(",") if part.strip()]
+    # "external" names the data menu's external-source row (exakit connect), an
+    # answer EXAKIT_DATASETS may carry from the shell or exakit.env. A persona
+    # brings no source to connect, so it is not a dataset here and not an error.
+    ids = [part.strip() for part in value.split(",") if part.strip() and part.strip() != "external"]
     unknown = [item for item in ids if item not in known]
     if unknown:
         raise persona_service.BadInput(f"Unknown dataset id '{unknown[0]}' in EXAKIT_DATASETS")
