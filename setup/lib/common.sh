@@ -8033,6 +8033,30 @@ EXAKIT_UPDATE_JSON_PY
     return 1
 }
 
+# _exakit_update_handover_target <target> <targets> <kit-component> — what the
+# new kit is handed after this process updated the kit itself. "all" stays
+# all: the new kit's list may hold components this one does not know. Named
+# ids hand over the kit and the ids after it - the ones before it are done,
+# and handing them over again listed them under both updated and current. The
+# kit stays in the list so the new run makes its new-setup check; it skips the
+# kit itself. ⇄ twin: Get-ExakitHandoverTarget in setup/exakit.ps1.
+_exakit_update_handover_target() {
+    if [ "$1" = "all" ]; then
+        printf 'all\n'
+        return 0
+    fi
+    _euht_out="exakit"
+    _euht_seen=0
+    for _euht_t in $2; do
+        if [ "$_euht_seen" = 1 ]; then
+            _euht_out="$_euht_out $_euht_t"
+        elif [ "$_euht_t" = "$3" ]; then
+            _euht_seen=1
+        fi
+    done
+    printf '%s\n' "$_euht_out"
+}
+
 # _exakit_update_run <target> <targets> [component options...] — the body of
 # exakit_update: one pass over the targets, applying what is advertised.
 _exakit_update_run() {
@@ -8219,7 +8243,7 @@ _exakit_update_run() {
             # included, is its own answer, and the rows it wrote stand.
             if command -v exakit_update_handover_ready >/dev/null 2>&1; then
                 if exakit_update_handover_ready; then
-                    exakit_update_handover "$_target"
+                    exakit_update_handover "$(_exakit_update_handover_target "$_target" "$_targets" "$_component")"
                     return $?
                 fi
                 warn "The updated exakit command was not found - the rest of this update waits for the next 'exakit update'"

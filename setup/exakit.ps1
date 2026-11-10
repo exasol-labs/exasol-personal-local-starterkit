@@ -3487,6 +3487,25 @@ function Invoke-CmdUpdate {
     Write-ExakitUpdateJsonReport -RunFailed $runFailed -RunError $runError
 }
 
+# Get-ExakitHandoverTarget - what the new kit is handed after this process
+# updated the kit itself. "all" stays all: the new kit's list may hold
+# components this one does not know. Named ids hand over the kit and the ids
+# after it - the ones before it are done, and handing them over again listed
+# them under both updated and current. The kit stays in the list so the new
+# run makes its new-setup check; it skips the kit itself. Twin of
+# _exakit_update_handover_target in common.sh.
+function Get-ExakitHandoverTarget {
+    param([string]$Target = "all", [string[]]$Targets = @(), [string]$Kit = "exakit")
+    if ($Target -eq "all") { return "all" }
+    $after = New-Object System.Collections.ArrayList
+    $seen = $false
+    foreach ($t in $Targets) {
+        if ($seen) { [void]$after.Add($t) }
+        elseif ($t -eq $Kit) { $seen = $true }
+    }
+    return ((@("exakit") + @($after)) -join " ")
+}
+
 # Invoke-ExakitUpdateRun - the body of `exakit update`: one pass over the
 # targets, applying what is advertised. Twin of _exakit_update_run.
 function Invoke-ExakitUpdateRun {
@@ -3511,7 +3530,12 @@ function Invoke-ExakitUpdateRun {
     $deferred = 0
     $acted = 0
     $script:ExakitKitSwapped = $false
-    $targets = @(Get-ExakitUpdateTargets -Target $Target)
+    # Several ids (exakit update exapump dbt-exasol) arrive already resolved in
+    # -Components, and $Target holds them joined by spaces for the handover and
+    # the messages: resolving the joined string again was "Unknown update
+    # target: exapump dbt-exasol". Twin of the <targets> list _exakit_update_run
+    # takes.
+    if ($null -ne $Components) { $targets = @($Components) } else { $targets = @(Get-ExakitUpdateTargets -Target $Target) }
     foreach ($component in $targets) {
         # A run handed over by the previous kit's updater: that run already
         # updated the kit, and listing it again would report it twice.
@@ -3714,7 +3738,7 @@ function Invoke-ExakitUpdateRun {
             (Get-Command Invoke-ExakitUpdateHandover -ErrorAction SilentlyContinue)) {
             $kitNow = Get-ExakitManifestValue "kit.version"
             if ($kitNow -and $kitNow -ne $current) {
-                $handoverCode = Invoke-ExakitUpdateHandover -Target $Target -AssumeYes $AssumeYes
+                $handoverCode = Invoke-ExakitUpdateHandover -Target (Get-ExakitHandoverTarget -Target $Target -Targets $targets -Kit $component) -AssumeYes $AssumeYes
                 if ($null -ne $handoverCode) {
                     if ($handoverCode -ne 0) {
                         if ($script:ExakitUpdateJson) { throw "the updated kit's update run did not finish (exit $handoverCode)" }

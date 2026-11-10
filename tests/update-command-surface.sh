@@ -250,42 +250,77 @@ esac
 _ucs_out="$(_ucs_multi exapump dbt-exasol --plan)"; _ucs_rc=$?
 [ "$_ucs_rc" -eq 2 ] && pass "an option behind several ids is still refused with exit 2" || fail "ids plus --plan exited $_ucs_rc"
 
-# The kit moves first, then hands the rest to the new kit (#45): the same shell
+# The kit moves first, then the NEW kit finishes the run (#45): the same shell
 # kept the old code and manifest and built a download URL the new release does
-# not have. Only the updaters are stubbed; _exakit_update_run is the real one.
-_ucs_handoff() { # _ucs_handoff <json 0|1> -> what ran in this shell and what the new kit was asked
+# not have. The new kit is handed the run (core-setup.sh's handover): `all`
+# stays all - the new kit's list may hold components the old one does not know -
+# and named ids hand over the kit and the ids after it. The new run skips the kit
+# (EXAKIT_UPDATE_HANDOVER=1), updates the rest, makes its own new-setup check,
+# and under --json writes its rows into the same results file, so the one
+# object lists what it did - nothing is deferred. Only the updaters are stubbed;
+# _exakit_update_run and the handover are the real ones.
+_ucs_handoff() { # _ucs_handoff <json 0|1> <target> <targets> -> what ran here, what the new kit was asked, the rows
     _ucs_bin="$(mktemp -d)"
     cat > "$_ucs_bin/exakit" <<'UCS_FAKE'
 #!/bin/sh
-printf 'new-kit:%s\n' "$*"
+printf 'new-kit:%s handover=%s\n' "$*" "${EXAKIT_UPDATE_HANDOVER:-0}"
+# The new run's own rows, as its _exakit_update_note writes them under --json.
+if [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] && [ "${EXAKIT_UPDATE_JSON:-0}" = 1 ]; then
+    shift
+    for _id in "$@"; do
+        [ "$_id" = exakit ] && continue
+        [ "$_id" = all ] && _id="exasol-scheduler dbt-exasol"
+        for _one in $_id; do printf '%s|updated|1.0|2.0|\n' "$_one" >> "$EXAKIT_UPDATE_RESULTS"; done
+    done
+fi
+exit 0
 UCS_FAKE
     chmod +x "$_ucs_bin/exakit"
     EXAKIT_BIN_DIR="$_ucs_bin" EXAKIT_UPDATE_JSON="$1" EXAKIT_UPDATE_RESULTS="$_ucs_bin/results" bash -c '
         . "$1/setup/lib/common.sh" >/dev/null 2>&1
+        . "$1/setup/lib/core-setup.sh" >/dev/null 2>&1
         EXAKIT_BIN_DIR="$2"; EXAKIT_VERSION_POLICY=pinned
         exakit_print_versions_source_line() { :; }
         exakit_component_min_kit() { :; }
+        exakit_component_is_managed() { return 0; }
+        exakit_core_update_check() { :; }
         exakit_update_actual_target() { printf "%s\n" "$1"; }
         exakit_component_current() { case "$1" in exakit) cat "$EXAKIT_BIN_DIR/kit" 2>/dev/null || echo 0.2.0 ;; *) echo 1.0 ;; esac; }
         exakit_component_available() { case "$1" in exakit) echo 0.2.3 ;; *) echo 2.0 ;; esac; }
         exakit_update_component() { printf "this-shell:%s\n" "$1"; [ "$1" = exakit ] && echo 0.2.3 > "$EXAKIT_BIN_DIR/kit"; return 0; }
-        _exakit_update_run all "exakit exasol-scheduler dbt-exasol"
-        [ -f "$EXAKIT_UPDATE_RESULTS" ] && cat "$EXAKIT_UPDATE_RESULTS"' _ "$ROOT" "$_ucs_bin" 2>&1
+        _exakit_update_run "$3" "$4"
+        [ -f "$EXAKIT_UPDATE_RESULTS" ] && cat "$EXAKIT_UPDATE_RESULTS"' _ "$ROOT" "$_ucs_bin" "$2" "$3" 2>&1
     rm -rf "$_ucs_bin"
 }
-_ucs_out="$(_ucs_handoff 0)"
+_ucs_all="exakit
+exasol-scheduler
+dbt-exasol"
+_ucs_out="$(_ucs_handoff 0 all "$_ucs_all")"
 case "$_ucs_out" in
-    *"this-shell:exakit"*"new-kit:update exasol-scheduler dbt-exasol"*) pass "after the kit moves, the new kit updates the rest" ;;
-    *) fail "the rest was not handed to the new kit: $_ucs_out" ;;
+    *"this-shell:exakit"*"new-kit:update all handover=1"*) pass "after the kit moves, the new kit is handed the run: all stays all" ;;
+    *) fail "the run was not handed to the new kit as all: $_ucs_out" ;;
 esac
 case "$_ucs_out" in
-    *"this-shell:exasol-scheduler"*) fail "...and this shell still updated an add-on with the old code" ;;
+    *"this-shell:exasol-scheduler"*|*"this-shell:dbt-exasol"*) fail "...and this shell still updated an add-on with the old code" ;;
     *) pass "...and the old shell updates nothing after the kit" ;;
 esac
-_ucs_out="$(_ucs_handoff 1)"
+_ucs_out="$(_ucs_handoff 1 all "$_ucs_all")"
 case "$_ucs_out" in
-    *"exasol-scheduler|deferred|||exakit update exasol-scheduler dbt-exasol"*) pass "under --json the rest is deferred with the command that applies it" ;;
-    *) fail "under --json the rest was not deferred: $_ucs_out" ;;
+    *"exasol-scheduler|updated|1.0|2.0|"*"dbt-exasol|updated|1.0|2.0|"*) pass "under --json the handed-over run's rows are the answer" ;;
+    *) fail "under --json the new run's rows are missing: $_ucs_out" ;;
+esac
+case "$_ucs_out" in
+    *"|deferred|"*) fail "...and nothing is deferred, yet a row was: $_ucs_out" ;;
+    *) pass "...and nothing is deferred" ;;
+esac
+# Named ids: the ones before the kit are done here, so only the kit and the ids
+# after it are handed over - none is listed as both updated and current.
+_ucs_out="$(_ucs_handoff 0 "exasol-scheduler exakit dbt-exasol" "exasol-scheduler
+exakit
+dbt-exasol")"
+case "$_ucs_out" in
+    *"this-shell:exasol-scheduler"*"this-shell:exakit"*"new-kit:update exakit dbt-exasol handover=1"*) pass "named ids: the kit and the ids after it are handed over" ;;
+    *) fail "named ids were not handed over as the kit and the ids after it: $_ucs_out" ;;
 esac
 
 _ucs_out="$(_ucs_run --bogus)"; _ucs_rc=$?
