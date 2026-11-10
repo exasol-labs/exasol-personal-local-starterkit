@@ -61,6 +61,10 @@ class RenderResult:
     managed_hash: str | None
     entry_name: str
     remove_file: bool = False
+    # The parsed document `content` must read back as. An adapter that
+    # re-serialises a whole user file sets it so validate_render can refuse a
+    # write that would change any value the user already had.
+    expected_document: Any = None
 
 
 class ClientAdapter(ABC):

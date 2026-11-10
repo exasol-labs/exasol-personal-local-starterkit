@@ -120,6 +120,81 @@ class AdditionalAdapterTests(unittest.TestCase):
             rendered.content or "",
         )
 
+    def test_codex_adapter_keeps_every_existing_value_type(self) -> None:
+        """Adding the kit's entry must not change anything already in config.toml.
+
+        Regression: the ChatGPT app writes `startup_timeout_sec = 120.0` for its
+        own MCP server, the kit re-wrote it as the string "120.0", and ChatGPT
+        then refused to start ("invalid type: string \\"120.0\\", expected f64").
+        """
+        import tomllib
+        adapter = self._registry.get("codex")
+        location = adapter.locate(self._environment)
+        path: Path = location.path  # type: ignore[assignment]
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            'model = "gpt-5"\n'
+            "when = 2026-11-10T09:00:00Z\n"
+            "day = 2026-11-10\n"
+            "ratio = 0.25\n"
+            "big = 1e+20\n"
+            "never = inf\n"
+            'note = "tab\\there\\nline \\"q\\" \\\\ \\u0001"\n'
+            "mixed = [1, [2.5, \"x\"], { k = 1.0 }]\n"
+            "\n"
+            "[mcp_servers.node_repl]\n"
+            'command = "/Applications/ChatGPT.app/node_repl"\n'
+            "startup_timeout_sec = 120.0\n"
+            "tool_timeout_sec = 60\n"
+            "\n"
+            "[mcp_servers.node_repl.env]\n"
+            'KEY = "1"\n'
+            "\n"
+            "[[profiles.list]]\n"
+            'name = "a"\n'
+            "\n"
+            "[[profiles.list]]\n"
+            'name = "b"\n'
+            "[profiles.list.sub]\n"
+            "x = 3.0\n"
+            "\n"
+            '[projects."/Users/someone/My Project"]\n'
+            'trust_level = "trusted"\n',
+            encoding="utf-8",
+        )
+        before = tomllib.loads(path.read_text(encoding="utf-8"))
+        inspection = adapter.inspect(path, "exasol")
+        rendered = adapter.render(self._server, inspection)
+        self.assertEqual(adapter.validate_render(rendered), [])
+        after = tomllib.loads(rendered.content or "")
+        node = after["mcp_servers"]["node_repl"]
+        self.assertIsInstance(node["startup_timeout_sec"], float)
+        self.assertEqual(node["startup_timeout_sec"], 120.0)
+        self.assertIn("startup_timeout_sec = 120.0", rendered.content or "")
+        self.assertIsInstance(node["tool_timeout_sec"], int)
+        exasol = after["mcp_servers"].pop("exasol")
+        self.assertEqual(exasol["command"], "/tmp/uvx")
+        self.assertEqual(after, before)
+        # Removing the kit's entry again gives back the user's document.
+        path.write_text(rendered.content or "", encoding="utf-8")
+        removal = adapter.render_removal(adapter.inspect(path, "exasol"), "exasol")
+        self.assertEqual(adapter.validate_render(removal), [])
+        self.assertEqual(tomllib.loads(removal.content or ""), before)
+
+    def test_codex_adapter_refuses_a_write_that_would_change_user_values(self) -> None:
+        from mcp.adapters.base import RenderResult
+        adapter = self._registry.get("codex")
+        rendered = RenderResult(
+            path=self._temp_dir / "codex" / "config.toml",
+            content='startup_timeout_sec = "120.0"\n',
+            managed_hash=None,
+            entry_name="exasol",
+            expected_document={"startup_timeout_sec": 120.0},
+        )
+        findings = adapter.validate_render(rendered)
+        self.assertEqual([f.code for f in findings], ["lossy_render_output"])
+        self.assertTrue(findings[0].blocking)
+
     def test_opencode_adapter_renders_local_entry_shape(self) -> None:
         # OpenCode's entry shape is distinctive: the section key is "mcp", the
         # command and its args fold into ONE array, env goes under
