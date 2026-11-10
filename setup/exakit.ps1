@@ -4385,6 +4385,7 @@ function Invoke-CmdConnect {
         if (-not $interactive) { Deny-ExakitVsInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" "exakit source catalog" }
         # The wizard's first line, as above the menu: this computer's public IP.
         [void](Get-ExakitVsCatalog)
+        Show-ExakitVsClockCheck
         $source = Read-ExakitPrompt "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" ""
     }
     # With --json the plan below resolves the source (an unknown or gated one
@@ -4405,7 +4406,7 @@ function Invoke-CmdConnect {
     # resolve orders them here without it.
     if (-not $name -and -not $json) {
         if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
-        $name = Read-ExakitVsLineAnswer -Question "Name for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name for this connection"
+        $name = Read-ExakitVsLineAnswer -Question "Name (alias) for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name (alias) for this connection"
         # A name typed here can be a connected source too: re-pointed, not asked again.
         $live = Test-ExakitVsSourceLive -Name $name
     }

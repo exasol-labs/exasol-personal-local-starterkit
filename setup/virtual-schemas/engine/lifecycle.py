@@ -72,8 +72,8 @@ REMEDY_FOR = {
     "unreachable": "the source did not answer from inside the database: check the host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then: exakit source check {name}",
     "nohost": "the host name no longer resolves: check it (a private name may need a VPN), then: exakit source check {name}",
     "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS) - then: exakit source check {name}",
-    "nojava": "the Java language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
-    "norust": "the Rust language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script",
+    "nojava": "exakit connect installs the Java language container with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+    "norust": "exakit connect installs the Rust language container with one database restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "denied": "the account signs in but may not read this data: grant it what the message names ({access}), then: exakit source check {name}",
     "privilege": "the source took the credentials, but the account lacks a privilege: grant it what the message names ({access}), then: exakit source check {name}",
@@ -485,6 +485,30 @@ class Engine(object):
         if not re.search(r"(^|\s)%s=" % re.escape(slc["alias"]), value):
             raise Failure("the Rust language container is not installed in the database (no %s language alias)"
                           % slc["alias"], EXIT["norust"], "norust")
+
+    def missing_languages(self, need):
+        """Which of the language containers in `need` (java, rust) the database
+        lacks, asked before anything is connected: Rust by its alias, as
+        ensure_language asks; Java by running the kit's own file probe on a
+        path that is not a file (an empty one is NULL to the database), which
+        touches no network."""
+        missing = []
+        if "java" in need:
+            try:
+                self.ensure_probe()
+                self.java_query("SELECT EXAKIT_VS.%s('-') AS R" % FILES)
+            except Failure as error:
+                if error.kind != "nojava":
+                    raise
+                missing.append("java")
+        if "rust" in need:
+            try:
+                self.ensure_language(self.defs.profile("rust-native"))
+            except Failure as error:
+                if error.kind != "norust":
+                    raise
+                missing.append("rust")
+        return missing
 
     def probe(self, host, port):
         """'ok <ip>' | 'dns ...' | 'tcp <ip> ...', from inside the database's Java."""

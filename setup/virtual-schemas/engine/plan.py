@@ -89,12 +89,13 @@ def resolve_arch(pin):
 # network (exasol-db-<id>-services) with no --add-host, so host.docker.internal
 # resolves only where the Docker installation itself provides it (Docker
 # Desktop does; a plain Docker Engine on Linux does not), and without it the
-# address of this computer is that bridge's gateway. Not measured on a live
-# 2.4 deployment, so the advice names both rather than promising one.
+# address of this computer is that bridge's gateway, which the kit does not
+# know. Measured on Docker Desktop: host.docker.internal is 192.168.65.254
+# inside the database, so the advice names that.
 LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "localhost.localdomain")
 THIS_COMPUTER = {
     "podman": "on macOS 192.168.64.1, on Linux and WSL host.containers.internal",
-    "docker": "on Docker host.docker.internal where the deployment provides it, else the bridge gateway",
+    "docker": "on Docker host.docker.internal (192.168.65.254 on Docker Desktop)",
 }
 
 # The engine the kit recorded for the deployment (manifest runtime.engine,
@@ -493,6 +494,21 @@ def jdbc_url(connector, values, extra=None):
     return connector["url"].format(**fields)
 
 
+def languages(connector, values, profile):
+    """The language containers a connect of this source runs in the database:
+    rust for a native adapter, java for a Java adapter and for the kit's own
+    Java probes (the route check of a source with a host, the staged-file wait
+    of a profile that needs DNS). The terminal flow installs the missing ones
+    before its table, so no row has to fail for one."""
+    slc = profile.get("slc") or {}
+    needs = []
+    if slc.get("language") == "rust":
+        needs.append("rust")
+    if slc.get("language") != "rust" or slc.get("needs_dns") or source_host(connector, values):
+        needs.append("java")
+    return needs
+
+
 def tls_warning(connector, values):
     if plain_http(connector, values):
         return ("plain http: the catalog token or storage keys and the rows cross the network unencrypted "
@@ -528,12 +544,11 @@ def describe(defs, connector_id, name, values, runtime, cache, store):
     if values.get("ca"):
         count = len(tlsca.certificates(values["ca"]))
         if connector.get("tls_truststore"):
-            how = "%d certificate%s, in a truststore for the adapter and the loader" % (count, "" if count == 1 else "s")
+            how = "%d certificate%s, for the adapter and the loader" % (count, "" if count == 1 else "s")
         elif connector.get("ca_encoding") == "base64-bundle":
-            how = "%d certificate%s, as a wallet inside the connection" % (count, "" if count == 1 else "s")
+            how = "%d certificate%s, kept inside the connection" % (count, "" if count == 1 else "s")
         elif connector.get("tls_class"):
-            how = ("%d certificate%s, checked with the host name by the kit's TLS helper class"
-                   % (count, "" if count == 1 else "s"))
+            how = "%d certificate%s, verified against the host name" % (count, "" if count == 1 else "s")
         elif count == 1:
             how = "1 certificate"
         else:
@@ -583,6 +598,7 @@ def describe(defs, connector_id, name, values, runtime, cache, store):
         "objects": names, "downloads": downloads, "steps": steps,
         "download_bytes": sum(d["bytes"] for d in downloads if not d["cached"]),
         "exposure": "the kit's MCP read-only user can read every table of %s (SELECT ANY TABLE)" % names["schema"],
+        "languages": languages(connector, values, profile),
         "restart": False,
         "warnings": [w for w in [tls_warning(connector, values), entry.get("caveat")] if w],
         "gate": entry.get("gate") if entry["status"] == "gated" else None,

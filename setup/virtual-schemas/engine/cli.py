@@ -127,6 +127,9 @@ def parse(argv):
         # then a re-point that replaces only the credential, not "unchanged" -
         # a given --password-file is never dropped unread.
         cmd.add_argument("--secret-given", action="store_true")
+    # The language containers (java, rust) of those named that the database
+    # lacks: the terminal flow prepares the database before its table.
+    sub.add_parser("languages").add_argument("need", nargs="*")
     sub.add_parser("list")
     sub.add_parser("issues").add_argument("--status", default="")
     sub.add_parser("show").add_argument("name")
@@ -163,9 +166,9 @@ REMEDY_FOR_KIND = {
     "gated": "connect another source; the ones available are listed by: exakit source catalog",
     "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then "
            "exakit start (the start gives Java the deployment's DNS) - then try again",
-    "nojava": "the Java language container is not installed: exakit connect installs it with one database "
+    "nojava": "exakit connect installs the Java language container with one database "
               "restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
-    "norust": "the Rust language container is not installed: exakit connect installs it with one database "
+    "norust": "exakit connect installs the Rust language container with one database "
               "restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "internal": "a fault in the kit, not in the input: the traceback is in the log (exakit logs); report it with that",
@@ -334,7 +337,7 @@ def form_answer(args):
     connector = defs.connector(connector_id)
     entry = defs.entry(connector_id)
     if args.command == "inputs":
-        fields = [{"name": "name", "label": "Name for this connection", "kind": "source-name", "required": True,
+        fields = [{"name": "name", "label": "Name (alias) for this connection", "kind": "source-name", "required": True,
                    "default": "", "choices": [], "secret": False}]
         for spec in connector["inputs"]:
             fields.append({"name": spec["name"], "label": spec.get("label", spec["name"]), "kind": spec["kind"],
@@ -458,6 +461,8 @@ def main(argv=None):
                     # Nothing to change, but not working either: a failure,
                     # with the source's own fix.
                     code = 1
+            elif args.command == "languages":
+                result = {"missing": engine.missing_languages(args.need)}
             elif args.command == "list":
                 result = {"sources": engine.listing()}
             elif args.command == "issues":
