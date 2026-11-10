@@ -1,6 +1,6 @@
 ---
 name: exasol-virtual-schemas
-description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and a private CA, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, with the credential again), disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
+description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and the CA PEM the four JDBC databases always need with verify, the database clock after a laptop sleeps, Windows PowerShell quoting, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, with the credential again), disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
 ---
 
 # Virtual schemas — the shared rules
@@ -70,8 +70,9 @@ exakit source check <name> --json                                   # later: a f
   `mongodb+srv://`, `s3://`, an Azure blob URL, a Glue ARN), checked like `--set`, which
   wins over it. A password in it is never used, unread parameters are dropped by name;
   prefer one without a password: other local users can read the command line.
-- **Name**: lower case letters, digits and `_`, a letter first, at most 40 (`sales`):
-  the tables appear as `VS_SALES`, the credential in the CONNECTION `EXAKIT_SRC_SALES`.
+- **Name**: the form asks "Name (alias) for this connection" (`--name`): lower case
+  letters, digits and `_`, a letter first, at most 40 (`sales`). The tables appear
+  as `VS_SALES`, the credential in the CONNECTION `EXAKIT_SRC_SALES`.
 - `exakit connect` alone, at a terminal, opens a menu and a panel per source. An agent
   never lands in it; suggest it to a user who connects several sources by hand.
   The form marks each required field with a red `*` (a plain `*` without colour), and its
@@ -81,37 +82,63 @@ exakit source check <name> --json                                   # later: a f
   Enter uses it, `e` pastes it again, Esc or `n` types the fields instead. A password in
   the string is dropped and asked for separately, hidden. A language container or
   restart the source needs is made without a question there: picking it was the permission.
+  Above the menu it names the database clock: "Database clock: in sync with this
+  computer.", or a warning and, at a terminal, an offer to restart the database.
 
 ## Rules that are not negotiable
 
 - **The credential never goes on the command line.** `--password=…`, `--secret…` and
   `--token…` are refused (exit 2). Never invent, guess, echo or `cat` a credential.
-- **`localhost` / `127.0.0.1` means the database itself** and is refused. A source on
-  this computer is `192.168.64.1` on macOS (the launcher VM's gateway;
-  `host.containers.internal` there is the VM). On Linux and WSL it is the address
-  the database sees this computer at (Podman: `host.containers.internal`; Docker:
-  `host.docker.internal` where the deployment provides it, else the bridge gateway);
-  the refusal names the one for this deployment's engine. The source must listen on
+- **`localhost` / `127.0.0.1` means the database itself** and is refused, with
+  advice. A source on this computer is `192.168.64.1` on macOS (the launcher VM's
+  gateway; `host.containers.internal` there is the VM). On Linux and WSL it is the
+  address the database sees this computer at (Podman: `host.containers.internal`;
+  Docker: `host.docker.internal`, which resolves inside the database to
+  192.168.65.254 on Docker Desktop; a plain Docker Engine has no such name, so use
+  the bridge gateway); the refusal names the one for this deployment's engine. The source must listen on
   that interface, not only on 127.0.0.1. A VPN client can still drop that traffic.
 - **TLS verifies the certificate and host name by default** (`tls=verify` where a
   connector has the input). `require` only encrypts; `disable` sends credentials in
   clear. Lower it only when the user says so, and say the cost.
-- **A private CA is trusted, not skipped.** RDS, Azure and company servers sign with a CA
-  Java does not hold: "PKIX path building failed" (MySQL: "Path does not chain with any
-  of the trust anchors"). PostgreSQL, MySQL, SQL Server and Oracle take
-  `--set ca=<PEM file or bundle>` (for RDS the region's bundle: the connector skill names
-  it). "the trustAnchors parameter must be non-empty" is Exasol Personal's JDBC loader
-  having no CA store: the same `--set ca` fixes it, a public CA's root too. Never answer
-  PKIX with `tls=require`.
-- **"validity check failed"** with a certificate in date: the database clock is behind
-  (after the laptop slept); `connect` and `check` warn ("The database clock is 33 min
-  behind this computer"). `exakit stop`, then `exakit start`. Signed requests (S3, Glue,
-  Azure) are refused past 15 minutes of skew; the kit then names the clock.
+- **PostgreSQL, MySQL, SQL Server and Oracle always need a CA PEM with `tls=verify`**
+  on Exasol Personal 2.4, even for a public CA (Let's Encrypt, DigiCert): the
+  database's JDBC loader has an empty Java trust store. Without one the connect
+  fails with "the trustAnchors parameter must be non-empty" (PostgreSQL, SQL Server,
+  Oracle) or "Could not load trustJKS keystore from null" (MySQL). Give
+  `--set ca=<PEM file or bundle>`: a public CA's root (ISRG Root X1 for Let's
+  Encrypt), the RDS region bundle, a company root. SQL Server on Linux sends only its
+  leaf certificate, so its PEM holds the root plus the intermediates. The form's CA
+  prompt says "Enter to skip": with `verify` do not skip it.
+- **"PKIX path building failed"** (MySQL: "Path does not chain with any of the trust
+  anchors"): the PEM given does not sign the server - give the right one. Never answer
+  it with `tls=require`: `require` encrypts without checking the certificate, so it
+  needs no PEM, but it is weaker; use it only when the user accepts that. Oracle has
+  no `require`. The other nine connectors need no CA file.
+- **The database clock.** After a laptop sleeps, the database clock can fall behind.
+  TLS then fails with "not yet valid" ("validity check failed"), and S3 and Azure (and
+  Glue) signatures fail past 15 minutes of skew (kind `clock`). `connect` and `check`
+  warn ("The database clock is 33 min behind this computer"). The fix: `exakit stop`,
+  then `exakit start`.
+
+## Windows PowerShell 5.1
+
+- An argument loses its inner double quotes before exakit runs, so a query with
+  quoted names must be piped or read from a file:
+  `'SELECT "first_name" FROM VS_SHOP."actor"' | exakit sql`, or `exakit sql --file q.sql`.
+  A query without double quotes runs as an argument, as in bash. PowerShell 7 keeps them.
+- An `&` inside `--url` is split by cmd.exe (through `exakit.cmd`): paste such a
+  connection string at the form's hidden prompt, or give the fields with `--set`.
+  A `;` (SQL Server JDBC) is fine.
+- PowerShell 5.1 pipes only ASCII to a command: give a non-ASCII credential with
+  `--password-file`.
 
 ## Prepare the source
 
 **Network.** Allow this computer's public IP at the source (security group, firewall
-rule, access list, network policy - each connector skill names its own): the database's
+rule, access list, network policy - each connector skill names its own). Two
+filters are easy to miss: a Snowflake login with a programmatic access token
+requires a network policy on the user, and MongoDB Atlas has a project IP access
+list. the database's
 traffic leaves through this computer. For a source on the internet the plan says "This
 computer's public IP is <ip>: <host> must allow it if it filters by address (security
 group, firewall or IP access list)", `--json` carries it as `public_ip`, and the fix of
@@ -193,7 +220,9 @@ exakit source describe <name> [table] [--ddl --schema LOCAL]   # tables and colu
 
 `check` is one shot, not monitoring. After `exakit update`, run `exakit source check
 --all`: it moves sources to the adapter the update pins (one it could not refresh is
-named, with `exakit source refresh <name>`).
+named, with `exakit source refresh <name>`). A tester on a staging build: `exakit
+update` does not pull a staging change published at the same version; re-run the
+install command instead.
 
 ## Re-point a source that moved
 
@@ -205,7 +234,7 @@ exakit connect <id> --name <name> --set host=<new host> [--set port=...] [--set 
 exakit connect <id> --name <name> --set host=<new host> --password-file <file> --yes --json
 ```
 
-- The recorded inputs stand; what is given replaces them. The plan (`action: repoint`)
+- The recorded inputs stand; what is given replaces them. A recorded CA is kept. The plan (`action: repoint`)
   lists `changes`, each `{input, from, to}`, and `credential: required`. Show it to the user.
 - **The credential is always given again**, as for a first connect (a hidden prompt on a
   terminal, `--password-file` or `--password-stdin` unattended): the database never
@@ -287,5 +316,12 @@ removes them. `SELECT EXAKIT_VS.LAKEHOUSE_VERSION()` names the build.
   text (`UPPER('straße')` is `STRASSE`), dates outside Exasol's range, `TO_DATE`/
   `TO_TIMESTAMP` with a format are stricter, `STDDEV`/`VARIANCE` precision. Mention them
   if a user compares results.
+- **Unity Catalog** (the `unity` route, and Databricks' Iceberg REST endpoint) needs
+  External Data Access on the metastore, EXTERNAL USE SCHEMA for the principal, and a
+  schema on external storage: Default Storage cannot be read by outside engines.
+  `iceberg-rest` works against Databricks' `https://<workspace>/api/2.1/unity-catalog/iceberg-rest`
+  with a personal access token as the bearer and vended credentials.
+- AWS Glue's Iceberg REST endpoint needs SigV4 signing, which `iceberg-rest` does not
+  support: read Glue through `lakehouse`.
 - `Fingerprint mismatch`: the Rust language container is not the version the engine was
   built for. `exakit connect` installs the pinned one; do not swap it by hand.
