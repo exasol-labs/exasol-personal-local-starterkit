@@ -1530,6 +1530,45 @@ has "...and the scan UDF" "import script EXAKIT_VS.MONGODB_SCAN (no other mongod
 run remove mgt
 check "...and drops both" "[]" "$(dbq '[s for s in d["scripts"] if "MONGODB" in s]')"
 
+printf '\n== a fresh database: MongoDB first, nothing else connected ==\n'
+# Every adapter script goes into EXAKIT_VS, which only the Java probes made: a
+# MongoDB source asks neither (no host, a Rust profile), so on a fresh
+# database - or after the last source took the schema away - its CREATE ...
+# SCRIPT went into a schema that did not exist ("schema EXAKIT_VS not found").
+# Its own kit home and deployment, so no source of the cases above counts.
+FR_SAVED_HOME="$HOME_K"; FR_SAVED_DEPLOY="$DEPLOY"; FR_SAVED_EXA="$EXA"
+HOME_K="$WORK/kit-fresh"; DEPLOY="$WORK/deploy-fresh"; EXA="$DEPLOY/local/runtime/exa"
+mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
+cp -R "$FR_SAVED_HOME/cache" "$HOME_K/cache"
+# "yes" when CREATE SCHEMA EXAKIT_VS came before the first Rust script, since statement $1.
+schema_first() { dbq '(lambda s: "yes" if "CREATE SCHEMA EXAKIT_VS" in s and s.index("CREATE SCHEMA EXAKIT_VS") < min([i for i, x in enumerate(s) if x.startswith("CREATE OR REPLACE RUST")] + [len(s)]) else "no")(d["statements"]['"${1:-0}"':])'; }
+fr_sources() { eng --json list 2>/dev/null | python3 -c 'import json, sys; print(json.dumps([s["name"] for s in json.load(sys.stdin)["sources"]]))'; }
+db '{"sources": {"cluster0.example.net": {"tables": ["MOVIES"], "secret": "'"$SECRET"'"}, "pg.example.com": {"tables": ["ORDERS"]}}}'
+run_secret "wrong" connect mongodb --name fr_bad $MG_SET --set collection=movies --secret-stdin
+check "a wrong password, the first connect of all: exit 1, refused by the source after EXAKIT_VS and the scripts were made" \
+    "1 yes" "$RC $(schema_first)"
+lacks "...not by the database for a missing schema" "schema EXAKIT_VS not found" "$OUT"
+check "...and the rollback leaves nothing: no source, CONNECTION, script or EXAKIT_VS" "[] {} [] []" \
+    "$(fr_sources) $(dbq 'd["connections"]') $(dbq 'd["scripts"]') $(dbq 'd["schemas"]')"
+FR0="$(dbq 'len(d["statements"])')"
+run_secret "$SECRET" connect mongodb --name fr_m $MG_SET --set collection=movies --secret-stdin
+check "MongoDB connected first on a fresh database: exit 0" "0" "$RC"
+check "...EXAKIT_VS made before its adapter script, no Java probe asked" "yes 0" \
+    "$(schema_first "$FR0") $(dbq 'sum("EXAKIT_DNS_PROBE_V2(" in s or "EXAKIT_FILES_PROBE_V1(" in s for s in d["statements"]['"$FR0"':])')"
+check "...the adapter and its scan UDF in it" '["EXAKIT_VS.MONGODB_ADAPTER", "EXAKIT_VS.MONGODB_SCAN"]' "$(dbq 'sorted(d["scripts"])')"
+run remove fr_m
+check "the last source out drops EXAKIT_VS and everything in it" "0 [] []" "$RC $(dbq 'd["schemas"]') $(dbq 'd["scripts"]')"
+# The other way to reach a database without EXAKIT_VS: another source made it, and left.
+run_secret "$SECRET" connect postgresql --name fr_pg $PG_SET --secret-stdin; FR_RC="$RC"
+run remove fr_pg
+check "a PostgreSQL source connected and removed: EXAKIT_VS gone with it" "0 0 []" "$FR_RC $RC $(dbq 'd["schemas"]')"
+FR1="$(dbq 'len(d["statements"])')"
+run_secret "$SECRET" connect mongodb --name fr_m $MG_SET --set collection=movies --secret-stdin
+check "...then MongoDB connects: exit 0, EXAKIT_VS made again first" "0 yes" "$RC $(schema_first "$FR1")"
+run remove fr_m
+check "...and leaves with it" "0 [] []" "$RC $(fr_sources) $(dbq 'd["schemas"]')"
+HOME_K="$FR_SAVED_HOME"; DEPLOY="$FR_SAVED_DEPLOY"; EXA="$FR_SAVED_EXA"
+
 check "the Rust container is pinned for both CPUs, size and SHA-256" "aarch64 x86_64" "$(python3 - "$ROOT" <<'PYR'
 import json, re, sys
 c = json.load(open(sys.argv[1] + "/setup/virtual-schemas/profiles/rust-native/profile.json"))["slc"]["custom"]
