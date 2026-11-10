@@ -90,7 +90,10 @@ check "stale: no warning" "" "$(printf '%s\n' "$out" | grep '^WARN' || true)"
 
 echo "== a running launcher keeps its lock"
 setup_case busy 1 "$LOCK"
-sh -c "sleep 60; : $STUB" &   # a process whose command line names the launcher (the ; keeps sh from exec-ing sleep)
+# A running launcher: a process whose command line STARTS with the launcher's path (as the real binary's does).
+# exec -a names sleep after it. A process that only mentions the path - the harness's own `bash -c '...'` - is no
+# launcher; matching it held every stale lock on Linux.
+bash -c 'exec -a "$0" sleep 60' "$STUB" &
 CHILDREN="$CHILDREN $!"
 sleep 0.3
 out="$(run_case busy)"

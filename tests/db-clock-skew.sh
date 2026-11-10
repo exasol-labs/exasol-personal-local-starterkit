@@ -86,16 +86,22 @@ done
 expect "the limit can be raised" "no" "$(EXAKIT_CLOCK_SKEW_LIMIT=3600 helpers exakit_clock_skewed -1955 && echo yes || echo no)"
 
 # --- through exakit status ------------------------------------------------------
-# exakit with personal_status answering "running", injected after the library
-# sourcing so it overrides the real probe (which would look for a launcher).
+# exakit with personal_status answering "running", injected right after the
+# module that defines the real probe (which would look for a launcher), so it
+# overrides it. The anchor was the json-tables.sh source line until aaffaae
+# moved the add-ons to Python and dropped that line: sed then matched nothing,
+# the stub landed after the command dispatch, and status asked the real probe.
+# So the anchor must be there exactly once, or the stub is not built at all.
 STUB_CLI="$WORK/exakit"
 ln -s "$ROOT/setup/lib" "$WORK/lib"
+[ "$(grep -c '^\. "\$_lib_dir/runtime-personal\.sh"$' "$ROOT/setup/exakit")" = 1 ] ||
+    { printf 'FAIL could not build the exakit stub (injection point moved)\n'; exit 1; }
 {
-    sed -n '1,/^\[ -f "\$_lib_dir\/json-tables.sh" \]/p' "$ROOT/setup/exakit"
+    sed -n '1,/^\. "\$_lib_dir\/runtime-personal\.sh"$/p' "$ROOT/setup/exakit"
     cat <<'STUB_EOF'
 personal_status() { printf '%s\n' "${FAKE_DB_STATE:-running}"; }
 STUB_EOF
-    sed -n '/^\[ -f "\$_lib_dir\/json-tables.sh" \]/,$p' "$ROOT/setup/exakit" | tail -n +2
+    sed -n '/^\. "\$_lib_dir\/runtime-personal\.sh"$/,$p' "$ROOT/setup/exakit" | tail -n +2
 } > "$STUB_CLI"
 grep -q 'FAKE_DB_STATE' "$STUB_CLI" || { printf 'FAIL could not build the exakit stub (injection point moved)\n'; exit 1; }
 bash -n "$STUB_CLI" || { printf 'FAIL the exakit stub does not parse\n'; exit 1; }

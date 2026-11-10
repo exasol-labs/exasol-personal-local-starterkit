@@ -468,7 +468,10 @@ class NotebookPlanTest(unittest.TestCase):
 
     def test_menu_selection_continues_after_one_frontend_fails(self) -> None:
         self.store.set_many({"components.notebook.version": "3.1.0"})
-        with patch.object(notebook_cli, "_preflight"), \
+        # The Textual menu is never drawn on Windows (exakit.ps1 draws its own), so the path under test is the
+        # Mac and Linux one wherever the test runs; everything it would start is mocked.
+        with patch.object(notebook_cli.sys, "platform", "linux"), \
+             patch.object(notebook_cli, "_preflight"), \
              patch.object(notebook_cli.sys.stdin, "isatty", return_value=True), \
              patch.object(notebook_cli.sys.stdout, "isatty", return_value=True), \
              patch.object(notebook_cli, "_menu", return_value=["jupyterlab", "marimo"]), \

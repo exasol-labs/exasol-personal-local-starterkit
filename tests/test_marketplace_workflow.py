@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
 import workflow_cli  # noqa: E402
-from runtime import KitContext, Manifest  # noqa: E402
+from runtime import KitContext, Manifest, venv_python  # noqa: E402
 
 
 class WorkflowCliTest(unittest.TestCase):
@@ -45,7 +45,7 @@ class WorkflowCliTest(unittest.TestCase):
         self.assertFalse(payload["rejected"])
 
     def test_list_runs_notebook_module_without_warning_prone_m_flag(self) -> None:
-        python = self.home / "notebook-venv/bin/python"
+        python = venv_python(self.home / "notebook-venv")
         python.parent.mkdir(parents=True)
         python.touch()
         result = type("Result", (), {"returncode": 0, "stdout": "[]\n", "stderr": ""})()
@@ -60,7 +60,7 @@ class WorkflowCliTest(unittest.TestCase):
         self.assertTrue(kwargs["capture_output"])
 
     def test_missing_workflow_json_is_one_failure_object(self) -> None:
-        python = self.home / "notebook-venv/bin/python"
+        python = venv_python(self.home / "notebook-venv")
         python.parent.mkdir(parents=True)
         python.touch()
         result = type("Result", (), {"returncode": 1, "stdout": "", "stderr": "workflow is absent\n"})()

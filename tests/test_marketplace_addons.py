@@ -17,7 +17,7 @@ from unittest.mock import Mock, patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
 from addons import dash_server, dbt_exasol, exasol_vscode, json_tables  # noqa: E402
-from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
+from runtime import AddonFailure, KitContext, Manifest, venv_python  # noqa: E402
 
 
 class AddonSafetyTest(unittest.TestCase):
@@ -69,7 +69,7 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertEqual("kit", self.manifest.get("components.dash_server.ownership"))
 
     def test_dash_validation_restarts_owned_process_after_broken_ui(self) -> None:
-        python = self.home / "dash-server-venv/bin/python"
+        python = venv_python(self.home / "dash-server-venv")
         python.parent.mkdir(parents=True)
         python.write_text("python", encoding="utf-8")
         service = Mock()
@@ -84,7 +84,7 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertTrue(self.manifest.get("components.dash_server.ui_validated"))
 
     def test_dash_install_repairs_pip_in_existing_environment(self) -> None:
-        python = self.home / "dash-server-venv/bin/python"
+        python = venv_python(self.home / "dash-server-venv")
         python.parent.mkdir(parents=True)
         python.write_text("python", encoding="utf-8")
         with patch.object(KitContext, "require_uv"), \
@@ -101,7 +101,7 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertTrue(any("Installing Dash Server 0.1.1" == args[0] for args in commands))
 
     def test_dash_validation_probes_fresh_server_before_stopping_it(self) -> None:
-        python = self.home / "dash-server-venv/bin/python"
+        python = venv_python(self.home / "dash-server-venv")
         python.parent.mkdir(parents=True)
         python.write_text("python", encoding="utf-8")
         service = Mock()
