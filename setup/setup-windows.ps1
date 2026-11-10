@@ -104,8 +104,6 @@ if (Test-Path $earlyPs1) {
 # end an install that already succeeded.
 function Invoke-ExakitClosingOffer {
     Initialize-ExakitMarketplacePythonHooks
-    $nbBefore = $false
-    try { $nbBefore = [bool](Test-ExakitMarketplaceAddonInstalled notebook) } catch { }
     [void](Invoke-ExakitBestEffort -Component "autostart" -Repair "exakit autostart" `
         -Label "automatic start" `
         -Warning "Automatic start could not be turned on." `
@@ -119,10 +117,6 @@ function Invoke-ExakitClosingOffer {
             -Label "marketplace add-ons" `
             -Warning "The marketplace offer did not finish cleanly." `
             -Body { Request-ExakitMarketplaceOffer })
-        # The notebook was just added from the offer: how to give it a model, once.
-        if (-not $nbBefore -and (Get-Command Write-ExakitModelSetupHint -ErrorAction SilentlyContinue)) {
-            try { Write-ExakitModelSetupHint -Mode marketplace } catch { }
-        }
     }
 }
 
@@ -550,9 +544,6 @@ try {
             (Join-Path $PSScriptRoot 'exakit.ps1'), '--host', (Get-Process -Id $PID).Path)
         if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
     }
-    # How to give the notebooks a model, before the panel the reader keeps: for
-    # a Data Scientist install only.
-    if (Get-Command Write-ExakitModelSetupHint -ErrorAction SilentlyContinue) { Write-ExakitModelSetupHint -Mode installer }
     Show-ExakitConnectionSummary
     # Only when the kit version moved during this run, and never able to fail it:
     # every reader inside degrades to silence.

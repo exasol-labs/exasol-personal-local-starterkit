@@ -70,40 +70,10 @@ EXAKIT_UNINSTALL_NOTEBOOKS=remove full_uninstall 0 >/dev/null 2>&1
 check "and the real run removes the whole kit home" "no" "$([ -e "$EXAKIT_HOME" ] && echo yes || echo no)"
 mkdir -p "$EXAKIT_HOME"
 
-echo "the model panel: short, for a Data Scientist install, and right after the notebook is added:"
-hint() { ( exakit_marketplace_addon_installed() { [ "$1" = notebook ]; }; manifest_get() { [ "$1" = persona.id ] && printf '%s' "${PERSONA_ID:-data-scientist}"; }; UI_FANCY=0 exakit_model_setup_hint "$@" 2>&1 ); }
-HINT="$(hint installer)"
-contains "the model id and the address" 'export EXAKIT_MODEL_ID="claude-opus-5-5"' "$HINT"
-contains "the key through a hidden read, never a value" "read -rs EXAKIT_PROVIDER_API_KEY; export EXAKIT_PROVIDER_API_KEY" "$HINT"
-contains "says it is optional" "Skip it and the notebooks still run" "$HINT"
-contains "and the notebook command that shows the rest" "nb.model_setup()" "$HINT"
-check "short: at most nine lines on screen" "yes" "$([ "$(printf '%s\n' "$HINT" | grep -c .)" -le 9 ] && echo yes || echo no)"
-check "no key value, no secret pattern" "" "$(printf '%s' "$HINT" | grep -E 'API_KEY=|SECRET_KEY=|sk-' || true)"
-check "every line fits 80 columns" "" "$(printf '%s\n' "$HINT" | awk 'length > 80')"
-check "silent when a model is already set" "" "$(EXAKIT_MODEL_ID=set hint installer)"
-check "silent without the notebook add-on" "" "$( ( exakit_marketplace_addon_installed() { false; }; exakit_model_setup_hint marketplace 2>&1 ) )"
-check "the installer shows it to a General install: never" "" "$(PERSONA_ID=general hint installer)"
-contains "...but a Data Scientist with General, yes" "EXAKIT_MODEL_ID" "$(PERSONA_ID=general,data-scientist hint installer)"
-contains "the marketplace shows it after adding the notebook, whatever the persona" "EXAKIT_MODEL_ID" "$(PERSONA_ID=general hint marketplace)"
-for _s in setup-macos.sh setup-linux.sh; do
-    check "$_s shows it to a persona install after its add-ons and before the panel" "yes" \
-        "$(awk '/_exakit_marketplace_cli installer_flow --phase services/{a=NR} /exakit_model_setup_hint installer/{if(!h)h=NR} /^connection_summary/{c=NR} END{print (a&&h&&c&&a<h&&h<c)?"yes":"no"}' "$ROOT/setup/$_s")"
-    check "$_s shows it after the closing offer only when that added the notebook" "1" \
-        "$(grep -c 'exakit_model_setup_hint marketplace' "$ROOT/setup/$_s")"
+echo "no model panel: the install and the marketplace never print one (nb.model_setup() does it in a notebook):"
+for _s in setup/setup-macos.sh setup/setup-linux.sh setup/setup-windows.ps1 setup/exakit setup/exakit.ps1 setup/lib/common.sh setup/lib/exakit-common.ps1; do
+    check "$_s prints no model panel" "0" "$(grep -c 'model_setup_hint\|ModelSetupHint\|your AI model for the notebooks' "$ROOT/$_s")"
 done
-check "exakit marketplace shows it after a fresh notebook install" "1" "$(grep -c 'exakit_model_setup_hint marketplace' "$ROOT/setup/exakit")"
-check "the Windows installer too" "yes" \
-    "$(awk '/installer_flow -AllowFailure/{a=NR} /Write-ExakitModelSetupHint -Mode installer/{if(!h)h=NR} /Show-ExakitConnectionSummary$/{c=NR} END{print (a&&h&&c&&a<h&&h<c)?"yes":"no"}' "$ROOT/setup/setup-windows.ps1")"
-check "the PowerShell twin types the key hidden too" "yes" "$(grep -q 'Read-Host "Model API key" -AsSecureString' "$ROOT/setup/lib/exakit-common.ps1" && echo yes)"
-if command -v pwsh >/dev/null 2>&1; then
-    PS_HINT="$(cd "$ROOT" && HOME="$WORK/pshome" EXAKIT_HOME="$WORK/pskit" pwsh -NoProfile -Command '. ./setup/lib/ui.ps1; . ./setup/lib/exakit-common.ps1; function Test-ExakitMarketplaceAddonInstalled { param($Id) $Id -eq "notebook" }; function Get-ExakitManifestValue { param($K) "data-scientist" }; $script:UiFancy = $false; Write-ExakitModelSetupHint -Mode installer' 2>&1)"
-    contains "pwsh: the same panel, PowerShell lines" '$env:EXAKIT_MODEL_ID = "claude-opus-5-5"' "$PS_HINT"
-    contains "pwsh: the key through a secure prompt" 'Read-Host "Model API key" -AsSecureString' "$PS_HINT"
-    check "pwsh: no key value, no secret pattern" "" "$(printf '%s' "$PS_HINT" | grep -E 'API_KEY=|SECRET_KEY=|sk-' || true)"
-    check "pwsh: every line fits 80 columns" "" "$(printf '%s\n' "$PS_HINT" | awk 'length > 80')"
-else
-    echo "  skip pwsh is not installed - the PowerShell panel is checked as text only"
-fi
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
