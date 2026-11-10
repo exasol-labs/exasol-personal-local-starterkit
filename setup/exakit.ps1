@@ -4361,9 +4361,12 @@ function Invoke-CmdConnect {
         }
         $sets = $urlSets + $sets
     }
+    # A name that is a connected source is re-pointed in place, or left as it
+    # is: on the line-by-line path, which asks nothing the record holds.
+    $live = Test-ExakitVsSourceLive -Name $name
     # A person at a console gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
-    if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {
+    if (-not $dry -and -not $json -and -not $live -and (Test-ExakitVsTuiOk)) {
         Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
     }
     # --json never asks: a console is as good as none.
@@ -4371,7 +4374,7 @@ function Invoke-CmdConnect {
     # Someone answering at a console: each question says (required) or
     # (optional), and a connection string can stand for the fields. --yes,
     # --dry-run and --json ask exactly as they always did.
-    $ask = ($interactive -and -not $dry -and -not $json -and -not $script:ExakitVsAssumeYes)
+    $ask = ($interactive -and -not $dry -and -not $json -and -not $script:ExakitVsAssumeYes -and -not $live)
     if (-not $source) {
         if (-not $interactive) { Deny-ExakitVsInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" "exakit source catalog" }
         $source = Read-ExakitPrompt "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" ""
@@ -4394,7 +4397,8 @@ function Invoke-CmdConnect {
         if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
         $name = Read-ExakitVsLineAnswer -Question "Name for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name for this connection"
     }
-    if ($interactive) {
+    # A connected source's inputs are its record's: only what was given changes.
+    if ($interactive -and -not $live) {
         $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
         foreach ($spec in @($definition.inputs)) {
             if ($spec.kind -in @("secret", "secret-file") -or $given -contains $spec.name) { continue }
@@ -4409,27 +4413,64 @@ function Invoke-CmdConnect {
         }
     }
     $base = @($connector, "--name", $name) + $sets
+    # A re-point's plan says whether a credential replaces the stored one.
+    $givenFlag = @()
+    if ($live -and ($pwStdin -or $pwFile)) { $givenFlag = @("--secret-given") }
+    $action = ""
     if ($json) {
         # The plan checks every input before the credential is read; a refusal,
         # or with --dry-run the plan itself, is the answer. --name=VALUE: an
         # empty name stays one argument (5.1 drops an empty one).
         $base = @($connector, "--name=$name") + $sets
-        $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base)
+        $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base + $givenFlag)
         if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; Exit-ExakitVs $planned.Code }
-        $connector = "" + ((@($planned.Lines) -join "`n") | ConvertFrom-Json).connector
+        $planDoc = (@($planned.Lines) -join "`n") | ConvertFrom-Json
+        $connector = "" + $planDoc.connector
+        if ($planDoc.PSObject.Properties["action"]) { $action = "" + $planDoc.action }
+        # Nothing to change: the plan is the answer, and nothing runs.
+        if ($action -eq "unchanged") { foreach ($line in $planned.Lines) { Write-Output $line }; exit 0 }
+        if ($action -eq "repoint" -and -not $script:ExakitVsAssumeYes) {
+            # --json never asks, and asking is how a person agrees: without
+            # --yes nothing changes (exit 5), as source disconnect and remove.
+            $cmd = "" + $planDoc.command
+            if (-not $cmd) { $cmd = "exakit connect $connector --name $name" }
+            if ($pwFile) { $cmd = "$cmd --password-file " + (Format-ExakitVsWord $pwFile) }
+            elseif ($pwStdin) { $cmd = "$cmd --password-stdin" }
+            if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "DECLINED" "connect $($name): a re-point, --json without --yes" }
+            Write-Output (New-ExakitVsFailureJson -Kind "declined" -Problem "re-pointing $name was not confirmed; nothing was changed" `
+                -Remedy "preview it with --dry-run, then confirm it with --yes" -Command "$cmd --yes --json")
+            exit 5
+        }
         $base = @($connector, "--name=$name") + $sets
     } else {
-        $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
+        $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base + $givenFlag)
         $plan = Show-ExakitVsLines -Lines $planned.Lines
         if ($planned.Code -ne 0) { Exit-ExakitVs $planned.Code }
+        if ($null -ne $plan -and $plan.PSObject.Properties["action"]) { $action = "" + $plan.action }
+        # Nothing to change: the engine's line said so, and nothing runs.
+        if ($action -eq "unchanged") { exit 0 }
         Show-ExakitVsPlan $plan
         if ($dry) { exit 0 }
     }
-    if ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
+    if ($action -eq "repoint") {
+        # Asked at a console (no by default); without one only --yes agrees.
+        if (-not (Confirm-ExakitVs "Re-point $name now?")) { Info "Nothing was changed. Confirm it with --yes."; exit 5 }
+    } elseif ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
     $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
     $secret = ""
-    if ($secretSpec) {
+    if ($action -eq "repoint") {
+        # The stored credential is kept: none is asked for. Only one given with
+        # --password-file or --password-stdin replaces it, tried first like
+        # the new address.
+        if ($pwStdin) { $secret = $stdinSecret }
+        elseif ($pwFile) {
+            $secret = Read-ExakitVsSecretFile -Path $pwFile
+            if (-not $secret) { Deny-ExakitVsInput "$pwFile holds no credential." "$pwFile holds no credential" "give a file that holds the credential, or leave --password-file out to keep the stored one" }
+        }
+        if ($secret) { $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret }
+        else { $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base) }
+    } elseif ($secretSpec) {
         $what = ("" + $secretSpec.label).ToLower()
         if ($pwStdin) { $secret = $stdinSecret }
         else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }

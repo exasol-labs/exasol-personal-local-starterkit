@@ -114,6 +114,9 @@ exakit sql "SELECT * FROM VS_DOCS.CUSTOMERS LIMIT 10"
 - A SAS expires: generate a new one (section 4), then
   `exakit source reauth docs --password-file ~/.config/exakit/docs-sas.txt`
   (a refused one keeps the old).
+- Another account or container: its CONNECTION holds them inside the credential, so
+  give it again with the change: `exakit connect azure-blob --name docs --set
+  container=<new> --password-file <file> --yes` (`--dry-run` first).
 - A changed mapping: `exakit source remove docs`, then connect again.
 - Stop: `exakit source disconnect docs` or `exakit source remove docs`
   (`--dry-run` first, then ask) - see the shared skill.

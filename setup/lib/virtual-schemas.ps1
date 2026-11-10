@@ -789,7 +789,23 @@ function Show-ExakitVsDropPlan {
 function Show-ExakitVsPlan {
     param($Plan)
     if ($null -eq $Plan) { return }
-    Write-Host ("  Plan for {0} ({1}, {2}, {3})" -f $Plan.name, $Plan.connector, $Plan.tier, $Plan.status)
+    $repoint = ($Plan.PSObject.Properties["action"] -and $Plan.action -eq "repoint")
+    $title = "Plan for"
+    if ($repoint) { $title = "Re-point" }
+    Write-Host ("  {0} {1} ({2}, {3}, {4})" -f $title, $Plan.name, $Plan.connector, $Plan.tier, $Plan.status)
+    if ($Plan.PSObject.Properties["changes"]) {
+        foreach ($c in @($Plan.changes)) {
+            if ($null -eq $c) { continue }
+            $from = "(none)"; $to = "(none)"
+            if ($null -ne $c.from) { $from = "" + $c.from }
+            if ($null -ne $c.to) { $to = "" + $c.to }
+            Write-Host ("    {0}: {1} -> {2}" -f $c.input, $from, $to)
+        }
+    }
+    if ($repoint) {
+        if ($Plan.credential -eq "kept") { Write-Host "    Credential: kept - the one in the database stays, nothing is asked" }
+        else { Write-Host "    Credential: replaced by the one given, after it is tried" }
+    }
     foreach ($d in @($Plan.downloads)) {
         $verb = "download"
         if ($d.cached) { $verb = "reuse" }
@@ -799,6 +815,29 @@ function Show-ExakitVsPlan {
     Write-Host "    Exposure: $($Plan.exposure)"
     foreach ($w in @($Plan.warnings)) { if ($w) { Write-Host "    Warning: $w" } }
     if ($Plan.gate) { Write-Host "    Not available yet: $($Plan.gate)" }
+}
+
+# Test-ExakitVsSourceLive - the name is a source the kit connected and has not
+# disconnected: `exakit connect` re-points it in place (or says there is
+# nothing to change), on the line-by-line path. Twin of _exakit_vs_source_live.
+function Test-ExakitVsSourceLive {
+    param([string]$Name)
+    if (-not $Name -or $Name -cnotmatch '^[a-z][a-z0-9_]{0,39}$') { return $false }
+    $folder = Join-Path (Join-Path $script:ExakitHome "sources") $Name
+    if (-not (Test-Path -LiteralPath (Join-Path $folder "config.json") -PathType Leaf)) { return $false }
+    $stateFile = Join-Path $folder "state.json"
+    if (-not (Test-Path -LiteralPath $stateFile -PathType Leaf)) { return $true }
+    $disconnected = @(Get-Content -LiteralPath $stateFile -ErrorAction SilentlyContinue | Where-Object { $_ -match '^  "status": "disconnected"' })
+    return ($disconnected.Count -eq 0)
+}
+
+# Format-ExakitVsWord - the text as one shell word: as it is when it needs no
+# quoting, else in single quotes. For a command the --json answer names. Twin
+# of _exakit_vs_word.
+function Format-ExakitVsWord {
+    param([string]$Text)
+    if ($Text -and $Text -cmatch '^[A-Za-z0-9_@%+=:,./-]+$') { return $Text }
+    return ("'" + $Text.Replace("'", "''") + "'")
 }
 
 # --- the terminal flow: pick, fill in, review, connect ----------------------------

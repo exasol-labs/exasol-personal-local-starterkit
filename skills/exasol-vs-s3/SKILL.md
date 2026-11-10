@@ -109,6 +109,9 @@ exakit sql "SELECT * FROM VS_DOCS.ORDERS LIMIT 10"
 
 - A new key (rotation, or temporary credentials that expired):
   `exakit source reauth docs --password-file <new.json>`.
+- Another bucket or region: its CONNECTION holds them inside the credential, so
+  give the key again with the change: `exakit connect s3 --name docs --set
+  region=<new> --password-file <key.json> --yes` (`--dry-run` first).
 - A changed mapping: `exakit source remove docs`, then connect again.
 - Stop: `exakit source disconnect docs` or `exakit source remove docs`
   (`--dry-run` first, then ask) - see the shared skill.

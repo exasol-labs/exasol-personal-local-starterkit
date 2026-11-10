@@ -139,6 +139,9 @@ Types: Oracle `DATE` carries a time of day, so it arrives as `TIMESTAMP(0)`.
 
 - New password: `ALTER USER exakit_reader IDENTIFIED BY "@PW@"` with a fresh
   file, then `exakit source reauth hr --password-file ~/.config/exakit/hr.pw`.
+- The database moved (a new host, port or service): `exakit connect oracle --name hr
+  --set host=<new host> --yes` (`--dry-run` first). The credential and `VS_HR` are
+  kept; the new address is tried before anything changes - see the shared skill.
 - Tables added at the source: grant `READ` on them (before 23ai), then
   `exakit source refresh hr`.
 - Stop: `exakit source disconnect hr` or `exakit source remove hr`

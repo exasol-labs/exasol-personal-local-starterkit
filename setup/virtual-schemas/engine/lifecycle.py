@@ -20,6 +20,7 @@ The EXAKIT_VS schema also holds the DNS probe, and is dropped with the last sour
 import hashlib
 import os
 import re
+import shlex
 import time
 
 import artifacts
@@ -45,6 +46,16 @@ FILES = "EXAKIT_FILES_PROBE_V1"
 # SETTLE seconds. Both are read from the environment for the test suite only.
 VISIBLE_TIMEOUT = float(os.environ.get("EXAKIT_VS_VISIBLE_TIMEOUT", "20"))
 SETTLE = float(os.environ.get("EXAKIT_VS_SETTLE_SECONDS", "2"))
+
+# Inputs a re-point does not change in place (Engine.repoint): a mapping is
+# staged per source, and a CA is chosen and staged by the connect that trusted
+# it. Neither file is read again when it is not given.
+REPOINT_FIXED_KINDS = ("edml", "ca-file")
+
+# A connection the kit makes and changes to learn, before a source's own
+# CONNECTION is touched, whether ALTER CONNECTION ... TO '<address>' keeps the
+# user and password it holds (Engine.alter_keeps_credential).
+ALTER_PROBE = "EXAKIT_PENDING_ALTER_PROBE"
 
 EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 5,
         "dns": 20, "nojava": 21, "unreachable_db": 22, "norust": 23}
@@ -891,18 +902,25 @@ class Engine(object):
         except (OSError, ValueError, planner.PlanError):
             return None
 
-    def vs_sql(self, connector, names, values, extra=None):
-        props = ["%s = %s" % (connector.get("connection_property", "CONNECTION_NAME"), sql.literal(names["connection"]))]
+    @staticmethod
+    def vs_properties(connector, names, values, extra=None):
+        """The virtual schema's properties, in order, as (key, value): its
+        CONNECTION's name first, then the connector's own from the inputs."""
+        props = [(connector.get("connection_property", "CONNECTION_NAME"), names["connection"])]
         fields = dict(values, **(extra or {}))
         for key, template in connector["vs_properties"].items():
-            props.append("%s = %s" % (key, sql.literal(template.format(**fields))))
+            props.append((key, template.format(**fields)))
         if planner.plain_http(connector, values):
             # The lakehouse engine refuses an http catalog or store unless told.
             for key, value in (connector.get("vs_when_http") or {}).items():
-                props.append("%s = %s" % (key, sql.literal(value)))
+                props.append((key, value))
+        return props
+
+    def vs_sql(self, connector, names, values, extra=None):
         return "CREATE VIRTUAL SCHEMA %s USING %s.%s WITH %s" % (
             sql.ident(names["schema"]), sql.ident(names["script_schema"]), sql.ident(names["script"]),
-            " ".join(props))
+            " ".join("%s = %s" % (key, sql.literal(value))
+                     for key, value in self.vs_properties(connector, names, values, extra)))
 
     def check_scope(self, connector, names, values):
         """Is the schema (MySQL: the database) there, and may the account use
@@ -972,7 +990,7 @@ class Engine(object):
         return tables, self.bounded_read(schema, tables), "a bounded read", []
 
     # --- operations -----------------------------------------------------------------
-    def connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False):
+    def connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False, secret_given=False):
         # The gate first, as the shells' own resolve says it: a gated
         # connector is exit 5 whatever else is wrong with the command.
         entry = self.defs.entry(connector_id)
@@ -988,14 +1006,28 @@ class Engine(object):
         profile = self.defs.profile(connector["profile"])
         if self.store.exists(name):
             current = self.store.config(name)
-            if self.store.status(name).get("status") == "disconnected" and current["connector"] == connector_id:
-                # Reconnecting: the recorded inputs stand unless one is given
-                # again, so "exakit connect <connector> --name N" plus the
-                # credential is the whole command - the one disconnect names.
-                given = dict(current.get("inputs") or {}, **given)
+            if current["connector"] != connector_id:
+                # Said by the plan too, before a credential is asked for: a
+                # name is one source, and one connector's inputs mean nothing
+                # to another's.
+                fix = "choose another name or remove it first: exakit source remove %s" % name
+                taken = "a source named %s already exists (%s), so it cannot be connected as %s" % (
+                    name, current["connector"], connector_id)
+                raise Failure(taken, EXIT["conflict"], "conflict", remedy=fix, said="%s; %s" % (taken, fix))
+            if self.store.status(name).get("status") != "disconnected":
+                # A source that is connected is updated in place: its new
+                # address (and a new credential, when one is given) tried
+                # before anything changes, its CONNECTION and VS_<NAME> kept.
+                return self.repoint(connector_id, name, given, secret, preview=plan_only or dry_run,
+                                    secret_given=secret_given or bool(secret))
+            # Reconnecting: the recorded inputs stand unless one is given
+            # again, so "exakit connect <connector> --name N" plus the
+            # credential is the whole command - the one disconnect names.
+            given = dict(current.get("inputs") or {}, **given)
         values = planner.validate_inputs(connector, given)
         names = planner.objects(name, connector)
         description = planner.describe(self.defs, connector_id, name, values, self.runtime, self.cache, self.store)
+        description["action"] = "reconnect" if self.store.exists(name) else "connect"
         # Asked now, in the background: a plan waits for the answer; a connect
         # only when its result or a network failure's remedy names it.
         self.egress(connector, values, wait=False)
@@ -1184,9 +1216,457 @@ class Engine(object):
                                                          "evidence": ("metadata and %s" % how) if read else "metadata",
                                                          "empty_tables": empty}})
             self.store.clear_journal(name)
-        return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready",
+        return {"name": name, "connector": connector_id, "action": "reconnected" if reconnect else "connected",
+                "objects": names, "tables": len(tables), "status": "ready",
                 "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"]),
                 "public_ip": self.egress(connector, values)[0]}
+
+    # --- re-pointing a connected source -------------------------------------------
+    # `exakit connect <connector> --name N` for a source N that is connected
+    # (not disconnected) updates it in place: when the source moved to a new
+    # host, port or database, the recorded inputs stand and what is given
+    # replaces them. The stored credential is kept - it is in the database's
+    # CONNECTION and nowhere else, so nothing asks for it - unless a new one
+    # is given, and VS_<NAME> keeps its name, so saved queries and views keep
+    # working. Every change is tried before the source is changed, and a
+    # failure puts back what this attempt changed: the source keeps working.
+
+    @staticmethod
+    def previous(names):
+        """Where a re-point keeps a source's CONNECTION aside while the new one
+        is verified (a new credential given with it). Outside the EXAKIT_SRC_
+        names, as the pending trial's are."""
+        return dict(names, connection="EXAKIT_PREVIOUS_" + names["connection"])
+
+    def repoint_values(self, connector, old, given):
+        """The source's inputs after the re-point, checked as connect checks
+        them (a loopback host refused with its advice): the recorded ones with
+        the given ones over them. A recorded CA or mapping file is not read
+        again unless it is given anew - it may be gone, and what it held was
+        staged with the source when it connected."""
+        specs = {spec["name"]: spec for spec in connector["inputs"]}
+        recorded = dict((key, value) for key, value in old.items() if key in specs)
+        unread = dict((key, value) for key, value in recorded.items()
+                      if specs[key]["kind"] in REPOINT_FIXED_KINDS and key not in given)
+        trimmed = dict(connector, inputs=[spec for spec in connector["inputs"] if spec["name"] not in unread])
+        values = planner.validate_inputs(trimmed, dict((k, v) for k, v in dict(recorded, **given).items()
+                                                       if k not in unread))
+        values.update(unread)
+        if values.get("ca") and values.get("tls", "verify") != "verify":
+            raise planner.PlanError("ca is used to verify the server, so it needs tls=verify (not %s)" % values["tls"])
+        return values
+
+    @staticmethod
+    def repoint_extra(config, connector, runtime, name):
+        """What the source's URL and properties were built with besides its
+        inputs: the CA and truststore it trusts, its key file, its mapping."""
+        extra = {"ca_pem": config.get("tls_ca"), "truststore": config.get("tls_truststore"),
+                 "key_path": config.get("key_file"), "sa_email": config.get("sa_email")}
+        if any(spec["kind"] == "edml" for spec in connector["inputs"]):
+            extra["mapping_path"] = runtime.bucket_sql("mappings", name)[len("/buckets"):]
+        return extra
+
+    @staticmethod
+    def where_words(connector, values):
+        """Where a source is, as a person reads it: its host and port (a
+        cloud store's name), then the database, schema or namespace it reads."""
+        place = source_where(connector, values) or connector["id"]
+        port = values.get("port")
+        if port and place == values.get("host"):
+            place = "%s:%s" % (place, port)
+        scope = [str(values[k]) for k in ("database", "service", "catalog", "schema", "namespace", "dataset",
+                                          "collection") if values.get(k)]
+        return "%s (%s)" % (place, "/".join(scope)) if scope else place
+
+    def repoint(self, connector_id, name, given, secret, preview=False, secret_given=False):
+        config = self.store.config(name)
+        connector = self.defs.connector(connector_id)
+        entry = self.defs.entry(connector_id)
+        names = config["objects"]
+        old = dict(config.get("inputs") or {})
+        values = self.repoint_values(connector, old, given)
+        changes = []
+        for spec in connector["inputs"]:
+            key = spec["name"]
+            if spec["kind"] in ("secret", "secret-file") or old.get(key) == values.get(key):
+                continue
+            changes.append({"input": key, "from": old.get(key), "to": values.get(key)})
+        replaced = bool(secret) or secret_given
+        state = self.store.status(name).get("status", "unknown")
+        kinds = dict((spec["name"], spec["kind"]) for spec in connector["inputs"])
+        fixed = [c["input"] for c in changes if kinds[c["input"]] in REPOINT_FIXED_KINDS or c["input"] == "tls"]
+        if fixed:
+            how = ("its mapping is staged for the source: exakit source remove %s, then connect it again with the new "
+                   "one" % name) if any(kinds[k] == "edml" for k in fixed) else (
+                  "the CA and TLS level are set by the connect that trusted them: exakit source disconnect %s --yes, "
+                  "then exakit connect %s --name %s with the new ones and the credential" % (name, connector_id, name))
+            raise Failure("%s cannot be changed in place for %s" % (" and ".join(fixed), name), EXIT["input"], "input",
+                          remedy="nothing was changed - %s" % how,
+                          said="%s cannot be changed in place for %s; nothing was changed - %s" % (
+                              " and ".join(fixed), name, how))
+        if not changes and not replaced:
+            note = ("Nothing to change: %s already reads from %s with these inputs; its credential and %s stay as "
+                    "they are" % (name, self.where_words(connector, values), names["schema"]))
+            self.emit("INFO", note)
+            return {"action": "unchanged", "name": name, "connector": connector_id, "objects": names,
+                    "status": state, "changes": [], "credential": "kept", "note": note}
+        # The inputs a CONNECTION holds inside its credential: a document
+        # source's JSON carries its bucket, region or warehouse, and a user
+        # name goes with the password it is IDENTIFIED BY.
+        needs = [c["input"] for c in changes if connector.get("credential") or c["input"] == "user"]
+        if needs and not replaced:
+            why = ("its CONNECTION holds them inside its credential" if connector.get("credential")
+                   else "a user name goes with its password")
+            fix = ("nothing was changed - give the credential too, with --password-file <file> or --password-stdin, "
+                   "and run the same exakit connect again")
+            raise Failure("%s of %s cannot change without the credential: %s" % (" and ".join(needs), name, why),
+                          EXIT["input"], "input", remedy=fix,
+                          said="%s of %s cannot change without the credential (%s); %s" % (
+                              " and ".join(needs), name, why, fix))
+        if replaced and connector.get("secret_as_file"):
+            fix = ("nothing was changed - give the new key file with: exakit source reauth %s --password-file "
+                   "<key.json>, then re-point it without one" % name)
+            raise Failure("a new key file is not taken by a re-point of %s" % name, EXIT["input"], "input",
+                          remedy=fix, said="a new key file is not taken by a re-point of %s; %s" % (name, fix))
+        extra = self.repoint_extra(config, connector, self.runtime, name)
+        props_old = self.vs_properties(connector, names, old, extra)
+        props_new = self.vs_properties(connector, names, values, extra)
+        before = dict(props_old)
+        after = dict(props_new)
+        props = [(k, v) for k, v in props_new if before.get(k) != v] + [(k, "") for k, _ in props_old if k not in after]
+        url = old_url = None
+        if not connector.get("credential"):
+            url = planner.jdbc_url(connector, values, extra)
+            old_url = planner.jdbc_url(connector, old, extra)
+        moves = replaced or url != old_url
+        if preview:
+            return self.repoint_plan(connector_id, connector, entry, name, names, state, values, changes, replaced,
+                                     moves, props)
+        if replaced and not secret:
+            raise Failure("%s needs the new credential on standard input" % connector_id, EXIT["input"], "input",
+                          remedy="pipe it on standard input or give it with --password-file <file>")
+        return self.repoint_apply(connector_id, connector, name, config, names, old, values, changes, secret,
+                                  extra, url, old_url, moves, props, props_old)
+
+    def repoint_plan(self, connector_id, connector, entry, name, names, state, values, changes, replaced, moves,
+                     props):
+        """The re-point as data, before any of it happens: what changes, from
+        what to what, and that the credential is kept or replaced."""
+        steps = []
+        host = planner.source_host(connector, values)
+        if host:
+            steps.append("check from inside the database that %s resolves and answers on port %d"
+                         % (host, planner.source_port(connector, values)))
+        if replaced:
+            steps += ["try the new %s on a pending CONNECTION first - %s is not touched while it is tried"
+                      % ("address and the credential given" if changes else "credential", names["connection"]),
+                      "replace %s with it, the previous one kept aside until the re-point is verified"
+                      % names["connection"]]
+        elif moves and connector.get("secret_as_file"):
+            steps.append("point %s at the new address (it holds no credential; the key file stays)"
+                         % names["connection"])
+        elif moves:
+            steps.append("point %s at the new address with ALTER CONNECTION, keeping its credential (that this "
+                         "database keeps it is checked first, on a throwaway connection), and try it there with "
+                         "one read - pointed back if the source refuses" % names["connection"])
+        else:
+            steps.append("try %s with the new inputs (its address does not change)" % names["connection"])
+        if connector.get("etl") and connector.get("schema_check"):
+            steps.append("check that the source has %s %s and the account may use it"
+                         % (connector["schema_check"]["input"], values.get(connector["schema_check"]["input"], "")))
+        if props:
+            steps.append("set %s's %s" % (names["schema"], ", ".join(k for k, _ in props)))
+        steps += ["refresh %s in place: it keeps its name, so saved queries and views keep working" % names["schema"],
+                  "verify metadata and one bounded read; on any failure what was changed is put back"]
+        plan = {"action": "repoint", "connector": connector_id, "name": name, "tier": entry["tier"],
+                "status": entry["status"], "existing": state, "objects": names, "changes": changes,
+                "credential": "replaced" if replaced else "kept", "downloads": [], "download_bytes": 0,
+                "steps": steps, "restart": False, "gate": None,
+                "exposure": "the kit's MCP read-only user can read every table of %s (SELECT ANY TABLE)"
+                            % names["schema"],
+                "warnings": [w for w in [planner.tls_warning(connector, values), entry.get("caveat")] if w],
+                "command": "exakit connect %s --name %s%s" % (connector_id, name, "".join(
+                    " --set " + shlex.quote("%s=%s" % (c["input"], "" if c["to"] is None else c["to"]))
+                    for c in changes))}
+        ip, where = self.egress(connector, values)
+        plan["public_ip"] = ip
+        if ip:
+            self.emit("INFO", publicip.advice(ip, where))
+        return plan
+
+    def alter_keeps_credential(self, name):
+        """ALTER CONNECTION ... TO '<address>' with no USER clause: does this
+        database keep the user and password the connection holds? Exasol's
+        documentation does not say, and a source whose credential were
+        cleared could not be put back - the kit never has it. So it is asked
+        of a throwaway connection the kit makes, with a made-up user and
+        password, before the source's own is touched: the address must have
+        changed and the user stayed. Anything else refuses the re-point, with
+        nothing changed."""
+        if getattr(self, "_alter_keeps", False):
+            return
+        db = self.db()
+        probe = sql.ident(ALTER_PROBE)
+        row, why = {}, None
+        try:
+            db.execute("DROP CONNECTION IF EXISTS %s" % probe)
+            db.execute("CREATE CONNECTION %s TO 'exakit-alter-probe-1' USER 'exakit_alter_probe' "
+                       "IDENTIFIED BY 'exakit-alter-probe'" % probe)
+            db.execute("ALTER CONNECTION %s TO 'exakit-alter-probe-2'" % probe)
+            rows = db.query("SELECT CONNECTION_STRING, USER_NAME FROM EXA_DBA_CONNECTIONS WHERE CONNECTION_NAME = %s"
+                            % sql.literal(ALTER_PROBE))
+            row = rows[0] if rows else {}
+        except sql.DbError as error:
+            why = str(error)
+        finally:
+            try:
+                db.execute("DROP CONNECTION IF EXISTS %s" % probe)
+            except sql.DbError:
+                pass
+        if row.get("CONNECTION_STRING") != "exakit-alter-probe-2" or row.get("USER_NAME") != "exakit_alter_probe":
+            fix = ("nothing was changed - give the credential with --password-file <file> (or --password-stdin) and "
+                   "run the same exakit connect again")
+            said = ("this database does not keep a connection's credential through ALTER CONNECTION%s, so %s cannot "
+                    "move without it" % (" (%s)" % why if why else "", name))
+            raise Failure(said, EXIT["input"], "input", remedy=fix, said="%s; %s" % (said, fix))
+        self._alter_keeps = True
+
+    def repoint_trial(self, connector, names, values, name, extra, make=None):
+        """The source tried with the new inputs: one statement through the
+        loader (and the schema check) for a JDBC source, else a throwaway
+        virtual schema on the source's adapter - read too, for a document
+        source. Through the source's own CONNECTION, or with make=(url, user,
+        secret, hidden) through a pending one made from those and dropped
+        after: then the source is not touched at all."""
+        db = self.db()
+        trial = self.pending(names) if make else names
+        throwaway = self.pending(names)["schema"]
+        secrets = [make[2]] + list(make[3]) if make else []
+        try:
+            if make:
+                # What a trial killed part way left (Ctrl-C, a closed lid) goes first.
+                self.drop_pending(names)
+                self.create_connection(trial, make[0], make[1], make[2], replace=True, hidden=make[3])
+            if connector.get("etl"):
+                db.query("SELECT * FROM (IMPORT FROM JDBC AT %s STATEMENT %s)"
+                         % (sql.ident(trial["connection"]), sql.literal(connector.get("probe_sql", "SELECT 1"))),
+                         secrets=secrets)
+                self.check_scope(connector, trial, values)
+            else:
+                db.execute("DROP FORCE VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(throwaway))
+                db.execute(self.vs_sql(connector, dict(trial, schema=throwaway), values, extra), secrets=secrets)
+                if any(spec["kind"] == "edml" for spec in connector["inputs"]):
+                    for table in self.tables(throwaway)[:self.READ_ALL_LIMIT]:
+                        db.query("SELECT * FROM %s.%s LIMIT 1" % (sql.ident(throwaway), sql.ident(table)),
+                                 secrets=secrets)
+        finally:
+            if make:
+                self.drop_pending(names)
+            elif not connector.get("etl"):
+                try:
+                    db.execute("DROP FORCE VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(throwaway))
+                except sql.DbError:
+                    pass
+        self.emit("OK", "The source accepted %s at %s" % ("the credential given" if make else "the stored credential",
+                                                         self.where_words(connector, values)))
+
+    def repoint_undo(self, connector, names, journal, old_url, props_old, props):
+        """Put back what this re-point changed, newest first; the list of what
+        could not be put back (empty when the source is as it was)."""
+        db, left = self._db, []
+        if db is None:
+            return left
+        live = sql.ident(names["connection"])
+        steps = []
+        if journal.get("props_set"):
+            before = dict(props_old)
+            steps.append(("its properties", "ALTER VIRTUAL SCHEMA %s SET %s" % (
+                sql.ident(names["schema"]), " ".join("%s = %s" % (k, sql.literal(before.get(k, ""))) for k, _ in props))))
+        if journal.get("swapped"):
+            steps += [("the new CONNECTION", "DROP CONNECTION IF EXISTS %s" % live),
+                      ("its CONNECTION", "RENAME CONNECTION %s TO %s" % (
+                          sql.ident(self.previous(names)["connection"]), live))]
+        elif journal.get("moved") and old_url is not None:
+            if connector.get("secret_as_file"):
+                steps.append(("its CONNECTION", "CREATE OR REPLACE CONNECTION %s TO %s" % (live, sql.literal(old_url))))
+            else:
+                steps.append(("its CONNECTION", "ALTER CONNECTION %s TO %s" % (live, sql.literal(old_url))))
+        for what, statement in steps:
+            try:
+                db.execute(statement)
+            except sql.DbError as error:
+                left.append(what)
+                self.emit("WARN", "could not put back %s: %s" % (what, error))
+        if journal.get("refreshed") or journal.get("props_set"):
+            try:
+                db.execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(names["schema"]))
+            except sql.DbError as error:
+                self.emit("WARN", "%s could not be refreshed from its previous address (%s); its table list is "
+                                  "read again by: exakit source refresh %s" % (names["schema"], error, names["schema"]))
+        return left
+
+    def recover_repoint(self, name, connector, names, old_url, props_old):
+        """Put back what an interrupted re-point recorded in its journal (Ctrl-C,
+        a closed lid): the record still holds the inputs from before it, so
+        every property of the virtual schema goes back to the record's (which
+        ones that attempt set is not known), its CONNECTION's name aside."""
+        journal = self.store.journal(name)
+        if not journal or journal.get("operation") != "repoint":
+            return
+        if journal.get("swapped") or journal.get("moved") or journal.get("props_set") or journal.get("refreshed"):
+            self.emit("INFO", "An earlier re-point of %s was interrupted; putting back what it changed first" % name)
+            if journal.get("swapped") and not self.exists("connection", self.previous(names)["connection"]):
+                journal = dict(journal, swapped=False)
+            self.repoint_undo(connector, names, journal, old_url, props_old, props_old[1:])
+        self.store.clear_journal(name)
+
+    def repoint_failure(self, error, connector, name, values, old_where, replaced, left):
+        """The Failure a re-point ends with: what happened, its class and the
+        fix, saying that nothing changed - or, when something could not be put
+        back, what."""
+        kind = self.signed_kind(getattr(error, "kind", "error"), connector)
+        code = getattr(error, "code", EXIT["failed"])
+        if isinstance(error, sql.DbError):
+            code = EXIT["dns"] if kind == "dns" else EXIT["nojava"] if kind == "nojava" else EXIT["failed"]
+        if self.language_kind(kind, connector, error) == "norust":
+            kind, code = "norust", EXIT["norust"]
+        kept = "nothing was changed - %s still reads from %s" % (name, old_where)
+        if left:
+            kept = ("%s could not be put back after the failure (%s), so %s is recorded as failed - check it with: "
+                    "exakit source check %s" % (" and ".join(left), name, name, name))
+        again = "then run the same exakit connect again"
+        access = connector.get("access", "read access")
+        if isinstance(error, ScopeFailure):
+            remedy = "%s; %s" % (error.remedy, kept)
+        elif isinstance(error, Failure) and error.remedy:
+            # It names its own fix, and that nothing changed (the bridge's
+            # own refusals before any change).
+            remedy = error.remedy
+        else:
+            cred = "the credential given" if replaced else "the stored credential"
+            remedy = {
+                "auth": "the source at the new address refused %s; %s. Give the credential it takes with "
+                        "--password-file <file> (or --password-stdin), %s" % (cred, kept, again),
+                "unreachable": "the new address did not answer from inside the database; %s. Check the host, port, "
+                               "firewall and VPN %s, %s" % (kept, LISTEN_ADVICE, again),
+                "nohost": "the new host name does not resolve; %s. Check its spelling (a private name may need a "
+                          "VPN), %s" % (kept, again),
+                "tls": "the new address's certificate or host name did not verify; %s. Fix the server certificate, %s"
+                       % (kept, again),
+                "denied": "the account signs in but may not read this data at the new address; %s. Grant it what the "
+                          "message names (%s), %s" % (kept, access, again),
+                "privilege": "the source took the credential, but the account lacks a privilege at the new address; "
+                             "%s. Grant it what the message names (%s), %s" % (kept, access, again),
+                "missing_or_denied": "the new address answers that the object the message names does not exist for "
+                                     "this account; %s. Check that name as the source spells it, or grant the account "
+                                     "%s, %s" % (kept, access, again),
+                "schema_missing": "the new address has no such namespace that this credential can see; %s. Check it, "
+                                  "%s" % (kept, again),
+            }.get(kind)
+            if kind == "tls":
+                specific = tls_remedy(error, connector, self.clock())
+                if specific:
+                    remedy = "%s; %s" % (kept, specific.replace(
+                        "give it with --set ca=<file>", "a CA is given by a reconnect: exakit source disconnect %s "
+                        "--yes, then exakit connect %s --name %s --set ca=<file> with the new address and the "
+                        "credential" % (name, connector["id"], name)))
+            if remedy is None:
+                remedy = "%s; %s" % (kept, remedy_text(kind).format(name=name, access=access,
+                                                                      store=connector.get("store", "bucket")))
+            if kind in ADDRESS_KINDS:
+                remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
+        return Failure(str(error), code, kind, remedy=remedy, said="%s; %s" % (error, remedy))
+
+    def repoint_apply(self, connector_id, connector, name, config, names, old, values, changes, secret, extra,
+                      url, old_url, moves, props, props_old):
+        replaced = bool(secret)
+        old_where, new_where = self.where_words(connector, old), self.where_words(connector, values)
+        user = conn_secret = None
+        hidden, notes = [], []
+        if replaced:
+            url, user, conn_secret, hidden, notes = self.credential(connector, values, secret)
+            if url is None:
+                url = planner.jdbc_url(connector, values, extra)
+        journal = {"operation": "repoint", "connector": connector_id, "started": sources.now()}
+        with self.store.lock():
+            self.recover_repoint(name, connector, names, old_url, props_old)
+            self.store.save_journal(name, journal)
+
+            def mark(flag):
+                journal[flag] = True
+                self.store.save_journal(name, journal)
+
+            try:
+                self.warn_clock()
+                # Nothing of the source changes before these: the route, then
+                # the new address (and credential) tried.
+                self.require_route(connector, values, name)
+                if replaced:
+                    self.repoint_trial(connector, names, values, name, extra, make=(url, user, conn_secret, hidden))
+                    self.db().execute("DROP CONNECTION IF EXISTS %s" % sql.ident(self.previous(names)["connection"]))
+                    self.db().execute("RENAME CONNECTION %s TO %s" % (
+                        sql.ident(names["connection"]), sql.ident(self.previous(names)["connection"])))
+                    mark("swapped")
+                    self.create_connection(names, url, user, conn_secret, hidden=hidden)
+                    self.emit("OK", "Connection %s now holds the new %s (the previous one is kept aside until this "
+                                    "is verified)" % (names["connection"], "address and credential" if changes
+                                                      else "credential"))
+                elif moves:
+                    if connector.get("secret_as_file"):
+                        mark("moved")
+                        self.create_connection(names, url, None, None, replace=True)
+                    else:
+                        self.alter_keeps_credential(name)
+                        mark("moved")
+                        self.db().execute("ALTER CONNECTION %s TO %s" % (sql.ident(names["connection"]),
+                                                                          sql.literal(url)))
+                    self.emit("OK", "Connection %s points at %s; its credential is kept"
+                              % (names["connection"], new_where))
+                    self.repoint_trial(connector, names, values, name, extra)
+                else:
+                    self.repoint_trial(connector, names, values, name, extra)
+                if props:
+                    mark("props_set")
+                    self.db().execute("ALTER VIRTUAL SCHEMA %s SET %s" % (sql.ident(names["schema"]), " ".join(
+                        "%s = %s" % (key, sql.literal(value)) for key, value in props)))
+                mark("refreshed")
+                self.db().execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(names["schema"]))
+                tables, read, how, empty = self.verify(connector, names["schema"])
+            except (Failure, sql.DbError, artifacts.ArtifactError, planner.PlanError, OSError) as error:
+                left = self.repoint_undo(connector, names, journal, old_url, props_old, props)
+                self.store.clear_journal(name)
+                failure = self.repoint_failure(error, connector, name, values, old_where, replaced, left)
+                if left:
+                    self.record_check(name, "failed", "an unfinished re-point: %s" % failure, failure.kind)
+                raise failure
+            if journal.get("swapped"):
+                try:
+                    self.db().execute("DROP CONNECTION IF EXISTS %s" % sql.ident(self.previous(names)["connection"]))
+                except sql.DbError as error:
+                    self.emit("WARN", "the previous CONNECTION %s could not be dropped (%s); it is dropped with the "
+                                      "source: exakit source remove %s"
+                              % (self.previous(names)["connection"], error, name))
+            record = dict(config, inputs=values)
+            self.store.save_config(name, record)
+            status = self.store.status(name)
+            status.pop("needs_refresh", None)
+            status.update(status="ready", tables=len(tables), repointed_at=sources.now(),
+                          last_check={"at": sources.now(), "outcome": "ok",
+                                      "evidence": ("metadata and %s" % how) if read else "metadata",
+                                      "empty_tables": empty})
+            self.store.save_status(name, status)
+            self.store.clear_journal(name)
+        for note in notes:
+            self.emit("INFO", note.replace("<name>", name))
+        moved_words = "; ".join("%s %s -> %s" % (c["input"], "(none)" if c["from"] is None else c["from"],
+                                                 "(none)" if c["to"] is None else c["to"]) for c in changes)
+        self.emit("OK", "Re-pointed %s%s: the credential %s, and %s kept its name (%d table%s)" % (
+            name, " (%s)" % moved_words if moved_words else "", "was replaced" if replaced else "was kept",
+            names["schema"], len(tables), "" if len(tables) == 1 else "s"))
+        return {"action": "repointed", "name": name, "connector": connector_id, "objects": names,
+                "changes": changes, "credential": "replaced" if replaced else "kept", "tables": len(tables),
+                "status": "ready", "example": example_query(names["schema"], tables),
+                "tips": tips(connector, name, names["schema"]), "public_ip": self.egress(connector, values)[0]}
 
     def recover_interrupted(self, name, names):
         """Undo what an interrupted first connect recorded in its journal."""
@@ -1378,6 +1858,17 @@ class Engine(object):
                 self.db().execute(statement)
             except (sql.DbError, Failure):
                 pass
+
+    def drop_previous(self, name, names):
+        """Drop the CONNECTION an interrupted re-point kept aside (its journal
+        says so; nothing is asked of the database otherwise)."""
+        if (self.store.journal(name) or {}).get("operation") != "repoint":
+            return
+        try:
+            self.db().execute("DROP CONNECTION IF EXISTS %s" % sql.ident(self.previous(names)["connection"]))
+        except (sql.DbError, Failure):
+            pass
+        self.store.clear_journal(name)
 
     def try_credential(self, connector, names, url, user, secret, values=None, hidden=(), name=None):
         if not connector.get("etl"):
@@ -1693,8 +2184,9 @@ class Engine(object):
             if self.exists("connection", connection):
                 self.db().execute("DROP CONNECTION %s" % sql.ident(connection))
             # A disconnected source keeps no credential: not even one a reauth
-            # killed mid-try left pending.
+            # killed mid-try left pending, or a re-point kept aside.
             self.drop_pending(config["objects"])
+            self.drop_previous(name, config["objects"])
             if config.get("key_file") and os.path.isfile(self.key_file(name)):
                 os.remove(self.key_file(name))
             self.store.update_status(name, status="disconnected", disconnected_at=sources.now())
@@ -1735,8 +2227,10 @@ class Engine(object):
                 force = "" if connection_present else "FORCE "
                 db.execute("DROP %sVIRTUAL SCHEMA %s CASCADE" % (force, sql.ident(names["schema"])))
             # A reauth killed mid-try can leave its trial schema, on this
-            # source's adapter script, and its pending credential behind.
+            # source's adapter script, and its pending credential behind -
+            # and a re-point its previous CONNECTION.
             self.drop_pending(names)
+            self.drop_previous(name, names)
             if own_adapter and self.exists("script", names["script_schema"], names["script"]):
                 db.execute("DROP ADAPTER SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(names["script"])))
             for script in shared if last else []:

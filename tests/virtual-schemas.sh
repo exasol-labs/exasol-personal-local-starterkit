@@ -14,6 +14,9 @@
 #   5. Failures are classified (auth, tls, unreachable, dns, no Java) with an
 #      exit code or status the shell and `exakit source issues` act on.
 #   6. Every input is validated before it reaches a template.
+#   7. connect --name of a connected source re-points it in place: the new
+#      address tried before anything changes, the stored credential kept,
+#      VS_<NAME> kept, and every failure leaves the source as it was.
 #
 #   bash tests/virtual-schemas.sh
 set -u
@@ -482,8 +485,8 @@ run_secret "$SECRET" connect postgresql --name warehouses --set host=wh.example.
 check "connect warehouses: exit 0" "0" "$RC"
 check "the shared driver lists both consumers" '["sales", "warehouses"]' \
     "$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["artifacts"]; print(json.dumps(next(v["consumers"] for k,v in r.items() if k.endswith("POSTGRES_JDBC_DRIVER/postgresql-42.7.14.jar"))))' "$HOME_K/sources/registry.json")"
-run_secret "$SECRET" connect postgresql --name sales $PG_SET --secret-stdin
-check "a name already in use is a conflict, exit 3" "3" "$RC"
+run_secret "$SECRET" connect mysql --name sales $PG_SET --secret-stdin
+check "a name already in use by another connector is a conflict, exit 3" "3" "$RC"
 
 printf '\n== a staged file reaches the database a moment after it is written ==\n'
 # Measured on Exasol Personal: the jar staged on this computer was loaded
@@ -3380,10 +3383,10 @@ check "no credential (nothing on stdin): exit 2, one failure object, nothing ask
 has "...its remedy says how to give it" "--password-file" "$(one 'd["remedy"]')"
 jsonsh /dev/null pg --name jsonbad --set host=pg.example.com --set database=sales --set user=reader --set port=70000 --json
 check "a bad input: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
-jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
-check "a name already taken: exit 3, one failure object" "3 [False, 'conflict', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh "$WORK/json.secret" mysql --name jsonok $PG_SET --json
+check "a name already taken by another connector: exit 3, one failure object" "3 [False, 'conflict', True, True, True, True]" "$JRC $(one "$SHAPE")"
 check "...error is what happened, remedy the fix (once in each)" \
-    "['a source named jsonok already exists (postgresql)', 'choose another name or remove it first: exakit source remove jsonok']" \
+    "['a source named jsonok already exists (postgresql), so it cannot be connected as mysql', 'choose another name or remove it first: exakit source remove jsonok']" \
     "$(one '[d["error"], d["remedy"]]')"
 jsonsh "$WORK/json.secret" gatedtest --name jsongt --set project=p --set dataset=d --json
 check "a gated connector: exit 5, one failure object" "5 [False, 'gated', True, True, True, True]" "$JRC $(one "$SHAPE")"
@@ -4215,6 +4218,269 @@ check "review 4: no kit Python to read the credential: exit 2, one object, kind 
 _reader_range='/^_exakit_vs_secret_text()/,/^}/p'
 check "...and the reader never falls back to another Python (no run_python_any)" "0" \
     "$(sed -n "$_reader_range" "$ROOT/setup/lib/virtual-schemas.sh" | grep -c run_python_any)"
+
+printf '\n== re-point: exakit connect --name of a connected source updates it in place ==\n'
+# The source moved (a new host, port or database): the same connect, with the
+# new address, updates it. The stored credential stays where it is - in the
+# CONNECTION, never asked for - and VS_<NAME> keeps its name, so saved queries
+# keep working. Every change is tried before the source changes; a failure
+# leaves the old one working.
+python3 - "$STATE" <<'PY'
+import json, sys
+json.dump({"sources": {"old.example.com": {"tables": ["ORDERS"], "secret": "Old-Pw-1"},
+                       "new.example.com": {"tables": ["ORDERS", "CUSTOMERS"], "secret": "Old-Pw-1"},
+                       "auth.example.com": {"tables": ["ORDERS"], "secret": "Another-Pw"},
+                       "fresh.example.com": {"tables": ["ORDERS", "ITEMS"], "secret": "Fresh-Pw-2"}},
+           "unreachable": ["gone.example.com"]}, open(sys.argv[1], "w"))
+PY
+# The engine's --json object among its event lines (run keeps stderr): the
+# range is assigned first, as bash 3.2 needs it (tests/bash32-guard.sh).
+_obj_range='/^{/,/^}/p'
+jone() { JOUT="$(printf '%s' "$OUT" | sed -n "$_obj_range")"; one "$1"; }
+RP_SET="--set host=old.example.com --set database=sales --set user=reader"
+conn() { dbq "d['connections'].get('EXAKIT_SRC_MOVED', {}).get('$1')"; }
+inputs() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"][sys.argv[2]])' "$HOME_K/sources/moved/config.json" "$1"; }
+stmts() { dbq 'len(d["statements"])'; }
+run_secret "Old-Pw-1" connect postgresql --name moved $RP_SET --secret-stdin
+check "a source to move: connected, exit 0" "0" "$RC"
+has "...the first connect's result says connected" '"action": "connected"' "$OUT"
+
+# Nothing given that differs, no credential: nothing to change, nothing sent.
+N="$(stmts)"
+run --json plan postgresql --name moved $RP_SET
+check "the same inputs, no credential: the plan is 'unchanged', exit 0" "0 unchanged" "$RC $(printf '%s' "$OUT" | sed -n 's/^  "action": "\(.*\)",$/\1/p')"
+run connect postgresql --name moved $RP_SET </dev/null
+check "...and connect: exit 0, nothing sent to the database (no refresh)" "0 $N" "$RC $(stmts)"
+has "...said in words" "Nothing to change: moved already reads from old.example.com:5432 (sales/public)" "$OUT"
+run connect postgresql --name moved --set host=old.example.com </dev/null
+check "...an input given again as it is: still nothing to change" "0 $N" "$RC $(stmts)"
+
+# The plan: what changes, from what to what, the credential kept.
+run --json plan postgresql --name moved --set host=new.example.com --set port=5433
+check "plan of a re-point: exit 0, action repoint, the credential kept" "0 ['repoint', 'kept']" \
+    "$RC $(jone '[d["action"], d["credential"]]')"
+check "...each change from old to new" "[('host', 'old.example.com', 'new.example.com'), ('port', '5432', '5433')]" \
+    "$(jone '[(c["input"], c["from"], c["to"]) for c in d["changes"]]')"
+check "...the command that makes it, without --yes" "exakit connect postgresql --name moved --set host=new.example.com --set port=5433" \
+    "$(jone 'd["command"]')"
+check "...and nothing was sent to the database" "$N" "$(stmts)"
+run --json plan postgresql --name moved --set host=new.example.com --secret-given
+check "...a credential to come: the plan says it is replaced" "replaced" \
+    "$(jone 'd["credential"]')"
+run connect postgresql --name moved --set host=new.example.com --dry-run </dev/null
+check "connect --dry-run: exit 0, nothing sent, the CONNECTION as it was" "0 $N old.example.com" \
+    "$RC $(stmts) $(conn url | sed 's|jdbc:postgresql://\([^:]*\):.*|\1|')"
+
+# The re-point itself: the route checked, the CONNECTION moved with ALTER
+# (its credential kept), tried, VS_MOVED refreshed in place.
+N="$(stmts)"
+run connect postgresql --name moved --set host=new.example.com --set port=5433 </dev/null
+check "re-point: exit 0" "0" "$RC"
+has "...the result says repointed, the credential kept" '"action": "repointed"' "$OUT"
+has "...and kept" '"credential": "kept"' "$OUT"
+check "...the CONNECTION points at the new host and port" "jdbc:postgresql://new.example.com:5433/sales" "$(conn url | sed 's|?.*||')"
+check "...its credential is the one it had: never asked, never replaced" "Old-Pw-1" "$(conn secret)"
+check "...VS_MOVED kept its name and reads the new source's tables" '["CUSTOMERS", "ORDERS"]' \
+    "$(dbq 'sorted(d["virtual"]["VS_MOVED"]["tables"])')"
+check "...it was refreshed in place, never dropped or created again" "0 1" \
+    "$(dbq "len([s for s in d['statements'][$N:] if ('DROP' in s and '\"VS_MOVED\"' in s) or s.startswith('CREATE VIRTUAL SCHEMA \"VS_MOVED\"')])") $(dbq "len([s for s in d['statements'][$N:] if s == 'ALTER VIRTUAL SCHEMA \"VS_MOVED\" REFRESH'])")"
+check "...the CONNECTION was ALTERed, not created again" "1 0" \
+    "$(dbq "len([s for s in d['statements'][$N:] if s.startswith('ALTER CONNECTION \"EXAKIT_SRC_MOVED\"')])") $(dbq "len([s for s in d['statements'][$N:] if 'CONNECTION \"EXAKIT_SRC_MOVED\"' in s and s.startswith('CREATE')])")"
+check "...after the kit checked, on a throwaway connection, that ALTER keeps a credential - and dropped it" "true false" \
+    "$(dbq 'any("EXAKIT_PENDING_ALTER_PROBE" in s and s.startswith("ALTER CONNECTION") for s in d["statements"])') $(dbq '"EXAKIT_PENDING_ALTER_PROBE" in d["connections"]')"
+check "...the record holds the new inputs" "new.example.com 5433" "$(inputs host) $(inputs port)"
+check "...and says ready" "ready" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/moved/state.json")"
+lacks "...the credential is in no output" "Old-Pw-1" "$OUT"
+check "...nor under the kit home (records, journal, the day log)" "" "$(grep -rl 'Old-Pw-1' "$HOME_K" 2>/dev/null)"
+check "...no journal is left" "no" "$([ -f "$HOME_K/sources/moved/journal.json" ] && echo yes || echo no)"
+has "...the day log records the re-point's statements" 'ALTER CONNECTION "EXAKIT_SRC_MOVED" TO' "$(cat "$HOME_K"/logs/virtual-schemas-*.log)"
+has "...with the throwaway's made-up password masked like any other" "IDENTIFIED BY '***'" "$(grep EXAKIT_PENDING_ALTER_PROBE "$HOME_K"/logs/virtual-schemas-*.log)"
+
+# A database move changes the URL and the virtual schema's property: SET in place.
+run connect postgresql --name moved --set database=archive </dev/null
+check "a new database: exit 0" "0" "$RC"
+check "...the URL and VS_MOVED's CATALOG_NAME carry it" "jdbc:postgresql://new.example.com:5433/archive archive" \
+    "$(conn url | sed 's|?.*||') $(dbq 'd["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"]')"
+
+# Test first: the new address is tried before anything changes, and a
+# failure leaves the source as it was.
+URL_BEFORE="$(conn url)"; N="$(stmts)"
+run connect postgresql --name moved --set host=gone.example.com </dev/null
+check "a new host that does not answer: exit 1, kind unreachable" "1" "$RC"
+run --json connect postgresql --name moved --set host=gone.example.com </dev/null
+JOUT="$(printf '%s' "$OUT" | sed -n "$_obj_range")"
+check "...--json: one object, kind unreachable" "1 [False, 'unreachable']" "$RC $(one '[d["ok"], d["kind"]]')"
+check "...the remedy says nothing changed and where it still reads from" "True" \
+    "$(one '"nothing was changed - moved still reads from new.example.com:5433 (archive/public)" in d["remedy"]')"
+check "...the CONNECTION was never touched (the route failed first)" "$URL_BEFORE 0" \
+    "$(conn url) $(dbq "len([s for s in d['statements'][$N:] if s.startswith('ALTER CONNECTION \"EXAKIT_SRC_MOVED\"')])")"
+check "...and the record still holds the old host" "new.example.com" "$(inputs host)"
+N="$(stmts)"
+run connect postgresql --name moved --set host=auth.example.com </dev/null
+check "a new host that refuses the stored credential: exit 1" "1" "$RC"
+has "...said with the fix" "the source at the new address refused the stored credential; nothing was changed" "$OUT"
+check "...the CONNECTION moved for the one read and came back: the old address, the same credential" "$URL_BEFORE Old-Pw-1" \
+    "$(conn url) $(conn secret)"
+check "...ALTERed there and back" "2" "$(dbq "len([s for s in d['statements'][$N:] if s.startswith('ALTER CONNECTION \"EXAKIT_SRC_MOVED\"')])")"
+check "...the record unchanged, still ready, no journal" "new.example.com ready no" \
+    "$(inputs host) $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/moved/state.json") $([ -f "$HOME_K/sources/moved/journal.json" ] && echo yes || echo no)"
+
+# A virtual schema that will not take the new properties: everything put back.
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["set_fail"] = "adapter refused the properties"; json.dump(d, open(sys.argv[1], "w"))
+PY
+run connect postgresql --name moved --set database=other </dev/null
+check "a property the virtual schema refuses after the move: exit 1, the CONNECTION back where it was" "1 $URL_BEFORE" "$RC $(conn url)"
+check "...the record keeps the database it had" "archive" "$(inputs database)"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("set_fail"); json.dump(d, open(sys.argv[1], "w"))
+PY
+
+# A database whose ALTER CONNECTION would drop the credential: never relied on.
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["alter_clears"] = True; json.dump(d, open(sys.argv[1], "w"))
+PY
+run connect postgresql --name moved --set host=old.example.com --set port=5432 </dev/null
+check "ALTER CONNECTION would not keep the credential: exit 2, nothing changed" "2 $URL_BEFORE Old-Pw-1" "$RC $(conn url) $(conn secret)"
+has "...said, with the fix: give the credential" "does not keep a connection's credential through ALTER CONNECTION" "$OUT"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("alter_clears"); json.dump(d, open(sys.argv[1], "w"))
+PY
+
+# localhost is the database itself: refused with the advice a first connect gets.
+run connect postgresql --name moved --set host=localhost </dev/null
+check "a re-point to localhost: exit 2, nothing changed" "2 $URL_BEFORE" "$RC $(conn url)"
+has "...with the loopback advice" "host=localhost would be the database itself, not this computer" "$OUT"
+run --json plan postgresql --name moved --set host=127.0.0.1
+check "...the plan refuses it too, kind input" "2 input" "$RC $(jone 'd["kind"]')"
+
+# Another connector under the name: refused, the name stays the source's.
+run --json plan mysql --name moved --set host=new.example.com --set database=x --set user=u
+check "another connector under the same name: exit 3, kind conflict, before any credential" "3 conflict" \
+    "$RC $(jone 'd["kind"]')"
+check "...its error and fix" "['a source named moved already exists (postgresql), so it cannot be connected as mysql', 'choose another name or remove it first: exakit source remove moved']" \
+    "$(jone '[d["error"], d["remedy"]]')"
+
+# What a re-point does not change in place, and what needs the credential.
+run connect postgresql --name moved --set tls=require </dev/null
+check "tls is not changed in place: exit 2" "2" "$RC"
+has "...the fix is a reconnect" "exakit source disconnect moved --yes" "$OUT"
+run connect postgresql --name moved --set user=other </dev/null
+check "a new user without its credential: exit 2" "2" "$RC"
+has "...said why" "user of moved cannot change without the credential" "$OUT"
+
+# A new credential with the move: tried on a pending CONNECTION first, the
+# source untouched until it is accepted; the previous one kept aside until the
+# re-point is verified, then dropped.
+N="$(stmts)"
+run_secret "Not-Fresh" connect postgresql --name moved --set host=fresh.example.com --set port=5432 --set database=sales --secret-stdin
+check "a new address with a credential it refuses: exit 1, nothing changed" "1 $URL_BEFORE Old-Pw-1" "$RC $(conn url) $(conn secret)"
+check "...the source's CONNECTION was never touched (the pending one was tried)" "0 0" \
+    "$(dbq "len([s for s in d['statements'][$N:] if 'EXAKIT_SRC_MOVED' in s and (s.startswith('ALTER CONNECTION') or s.startswith('RENAME'))])") $(pending | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+run_secret "Fresh-Pw-2" connect postgresql --name moved --set host=fresh.example.com --set port=5432 --set database=sales --secret-stdin
+check "a new address and its credential: exit 0, credential replaced" "0 True" "$RC $(printf '%s' "$OUT" | grep -c '"credential": "replaced"' | sed 's/^[1-9].*/True/')"
+check "...the CONNECTION holds both" "jdbc:postgresql://fresh.example.com:5432/sales Fresh-Pw-2" "$(conn url | sed 's|?.*||') $(conn secret)"
+check "...the previous CONNECTION was kept aside, then dropped; no pending one left" "false []" \
+    "$(dbq '"EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED" in d["connections"]') $(pending)"
+check "...VS_MOVED kept its name: the new source's tables" '["ITEMS", "ORDERS"]' "$(dbq 'sorted(d["virtual"]["VS_MOVED"]["tables"])')"
+lacks "...neither credential is in the output" "Fresh-Pw-2" "$OUT"
+check "...nor under the kit home" "" "$(grep -rlE 'Fresh-Pw-2|Not-Fresh' "$HOME_K" 2>/dev/null)"
+# Only a credential, nothing else: a reauth through connect, tried first too.
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["fresh.example.com"]["secret"] = "Fresh-Pw-3"; json.dump(d, open(sys.argv[1], "w"))
+PY
+run_secret "Fresh-Pw-3" connect postgresql --name moved --secret-stdin
+check "a credential alone: exit 0, replaced, the address as it was" "0 Fresh-Pw-3 fresh.example.com" \
+    "$RC $(conn secret) $(inputs host)"
+
+# The shell: --json never takes silence for consent; --yes does; a stored
+# credential is never asked for.
+jsonsh /dev/null pg --name moved --set host=new.example.com --set port=5433 --json
+check "exakit connect --json, a re-point without --yes: exit 5, kind declined, nothing changed" \
+    "5 [False, 'declined'] fresh.example.com" "$JRC $(one '[d["ok"], d["kind"]]') $(inputs host)"
+check "...its command is the --yes form" "exakit connect postgresql --name moved --set host=new.example.com --set port=5433 --yes --json" "$(one 'd["command"]')"
+jsonsh /dev/null pg --name moved --set host=new.example.com --set port=5433 --dry-run --json
+check "...--dry-run --json: the plan, exit 0, nothing changed" "0 repoint fresh.example.com" "$JRC $(one 'd["action"]') $(inputs host)"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["new.example.com"]["secret"] = "Fresh-Pw-3"; json.dump(d, open(sys.argv[1], "w"))
+PY
+printf 'not-a-credential' > "$WORK/repoint.stdin"
+jsonsh "$WORK/repoint.stdin" pg --name moved --set host=new.example.com --set port=5433 --yes --json
+check "...with --yes: exit 0, repointed, the stored credential kept (stdin is not read)" "0 ['repointed', 'kept'] Fresh-Pw-3" \
+    "$JRC $(one '[d["action"], d["credential"]]') $(conn secret)"
+jsonsh /dev/null pg --name moved --set host=new.example.com --json
+check "...the same again: exit 0, unchanged" "0 unchanged" "$JRC $(one 'd["action"]')"
+jsonsh /dev/null mysql --name moved --set host=new.example.com --set database=x --set user=u --json
+check "...another connector: exit 3, kind conflict" "3 conflict" "$JRC $(one 'd["kind"]')"
+printf 'Fresh-Pw-4' > "$WORK/repoint.pw"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["new.example.com"]["secret"] = "Fresh-Pw-4"; json.dump(d, open(sys.argv[1], "w"))
+PY
+jsonsh /dev/null pg --name moved --password-file "$WORK/repoint.pw" --json
+check "...a credential by --password-file, no --yes: declined, the --yes form names the file" \
+    "5 exakit connect postgresql --name moved --password-file $WORK/repoint.pw --yes --json" "$JRC $(one 'd["command"]')"
+jsonsh /dev/null pg --name moved --password-file "$WORK/repoint.pw" --yes --json
+check "...with --yes: replaced" "0 replaced Fresh-Pw-4" "$JRC $(one 'd["credential"]') $(conn secret)"
+OUT="$(urlsh cmd_connect pg --name moved --set port=5432 </dev/null)"; RC=$?
+check "exakit connect (no --json, no terminal), a re-point without --yes: exit 5, nothing changed" "5 5433" "$RC $(inputs port)"
+has "...the plan says what changes" "port: 5433 -> 5432" "$OUT"
+has "...and that the credential is kept" "Credential: kept" "$OUT"
+has "...and how to agree" "Nothing was changed. Confirm it with --yes." "$OUT"
+OUT="$(urlsh cmd_connect pg --name moved --set port=5432 --yes </dev/null)"; RC=$?
+check "...with --yes: exit 0, re-pointed" "0 5432" "$RC $(inputs port)"
+has "...said" "Re-pointed moved (port 5433 -> 5432): the credential was kept, and VS_MOVED kept its name" "$OUT"
+OUT="$(urlsh cmd_connect pg --name moved --set port=5432 </dev/null)"; RC=$?
+check "...and again: nothing to change, exit 0" "0" "$RC"
+has "...said" "Nothing to change: moved already reads from" "$OUT"
+
+# An interrupted re-point (a closed lid between the move and the record): the
+# next one puts the CONNECTION back where the record says first.
+python3 - "$STATE" "$HOME_K/sources/moved/journal.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1])); d["connections"]["EXAKIT_SRC_MOVED"]["url"] = "jdbc:postgresql://half.example.com:1/x"
+json.dump(d, open(sys.argv[1], "w"))
+json.dump({"operation": "repoint", "connector": "postgresql", "moved": True}, open(sys.argv[2], "w"))
+PY
+run connect postgresql --name moved --set port=5433 </dev/null
+check "a re-point after an interrupted one: exit 0" "0" "$RC"
+has "...which was put back first" "An earlier re-point of moved was interrupted; putting back what it changed first" "$OUT"
+check "...then moved as asked" "jdbc:postgresql://new.example.com:5433/sales Fresh-Pw-4" "$(conn url | sed 's|?.*||') $(conn secret)"
+
+# A native adapter (MongoDB): no loader, so the new address is tried through a
+# throwaway virtual schema on the moved CONNECTION, dropped after.
+python3 - "$STATE" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+d["sources"]["cluster0.example.net"] = {"tables": ["MOVIES"], "secret": "Mg-Pw-1", "collections": ["sample_mflix.movies"]}
+d["sources"]["cluster1.example.net"] = {"tables": ["THEATERS"], "secret": "Mg-Pw-1", "collections": ["sample_mflix.theaters"]}
+json.dump(d, open(sys.argv[1], "w"))
+PY
+run_secret "Mg-Pw-1" connect mongodb --name mgmove --set "uri=mongodb+srv://cluster0.example.net/?authSource=admin" \
+    --set database=sample_mflix --set collection=movies --set user=reader --secret-stdin
+check "a MongoDB source to move: exit 0" "0" "$RC"
+run connect mongodb --name mgmove --set "uri=mongodb+srv://cluster1.example.net/?authSource=admin" --set collection=theaters </dev/null
+check "...re-pointed to another cluster and collection: exit 0" "0" "$RC"
+check "...its CONNECTION's URI moved, its password kept; VS_MGMOVE's COLLECTION set; the throwaway gone" \
+    "mongodb+srv://cluster1.example.net/?authSource=admin Mg-Pw-1 theaters [\"THEATERS\"] false" \
+    "$(dbq 'd["connections"]["EXAKIT_SRC_MGMOVE"]["url"]') $(dbq 'd["connections"]["EXAKIT_SRC_MGMOVE"]["secret"]') $(dbq 'd["virtual"]["VS_MGMOVE"]["properties"]["COLLECTION"]') $(dbq 'd["virtual"]["VS_MGMOVE"]["tables"]') $(dbq '"EXAKIT_PENDING_VS_MGMOVE" in d["virtual"]')"
+has "...the throwaway was made on the moved CONNECTION" "MONGODB_CONNECTION = 'EXAKIT_SRC_MGMOVE'" \
+    "$(dbq '[s for s in d["statements"] if s.startswith("CREATE VIRTUAL SCHEMA \"EXAKIT_PENDING_VS_MGMOVE\"")][-1]')"
+
+# A document source holds its bucket and region inside its credential: a
+# re-point of one needs the credential again, said before anything happens.
+mkdir -p "$HOME_K/sources/docmove"
+printf '%s\n' '{"schema_version": 1, "id": "docmove", "connector": "s3", "profile": "java-document-files",
+  "inputs": {"bucket": "docs-bucket", "region": "ap-south-1", "mapping": "/no/such/mapping.json", "access_key_id": "AKIAIOSFODNN7EXAMPLE"},
+  "objects": {"connection": "EXAKIT_SRC_DOCMOVE", "schema": "VS_DOCMOVE", "script_schema": "EXAKIT_VS", "script": "ADAPTER_DOCMOVE"}}' \
+    > "$HOME_K/sources/docmove/config.json"
+printf '%s\n' '{"status": "ready"}' > "$HOME_K/sources/docmove/state.json"
+run --json plan s3 --name docmove --set region=eu-west-1
+check "an S3 source's region without the credential: exit 2, kind input (its mapping file is not read again)" "2 input" \
+    "$RC $(jone 'd["kind"]')"
+has "...said why" "region of docmove cannot change without the credential (its CONNECTION holds them inside its credential)" "$OUT"
+run --json plan s3 --name docmove --set region=eu-west-1 --secret-given
+check "...with one to come: the plan, the credential replaced" "0 replaced" \
+    "$RC $(jone 'd["credential"]')"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

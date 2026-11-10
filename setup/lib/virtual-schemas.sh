@@ -1651,9 +1651,13 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
         _exakit_vs_paste "$_cc_source" "$_cc_url" || _exakit_vs_exit $?
         _cc_url=""
     fi
+    # A name that is a connected source is re-pointed in place, or left as it
+    # is: on the line-by-line path, which asks nothing the record holds.
+    _cc_live=""
+    _exakit_vs_source_live "$_cc_name" && _cc_live=1
     # A person at a terminal gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
-    if [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && _exakit_vs_tui_ok; then
+    if [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && [ -z "$_cc_live" ] && _exakit_vs_tui_ok; then
         _exakit_vs_tui "$_cc_source" "$_cc_name" "$_cc_pwfile"
         _exakit_vs_exit $?
     fi
@@ -1665,7 +1669,8 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     # stdin (even with a terminal behind /dev/tty), --yes, --dry-run and --json
     # ask exactly as they always did - as Test-ExakitInteractive has it.
     _cc_ask=""
-    if [ -t 0 ] && [ -n "$_cc_tty" ] && [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ]; then
+    if [ -t 0 ] && [ -n "$_cc_tty" ] && [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ] \
+       && [ -z "$_cc_live" ]; then
         _cc_ask=1
     fi
     if [ -z "$_cc_source" ]; then
@@ -1695,7 +1700,8 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
         [ -n "$_cc_tty" ] || reject "Give the connection a name with --name (lower case, e.g. sales)."
         _cc_name="$(_exakit_vs_prompt "Name for this connection (lower case, e.g. sales)" "" 1 "$_cc_ask" "Name for this connection")"
     fi
-    [ -n "$_cc_tty" ] && _exakit_vs_ask_inputs "$_cc_resolved" "$_cc_ask"
+    # A connected source's inputs are its record's: only what was given changes.
+    [ -n "$_cc_tty" ] && [ -z "$_cc_live" ] && _exakit_vs_ask_inputs "$_cc_resolved" "$_cc_ask"
     # Build the engine's argument list from the newline-separated pairs; bash
     # 3.2 has no arrays worth trusting with this, so the positional
     # parameters carry it.
@@ -1706,26 +1712,53 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done <<EOF
 $EXAKIT_VS_SETS
 EOF
+    # A re-point's plan says whether a credential replaces the stored one.
+    _cc_given=""
+    if [ -n "$_cc_live" ] && { [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ]; }; then _cc_given="--secret-given"; fi
     _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp && exit 1; die "Could not create a temporary file."; }
+    _cc_action=""
     if [ "$_cc_json" = 1 ]; then
         # The plan checks every input before the credential is read; a refusal,
         # or with --dry-run the plan itself, is the answer.
-        exakit_vs_engine --json plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        exakit_vs_engine --json plan "$@" $_cc_given < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _cc_rc=$?
         if [ "$_cc_rc" -ne 0 ] || [ "$_cc_dry" = 1 ]; then cat "$_cc_out"; rm -f "$_cc_out"; _exakit_vs_exit "$_cc_rc"; fi
-        # The connector it resolved to, by the plan's own top-level key.
+        # The connector it resolved to, and what the plan is, by its own top-level keys.
         _cc_resolved="$(sed -n 's/^  "connector": "\([a-z0-9-]*\)",*$/\1/p' "$_cc_out" | head -n 1)"
+        _cc_action="$(sed -n 's/^  "action": "\([a-z]*\)",*$/\1/p' "$_cc_out" | head -n 1)"
+        # Nothing to change: the plan is the answer, and nothing runs.
+        if [ "$_cc_action" = unchanged ]; then cat "$_cc_out"; rm -f "$_cc_out"; exit 0; fi
+        if [ "$_cc_action" = repoint ] && [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ]; then
+            # --json never asks, and asking is how a person agrees: without
+            # --yes nothing changes (exit 5), as source disconnect and remove.
+            _cc_cmd="$(run_python_any -c 'import json, sys; print(json.load(open(sys.argv[1])).get("command") or "")' "$_cc_out" 2>/dev/null)"
+            rm -f "$_cc_out"
+            [ -n "$_cc_cmd" ] || _cc_cmd="exakit connect $_cc_resolved --name $_cc_name"
+            if [ -n "$_cc_pwfile" ]; then _cc_cmd="$_cc_cmd --password-file $(_exakit_vs_word "$_cc_pwfile")"
+            elif [ "$_cc_pwstdin" = 1 ]; then _cc_cmd="$_cc_cmd --password-stdin"; fi
+            _exakit_log_file "DECLINED connect $_cc_name: a re-point, --json without --yes"
+            _exakit_vs_json_failure declined "re-pointing $_cc_name was not confirmed; nothing was changed" \
+                "preview it with --dry-run, then confirm it with --yes" "$_cc_cmd --yes --json"
+            exit 5
+        fi
         rm -f "$_cc_out"
         shift; set -- "$_cc_resolved" "$@"
     else
-        exakit_vs_engine plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        exakit_vs_engine plan "$@" $_cc_given < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _cc_rc=$?
         _exakit_vs_render "$_cc_out"; rm -f "$_cc_out"
         [ "$_cc_rc" -eq 0 ] || _exakit_vs_exit "$_cc_rc"
+        _cc_action="$(printf '%s' "$EXAKIT_VS_RESULT" | sed -n 's/.*"action": "\([a-z]*\)".*/\1/p' | head -n 1)"
+        # Nothing to change: the engine's line said so, and nothing runs.
+        [ "$_cc_action" = unchanged ] && exit 0
         _exakit_vs_show_plan "$EXAKIT_VS_RESULT"
         [ "$_cc_dry" = 1 ] && exit 0
     fi
-    if [ -n "$_cc_tty" ] && ! _exakit_vs_confirm "Connect now?"; then
+    if [ "$_cc_action" = repoint ]; then
+        # Asked at a terminal (no by default); without one only --yes agrees.
+        _exakit_vs_confirm "Re-point $_cc_name now?" \
+            || { info "Nothing was changed. Confirm it with --yes."; exit 5; }
+    elif [ -n "$_cc_tty" ] && ! _exakit_vs_confirm "Connect now?"; then
         # 5, as every command a person did not confirm: 0 would read as "done".
         info "Nothing was changed."
         exit 5
@@ -1733,6 +1766,23 @@ EOF
     _cc_label="$(run_python_any -c 'import json,sys; c=json.load(open(sys.argv[1])); print(next((s.get("label","password") for s in c["inputs"] if s["kind"] in ("secret","secret-file")), ""))' \
         "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
     unset _cc_secret; _cc_secret=""
+    if [ "$_cc_action" = repoint ]; then
+        # The stored credential is kept: none is asked for, and stdin is not
+        # read. Only one given with --password-file or --password-stdin
+        # replaces it, tried first like the new address.
+        _cc_label=""
+        if [ "$_cc_pwstdin" = 1 ]; then
+            _cc_secret="$EXAKIT_VS_STDIN_SECRET"
+        elif [ -n "$_cc_pwfile" ]; then
+            if [ "$_cc_json" = 1 ] && { [ -d "$_cc_pwfile" ] || [ ! -r "$_cc_pwfile" ]; }; then
+                _exakit_vs_refuse 2 "Cannot read $_cc_pwfile" "cannot read $_cc_pwfile" \
+                    "give a file this user can read with --password-file, or pipe the credential in with --password-stdin"
+            fi
+            _cc_secret="$(_exakit_vs_read_secret "credential" "$_cc_pwfile")" || _exakit_vs_secret_failed $?
+            [ -n "$_cc_secret" ] || _exakit_vs_refuse 2 "$_cc_pwfile holds no credential." "$_cc_pwfile holds no credential" \
+                "give a file that holds the credential, or leave --password-file out to keep the stored one"
+        fi
+    fi
     if [ -n "$_cc_label" ]; then
         _cc_what="$(printf '%s' "$_cc_label" | tr 'A-Z' 'a-z')"
         # With --json an unreadable file is the one object; without, the
@@ -1764,6 +1814,24 @@ EOF
     _exakit_vs_exit "$_cc_rc"
 }
 
+# _exakit_vs_source_live <name> — the name is a source the kit connected and
+# has not disconnected: `exakit connect` re-points it in place (or says there
+# is nothing to change), on the line-by-line path. ⇄ twin: Test-ExakitVsSourceLive.
+_exakit_vs_source_live() {
+    case "$1" in ""|[!a-z]*|*[!a-z0-9_]*) return 1 ;; esac
+    [ -f "$EXAKIT_HOME/sources/$1/config.json" ] || return 1
+    ! grep -q '^  "status": "disconnected"' "$EXAKIT_HOME/sources/$1/state.json" 2>/dev/null
+}
+
+# _exakit_vs_word <text> — the text as one shell word: as it is when it needs
+# no quoting, else in single quotes. For a command the --json answer names.
+_exakit_vs_word() {
+    case "$1" in
+        ""|*[!A-Za-z0-9_@%+=:,./-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
 # _exakit_vs_query_hints <connect-result-json> <name> — a first query on one of
 # the source's real tables, quoted as it must be, then how this kind of source
 # names and types what it sends (the connector's tips).
@@ -1787,7 +1855,13 @@ _exakit_vs_show_plan() {
     [ -n "$1" ] || return 0
     printf '%s' "$1" | run_python_any -c 'import json, sys
 p = json.load(sys.stdin)
-print("  Plan for %s (%s, %s, %s)" % (p["name"], p["connector"], p["tier"], p["status"]))
+repoint = p.get("action") == "repoint"
+print("  %s %s (%s, %s, %s)" % ("Re-point" if repoint else "Plan for", p["name"], p["connector"], p["tier"], p["status"]))
+for c in p.get("changes") or []:
+    print("    %s: %s -> %s" % (c["input"], "(none)" if c["from"] is None else c["from"], "(none)" if c["to"] is None else c["to"]))
+if repoint:
+    print("    Credential: " + ("kept - the one in the database stays, nothing is asked" if p["credential"] == "kept"
+                               else "replaced by the one given, after it is tried"))
 for d in p["downloads"]:
     print("    %s %s %s (%.1f MB%s)" % ("reuse" if d["cached"] else "download", d["role"], d["version"], d["bytes"] / 1e6, ", " + d["license"]))
 for s in p["steps"]:

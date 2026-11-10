@@ -64,6 +64,9 @@ database and inspect it afterwards:
                 script_fail scripts (SCHEMA.NAME) whose CREATE OR REPLACE fails
     vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
                 adapter that echoes what the CONNECTION holds)
+    alter_clears true -> ALTER CONNECTION ... TO '<address>' drops the user and
+                password the connection held; altered lists every ALTERed one
+    set_fail    a message: ALTER VIRTUAL SCHEMA ... SET fails with it
     connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
                 its query => field printing the statement back, secret and
                 all, across as many lines as the statement has
@@ -417,7 +420,14 @@ class Fake(object):
     def _query(self, doc, sql):
         m = re.search(r"FROM EXA_DBA_CONNECTIONS WHERE CONNECTION_NAME = '([^']+)'", sql)
         if m:
-            return [{"CONNECTION_NAME": m.group(1)}] if m.group(1) in doc["connections"] else []
+            con = doc["connections"].get(m.group(1))
+            if con is None:
+                return []
+            row = {"CONNECTION_NAME": m.group(1)}
+            if sql.startswith("SELECT CONNECTION_STRING, USER_NAME "):
+                # What the system table shows of a connection: never its password.
+                row.update(CONNECTION_STRING=con["url"].replace("''", "'"), USER_NAME=con["user"] or None)
+            return [row]
         m = re.search(r"FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '([^']+)'", sql)
         if m:
             # columns: {table: [[name, type, nullable], ...]} at the top level;
@@ -556,6 +566,39 @@ class Fake(object):
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
             doc["connections"][m.group(2)] = {"url": m.group(3), "user": (m.group(4) or "").replace("''", "'"),
                                               "secret": (m.group(5) or "").replace("''", "'")}
+            return
+        m = re.match(r"ALTER CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'$", sql)
+        if m:
+            # The address alone. alter_clears: this database's ALTER drops the
+            # user and password a connection held (the semantics the kit
+            # checks on a throwaway connection before it relies on keeping them).
+            con = doc["connections"].get(m.group(1))
+            if con is None:
+                raise Exception("connection %s not found" % m.group(1))
+            con["url"] = m.group(2)
+            if doc.get("alter_clears"):
+                con["user"], con["secret"] = "", ""
+            doc.setdefault("altered", []).append(m.group(1))
+            return
+        m = re.match(r'RENAME CONNECTION "([^"]+)" TO "([^"]+)"$', sql)
+        if m:
+            if m.group(1) not in doc["connections"]:
+                raise Exception("connection %s not found" % m.group(1))
+            if m.group(2) in doc["connections"]:
+                raise Exception("connection %s already exists" % m.group(2))
+            doc["connections"][m.group(2)] = doc["connections"].pop(m.group(1))
+            return
+        m = re.match(r"ALTER VIRTUAL SCHEMA \"([^\"]+)\" SET ((?:\w+ = '(?:[^']|'')*' ?)+)$", sql)
+        if m:
+            # The adapter reads the source's metadata again with the new
+            # properties (set_fail: it fails, as an adapter that cannot).
+            vs = doc["virtual"][m.group(1)]
+            if doc.get("set_fail"):
+                raise Exception(doc["set_fail"])
+            src = _source_for(doc, vs["connection"])
+            vs.setdefault("properties", {}).update(re.findall(r"(\w+) = '((?:[^']|'')*)'", m.group(2)))
+            if "tables" in src:
+                vs["tables"] = list(src["tables"])
             return
         m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING .* CONNECTION_NAME = \'([^\']+)\' MAPPING = \'([^\']+)\'', sql)
         if m:
