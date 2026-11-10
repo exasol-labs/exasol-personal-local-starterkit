@@ -58,8 +58,8 @@ no skill here, or a skill misses one of its connector's inputs.
 | [`exasol-vs-azure-blob`](exasol-vs-azure-blob/SKILL.md) | Querying the same in an Azure Blob Storage container — a read-and-list container SAS. |
 | [`exasol-vs-databricks`](exasol-vs-databricks/SKILL.md) | Connecting a Unity Catalog schema through a SQL warehouse — a PAT, CAN USE, IP access lists. |
 | [`exasol-vs-lakehouse`](exasol-vs-lakehouse/SKILL.md) | Reading Iceberg tables of an AWS Glue database from S3 — the Glue and S3 IAM policy. |
-| [`exasol-vs-iceberg-rest`](exasol-vs-iceberg-rest/SKILL.md) | Reading Iceberg tables behind an Iceberg REST catalog (Beta) — a catalog token or storage keys. |
-| [`exasol-vs-unity`](exasol-vs-unity/SKILL.md) | Reading a Unity Catalog schema from storage without a warehouse (Beta) — External Data Access. |
+| [`exasol-vs-iceberg-rest`](exasol-vs-iceberg-rest/SKILL.md) | Reading Iceberg tables behind an Iceberg REST catalog — a catalog token or storage keys. |
+| [`exasol-vs-unity`](exasol-vs-unity/SKILL.md) | Reading a Unity Catalog schema from storage without a warehouse — External Data Access. |
 | [`exasol-vs-mongodb`](exasol-vs-mongodb/SKILL.md) | Connecting one MongoDB collection (Atlas or self-hosted) — the access list, child tables. |
 
 **The wider Exasol ecosystem** — installed with the kit; it catalogs tools that are *not* part of it
