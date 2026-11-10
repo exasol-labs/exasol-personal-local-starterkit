@@ -14,7 +14,8 @@ A document-files source (profile B) also has a mapping staged in the kit's
 bucket folder under mappings/<name>/, and shares its connector's import script
 (EXAKIT_VS.<import_script>, a name the adapter fixes) with the other sources of
 that connector; the last of them out drops it.
-The EXAKIT_VS schema also holds the DNS probe, and is dropped with the last source.
+The EXAKIT_VS schema, made before the first script goes into it, also holds the
+DNS probe, and is dropped with the last source.
 """
 
 import hashlib
@@ -404,11 +405,25 @@ class Engine(object):
         return bool(rows)
 
     # --- prerequisites ---------------------------------------------------------------
+    def ensure_script_schema(self):
+        """EXAKIT_VS, the schema every script the kit creates goes into, made
+        when it is missing: on a fresh database, or after the last source took
+        it away. Not the Java probes' alone - a MongoDB source asks neither
+        (no host, a Rust profile). It is the kit's, not one source's, so it is
+        never journaled: drop_kit_schema_if_unused takes it with the last
+        source, after a failed first connect too."""
+        if not self.exists("schema", "EXAKIT_VS"):
+            self.db().execute("CREATE SCHEMA EXAKIT_VS")
+
+    def create_script(self, statement):
+        """An adapter or companion script, never before its schema."""
+        self.ensure_script_schema()
+        self.db().execute(statement)
+
     def ensure_probe(self):
         """EXAKIT_VS and its Java DNS probe; tells a missing Java container apart."""
+        self.ensure_script_schema()
         db = self.db()
-        if not self.exists("schema", "EXAKIT_VS"):
-            db.execute("CREATE SCHEMA EXAKIT_VS")
         try:
             db.execute(
                 "CREATE OR REPLACE JAVA SCALAR SCRIPT EXAKIT_VS.%s(h VARCHAR(253), p DECIMAL(5,0)) "
@@ -718,6 +733,7 @@ class Engine(object):
         if connector.get("tls_class"):
             # Staged for every source of this connector, so the loader's
             # settings.cfg never changes with which source uses a CA.
+            self.ensure_script_schema()     # the helper is built by a script in it
             try:
                 helper = tlshelper.jar(self.db(), self.defs.root, self.cache.root)
             except tlshelper.HelperError as error:
@@ -735,6 +751,7 @@ class Engine(object):
         if etl and etl.get("trust_store") == "container":
             # The driver trusts only the JVM's default store, which the loader
             # lacks; the kit's main class points it at the container's own.
+            self.ensure_script_schema()     # the helper is built by a script in it
             try:
                 loader_helper = tlshelper.jar(self.db(), self.defs.root, self.cache.root, "loader")
             except tlshelper.HelperError as error:
@@ -1083,14 +1100,14 @@ class Engine(object):
                 if not reconnect:
                     shared_before = connector.get("shared_adapter") and \
                         self.exists("script", names["script_schema"], names["script"])
-                    self.db().execute(self.adapter_sql(names, jars, profile))
+                    self.create_script(self.adapter_sql(names, jars, profile))
                     if not shared_before:
                         made("script")
                     for spec in self.companions(connector, profile):
                         if not self.exists("script", names["script_schema"], spec["name"]):
                             created.setdefault("companions", []).append(spec["name"])
                             self.store.save_journal(name, journal)
-                        self.db().execute(self.companion_sql(spec, names, jars))
+                        self.create_script(self.companion_sql(spec, names, jars))
                     self.db().execute(self.vs_sql(connector, names, values, {"mapping_path": mapping_path}))
                     made("schema")
                 self.warn_key_readers(connector, name)
@@ -1624,9 +1641,9 @@ class Engine(object):
             self.await_staged(jars, sorted(made), profile)
             names = self.store.config(stale[0])["objects"]
             if connector.get("shared_adapter"):
-                self.db().execute(self.adapter_sql(names, jars, profile))
+                self.create_script(self.adapter_sql(names, jars, profile))
             for spec in self.companions(connector, profile):
-                self.db().execute(self.companion_sql(spec, names, jars))
+                self.create_script(self.companion_sql(spec, names, jars))
         except (Failure, sql.DbError, artifacts.ArtifactError, planner.PlanError, OSError) as error:
             give_up(attempts)
             restore_cfg()
@@ -1640,7 +1657,7 @@ class Engine(object):
             name = attempt["name"]
             if not connector.get("shared_adapter"):
                 try:
-                    self.db().execute(self.adapter_sql(self.store.config(name)["objects"], attempt["jars"], profile))
+                    self.create_script(self.adapter_sql(self.store.config(name)["objects"], attempt["jars"], profile))
                 except (Failure, sql.DbError) as error:
                     give_up([attempt])
                     self.emit("WARN", "Could not move %s to %s adapter %s (%s); it keeps the adapter it had - retry "
