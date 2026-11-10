@@ -240,7 +240,7 @@ class ClaudeDesktopAdapter(ClientAdapter):
         if server_definition.env:
             entry["env"] = dict(server_definition.env)
         mcp_servers[server_definition.name] = entry
-        content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
@@ -256,7 +256,7 @@ class ClaudeDesktopAdapter(ClientAdapter):
             if not mcp_servers:
                 document.pop("mcpServers", None)
         remove_file = not document
-        content = None if remove_file else json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = None if remove_file else json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,

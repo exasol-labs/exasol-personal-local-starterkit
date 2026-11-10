@@ -115,6 +115,12 @@ exakit_component_ownership() {
         fi
     fi
     case "$_eco_owner" in kit|user|unknown) printf '%s' "$_eco_owner"; return 0 ;; esac
+    # NO RECEIPT AT ALL: an install made before receipts existed (every kit up
+    # to 0.2.4). Answering "unknown" here made `exakit update` skip the launcher,
+    # the database and exapump of every existing install and say "current", and
+    # uninstall keep their database. The kit's own manifest says what it
+    # installed - see _exakit_legacy_kit_owned - so that answers instead.
+    if [ -z "$_eco_owner" ] && _exakit_legacy_kit_owned "$1"; then printf kit; return 0; fi
     # Legacy package environments under the private kit home were created by
     # the kit. This never applies to a shared binary or database directory.
     case "$1" in
@@ -126,6 +132,35 @@ exakit_component_ownership() {
             done ;;
     esac
     printf unknown
+}
+
+# _exakit_legacy_kit_owned <id> - for a component with no ownership receipt at
+# all: did the kit install it? Read only from what the kit's own manifest
+# recorded when it installed it, never from PATH. A launcher the kit kept from
+# PATH was recorded at that path, not the kit's, so it is never claimed:
+#   personal  runtime.launcher is the kit's own launcher path, and it is there
+#   exapump   components.exapump.path is the kit's own exapump path, and it is there
+#   database  a Personal runtime the kit's own launcher deployed in the
+#             deployment folder the kit recorded
+#   mcp       the kit recorded the MCP server it set up
+# Twin of Test-ExakitLegacyKitOwned in exakit-common.ps1.
+_exakit_legacy_kit_owned() {
+    case "$1" in
+        personal|launcher|exasol)
+            _elk="$(manifest_get runtime.launcher 2>/dev/null || true)"
+            [ -n "$_elk" ] && [ "$_elk" = "${EXAKIT_BIN_DIR:-}/exasol" ] && [ -x "$_elk" ] ;;
+        exapump)
+            _elk="$(manifest_get components.exapump.path 2>/dev/null || true)"
+            [ -n "$_elk" ] && [ "$_elk" = "${EXAKIT_EXAPUMP_BIN:-${EXAKIT_BIN_DIR:-}/exapump}" ] && [ -e "$_elk" ] ;;
+        database|runtime)
+            [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
+            _exakit_legacy_kit_owned personal || return 1
+            _elk="$(manifest_get runtime.deployment_dir 2>/dev/null || true)"
+            [ -n "$_elk" ] && { [ -z "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] || [ "$_elk" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; } ;;
+        mcp)
+            [ -n "$(manifest_get components.mcp_server.version 2>/dev/null || true)$(manifest_get components.mcp_server.backend 2>/dev/null || true)" ] ;;
+        *) return 1 ;;
+    esac
 }
 
 exakit_record_ownership() {
@@ -151,7 +186,12 @@ exakit_reuse_ownership() {
     # an untracked/user installation into a kit installation.
     _ero_existing="$(exakit_component_ownership "$1")"
     _ero_receipt="$(manifest_get "$(exakit_ownership_key "$1").ownership_path" 2>/dev/null || true)"
-    if [ "$_ero_existing" != kit ] || { [ -n "${2:-}" ] && [ "$_ero_receipt" != "$2" ]; }; then
+    if [ "$_ero_existing" = kit ] && [ -z "$(manifest_get "$(exakit_ownership_key "$1").ownership" 2>/dev/null || true)" ]; then
+        # The kit's own install from before receipts (_exakit_legacy_kit_owned):
+        # write the receipt it never had. Branding it "user" here made every
+        # later update, repair and uninstall leave it alone for good.
+        exakit_record_ownership "$1" kit "${2:-}"
+    elif [ "$_ero_existing" != kit ] || { [ -n "${2:-}" ] && [ "$_ero_receipt" != "$2" ]; }; then
         exakit_record_ownership "$1" user "${2:-}"
     fi
 }
@@ -1438,8 +1478,61 @@ confirm_env() {
     case "$_ce_val" in
         1|y|Y|yes|YES|Yes) return 0 ;;
         0|n|N|no|NO|No)    return 1 ;;
+        # AN ANSWER THAT IS NOT YES OR NO IS BAD INPUT, NOT A QUESTION (audit
+        # AGK-10): `EXAKIT_REUSE_DB=maybe` used to fall through to the prompt,
+        # which waits on /dev/tty when an agent runs with a controlling terminal.
+        ?*) reject "$_ce_var must be 1 or 0 (yes or no), not '$_ce_val'." ;;
         *) confirm "$_ce_question" "$_ce_default" ;;
     esac
+}
+
+# exakit_validate_env_answers — every answer the installer reads from the
+# environment, checked BEFORE anything is installed (audit AGK-10). A typo used
+# to be echoed as "(yours)" by the dry run and surface minutes later, or be
+# read silently as the default. Prints one line per bad answer to stderr and
+# returns 2 when there is any. Read-only: safe in a dry run.
+exakit_validate_env_answers() {
+    _eva_bad=0
+    _eva_say() { printf '  %s\n' "$1" >&2; _eva_bad=1; }
+    for _eva_var in EXAKIT_REUSE_DB EXAKIT_REPLACE_DB EXAKIT_PODMAN_SELFHEAL EXAKIT_CONFIRM_RUNTIME_UPDATE \
+                    EXAKIT_AUTO_ROLLBACK EXAKIT_SKIP_MCP EXAKIT_LOAD_SAMPLE EXAKIT_WSL_CHECKED; do
+        eval "_eva_val=\${$_eva_var:-}"
+        case "$_eva_val" in
+            ''|1|0|y|Y|n|N|yes|no|YES|NO|Yes|No) ;;
+            *) _eva_say "$_eva_var must be 1 or 0, not '$_eva_val'" ;;
+        esac
+    done
+    case "${EXAKIT_INSTALL_PODMAN:-}" in ''|0|1) ;; *) _eva_say "EXAKIT_INSTALL_PODMAN must be 0 or 1, not '$EXAKIT_INSTALL_PODMAN'" ;; esac
+    case "${EXAKIT_ON_EXISTING:-}" in ''|skip|replace|append) ;; *) _eva_say "EXAKIT_ON_EXISTING must be skip, replace or append, not '$EXAKIT_ON_EXISTING'" ;; esac
+    case "${EXAKIT_CONTAINER_ENGINE:-}" in ''|docker|podman) ;; *) _eva_say "EXAKIT_CONTAINER_ENGINE must be docker or podman, not '$EXAKIT_CONTAINER_ENGINE'" ;; esac
+    if [ -n "${EXAKIT_MCP_CLIENTS:-}" ]; then
+        case "$(printf '%s' "$EXAKIT_MCP_CLIENTS" | tr 'A-Z' 'a-z')" in
+            all|none|skip) ;;
+            *) exakit_parse_mcp_client_selection "$EXAKIT_MCP_CLIENTS" >/dev/null 2>&1 || \
+                   _eva_say "EXAKIT_MCP_CLIENTS names a client the kit does not know: '$EXAKIT_MCP_CLIENTS' (known: claude, claude_desktop, claude_code, codex, cursor, copilot, gemini, opencode, continue, all, none)" ;;
+        esac
+    fi
+    if [ -n "${EXAKIT_DATASETS:-}" ] && command -v exakit_bundled_datasets >/dev/null 2>&1; then
+        _eva_known=" $(exakit_bundled_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
+        if [ "$_eva_known" != "  " ]; then
+            for _eva_id in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
+                # `external` is the data menu's last row (exakit connect), a valid
+                # answer that loads nothing - not a dataset.
+                case "$_eva_id" in none|all|external) continue ;; esac
+                case "$_eva_known" in *" $_eva_id "*) ;; *) _eva_say "EXAKIT_DATASETS names an unknown dataset '$_eva_id' (known:$(printf '%s' "$_eva_known" | sed 's/ *$//'))" ;; esac
+            done
+        fi
+    fi
+    if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
+        _eva_root="$(exakit_repo_root 2>/dev/null || true)"
+        if [ -n "$_eva_root" ] && [ -f "$_eva_root/marketplace/metadata.py" ] && exakit_can_run_python 2>/dev/null; then
+            _eva_out="$(run_python_any "$_eva_root/marketplace/metadata.py" "$_eva_root" answer "$EXAKIT_MARKETPLACE_ADDONS" 2>&1)" || \
+                _eva_say "$_eva_out"
+        fi
+    fi
+    [ "$_eva_bad" = 0 ] && return 0
+    printf '  Nothing was installed. Fix the answer and re-run.\n' >&2
+    return 2
 }
 
 _exakit_prompt_tty() {
@@ -5981,19 +6074,25 @@ exakit_print_ready_line() {
 # command; nothing is required - without it the AI steps skip and say so.
 # ⇄ twin: Write-ExakitModelSetupHint in exakit-common.ps1.
 exakit_model_setup_hint() {
+    # [installer|marketplace]. The installer shows it only to a Data Scientist
+    # (the persona whose notebooks use a model); `marketplace` is the caller
+    # that has just installed the notebook add-on, for anyone.
     [ -z "${EXAKIT_MODEL_ID:-}" ] || return 0
     exakit_marketplace_addon_installed notebook 2>/dev/null || return 0
+    if [ "${1:-installer}" = installer ]; then
+        case ",$(manifest_get persona.id 2>/dev/null || true)," in
+            *,data-scientist,*) ;;
+            *) return 0 ;;
+        esac
+    fi
     printf '\n'
-    ui_panel_begin "Your AI model and Langfuse (optional, for the notebooks)"
-    ui_panel_line "Set once, here in this terminal, then: exakit notebook"
+    ui_panel_begin "Optional: your AI model for the notebooks"
+    ui_panel_line "Run these here, then: exakit notebook"
     ui_panel_line '  export EXAKIT_MODEL_ID="claude-opus-5-5"'
     ui_panel_line '  export EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"'
     ui_panel_line "  read -rs EXAKIT_PROVIDER_API_KEY; export EXAKIT_PROVIDER_API_KEY"
-    ui_panel_line "    (type the key, Enter: hidden, and never in the shell history)"
-    ui_panel_line '  export LANGFUSE_BASE_URL="https://cloud.langfuse.com"'
-    ui_panel_line "  LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY: the same way as the API key"
-    ui_panel_line "Or in a notebook: nb.model_setup() shows what is set and how to set it"
-    ui_panel_line "Nothing set: the AI steps skip and say so. Everything else runs."
+    ui_panel_line "Skip it and the notebooks still run; only the AI steps are skipped."
+    ui_panel_line "More, Langfuse included: nb.model_setup() in a notebook"
     ui_panel_end
 }
 
@@ -8007,6 +8106,12 @@ elif updated:
     status, remedy = "updated", None
 else:
     status, remedy = "current", None
+# A component behind its advertised version that was KEPT (not the kit's) is
+# not "current": the top-level hint says so, naming them.
+kept = [e for e in skipped if e.get("remedy_hint") and e.get("from") and e.get("to") and e["from"] != e["to"]]
+if kept and not hint:
+    hint = ("kept as they are, behind the advertised version: %s - installed outside the kit, so their owner updates them"
+            % ", ".join("%s %s -> %s" % (e["component"], e["from"], e["to"]) for e in kept))
 print(json.dumps({
     "ok": not failed,
     "status": status,
@@ -8099,7 +8204,10 @@ _exakit_update_run() {
         # is: an update it would apply is a change to somebody else's install.
         if [ -n "$_cur" ] && [ "$_cur" != "not installed" ] && ! exakit_component_is_managed "$_upd_actual"; then
             exakit_preserve_component "$_upd_actual"
-            _exakit_update_note "$_upd_actual" skipped "$_cur" "$_avail"
+            # The row says WHY, so an agent can tell "kept: not the kit's" from
+            # "no build for this machine" (which carries no hint).
+            _exakit_update_note "$_upd_actual" skipped "$_cur" "$_avail" "" "" \
+                "kept as it is: installed outside the kit ($(exakit_component_ownership "$_upd_actual")-owned), so its owner updates it"
             continue
         fi
         # No build for this machine: a routine update stays quiet about it (there is

@@ -853,6 +853,10 @@ personal_install_launcher() {
     EXAKIT_ACTIVE_LABEL="Installing launcher to $(ui_tilde "$EXAKIT_PERSONAL_BIN")"
     info "Installing launcher to $(ui_tilde "$EXAKIT_PERSONAL_BIN")"
     mkdir -p "$EXAKIT_BIN_DIR"
+    # Only now, with the new binary downloaded and verified, is the old one
+    # removed: a fresh file rather than one rewritten in place, which macOS's
+    # code-signature cache would refuse to run.
+    rm -f "$EXAKIT_PERSONAL_BIN"
     install -m 755 "$_binary" "$EXAKIT_PERSONAL_BIN" \
         || die "Could not install the Exasol launcher to $EXAKIT_PERSONAL_BIN (is it writable? is the disk full?)."
     push_rollback "rm -f \"$EXAKIT_PERSONAL_BIN\""
@@ -3782,7 +3786,9 @@ personal_update() {
                 EXAKIT_PERSONAL_VERSION="$_latest"
                 EXAKIT_FORCE_COMPONENT_INSTALL=1
                 export EXAKIT_PERSONAL_VERSION EXAKIT_FORCE_COMPONENT_INSTALL
-                rm -f "$EXAKIT_PERSONAL_BIN"
+                # The working launcher stays until the new one is downloaded and
+                # verified: personal_install_launcher replaces it only then
+                # (audit LCY-06; deleting it first left none after a failed download).
                 personal_install_launcher
                 manifest_set runtime.launcher "$(personal_cli)"
                 manifest_set runtime.launcher_version "$EXAKIT_PERSONAL_VERSION"
@@ -3842,7 +3848,7 @@ personal_update() {
     EXAKIT_FORCE_COMPONENT_INSTALL=1
     export EXAKIT_PERSONAL_VERSION EXAKIT_FORCE_COMPONENT_INSTALL
     _pu_pw_before="$(read_credential personal_sys_password 2>/dev/null || true)"
-    rm -f "$EXAKIT_PERSONAL_BIN"
+    # The working launcher stays until the new one is verified (audit LCY-06).
     personal_install_launcher
     personal_record_manifest
     manifest_set desired.runtime.personal "$EXAKIT_PERSONAL_VERSION"

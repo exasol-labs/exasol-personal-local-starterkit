@@ -110,6 +110,44 @@ def cells_digest(path: Path) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _place(origin: Path, target: Path, key: str, before: dict[str, str], seen: dict[str, str],
+           added: list[str], problems: list[str]) -> None:
+    """Copy one kit file to ``target`` unless it is the user's: a file of their own with the kit's name, one they
+    edited, or one the kit copied before and they deleted. One the kit copied and nobody touched takes the kit's newer
+    version. Records the digest in ``seen`` and what happened in ``added`` / ``problems``."""
+    if target.exists() or target.is_symlink():
+        if key not in before or target.is_symlink():
+            seen.setdefault(key, "")                     # a file of the user's own with the kit's name: theirs
+            return
+        latest, there = cells_digest(origin), cells_digest(target)
+        if not before[key]:                              # an older kit's record: adopted only when it is the kit's now
+            seen[key] = latest if there == latest else ""
+            return
+        if there != before[key] or latest == there:
+            return                                       # edited by the user (theirs), or already the kit's latest
+        try:
+            shutil.copyfile(origin, target)
+        except OSError as err:
+            problems.append(f"{key}: {err.strerror or err}")
+            return
+        seen[key] = latest
+        added.append(f"{key} (updated)")
+        return
+    if key in before:
+        return                                           # copied once, then deleted by the user: it stays deleted
+    if target.parent.exists() and not target.parent.is_dir():
+        problems.append(f"{key}: {target.parent} is a file where its folder should be")
+        return
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(origin, target)
+    except OSError as err:
+        problems.append(f"{key}: {err.strerror or err}")
+        return
+    added.append(key)
+    seen[key] = cells_digest(target)
+
+
 def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None = None) -> tuple[list[str], list[str]]:
     """The picked personas' notebooks for a front end into their folders: (the ones added as persona/file, the
     problems). A persona added later brings its folder on the next copy. One already there is the user's; one the kit
@@ -121,43 +159,21 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
     added, problems, seen = [], [], dict(before)
     have = {entry["persona"] for entry in doc["notebooks"]}
     fresh = not any(key.split("/", 1)[0] in have for key in before)     # no persona's notebooks copied here yet
-    for folder, entry in _placed(doc, personas, fresh):
+    placed = _placed(doc, personas, fresh)
+    for folder, entry in placed:
         name = entry.get(front)
         if not name or not (source / folder / name).is_file():
             continue                                     # a catalog entry this kit copy does not carry yet
-        key = f"{folder}/{name}"
-        target = base / folder / name
-        if target.exists() or target.is_symlink():
-            if key not in before or target.is_symlink():
-                seen.setdefault(key, "")                 # a file of the user's own with the kit's name: theirs
-                continue
-            fresh, there = cells_digest(source / folder / name), cells_digest(target)
-            if not before[key]:                          # an older kit's record: adopted only when it is the kit's now
-                seen[key] = fresh if there == fresh else ""
-                continue
-            if there != before[key] or fresh == there:
-                continue                                 # edited by the user (theirs), or already the kit's latest
-            try:
-                shutil.copyfile(source / folder / name, target)
-            except OSError as err:
-                problems.append(f"{key}: {err.strerror or err}")
-                continue
-            seen[key] = fresh
-            added.append(f"{key} (updated)")
+        _place(source / folder / name, base / folder / name, f"{folder}/{name}", before, seen, added, problems)
+    # Guides that go beside a persona's notebooks (MODEL-PROVIDERS.md beside the Data Scientist's), under the same
+    # rules as a notebook: an edited copy is the user's, a deleted one is not brought back.
+    folders = {folder for folder, _ in placed}
+    for guide in doc.get("guides", []):
+        origin = kit / guide["source"]
+        if front not in guide.get("fronts", ("jupyter",)) or not origin.is_file():
             continue
-        if key in before:
-            continue                                     # copied once, then deleted by the user: it stays deleted
-        if target.parent.exists() and not target.parent.is_dir():
-            problems.append(f"{key}: {target.parent} is a file where its folder should be")
-            continue
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source / folder / name, target)
-        except OSError as err:
-            problems.append(f"{key}: {err.strerror or err}")
-            continue
-        added.append(key)
-        seen[key] = cells_digest(target)
+        for folder in sorted(folders & set(guide.get("personas", ()))):
+            _place(origin, base / folder / guide["file"], f"{folder}/{guide['file']}", before, seen, added, problems)
     # The full official example library is prebuilt into this kit copy.
     # It is optional only for older kit copies; installation never fetches it.
     library = kit / "notebook" / "examples" / front
@@ -227,7 +243,7 @@ def readme_text(kit: Path, doc: dict, personas: set[str] | None = None, fresh: b
               "  `~/.exasol-starter-kit/exakit.env`. Or fill in the *Your AI model and Langfuse* cell in a notebook.",
               "  `nb.model_setup()` in a cell says what is set and prints these lines for this machine.",
               "- Langfuse traces: `export LANGFUSE_BASE_URL=...` and the two keys, `LANGFUSE_PUBLIC_KEY` and",
-              "  `LANGFUSE_SECRET_KEY`, the same way. `MODEL-PROVIDERS.md` here has both recipes, PowerShell too.",
+              "  `LANGFUSE_SECRET_KEY`, the same way. `data-scientist/MODEL-PROVIDERS.md` has both recipes, PowerShell too.",
               "- JupyterLab reads these only when it starts. Already running? Set them in a terminal, then run",
               "  `exakit notebook stop && exakit notebook` there (a kernel restart is not enough).",
               "- Marimo: `exakit notebook marimo`.",

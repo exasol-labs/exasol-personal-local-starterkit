@@ -173,7 +173,7 @@ class VSCodeCopilotAdapter(ClientAdapter):
         servers = document.setdefault("servers", {})
         entry = self._entry_for(server_definition)
         servers[server_definition.name] = entry
-        content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
@@ -217,7 +217,7 @@ class VSCodeCopilotAdapter(ClientAdapter):
             # the same run, so a user with other servers there had nothing to
             # recover from.
             document["servers"] = servers
-        content = json.dumps(document, indent=2, sort_keys=True) + "\n"
+        content = json.dumps(document, indent=2, ensure_ascii=False) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,

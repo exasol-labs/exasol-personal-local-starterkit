@@ -86,7 +86,8 @@ starts `exakit notebook` (keys through a hidden `read -rs`, or `Read-Host -AsSec
 model's id and address in `~/.exasol-starter-kit/exakit.env`, or fill in the *Your AI model and Langfuse* cell in
 Explore or Ask. `nb.model_setup()` says what is set and prints the lines for the machine it runs on;
 `nb.model_settings()` reports them without secrets. The recipes, both shells, and the providers in
-detail: [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md).
+detail: [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md), copied beside the Data Scientist notebooks
+(`starter-kit-notebooks/data-scientist/MODEL-PROVIDERS.md`).
 
 ## The training handoff
 

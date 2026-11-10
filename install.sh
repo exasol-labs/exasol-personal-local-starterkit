@@ -384,6 +384,23 @@ main() {
             || _fetch_kit "https://github.com/$EXAKIT_REPO/archive/refs/tags/$EXAKIT_REF.tar.gz" \
             || fail "Could not download the kit from github.com/$EXAKIT_REPO ($EXAKIT_REF). Check your internet connection or proxy (set HTTPS_PROXY if needed); if the repository is private, set GITHUB_TOKEN or use EXAKIT_LOCAL_KIT."
 
+        # THE KIT ITSELF, VERIFIED WHEN A DIGEST IS GIVEN (audit SEC-01). Every
+        # component the kit installs is checked against a digest in this copy,
+        # so the copy is the trust anchor: EXAKIT_KIT_SHA256 pins it. Checked
+        # before anything is unpacked; a mismatch changes nothing.
+        if [ -n "${EXAKIT_KIT_SHA256:-}" ]; then
+            if command -v sha256sum >/dev/null 2>&1; then
+                _kit_sum="$(sha256sum "$tmp_tar" | awk '{print $1}')"
+            else
+                _kit_sum="$(shasum -a 256 "$tmp_tar" | awk '{print $1}')"
+            fi
+            if [ "$_kit_sum" != "$(printf '%s' "$EXAKIT_KIT_SHA256" | tr 'A-F' 'a-f')" ]; then
+                rm -f "$tmp_tar"
+                fail "The downloaded kit ($EXAKIT_REPO@$EXAKIT_REF) does not match EXAKIT_KIT_SHA256 (got $_kit_sum). Nothing was installed."
+            fi
+            say "Kit archive verified against EXAKIT_KIT_SHA256"
+        fi
+
         # Replace previous kit copy so re-runs always use the fetched ref.
         find "$kit_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
         tar -xzf "$tmp_tar" -C "$kit_dir" --strip-components 1 \
@@ -436,6 +453,18 @@ main() {
         set +f; IFS="$_persona_ifs"
         [ -n "$_personas" ] || fail "EXAKIT_PERSONA names no persona (available: ${_known:-none}). Nothing was installed."
         say "Persona: $_personas - it answers every choice you did not set yourself."
+    fi
+
+    # EVERY ANSWER CHECKED BEFORE ANYTHING IS INSTALLED (audit AGK-10), dry run
+    # or not: a typo used to be shown as "(yours)" by the plan and surface
+    # minutes later, or be read silently as the default. Read-only.
+    if command -v bash >/dev/null 2>&1 && [ -f "$kit_dir/setup/lib/common.sh" ]; then
+        if ! EXAKIT_READONLY_QUERY=1 bash -c '. "$1/setup/lib/ui.sh" >/dev/null 2>&1; . "$1/setup/lib/common.sh" >/dev/null 2>&1
+                [ -f "$1/setup/lib/exapump.sh" ] && . "$1/setup/lib/exapump.sh" >/dev/null 2>&1
+                exakit_validate_env_answers' _ "$kit_dir" </dev/null; then
+            say "Some answers in the environment are not ones the kit can use (listed above)."
+            exit 2
+        fi
     fi
 
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then

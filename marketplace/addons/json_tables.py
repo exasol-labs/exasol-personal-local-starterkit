@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
 import kit_telemetry
-from runtime import AddonFailure, KitContext, cmd_quote, venv_python, host_machine, open_url, probe
+from runtime import cmd_file_bytes, AddonFailure, KitContext, cmd_quote, venv_python, host_machine, open_url, probe
 
 ID = "json-tables"
 RECEIPT = "components.json_tables"
@@ -244,9 +244,9 @@ def _write_launchers(ctx: KitContext) -> None:
     # unless the user set the variable (kit_telemetry.py).
     variable, value = kit_telemetry.VARIABLE, kit_telemetry.VALUE
     if os.name == "nt":
-        launcher.write_text("@echo off\r\nset " + cmd_quote(f"PATH={shim.parent};").rstrip('"') + '%PATH%"\r\n'
-                            + f'if not defined {variable} set "{variable}={value}"\r\n'
-                            + f"{cmd_quote(cli)} %*\r\n", encoding="utf-8")
+        launcher.write_bytes(cmd_file_bytes("@echo off\r\nset " + cmd_quote(f"PATH={shim.parent};").rstrip('"') + '%PATH%"\r\n'
+                                            + f'if not defined {variable} set "{variable}={value}"\r\n'
+                                            + f"{cmd_quote(cli)} %*\r\n"))
     else:
         launcher.write_text("#!/bin/sh\nPATH=" + shlex.quote(str(shim.parent)) + ':"$PATH"\nexport PATH\n'
                             f': "${{{variable}={value}}}"\nexport {variable}\nexec '

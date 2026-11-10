@@ -15,7 +15,7 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 
 from process import ManagedProcess, port_open, windows_listening
-from runtime import AddonFailure, KitContext, cmd_quote, probe, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, cmd_file_bytes, cmd_quote, probe, venv_executable, venv_python
 
 ID = "dash-server"
 RECEIPT = "components.dash_server"
@@ -130,7 +130,7 @@ def _write_launcher(ctx: KitContext) -> Path:
     script = ctx.root / "marketplace" / "dash_launcher.py"
     ctx.bin_dir.mkdir(parents=True, exist_ok=True)
     if os.name == "nt":
-        launcher.write_text(f"@echo off\r\n{cmd_quote(venv_python(venv))} {cmd_quote(script)} %*\r\n", encoding="utf-8")
+        launcher.write_bytes(cmd_file_bytes(f"@echo off\r\n{cmd_quote(venv_python(venv))} {cmd_quote(script)} %*\r\n"))
     else:
         launcher.write_text("#!/bin/sh\nexec " + shlex.quote(str(venv_python(venv))) + " "
                             + shlex.quote(str(script)) + ' "$@"\n', encoding="utf-8")
