@@ -5,7 +5,7 @@
     cli.py [context] inputs     CONNECTOR
     cli.py [context] field      CONNECTOR INPUT [--base64]   (the value on standard input)
     cli.py [context] paste      CONNECTOR [--base64]         (a connection string on standard input)
-    cli.py [context] plan       CONNECTOR --name N [--set KEY=VALUE ...]
+    cli.py [context] plan       CONNECTOR --name N [--set KEY=VALUE ...] [--secret-given]
     cli.py [context] connect    CONNECTOR --name N [--set KEY=VALUE ...] [--secret-stdin]
     cli.py [context] list | issues [--status S] | show N | check N|--all
     cli.py [context] reauth     N --secret-stdin
@@ -16,6 +16,20 @@
 
     context: --defs DIR --kit-home DIR --deployment-dir DIR --dsn HOST:PORT
              --user USER --password-file FILE [--json]
+
+plan and connect for a name that is a connected source of the same connector
+re-point it in place (lifecycle.Engine.repoint): the recorded inputs with the
+given ones over them, VS_<NAME> kept, and the credential given again - always
+(the database never returns a stored one, and moving a CONNECTION clears it).
+Their answer has "action": the plan's is connect, reconnect, repoint or
+unchanged (nothing would change: the same inputs and no credential), the
+result's connected, reconnected, repointed or unchanged. A re-point's adds
+"changes" ([{input, from, to}]) and "credential" ("required" in the plan,
+"replaced" in the result), and its plan "command", the connect that makes it
+without its credential or --yes; "interrupted" is true when an earlier
+re-point left its journal. An unchanged source that is not ready answers exit
+1 with its error, kind, remedy and command. A name taken by another connector
+is a conflict (exit 3).
 
 A secret is read from standard input only (--secret-stdin), never from an
 argument: arguments are visible to every local user through the process table.
@@ -108,6 +122,11 @@ def parse(argv):
         cmd.add_argument("--secret-stdin", action="store_true")
         cmd.add_argument("--secret-stdin-base64", action="store_true")
         cmd.add_argument("--dry-run", action="store_true")
+        # A credential will come with the connect (the shell knows before it
+        # reads one): the plan of a connected source with no other change is
+        # then a re-point that replaces only the credential, not "unchanged" -
+        # a given --password-file is never dropped unread.
+        cmd.add_argument("--secret-given", action="store_true")
     sub.add_parser("list")
     sub.add_parser("issues").add_argument("--status", default="")
     sub.add_parser("show").add_argument("name")
@@ -337,6 +356,11 @@ def form_answer(args):
             if store.status(raw).get("status") != "disconnected" or current["connector"] != connector_id:
                 taken = "a source named %s already exists (%s)" % (raw, current["connector"])
                 fix = "choose another name or remove it first: exakit source remove %s" % raw
+                if current["connector"] == connector_id:
+                    # The form makes new sources; a connected one moves with
+                    # the line-by-line connect, its inputs as recorded.
+                    fix += ("; to point it at a new address instead: exakit connect %s --name %s --set "
+                            "<input>=<new value>" % (connector_id, raw))
                 raise planner.PlanError(taken, code=lifecycle.EXIT["conflict"], remedy=fix,
                                         said="%s; %s" % (taken, fix))
         return {"value": raw}
@@ -427,7 +451,13 @@ def main(argv=None):
             if args.command in ("plan", "connect"):
                 connector = engine.defs.resolve(args.connector)
                 result = engine.connect(connector, args.name, pairs(args.set), secret_of(args),
-                                        dry_run=args.dry_run, plan_only=args.command == "plan")
+                                        dry_run=args.dry_run, plan_only=args.command == "plan",
+                                        secret_given=args.secret_given)
+                if args.command == "connect" and result.get("action") == "unchanged" and \
+                        result.get("status") != "ready":
+                    # Nothing to change, but not working either: a failure,
+                    # with the source's own fix.
+                    code = 1
             elif args.command == "list":
                 result = {"sources": engine.listing()}
             elif args.command == "issues":

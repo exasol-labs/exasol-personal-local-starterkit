@@ -131,6 +131,10 @@ Types: `STRING` arrives as `VARCHAR(2000000)`, `BIGINT` as `DECIMAL(19,0)`.
 
 - The token expires at the lifetime it was made with: a new one, then
   `exakit source reauth lake --password-file ~/.config/exakit/<name>.pat`.
+- Another workspace host or SQL warehouse: `exakit connect databricks --name lake
+  --set http_path=<new path> --password-file ~/.config/exakit/<name>.pat --yes`
+  (`--dry-run` first). The token is given again; `VS_LAKE` keeps its name - see the
+  shared skill.
 - Tables added at the source: `exakit source refresh lake`.
 - Stop: `exakit source disconnect lake` or `exakit source remove lake`
   (`--dry-run` first, then ask) - see the shared skill.
