@@ -9,6 +9,7 @@
 # cannot fix from inside the database:
 #
 #   exit 20  Java in the database has no DNS resolver -> Repair-PersonalSlcDns, retry once
+#            (Docker: the fix is in the image - one restart, asked, then the retry)
 #   exit 21  the Java language container is missing   -> `exasol slc install java` (asked), retry once
 
 function Get-ExakitVsDefs {
@@ -546,6 +547,31 @@ function Install-ExakitVsJava {
         Write-Host ("  {0} The Java language container did not install. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red
         return $false
     }
+    # Docker: the download the start would make, made now, and the image
+    # linked to the deployment's DNS before the start mounts it read-only - so
+    # this start is the only one (Initialize-PersonalSlcDns).
+    try { Initialize-PersonalSlcDns -Pull } catch { }
+    if (-not (Restart-ExakitVsDatabase)) {
+        Write-Host ("  {0} The database did not come back after installing Java. Run: exakit start" -f $script:UiCross) -ForegroundColor Red
+        return $false
+    }
+    # An installed kit's start repairs DNS; this kit copy may be newer than it.
+    # Docker: linked in the image after an older kit's start mounted it - one
+    # more start mounts it.
+    try { [void](Repair-PersonalSlcDns) } catch { }
+    if ($script:PersonalSlcDnsNeedsStart -and -not (Restart-ExakitVsDatabase)) {
+        Write-Host ("  {0} The database did not come back after installing Java. Run: exakit start" -f $script:UiCross) -ForegroundColor Red
+        return $false
+    }
+    Ok "Java language container installed"
+    return $true
+}
+
+# Restart-ExakitVsDatabase - exakit stop (add-on services with it), then
+# exakit start, through the installed kit: its start brings add-on services
+# back and gives the language containers the deployment's DNS. $true when
+# that start succeeded: a caller must not go on with a database that is down.
+function Restart-ExakitVsDatabase {
     $exakit = Join-Path $script:BinDir "exakit.cmd"
     $previousStop = $env:EXAKIT_STOP_ADDONS
     try {
@@ -554,9 +580,7 @@ function Install-ExakitVsJava {
     } finally { $env:EXAKIT_STOP_ADDONS = $previousStop }
     # Write-Host, not Out-Host: with --json, Invoke-ExakitVsAside moves these lines to stderr.
     & $exakit start | ForEach-Object { Write-Host "$_" }
-    try { [void](Repair-PersonalSlcDns) } catch { }
-    Ok "Java language container installed"
-    return $true
+    return ($LASTEXITCODE -eq 0)
 }
 
 # Repair-ExakitVsForRetry - what the bridge does about exit 20 (DNS repaired),
@@ -567,15 +591,21 @@ function Repair-ExakitVsForRetry {
     if ($Code -eq 20) {
         Info "Giving the database's language containers the deployment's DNS, then trying again"
         if (Repair-PersonalSlcDns) { return $true }
-        # A restart cannot repair it on Docker (lifecycle.DNS_ON_DOCKER): the
-        # failure's own fix says so, and this line does not contradict it.
-        $engine = ""
-        try { $engine = "" + (Get-PersonalSlcDnsEngine) } catch { }
-        if ($engine -eq "docker") {
-            Write-Host "  DNS could not be repaired on this Docker deployment; the failure's fix says why." -ForegroundColor Red
-        } else {
-            Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red
+        if ($script:PersonalSlcDnsNeedsStart) {
+            # Docker: the fix is in the language container image, and the
+            # database mounts an image only when it starts.
+            Info "The database sees it from its next start: one restart (add-on services restart with it)."
+            if (-not (Confirm-ExakitVs "Restart the database now?")) {
+                Write-Host "  Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again." -ForegroundColor Red
+                return $false
+            }
+            if (-not (Restart-ExakitVsDatabase)) {
+                Write-Host "  The database did not come back. Run: exakit start" -ForegroundColor Red
+                return $false
+            }
+            return $true
         }
+        Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red
         return $false
     }
     if ($Code -eq 21) { return [bool](Install-ExakitVsJava) }

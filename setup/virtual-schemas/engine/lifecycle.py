@@ -64,7 +64,7 @@ REMEDY_FOR = {
     "tls": "the source's certificate or host name did not verify; fix the server certificate or trust its CA, then: exakit source check {name}",
     "unreachable": "the source did not answer from inside the database: check the host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then: exakit source check {name}",
     "nohost": "the host name no longer resolves: check it (a private name may need a VPN), then: exakit source check {name}",
-    "dns": "Java in the database could not resolve the host name; restart the database with exakit start (it repairs DNS), then: exakit source check {name}",
+    "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS) - then: exakit source check {name}",
     "nojava": "the Java language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
     "norust": "the Rust language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
@@ -80,22 +80,13 @@ REMEDY_FOR = {
     "error": "see the log: exakit logs",
 }
 
-# Java without DNS on a Docker deployment (kit 0.2.4+): the repair writes the
-# deployment's DNS into the language container, Docker mounts it read-only,
-# and the restart REMEDY_FOR["dns"] names changes nothing there. The one place
-# this is said - cli.py asks remedy_text too - so a working Docker repair
-# replaces it here.
-DNS_ON_DOCKER = ("Java in the database could not resolve the host name, and the kit cannot repair that on a Docker "
-                 "deployment yet: Docker mounts the language container read-only, so a restart does not fix it. "
-                 "A Podman deployment (or macOS) works around it")
-
-
 def remedy_text(kind, table=None):
-    """The fix for a kind as a template, from table (REMEDY_FOR by default):
-    DNS_ON_DOCKER for Java without DNS on a deployment recorded as Docker."""
+    """The fix for a kind as a template, from table (REMEDY_FOR by default).
+    Java without DNS has one fix on every engine, a stop and a start: Podman
+    and macOS repair the running container after the start, and on Docker the
+    start links the language container image before it mounts it (read-only;
+    setup/lib/personal-slc-dns.py)."""
     table = REMEDY_FOR if table is None else table
-    if kind == "dns" and planner.ENGINE == "docker":
-        return DNS_ON_DOCKER
     return table.get(kind, table["error"])
 
 
