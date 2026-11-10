@@ -84,7 +84,8 @@ and `EXAKIT_MODEL_TEMPERATURE` (not sent unless set; Claude Opus 4.7+ refuses te
 `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` turn tracing on. Set them in the terminal that
 starts `exakit notebook` (keys through a hidden `read -rs`, or `Read-Host -AsSecureString` on Windows), keep the
 model's id and address in `~/.exasol-starter-kit/exakit.env`, or fill in the *Your AI model and Langfuse* cell in
-Explore or Ask. `nb.model_setup()` says what is set and prints the lines for the machine it runs on;
+Explore or Ask. `nb.model_setup()` asks for anything missing (keys in a hidden box, in JupyterLab and Marimo),
+says what is set and prints the lines for the machine it runs on;
 `nb.model_settings()` reports them without secrets. The recipes, both shells, and the providers in
 detail: [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md), copied beside the Data Scientist notebooks
 (`starter-kit-notebooks/data-scientist/MODEL-PROVIDERS.md`).

@@ -168,9 +168,27 @@ class FlowTest(unittest.TestCase):
         doc = self.describe()["doc"]
         self.approve(doc)
         self.db.views.clear()
-        again = self.approve(doc)
+        again = self.approve(doc, publish=False)
         self.assertIsNone(again["published"])
         self.assertNotIn("published as", again["message"])
+
+    def test_an_unchanged_approval_that_was_never_published_is_published_now(self):
+        """A shipped dataset's descriptor the store adopted (or an approval whose publish failed) is approved but has
+        no view: approving the same again writes no version and publishes it, so agents find its roles."""
+        doc = self.describe()["doc"]
+        self.approve(doc)
+        self.db.views.clear()
+        again = self.approve(doc)
+        self.assertEqual(("unchanged", "EXAKIT_SEMANTIC.SUPPORT__TICKETS"), (again["status"], again["published"]))
+        self.assertIn("SUPPORT__TICKETS", self.db.views)
+        self.assertEqual([1], store.versions("SUPPORT.TICKETS", self.home))
+        self.assertIn("published as EXAKIT_SEMANTIC.SUPPORT__TICKETS", again["message"])
+        self.db.views.clear()
+        self.db.fail_publish = True
+        failed = self.approve(doc)
+        self.assertEqual("unchanged", failed["status"], "the approval stands")
+        self.assertIsNone(failed["published"])
+        self.assertIn("PermissionError", failed["reason"])
 
     def test_a_changed_table_drafts_the_next_version_carrying_unchanged_columns_over(self):
         doc = self.describe()["doc"]
