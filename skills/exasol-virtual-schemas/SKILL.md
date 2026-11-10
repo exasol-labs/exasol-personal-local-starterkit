@@ -75,7 +75,11 @@ exakit source check <name> --json                                   # later: a f
 - `exakit connect` alone, at a terminal, opens a menu and a panel per source. An agent
   never lands in it; suggest it to a user who connects several sources by hand.
   The form marks each required field with a red `*` (a plain `*` without colour), and its
-  first question takes a pasted connection string, read hidden. A language container or
+  first question takes a pasted connection string, read hidden (nothing shows while it is
+  pasted; the hint lists the forms the connector reads, one per line). It is then shown
+  back with every credential masked (`Read: postgres://reader:****@host/db`, `password=****`):
+  Enter uses it, `e` pastes it again, Esc or `n` types the fields instead. A password in
+  the string is dropped and asked for separately, hidden. A language container or
   restart the source needs is made without a question there: picking it was the permission.
 
 ## Rules that are not negotiable

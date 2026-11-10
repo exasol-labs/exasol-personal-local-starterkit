@@ -2466,6 +2466,14 @@ has "...a terminal that cannot hide input is refused, not read in clear" "stty -
 has "...and the terminal's own state comes back, on Ctrl-C too" 'trap '"'"'stty "${_erh_saved:-echo}"' "$HIDDEN"
 VSREAD="$(sed -n '/^_exakit_vs_read_secret() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
 has "the virtual-schema credential prompt uses it" "exakit_read_hidden" "$VSREAD"
+# Read in canonical mode, an arrow or Delete pressed at it arrives as bytes:
+# they are dropped, so the password is the one typed (the replay below types
+# them at the line-by-line prompt). The legacy migration's prompt does the same.
+dke() { ( . "$ROOT/setup/lib/common.sh" 2>/dev/null; exakit_drop_key_escapes "$1"; printf '%s' "$_EKE_OUT" ); }
+check "an arrow, Ctrl-Left, Delete, an application-mode arrow and a lone Esc are dropped from a hidden line" \
+    "pa\$s\"w'rd;=" "$(dke "pa$(printf '\033[D')\$s$(printf '\033[1;5D')\"w$(printf '\033[3~')'r$(printf '\033OD')d;$(printf '\033')=")"
+has "...exakit_read_hidden drops them" 'exakit_drop_key_escapes "$_erh_value"' "$HIDDEN"
+has "...and so does the legacy migration's password prompt" 'exakit_drop_key_escapes "$EXAKIT_LEGACY_PASSWORD"' "$(cat "$ROOT/setup/exakit")"
 
 printf '\n== the terminal form asks the engine, one answer at a time ==\n'
 run inputs pg
@@ -2525,7 +2533,9 @@ pasted() { printf '\\x0e%s\\x0f' "$1"; }
 # macOS): a hidden prompt in canonical mode never saw its Enter.
 LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
-Q_PASTE="$(when 'Connection string (hidden; Enter to type the fields):')"
+Q_PASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
+# The question after a string was read and shown back masked: Enter uses it.
+Q_USE="$(when 'Esc/n to type the fields instead')"
 Q_NAME="$(when 'Name for this connection *:')"
 Q_HOST="$(when 'Host name or address *:')"
 Q_PORT="$(when 'Port [')"
@@ -2655,12 +2665,12 @@ PY
         # The PowerShell twin, under the same terminal model. pwsh starts slower:
         # the menu is waited for like every question.
         EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
-            "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+            "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
         check "PowerShell: one menu, one panel, one table" "0" "$TUI_RC"
         has "...its review names this computer's public IP too" "tuips: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
         has "...and the row ends with the schema" "✓ VS_TUIPS · 1 table" "$TUI_SCREEN"
         lacks "...the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
-        check "...it reached the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
+        check "...it reached the CONNECTION, an arrow and Delete pressed in it dropped" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
     else
         pass "PowerShell terminal flow: skipped (no pwsh)"
     fi
@@ -2671,7 +2681,7 @@ PY
     # left out. Bash, then PowerShell.
     LONGURL="jdbc:postgresql://pg.example.com:5433/sales?user=reader&ApplicationName=$LONGX"
     TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
-        "${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuilong\r$Q_SCHEMA\r${Q_PW}\x04"
+        "${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")$Q_USE\r${Q_NAME}tuilong\r$Q_SCHEMA\r${Q_PW}\x04"
     check "a 1500-character paste with a second line, then Ctrl-D: one panel" "0" "$TUI_RC"
     has "...the long string was read whole: its port" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
     has "...the second line answered nothing: the name is the one typed" "Name for this connection *  tuilong" "$TUI_SCREEN"
@@ -2679,12 +2689,24 @@ PY
     has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
     if command -v pwsh >/dev/null 2>&1; then
         TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
-            "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
+            "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")$Q_USE\r${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
         check "PowerShell: the same paste and Ctrl-D: one menu, one panel" "0" "$TUI_RC"
         has "...the long string was read whole" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
         has "...the second line answered nothing" "Name for this connection *  tuipslong" "$TUI_SCREEN"
         lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
         has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
+        # The PowerShell form's hidden read: an arrow's sequence is no
+        # character; the string is shown back masked, e asks again, and the
+        # second one is used.
+        TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
+            "$MENU $MENU\r${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}postgres://reader:psPw-zz5@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipsagain\r$Q_SCHEMA\r${Q_PW}\x04"
+        check "PowerShell: a string, e, a second string: one menu, one panel" "0" "$TUI_RC"
+        TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+        has "...the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db')" "$TUI_RAW"
+        check "...the first read as abc, the arrow and Delete dropped" "1" "$(printf '%s\n' "$TUI_RAW" | grep -c '^    • Read: abc$')"
+        has "...the second shown back, its password masked" "Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_RAW"
+        lacks "...the password never drawn" "psPw-zz5" "$TUI_RAW"
+        has "...and the second one used" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
     else
         pass "PowerShell long paste: skipped (no pwsh)"
     fi
@@ -2926,6 +2948,34 @@ else:
 PY2
 )"
 
+# The hint above the question asks for the string, then names every form the
+# connector reads on a line of its own, indented under the hint's text: all 13
+# connectors, as the line-by-line flow prints it (the panel's twin is asserted
+# on the replays below). Too narrow for a form, it wraps at the same indent.
+hintsh() {
+    ( EXAKIT_HOME="$HOME_K"; COLUMNS="$1"; shift
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+      UI_DIM=''; UI_RESET=''; UI_BULLET='-'
+      _exakit_vs_paste_hint "$(_exakit_vs_paste_forms "$1")" ) 2>&1
+}
+_hint_n=0
+for _c in $(ls "$ROOT/setup/virtual-schemas/connectors"); do
+    _want="$(python3 - "$DEFS/connectors/$_c/connector.json" <<'PY2'
+import json, sys
+print("    - Paste the source's connection string, for example:")
+for f in json.load(open(sys.argv[1]))["paste"]["forms"]:
+    print("        " + f)
+PY2
+)"
+    check "the hint for $_c: one form per line, indented under its text" "$_want" "$(hintsh 200 "$_c")"
+    _hint_n=$(( _hint_n + 1 ))
+done
+check "...every connector has one" "13" "$_hint_n"
+check "...a form wider than the terminal wraps at the same indent" \
+    "$(printf '%s\n' "    - Paste the source's connection string, for example:" '        jdbc:postgresql://ho' '        st:5432/db' '        postgres://user@host' '        :5432/db' '        host[:port][/databas' '        e]')" \
+    "$(hintsh 30 postgresql)"
+
 PW='Hunter2-pa55'
 for _case in "pg|postgres://reader:$PW@pg.example.com/sales" "pg|jdbc:postgresql://pg.example.com/sales?user=reader&password=$PW" \
              "mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=$PW" \
@@ -2944,6 +2994,52 @@ for _case in "pg|postgres://reader:$PW@pg.example.com/sales" "pg|jdbc:postgresql
     has "...and that the string was on the command line" "The string was on the command line" "$OUT"
 done
 lacks "a credential never becomes an input value" '"password"' "$VALS"
+
+# The string shown back after it was pasted (paste.py masked): every credential
+# value replaced by ****, its name or user kept, everything else as pasted. One
+# place masks - the engine; the shells print what it answers.
+pmask() { printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json, sys; print(json.load(sys.stdin).get("masked", "<none>"))' 2>/dev/null; }
+MPW='Pw-zz1'
+while IFS='|' read -r _c _u _m; do
+    [ -n "$_c" ] || continue
+    pst "$_c" "$_u"
+    check "masked ($_c): $_u" "0 $_m" "$RC $(pmask)"
+    lacks "...the credential is in none of the output" "$MPW" "$OUT"
+done <<EOF
+pg|postgres://reader:$MPW@pg.example.com/sales|postgres://reader:****@pg.example.com/sales
+pg|postgresql://postgres:$MPW@db.abcd.supabase.co:5432/postgres|postgresql://postgres:****@db.abcd.supabase.co:5432/postgres
+pg|postgres://reader:$MPW@zz:x/y;@pg.example.com:5432/sales|postgres://reader:****@pg.example.com:5432/sales
+pg|postgres://reader:$MPW%40zz%3A%2F%3B%25@pg.example.com/sales|postgres://reader:****@pg.example.com/sales
+pg|jdbc:postgresql://pg.example.com/sales?user=reader&password=$MPW%26zz%3D%25&sslmode=require|jdbc:postgresql://pg.example.com/sales?user=reader&password=****&sslmode=require
+pg|jdbc:postgresql://pg.example.com/sales?user=reader&password=$MPW#zz|jdbc:postgresql://pg.example.com/sales?user=reader&password=****#****
+mysql|jdbc:mysql://my.example.com/shop?user=r&password=Abc&$MPW|jdbc:mysql://my.example.com/shop?user=r&password=****&****
+mysql|jdbc:mysql://reader:$MPW@my.example.com:3307/shop?sslMode=VERIFY_CA|jdbc:mysql://reader:****@my.example.com:3307/shop?sslMode=VERIFY_CA
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=$MPW|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=****
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=$MPW=x%@:/|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=****
+mssql|jdbc:sqlserver://sql.example.com:1433;databaseName=erp;user=reader;password={$MPW;b=c};encrypt=true|jdbc:sqlserver://sql.example.com:1433;databaseName=erp;user=reader;password=****;****;encrypt=true
+oracle|jdbc:oracle:thin:reader/$MPW@//ora.example.com:1521/ORCLPDB1|jdbc:oracle:thin:reader/****@//ora.example.com:1521/ORCLPDB1
+snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&warehouse=wh&user=bob&password=$MPW|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&warehouse=wh&user=bob&password=****
+databricks|jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;UID=token;PWD=$MPW|jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;UID=token;PWD=****
+bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=p1;OAuthPvtKeyPath=/keys/k.json;OAuthPvtKey=$MPW;DefaultDataset=d1|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=p1;OAuthPvtKeyPath=/keys/k.json;OAuthPvtKey=****;DefaultDataset=d1
+mongodb|mongodb+srv://reader:$MPW@cluster0.abc12.mongodb.net/movies?retryWrites=true|mongodb+srv://reader:****@cluster0.abc12.mongodb.net/movies?retryWrites=true
+mongodb|mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?authMechanismProperties=AWS_SESSION_TOKEN:$MPW|mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?authMechanismProperties=****
+s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$MPW|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=****&X-Amz-Signature=****
+azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$MPW/ab+c==;EndpointSuffix=core.windows.net|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=****;EndpointSuffix=core.windows.net
+azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$MPW%2Bx%3D|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=****
+iceberg-rest|https://ak:$MPW@catalog.example.com/api|https://ak:****@catalog.example.com/api
+iceberg-rest|https://$MPW@catalog.example.com/api?warehouse=w|https://****@catalog.example.com/api?warehouse=****
+unity|https://dbc-1.cloud.databricks.com/?token=$MPW|https://dbc-1.cloud.databricks.com/?token=****
+pg|postgresql://reader@exakit-vs-test-pg.c54yea04y0f8.ap-south-1.rds.amazonaws.com:5432/pagila?currentSchema=public&sslmode=verify-full|postgresql://reader@exakit-vs-test-pg.c54yea04y0f8.ap-south-1.rds.amazonaws.com:5432/pagila?currentSchema=public&sslmode=verify-full
+azure|abfss://data@mystorage.dfs.core.windows.net/raw|abfss://data@mystorage.dfs.core.windows.net/raw
+lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|arn:aws:glue:eu-central-1:123456789012:database/sales_lake
+oracle|ora.example.com:1521/ORCLPDB1|ora.example.com:1521/ORCLPDB1
+s3|s3://my-bucket/docs/|s3://my-bucket/docs/
+EOF
+OUT="$(printf '%s' "jdbc:postgresql://pg.example.com/sales?user=reader&password=$MPW" | eng --json paste pg 2>/dev/null)"
+check "--json: the masked string is in the answer too" "jdbc:postgresql://pg.example.com/sales?user=reader&password=****" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["masked"])' 2>/dev/null)"
+lacks "...and the credential is not" "$MPW" "$OUT"
+check "none of the strings above, nor their credential, is in the kit home (the day's log included)" "" "$(grep -rlF "$MPW" "$HOME_K" 2>/dev/null)"
 pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"
 check "mongodb: the uri keeps no credentials and no path" '{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true", "user": "reader"}' "$VALS"
 pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?retryWrites=true&authSource=sales"
@@ -2962,7 +3058,9 @@ pst mysql 'jdbc:mysql://my.example.com/shop?user=r&password=Abc&Xyz9'
 lacks "...MySQL too" "Xyz9" "$OUT"
 pst pg 'jdbc:postgresql://pg.example.com/sales?ApplicationName=report-x9&sslrootcert=/etc/ca.pem&password=zz'
 has "unknown parameters are dropped by name" "Not used from the connection string: ApplicationName, sslrootcert" "$OUT"
-lacks "...never by value" "report-x9" "$OUT"
+# The notes never quote a value; only the masked string shown back (RESULT's
+# masked) holds the string, credentials out.
+lacks "...never by value" "report-x9" "$(printf '%s\n' "$OUT" | grep -v '^RESULT ')"
 has "...and listed" '"dropped": ["ApplicationName", "sslrootcert", "password"]' "$OUT"
 pst databricks 'jdbc:databricks://dbc-1.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc;UID=token'
 lacks "...what the kit sets itself is consumed without a note" "Not used" "$OUT"
@@ -2986,7 +3084,7 @@ unset EXAKIT_VS_OS
 rm -f "$HOME_K/manifest.json"
 pst pg 'postgres://pg.example.com:99999/sales'
 has "a value that fails its check is named, not quoted" "port from the connection string is not used: it is not a valid port" "$OUT"
-lacks "...(no value in the message)" "99999" "$OUT"
+lacks "...(no value in the message)" "99999" "$(printf '%s\n' "$OUT" | grep -v '^RESULT ')"
 
 for _case in "oracle|jdbc:oracle:thin:@orahost-zz9.example.com:1521:ORCLZZ|Oracle SID" \
              "oracle|jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=orahost-zz9)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=s)))|TNS descriptor" \
@@ -3032,6 +3130,12 @@ has "...the plan reflects it" "does NOT check the server's identity" "$OUT"
 lacks "...the password is in no argument" "$PW" "$(cat "$WORK/url.argv")"
 lacks "...and not in the output" "$PW" "$OUT"
 lacks "...nor the log" "$PW" "$(cat "$WORK/url.log" 2>/dev/null)"
+lacks "...--url asks nothing: no masked string shown back" "Read:" "$OUT"
+lacks "...and no question after it" "Esc/n to type the fields instead" "$OUT"
+OUT="$(urlsh cmd_connect pg --name urlpg --url "postgres://reader:$PW@pg.example.com:5433/sales" --dry-run --json </dev/null)"; RC=$?
+check "connect --url --dry-run --json: exit 0" "0" "$RC"
+lacks "...asks nothing either" "Esc/n to type the fields instead" "$OUT"
+lacks "...and holds no credential" "$PW" "$OUT"
 rm -f "$WORK/url.argv"
 OUT="$(urlsh cmd_connect pg --name urlpg --url=postgres://pg.example.com/sales?sslmode=require --set tls=verify --set user=reader --dry-run </dev/null)"; RC=$?
 check "--url=STRING works too, and --set tls overrides the string's sslmode" "0" "$RC"
@@ -3052,9 +3156,10 @@ has "...and the string's inputs are the ones recorded" '"host": "pg.example.com"
 
 # On a terminal the panel opens with the string's answers in it.
 printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
-TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
+TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
     tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
 check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
+lacks "...no connection string asked for, and no question about one" "Esc/n to type the fields instead" "$(cat "$WORK/tui.raw")"
 has "...the panel holds the string's host" "Host name or address *      pg.example.com" "$TUI_SCREEN"
 has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
 has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
@@ -3062,8 +3167,8 @@ has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.
 printf '\n== the connect form: a red * for a required field, a pasted string, one answer changed ==\n'
 # What a person sees on the way (TTY_REPLAY_RAW: the whole stream, colours out)
 # as well as what the screen is left holding. The pasted string carries a
-# password: it is read hidden, not used, the hidden prompt still asks, and the
-# CONNECTION gets the typed one.
+# password: it is read hidden, shown back with the password masked, not used,
+# the hidden prompt still asks, and the CONNECTION gets the typed one.
 if command -v python3 >/dev/null 2>&1; then
     URLPW='Url-pa55-zz7'
     RAW="$WORK/tui.raw"
@@ -3074,7 +3179,7 @@ if command -v python3 >/dev/null 2>&1; then
     # (schema) it takes it, on one without (ca) it leaves it empty; 3 asks the
     # port again.
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
     check "a pasted string, a refused Enter, one answer changed: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "the panel marks a required field with a star after its label" "│     Host name or address *      " "$TUI_RAW"
@@ -3083,10 +3188,14 @@ if command -v python3 >/dev/null 2>&1; then
     has "...one legend line in the box says what the star means" "│     * required " "$TUI_RAW"
     lacks "...and the words are gone" "(required)" "$TUI_RAW"
     lacks "...both of them" "(optional)" "$TUI_RAW"
-    has "the first question is the connection string, read hidden" "Connection string (hidden; Enter to type the fields):" "$TUI_RAW"
-    has "...its help names the forms the connector reads" "as it shows it: jdbc:postgresql://host:5432/db," "$TUI_RAW"
-    has "...all of them" "postgres://user@host:5432/db or host[:port][/database]" "$TUI_RAW"
+    has "the first question is the connection string, read hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
+    has "...its hint says what to paste" "    • Paste the source's connection string, for example:" "$TUI_RAW"
+    has "...then each form the connector reads on its own line, indented under the text" "$(printf '        %s\n' 'jdbc:postgresql://host:5432/db' 'postgres://user@host:5432/db' 'host[:port][/database]')" "$TUI_RAW"
+    lacks "...no list run together any more" "as it shows it:" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
+    has "the string is shown back, its password masked by the engine" "    • Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_RAW"
+    has "...then one key decides" "Enter to use it · e to paste it again · Esc/n to type the fields instead" "$TUI_RAW"
+    has "...and the masked string stays under the panel" "Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_SCREEN"
     has "the question ends in the star too" "Name for this connection *:" "$TUI_RAW"
     has "...Enter on an empty required field is refused, in one line" "Name for this connection is required" "$TUI_RAW"
     has "...an optional one shows the default Enter takes, no star" "Schema [public]:" "$TUI_RAW"
@@ -3103,8 +3212,9 @@ if command -v python3 >/dev/null 2>&1; then
     has "an optional field left empty" "$(prow 'CA certificate file' '(none)')" "$TUI_SCREEN"
     has "...and it connects" "✓ VS_TUIPASTE" "$TUI_SCREEN"
     has "...with the port as changed" '"port": "5432"' "$(cat "$HOME_K/sources/tuipaste/"*.json 2>/dev/null)"
-    check "the typed credential reached the CONNECTION, not the string's" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPASTE"]["secret"]')"
+    check "the typed credential reached the CONNECTION, not the string's - an arrow and Delete pressed in it dropped" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPASTE"]["secret"]')"
     check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+    check "...nor the raw string" "" "$(grep -rlF "postgres://reader:$URLPW@pg.example.com:5433/sales" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
     lacks "...and the credential typed is in none of what was drawn" "$TUI_SECRET" "$TUI_RAW"
 
     # A string that does not parse is said and asked again; Enter types the
@@ -3143,7 +3253,7 @@ if command -v python3 >/dev/null 2>&1; then
     # 56 columns wide, on a terminal that holds the wrap (xterm's kind): one row,
     # counted as one, or the next redraw climbs one line too far.
     TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
     check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
     has "...the value kept" "$(prow 'Host name or address *' 'pg.example.com')" "$TUI_SCREEN"
     lacks "...its mark dropped" "(from the string)" "$TUI_SCREEN"
@@ -3152,12 +3262,15 @@ if command -v python3 >/dev/null 2>&1; then
     # The line-by-line questions (a terminal without the drawn form), on a pty
     # that is the scenario's /dev/tty, as a real terminal is.
     Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) *')"
-    Q_LPASTE="$(when 'Connection string (Enter to type the fields) (input hidden):')"
+    Q_LPASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
-    has "line by line: the connection string is asked first, hidden" "Connection string (Enter to type the fields) (input hidden):" "$TUI_RAW"
+    has "line by line: the connection string is asked first, hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
+    has "...under the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db' '        postgres://user@host:5432/db' '        host[:port][/database]')" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
+    has "...shown back masked: the password, and what followed it unencoded" "    • Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****&****" "$TUI_RAW"
+    has "...then one key decides" "Enter to use it · e to paste it again · Esc/n to type the fields instead" "$TUI_RAW"
     has "...a garbage string is said and asked again" "the connection string has a space, line break or control character in it" "$TUI_RAW"
     has "...the password in it noted, not used" "it was not used. The credential is asked for separately" "$TUI_RAW"
     lacks "...without the command-line sentence" "The string was on the command line" "$TUI_RAW"
@@ -3175,6 +3288,46 @@ if command -v python3 >/dev/null 2>&1; then
     check "...the typed one reaches the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPG"]["secret"]')"
     lacks "...and is never shown" "$TUI_SECRET" "$TUI_RAW"
     check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+
+    # After a string is read and shown back masked, one key decides: e asks for
+    # it again (the second one is used), n or Esc types the fields, Enter uses
+    # it. The hidden reader drops an arrow's or Delete's escape sequence
+    # whole, Backspace and Ctrl-U still edit, and a lone Esc waits for nothing:
+    # each of the four strings below is read as "abc" (a bare host).
+    TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
+        "${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[1;5D')$(pasted '\x1bOD')\r${Q_USE}e${Q_PASTE}abcx\x7f\r${Q_USE}e${Q_PASTE}zzz\x15abc$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}abc\x1b\x01\r${Q_USE}e${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuiagain\r$Q_SCHEMA\r${Q_PW}\x04"
+    check "e four times, then a fifth string used: one panel" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    check "...an arrow, Ctrl-Left, an application-mode arrow, Backspace, Ctrl-U, Delete and a lone Esc: each string read as abc" \
+        "4" "$(printf '%s\n' "$TUI_RAW" | grep -c '^    • Read: abc$')"
+    lacks "...no piece of an escape sequence joined it" "Read: abc[" "$TUI_RAW"
+    lacks "...nor the half a Backspace or Ctrl-U removed" "Read: abcx" "$TUI_RAW"
+    has "...e asked again, and the last string is the one used: its port" "$(prow Port '5433 (from the string)')" "$TUI_SCREEN"
+    lacks "...nothing of the first four kept" "abc (from the string)" "$TUI_SCREEN"
+    lacks "...and the password typed at the hidden prompt was never drawn" "$URLPW" "$TUI_RAW"
+
+    # n types the fields instead, and so does Esc; nothing from the string is kept.
+    for _key in n '\x1b'; do
+        TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
+            "${Q_PASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}${_key}${Q_NAME}tuinot\r${Q_HOST}\x04"
+        TUI_RAW="$(tr -d '\r' < "$RAW")"
+        check "the string read, then $_key: one panel, left out at the host" "0" "$TUI_RC"
+        has "...shown back in full: it holds no credential" "Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
+        has "...then the fields are asked, the host first after the name" "Host name or address *:" "$TUI_RAW"
+        lacks "...nothing from the string" "(from the string)" "$TUI_RAW"
+    done
+
+    # Line by line too: e asks again, n types the fields; the hidden password
+    # prompt (a canonical read) drops an arrow pressed in it.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
+        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "line by line: the first string shown back" "    • Read: postgres://reader@first.example.com/one" "$TUI_RAW"
+    has "...e asked again" "    • Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
+    has "...n typed the fields: the host asked" "? Host name or address" "$TUI_RAW"
+    lacks "...nothing from the string said" "From the connection string" "$TUI_RAW"
+    check "...it connects with the typed answers: port 5432, not the string's" '"port": "5432"' "$(cat "$HOME_K/sources/lineno/"*.json 2>/dev/null | grep -o '"port": "[0-9]*"' | head -1)"
+    check "...and the password, an arrow and Delete pressed in it, reached the CONNECTION as typed" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINENO"]["secret"]')"
 
     # --dry-run at the same terminal asks as it always did: no marks, no
     # connection string.

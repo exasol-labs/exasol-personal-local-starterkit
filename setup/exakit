@@ -1878,6 +1878,8 @@ cmd_migrate() {
                 [ "$_mg_tty" = stdin ] && _mg_tty=/dev/stdin
                 printf '    %s?%s Password of the %s user in the old database (not shown): ' "${UI_ASK:-}" "${UI_RESET:-}" "$EXAKIT_LEGACY_USER" > "$_mg_tty"
                 IFS= read -rs EXAKIT_LEGACY_PASSWORD < "$_mg_tty" || EXAKIT_LEGACY_PASSWORD=""
+                # An arrow pressed in it is no part of the password.
+                exakit_drop_key_escapes "$EXAKIT_LEGACY_PASSWORD"; EXAKIT_LEGACY_PASSWORD="$_EKE_OUT"; _EKE_OUT=""
                 printf '\n' > "$_mg_tty"
                 [ -n "$EXAKIT_LEGACY_PASSWORD" ] || _mg_reject "No password was given."
             else

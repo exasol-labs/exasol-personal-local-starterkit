@@ -29,6 +29,12 @@ A credential in the string - user:password@, or a parameter named like one -
 is never used, stored or echoed: a note says it was ignored and asked for
 separately. Every other parameter the kit does not read is dropped by name
 (never by value). Messages never quote the string.
+
+The answer's "masked" is the string as read with every credential value
+replaced by **** (user:****@, password=****, AccountKey=****, sig=****), the
+names and everything else kept: what the connect form shows back after a
+string was pasted at its hidden prompt. It is the one place a string is
+masked; the shells print it and never mask one themselves.
 """
 
 import re
@@ -170,7 +176,7 @@ class Reading(object):
                 self.drop(name if secret or not after_secret else "?")
             after_secret = after_secret or secret
 
-    def result(self):
+    def result(self, masked=""):
         values = {}
         for name in [s["name"] for s in self.connector["inputs"]]:
             if name not in self.values:
@@ -199,7 +205,8 @@ class Reading(object):
         if values:
             notes.append(("INFO", "From the connection string: %s" % ", ".join(sorted(values))))
         return {"values": values, "notes": [text for _, text in notes],
-                "dropped": [n if PARAM_NAME.match(n) else "?" for n in self.dropped], "events": notes}
+                "dropped": [n if PARAM_NAME.match(n) else "?" for n in self.dropped], "events": notes,
+                "masked": masked}
 
 
 # --- the parameters a rule reads together -------------------------------------
@@ -461,6 +468,176 @@ STYLES = {"url": style_url, "oracle": style_oracle, "mongodb": style_mongodb, "s
           "azure": style_azure, "glue": style_glue, "catalog": style_catalog}
 
 
+# --- the string shown back, its credentials masked ------------------------------
+#
+# Each style's string is cut where its reader cuts it, by position, so a value is
+# masked where it stands and nothing else is touched. A mask is never narrower
+# than the reader: a parameter named like a credential is masked whether or not
+# the reader used it, and after one, every part the reader does not know is
+# masked whole - it may be the rest of a password whose & or ; was not
+# percent-encoded (the reader counts those, never names them).
+
+MASK = "****"
+
+
+class Mask(object):
+    def __init__(self, reading, text):
+        self.reading = reading
+        self.text = text
+        self.spans = []
+        self.after_secret = False
+        block = reading.block
+        self.known = set(p.lower() for p in block.get("params", {}))
+        self.known |= set(p.lower() for p in block.get("implied", []))
+        self.known |= set(CONSUMED.get(block.get("tls"), ()))
+
+    def hide(self, start, end):
+        if end > start:
+            self.spans.append((start, end))
+
+    def userinfo(self, start, end, separator=":", whole=False):
+        """text[start:end] is user[:password]: the password masked; all of
+        it when whole (a catalog's userinfo is a credential either way)."""
+        info = self.text[start:end]
+        user, sep, password = info.partition(separator)
+        if sep and password:
+            self.hide(start + len(user) + 1, end)
+        elif whole:
+            self.hide(start, end)
+
+    def segments(self, start, end, separator, every=False):
+        """The name=value parts of text[start:end]: a credential's value
+        masked, its name kept; after one, an unknown part masked whole;
+        every value when every (a catalog's query is a credential)."""
+        pos = start
+        for segment in self.text[start:end].split(separator):
+            at = pos
+            pos += len(segment) + 1
+            if not segment.strip():
+                continue
+            name, eq, _ = segment.partition("=")
+            clean = unquote(name).strip()
+            if every:
+                self.hide(at + len(name) + 1 if eq else at, at + len(segment))
+            elif clean and self.reading.is_secret(clean):
+                if eq:
+                    self.hide(at + len(name) + 1, at + len(segment))
+                self.after_secret = True
+            elif self.after_secret and clean.lower() not in self.known:
+                self.hide(at, at + len(segment))
+
+    def fragment(self, at):
+        """Everything after a # at text[at] - no reader uses it, and it may be
+        the end of a password with an unencoded #."""
+        self.hide(at + 1, len(self.text))
+
+    def tail(self, base, separator=":"):
+        """What follows the scheme, cut as split_tail cuts it."""
+        text = self.text
+        tail = text[base:]
+        cut = _first(tail, ";?")
+        at = tail.rfind("@", 0, cut)
+        if at >= 0:
+            _, sep, password = tail[:at].partition(separator)
+            last = tail.rfind("@")
+            if sep and password and last > at:
+                # Another @ after the cut: the password may hold an @ and a ;
+                # or ? unencoded, which the reader cut short - masked up to the
+                # last @, never shown in part.
+                at = last
+            self.userinfo(base, base + at, separator)
+            base += at + 1
+        self.rest(base)
+
+    def rest(self, base):
+        """text[base:]: an authority and path, then ;k=v and ?k=v&k=v, then #."""
+        text = self.text
+        hash_at = text.find("#", base)
+        end = hash_at if hash_at >= 0 else len(text)
+        if hash_at >= 0:
+            self.fragment(hash_at)
+        params = base + _first(text[base:end], ";?")
+        query = text.find("?", params, end)
+        if query < 0:
+            query = end
+        self.segments(params, query, ";")
+        if query < end:
+            self.segments(query + 1, end, "&")
+
+    def result(self):
+        out, last = [], 0
+        for start, end in sorted(self.spans):
+            if end <= last:
+                continue
+            start = max(start, last)
+            out.append(self.text[last:start])
+            out.append(MASK)
+            last = end
+        out.append(self.text[last:])
+        return "".join(out)
+
+
+def _scheme_end(text):
+    """Where what follows the first "://" starts; 0 without one."""
+    at = text.find("://")
+    return at + 3 if at >= 0 else 0
+
+
+def mask_url(mask):
+    mask.tail(_scheme_end(mask.text))
+
+
+def mask_oracle(mask):
+    text = mask.text
+    if text.lower().startswith("jdbc:oracle:thin:"):
+        base = len("jdbc:oracle:thin:")
+        at = text.rfind("@")
+        if at >= base:
+            mask.userinfo(base, at, "/")
+        mask.rest(at + 1)
+    else:
+        mask.rest(0)
+
+
+def mask_azure(mask):
+    text = mask.text
+    if "://" not in text and "accountname=" in text.lower():
+        mask.segments(0, len(text), ";")
+    else:
+        # container@account is not a user: only a query or a fragment can
+        # hold a credential (a SAS token's sig).
+        mask.rest(_scheme_end(text))
+
+
+def mask_catalog(mask):
+    text = mask.text
+    match = re.match(r"^(https?)://([^/?#]*)([^?#]*)(.*)$", text, re.I)
+    if not match:
+        mask.rest(0)
+        return
+    authority = match.group(2)
+    if "@" in authority:
+        mask.userinfo(match.start(2), match.start(2) + authority.rfind("@"), whole=True)
+    tail = match.start(4)
+    hash_at = text.find("#", tail)
+    end = hash_at if hash_at >= 0 else len(text)
+    if hash_at >= 0:
+        mask.fragment(hash_at)
+    if text.startswith("?", tail):
+        mask.segments(tail + 1, end, "&", every=True)
+
+
+MASKS = {"url": mask_url, "mongodb": mask_url, "s3": mask_url, "glue": mask_url, "oracle": mask_oracle,
+         "azure": mask_azure, "catalog": mask_catalog}
+
+
+def masked(reading, text):
+    """text with every credential value replaced by **** (Mask)."""
+    mask = Mask(reading, text)
+    MASKS[reading.block.get("style", "url")](mask)
+    return mask.result()
+
+
 def read(connector, text):
     """The inputs a connection string names: {"values", "notes", "dropped",
     "events"}. A string the connector cannot read is a PlanError that does
@@ -479,4 +656,4 @@ def read(connector, text):
                                 "give it on one line, as the source shows it")
     reading = Reading(connector, block)
     STYLES[block.get("style", "url")](reading, text)
-    return reading.result()
+    return reading.result(masked(reading, text))
