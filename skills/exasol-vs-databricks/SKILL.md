@@ -15,7 +15,7 @@ skill adds only what is Databricks' own.
 Any Unity Catalog schema, read through a SQL warehouse: each query runs on the
 warehouse (it costs compute and starts a stopped one - seconds when serverless,
 minutes for a classic one). One source is one catalog schema. To read tables on
-your own storage without a warehouse, see `exasol-vs-unity` (Beta). Tier GA.
+your own storage without a warehouse, see `exasol-vs-unity`. Tier GA.
 
 ## 2. What to get from the user
 

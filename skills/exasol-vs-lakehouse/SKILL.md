@@ -81,8 +81,8 @@ exakit connect lakehouse --name lake --set region=<region> --set database=<datab
   --password-file ~/.config/exakit/<name>-key.json --yes --json
 ```
 
-The first lakehouse source installs the Rust language container after asking
-(`--yes` consents: tell the user first - one database restart). The tables
+The first lakehouse source installs the Rust language container - at once at a
+terminal, with `--yes` in a script (tell the user first - one database restart). The tables
 appear as `VS_LAKE`.
 
 ## 7. Verify
