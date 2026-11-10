@@ -490,6 +490,7 @@ _HOME_SAVED="$HOME"
 HOME="$WORK/fakehome"; export HOME
 mkdir -p "$HOME/.claude/skills/zz-invented-skill" \
          "$HOME/.agents/skills/zz-invented-skill" \
+         "$HOME/.continue/skills/zz-invented-skill" \
          "$HOME/.claude/skills/somebody-elses-skill"
 
 _exakit_remove_installed_skills 0 >/dev/null 2>&1
@@ -497,6 +498,11 @@ if [ -e "$HOME/.claude/skills/zz-invented-skill" ]; then
     check "a kit skill is removed" "gone" "STILL-THERE"
 else
     check "a kit skill is removed" "gone" "gone"
+fi
+if [ -e "$HOME/.continue/skills/zz-invented-skill" ]; then
+    check "a kit skill is removed from Continue's folder" "gone" "STILL-THERE"
+else
+    check "a kit skill is removed from Continue's folder" "gone" "gone"
 fi
 if [ -e "$HOME/.claude/skills/somebody-elses-skill" ]; then
     check "a foreign skill is kept" "kept" "kept"

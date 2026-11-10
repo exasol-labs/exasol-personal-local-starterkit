@@ -13455,7 +13455,10 @@ _exakit_remove_installed_skills() {
     # uninstall - long enough to push everything else off a screen, and saying
     # nothing the count and the folder do not. The individual paths are still
     # worth having in the log, where a reader goes when they want them.
-    for _root in "$HOME/.claude/skills" "$HOME/.agents/skills"; do
+    # Continue's folder too, whether or not ~/.continue is still there: the
+    # install places skills in it only when Continue is on the machine, and the
+    # user may have removed Continue since. Only the kit's names are touched.
+    for _root in "$HOME/.claude/skills" "$HOME/.agents/skills" "$HOME/.continue/skills"; do
         _rs_found=0
         for _name in $_skill_names; do
             [ -e "$_root/$_name" ] || continue
