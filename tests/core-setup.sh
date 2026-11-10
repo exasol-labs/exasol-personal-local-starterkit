@@ -478,7 +478,7 @@ _persona_probe() { # _persona_probe <script> <rerun 0|1> -> what ran, and ACTIVE
       exakit_marketplace_offer() { printf 'offer|'; }
       _exakit_marketplace_cli() { printf 'services|'; }
       exakit_persona_marketplace_note() { :; }
-      PP_RERUN="$2"; EXAKIT_PERSONA_ACTIVE=1
+      PP_RERUN="$2"; EXAKIT_PERSONA_ACTIVE=1; EXAKIT_BIN_DIR="$WORK/pp-bin"
       eval "$_pp_apply"; eval "$_pp_close"
       printf 'ACTIVE=%s' "${EXAKIT_PERSONA_ACTIVE:-}" )
 }
