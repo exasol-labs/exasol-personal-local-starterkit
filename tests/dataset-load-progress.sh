@@ -249,7 +249,7 @@ check "a row per dataset, plus the parent, your file, the external source and Sk
 check "the parent row leads"       "group|Sample datasets" "$(sed -n 1p "$TBL" | cut -d'|' -f1,2)"
 check "the last dataset corners"   "corner"     "$(sed -n 4p "$TBL" | cut -d'|' -f1)"
 check "the file row is 5"          "5"          "$EXAKIT_TABLE_ROW_LOCAL"
-check "the external source is 6, shown but disabled" "Connect an external source - coming soon|disabled" "$(sed -n 6p "$TBL" | cut -d'|' -f2,4)"
+check "the external source is 6, shown but disabled (no virtual-schema module here)" "Connect an external source - unavailable|disabled" "$(sed -n 6p "$TBL" | cut -d'|' -f2,4)"
 check "Skip is 7, and exclusive"   "7"          "$EXAKIT_TABLE_EXCLUSIVE"
 check "the group is all-or-none"   "1:2:4:all"  "$EXAKIT_TABLE_GROUP"
 check "everything loadable is pre-ticked" "1,2,3,4" "$EXAKIT_TABLE_DEFAULTS"
@@ -400,7 +400,7 @@ has "...and stops it"                  'ui_table_end "$EXAKIT_TABLE_STATE"'   "$
 # A warning printed into a frame that is still being repainted lands inside the
 # box, so the installer collects them and speaks after the table has stopped.
 has "warnings wait for the table"      '_data_notes="${_data_notes}warn|'      "$COMMON_SH"
-has "...and are said afterwards"       'EXAKIT_DATA_NOTES_EOF'                "$COMMON_SH"
+has "...and are said afterwards"       'exakit_print_notes "$_data_notes"'    "$COMMON_SH"
 
 printf '\n== under a REAL terminal, one table is left, not three ==\n'
 

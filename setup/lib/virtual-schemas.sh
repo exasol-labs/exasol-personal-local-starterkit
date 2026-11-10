@@ -34,10 +34,44 @@ exakit_vs_available() {
     [ -n "$_eva_py" ] && [ -x "$_eva_py" ]
 }
 
+# exakit_vs_unavailable_reason — why exakit_vs_available said no, in the few
+# words the data table's disabled row has room for (the whole label stays
+# inside the name column of an 80-column table).
+exakit_vs_unavailable_reason() {
+    if ! exakit_vs_defs >/dev/null 2>&1; then
+        printf 'unavailable\n'
+    else
+        printf 'no pyexasol\n'
+    fi
+}
+
+# _exakit_vs_cli — the kit's own command beside this library (setup/exakit).
+# It loads THIS library (its lib/ comes first), so it is the same kit version
+# as the installer that sourced it, whatever the kit home holds yet.
+_exakit_vs_cli() {
+    _evc_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)" || return 1
+    [ -f "$_evc_dir/exakit" ] || return 1
+    printf '%s\n' "$_evc_dir/exakit"
+}
+
 # exakit_vs_connect_wizard — the data-load row: `exakit connect` asking for
-# everything. Run in a subshell by the caller, since cmd_connect exits.
+# everything, the same as typed with no arguments. Run in a subshell by the
+# caller, since cmd_connect exits. Inside exakit (`exakit data-load`) that is
+# cmd_connect itself. The installer sources this file too, but cmd_connect
+# needs what only the command defines (_require_install and the rest), and the
+# installed command reads the kit home, which the installer's last step
+# refreshes (kit_helper_step). So there the wizard is the command beside this
+# library, as a child: the same kit version as the installer.
 exakit_vs_connect_wizard() {
-    cmd_connect
+    if [ "$(type -t _require_install 2>/dev/null)" = function ]; then
+        cmd_connect
+        return $?
+    fi
+    _evw_cli="$(_exakit_vs_cli)" || {
+        warn "This kit copy has no exakit command beside its library."
+        return 2
+    }
+    "${BASH:-bash}" "$_evw_cli" connect
 }
 
 # _exakit_vs_kit_python — the kit's pyexasol interpreter, which the engine and

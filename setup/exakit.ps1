@@ -4050,11 +4050,17 @@ function Invoke-CmdDataLoad {
         if ($env:EXAKIT_DATASETS) {
             $known = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
             $any = $false
+            $external = $false
             foreach ($id in ($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
                 if ($known -ccontains $id) {
                     $any = $true
                     Info "Reloading dataset '$id' (EXAKIT_DATASETS, -Force)"
                     Invoke-ExakitDatasetLoad -KitRoot $kitRoot -Id $id -Force
+                } elseif ($id -ceq "external") {
+                    # The menu's external-source row: nothing to reload, and
+                    # never the wizard. As plain data-load: the hint, exit 0.
+                    $any = $true
+                    $external = $true
                 } else {
                     Warn2 "Unknown dataset id '$id' in EXAKIT_DATASETS (available: $($known -join ', '))."
                 }
@@ -4062,6 +4068,7 @@ function Invoke-CmdDataLoad {
             if (-not $any) {
                 Fail "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was reloaded."
             }
+            if ($external) { Write-ExakitDataExternalHint }
             return
         }
         Info "Reloading the bundled sample dataset (log: $script:LogFile)"
@@ -4077,6 +4084,7 @@ function Invoke-CmdDataLoad {
         $pendingIds = @(Get-ExakitPendingDatasets | ForEach-Object { $_.Id })
         $any = $false
         $failed = $false
+        $external = $false
         foreach ($id in ($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
             if ($known -ccontains $id) {
                 $any = $true
@@ -4086,13 +4094,26 @@ function Invoke-CmdDataLoad {
                 } else {
                     Ok "Dataset '$id' is already loaded - nothing to do (replace it with: exakit data-load --force $id, which drops and rebuilds its tables)"
                 }
+            } elseif ($id -ceq "external") {
+                # The menu's external-source row, named. An answer, never the
+                # wizard: that asks its own questions. Twin of cmd_data_load.
+                $any = $true
+                $external = $true
             } else {
                 Warn2 "Unknown dataset id '$id' in EXAKIT_DATASETS (available: $($known -join ', '))."
             }
         }
         if (-not $any) { Fail "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was loaded." }
+        if ($external) { Write-ExakitDataExternalHint }
         if ($failed) { exit 1 }
     } else {
+        # A file named (the argument or EXAKIT_DATA_FILE) is the whole answer:
+        # loading datasets too would make every `exakit data-load <path>` also
+        # load an EXAKIT_DATASETS left in the shell or exakit.env. Said, not
+        # silent. Twin of cmd_data_load.
+        if ($env:EXAKIT_DATASETS -and $env:EXAKIT_DATA_FILE) {
+            Warn2 "EXAKIT_DATASETS is ignored when a file is named; load them with a separate exakit data-load"
+        }
         Show-ExakitDataLoadMenu
     }
 }
@@ -5260,6 +5281,9 @@ try {
     # Fail() already printed the error and the log path; just set the exit code.
     exit 1
 } catch {
+    # Input the loader refused (Stop-ExakitLocalFileRefused) already said why:
+    # bad input, exit 2, as every refusal answers.
+    if (Test-ExakitRefusal $_) { exit 2 }
     Write-Host "  x Unexpected error: $_" -ForegroundColor Red
     exit 1
 }

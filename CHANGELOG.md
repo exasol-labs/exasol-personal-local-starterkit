@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+**Connect an external source from the data menu.** The install's data table
+and `exakit data-load` offer "Connect an external source" wherever virtual
+schemas can run, on macOS, Linux and Windows; it said "coming soon" during
+every install. Ticked, it runs the `exakit connect` wizard after the datasets
+and the file. A connect that fails or is cancelled is reported with the
+`exakit connect` hint, and the install carries on. Without a terminal the
+wizard never starts: `EXAKIT_DATASETS=...,external` prints the hint instead.
+At install, `EXAKIT_DATA_FILE` now loads alongside a persona's datasets (and
+`EXAKIT_DATASETS` or `EXAKIT_LOAD_SAMPLE`), where it used to be dropped.
+`exakit data-load` with a file named still loads only the file, and now
+says that `EXAKIT_DATASETS` was ignored.
+
 **`exakit connect --url`: paste a connection string.** A JDBC URL, a
 `postgres://`, `mysql://` or `mongodb+srv://` URI, an S3, Azure or Glue
 address, or a bare `host:port/database` as a cloud console shows it fills the

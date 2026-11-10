@@ -1126,6 +1126,23 @@ class ExakitFailException : System.Exception {
     ExakitFailException([string]$Msg) : base($Msg) {}
 }
 
+# ExakitRefusedException - input refused as bad (a file the loader cannot take),
+# not a failed step: `exakit data-load` answers it with exit 2, the installer
+# with a warning it does not book. The twin of the shell loader's exit 3
+# (_llf_refuse), which both of its callers read the same way. It used to be an
+# `exit 2` inside the loader, which ended the whole installer on Windows.
+class ExakitRefusedException : System.Exception {
+    ExakitRefusedException([string]$Msg) : base($Msg) {}
+}
+
+# Test-ExakitRefusal <error record> - is this the loader refusing bad input?
+# Matched by name, so a caller needs no type literal from another file.
+function Test-ExakitRefusal {
+    param($ErrorRecord)
+    if ($null -eq $ErrorRecord -or $null -eq $ErrorRecord.Exception) { return $false }
+    return ($ErrorRecord.Exception.GetType().Name -eq "ExakitRefusedException")
+}
+
 # Deny-ExakitInput <message> [remedy] - refuse the caller's input, honouring
 # --json. Twin of reject() in common.sh, and it exists for the same reason: a
 # refusal owes the same contract as an answer. AGENTS.md promises that where a

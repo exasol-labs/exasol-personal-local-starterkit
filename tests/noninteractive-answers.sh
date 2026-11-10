@@ -145,6 +145,73 @@ else
     check "bad EXAKIT_DATA_FILE is refused promptly (exit 3 = bad input)" "rc=3" "$(cat "$WORK/local-file-rc" 2>/dev/null || echo "no-rc-recorded")"
 fi
 
+echo "the install's data answers - each row its own, in the table's order:"
+# The real installer step (exakit_maybe_offer_data_load) with the loaders as
+# stubs: what ran, in order, then its status. `external` names the
+# external-source row: unattended it is only ever the command to run - the
+# wizard (a stub here that says CONNECT) is never started.
+offer() { # offer — LOAD/FILE/CONNECT in order~rc~what was said~NOTE=the failure note
+    (
+        # OFFER_FAIL names a dataset whose load fails; OFFER_FILE_RC is what the
+        # file loader answers (3: refused, 1: failed). The failure note is kept.
+        exakit_load_dataset() { printf 'LOAD %s\n' "$2" >> "$WORK/offer.log"; [ "$2" != "${OFFER_FAIL:-}" ]; }
+        exakit_load_sample_data() { printf 'LOAD tpch(sample)\n' >> "$WORK/offer.log"; }
+        exakit_load_local_file() { printf 'FILE %s\n' "$EXAKIT_DATA_FILE" >> "$WORK/offer.log"; echo "FILE-RAN"; return "${OFFER_FILE_RC:-0}"; }
+        exakit_vs_connect_wizard() { printf 'CONNECT\n' >> "$WORK/offer.log"; }
+        exakit_bundled_datasets() { printf 'tpch|TPC-H\nenergy|Energy\namazon_sales|Amazon\n'; }
+        exakit_note_failure() { printf '%s' "$*" > "$WORK/offer.note"; }
+        _exakit_prompt_tty() { :; }
+        : > "$WORK/offer.log"; : > "$WORK/offer.note"
+        EXAKIT_HOME="$WORK/home" exakit_maybe_offer_data_load "$ROOT" </dev/null > "$WORK/offer.out" 2>&1
+        _o_rc=$?
+        printf '%s~rc=%s~%s~NOTE=%s' "$(tr '\n' ';' < "$WORK/offer.log")" "$_o_rc" "$(tr '\n' ' ' < "$WORK/offer.out")" "$(cat "$WORK/offer.note")"
+    )
+}
+unset EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATA_FILE
+out="$(EXAKIT_DATASETS=tpch,external offer)"
+check "EXAKIT_DATASETS=tpch,external: the dataset loads, the wizard does not start" "LOAD tpch;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+check "...the external row is one line naming the command" "yes" \
+    "$(printf '%s' "$out" | grep -q 'needs a terminal. Connect one any time with: exakit connect' && echo yes || echo no)"
+check "...and external is not an unknown id" "no" "$(printf '%s' "$out" | grep -q "Unknown dataset id 'external'" && echo yes || echo no)"
+out="$(EXAKIT_DATASETS=external offer)"
+check "EXAKIT_DATASETS=external alone: an answer, nothing loaded, nothing failed" "~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+out="$(EXAKIT_DATASETS=nope offer)"
+check "an id the kit does not ship still fails the step" "~rc=1" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+# A persona answers through EXAKIT_DATASETS; the file named beside it used to be
+# dropped without a word. Now each answers its own row: the datasets, then the
+# file, then the external row's command.
+out="$(EXAKIT_DATASETS=amazon_sales,external EXAKIT_DATA_FILE="$WORK/mine.csv" offer)"
+check "EXAKIT_DATASETS and EXAKIT_DATA_FILE: the datasets, then the file" "LOAD amazon_sales;FILE $WORK/mine.csv;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+check "...then the external row's command, last" "yes" \
+    "$(printf '%s' "$out" | cut -d'~' -f3 | grep -q 'Loading a local file (EXAKIT_DATA_FILE).*Connect one any time with: exakit connect' && echo yes || echo no)"
+out="$(EXAKIT_LOAD_SAMPLE=0 EXAKIT_DATA_FILE="$WORK/mine.csv" offer)"
+check "EXAKIT_LOAD_SAMPLE=0 and a file: the samples are skipped, the file loads" "FILE $WORK/mine.csv;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+out="$(EXAKIT_LOAD_SAMPLE=1 EXAKIT_DATA_FILE="$WORK/mine.csv" offer)"
+check "EXAKIT_LOAD_SAMPLE=1 and a file: the sample, then the file" "LOAD tpch(sample);FILE $WORK/mine.csv;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+out="$(EXAKIT_LOAD_SAMPLE=0 offer)"
+check "EXAKIT_LOAD_SAMPLE=0 alone still skips everything, as it said" "yes" \
+    "$(printf '%s' "$out" | grep -q 'Skipping data loading (EXAKIT_LOAD_SAMPLE=0)' && echo yes || echo no)"
+# A refused file beside a dataset answer (a persona's, or EXAKIT_DATASETS) is
+# bad input, not a failed step: a warning, and the step is not booked.
+out="$(EXAKIT_DATASETS=amazon_sales EXAKIT_DATA_FILE="$WORK/mine.tsv" OFFER_FILE_RC=3 offer)"
+check "a dataset answer and a refused file: the dataset, the file, nothing booked" "LOAD amazon_sales;FILE $WORK/mine.tsv;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+check "...the refusal is a warning" "yes" "$(printf '%s' "$out" | grep -q 'The local file was refused (see above)' && echo yes || echo no)"
+# An answer that matches nothing is said before the file loads, as on Windows.
+out="$(EXAKIT_DATASETS=nope EXAKIT_DATA_FILE="$WORK/mine.csv" offer)"
+check "no dataset matched: said before the file loads" "yes" \
+    "$(printf '%s' "$out" | cut -d'~' -f3 | grep -q 'matched no bundled dataset.*FILE-RAN' && echo yes || echo no)"
+# A dataset and the file both fail: the step is failed once, naming both.
+out="$(EXAKIT_DATASETS=tpch EXAKIT_DATA_FILE="$WORK/mine.csv" OFFER_FAIL=tpch OFFER_FILE_RC=1 offer)"
+check "a dataset and the file both fail: the step fails" "rc=1" "$(printf '%s' "$out" | cut -d'~' -f2)"
+check "...and the note names both reasons" "yes" \
+    "$(printf '%s' "$out" | sed -n 's/.*~NOTE=//p' | grep -q "loading dataset 'tpch' did not finish.*loading the local file did not finish" && echo yes || echo no)"
+# No answer variables and no terminal: the table's defaults stand, and the
+# external row is never one of them.
+out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
+        exakit_vs_available() { return 0; }
+        offer) )"
+check "no answers, no terminal: the pending samples, never the wizard" "LOAD tpch;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+
 echo ""
 echo "noninteractive-answers: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

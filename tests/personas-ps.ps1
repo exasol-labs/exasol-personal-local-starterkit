@@ -66,12 +66,12 @@ try {
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
     Check "the persona's row ticked, the file and external rows after the datasets, each described in the Description column" `
-        "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;Orders, customers, parts;Online orders;;;" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip~;Orders, customers, parts;Online orders;;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"
     Check "a persona picked: only its datasets under Sample datasets, then upload, external and Skip" `
-        "Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~1,2" `
+        "Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip~1,2" `
         "$((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ';')~$($script:ExakitTableDefaults -join ',')"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,amazon_sales"
@@ -90,6 +90,39 @@ try {
     Check "EXAKIT_LOAD_SAMPLE=0 and add-ons none win" "|all|none" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_SKIP_MCP = "1"; Set-ExakitPersonaEnv
     Check "EXAKIT_SKIP_MCP=1 wins over the persona's clients" "" $env:EXAKIT_MCP_CLIENTS
+    Write-Host "a persona and a file of your own: both load, the file after the datasets:"
+    # EXAKIT_PERSONA answers through EXAKIT_DATASETS, and that answer used to
+    # return before EXAKIT_DATA_FILE was looked at: the file was dropped without
+    # a word. The real persona answers and the real installer step, in a scope
+    # of their own; the loaders are stubs that say what they were asked to load.
+    $mine = Join-Path $work "mine.csv"
+    $ran = & {
+        $script:Ran = New-Object System.Collections.ArrayList
+        function Invoke-ExakitDatasetLoad { param($KitRoot, $Id, [switch]$Force) [void]$script:Ran.Add("LOAD $Id") }
+        function Import-ExakitLocalFile { [void]$script:Ran.Add("FILE $($env:EXAKIT_DATA_FILE)"); return "loaded" }
+        Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_DATA_FILE = $mine; Set-ExakitPersonaEnv -NoRecord
+        try { Request-ExakitDataLoadOffer -KitRoot $repo 6>$null } finally { Remove-Item Env:EXAKIT_DATA_FILE -ErrorAction SilentlyContinue }
+        $script:Ran -join ";"
+    }
+    Check "EXAKIT_PERSONA plus EXAKIT_DATA_FILE: the persona's datasets, then the file" "LOAD amazon_sales;LOAD fraud_transactions;FILE $mine" $ran
+    # The persona picked at the install's question: a file named in the
+    # environment skips the table, and the persona's datasets still to load are
+    # loaded before it. Twin of the same checks in tests/personas.sh.
+    function Sel([string]$Active, [string]$Preselect) {
+        return (& {
+            function Get-ExakitPendingDatasets { return @("tpch", "amazon_sales", "fraud_transactions") | ForEach-Object { [pscustomobject]@{ Id = $_; Label = $_; Description = "" } } }
+            if ($Active) { $env:EXAKIT_PERSONA_ACTIVE = $Active } else { Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue }
+            $env:EXAKIT_DATASETS_PRESELECT = $Preselect
+            $env:EXAKIT_DATA_FILE = $mine
+            try { (@(Select-ExakitDataLoad -FinalLabel "Skip" 6>$null)) -join "," }
+            finally { foreach ($v in "EXAKIT_PERSONA_ACTIVE", "EXAKIT_DATASETS_PRESELECT", "EXAKIT_DATA_FILE") { Remove-Item "Env:$v" -ErrorAction SilentlyContinue } }
+        })
+    }
+    Check "a persona picked at the question, and a file: its datasets, then the file" "amazon_sales,fraud_transactions,local" (Sel "1" "amazon_sales,fraud_transactions")
+    Check "...only the ones still to load" "amazon_sales,local" (Sel "1" "amazon_sales,weather")
+    Check "a persona that wants no samples, and a file: the file" "local" (Sel "1" "none")
+    Check "no persona, and a file: the file, as always" "local" (Sel "" "tpch")
+    Clear-Answers
     Write-Host "the persona service's word, not a guess:"
     Check "an unknown persona names the ones there are" $true (($null -eq (Get-ExakitPersona "nope")) -and ($script:ExakitPersonaProblem -like "*Unknown persona 'nope' (available: data-scientist general)*"))
     Check "two words are not two personas" $null (Get-ExakitPersona "ml-engineer ml-engineer")

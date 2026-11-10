@@ -32,6 +32,113 @@ function Test-ExakitVsAvailable {
     return (Test-Path -LiteralPath (Get-PyexasolVenvPython))
 }
 
+# Get-ExakitVsUnavailableReason - why Test-ExakitVsAvailable said no, in the few
+# words the data table's disabled row has room for (the whole label stays
+# inside the name column of an 80-column table). Twin of
+# exakit_vs_unavailable_reason.
+function Get-ExakitVsUnavailableReason {
+    if (-not (Get-ExakitVsDefs)) { return "unavailable" }
+    return "no pyexasol"
+}
+
+# Get-ExakitVsCli - the kit's own command beside this library (setup\exakit.ps1).
+# It loads THIS library (its lib\ comes first), so it is the same kit version as
+# the installer that dot-sourced it, whatever the kit home holds yet. Twin of
+# _exakit_vs_cli.
+function Get-ExakitVsCli {
+    $cli = Join-Path (Split-Path -Parent $PSScriptRoot) "exakit.ps1"
+    if (Test-Path -LiteralPath $cli) { return $cli }
+    return $null
+}
+
+# Ctrl+C while the wizard runs. The console sends it to every process attached
+# to it: the wizard's child ends, and this PowerShell, on its own handler, would
+# stop its pipeline as soon as the child returned - in the installer that is
+# step 7, the closing panel and the summary of what did not finish, all lost,
+# and Invoke-ExakitBestEffort cannot catch a stopped pipeline. While the child
+# runs, a Console.CancelKeyPress handler (registered after PowerShell's own, so
+# asked first) answers Cancel = true for this process only; the child still
+# gets its Ctrl+C. C# 5 and ASCII, for Windows PowerShell 5.1's compiler.
+$script:ExakitVsCtrlCSource = @"
+using System;
+public static class ExakitConnectCtrlC {
+    private static ConsoleCancelEventHandler handler = null;
+    public static bool Held { get { return handler != null; } }
+    public static void Hold() {
+        if (handler != null) { return; }
+        handler = new ConsoleCancelEventHandler(OnCancel);
+        Console.CancelKeyPress += handler;
+    }
+    public static void Release() {
+        if (handler == null) { return; }
+        Console.CancelKeyPress -= handler;
+        handler = null;
+    }
+    private static void OnCancel(object sender, ConsoleCancelEventArgs e) {
+        e.Cancel = true;
+    }
+}
+"@
+
+# Get-ExakitVsCtrlC - the helper type, compiled once per process; $null when it
+# cannot be (the wizard then runs without it, as it did before).
+function Get-ExakitVsCtrlC {
+    $type = 'ExakitConnectCtrlC' -as [type]
+    if ($type) { return $type }
+    try {
+        Add-Type -TypeDefinition $script:ExakitVsCtrlCSource -Language CSharp -ErrorAction Stop
+    } catch {
+        Write-ExakitLog "WARN" "Ctrl+C guard for exakit connect not available: $_"
+        return $null
+    }
+    return ('ExakitConnectCtrlC' -as [type])
+}
+
+# Start-ExakitVsChild <cli> - the command beside this library, `connect`, on the
+# PowerShell running this one, started straight on this console (nothing
+# redirected) rather than through the pipeline: a caller that captures output -
+# the installer's data step runs inside [void](...) - would redirect the
+# child's output, and ui.ps1 then turns its menus off (IsOutputRedirected).
+# Returns its exit code; throws when it cannot be started.
+function Start-ExakitVsChild {
+    param([Parameter(Mandatory)][string]$Cli)
+    $exe = (Get-Process -Id $PID).Path
+    if (-not $exe) { throw "the path of this PowerShell is not known" }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $exe
+    $psi.Arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$Cli`" connect"
+    $psi.UseShellExecute = $false
+    $child = [System.Diagnostics.Process]::Start($psi)
+    $child.WaitForExit()
+    return $child.ExitCode
+}
+
+# Invoke-ExakitVsConnectWizard - the data-load row: `exakit connect` asking for
+# everything, the same as typed with no arguments. Always a child: the command
+# exits when it is done, and the installer does not have Invoke-CmdConnect at
+# all. Ctrl+C ends the child only (see above). Never throws: a child that
+# cannot be started is a connect that did not finish (exit 1). Returns the
+# child's exit code - -1073741510 (0xC000013A) when Ctrl+C ended it, which
+# Test-ExakitConnectCancelled reads as a cancel. Twin of
+# exakit_vs_connect_wizard.
+function Invoke-ExakitVsConnectWizard {
+    $cli = Get-ExakitVsCli
+    if (-not $cli) {
+        Warn2 "This kit copy has no exakit command beside its library."
+        return 2
+    }
+    $guard = Get-ExakitVsCtrlC
+    try {
+        if ($guard) { $guard::Hold() }
+        return [int](Start-ExakitVsChild -Cli $cli)
+    } catch {
+        Write-ExakitLog "WARN" "exakit connect could not be started: $_"
+        return 1
+    } finally {
+        if ($guard) { $guard::Release() }
+    }
+}
+
 # Invoke-ExakitVsEngine - the engine with this installation's context. The
 # secret, when there is one, goes to its stdin base64-encoded (and
 # --secret-stdin becomes --secret-stdin-base64): Windows PowerShell 5.1

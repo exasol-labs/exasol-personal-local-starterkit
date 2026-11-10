@@ -98,6 +98,13 @@ it, and say why when you do.
 Never load row by row from a Python loop of `INSERT`s. In a notebook, use
 `nb.load_own_file(...)` (§5).
 
+Data that should stay where it is (another database, a lake, a bucket) is not
+loaded: `exakit connect` queries it in place through a virtual schema
+(`exasol-virtual-schemas`). The data menu's last row, "Connect an external
+source", runs that same wizard for a person at a terminal; named in
+`EXAKIT_DATASETS` (`external`) it only prints the `exakit connect` hint, so an
+agent connects with the unattended `exakit connect <connector> ...` form.
+
 **Read and explore data**
 
 1. The MCP tools — they connect as the read-only user, so nothing can change.

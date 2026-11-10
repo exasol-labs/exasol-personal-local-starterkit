@@ -1851,6 +1851,19 @@ function Import-ExakitLocalJson {
     }
 }
 
+# Stop-ExakitLocalFileRefused <message> - a file the loader cannot take: said as
+# the card every refusal has, logged, and thrown as ExakitRefusedException - bad
+# input, never a failed step. `exakit data-load` answers it with exit 2 once the
+# rows after the file have had their turn; the installer warns and carries on.
+# Twin of _llf_refuse in exapump.sh (exit 3, read the same way by its callers).
+# It used to be a bare `exit 2`, which ended the whole installer.
+function Stop-ExakitLocalFileRefused {
+    param([Parameter(Mandatory)][string]$Message)
+    Write-Host ""; Write-Host "  [x] $Message"
+    Write-ExakitLog "REJECT" $Message
+    throw [ExakitRefusedException]::new($Message)
+}
+
 function Import-ExakitLocalFile {
     $defaultPath = if ($env:EXAKIT_DATA_FILE) { $env:EXAKIT_DATA_FILE } else { "" }
     while ($true) {
@@ -1884,13 +1897,12 @@ function Import-ExakitLocalFile {
             # and does not rename it behind the user's back.
             if ($llfKind -eq "csv" -and (Test-ExakitCsvExtensionRefused $path)) {
                 Warn2 "$llfName looks tabular, but exapump reads .csv and .parquet only - rename it to .csv and load that."
-                if (-not (Test-ExakitInteractive)) { exit 2 }
+                if (-not (Test-ExakitInteractive)) { Stop-ExakitLocalFileRefused "Cannot load '$llfName': exapump reads .csv and .parquet only - rename it to .csv first." }
                 continue
             }
             if ($llfKind -eq "unknown") {
                 if (-not (Test-ExakitInteractive)) {
-                    Write-Host ""; Write-Host "  [x] Cannot load '$llfName': only .csv and .parquet (and .json / .geojson with the JSON Tables add-on) are supported - rename or convert the file first."
-                    exit 2
+                    Stop-ExakitLocalFileRefused "Cannot load '$llfName': only .csv and .parquet (and .json / .geojson with the JSON Tables add-on) are supported - rename or convert the file first."
                 }
                 Warn2 "Only .csv and .parquet (and .json / .geojson with the JSON Tables add-on) can be loaded: $llfName"
                 continue
@@ -1909,7 +1921,7 @@ function Import-ExakitLocalFile {
         }
         Warn2 "File not found or empty: $path"
         if (-not (Test-ExakitInteractive)) {
-            Write-Host ""; Write-Host "  [x] File not found or empty: $path"; exit 2
+            Stop-ExakitLocalFileRefused "File not found or empty: $path"
         }
     }
     $kind = Get-ExakitDataFileKind $path
@@ -1978,9 +1990,8 @@ function Import-ExakitLocalFile {
         # Bad input, the same class as an unsupported file: exit 2, nothing
         # recorded - not the folder path's "failed", which the installer books
         # as a failed step over a typo in a variable.
-        Write-Host ""; Write-Host "  [x] EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
-        Write-ExakitLog "REJECT" "EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
-        exit 2
+        Stop-ExakitLocalFileRefused "EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
+
     }
     Clear-ExakitTableListing
     $rows = Get-ExakitTableRowCount $target
@@ -3968,15 +3979,17 @@ function New-ExakitDataTable {
         [void]$ids.Add("local")
         $script:ExakitTableRowLocal = $ids.Count
         # An external source stays where it is and is queried through a virtual
-        # schema - the same wizard as `exakit connect`. Pickable only where it
-        # can work (the module is loaded and the kit's pyexasol is installed);
-        # elsewhere (the installer) it is shown and cannot be picked. Twin of
-        # the row in exakit_data_table_build.
+        # schema - the same wizard as `exakit connect`. Pickable wherever it can
+        # work (the module is loaded - the installer loads it too - and the
+        # kit's pyexasol is installed); elsewhere it is shown, cannot be
+        # picked, and says why. Twin of the row in exakit_data_table_build.
         if ((Get-Command Test-ExakitVsAvailable -ErrorAction SilentlyContinue) -and (Test-ExakitVsAvailable)) {
-            [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source (PostgreSQL, MySQL, SQL Server, Oracle, Snowflake)")
+            [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source")
             [void]$ids.Add("external")
         } else {
-            [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source - coming soon")
+            $why = "unavailable"
+            if (Get-Command Get-ExakitVsUnavailableReason -ErrorAction SilentlyContinue) { $why = Get-ExakitVsUnavailableReason }
+            [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source - $why")
             if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
             [void]$ids.Add("")
         }
@@ -4025,12 +4038,23 @@ function Select-ExakitDataLoad {
     # EXAKIT_DATA_FILE mirrors the EXAKIT_DATASETS contract: naming a file IS
     # choosing the local-file option, so the table never draws. The path (and
     # EXAKIT_DATA_TABLE) are consumed by Import-ExakitLocalFile as its answers.
+    $script:ExakitDataFileAnnounce = $false
     if ($env:EXAKIT_DATA_FILE) {
-        Info "Loading a local file (EXAKIT_DATA_FILE)."
         # No table was built, so nothing may animate one. The row ids ARE that
         # signal, the way an empty EXAKIT_TABLE_STATE is on the shell side.
         $script:ExakitTableIds = @()
-        return @("local")
+        # The personas picked at the install's question keep their datasets:
+        # the file loads after them, not instead of them - and is announced
+        # just before it loads (Write-ExakitDataFileAnnounce), not ahead of
+        # their datasets. Twin of the same block in exakit_data_load_select.
+        $mine = @()
+        if ($env:EXAKIT_PERSONA_ACTIVE -and $env:EXAKIT_DATASETS_PRESELECT -and $env:EXAKIT_DATASETS_PRESELECT -ne "none") {
+            $wanted = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
+            $mine = @(Get-ExakitPendingDatasets | Where-Object { $wanted -ccontains $_.Id } | ForEach-Object { $_.Id })
+        }
+        if ($mine.Count -gt 0) { $script:ExakitDataFileAnnounce = $true }
+        else { Info "Loading a local file (EXAKIT_DATA_FILE)." }
+        return @($mine + @("local"))
     }
     # ONE SCREEN: "Sample datasets" is the parent row with the datasets under
     # it, then your own file or folder, an external source (exakit connect
@@ -4080,6 +4104,80 @@ function Select-ExakitDataLoad {
 }
 
 
+# Get-ExakitDataLoadOrder - the picked ids in the table's order: the datasets,
+# then your own file, then the external source. The shell twins get the same
+# order by asking the file and the source after the table has closed.
+function Get-ExakitDataLoadOrder {
+    param([string[]]$Chosen = @())
+    $datasets = @($Chosen | Where-Object { $_ -ne "local" -and $_ -ne "external" })
+    $file = @($Chosen | Where-Object { $_ -eq "local" })
+    $source = @($Chosen | Where-Object { $_ -eq "external" })
+    return @($datasets + $file + $source)
+}
+
+# What a run that does not start the wizard says for the external row. The
+# wizard asks questions only a person can answer (its inputs are not read from
+# the environment). Without a console that is the reason; with one, the row was
+# named in EXAKIT_DATASETS or nobody confirmed the table, and it is for later.
+# Twin of exakit_data_external_hint_text.
+function Get-ExakitDataExternalHint {
+    if (-not (Test-ExakitInteractive)) {
+        return "Connecting an external source asks its own questions, so it needs a terminal. Connect one any time with: exakit connect"
+    }
+    return "Connecting an external source asks its own questions, which this run does not ask. Run it later: exakit connect"
+}
+function Write-ExakitDataExternalHint {
+    Info (Get-ExakitDataExternalHint)
+}
+
+# Write-ExakitDataFileAnnounce - "Loading a local file (EXAKIT_DATA_FILE)." just
+# before the file loads, when a persona's datasets went first (see
+# Select-ExakitDataLoad). Twin of exakit_data_file_announce.
+function Write-ExakitDataFileAnnounce {
+    if (-not $script:ExakitDataFileAnnounce) { return }
+    $script:ExakitDataFileAnnounce = $false
+    Info "Loading a local file (EXAKIT_DATA_FILE)."
+}
+
+# Test-ExakitConnectCancelled <exit code> - did the wizard end without
+# connecting because the person stopped it? 5 is its own "nothing changed",
+# 130 an interrupt on a shell, and -1073741510 (0xC000013A,
+# STATUS_CONTROL_C_EXIT) Ctrl+C on a Windows console. Twin of the 5|130 arm in
+# exakit_data_external_run.
+function Test-ExakitConnectCancelled {
+    param([int]$Code)
+    return ($Code -eq 5 -or $Code -eq 130 -or $Code -eq -1073741510)
+}
+
+# Invoke-ExakitDataExternal - the "Connect an external source" row, run last,
+# after the datasets and the file: `exakit connect` with no arguments
+# (Invoke-ExakitVsConnectWizard, a child on this console). Only a person who
+# ticked the row at a console gets the wizard; anything else is told the
+# command. It never fails its caller: a connect that failed or was cancelled
+# is said, with the command that retries it, and the data load carries on.
+# Twin of exakit_data_external_run.
+function Invoke-ExakitDataExternal {
+    if (-not $script:ExakitTableConfirmed -or -not (Test-ExakitInteractive)) {
+        Write-ExakitDataExternalHint
+        return
+    }
+    if (-not (Get-Command Invoke-ExakitVsConnectWizard -ErrorAction SilentlyContinue)) {
+        Warn2 "This kit copy cannot connect an external source. Update it (exakit update), then run: exakit connect"
+        return
+    }
+    Write-Host ""
+    # Never the caller's failure: a wizard that could not even be started is a
+    # connect that did not finish.
+    $code = 1
+    try { $code = [int](Invoke-ExakitVsConnectWizard) } catch { Write-ExakitLog "WARN" "data load: exakit connect could not run: $_" }
+    Write-ExakitLog "INFO" "data load: exakit connect (the external-source row) exited $code"
+    if (Test-ExakitConnectCancelled $code) {
+        Info "No external source was connected. Connect one any time with: exakit connect"
+    } elseif ($code -ne 0) {
+        Warn2 "Connecting the external source did not finish (see above). Retry any time with: exakit connect"
+    }
+}
+
 function Show-ExakitDataLoadMenu {
     if (-not (Get-ExakitManifestValue "components.exapump.profile")) {
         Fail "No exapump connection profile is recorded - re-run the installer, then retry."
@@ -4089,32 +4187,39 @@ function Show-ExakitDataLoadMenu {
         Info "Data loading cancelled."
         return
     }
-    # Your own file first, then the external source: both are questions asked
-    # after the table, and the shell twin (exakit_data_load_menu) asks them in
-    # this order too.
-    $chosen = @(@($chosen | Where-Object { $_ -ne "external" }) + @($chosen | Where-Object { $_ -eq "external" }))
+    # The table's order: the datasets, your own file, then the external source.
+    # The file and the source are questions asked after the table, and the
+    # shell twin (exakit_data_load_menu) asks them in this order too.
+    $chosen = @(Get-ExakitDataLoadOrder -Chosen $chosen)
+    $deferred = $null
     Start-ExakitDataTableRun
     try {
         foreach ($id in $chosen) {
             if ($id -eq "external") {
                 Stop-ExakitDataTableRun
-                # cmd_connect's twin exits; a child exakit keeps that from
-                # ending this menu. NOT piped: a piped child's output is
-                # redirected, ui.ps1 then turns its menus off
-                # (IsOutputRedirected) and the wizard fell back to its
-                # defaults. On its own the child has the console, as a typed
-                # `exakit connect` does.
-                & (Join-Path $script:BinDir "exakit.cmd") connect
+                # A connect that failed or was cancelled is said and does not
+                # change this command's exit code: the loads are what it
+                # reports on.
+                Invoke-ExakitDataExternal
                 continue
             }
             if ($id -eq "local") {
+                # A refused or failed file still lets the external source after
+                # it have its turn, as the shell twin runs the file in a
+                # subshell: refused is exit 2 at the end, failed is its error,
+                # thrown once the loop is done.
                 Stop-ExakitDataTableRun
-                $result = Import-ExakitLocalFile
-                if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
-                # Declined (the table held rows this kit did not load and the
-                # answer was skip): exit 5, as every unconfirmed command does.
-                # Twin of _menu_status=5 in exakit_data_load_menu.
-                if ($result -eq "declined") { $script:PendingExitCode = 5 }
+                Write-ExakitDataFileAnnounce
+                try {
+                    $result = Import-ExakitLocalFile
+                    if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
+                    # Declined (the table held rows this kit did not load and the
+                    # answer was skip): exit 5, as every unconfirmed command does.
+                    # Twin of _menu_status=5 in exakit_data_load_menu.
+                    if ($result -eq "declined") { $script:PendingExitCode = 5 }
+                } catch {
+                    if (Test-ExakitRefusal $_) { $script:PendingExitCode = 2 } else { $deferred = $_ }
+                }
             } else {
                 $kitRoot = Get-ExakitRepoRoot
                 if (-not $kitRoot) { Fail "Could not find the kit's sql/ and data/ files to load." }
@@ -4124,6 +4229,9 @@ function Show-ExakitDataLoadMenu {
     } finally {
         Stop-ExakitDataTableRun
     }
+    # The file's failure, now that the external row has had its turn: exit 1,
+    # as the shell twin's _menu_status.
+    if ($deferred) { throw $deferred }
 }
 
 # Start-ExakitDataTableRun / Stop-ExakitDataTableRun - the same table the
@@ -4165,13 +4273,53 @@ function Invoke-ExakitSampleDataLoad {
     Invoke-ExakitDatasetDirLoad -KitRoot $KitRoot -Id "tpch" -Force:$Force
 }
 
+# Invoke-ExakitOfferLocalFile - the installer's local-file load (the file row,
+# or EXAKIT_DATA_FILE), once the table has stopped animating. A file the loader
+# refused is bad input, not a failed step: a warning, not booked, and the
+# install carries on. A failed load throws; the caller decides when. Twin of
+# _exakit_offer_local_file.
+function Invoke-ExakitOfferLocalFile {
+    Write-ExakitDataFileAnnounce
+    try {
+        $result = Import-ExakitLocalFile
+    } catch {
+        if (-not (Test-ExakitRefusal $_)) { throw }
+        Warn2 "The local file was refused (see above). Load another any time with: exakit data-load"
+        return
+    }
+    if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
+    # Not a failed step - the install is fine, the table is the reader's.
+    # Twin of the exit-5 note in the shell installer.
+    if ($result -eq "declined") {
+        Warn2 "The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load"
+    }
+}
+
+# Stop-ExakitDataOffer <reasons> <unsaid> - end the installer's data step as
+# failed once every row picked has had its turn, naming EVERY reason (a dataset
+# and the file can both fail). With something not on screen yet (-Unsaid) it is
+# said as Fail says it; otherwise each reason was already said where it
+# happened, and only the booking is left. Invoke-ExakitBestEffort books it
+# without ending the install.
+function Stop-ExakitDataOffer {
+    param([string[]]$Reasons, [switch]$Unsaid)
+    $all = (@($Reasons | Where-Object { $_ }) -join " ")
+    if ($Unsaid) { Fail $all }
+    Set-ExakitFailureReason $all
+    if ($script:ExakitRecordFailureNotes -and (Get-Command Write-ExakitFailureNote -ErrorAction SilentlyContinue)) {
+        Write-ExakitFailureNote $all
+    }
+    Write-ExakitLog "FATAL" $all
+    throw [ExakitFailException]::new($all)
+}
+
 # Request-ExakitDataLoadOffer <kit_root> - interactively offer the guided
 # data loading menu during install. Non-interactive installs print the
-# follow-up command and continue. Runs in a try/catch so a Fail() inside the
-# loading flow (which calls exit) is still contained by the caller... note:
-# unlike bash's subshell isolation, PowerShell's exit terminates the whole
-# process, so callers that must survive a failed load run this in a child
-# pwsh process instead (see setup-windows.ps1).
+# follow-up command and continue. The rows run in the table's order: the
+# datasets, then your own file, then the external source (`exakit connect`, at
+# a console only). A failure is thrown once everything picked has had its
+# turn, with every reason, and the caller (Invoke-ExakitBestEffort) books it
+# without ending the install. Twin of exakit_maybe_offer_data_load.
 function Request-ExakitDataLoadOffer {
     param([Parameter(Mandatory)][string]$KitRoot)
     # One dataset's failure must not cost the others: a thrown load used to leave
@@ -4179,97 +4327,138 @@ function Request-ExakitDataLoadOffer {
     # data is not installed" about a TPCH that was fully in. Failures are
     # collected and reported once, with the exact retry.
     $failedIds = @()
-    $failedReason = ""
+    # Why the step failed, every part of it, and whether a part is not on
+    # screen yet (the datasets' retry line is said once, at the end).
+    $reasons = @()
+    $unsaid = $false
 
     # EXAKIT_DATASETS names bundled datasets directly (csv of ids from
     # data\datasets\<id>\, e.g. "tpch,weather") so an agent-driven or scripted
     # install picks an exact selection without a tty. Unknown ids warn and are
-    # skipped; if none are valid the load fails. EXAKIT_DATASETS takes
-    # precedence over EXAKIT_LOAD_SAMPLE. Twin of exakit_maybe_offer_data_load
-    # in common.sh - the .ps1 path used to ignore these documented vars.
-    if ($env:EXAKIT_DATASETS) {
-        $knownIds = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
-        $validAny = $false
-        foreach ($envId in ($env:EXAKIT_DATASETS -split ',')) {
-            $envId = $envId.Trim()
-            if (-not $envId) { continue }
-            if ($knownIds -ccontains $envId) {
-                $validAny = $true
-                Info "Loading dataset '$envId' (EXAKIT_DATASETS)."
-                try {
-                    Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $envId
-                } catch {
-                    $reason = Get-ExakitFailureReason
-                    if (-not $reason) { $reason = "$_" }
-                    # ONE TELLING. Fail already put the reason on screen with
-                    # the log path under it; repeating it here and again in
-                    # the closing line printed the same failure three times.
-                    Write-ExakitLog "WARN" "Dataset '$envId' did not load: $reason"
-                    $failedIds += $envId
-                    $failedReason = $reason
-                }
-            } else {
-                Warn2 "Unknown dataset id '$envId' in EXAKIT_DATASETS (available: $($knownIds -join ', '))."
-            }
-        }
-        if (-not $validAny) { Fail "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was loaded." }
-        if ($failedIds.Count -gt 0) {
-            Fail "Dataset(s) $($failedIds -join ', ') did not load. Retry with: `$env:EXAKIT_DATASETS = '$($failedIds -join ',')'; exakit data-load"
-        }
-        return
-    }
-
-    # EXAKIT_LOAD_SAMPLE decides up front: =0 skips data loading entirely, =1
-    # loads the bundled TPC-H sample without asking. Twin of common.sh.
-    if ($env:EXAKIT_LOAD_SAMPLE -eq "0") {
-        Info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
-        return
-    }
-    if ($env:EXAKIT_LOAD_SAMPLE -eq "1") {
-        Info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
-        Invoke-ExakitSampleDataLoad -KitRoot $KitRoot
-        return
-    }
-
-    # No lead-in sentence: the checkbox below names every dataset on offer and
-    # the skip, which is the whole of what this line was explaining.
-    # Dynamic dataset checkbox (shared with `exakit data-load`): only bundled
-    # datasets that are not loaded yet are offered, pre-selected, plus the
-    # local-file option and an explicit skip. Non-interactive installs keep
-    # the pre-selected defaults.
-    $chosen = Select-ExakitDataLoad -FinalLabel "Skip"
-    if ($chosen -contains "none") {
-        Info "Skipping data loading. Run it any time with: exakit data-load"
-        return
-    }
-    Start-ExakitDataTableRun
-    try {
-        foreach ($id in $chosen) {
-            if ($id -eq "local") {
-                Stop-ExakitDataTableRun
-                $result = Import-ExakitLocalFile
-                if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
-                # Not a failed step - the install is fine, the table is the
-                # reader's. Twin of the exit-5 note in the shell installer.
-                if ($result -eq "declined") {
-                    Warn2 "The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load"
-                }
-            } else {
-                try {
-                    Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $id
-                } catch {
-                    $reason = Get-ExakitFailureReason
-                    if (-not $reason) { $reason = "$_" }
-                    Write-ExakitLog "WARN" "Dataset '$id' did not load: $reason"
-                    $failedIds += $id
-                    $failedReason = $reason
+    # skipped; if none are valid the step fails. `external` names the
+    # external-source row, which unattended only prints the command.
+    # EXAKIT_DATASETS takes precedence over EXAKIT_LOAD_SAMPLE (=0 skips the
+    # samples, =1 loads the bundled TPC-H). EXAKIT_DATA_FILE loads after either:
+    # a persona fills in EXAKIT_DATASETS, and that answer used to return before
+    # the file was looked at, so the file was dropped without a word. Twin of
+    # exakit_maybe_offer_data_load in common.sh.
+    if ($env:EXAKIT_DATASETS -or $env:EXAKIT_LOAD_SAMPLE -eq "0" -or $env:EXAKIT_LOAD_SAMPLE -eq "1") {
+        $externalNamed = $false
+        if ($env:EXAKIT_DATASETS) {
+            $knownIds = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
+            $validAny = $false
+            foreach ($envId in ($env:EXAKIT_DATASETS -split ',')) {
+                $envId = $envId.Trim()
+                if (-not $envId) { continue }
+                if ($knownIds -ccontains $envId) {
+                    $validAny = $true
+                    Info "Loading dataset '$envId' (EXAKIT_DATASETS)."
+                    try {
+                        Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $envId
+                    } catch {
+                        $reason = Get-ExakitFailureReason
+                        if (-not $reason) { $reason = "$_" }
+                        # ONE TELLING. Fail already put the reason on screen with
+                        # the log path under it; repeating it here and again in
+                        # the closing line printed the same failure three times.
+                        Write-ExakitLog "WARN" "Dataset '$envId' did not load: $reason"
+                        $failedIds += $envId
+                    }
+                } elseif ($envId -ceq "external") {
+                    # The external-source row, by the id the table gives it. An
+                    # answer, not an unknown id - and unattended only ever the
+                    # command to run (after the file).
+                    $validAny = $true
+                    $externalNamed = $true
+                } else {
+                    Warn2 "Unknown dataset id '$envId' in EXAKIT_DATASETS (available: $($knownIds -join ', '))."
                 }
             }
+            if (-not $validAny) {
+                # Said now, before the file, as the shell twin says it.
+                $noMatch = "EXAKIT_DATASETS='$($env:EXAKIT_DATASETS)' matched no bundled dataset - nothing was loaded."
+                Write-ExakitError $noMatch
+                $reasons += $noMatch
+            }
+        } elseif ($env:EXAKIT_LOAD_SAMPLE -eq "0") {
+            if ($env:EXAKIT_DATA_FILE) {
+                Info "Skipping the sample data (EXAKIT_LOAD_SAMPLE=0)."
+            } else {
+                Info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
+            }
+        } else {
+            Info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
+            try {
+                Invoke-ExakitSampleDataLoad -KitRoot $KitRoot
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                $reasons += $reason
+            }
         }
-    } finally {
-        Stop-ExakitDataTableRun
+        if ($env:EXAKIT_DATA_FILE) {
+            Info "Loading a local file (EXAKIT_DATA_FILE)."
+            try {
+                Invoke-ExakitOfferLocalFile
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                $reasons += $reason
+            }
+        }
+        if ($externalNamed) { Write-ExakitDataExternalHint }
+    } else {
+        # No lead-in sentence: the checkbox below names every dataset on offer and
+        # the skip, which is the whole of what this line was explaining.
+        # Dynamic dataset checkbox (shared with `exakit data-load`): only bundled
+        # datasets that are not loaded yet are offered, pre-selected, plus the
+        # local-file option, the external source and an explicit skip.
+        # Non-interactive installs keep the pre-selected defaults.
+        $chosen = Select-ExakitDataLoad -FinalLabel "Skip"
+        if ($chosen -contains "none") {
+            Info "Skipping data loading. Run it any time with: exakit data-load"
+            return
+        }
+        $chosen = @(Get-ExakitDataLoadOrder -Chosen $chosen)
+        Start-ExakitDataTableRun
+        try {
+            foreach ($id in $chosen) {
+                if ($id -eq "external") {
+                    # Last, the table's order. A connect that failed or was
+                    # cancelled is said, with the command, and is not a failed
+                    # data step: the install carries on.
+                    Stop-ExakitDataTableRun
+                    Invoke-ExakitDataExternal
+                } elseif ($id -eq "local") {
+                    # A failed file still lets the external source after it
+                    # have its turn; a refused one is only a warning.
+                    Stop-ExakitDataTableRun
+                    try {
+                        Invoke-ExakitOfferLocalFile
+                    } catch {
+                        $reason = Get-ExakitFailureReason
+                        if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                        $reasons += $reason
+                    }
+                } else {
+                    try {
+                        Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $id
+                    } catch {
+                        $reason = Get-ExakitFailureReason
+                        if (-not $reason) { $reason = "$_" }
+                        Write-ExakitLog "WARN" "Dataset '$id' did not load: $reason"
+                        $failedIds += $id
+                    }
+                }
+            }
+        } finally {
+            Stop-ExakitDataTableRun
+        }
     }
     if ($failedIds.Count -gt 0) {
-        Fail "Dataset(s) $($failedIds -join ', ') did not load. Retry with: `$env:EXAKIT_DATASETS = '$($failedIds -join ',')'; exakit data-load"
+        # The datasets' retry line goes first: they ran first.
+        $reasons = @("Dataset(s) $($failedIds -join ', ') did not load. Retry with: `$env:EXAKIT_DATASETS = '$($failedIds -join ',')'; exakit data-load") + $reasons
+        $unsaid = $true
     }
+    if ($reasons.Count -gt 0) { Stop-ExakitDataOffer -Reasons $reasons -Unsaid:$unsaid }
 }

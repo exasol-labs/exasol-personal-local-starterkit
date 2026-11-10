@@ -11793,14 +11793,97 @@ exakit_maybe_offer_mcp_setup() {
     fi
 }
 
+# _exakit_offer_fail <reason> — book the installer's data step as failed and
+# keep EVERY reason: a dataset and the file can both fail, and the failure note
+# holds one line that the closing summary quotes (a later note replaced an
+# earlier one, so the first reason was lost).
+_exakit_offer_fail() {
+    _data_failed=1
+    _data_reasons="${_data_reasons:+$_data_reasons; }$1"
+    exakit_note_failure "$_data_reasons"
+}
+
+# _exakit_offer_local_file — the installer's local-file load (the file row, or
+# EXAKIT_DATA_FILE), once nothing on screen animates any more. What it has to
+# say goes into the caller's _data_notes, a failure into its _data_failed.
+_exakit_offer_local_file() {
+    command -v exakit_data_file_announce >/dev/null 2>&1 && exakit_data_file_announce
+    ( exakit_load_local_file )
+    _local_status=$?
+    if [ "$_local_status" -eq 2 ]; then
+        _data_notes="${_data_notes}info|Local file load skipped.
+"
+    elif [ "$_local_status" -eq 3 ]; then
+        # Refused as bad input (the file, not the install): say so, but
+        # do not book it as a failed step.
+        _data_notes="${_data_notes}warn|The local file was refused (see above). Load another any time with: exakit data-load
+"
+    elif [ "$_local_status" -eq 5 ]; then
+        # Declined: the target already held rows this kit did not load and
+        # nobody said replace or append, so the loader changed nothing
+        # (the remedy is printed above it). Not a failed step - the
+        # install is fine, the table is the reader's.
+        _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
+"
+    elif [ "$_local_status" -ne 0 ]; then
+        _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
+"
+        _exakit_offer_fail "loading the local file did not finish (see the log)"
+    fi
+    return 0
+}
+
+# exakit_print_notes <notes> — kind|text lines, said as warn or info, in order.
+exakit_print_notes() {
+    while IFS='|' read -r _pn_kind _pn_text; do
+        [ -n "$_pn_text" ] || continue
+        case "$_pn_kind" in
+            warn) warn "$_pn_text" ;;
+            *)    info "$_pn_text" ;;
+        esac
+    done <<EXAKIT_PRINT_NOTES_EOF
+$1
+EXAKIT_PRINT_NOTES_EOF
+}
+
+# _exakit_offer_notes — the notes the loads left in _data_notes, said once, and
+# cleared, so a later flush does not repeat them.
+_exakit_offer_notes() {
+    exakit_print_notes "$_data_notes"
+    _data_notes=""
+}
+
+# _exakit_offer_answered_rest <external-named:0|1> — after an unattended answer
+# for the datasets (EXAKIT_DATASETS or EXAKIT_LOAD_SAMPLE), the other two rows,
+# in the table's order. The file EXAKIT_DATA_FILE names is its own answer and
+# loads too: a persona fills in EXAKIT_DATASETS, and that answer used to return
+# before the file was looked at, so EXAKIT_PERSONA plus EXAKIT_DATA_FILE loaded
+# the persona's datasets and dropped the file without a word. Then the external
+# source, which unattended is only ever the command to run.
+_exakit_offer_answered_rest() {
+    if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
+        info "Loading a local file (EXAKIT_DATA_FILE)."
+        _exakit_offer_local_file
+    fi
+    if [ "$1" = 1 ]; then
+        _data_notes="${_data_notes}info|$(exakit_data_external_hint_text 2>/dev/null || printf 'Connect an external source any time with: exakit connect')
+"
+    fi
+    _exakit_offer_notes
+}
+
 # exakit_maybe_offer_data_load <kit_root> — load data during install, via the
 # dynamic dataset checkbox (bundled datasets not loaded yet are pre-selected;
-# the user can additionally or instead pick a local file, or explicitly skip).
+# the user can additionally or instead pick a local file or an external source,
+# or explicitly skip). The rows run in the table's order: the datasets, then the
+# file, then the external source (`exakit connect`, at a terminal only).
 # Scripted installs can still steer with EXAKIT_DATASETS (csv of bundled
-# dataset ids) or EXAKIT_LOAD_SAMPLE (=0 skips, =1 bundled sample);
-# EXAKIT_DATASETS takes precedence. Non-interactive runs keep the
-# pre-selected defaults. Each load runs in a subshell so a die() inside the
-# loading flow never aborts the surrounding install.
+# dataset ids; `external` names the external-source row, which unattended only
+# prints the command) or EXAKIT_LOAD_SAMPLE (=0 skips the samples, =1 bundled
+# sample); EXAKIT_DATASETS takes precedence. EXAKIT_DATA_FILE loads alongside
+# either. Non-interactive runs keep the pre-selected defaults. Each load runs
+# in a subshell so a die() inside the loading flow never aborts the
+# surrounding install.
 exakit_maybe_offer_data_load() {
     _kit_root="$1"
     : "$_kit_root"
@@ -11826,9 +11909,12 @@ exakit_maybe_offer_data_load() {
     # database is a thing to repair with one command, not a reason to abandon an
     # install whose database is already up.
     _data_failed=0
+    _data_notes=""
+    _data_reasons=""
     if [ -n "${EXAKIT_DATASETS:-}" ]; then
         _known_ids=" $(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ' ') "
         _valid_any=0
+        _data_external_named=0
         for _env_id in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
             case "$_known_ids" in
                 *" $_env_id "*)
@@ -11836,37 +11922,50 @@ exakit_maybe_offer_data_load() {
                     info "Loading dataset '$_env_id' (EXAKIT_DATASETS)."
                     if ! ( exakit_load_dataset "$_kit_root" "$_env_id" ); then
                         warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-                        exakit_note_failure "loading dataset '$_env_id' did not finish (see the log)"
-                        _data_failed=1
+                        _exakit_offer_fail "loading dataset '$_env_id' did not finish (see the log)"
                     fi
                     ;;
                 *)
-                    warn "Unknown dataset id '$_env_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_known_ids" | sed 's/ *$//'))."
+                    if [ "$_env_id" = external ]; then
+                        # The external-source row, by the id the table gives
+                        # it. An answer, not an unknown id - and unattended
+                        # only ever the command to run (after the file).
+                        _valid_any=1
+                        _data_external_named=1
+                    else
+                        warn "Unknown dataset id '$_env_id' in EXAKIT_DATASETS (available:$(printf '%s' "$_known_ids" | sed 's/ *$//'))."
+                    fi
                     ;;
             esac
         done
         if [ "$_valid_any" -ne 1 ]; then
             error "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset — nothing was loaded."
-            exakit_note_failure "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset"
-            return 1
+            _exakit_offer_fail "EXAKIT_DATASETS='$EXAKIT_DATASETS' matched no bundled dataset"
         fi
+        _exakit_offer_answered_rest "$_data_external_named"
         return "$_data_failed"
     fi
 
     # EXAKIT_LOAD_SAMPLE lets an agent-driven or scripted install decide up front:
-    # =1 loads the bundled sample without asking, =0 skips data loading entirely.
+    # =1 loads the bundled sample without asking, =0 skips the sample data. A
+    # file named in EXAKIT_DATA_FILE loads after either.
     if [ "${EXAKIT_LOAD_SAMPLE:-}" = "0" ]; then
-        info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
-        return 0
+        if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
+            info "Skipping the sample data (EXAKIT_LOAD_SAMPLE=0)."
+        else
+            info "Skipping data loading (EXAKIT_LOAD_SAMPLE=0). Run it any time with: exakit data-load"
+        fi
+        _exakit_offer_answered_rest 0
+        return "$_data_failed"
     fi
     if [ "${EXAKIT_LOAD_SAMPLE:-}" = "1" ]; then
         info "Loading the bundled sample data (EXAKIT_LOAD_SAMPLE=1)."
         if ! ( exakit_load_sample_data "$_kit_root" ); then
             warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-            exakit_note_failure "the bundled sample data did not finish loading (see the log)"
-            return 1
+            _exakit_offer_fail "the bundled sample data did not finish loading (see the log)"
         fi
-        return 0
+        _exakit_offer_answered_rest 0
+        return "$_data_failed"
     fi
 
     # No lead-in sentence: the checkbox below names every dataset on offer and
@@ -11918,8 +12017,7 @@ exakit_maybe_offer_data_load() {
                 if ! ( ui_table_detach; exakit_load_dataset "$_kit_root" "$_data_id" ); then
                     _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
 "
-                    exakit_note_failure "loading dataset '$_data_id' did not finish (see the log)"
-                    _data_failed=1
+                    _exakit_offer_fail "loading dataset '$_data_id' did not finish (see the log)"
                 fi
                 ;;
         esac
@@ -11950,44 +12048,20 @@ exakit_maybe_offer_data_load() {
     # killing the animator, it does not take the frame off the screen.
     if [ "$_data_has_local" = 1 ]; then
         printf '\n'
-        ( exakit_load_local_file )
-        _local_status=$?
-        if [ "$_local_status" -eq 2 ]; then
-            _data_notes="${_data_notes}info|Local file load skipped.
-"
-        elif [ "$_local_status" -eq 3 ]; then
-            # Refused as bad input (the file, not the install): say so, but
-            # do not book it as a failed step.
-            _data_notes="${_data_notes}warn|The local file was refused (see above). Load another any time with: exakit data-load
-"
-        elif [ "$_local_status" -eq 5 ]; then
-            # Declined: the target already held rows this kit did not load and
-            # nobody said replace or append, so the loader changed nothing
-            # (the remedy is printed above it). Not a failed step - the
-            # install is fine, the table is the reader's.
-            _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
-"
-        elif [ "$_local_status" -ne 0 ]; then
-            _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
-"
-            exakit_note_failure "loading the local file did not finish (see the log)"
-            _data_failed=1
-        fi
+        _exakit_offer_local_file
     fi
+    # The external source last, the table's order: `exakit connect` asking for
+    # everything. A connect that failed or was cancelled is said, with the
+    # command, and is not a failed data step: the install carries on. What the
+    # loads above left to say is said first, so a "see above" stays next to
+    # what it points at.
     if [ "$_data_has_external" = 1 ]; then
-        printf '\n'
-        ( exakit_vs_connect_wizard ) || _data_notes="${_data_notes}info|Connect an external source any time with: exakit connect
+        _exakit_offer_notes
+        exakit_data_external_run
+        [ -n "$EXAKIT_DATA_EXTERNAL_NOTE" ] && _data_notes="${_data_notes}$EXAKIT_DATA_EXTERNAL_NOTE
 "
     fi
-    while IFS='|' read -r _dn_kind _dn_text; do
-        [ -n "$_dn_text" ] || continue
-        case "$_dn_kind" in
-            warn) warn "$_dn_text" ;;
-            *)    info "$_dn_text" ;;
-        esac
-    done <<EXAKIT_DATA_NOTES_EOF
-$_data_notes
-EXAKIT_DATA_NOTES_EOF
+    _exakit_offer_notes
     return "$_data_failed"
 }
 

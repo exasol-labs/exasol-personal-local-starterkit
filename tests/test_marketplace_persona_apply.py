@@ -169,6 +169,23 @@ class PersonaApplyTest(unittest.TestCase):
                 persona_apply.apply(self.ctx, "ml-engineer", ["exakit"])
         self.assertEqual("data-scientist", self.manifest.get("persona.id"))
 
+    def test_external_is_the_menu_row_and_persona_add_skips_it(self) -> None:
+        # EXAKIT_DATASETS may carry `external` (the data menu's external-source
+        # row) from the shell or exakit.env: not a dataset, and not an error.
+        self.assertEqual(["tpch"], persona_apply._requested_datasets(ROOT, "tpch,external"))
+        self.assertEqual([], persona_apply._requested_datasets(ROOT, "external"))
+        with self.assertRaises(persona_apply.persona_service.BadInput):
+            persona_apply._requested_datasets(ROOT, "tpch,nope")
+        calls = []
+        with patch.dict(os.environ, {"EXAKIT_DATASETS": "amazon_sales,external", "EXAKIT_MCP_CLIENTS": "skip",
+                                     "EXAKIT_MARKETPLACE_ADDONS": "none", "EXAKIT_SKIP_MCP": ""}), \
+             patch.object(persona_apply, "_query", return_value=None), \
+             patch.object(persona_apply, "_child", side_effect=lambda _p, command, _a, env:
+                          calls.append((command, dict(env))) or True), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(0, persona_apply.apply(self.ctx, "data-scientist", ["exakit"]))
+        self.assertEqual("data-load", calls[0][0])
+        self.assertEqual("amazon_sales", calls[0][1]["EXAKIT_DATASETS"])
+
     def test_marketplace_answer_keeps_existing_case_insensitive_ids(self) -> None:
         self.assertEqual(["notebook", "udf-devkit"],
                          persona_apply._requested_addons(ROOT, "NOTEBOOK, UDF-DEVKIT"))

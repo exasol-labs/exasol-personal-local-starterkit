@@ -38,6 +38,9 @@ if [ -f "$LIB_DIR/mcp.sh" ];      then . "$LIB_DIR/mcp.sh"      || die "Could no
 if [ -f "$LIB_DIR/pyexasol.sh" ]; then . "$LIB_DIR/pyexasol.sh" || die "Could not load $LIB_DIR/pyexasol.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/core-setup.sh" ]; then . "$LIB_DIR/core-setup.sh" || die "Could not load $LIB_DIR/core-setup.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/persona.sh" ];  then . "$LIB_DIR/persona.sh"  || die "Could not load $LIB_DIR/persona.sh (corrupted kit copy? re-download and re-run)"; fi
+# The data table's "Connect an external source" row: whether it can be picked
+# (exakit_vs_available) and the wizard it runs (exakit_vs_connect_wizard).
+if [ -f "$LIB_DIR/virtual-schemas.sh" ]; then . "$LIB_DIR/virtual-schemas.sh" || die "Could not load $LIB_DIR/virtual-schemas.sh (corrupted kit copy? re-download and re-run)"; fi
 
 exakit_init_logging
 # Where the bootstrap time went, in the log: the installer stamps its start,

@@ -786,18 +786,25 @@ check "...and nothing was touched" "0" "$(grep -c . "$LOADED")"
 
 # Both callers of the loader read exit 5 as "declined", not as a failed step:
 # the installer must not write a failure note over the reader's own table.
-# The branch itself, lifted out of exakit_maybe_offer_data_load and run over a
-# loader that answers each status in turn. A grep for the `-eq 5` line passed
-# a mutant that booked the decline as a failure right under it; this does not.
-_ucs_branch="$(awk '/_data_has_local" = 1 \]; then/{p=1} p{print} p&&/^    fi$/{exit}' "$ROOT/setup/lib/common.sh")"
+# The branch itself - _exakit_offer_local_file, which both of the installer's
+# paths to a file call (the table's file row and EXAKIT_DATA_FILE beside a
+# dataset answer) - lifted out of common.sh and run over a loader that answers
+# each status in turn. A grep for the `-eq 5` line passed a mutant that booked
+# the decline as a failure right under it; this does not.
+_ucs_branch="$(awk '/^_exakit_offer_local_file\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$ROOT/setup/lib/common.sh")"
+# ...with the helper that books a failure, which keeps every reason.
+_ucs_fail="$(awk '/^_exakit_offer_fail\(\) \{/{p=1} p{print} p&&/^\}$/{exit}' "$ROOT/setup/lib/common.sh")"
 check "the installer's local-load branch was lifted" "yes" "$(printf '%s' "$_ucs_branch" | grep -q '_local_status" -eq 5' && echo yes || echo no)"
+check "...and both installer paths to a file run it" "2" "$(grep -c '^ *_exakit_offer_local_file$' "$ROOT/setup/lib/common.sh")"
 _installer_books() { # _installer_books <loader exit status> -> "failed=<0|1> noted=<n> notes=<text>"
     bash -c '
-        _data_has_local=1; _data_failed=0; _data_notes=""; _noted=0
+        _data_failed=0; _data_notes=""; _noted=0
         exakit_load_local_file() { return '"$1"'; }
         exakit_note_failure() { _noted=$((_noted + 1)); }
         error() { :; }; printf() { command printf "$@"; }
+        '"$_ucs_fail"'
         '"$_ucs_branch"'
+        _exakit_offer_local_file
         command printf "failed=%s noted=%s notes=%s" "$_data_failed" "$_noted" "$(command printf "%s" "$_data_notes" | tr "\n" " ")"' 2>/dev/null
 }
 _b5="$(_installer_books 5)"

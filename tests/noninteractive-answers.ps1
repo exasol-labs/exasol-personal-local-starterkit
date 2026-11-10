@@ -102,6 +102,88 @@ try {
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip" 6> $null)
     Check "selection is none, not local" "none" $chosen
     Check "...and says how to load a file unattended" "True" (($infoSeen -join " ").Contains("name it with EXAKIT_DATA_FILE"))
+
+    Write-Host "the install's data answers - each row its own, in the table's order:"
+    # The real installer step (Request-ExakitDataLoadOffer) with the loaders as
+    # stubs: what ran, in order, then whether it threw. `external` names the
+    # external-source row: unattended it is only ever the command to run - the
+    # wizard (a stub here that says CONNECT) is never started. Twin of the same
+    # block in the bash test.
+    function Get-ExakitBundledDatasets { return @("tpch", "energy", "amazon_sales") | ForEach-Object { [pscustomobject]@{ Id = $_; Label = $_ } } }
+    function Invoke-ExakitDatasetLoad { param($KitRoot, $Id, [switch]$Force) [void]$script:Ran.Add("LOAD $Id") }
+    function Invoke-ExakitSampleDataLoad { param($KitRoot, [switch]$Force) [void]$script:Ran.Add("LOAD tpch(sample)") }
+    function Import-ExakitLocalFile { [void]$script:Ran.Add("FILE $($env:EXAKIT_DATA_FILE)"); return "loaded" }
+    function Invoke-ExakitVsConnectWizard { [void]$script:Ran.Add("CONNECT"); return 0 }
+    function Warn2([string]$M) { [void]$infoSeen.Add($M) }
+    function Fail([string]$M) { throw "FAIL: $M" }
+    # No console: the hint says so (with one it says to run it later).
+    function Test-ExakitInteractive { return $false }
+    function Offer([hashtable]$Answers) {
+        $script:Ran = New-Object System.Collections.ArrayList
+        $infoSeen.Clear()
+        foreach ($k in $Answers.Keys) { [Environment]::SetEnvironmentVariable($k, $Answers[$k], 'Process') }
+        $threw = ""
+        try { Request-ExakitDataLoadOffer -KitRoot $tmp } catch { $threw = "THREW" }
+        foreach ($k in @("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_DATA_FILE")) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+        return "$($script:Ran -join ';')~$threw"
+    }
+    $mine = Join-Path $tmp "mine.csv"
+    Check "EXAKIT_DATASETS=tpch,external: the dataset loads, the wizard does not start" "LOAD tpch~" (Offer @{ EXAKIT_DATASETS = "tpch,external" })
+    Check "...the external row is one line naming the command" "True" (($infoSeen -join " ").Contains("needs a terminal. Connect one any time with: exakit connect"))
+    Check "...and external is not an unknown id" "False" (($infoSeen -join " ").Contains("Unknown dataset id 'external'"))
+    Check "EXAKIT_DATASETS=external alone: an answer, nothing loaded, nothing failed" "~" (Offer @{ EXAKIT_DATASETS = "external" })
+    Check "an id the kit does not ship still fails the step" "~THREW" (Offer @{ EXAKIT_DATASETS = "nope" })
+    Check "EXAKIT_DATASETS and EXAKIT_DATA_FILE: the datasets, then the file" "LOAD amazon_sales;FILE $mine~" (Offer @{ EXAKIT_DATASETS = "amazon_sales,external"; EXAKIT_DATA_FILE = $mine })
+    Check "...then the external row's command, last" "True" (($infoSeen[$infoSeen.Count - 1]).Contains("Connect one any time with: exakit connect"))
+    Check "EXAKIT_LOAD_SAMPLE=0 and a file: the samples are skipped, the file loads" "FILE $mine~" (Offer @{ EXAKIT_LOAD_SAMPLE = "0"; EXAKIT_DATA_FILE = $mine })
+    Check "EXAKIT_LOAD_SAMPLE=1 and a file: the sample, then the file" "LOAD tpch(sample);FILE $mine~" (Offer @{ EXAKIT_LOAD_SAMPLE = "1"; EXAKIT_DATA_FILE = $mine })
+    [void](Offer @{ EXAKIT_LOAD_SAMPLE = "0" })
+    Check "EXAKIT_LOAD_SAMPLE=0 alone still skips everything, as it said" "True" (($infoSeen -join " ").Contains("Skipping data loading (EXAKIT_LOAD_SAMPLE=0)"))
+    function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H"; Description = "" }) }
+    function Test-ExakitVsAvailable { return $true }
+    Check "no answers, no console: the pending samples, never the wizard" "LOAD tpch~" (Offer @{})
+
+    Write-Host "the install's data answers - a refused file, a failed one, what is said and when:"
+    # Everything in one sequence: what loaded, and what was said, in order.
+    # $script:FileMode: ok, refused (the loader's real refusal) or failed;
+    # $script:DatasetFail names a dataset whose load fails.
+    function Info([string]$M) { [void]$script:Ran.Add("INFO $M") }
+    function Warn2([string]$M) { [void]$script:Ran.Add("WARN $M") }
+    function Write-ExakitError([string]$M) { [void]$script:Ran.Add("ERROR $M") }
+    function Invoke-ExakitDatasetLoad {
+        param($KitRoot, $Id, [switch]$Force)
+        [void]$script:Ran.Add("LOAD $Id")
+        if ($Id -eq $script:DatasetFail) { throw "dataset $Id failed" }
+    }
+    function Import-ExakitLocalFile {
+        [void]$script:Ran.Add("FILE")
+        if ($script:FileMode -eq "refused") { Stop-ExakitLocalFileRefused "File not found or empty: mine.csv" }
+        if ($script:FileMode -eq "failed") { throw "the file failed" }
+        return "loaded"
+    }
+    function Seq([hashtable]$Answers, [string]$FileMode = "ok", [string]$DatasetFail = "") {
+        $script:FileMode = $FileMode; $script:DatasetFail = $DatasetFail
+        $script:Ran = New-Object System.Collections.ArrayList
+        foreach ($k in $Answers.Keys) { [Environment]::SetEnvironmentVariable($k, $Answers[$k], 'Process') }
+        $threw = ""
+        try { Request-ExakitDataLoadOffer -KitRoot $tmp 6>$null } catch { $threw = "THREW $_" }
+        foreach ($k in @("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_DATA_FILE", "EXAKIT_PERSONA_ACTIVE", "EXAKIT_DATASETS_PRESELECT")) { Remove-Item "Env:$k" -ErrorAction SilentlyContinue }
+        return "$($script:Ran -join ' | ')~$threw"
+    }
+    $out = Seq @{ EXAKIT_DATASETS = "amazon_sales"; EXAKIT_DATA_FILE = $mine } "refused"
+    Check "a dataset answer and a refused file: a warning, not booked (nothing thrown)" "" ($out -split '~')[1]
+    Check "...the refusal is the warning the shell twin gives" "True" ($out.Contains("WARN The local file was refused (see above). Load another any time with: exakit data-load"))
+    $out = Seq @{ EXAKIT_DATASETS = "nope"; EXAKIT_DATA_FILE = $mine }
+    Check "no dataset matched: said before the file loads" "True" ([bool]($out -match "ERROR EXAKIT_DATASETS='nope' matched no bundled dataset.* \| INFO Loading a local file \(EXAKIT_DATA_FILE\)\. \| FILE"))
+    Check "...and the step still fails, with that reason" "True" (($out -split '~')[1].Contains("matched no bundled dataset"))
+    $out = Seq @{ EXAKIT_DATASETS = "tpch"; EXAKIT_DATA_FILE = $mine } "failed" "tpch"
+    $threw = ($out -split '~')[1]
+    Check "a dataset and the file both fail: the step fails once" "True" ($threw.StartsWith("THREW"))
+    Check "...naming the dataset" "True" ($threw.Contains("Dataset(s) tpch did not load"))
+    Check "...and the file" "True" ($threw.Contains("the file failed"))
+    function Get-ExakitPendingDatasets { return @("amazon_sales", "fraud_transactions") | ForEach-Object { [pscustomobject]@{ Id = $_; Label = $_; Description = "" } } }
+    $out = Seq @{ EXAKIT_PERSONA_ACTIVE = "1"; EXAKIT_DATASETS_PRESELECT = "amazon_sales,fraud_transactions"; EXAKIT_DATA_FILE = $mine }
+    Check "a persona's datasets and a file: the file is announced when it loads" "LOAD amazon_sales | LOAD fraud_transactions | INFO Loading a local file (EXAKIT_DATA_FILE). | FILE~" $out
 }
 finally {
     Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
