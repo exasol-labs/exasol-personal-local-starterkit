@@ -25,7 +25,7 @@ import os
 import exakit.nb as nb
 
 workflow_id = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
-print(f"Every step below is logged under it: exakit workflow show {workflow_id}")
+print(f"Workflow {workflow_id}: every step below is recorded under it.")
 
 # %% [markdown]
 # ## Pick the database Python runtime

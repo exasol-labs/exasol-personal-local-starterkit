@@ -150,7 +150,7 @@ def leakage_check(conn, ds, *, show: bool = True) -> list[str]:
     those columns (none: the list is empty) and prints why each was flagged."""
     if not ds.has("label"):
         if show:
-            print("No label role: nothing to check for a column that gives it away.")
+            print("No target: nothing to check for a column that gives it away.")
         return []
     table, columns, key = ds.fact_table, _columns(ds), _key(ds)
     label = _bare(ds.col("label"))

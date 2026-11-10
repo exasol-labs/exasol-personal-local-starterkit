@@ -126,9 +126,10 @@ def load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | 
 
 
 def first(*candidates: Dataset | LoadedTable | None) -> Dataset | LoadedTable:
-    """The first dataset that was loaded, in the order given."""
+    """The first dataset that was loaded, in the order given; says which one is used."""
     for candidate in candidates:
         if candidate is not None:
+            print(f"Using {candidate.id} ({candidate.fact_table}).")
             return candidate
     raise ValueError("No data was loaded: set one of the loader cells above (a sample dataset loads with no setup).")
 
