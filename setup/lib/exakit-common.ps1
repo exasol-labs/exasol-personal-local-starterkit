@@ -6981,7 +6981,19 @@ function Show-ExakitMarketplaceList {
         if ($entry.PSObject.Properties["version"]) { $line += " " + $entry.version }
         Write-Host $line
         if ($entry.PSObject.Properties["reason"]) {
-            Write-Host ("{0,-16} ({1})" -f "", $entry.reason)
+            # Wrapped to the console, under the status. Twin of the fold in exakit_marketplace_list.
+            $width = 80
+            try { if ([Console]::WindowWidth -gt 0) { $width = [Console]::WindowWidth } } catch { }
+            if ($env:COLUMNS -match '^\d+$') { $width = [int]$env:COLUMNS }
+            $avail = [Math]::Max(30, $width - 17)
+            $current = ""
+            foreach ($word in ("(" + $entry.reason + ")").Split(" ")) {
+                if ($current -and ($current.Length + 1 + $word.Length) -gt $avail) {
+                    Write-Host ((" " * 17) + $current)
+                    $current = $word
+                } elseif ($current) { $current = $current + " " + $word } else { $current = $word }
+            }
+            if ($current) { Write-Host ((" " * 17) + $current) }
         }
     }
     # The reference pages exist (exakit help <id> renders ten of them, offline)

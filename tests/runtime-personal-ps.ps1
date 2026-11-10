@@ -352,6 +352,10 @@ Check "a running container is never blamed" "" (Get-PersonalContainerError)
 $env:EXAKIT_PERSONAL_READY_TIMEOUT = "1"
 
 Write-Host "a failed fresh deploy says what went wrong:"
+# The WSL gate answers yes, as on a machine that passes it: on a Windows runner the real one cannot read a WSL 2.7
+# kernel, refuses the Podman deploy before the launcher runs, and there is no launcher output to show.
+# (tests/personal-wsl-gate-ps.ps1 covers the gate itself; the case below redefines it to record its call.)
+function Test-PersonalWslPodmanNetworkOk { param([string]$Rerun = "", [switch]$Replace, [switch]$Quiet, [switch]$StartMachine) return $true }
 Reset-Machine
 $script:m.PidsRootless = $true
 $script:m.InstallRc = 1

@@ -3623,7 +3623,11 @@ PERSONAL_LOCKED_TEXT="locked by another operation"
 # the deployment half-written. The database daemon runs under another name and
 # does not count. Returns 0 when the lock was released.
 personal_unlock_stale() {
-    if pgrep -f "$(personal_cli)" >/dev/null 2>&1; then
+    # A launcher RUNNING: its command line starts with the launcher's path. Not
+    # any process that merely mentions the path somewhere in its arguments (a
+    # shell script, an editor, `bash -c '...'`), which held a stale lock forever.
+    _pus_cli="$(personal_cli | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+    if pgrep -f "^${_pus_cli}( |\$)" >/dev/null 2>&1; then
         _exakit_log_file "WARN  the deployment is locked and a launcher is running: not unlocking"
         return 1
     fi

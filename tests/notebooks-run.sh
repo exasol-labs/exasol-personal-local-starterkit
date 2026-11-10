@@ -320,6 +320,11 @@ with tempfile.TemporaryDirectory(prefix="exakit-ai-lab-") as folder:
     seconds = time.monotonic() - started
     unchanged = hashlib.sha256(copy.read_bytes()).hexdigest() == digest
 if output:
+    # Kept without its outputs: it is Exasol's notebook, not the kit's, and its connection cell prints the
+    # database's address, which tools/artifact_scan.py rightly refuses to upload. What went wrong is printed below.
+    for cell in executed.get("cells", []):
+        if cell.get("cell_type") == "code":
+            cell["outputs"], cell["execution_count"] = [], None
     target = Path(output) / "ai-lab" / shipped.name
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(executed, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")

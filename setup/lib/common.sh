@@ -6014,7 +6014,12 @@ EXAKIT_ML_EOF
         [ -n "$_ml_id" ] || continue
         printf '%-16s %s%s%s\n' "$_ml_id" "$_ml_status" \
             "${_ml_ver:+ }" "$_ml_ver"
-        [ -n "$_ml_reason" ] && printf '%-16s %s\n' "" "($_ml_reason)"
+        # Wrapped to the terminal, under the status: a reason is a sentence or two
+        # (VS Code's names five editors), and one line ran past 60 columns.
+        if [ -n "$_ml_reason" ]; then
+            _ml_w=$(( ${COLUMNS:-80} - 17 )); [ "$_ml_w" -ge 30 ] || _ml_w=30
+            printf '(%s)\n' "$_ml_reason" | fold -s -w "$_ml_w" | sed 's/ *$//; s/^/                 /'
+        fi
     done <<EXAKIT_ML_OUT
 $_ml_rows
 EXAKIT_ML_OUT
