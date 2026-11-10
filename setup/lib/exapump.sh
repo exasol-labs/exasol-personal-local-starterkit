@@ -1714,6 +1714,10 @@ _exakit_json_tables_ensure() {
         warn "The marketplace installer is not available in this kit build."
         return 1
     }
+    # The install takes a minute (a download and a Python environment) and runs
+    # once: the folder's bar says so instead of sitting still on the file's name.
+    [ -n "${_blf_state:-}" ] && ui_progress_phase "$_blf_state" \
+        "installing the JSON engine (first JSON file only, about a minute)"
     if ! _exakit_marketplace_install_one json-tables >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
         _EXAKIT_JSON_TABLES_BLOCKED="The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
         warn "The JSON engine could not be installed, so this file was not loaded."

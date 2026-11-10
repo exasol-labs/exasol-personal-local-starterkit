@@ -10,6 +10,7 @@
 - **A folder's JSON file loads from a private kit repository.** The JSON engine was fetched anonymously, which a private repository answers with 404. It now comes through the API with `GITHUB_TOKEN`, as the datasets do, or from the public kit repository's copy of the same release, which the pinned checksum makes as good as the original.
 - **Each file's failure gives its own reason.** A failed file's reason was the last error anywhere in the log: the MCP read-only check's refusal named a JSON file's. Only the lines that file's load wrote are read now, and the kit's own warning when the engine wrote none.
 - **"Some of the data is not installed".** A failed local file or external source was reported as "sample data is not installed", even when the sample data had loaded.
+- **A folder load says when it installs the JSON engine, and Enter no longer stacks its bar.** The first JSON file installs the engine (a download and a Python environment, about a minute, once); the bar said only the file's name and sat still. It now reads "installing the JSON engine (first JSON file only, about a minute)". Keys typed while the bar runs are no longer echoed: an Enter moved the cursor down, and every redraw after it printed a second bar under the first.
 
 **Connect an external source from the data menu.** The install's data table
 and `exakit data-load` offer "Connect an external source" wherever virtual

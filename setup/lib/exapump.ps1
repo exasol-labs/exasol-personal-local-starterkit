@@ -1696,6 +1696,9 @@ function Confirm-ExakitJsonTablesReady {
     # boot if that is on. It quiets its own detail into the logfile. The shell
     # calls the singular _exakit_marketplace_install_one; this side has only the
     # plural, and one id is the same work.
+    # A minute, once: the bar says so instead of sitting still on the file's name. Twin of
+    # the phase in _exakit_json_tables_ensure (a no-op when no bar is running).
+    Set-ExakitProgressPhase "installing the JSON engine (first JSON file only, about a minute)"
     try { Invoke-ExakitMarketplaceApply -Ids @("json-tables") | Out-Null } catch { }
     if (-not (Test-ExakitJsonTablesReady)) {
         $script:JsonTablesBlocked = "The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
