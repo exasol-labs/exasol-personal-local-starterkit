@@ -4406,6 +4406,8 @@ function Invoke-CmdConnect {
     if (-not $name -and -not $json) {
         if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
         $name = Read-ExakitVsLineAnswer -Question "Name for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name for this connection"
+        # A name typed here can be a connected source too: re-pointed, not asked again.
+        $live = Test-ExakitVsSourceLive -Name $name
     }
     # A connected source's inputs are its record's: only what was given changes.
     if ($interactive -and -not $live) {

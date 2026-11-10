@@ -1860,6 +1860,8 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     if [ -z "$_cc_name" ] && [ "$_cc_json" = 0 ]; then
         [ -n "$_cc_tty" ] || reject "Give the connection a name with --name (lower case, e.g. sales)."
         _cc_name="$(_exakit_vs_prompt "Name for this connection (lower case, e.g. sales)" "" 1 "$_cc_ask" "Name for this connection")"
+        # A name typed here can be a connected source too: re-pointed, not asked again.
+        _exakit_vs_source_live "$_cc_name" && _cc_live=1
     fi
     # A connected source's inputs are its record's: only what was given changes.
     [ -n "$_cc_tty" ] && [ -z "$_cc_live" ] && _exakit_vs_ask_inputs "$_cc_resolved" "$_cc_ask"
