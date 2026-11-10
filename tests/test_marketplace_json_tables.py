@@ -92,3 +92,69 @@ class JsonTablesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AssetSourceTest(unittest.TestCase):
+    """The engine comes from the kit's repository, through the API with a token when that repository is private, and
+    else from the public kit repository's copy of the same release - only with a pinned checksum."""
+
+    PRIVATE = "ranjanm-chn/exasol-personal-local-starterkit-backup"
+
+    def _fetch(self, token: str | None, digest: str | None):
+        import hashlib
+        import io
+        from urllib.error import HTTPError
+        body = b"wheel bytes"
+        pins = {"sha256": {"wheel": digest or ""}} if digest is not None else {"sha256": {}}
+        if digest == "real":
+            pins = {"sha256": {"wheel": hashlib.sha256(body).hexdigest()}}
+        seen = []
+
+        class Response(io.BytesIO):
+            url = "https://objects.githubusercontent.com/x"
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def fake_open(request, timeout):
+            seen.append((request.full_url, request.get_header("Authorization")))
+            if request.full_url.startswith(f"https://github.com/{self.PRIVATE}/"):
+                raise HTTPError(request.full_url, 404, "Not Found", None, None)
+            if request.full_url.endswith("/releases/tags/json-tables-v0.4.1"):
+                return Response(json.dumps({"assets": [{"name": "w.whl", "url":
+                    f"https://api.github.com/repos/{self.PRIVATE}/releases/assets/7"}]}).encode())
+            return Response(body)
+
+        class Ctx:
+            def log_event(self, *_a, **_k): pass
+
+        env = {k: v for k, v in os.environ.items() if k not in ("GITHUB_TOKEN", "GH_TOKEN")}
+        if token:
+            env["GITHUB_TOKEN"] = token
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, env, clear=True), \
+                patch.object(json_tables, "open_url", side_effect=fake_open):
+            dest = Path(tmp) / "w.whl"
+            error = None
+            try:
+                json_tables._asset(Ctx(), self.PRIVATE, "json-tables-v0.4.1", "w.whl", "wheel", pins, None, dest)
+            except json_tables.AddonFailure as failure:
+                error = str(failure)
+            return seen, error
+
+    def test_a_private_repository_is_read_through_the_api_with_the_token(self):
+        seen, error = self._fetch("t0k", "real")
+        self.assertIsNone(error)
+        self.assertEqual(f"https://api.github.com/repos/{self.PRIVATE}/releases/assets/7", seen[-1][0])
+        self.assertEqual("Bearer t0k", seen[-1][1])
+        self.assertIsNone(seen[0][1], "the plain link never carries the token")
+
+    def test_without_a_token_the_public_copy_is_used_when_the_checksum_is_pinned(self):
+        seen, error = self._fetch(None, "real")
+        self.assertIsNone(error)
+        self.assertEqual("https://github.com/exasol-labs/exasol-personal-local-starterkit/releases/download/"
+                         "json-tables-v0.4.1/w.whl", seen[-1][0])
+
+    def test_without_a_pin_no_other_copy_is_trusted(self):
+        with patch.dict(os.environ, {"EXAKIT_ALLOW_UNVERIFIED_JSON_TABLES": "1"}):
+            seen, error = self._fetch(None, None)
+        self.assertEqual(1, len(seen), "only the kit's own repository is tried")
+        self.assertIn("needs GITHUB_TOKEN", error)

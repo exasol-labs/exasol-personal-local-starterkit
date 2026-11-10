@@ -9130,7 +9130,15 @@ exakit_repo_root() {
 # hardcoded list here would quietly take that away, so tests/skills.sh asserts
 # no skill name is ever hardcoded in this file.
 
-EXAKIT_SKILL_ROOTS="${EXAKIT_SKILL_ROOTS:-$HOME/.claude/skills $HOME/.agents/skills}"
+# Claude Code reads ~/.claude/skills. Codex, Cursor, GitHub Copilot, Gemini CLI
+# and OpenCode read ~/.agents/skills (Cursor and OpenCode read both). Continue
+# reads only ~/.continue/skills: placed there when Continue is on this machine,
+# so the kit does not create a Continue folder for someone who has none. Claude
+# Desktop and claude.ai read no folder: a skill reaches them as an uploaded ZIP.
+if [ -z "${EXAKIT_SKILL_ROOTS:-}" ]; then
+    EXAKIT_SKILL_ROOTS="$HOME/.claude/skills $HOME/.agents/skills"
+    [ -d "$HOME/.continue" ] && EXAKIT_SKILL_ROOTS="$EXAKIT_SKILL_ROOTS $HOME/.continue/skills"
+fi
 
 # exakit_skills_dir — the kit's skills/ source directory.
 exakit_skills_dir() {
@@ -9178,6 +9186,33 @@ exakit_skill_addon() {
     exakit_skill_field "$1" addon
 }
 
+# exakit_skill_persona <skill-md> — the persona a skill belongs to, or empty.
+# Declared like an add-on ("persona: data-scientist"): the skill is placed on a
+# kit that has that persona, and on one that gains it with `exakit persona add`.
+exakit_skill_persona() {
+    exakit_skill_field "$1" persona
+}
+
+# _exakit_skill_persona_open <skill-md> — true when the skill needs no persona,
+# or this kit has the one it names (persona.id is a comma-separated list).
+_exakit_skill_persona_open() {
+    _spo_want="$(exakit_skill_persona "$1")"
+    [ -n "$_spo_want" ] || return 0
+    case ",$(manifest_get persona.id 2>/dev/null || true)," in
+        *",$_spo_want,"*) return 0 ;;
+    esac
+    return 1
+}
+
+# _exakit_skill_gating_persona <skill-name> — the persona that gates this skill
+# and is NOT on the kit; empty when the skill is not gated, or the gate is open.
+_exakit_skill_gating_persona() {
+    _sgp_dir="$(exakit_skills_dir 2>/dev/null)" || return 0
+    [ -f "$_sgp_dir/$1/SKILL.md" ] || return 0
+    _exakit_skill_persona_open "$_sgp_dir/$1/SKILL.md" && return 0
+    exakit_skill_persona "$_sgp_dir/$1/SKILL.md"
+}
+
 # _exakit_skill_gating_addon <skill-name> — the add-on that gates this skill
 # and is NOT installed; empty when the skill is not gated, or the gate is open.
 _exakit_skill_gating_addon() {
@@ -9205,9 +9240,31 @@ exakit_skills_for_addon() {
 # installed: a skill for something the reader does not have is a set of triggers
 # an agent can match on for a tool that is not there.
 _exakit_skill_wanted() {
+    _exakit_skill_persona_open "$1" || return 1
     _skw_owner="$(exakit_skill_addon "$1")"
     [ -n "$_skw_owner" ] || return 0
     exakit_marketplace_addon_installed "$_skw_owner" 2>/dev/null
+}
+
+# exakit_install_persona_skills — place the skills of the personas this kit now
+# has. The installer places skills before it asks which persona the machine is
+# for, so a persona's skill is placed once more after the answer, and again when
+# `exakit persona add` brings one. Quiet: one log line per skill placed.
+exakit_install_persona_skills() {
+    _ips_dir="$(exakit_skills_dir 2>/dev/null)" || return 0
+    _ips_n=0
+    for _ips_path in "$_ips_dir"/*/; do
+        [ -f "$_ips_path/SKILL.md" ] || continue
+        [ -n "$(exakit_skill_persona "$_ips_path/SKILL.md")" ] || continue
+        _exakit_skill_wanted "$_ips_path/SKILL.md" || continue
+        _ips_name="$(basename "$_ips_path")"
+        _exakit_skill_place "$_ips_path" "$_ips_name"
+        _exakit_log_file "OK    Installed skill: $_ips_name (with its persona)"
+        _ips_n=$((_ips_n + 1))
+    done
+    [ "$_ips_n" -gt 0 ] || return 0
+    _exakit_skills_record_installed
+    return 0
 }
 
 # _exakit_skill_place <src-dir> <name> — copy one skill into every discovery
@@ -9356,6 +9413,11 @@ exakit_skills_summary_line() {
     elif [ "$2" -gt 1 ]; then
         _ssl="$_ssl, $2 arrive with their add-ons"
     fi
+    if [ "${5:-0}" -eq 1 ]; then
+        _ssl="$_ssl, 1 arrives with its persona"
+    elif [ "${5:-0}" -gt 1 ]; then
+        _ssl="$_ssl, $5 arrive with their personas"
+    fi
     [ "$3" -gt 0 ] && _ssl="$_ssl, $3 not placed"
     printf '%s, %s in this kit\n' "$_ssl" "$4"
 }
@@ -9408,6 +9470,7 @@ _exakit_skills_json_compact() {
     # tells parsers apart by its absence here.
     _skj_installed=0
     _skj_gated=0
+    _skj_persona=0
     _skj_missing=0
     _skj_total=0
     _skj_states=""
@@ -9419,6 +9482,7 @@ _exakit_skills_json_compact() {
         _skj_total=$((_skj_total + 1))
         _skl_state="$(exakit_skill_state "$_skl_id")"
         _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
+        _skl_persona="$(_exakit_skill_gating_persona "$_skl_id")"
         # An add-on's skill is never "available" to skills-install — that
         # command deliberately skips it, so calling it available
         # prescribed a command that cannot change it. It arrives with its
@@ -9431,6 +9495,13 @@ _exakit_skills_json_compact() {
             _skj_states="$_skj_states needs-addon"
             printf '{"name":"%s","state":"needs-addon","addon":"%s","remedy":"exakit marketplace %s","summary":"%s"}' \
                 "$_skl_id" "$_skl_owner" "$_skl_owner" \
+                "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        elif [ "$_skl_state" != "installed" ] && [ -n "$_skl_persona" ]; then
+            # A persona's skill arrives with its persona, the same way.
+            _skj_persona=$((_skj_persona + 1))
+            _skj_states="$_skj_states needs-persona"
+            printf '{"name":"%s","state":"needs-persona","persona":"%s","remedy":"exakit persona add %s","summary":"%s"}' \
+                "$_skl_id" "$_skl_persona" "$_skl_persona" \
                 "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
         else
             _skj_states="$_skj_states $_skl_state"
@@ -9464,8 +9535,8 @@ EXAKIT_SKL_EOF
     # count found no key for "available" or "needs-addon".
     _skj_by="$(printf '%s\n' $_skj_states | sort | uniq -c | \
         awk 'NF == 2 { printf "%s\"%s\":%d", (n++ ? "," : ""), $2, $1 }')"
-    printf '],"counts":{"installed":%d,"needs_addon":%d,"missing":%d,"total":%d},"by_state":{%s},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
-        "$_skj_installed" "$_skj_gated" "$_skj_missing" "$_skj_total" "$_skj_by" \
+    printf '],"counts":{"installed":%d,"needs_addon":%d,"needs_persona":%d,"missing":%d,"total":%d},"by_state":{%s},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
+        "$_skj_installed" "$_skj_gated" "$_skj_persona" "$_skj_missing" "$_skj_total" "$_skj_by" \
         "$([ -n "$_skj_have" ] && printf '"%s"' "$_skj_have" || printf null)" \
         "$([ -n "$_skj_want" ] && printf '"%s"' "$_skj_want" || printf null)" \
         "$_skj_status" "$_skj_next"
@@ -9487,6 +9558,7 @@ exakit_skills_list() {
     _skl_pending=0
     _skl_installed=0
     _skl_gated=0
+    _skl_persona_n=0
     printf '\n'
     ui_panel_begin "Exasol skills"
     while IFS='|' read -r _skl_id _skl_sum; do
@@ -9497,9 +9569,13 @@ exakit_skills_list() {
         # it. Say whose it is instead, and leave it out of the pending count
         # the advice below is computed from. Same three buckets as --json.
         _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
+        _skl_persona="$(_exakit_skill_gating_persona "$_skl_id")"
         if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
             _skl_state="with $_skl_owner"
             _skl_gated=$((_skl_gated + 1))
+        elif [ "$_skl_state" != "installed" ] && [ -n "$_skl_persona" ]; then
+            _skl_state="with $_skl_persona"
+            _skl_persona_n=$((_skl_persona_n + 1))
         elif [ "$_skl_state" = "installed" ]; then
             _skl_installed=$((_skl_installed + 1))
         else
@@ -9521,7 +9597,7 @@ EXAKIT_SKL_EOF
     ui_panel_line ""
     # What the rows add up to, every number labelled: the table alone left a
     # reader counting rows against the installer's sentence.
-    ui_panel_line "$(exakit_skills_summary_line "$_skl_installed" "$_skl_gated" "$_skl_pending" "$_skl_count")"
+    ui_panel_line "$(exakit_skills_summary_line "$_skl_installed" "$_skl_gated" "$_skl_pending" "$_skl_count" "$_skl_persona_n")"
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -12841,8 +12917,8 @@ kit_shared_steps() {
         exakit_clear_failure_note
         if ! exakit_maybe_offer_data_load "$_kit_root"; then
             exakit_record_soft_failure sample_data "exakit data-load" \
-                "$(exakit_take_failure_note)" "sample data"
-            warn "Sample data did not finish loading — carrying on so the rest of the install completes"
+                "$(exakit_take_failure_note)" "some of the data"
+            warn "Some of the data did not finish loading — carrying on so the rest of the install completes"
         else
             exakit_clear_soft_failure sample_data
         fi

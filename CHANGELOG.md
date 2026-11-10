@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### A data scientist skill, skills for every AI client, and clearer data failures
+
+- **`exasol-data-scientist`, a skill for the Data Scientist.** It works as a senior data scientist on the local database: clarify the question, load a file, folder or external source, profile and clean in SQL, approve the column map, engineer features where the data lives, train and validate in the kit's notebooks, test a difference, share a dashboard and a hand-off bundle. Each step names the kit's own tool (`exakit data-load`, `exakit connect` and virtual schemas, the read-only MCP server, `exakit describe`, the `exakit.nb` helpers and the Notebook Connector, Dash Server), and `references/` holds SQL and Python recipes checked against the practice datasets.
+- **A skill can belong to a persona.** `persona: <id>` in a SKILL.md places it only on a kit with that persona: after the install's persona question, and with `exakit persona add`. `exakit skills` names one still waiting as `needs-persona`, with `exakit persona add <id>` as its remedy (`counts.needs_persona` in `--json`). Both shells.
+- **Skills reach every AI client that reads them.** Claude Code reads `~/.claude/skills`; Codex, Cursor, GitHub Copilot, Gemini CLI and OpenCode read `~/.agents/skills`; Continue reads `~/.continue/skills`, now placed when Continue is on the machine. Claude Desktop and claude.ai read no folder: a skill reaches them as an uploaded ZIP.
+- **A folder's JSON file loads from a private kit repository.** The JSON engine was fetched anonymously, which a private repository answers with 404. It now comes through the API with `GITHUB_TOKEN`, as the datasets do, or from the public kit repository's copy of the same release, which the pinned checksum makes as good as the original.
+- **Each file's failure gives its own reason.** A failed file's reason was the last error anywhere in the log: the MCP read-only check's refusal named a JSON file's. Only the lines that file's load wrote are read now, and the kit's own warning when the engine wrote none.
+- **"Some of the data is not installed".** A failed local file or external source was reported as "sample data is not installed", even when the sample data had loaded.
+
 **Connect an external source from the data menu.** The install's data table
 and `exakit data-load` offer "Connect an external source" wherever virtual
 schemas can run, on macOS, Linux and Windows; it said "coming soon" during

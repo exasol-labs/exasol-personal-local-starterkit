@@ -146,6 +146,21 @@ def _api_assets(repo: str, tag: str) -> dict[str, dict]:
             if isinstance(asset, dict) and isinstance(asset.get("name"), str)}
 
 
+PUBLIC_REPO = "exasol-labs/exasol-personal-local-starterkit"
+
+
+def _api_asset_url(repo: str, tag: str, name: str, headers: dict[str, str]) -> str:
+    """The API URL of one release asset, found with the token: a private repository's only download route."""
+    request = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+                                     headers={**headers, "Accept": "application/vnd.github+json"})
+    with open_url(request, timeout=20) as response:
+        doc = json.load(response)
+    url = next((a.get("url", "") for a in doc.get("assets", []) if isinstance(a, dict) and a.get("name") == name), "")
+    if not url.startswith(f"https://api.github.com/repos/{repo}/releases/assets/"):
+        raise AddonFailure(f"JSON Tables release {tag} in {repo} has no asset {name}")
+    return url
+
+
 def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict,
            api_assets: dict[str, dict] | None, destination: Path) -> None:
     digest = pins.get("sha256", {}).get(key)
@@ -161,15 +176,35 @@ def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict
         )
     if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise AddonFailure(f"Invalid checksum for JSON Tables asset {name}")
-    url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response, destination.open("wb") as output:
-            if not response.url.startswith("https://"):
-                raise AddonFailure(f"JSON Tables asset {name} redirected away from HTTPS")
-            shutil.copyfileobj(response, output)
-    except OSError as error:
-        destination.unlink(missing_ok=True)
-        raise AddonFailure(f"Could not download JSON Tables asset {name}: {error}") from error
+    # Where the asset may come from, in order. The kit's own repository first; a PRIVATE one answers its
+    # releases/download link with 404 even to a token, so with GITHUB_TOKEN (or GH_TOKEN) the asset is fetched
+    # through the API, as the datasets are (_exakit_dataset_fetch_token). Then the public kit repository's copy of
+    # the same release - only with a pinned checksum, which makes any copy as good as the original.
+    attempts: list[tuple[str, dict[str, str]]] = [(f"https://github.com/{repo}/releases/download/{tag}/{name}", {})]
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        attempts.append((f"api:{repo}:{tag}", {"Authorization": f"Bearer {token}"}))
+    if digest and repo != PUBLIC_REPO:
+        attempts.append((f"https://github.com/{PUBLIC_REPO}/releases/download/{tag}/{name}", {}))
+    last: Exception | None = None
+    for url, headers in attempts:
+        try:
+            if url.startswith("api:"):
+                url = _api_asset_url(repo, tag, name, headers)
+                headers = {**headers, "Accept": "application/octet-stream"}
+            with open_url(urllib.request.Request(url, headers=headers), timeout=30) as response, \
+                    destination.open("wb") as output:
+                if not response.url.startswith("https://"):
+                    raise AddonFailure(f"JSON Tables asset {name} redirected away from HTTPS")
+                shutil.copyfileobj(response, output)
+            last = None
+            break
+        except (OSError, AddonFailure) as error:
+            destination.unlink(missing_ok=True)
+            last = error
+    if last is not None:
+        hint = "" if token else " (a private kit repository needs GITHUB_TOKEN)"
+        raise AddonFailure(f"Could not download JSON Tables asset {name}: {last}{hint}") from last
     if digest:
         with destination.open("rb") as stream:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()

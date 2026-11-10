@@ -300,8 +300,8 @@ function Invoke-ExakitPersonaData {
     # restores before the sample load can claim its tables.
     if (Get-Command Invoke-LegacyCrossingAfter -ErrorAction SilentlyContinue) { Invoke-LegacyCrossingAfter }
     [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
-        -Label "sample data" `
-        -Warning "Sample data load did not finish cleanly." `
+        -Label "some of the data" `
+        -Warning "Some of the data did not finish loading." `
         -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
 }
 

@@ -294,8 +294,8 @@ try {
             Invoke-LegacyCrossingAfter
         }
         [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
-            -Label "sample data" `
-            -Warning "Sample data load did not finish cleanly." `
+            -Label "some of the data" `
+            -Warning "Some of the data did not finish loading." `
             -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
     }
 
@@ -407,6 +407,8 @@ try {
         # the first install's answer stands
     } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
         Invoke-ExakitPersonaFlow -KitRoot $KitRoot
+        # The skills were placed before the question; a persona's own skill is placed now.
+        if (Get-Command Install-ExakitPersonaSkills -ErrorAction SilentlyContinue) { try { Install-ExakitPersonaSkills } catch { } }
     }
 
     # --- step 7: exakit helper command, last, after the persona's data ---------

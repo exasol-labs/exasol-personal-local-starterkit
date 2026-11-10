@@ -332,7 +332,7 @@ class JsonTablesArtifactTest(unittest.TestCase):
             destination = home / "engine"
             response = io.BytesIO(b"wrong asset")
             response.url = "https://github.com/release/engine"
-            with patch.object(json_tables.urllib.request, "urlopen", return_value=response):
+            with patch.object(json_tables, "open_url", return_value=response):
                 with self.assertRaisesRegex(AddonFailure, "Checksum mismatch"):
                     json_tables._asset(ctx, "owner/repo", "tag", "engine", "linux-x86_64",
                                        {"sha256": {"linux-x86_64": "0" * 64}}, None, destination)
