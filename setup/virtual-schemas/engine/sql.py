@@ -86,7 +86,8 @@ _KINDS = (
     ("missing_or_denied", r"ORA-00942|does not exist or not authorized"),
     ("dns", r"UnknownHostException|Name or service not known|nodename nor servname|unable to resolve host"),
     ("tls", r"PKIX|certificate|SSLHandshake|SSL connection|ssl_server_dn_match|TLS|SSLException|"
-            r"trustAnchors parameter must be non-empty"),
+            r"trustAnchors parameter must be non-empty|"
+            r"Could not load trustJKS keystore"),            # MySQL Connector/J: verify with no CA on Exasol Personal
     ("auth", r"password authentication failed|Access denied for user|Login failed for user|ORA-01017|"
              r"Incorrect username or password|invalid username/password|authentication failed|"
              r"JWT token is invalid|Programmatic access token is invalid|token has expired|"

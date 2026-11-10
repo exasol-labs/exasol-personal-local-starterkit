@@ -1361,6 +1361,26 @@ has "...for Snowflake (no ca, no tls choice): says it cannot connect here, offer
 lacks "...and does not offer tls=require, which Snowflake does not have" "tls=require" "$(printf '%s\n' "$E6" | sed -n 2p)"
 has "...MySQL keeps the ca advice" "give the CA as PEM with --set ca=<file>" "$(printf '%s\n' "$E6" | sed -n 3p)"
 check "...and the error is filed as TLS, so the remedy is shown (measured: Snowflake fell to 'see the log')" "tls" "$(printf '%s\n' "$E6" | sed -n 4p)"
+E7="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan, sql
+load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
+text = "Cannot create PoolableConnectionFactory (Could not load trustJKS keystore from null)"
+print(sql.classify(text))
+print(lifecycle.tls_remedy(text, load("mysql")))
+for c in ("postgresql", "mysql", "sqlserver", "oracle"):
+    w = plan.tls_warning(load(c), {"tls": "verify", "host": "h"})
+    print("%s|%s|%s" % (c, w, plan.tls_warning(load(c), {"tls": "verify", "ca": "x.pem"})))
+PYE
+)"
+check "C4: MySQL's 'Could not load trustJKS keystore from null' is filed as TLS" "tls" "$(printf '%s\n' "$E7" | sed -n 1p)"
+has "...with the same CA remedy as trustAnchors" "give the CA as PEM with --set ca=<file>" "$(printf '%s\n' "$E7" | sed -n 2p)"
+for c in postgresql mysql sqlserver oracle; do
+    has "C1: $c plan warns that tls=verify needs a CA file, a public CA too" "tls=verify needs a CA file here" "$(printf '%s\n' "$E7" | grep "^$c|")"
+    has "...and not once a CA is given" "|None" "$(printf '%s\n' "$E7" | grep "^$c|")"
+    lacks "C1: $c's CA prompt no longer says it is only for a private CA" "only for a private CA" "$(cat "$ROOT/setup/virtual-schemas/connectors/$c/connector.json")"
+done
 
 printf '\n== Snowflake: the loader trusts the container'"'"'s CA store ==\n'
 # Measured on Exasol Personal 2.3.0 against a real account: the JDBC loader's

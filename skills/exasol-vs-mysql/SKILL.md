@@ -95,8 +95,8 @@ change is at the source: show it, run it only after a yes.
 
 - **`verify` always needs `ca` on Exasol Personal 2.4**, even for a public CA:
   the database's JDBC loader has an empty Java trust store. MySQL then fails
-  with "Could not load trustJKS keystore from null". The form's CA prompt says
-  "Enter to skip"; with `verify` do not skip it.
+  with "Could not load trustJKS keystore from null". The plan warns when
+  `verify` has no CA; do not connect past that warning.
 - What to give: RDS / Aurora, the region's bundle
   `https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`; Azure,
   the root CA its TLS documentation names; a public CA, its root (Let's Encrypt:
