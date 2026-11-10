@@ -4089,14 +4089,22 @@ function Show-ExakitDataLoadMenu {
         Info "Data loading cancelled."
         return
     }
+    # Your own file first, then the external source: both are questions asked
+    # after the table, and the shell twin (exakit_data_load_menu) asks them in
+    # this order too.
+    $chosen = @(@($chosen | Where-Object { $_ -ne "external" }) + @($chosen | Where-Object { $_ -eq "external" }))
     Start-ExakitDataTableRun
     try {
         foreach ($id in $chosen) {
             if ($id -eq "external") {
                 Stop-ExakitDataTableRun
                 # cmd_connect's twin exits; a child exakit keeps that from
-                # ending this menu.
-                & (Join-Path $script:BinDir "exakit.cmd") connect | Out-Host
+                # ending this menu. NOT piped: a piped child's output is
+                # redirected, ui.ps1 then turns its menus off
+                # (IsOutputRedirected) and the wizard fell back to its
+                # defaults. On its own the child has the console, as a typed
+                # `exakit connect` does.
+                & (Join-Path $script:BinDir "exakit.cmd") connect
                 continue
             }
             if ($id -eq "local") {

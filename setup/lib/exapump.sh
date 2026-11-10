@@ -4182,11 +4182,6 @@ exakit_data_load_menu() {
     # Nothing is lost by closing first. This row has no per-file progress to
     # show in that table anyway: the folder load draws its own one-line bar, and
     # the datasets above have already finished and been drawn.
-    if [ "$_menu_has_external" = 1 ]; then
-        printf '\n'
-        ( exakit_vs_connect_wizard ) || _menu_notes="${_menu_notes}info|Connect an external source any time with: exakit connect
-"
-    fi
     if [ "$_menu_has_local" = 1 ]; then
         printf '\n'
         ( exakit_load_local_file )
@@ -4207,6 +4202,11 @@ exakit_data_load_menu() {
         elif [ "$_local_status" -ne 0 ]; then
             _menu_status="$_local_status"
         fi
+    fi
+    if [ "$_menu_has_external" = 1 ]; then
+        printf '\n'
+        ( exakit_vs_connect_wizard ) || _menu_notes="${_menu_notes}info|Connect an external source any time with: exakit connect
+"
     fi
     while IFS='|' read -r _mn_kind _mn_text; do
         [ -n "$_mn_text" ] || continue

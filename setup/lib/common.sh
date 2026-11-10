@@ -11948,11 +11948,6 @@ exakit_maybe_offer_data_load() {
     #
     # ui_table_detach was never the answer: it stops a subshell's exit from
     # killing the animator, it does not take the frame off the screen.
-    if [ "$_data_has_external" = 1 ]; then
-        printf '\n'
-        ( exakit_vs_connect_wizard ) || _data_notes="${_data_notes}info|Connect an external source any time with: exakit connect
-"
-    fi
     if [ "$_data_has_local" = 1 ]; then
         printf '\n'
         ( exakit_load_local_file )
@@ -11978,6 +11973,11 @@ exakit_maybe_offer_data_load() {
             exakit_note_failure "loading the local file did not finish (see the log)"
             _data_failed=1
         fi
+    fi
+    if [ "$_data_has_external" = 1 ]; then
+        printf '\n'
+        ( exakit_vs_connect_wizard ) || _data_notes="${_data_notes}info|Connect an external source any time with: exakit connect
+"
     fi
     while IFS='|' read -r _dn_kind _dn_text; do
         [ -n "$_dn_text" ] || continue

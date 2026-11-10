@@ -199,6 +199,23 @@ confirmed() { # confirmed — the same, with a person pressing Enter on the defa
     )
 }
 check "every sample loaded, Enter pressed: your own file" "local" "$(confirmed)"
+
+echo "after the table: your own file, then the external source (both entry points):"
+# Picked in any order, the file's question comes first and the connect wizard
+# second - in exakit data-load and in the installer's offer alike, and as the
+# PowerShell twin does (tests/data-question-ps.ps1).
+_order_of() { # _order_of <function> — what ran after the table, in order
+    (
+        manifest_get() { printf 'admin\n'; }
+        exakit_data_load_select() { EXAKIT_DATA_LOAD_SELECTION="external,local"; EXAKIT_TABLE_STATE=""; }
+        exakit_load_local_file() { printf 'local|'; }
+        exakit_vs_connect_wizard() { printf 'connect|'; }
+        unset EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATA_FILE
+        "$1" "$ROOT" 2>/dev/null
+    ) | tr -d '\n' | grep -o -E '(local|connect)\|' | tr -d '\n'
+}
+check "exakit data-load: the file first, then the connect wizard" "local|connect|" "$(_order_of exakit_data_load_menu)"
+check "the installer's offer: the same order" "local|connect|" "$(_order_of exakit_maybe_offer_data_load)"
 check "EXAKIT_DATA_FILE bypasses the table" "local~" \
     "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATA_FILE="$WORK" exakit_data_load_select Skip >/dev/null 2>&1
         printf '%s~%s' "$EXAKIT_DATA_LOAD_SELECTION" "$EXAKIT_TABLE_STATE") )"

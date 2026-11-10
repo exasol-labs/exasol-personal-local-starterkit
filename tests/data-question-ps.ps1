@@ -249,6 +249,35 @@ try {
     Has "an unknown id among them still refuses" "THREW REJECT: Unknown marketplace add-on" (Market "json-tables,not-a-tool")
     $offer = (Get-Content -Raw (Join-Path $repo "setup/lib/exakit-common.ps1"))
     Has "a persona's all is the whole marketplace, not a filter" 'if ($only -eq "all") {' $offer
+
+    Write-Host "after the table: your own file, then the external source:"
+    # Picked in any order, the file's question comes first and the connect
+    # wizard second, as in the shell twin (exakit_data_load_menu). The wizard is
+    # a child exakit, run on its own - never piped, which would redirect its
+    # output and turn its menus off (ui.ps1, IsOutputRedirected).
+    $script:Order = New-Object System.Collections.ArrayList
+    $orderFile = Join-Path $work "order.txt"
+    $savedBin = $script:BinDir
+    $script:BinDir = Join-Path $work "orderbin"
+    New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
+    $fakeCmd = Join-Path $script:BinDir "exakit.cmd"
+    $onWindows = $true
+    if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { $onWindows = [bool]$IsWindows }
+    if ($onWindows) {
+        "@echo %1>> `"$orderFile`"" | Set-Content -Path $fakeCmd -Encoding ascii
+    } else {
+        "#!/bin/sh`nprintf '%s\n' `"`$1`" >> `"$orderFile`"" | Set-Content -Path $fakeCmd -Encoding ascii
+        & chmod +x $fakeCmd
+    }
+    function Get-ExakitManifestValue([string]$Key) { return "admin" }
+    function Select-ExakitDataLoad { param([string]$FinalLabel) return @("external", "local") }
+    function Start-ExakitDataTableRun { }
+    function Stop-ExakitDataTableRun { }
+    function Import-ExakitLocalFile { Add-Content -LiteralPath $orderFile -Value "local"; return "loaded" }
+    try { Show-ExakitDataLoadMenu } finally { $script:BinDir = $savedBin }
+    Check "exakit data-load: the file first, then the connect wizard" "local|connect" ((Get-Content -LiteralPath $orderFile -ErrorAction SilentlyContinue) -join "|")
+    $menuText = (Get-Command Show-ExakitDataLoadMenu).Definition
+    Lacks "...and the wizard is not piped" "connect | Out-Host" $menuText
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
