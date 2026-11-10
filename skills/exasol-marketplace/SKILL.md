@@ -1,6 +1,6 @@
 ---
 name: exasol-marketplace
-description: Browse, install and remove the starter kit's optional add-ons through exakit marketplace — dash-server (agent-built dashboards), notebook (JupyterLab, Marimo), udf-devkit (Python and Rust UDFs, MLflow), Exasol for VS Code (editor extension), JSON Tables (JSON ingestion), Exasol Scheduler (SQL jobs on a schedule) and dbt-exasol (dbt models) — including the read-only listing, installing by id without a terminal, why an add-on may not be offered at all, and how installed add-ons join the normal update and uninstall flows. Triggers — "what optional tools can I add", "exakit marketplace", "install an add-on", "add dashboards to my kit", "add dbt to my kit", "schedule a query", "run this nightly", "install the scheduler", "why is an add-on not listed", "remove an add-on", "update my add-ons", "add a persona to my kit".
+description: Browse, install and remove the starter kit's optional add-ons through exakit marketplace — dash-server (agent-built dashboards), notebook (JupyterLab, Marimo), udf-devkit (Python and Rust UDFs, MLflow; hidden for now), Exasol for VS Code (editor extension), JSON Tables (JSON ingestion), Exasol Scheduler (SQL jobs on a schedule) and dbt-exasol (dbt models) — including the read-only listing, installing by id without a terminal, why an add-on may not be offered at all, and how installed add-ons join the normal update and uninstall flows. Triggers — "what optional tools can I add", "exakit marketplace", "install an add-on", "add dashboards to my kit", "add dbt to my kit", "schedule a query", "run this nightly", "install the scheduler", "why is an add-on not listed", "remove an add-on", "update my add-ons", "add a persona to my kit".
 ---
 
 # The marketplace — optional add-ons
@@ -63,7 +63,7 @@ interactive install ("Do you want to add optional tools?").
 |---|---|---|
 | `dash-server` | Agent-built live dashboards on the local database, driven through its own MCP control plane | `dash-server` |
 | `notebook` | JupyterLab or Marimo connected to the local database, with the kit's persona notebooks | `notebook` |
-| `udf-devkit` | Python and Rust UDF containers, training inside the database, a local MLflow server | `udf-devkit` |
+| `udf-devkit` | **Hidden for now:** not offered or installed (it returns with the ML Engineer); a kit that has it still updates and removes it. Python and Rust UDF containers, training inside the database, a local MLflow server | `udf-devkit` |
 | `exasol-vscode` | Exasol SQL editing and schema browsing inside VS Code | `exasol-vscode` |
 | `json-tables` | Ingest, query and reshape JSON-shaped data; the engine ships prebuilt, no Rust toolchain | `json-tables` |
 | `exasol-scheduler` | SQL jobs on a cron schedule, defined and audited as rows in a table | `exasol-scheduler` |

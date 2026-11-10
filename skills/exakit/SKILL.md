@@ -60,7 +60,7 @@ fixes it — relay that exact line rather than composing your own.
 | Marketplace | choosing, installing, updating, removing add-ons | `exasol-marketplace` |
 | notebook add-on | JupyterLab / Marimo with the kit's persona notebooks | `notebook` |
 | dash-server add-on | live dashboards | `dash-server` (server), `exasol-dash` (writing the app) |
-| udf-devkit add-on | Python/Rust UDF containers, models in BucketFS, local MLflow | `udf-devkit` |
+| udf-devkit add-on (hidden for now: not offered; a kit that has it keeps it) | Python/Rust UDF containers, models in BucketFS, local MLflow | `udf-devkit` |
 | exasol-scheduler add-on | SQL on a cron schedule | `exasol-scheduler` |
 | json-tables add-on | JSON data as tables | `json-tables` |
 | dbt-exasol add-on | SQL models with dbt | `dbt-exasol` |

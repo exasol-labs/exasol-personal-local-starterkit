@@ -11,7 +11,7 @@
 #
 # **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 #
-# **Steps:** 1 Access, 2 Understand, 3 Prepare, 4 Explore, 5 Model, 6 Validate, 7 Ask with AI, 8 Share, 9 Hand off. **This notebook: steps 0, 1 and 2.**
+# ![Steps 0 Kit, 1 Access and 2 Understand of nine: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:0,1,2)
 #
 # At the end you have a connection, an approved column map and a first result. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
 

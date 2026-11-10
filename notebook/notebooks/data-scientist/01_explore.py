@@ -11,7 +11,7 @@
 #
 # **Dataset:** the one you approved last (else `amazon_sales`). Change `DATASET` for `fraud_transactions` or your own file.
 #
-# **Steps:** 1 Access, 2 Understand, **3 Prepare, 4 Explore, 5 Model, 6 Validate**, 7 Ask with AI, 8 Share, 9 Hand off. **This notebook: steps 3 to 6.**
+# ![Steps 3 Prepare, 4 Explore, 5 Model and 6 Validate of nine: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:3,4,5,6)
 #
 # Each query is built from the approved column map, so no cell names a column. If the data has no date or no text, the step that needs it skips and says why. All settings are in the first cell. The AI step at the end is optional and off.
 

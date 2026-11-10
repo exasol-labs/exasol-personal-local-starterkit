@@ -214,13 +214,9 @@ names `exakit marketplace --list`, `exakit marketplace <id>` and
   │     │                             capabilities.                          │
   │ [✓] ├─ json-tables       0.4.1    Exasol JSON Tables: ingest, query, and │
   │     │                             reshape JSON-shaped data in Exasol.    │
-  │ [✓] ├─ notebook          3.1.0    Connection configuration management    │
-  │     │                             and additional tools for Jupyter       │
-  │     │                             notebooks.                             │
-  │ [✓] └─ udf-devkit        0.1.0    Release Repository for Script Language │
-  │                                   Container for user defined functions   │
-  │                                   (UDF's) that can be used in the EXASOL │
-  │                                   database.                              │
+  │ [✓] └─ notebook          3.1.0    Connection configuration management    │
+  │                                   and additional tools for Jupyter       │
+  │                                   notebooks.                             │
   │ [ ] Skip                                                                 │
   ╰──────────────────────────────────────────────────────────────────────────╯
 ```
