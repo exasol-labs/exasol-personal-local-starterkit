@@ -51,23 +51,35 @@ the tables chosen: outliers, drivers of a target, a difference between
 groups (a test), trends over time, segments (clusters), data quality, a
 prediction. Ask for the target only for a prediction or drivers.
 
-**Round 3: the fusion.** With two or more tables, show the links from the
-data map and ask which join to use. Check every join in SQL first: rows
-matched, rows not matched, keys repeated. A `possible` link that matches
-under about half the rows is not a join: say so and ask again. With no link
-at all, say the tables cannot be fused and offer to compare them side by side.
+**Round 3: the fusion.** Exasol is the hub: every sample, loaded table and
+connected source is queryable in one place, so one question can read all of
+them. Fusion is not only a key join. Use whatever answers the goal:
+
+- **Side by side.** The same measure from each source in one result.
+- **A shared grain.** Aggregate each source to a common level (day, month,
+  region, category, customer), then compare or correlate the levels.
+- **Stack.** `UNION ALL` of tables that hold the same kind of rows, tagged by
+  source.
+- **Enrich.** Join a reference table (a region list, a calendar, a price list)
+  where a real key exists. Check the match rate first and say it.
+- **Contrast.** One source as the baseline, another as the test.
+
+Explore freely: the user can ask anything across the sources, and you can
+propose angles they did not ask for. Say which sources each finding used, and
+say plainly what the data cannot support.
 
 **Round 4: the output.** "A notebook, a dashboard, or both?" Default: both.
 
 Then do it, in this order, saying which step you are on:
 
 1. Approve each table's column map (`exakit describe`, or `nb.review_roles`).
-2. Show the joined view's SQL. Create it in `EXAKIT_PREPARED` from a notebook
-   cell (the Notebook Connector, `nb.describe_schema(...).joined_view(...)`)
-   or `exakit sql --write`, only after a yes.
+2. Read across the sources in SQL through MCP. When a combined result is worth
+   keeping (for a dashboard or a model), show its SQL and create it as a view in
+   `EXAKIT_PREPARED` from a notebook cell (the Notebook Connector) or with
+   `exakit sql --write`, only after a yes.
 3. Run the analysis the user chose, in SQL first, then Python in the kit's
    notebook kernel. One finding per query, each with one sentence.
-4. Build the dashboard on Dash Server from the joined view (the `dash-server`
+4. Build the dashboard on Dash Server from those views (the `dash-server`
    skill, or `nb.share`), and give the URL from `exakit status --json`.
 5. End with the report template below and one recommended next step.
 
