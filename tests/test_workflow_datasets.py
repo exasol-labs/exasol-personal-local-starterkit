@@ -130,10 +130,11 @@ class WorkflowDatasetsTest(unittest.TestCase):
         self.assertIn("reference_datasets_live.py no-secrets", runs)
         self.assertEqual(named(runs, self.ids), set(self.ids), "the notebook loop must run on every reference dataset")
         install = next(s for s in job["steps"] if "install.sh" in s.get("run", ""))
-        # The ML Engineer is disabled for now ("visible": false): the Data Scientist installs, and the add-on the ML
-        # Engineer's notebooks need is named beside the persona's own.
+        # The ML Engineer and its udf-devkit add-on are hidden for now ("visible": false; the catalog refuses
+        # udf-devkit): the Data Scientist installs, and only its notebooks run.
         self.assertEqual(install["env"]["EXAKIT_PERSONA"], "data-scientist")
-        self.assertIn("udf-devkit", install["env"]["EXAKIT_MARKETPLACE_ADDONS"].split(","))
+        self.assertNotIn("udf-devkit", install["env"]["EXAKIT_MARKETPLACE_ADDONS"].split(","))
+        self.assertNotIn("ml-engineer/", runs, "a hidden persona's notebooks need its hidden add-on")
         self.assertIn("EXAKIT_LOCAL_KIT", install["env"])
         self.assertNotIn("EXAKIT_DATASETS", install["env"], "the personas' own dataset list is what has to load")
         on = triggers(doc)
@@ -196,7 +197,10 @@ class WorkflowDatasetsTest(unittest.TestCase):
             profiled = profile.profile_rows(columns, reader, table)
 
         def answer(doc):
-            return lambda *args: (0, json.dumps({"status": "draft", "doc": doc, "changed": [], "previous": None}), "")
+            # On a fresh install describe answers with the shipped approved v1 (adopted into the store): the computed
+            # roles, with the target a person chose.
+            doc = dict(doc, version=1, slots=dict(doc["slots"], target=shipped["slots"]["target"]))
+            return lambda *args: (0, json.dumps({"status": "approved", "doc": doc, "changed": [], "previous": 1}), "")
 
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"EXAKIT_HOME": home}):
             checks = live.Checks()

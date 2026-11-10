@@ -153,6 +153,45 @@ class NotebookCellsTest(unittest.TestCase):
                     self.assertIn("not PowerShell", out)
         self.assertIn(setup_env.this_machine(), ("mac", "linux", "wsl", "windows"))
 
+    def test_model_setup_asks_for_what_is_missing_inside_a_notebook(self):
+        """In JupyterLab or Marimo, nb.model_setup() asks: the model id, its address and Langfuse's in plain text,
+        then each key in a hidden box. The answers land in this kernel only and no key is printed."""
+        read = Prompts("claude-opus-5-5", "https://api.anthropic.com/v1/", "https://cloud.langfuse.com")
+        secret = Prompts(KEY, "pk-x", "sk-y")
+        (state, out) = quiet(lambda: nb.model_setup("mac", ask=True, read=read, secret=secret))
+        self.assertTrue(state["asked"])
+        self.assertEqual(3, len(read.asked), "model id, address, Langfuse address")
+        self.assertEqual(3, len(secret.asked), "the model key and the two Langfuse keys, hidden")
+        self.assertEqual("claude-opus-5-5", os.environ["EXAKIT_MODEL_ID"])
+        self.assertEqual(KEY, os.environ["EXAKIT_PROVIDER_API_KEY"])
+        self.assertEqual([], state["missing"])
+        self.assertNotIn(KEY, out)
+
+    def test_model_setup_asks_only_for_what_is_missing_and_enter_skips(self):
+        os.environ.update({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "https://model.example/v1/"})
+        read, secret = Prompts(""), Prompts(KEY)
+        (state, _) = quiet(lambda: nb.model_setup("mac", ask=True, read=read, secret=secret))
+        self.assertEqual(1, len(read.asked), "only the Langfuse address; Enter skips it")
+        self.assertIn("Langfuse", read.asked[0])
+        self.assertEqual(1, len(secret.asked), "only the missing model key")
+        self.assertIn("LANGFUSE_BASE_URL", state["missing"])
+
+    def test_model_setup_never_asks_outside_a_notebook_or_when_told_not_to(self):
+        read, secret = Prompts(), Prompts()
+        for kwargs in ({}, {"ask": False}):
+            with self.subTest(**kwargs):
+                (state, _) = quiet(lambda: nb.model_setup("mac", read=read, secret=secret, **kwargs))
+                self.assertFalse(state["asked"])
+        self.assertEqual([], read.asked + secret.asked)
+
+    def test_a_front_end_without_prompts_falls_back_to_the_lines(self):
+        def no_stdin(_prompt):
+            raise RuntimeError("no stdin")
+        (state, out) = quiet(lambda: nb.model_setup("mac", ask=True, read=no_stdin, secret=no_stdin))
+        self.assertFalse(state["asked"])
+        self.assertIn("Could not ask here", out)
+        self.assertIn('export EXAKIT_MODEL_ID="claude-opus-5-5"', out)
+
     def test_model_setup_never_prints_a_key_and_says_so_when_all_is_set(self):
         os.environ.update({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "https://model.example/v1/",
                            "EXAKIT_PROVIDER_API_KEY": KEY, "LANGFUSE_BASE_URL": "https://langfuse.example",

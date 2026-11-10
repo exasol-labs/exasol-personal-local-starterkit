@@ -1,9 +1,9 @@
 ---
 name: exasol-vs-iceberg-rest
-description: Connect Iceberg tables behind an Iceberg REST catalog (Polaris, Lakekeeper, Nessie, Gravitino) to local Exasol as a virtual schema with exakit connect iceberg-rest, read in place from storage by the lakehouse engine - Beta, not yet run against a live catalog. Covers the inputs to collect (catalog URL, warehouse, namespace, and either a catalog token or storage keys with region and endpoint), checking them against the catalog's REST API, least-privilege reads, https versus http, the unattended connect line, and the REST-specific failures. Connector id iceberg-rest, aliases rest, rest-catalog and iceberg-rest-catalog, tier Beta. Triggers — "connect an Iceberg REST catalog", "query a Polaris catalog from Exasol", "Lakekeeper or Nessie catalog in Exasol", "Iceberg on MinIO from Exasol", "exakit connect iceberg-rest", "NoSuchNamespaceException from exakit".
+description: Connect Iceberg tables behind an Iceberg REST catalog (Polaris, Lakekeeper, Nessie, Gravitino) to local Exasol as a virtual schema with exakit connect iceberg-rest, read in place from storage by the lakehouse engine. Covers the inputs to collect (catalog URL, warehouse, namespace, and either a catalog token or storage keys with region and endpoint), checking them against the catalog's REST API, least-privilege reads, https versus http, the unattended connect line, and the REST-specific failures. Connector id iceberg-rest, aliases rest, rest-catalog and iceberg-rest-catalog, tier GA. Triggers — "connect an Iceberg REST catalog", "query a Polaris catalog from Exasol", "Lakekeeper or Nessie catalog in Exasol", "Iceberg on MinIO from Exasol", "exakit connect iceberg-rest", "NoSuchNamespaceException from exakit".
 ---
 
-# Iceberg REST catalog → local Exasol (Beta)
+# Iceberg REST catalog → local Exasol
 
 Shared rules (credential handling, the lakehouse engine, the `--json` answer and
 failure kinds, disconnect versus remove) live in
@@ -14,8 +14,7 @@ skill adds only what is the REST route's own.
 
 The Iceberg tables of one namespace in an Iceberg REST catalog, read where they
 lie in storage by the same pinned engine and scripts as the Glue route
-(`exasol-vs-lakehouse`). One namespace is one source. **Beta: this route has
-not been run against a live Iceberg REST catalog yet - tell the user.** For AWS
+(`exasol-vs-lakehouse`). One namespace is one source. For AWS
 Glue use `exasol-vs-lakehouse`; for Databricks Unity Catalog, `exasol-vs-unity`
 or `exasol-vs-databricks`.
 
@@ -93,8 +92,8 @@ exakit connect iceberg-rest --name lake --set catalog_url=<catalog_url> --set wa
 ```
 
 Run each with `--dry-run` instead of `--yes --json` first. The first lakehouse source
-installs the Rust language container after asking (`--yes` consents: tell the
-user - one restart). The tables appear as `VS_LAKE`; connect again with another
+installs the Rust language container - at once at a terminal, with `--yes` in a
+script (tell the user first - one restart). The tables appear as `VS_LAKE`; connect again with another
 `--name` for the next namespace.
 
 ## 7. Verify

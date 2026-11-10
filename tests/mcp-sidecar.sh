@@ -84,6 +84,9 @@ printf '%s\n' "$*" >> "$STUB_CALLS"
 if [ -f "$STUB_DEF.seen" ]; then echo unchanged; else : > "$STUB_DEF.seen"; echo changed; fi
 UV
 chmod +x "$WORK/bin/uv"
+# The uvx beside the kit's uv, as a real install has it: the bridge's absolute command comes from there, never from
+# whatever uvx this machine happens to have on PATH (a CI runner has none).
+printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/uvx"; chmod +x "$WORK/bin/uvx"
 exakit_ensure_uv() { EXAKIT_UV_BIN="$WORK/bin/uv"; }
 export STUB_DEF="$WORK/definition.json"
 export EXAKIT_MCP_SIDECAR_WAIT=0       # one look at the status, no waiting

@@ -1,6 +1,6 @@
 ---
 name: exasol-virtual-schemas
-description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and a private CA, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
+description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and a private CA, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, with the credential again), disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
 ---
 
 # Virtual schemas — the shared rules
@@ -24,12 +24,12 @@ below for its inputs, preparation and fixes; this one holds what they all share.
 | `azure-blob` | [exasol-vs-azure-blob](../exasol-vs-azure-blob/SKILL.md) | GA | the same, in an Azure container |
 | `databricks` | [exasol-vs-databricks](../exasol-vs-databricks/SKILL.md) | GA | a Unity Catalog schema, via a SQL warehouse |
 | `lakehouse` | [exasol-vs-lakehouse](../exasol-vs-lakehouse/SKILL.md) | GA | Iceberg tables in AWS Glue |
-| `iceberg-rest` | [exasol-vs-iceberg-rest](../exasol-vs-iceberg-rest/SKILL.md) | Beta | an Iceberg REST catalog |
-| `unity` | [exasol-vs-unity](../exasol-vs-unity/SKILL.md) | Beta | Unity Catalog, read from storage |
+| `iceberg-rest` | [exasol-vs-iceberg-rest](../exasol-vs-iceberg-rest/SKILL.md) | GA | an Iceberg REST catalog |
+| `unity` | [exasol-vs-unity](../exasol-vs-unity/SKILL.md) | GA | Unity Catalog, read from storage |
 | `mongodb` | [exasol-vs-mongodb](../exasol-vs-mongodb/SKILL.md) | GA | one MongoDB collection |
 
 Every connector is `candidate`: tested against a simulated database, not yet qualified
-against every real server; Beta means not yet run against a live source.
+against every real server.
 `exakit source catalog` is the live list. `iceberg` asks between Glue (`lakehouse`) and a
 REST catalog (`iceberg-rest`); `unity-catalog` between the SQL warehouse (`databricks`)
 and the engine reading storage (`unity`).
@@ -54,7 +54,8 @@ exakit source check <name> --json                                   # later: a f
   `remedy` (the fix, a sentence), `command` (one runnable exakit command, or null),
   `public_ip` (null when not known); `choices` for an ambiguous connector,
   `rejected: true` when the kit refused before the engine ran.
-  `exakit source ... --json` fails in the same shape; `check` adds `status`.
+  `exakit source ... --json` fails in the same shape; `check` adds `status`. A connect's
+  result has `action`: `connected`, `reconnected`, `repointed` or `unchanged` (below).
 - **Act on a failure**: when `command` is not null, run it once the user agrees
   (`exakit source reauth <name>` also takes `--password-file <file>`). When it is null,
   follow `remedy` - a sentence, never something to execute. A failed first connect
@@ -73,8 +74,9 @@ exakit source check <name> --json                                   # later: a f
   the tables appear as `VS_SALES`, the credential in the CONNECTION `EXAKIT_SRC_SALES`.
 - `exakit connect` alone, at a terminal, opens a menu and a panel per source. An agent
   never lands in it; suggest it to a user who connects several sources by hand.
-  The form marks each field required or optional, and its first question takes a pasted
-  connection string, read hidden.
+  The form marks each required field with a red `*` (a plain `*` without colour), and its
+  first question takes a pasted connection string, read hidden. A language container or
+  restart the source needs is made without a question there: picking it was the permission.
 
 ## Rules that are not negotiable
 
@@ -152,9 +154,9 @@ does not guarantee the source does little work: keep remote queries selective.
 | `kind` (exit) | Meaning | Do |
 |---|---|---|
 | `input` (2) | bad or missing input, named in `error` | fix that input, run the same command |
-| `conflict` (3) | the name or an object is taken | another name, or `exakit source remove <name>` first |
+| `conflict` (3) | the name is another connector's source, or an object is taken | another name, or `exakit source remove <name>` first |
 | `missing` (4) / `gated` (5) | no source by that name / the connector is not available yet | `command`: `exakit source list` / `exakit source catalog` |
-| `declined` (5) | `disconnect` / `remove` without `--yes`: nothing changed | ask the user; `command` is the `--yes --json` form |
+| `declined` (5) | `disconnect` / `remove`, or a re-point, without `--yes`: nothing changed | ask the user; `command` is the `--yes --json` form |
 | `nojava` / `norust` (21 / 23) | the Java / Rust language container is missing and was not installed | tell the user (download, one restart), then rerun with `--yes` |
 | `unreachable_db` (22) | the local database does not answer | `command`: `exakit start` |
 | `auth` (1) | the source rejected the credential | first connect: correct it; later: `exakit source reauth <name> --password-file <file>` |
@@ -170,7 +172,7 @@ The other kinds (`region`, `nobucket`, `clock`, `schema_missing`, `external`, `m
 `dns`, `setup`, `error`) are connector-specific: `remedy` says the fix, and the connector
 skills name the ones they meet. The kit repairs Java without a DNS resolver (exit 20)
 itself and retries once; on a Docker deployment that repair takes one database restart,
-asked on a terminal and made by `--yes`. `exakit source list` and `issues` show a failing source's status
+made at once for a person at a terminal and by `--yes` in a script. `exakit source list` and `issues` show a failing source's status
 instead: `auth-failed`, `tls-failed`, `unreachable`, `dns-failed`, `access-denied`
 (`denied`, `privilege`, `external`) or `failed`.
 
@@ -188,6 +190,45 @@ exakit source describe <name> [table] [--ddl --schema LOCAL]   # tables and colu
 `check` is one shot, not monitoring. After `exakit update`, run `exakit source check
 --all`: it moves sources to the adapter the update pins (one it could not refresh is
 named, with `exakit source refresh <name>`).
+
+## Re-point a source that moved
+
+When a source moves to a new host, port or database, run the same connect with the
+source's name, only what changed, and its credential - not `remove` and connect again:
+
+```bash
+exakit connect <id> --name <name> --set host=<new host> [--set port=...] [--set database=...] --dry-run --json
+exakit connect <id> --name <name> --set host=<new host> --password-file <file> --yes --json
+```
+
+- The recorded inputs stand; what is given replaces them. The plan (`action: repoint`)
+  lists `changes`, each `{input, from, to}`, and `credential: required`. Show it to the user.
+- **The credential is always given again**, as for a first connect (a hidden prompt on a
+  terminal, `--password-file` or `--password-stdin` unattended): the database never
+  returns a stored one, and changing a CONNECTION's address clears it (measured on
+  Exasol 2026.2). Without it: exit 2, `kind: input`, nothing changed. Never try to read
+  it back out of the database.
+- `VS_<NAME>` keeps its name, so saved queries and views keep working; it is refreshed in
+  place for the new address's tables.
+- **Tried first**: the new address is checked from inside the database, then the new
+  address and credential are tried on a pending connection, before the source changes.
+  Then the source's CONNECTION is swapped (the old one kept aside until the re-point is
+  verified). Any failure (`unreachable`, `nohost`, `tls`, `auth`, `privilege`, ...) puts
+  everything back, the CONNECTION first - the `remedy` says "nothing was changed". If
+  something cannot be put back, the source is marked `failed`, and the next command on it
+  (`exakit source check <name>`) tries again; so does one after a re-point interrupted
+  part way (a plan then has `interrupted: true`).
+- Unattended it needs `--yes`: without it `--json` changes nothing (exit 5, `kind:
+  declined`; `command` is the `--yes` form when a credential flag was given, else null).
+  A terminal asks, No by default.
+- The same inputs and no credential: `action: unchanged`, exit 0 - or exit 1 with the
+  source's own fix when it is not `ready`. A credential and nothing else: only the
+  credential is replaced (as `exakit source reauth` does).
+- Refused, nothing changed (exit 2): `localhost` (the rule above), a mapping, CA or TLS
+  level (disconnect and connect again with them), a BigQuery source (its key is a file
+  staged for it: remove and connect again), and a credential given with `--set`. A name
+  another connector holds is a `conflict` (exit 3), and so is a source another command
+  changed while this one ran (run it again).
 
 ## Disconnect versus remove
 
@@ -230,8 +271,8 @@ table. One `.json` file per table, or a folder of them (at most 50):
 ## The lakehouse engine (lakehouse, iceberg-rest, unity)
 
 All three routes run exasol-labs' lakehouse-engine-rs (Apache DataFusion) inside the
-database. First use installs the Rust language container (the one MongoDB uses) after
-asking: pinned per CPU, checksum-verified, one restart. Four scripts are shared by every
+database. First use installs the Rust language container (the one MongoDB uses), at once
+at a terminal and with `--yes` in a script: pinned per CPU, checksum-verified, one restart. Four scripts are shared by every
 lakehouse source (`EXAKIT_VS.LAKEHOUSE_ADAPTER`, `LAKEHOUSE_SCAN`,
 `LAKEHOUSE_DISTRIBUTE_FILES`, `LAKEHOUSE_VERSION`); the last lakehouse source of any route
 removes them. `SELECT EXAKIT_VS.LAKEHOUSE_VERSION()` names the build.

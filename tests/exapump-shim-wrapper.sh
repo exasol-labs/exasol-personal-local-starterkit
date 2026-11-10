@@ -12,7 +12,10 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(cd "$(mktemp -d)" && pwd -P)"     # physical: macOS /var is /private/var, and the wrapper compares $PWD
-trap 'rm -rf "$WORK"' EXIT
+# A folder outside $HOME AND outside /tmp: the wrapper mounts /tmp already, so a config under it needs no mount of
+# its own. On Linux mktemp -d is under /tmp, so the "elsewhere" folder lives beside the checkout instead.
+ELSEWHERE="$(cd "$(mktemp -d "$ROOT/.shim-test.XXXXXX")" && pwd -P)"
+trap 'rm -rf "$WORK" "$ELSEWHERE"' EXIT
 pass=0; fail=0
 check() { if [ "$2" = 0 ]; then pass=$((pass + 1)); echo "  ok   $1"; else fail=$((fail + 1)); echo "  FAIL $1"; fi; }
 
@@ -28,7 +31,7 @@ sed -e "s|@RUNTIME@|$WORK/runtime|" -e "s|@USERNS@||" -e "s|@IMAGE@|IMAGE|" -e "
     "$WORK/template" > "$WORK/exapump"
 chmod +x "$WORK/exapump"
 
-home="$WORK/home"; mkdir -p "$home/.exasol-starter-kit/exapump" "$WORK/elsewhere kit/exapump"
+home="$WORK/home"; mkdir -p "$home/.exasol-starter-kit/exapump" "$ELSEWHERE/elsewhere kit/exapump"
 has_pair() { awk -v a="$1" -v b="$2" 'prev == a && $0 == b { found = 1 } { prev = $0 } END { exit !found }'; }
 for shell in sh dash; do                # Debian and Ubuntu run #!/bin/sh as dash
     command -v "$shell" >/dev/null 2>&1 || { echo "  skip $shell (not installed)"; continue; }
@@ -40,11 +43,11 @@ for shell in sh dash; do                # Debian and Ubuntu run #!/bin/sh as das
     [ "$(printf '%s\n' "$out" | grep -c -- '^-v$')" = 2 ]
     check "...and needs no mount of its own (\$HOME and /tmp only) ($shell)" $?
 
-    cfg="$WORK/elsewhere kit/exapump/config.toml"
+    cfg="$ELSEWHERE/elsewhere kit/exapump/config.toml"
     out="$(run EXAPUMP_CONFIG="$cfg")"
     printf '%s\n' "$out" | has_pair -e "EXAPUMP_CONFIG=$cfg"
     check "EXAPUMP_CONFIG outside \$HOME is passed, the space kept in one argument ($shell)" $?
-    printf '%s\n' "$out" | has_pair -v "$WORK/elsewhere kit/exapump:$WORK/elsewhere kit/exapump"
+    printf '%s\n' "$out" | has_pair -v "$ELSEWHERE/elsewhere kit/exapump:$ELSEWHERE/elsewhere kit/exapump"
     check "...and its folder is mounted ($shell)" $?
 
     out="$(run)"

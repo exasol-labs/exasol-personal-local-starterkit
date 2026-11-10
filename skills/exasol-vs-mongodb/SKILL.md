@@ -94,8 +94,8 @@ exakit connect mongodb --name movies --set "uri=mongodb+srv://<cluster-host>/?au
 
 - The URI carries no credentials: user and password go into the CONNECTION,
   hidden. Atlas `mongodb+srv://` addresses resolve from inside the database.
-- First use installs the Rust language container after asking (`--yes`
-  consents: tell the user - one restart). The adapter and its scan UDF
+- First use installs the Rust language container - at once at a terminal, with
+  `--yes` in a script (tell the user first - one restart). The adapter and its scan UDF
   (`EXAKIT_VS.MONGODB_ADAPTER`, `MONGODB_SCAN`) are shared by every MongoDB
   source; the last one removed drops them.
 - The tables appear as `VS_MOVIES`.
@@ -128,6 +128,10 @@ document's ObjectId.
 
 - New password: `exakit source reauth movies --password-file <file>` - tried on
   a throwaway schema first; a refused one keeps the old.
+- The cluster moved, or another collection: `exakit connect mongodb --name movies
+  --set uri=<new URI> --password-file <file> --yes` (`--dry-run` first). The password
+  is given again; `VS_MOVIES` keeps its name, and the change is tried on a throwaway
+  schema before anything changes - see the shared skill.
 - The collection's shape changed: `exakit source refresh movies` (columns come
   from a sample).
 - Stop: `exakit source disconnect movies` or `exakit source remove movies`

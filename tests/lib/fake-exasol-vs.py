@@ -53,6 +53,9 @@ database and inspect it afterwards:
                 (schema inference), and a failure there is wrapped in E-VSD-102
     connections {NAME: {"url", "user", "secret"}}    what the engine created
     schemas, scripts, virtual {VS: {"connection", "tables"}}
+                a CREATE ... SCRIPT into a schema not in schemas fails as
+                Exasol answers it (SQL state 42000, "schema <X> not found"):
+                the engine makes EXAKIT_VS itself, nothing makes it for it
     statements  every statement, secrets included, so a test can prove where
                 they went (into CONNECTION DDL) and where they did not
     stage_lag   how many staged-files probes see nothing before the files
@@ -64,6 +67,14 @@ database and inspect it afterwards:
                 script_fail scripts (SCHEMA.NAME) whose CREATE OR REPLACE fails
     vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
                 adapter that echoes what the CONNECTION holds)
+    ALTER CONNECTION ... TO '<address>' without USER/IDENTIFIED BY clears the
+                user and the password the connection held - measured on Exasol
+                2026.2.0-nano.8 (USER_NAME NULL, the password empty); altered
+                lists every ALTERed one
+    set_fail    a message: ALTER VIRTUAL SCHEMA ... SET fails with it;
+                set_fail_when a text: only a SET whose statement holds it fails
+    rename_fail connection names: a RENAME CONNECTION to one of them fails
+    create_fail connection names: a CREATE CONNECTION of one of them fails
     connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
                 its query => field printing the statement back, secret and
                 all, across as many lines as the statement has
@@ -90,6 +101,13 @@ def _load():
 def _save(doc):
     with open(os.environ["FAKE_VS_STATE"], "w") as handle:
         json.dump(doc, handle, indent=1)
+
+
+def _query_error(message, sql):
+    # pyexasol's ExaQueryError as the engine reads it: the database's message,
+    # then the session's fields, the statement last (code is the SQL state).
+    return Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
+                     "    code        =>  42000\n    query       =>  %s\n)" % (message, sql))
 
 
 def _host(url):
@@ -417,7 +435,14 @@ class Fake(object):
     def _query(self, doc, sql):
         m = re.search(r"FROM EXA_DBA_CONNECTIONS WHERE CONNECTION_NAME = '([^']+)'", sql)
         if m:
-            return [{"CONNECTION_NAME": m.group(1)}] if m.group(1) in doc["connections"] else []
+            con = doc["connections"].get(m.group(1))
+            if con is None:
+                return []
+            row = {"CONNECTION_NAME": m.group(1)}
+            if sql.startswith("SELECT CONNECTION_STRING, USER_NAME "):
+                # What the system table shows of a connection: never its password.
+                row.update(CONNECTION_STRING=con["url"].replace("''", "'"), USER_NAME=con["user"] or None)
+            return [row]
         m = re.search(r"FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '([^']+)'", sql)
         if m:
             # columns: {table: [[name, type, nullable], ...]} at the top level;
@@ -537,6 +562,10 @@ class Fake(object):
             return
         m = re.match(r"CREATE OR REPLACE (JAVA|RUST|LUA) (SCALAR|ADAPTER|SET) SCRIPT (?:\"?)([\w]+)(?:\"?)\.(?:\"?)([\w]+)", sql)
         if m:
+            if m.group(3) not in doc["schemas"]:
+                # Exasol resolves the name first: a script needs its schema to exist.
+                column = m.start(3) + (0 if sql[m.start(3) - 1] == '"' else 1)
+                raise _query_error("schema %s not found [line 1, column %d]" % (m.group(3), column), sql)
             if not doc[m.group(1).lower()]:
                 raise Exception("No usable script language container is installed for the requested language.")
             if m.group(1) == "JAVA" and doc["java"] == "builtin":
@@ -550,12 +579,45 @@ class Fake(object):
         m = re.match(r"CREATE (OR REPLACE )?CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'(?: USER '((?:[^']|'')*)' IDENTIFIED BY '((?:[^']|'')*)')?$", sql)
         if m:
             if doc.get("connection_fail"):
-                raise Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
-                                "    code        =>  42000\n    query       =>  %s\n)" % (doc["connection_fail"], sql))
+                raise _query_error(doc["connection_fail"], sql)
             if not m.group(1) and m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
+            if m.group(2) in doc.get("create_fail", []):
+                raise Exception("could not create connection %s (test)" % m.group(2))
             doc["connections"][m.group(2)] = {"url": m.group(3), "user": (m.group(4) or "").replace("''", "'"),
                                               "secret": (m.group(5) or "").replace("''", "'")}
+            return
+        m = re.match(r"ALTER CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'$", sql)
+        if m:
+            # The address alone: the user and password go with it (measured).
+            con = doc["connections"].get(m.group(1))
+            if con is None:
+                raise Exception("connection %s not found" % m.group(1))
+            con["url"] = m.group(2)
+            con["user"], con["secret"] = "", ""
+            doc.setdefault("altered", []).append(m.group(1))
+            return
+        m = re.match(r'RENAME CONNECTION "([^"]+)" TO "([^"]+)"$', sql)
+        if m:
+            if m.group(1) not in doc["connections"]:
+                raise Exception("connection %s not found" % m.group(1))
+            if m.group(2) in doc.get("rename_fail", []):
+                raise Exception("could not rename connection %s (test)" % m.group(1))
+            if m.group(2) in doc["connections"]:
+                raise Exception("connection %s already exists" % m.group(2))
+            doc["connections"][m.group(2)] = doc["connections"].pop(m.group(1))
+            return
+        m = re.match(r"ALTER VIRTUAL SCHEMA \"([^\"]+)\" SET ((?:\w+ = '(?:[^']|'')*' ?)+)$", sql)
+        if m:
+            # The adapter reads the source's metadata again with the new
+            # properties (set_fail: it fails, as an adapter that cannot).
+            vs = doc["virtual"][m.group(1)]
+            if doc.get("set_fail") or (doc.get("set_fail_when") and doc["set_fail_when"] in sql):
+                raise Exception(doc.get("set_fail") or "adapter refused the properties (test)")
+            src = _source_for(doc, vs["connection"])
+            vs.setdefault("properties", {}).update(re.findall(r"(\w+) = '((?:[^']|'')*)'", m.group(2)))
+            if "tables" in src:
+                vs["tables"] = list(src["tables"])
             return
         m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING .* CONNECTION_NAME = \'([^\']+)\' MAPPING = \'([^\']+)\'', sql)
         if m:

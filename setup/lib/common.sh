@@ -6014,7 +6014,12 @@ EXAKIT_ML_EOF
         [ -n "$_ml_id" ] || continue
         printf '%-16s %s%s%s\n' "$_ml_id" "$_ml_status" \
             "${_ml_ver:+ }" "$_ml_ver"
-        [ -n "$_ml_reason" ] && printf '%-16s %s\n' "" "($_ml_reason)"
+        # Wrapped to the terminal, under the status: a reason is a sentence or two
+        # (VS Code's names five editors), and one line ran past 60 columns.
+        if [ -n "$_ml_reason" ]; then
+            _ml_w=$(( ${COLUMNS:-80} - 17 )); [ "$_ml_w" -ge 30 ] || _ml_w=30
+            printf '(%s)\n' "$_ml_reason" | fold -s -w "$_ml_w" | sed 's/ *$//; s/^/                 /'
+        fi
     done <<EXAKIT_ML_OUT
 $_ml_rows
 EXAKIT_ML_OUT
@@ -6067,35 +6072,6 @@ exakit_print_ready_line() {
     return 0
 }
 
-# exakit_model_setup_hint — after the persona's add-ons and before the closing
-# panel: how to give the notebooks a model and Langfuse, once, in this terminal.
-# Only when the notebook add-on is installed (nothing else reads these) and no
-# model is set yet. The keys are typed into a hidden prompt, never into a
-# command; nothing is required - without it the AI steps skip and say so.
-# ⇄ twin: Write-ExakitModelSetupHint in exakit-common.ps1.
-exakit_model_setup_hint() {
-    # [installer|marketplace]. The installer shows it only to a Data Scientist
-    # (the persona whose notebooks use a model); `marketplace` is the caller
-    # that has just installed the notebook add-on, for anyone.
-    [ -z "${EXAKIT_MODEL_ID:-}" ] || return 0
-    exakit_marketplace_addon_installed notebook 2>/dev/null || return 0
-    if [ "${1:-installer}" = installer ]; then
-        case ",$(manifest_get persona.id 2>/dev/null || true)," in
-            *,data-scientist,*) ;;
-            *) return 0 ;;
-        esac
-    fi
-    printf '\n'
-    ui_panel_begin "Optional: your AI model for the notebooks"
-    ui_panel_line "Run these here, then: exakit notebook"
-    ui_panel_line '  export EXAKIT_MODEL_ID="claude-opus-5-5"'
-    ui_panel_line '  export EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"'
-    ui_panel_line "  read -rs EXAKIT_PROVIDER_API_KEY; export EXAKIT_PROVIDER_API_KEY"
-    ui_panel_line "Skip it and the notebooks still run; only the AI steps are skipped."
-    ui_panel_line "More, Langfuse included: nb.model_setup() in a notebook"
-    ui_panel_end
-}
-
 exakit_marketplace_offer() {
     # Several checks per add-on and a description fetched for each take
     # seconds: a turning spinner says the install is still going, not stuck.
@@ -6125,7 +6101,10 @@ exakit_marketplace_offer() {
     # A persona whose add-ons are "all" is the whole marketplace, every row
     # ticked: "all" is not an id, and as a filter it matched nothing, which
     # ended the offer with "Everything available is already covered."
-    if [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] && [ -z "${EXAKIT_SOFT_FAILED:-}" ] && [ -n "$(_exakit_prompt_tty)" ]; then
+    # Independent of the data: a dataset that failed to download is repaired with
+    # `exakit data-load` and is no reason to withhold the persona's notebooks and
+    # dashboards. Only a database that never installed holds them back.
+    if [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] && ! exakit_soft_failed runtime && [ -n "$(_exakit_prompt_tty)" ]; then
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         heading "Add-ons for your personas"
@@ -10199,14 +10178,14 @@ _exakit_assert_mcp_readonly_posture() {
 
     # AND WHAT EVERY USER HOLDS (SEC-17). A privilege granted to PUBLIC reaches
     # this login too, and the checks above, which ask about the login by name,
-    # cannot see it. Said, not refused: PUBLIC is the database owner's to set,
-    # rebuilding this login would not change it, and the write probe below still
-    # refuses a login that can actually write where it looks.
+    # cannot see it. Logged, not shown and not refused: PUBLIC is the database
+    # owner's to set, rebuilding this login would not change it, and the write
+    # probe below still refuses a login that can actually write where it looks.
     if ! _exakit_exapump_sql_has_token \
         "$_config_path" "admin" \
         "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE NOT IN ('CREATE SESSION', 'USE ANY SCHEMA', 'SELECT ANY TABLE')) + (SELECT COUNT(*) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE <> 'SELECT') = 0 THEN 'EXAKIT_PUBLIC_SCOPE_OK' ELSE 'EXAKIT_PUBLIC_SCOPE_TOO_WIDE' END AS STATUS" \
         "EXAKIT_PUBLIC_SCOPE_OK"; then
-        warn "Your database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
+        _exakit_log_file "WARN  the database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
     fi
 
     # Live proof the user cannot write: creating a table in the default schema
@@ -12123,8 +12102,12 @@ exakit_maybe_offer_data_load() {
                 ;;
             *)
                 if ! ( ui_table_detach; exakit_load_dataset "$_kit_root" "$_data_id" ); then
-                    _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
-"
+                    # Said once, however many datasets failed: each one's own reason is above.
+                    case "$_data_notes" in
+                        *"Data loading did not finish cleanly."*) ;;
+                        *) _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
+" ;;
+                    esac
                     _exakit_offer_fail "loading dataset '$_data_id' did not finish (see the log)"
                 fi
                 ;;

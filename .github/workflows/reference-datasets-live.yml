@@ -73,12 +73,12 @@ jobs:
         # No EXAKIT_DATASETS: the persona's own list is what has to load. The
         # reference datasets' release assets need not exist: EXAKIT_LOCAL_KIT
         # loads the checkout's CSVs after checking their SHA-256. The ML
-        # Engineer is disabled for now; its notebooks still run below, so its
-        # add-on (udf-devkit) is named beside the persona's own.
+        # Engineer and its udf-devkit add-on are hidden for now (the catalog
+        # refuses udf-devkit), so only the Data Scientist's notebooks run below.
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
           EXAKIT_PERSONA: data-scientist
-          EXAKIT_MARKETPLACE_ADDONS: dash-server,notebook,udf-devkit
+          EXAKIT_MARKETPLACE_ADDONS: dash-server,notebook
           EXAKIT_SKIP_MCP: "1"
           EXAKIT_NOTEBOOK_FRONTENDS: none
           EXAKIT_INSTALL_PODMAN: "0"
@@ -130,13 +130,11 @@ jobs:
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
           for recipe in amazon_sales:balanced fraud_transactions:balanced my_data_tickets:balanced; do
-            # The ML Engineer (disabled for now) takes amazon_sales and fraud_transactions.
-            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
+            # The ML Engineer and udf-devkit are hidden for now: their notebooks run again when they are released.
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \
-                notebook/notebooks/data-scientist/01_explore.py \
-                $ml
+                notebook/notebooks/data-scientist/01_explore.py
           done
       - name: no database password in notebooks, descriptors or workflows
         # (e): file names only, never a password.

@@ -19,12 +19,14 @@ class ManagedProcessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
             marker = folder / "server.py"
-            marker.write_text("from http.server import HTTPServer, BaseHTTPRequestHandler\n"
-                              "import sys\n"
+            # socketserver.TCPServer, not http.server.HTTPServer: HTTPServer looks up socket.getfqdn() when it
+            # binds, which takes longer than the start timeout on a CI runner whose DNS does not answer quickly.
+            marker.write_text("from http.server import BaseHTTPRequestHandler\n"
+                              "import socketserver, sys\n"
                               "class Handler(BaseHTTPRequestHandler):\n"
                               "    def do_GET(self):\n"
                               "        self.send_response(200); self.end_headers()\n"
-                              "HTTPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()\n")
+                              "socketserver.TCPServer(('127.0.0.1', int(sys.argv[1])), Handler).serve_forever()\n")
             with socket.socket() as probe:
                 try:
                     probe.bind(("127.0.0.1", 0))
@@ -44,10 +46,10 @@ class ManagedProcessTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             folder = Path(temp)
             marker = folder / "server.py"
-            marker.write_text("import sys, time\n"
-                              "from http.server import HTTPServer, BaseHTTPRequestHandler\n"
+            marker.write_text("import socketserver, sys, time\n"
+                              "from http.server import BaseHTTPRequestHandler\n"
                               "if sys.argv[2] == 'delay': time.sleep(60)\n"
-                              "HTTPServer(('127.0.0.1', int(sys.argv[1])), BaseHTTPRequestHandler).serve_forever()\n")
+                              "socketserver.TCPServer(('127.0.0.1', int(sys.argv[1])), BaseHTTPRequestHandler).serve_forever()\n")
             with socket.socket() as probe:
                 try:
                     probe.bind(("127.0.0.1", 0))

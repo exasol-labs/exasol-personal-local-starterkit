@@ -11,7 +11,7 @@
 #
 # **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 #
-# ![Steps 0 Kit, 1 Access and 2 Understand of nine: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:0,1,2)
+# ![Steps 0 Check the kit, 1 Access and 2 Understand. All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:0,1,2)
 #
 # At the end you have a connection, an approved column map and a first result. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
 
@@ -20,11 +20,7 @@
 #
 # Shows what is installed and running: the database, each add-on and the loaded datasets. It changes nothing.
 #
-# Other kit commands run the same way, with the log in the cell:
-#
-# - `nb.exakit("update")` updates the kit.
-# - `nb.exakit("marketplace", "dash-server")` adds an add-on.
-# - `nb.exakit("logs")` shows the logs.
+# The next cell lists other kit commands. Each runs here, with its log in the cell.
 
 # %%
 import exakit.nb as nb
@@ -35,14 +31,14 @@ kit_state = nb.kit_check()
 # Things you would otherwise do in a terminal - take the # off one line and run the cell; its log shows here.
 # nb.exakit("update")                            # bring the kit and its add-ons up to date
 # nb.exakit("marketplace", "dash-server")        # add an add-on (Share, step 8, needs this one)
-# nb.exakit("data-load", "fraud_transactions")        # load another of the kit's datasets
+# nb.exakit("data-load", "fraud_transactions")   # load another of the kit's datasets
 # nb.exakit("logs")                              # every log the kit keeps
 # nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})   # connect an AI client to the database
 
 # %% [markdown]
 # ## Step 1 · Access the data
 #
-# Connects to the database, starts a workflow and loads a dataset: a practice dataset, your own file or a connected source.
+# Starts a workflow, connects to the database and loads a dataset: a practice dataset, your own file or a connected source.
 
 # %% [markdown]
 # ### Start a workflow
@@ -54,7 +50,7 @@ import os
 import exakit.nb as nb
 
 workflow_id = nb.workflow("data-scientist-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
-print(f"Every step below is logged under it: exakit workflow show {workflow_id}")
+print(f"Workflow {workflow_id}: every step below is recorded under it.")
 
 # %% [include] ../00_shared/data_paths.py connect
 
@@ -70,15 +66,15 @@ print(f"Every step below is logged under it: exakit workflow show {workflow_id}"
 # %% [markdown]
 # ### A first result
 #
-# Rows per group, and the % where the label is 1 when the map has a label. Each query shows its SQL before the result.
+# Rows per group, and the % where the target is 1 when the map has a target. Each query shows its SQL before the result.
 
 # %%
 missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
 GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
 if GROUP_ROLE != "category":
-    print(f"No category role ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
+    print(f"No category ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
 if "label" in missing_roles:
-    print(f"No label role ({missing_roles['label']}): the label rate is left out; the steps that need it later say so.")
+    print(f"No target ({missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
 GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
 LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None   # CANCELLED_PCT
 LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
@@ -95,7 +91,7 @@ nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER
 first_rows
 
 # %% [markdown]
-# ## Next: steps 3 to 6
+# ## Next
 #
-# Open `01_explore.ipynb` to prepare, explore, model and validate. Then open `02_ask_your_data.ipynb` (step 7) and `03_share.ipynb` (steps 8 and 9). Each one continues this workflow.
+# Open `01_explore` to prepare, explore, model and validate (steps 3 to 6). Then open `02_ask_your_data` (step 7) and `03_share` (steps 8 and 9). Each one continues this workflow.
 

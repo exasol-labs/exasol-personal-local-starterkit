@@ -122,6 +122,9 @@ function Write-ExakitLog { param($Level, $Message) }
 # The allowlist removal lives in exakit-common.ps1, which this harness does not
 # load; the uninstall run calls it beside the skills step.
 function Remove-ExakitReadonlyAllowlist { return "REMOVED 0" }
+# The MCP sidecar lives in setup/lib/mcp.ps1, which this test does not load; uninstall guards the call with
+# Get-Command, and the sidecar itself is covered by tests/mcp-sidecar-ps.ps1.
+function Remove-McpSidecar { param([switch]$DryRun) }
 # The one-line narration the real run wraps itself in. Stubbed rather than
 # driven: this suite asserts what uninstall REMOVES, and an animation in a
 # harness with no console would only get in the way.

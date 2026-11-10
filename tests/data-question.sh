@@ -147,6 +147,30 @@ if command -v python3 >/dev/null 2>&1; then
     out="$(replay 'jjjj \r' DQ_SCENE=offer DQ_STUB_RC=1)"
     has "the datasets, then a connect that fails: the step still ends well" "RC=0 SELECTION=tpch,energy,amazon_sales,external" "$out"
     has "...and says so" "Connecting the external source did not finish" "$out"
+
+    echo "an interactive install: the external row opens the same connect menu as exakit connect (a real pty):"
+    # The whole installer data step, the real `exakit connect` included: the
+    # table first (the external row ticked), then the connector menu - the
+    # table with check boxes, never the line-by-line "Which source?" - where
+    # Skip closes it. Its stdin was a here-document (the persona flow's) before
+    # the fix, and a pipe when setup is started from `curl | sh`.
+    _conn_skip="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated"))' "$ROOT/setup/virtual-schemas/catalog.json")"
+    _conn_keys="k jjjjj \\r\\x02Tick one or more sources\\x03\\x02Enter to confirm\\x03$_conn_skip \\r"
+    for _dq_stdin in terminal pipe; do
+        out="$(TTY_REPLAY_COLS=100 TTY_REPLAY_CTTY=1 TTY_REPLAY_WAIT=40 replay "$_conn_keys" DQ_SCENE=install DQ_STDIN="$_dq_stdin")"
+        has "install, stdin a $_dq_stdin: the connect menu is the table" "╭─ Connect external sources" "$out"
+        has "...its rows are check boxes" "[ ] ├─ PostgreSQL" "$out"
+        lacks "...never the line-by-line questions" "Which source?" "$out"
+        lacks "...the replay never waited in vain" "WAIT FAILED" "$out"
+        has "...Skip closes it: nothing connected, said once" "No external source was connected. Connect one any time with: exakit connect" "$out"
+        has "...and the data step ends well" "RC=0 SELECTION=external" "$out"
+    done
+
+    echo "the installer's persona flow hands its steps the terminal:"
+    out="$(TTY_REPLAY_CTTY=1 replay '' DQ_SCENE=persona-stdin)"
+    has "setup's stdin is the terminal (install.sh's < /dev/tty)" "SETUP STDIN TERMINAL=yes" "$out"
+    has "...so is the persona question's (its picker wants a terminal)" "QUESTION STDIN TERMINAL=yes" "$out"
+    has "...and the data step's, not the flow's here-document" "DATA STEP STDIN TERMINAL=yes" "$out"
 else
     check "pty replays need python3" "skipped" "skipped"
 fi

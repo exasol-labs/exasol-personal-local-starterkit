@@ -5,7 +5,8 @@
 #   - a credential piped to Python survives byte for byte, non-ASCII included
 #     (Windows PowerShell 5.1 pipes to native programs in ASCII by default)
 #   - no empty argument reaches the engine
-#   - exit 20 repairs DNS and retries once; exit 21 offers Java and stops when declined
+#   - exit 20 repairs DNS and retries once; exit 21 installs Java at once for a
+#     connect at a console, and only with --yes for a script
 #   - `exakit connect` refuses a credential given as an argument
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tests/virtual-schemas.ps1
@@ -46,6 +47,16 @@ for cid in ("postgresql",):
         os.makedirs(folder, exist_ok=True)
         open(os.path.join(folder, doc[role]["asset"]), "wb").write(data)
     json.dump(doc, open(path, "w"), indent=2)
+# MongoDB: one adapter build a CPU and no driver, for the MongoDB-first case.
+path = os.path.join(defs, "connectors", "mongodb", "connector.json")
+doc = json.load(open(path))
+for arch, pin in doc["adapter"]["arch"].items():
+    data = ("adapter-mongodb-" + arch).encode()
+    pin["size"], pin["sha256"] = len(data), hashlib.sha256(data).hexdigest()
+    folder = os.path.join(home, "cache", "virtual-schemas", pin["sha256"])
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, pin["asset"]), "wb").write(data)
+json.dump(doc, open(path, "w"), indent=2)
 '@
 $seedFile = Join-Path $work "seed.py"; Set-Content -LiteralPath $seedFile -Value $seed -Encoding ASCII
 & $python $seedFile $defs $home2
@@ -127,6 +138,29 @@ Check "...and the caller's environment is put back" "docker" $env:EXAKIT_PERSONA
 Remove-Item Env:\EXAKIT_PERSONAL_ENGINE
 Remove-Item Env:\EXAKIT_VS_OS
 Remove-Item -LiteralPath $engineRecord -Force
+
+Write-Host ""
+Write-Host "== MongoDB first on a fresh database: EXAKIT_VS is made before its scripts =="
+# A MongoDB source asks no Java probe (it has no host, and its Rust profile
+# needs no DNS), which was all that made EXAKIT_VS: on a fresh database its
+# adapter script went into a schema that did not exist, and the simulated
+# database refuses that as Exasol does.
+$freshState = Join-Path $work "db-fresh.json"
+Set-Content -LiteralPath $freshState -Value '{"sources": {"cluster0.example.net": {"tables": ["MOVIES"]}}}' -Encoding ASCII
+$env:FAKE_VS_STATE = $freshState
+$env:EXAKIT_VS_SETTLE_SECONDS = "0"
+$r = Invoke-ExakitVsEngine -Arguments @("connect", "mongodb", "--name", "mgfirst", "--set", "uri=mongodb+srv://cluster0.example.net/", "--set", "database=sample_mflix", "--set", "collection=movies", "--set", "user=reader", "--secret-stdin") -Secret "mg-pass"
+$freshDb = Get-Content -Raw -LiteralPath $freshState -Encoding UTF8 | ConvertFrom-Json
+$freshSql = @($freshDb.statements)
+$schemaAt = [array]::IndexOf($freshSql, "CREATE SCHEMA EXAKIT_VS")
+$adapterAt = -1
+for ($i = 0; $i -lt $freshSql.Count; $i++) { if (("" + $freshSql[$i]).StartsWith('CREATE OR REPLACE RUST ADAPTER SCRIPT "EXAKIT_VS"')) { $adapterAt = $i; break } }
+Check "connect mongodb through the bridge on a fresh database: exit 0" 0 $r.Code
+Check "...EXAKIT_VS made first, then the adapter script in it" $true (($schemaAt -ge 0) -and ($schemaAt -lt $adapterAt))
+$r = Invoke-ExakitVsEngine -Arguments @("remove", "mgfirst")
+Check "...and removed again, so the cases below see the kit as it was" 0 $r.Code
+$env:FAKE_VS_STATE = $state
+Remove-Item Env:\EXAKIT_VS_SETTLE_SECONDS
 
 Write-Host ""
 Write-Host "== the query hint after connect: a quoted name, escaped for exakit.cmd =="
@@ -451,7 +485,7 @@ Check "...nor in the output" $false (((@($out) -join "`n")).Contains("url9"))
 Check "...whose note says it was not used" $true (((@($out) -join "`n")).Contains("The string was on the command line"))
 
 Write-Host ""
-Write-Host "== the connect form: required or optional, a pasted string, one answer changed =="
+Write-Host "== the connect form: a * for a required field, a pasted string, one answer changed =="
 # Invoke-ExakitVsTuiForm in a child PowerShell, with the real bridge and engine on
 # the simulated database. The console's answers come from a file and every
 # question is recorded: its text, and whether it was asked hidden.
@@ -521,25 +555,30 @@ function Invoke-FormChild([string[]]$Answers, [string]$PlanFail = "") {
     $script:formOut = (@($o) | ForEach-Object { "$_" }) -join "`n"
     $script:formAsked = @(Get-Content -LiteralPath $formRecord -ErrorAction SilentlyContinue)
 }
-function Row([string]$Label, [string]$Value) { return ($Label.PadRight(24) + "  " + $Value) }
+# A PostgreSQL panel row: label, value. The label column holds a required
+# field's " *" (26: "Name for this connection *").
+function Row([string]$Label, [string]$Value) { return ($Label.PadRight(26) + "  " + $Value) }
 # Enter on the required name is refused; on the optional schema it takes the
 # default, on the optional CA it leaves it empty; 3 asks the port again.
 Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
 Check "the first question is the connection string, read hidden" "HIDDEN Connection string (hidden; Enter to type the fields)" $script:formAsked[0]
 Check "...its help names the forms the connector reads" $true $script:formOut.Contains("jdbc:postgresql://host:5432/db,")
-Check "the panel marks a required field" $true $script:formOut.Contains((Row "Host name or address" "(required)"))
-Check "...and an optional one, with its default" $true $script:formOut.Contains((Row "Port" "(optional) [5432]"))
-Check "the question says (required)" $true ($script:formAsked -contains "ASK Name for this connection (required)")
+Check "the panel marks a required field with a star after its label" $true $script:formOut.Contains("|     Host name or address *      ")
+Check "...an optional one has no star, and keeps its default" $true $script:formOut.Contains((Row "Port" "[5432]"))
+Check "...no star on an optional one" $false $script:formOut.Contains("Port *")
+Check "...one legend line in the box says what the star means" $true $script:formOut.Contains("|     * required ")
+Check "...and the words are gone" $false ($script:formOut.Contains("(required)") -or $script:formOut.Contains("(optional)"))
+Check "the question ends in the star too" $true ($script:formAsked -contains "ASK Name for this connection *")
 Check "...an empty required answer is refused, in one line" $true $script:formOut.Contains("Name for this connection is required")
-Check "...an optional one says so, with the default Enter takes" $true ($script:formAsked -contains "ASK Schema (optional) [public]")
-Check "the fields the string filled are marked" $true $script:formOut.Contains((Row "Host name or address" "pg.example.com (from the string)"))
+Check "...an optional one shows the default Enter takes, no star" $true ($script:formAsked -contains "ASK Schema [public]")
+Check "the fields the string filled are marked" $true $script:formOut.Contains((Row "Host name or address *" "pg.example.com (from the string)"))
 Check "...and not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
 Check "a password in the string: the note says it was not used" $true $script:formOut.Contains("it was not used.")
 Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
-Check "...the hidden prompt still asks for it" $true ($script:formAsked -contains "HIDDEN Password (required) (hidden)")
+Check "...the hidden prompt still asks for it" $true ($script:formAsked -contains "HIDDEN Password * (hidden)")
 Check "...whose empty answer is refused too" $true $script:formOut.Contains("Password is required; it stays in memory")
 Check "the summary numbers every answer" $true $script:formOut.Contains("  3  " + (Row "Port" "5433 (from the string)"))
-Check "...a number asks that field again" $true ($script:formAsked -contains "ASK Port (optional) (- clears it) [5433]")
+Check "...a number asks that field again" $true ($script:formAsked -contains "ASK Port (- clears it) [5433]")
 Check "...one change, the rest as given" "FORM postgresql --name psform --set host=pg.example.com --set port=5432 --set database=sales --set schema=public --set user=reader --set tls=verify" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
 Check "...the typed credential kept for the connect, not the string's" "SECRET True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRET *" })[0])
 Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
@@ -550,7 +589,7 @@ Invoke-FormChild @("not a url", "jdbc:mysql://my.example.com/shop", "", "psjump"
 Check "a string with a space is refused in the engine's words" $true $script:formOut.Contains("the connection string has a space, line break or control character in it")
 Check "...so is another connector's" $true $script:formOut.Contains("the kit does not read this as a PostgreSQL connection string")
 Check "the plan's refusal is said above the field it names" $true $script:formOut.Contains("host=old.example.com is not a host this test lets through")
-Check "...which is asked again, its answer the default" $true ($script:formAsked -contains "ASK Host name or address (required) [old.example.com]")
+Check "...which is asked again, its answer the default" $true ($script:formAsked -contains "ASK Host name or address * [old.example.com]")
 Check "...instead of asking to change every answer" 0 @($script:formAsked | Where-Object { $_ -like "CONFIRM*" }).Count
 Check "...and the corrected host is the one planned" $true $script:formOut.Contains("FORM postgresql --name psjump --set host=pg.example.com ")
 Check "...the summary after it offers to leave the source out" $true ($script:formAsked -contains "ASK Number to change, Enter to continue, skip to leave this source out")
@@ -560,7 +599,7 @@ Check "...the summary after it offers to leave the source out" $true ($script:fo
 Invoke-FormChild @("", "psca", "pg.example.com", "", "sales", "ops", "reader", $env:FORM_SECRET, "", "", "", "5", "-", "skip") "ca is used to verify the server, so it needs tls=verify (not require)"
 Check "a refusal naming two inputs: the summary, with the reason" $true $script:formOut.Contains("ca is used to verify the server, so it needs tls=verify (not require)")
 Check "...no question to change every answer" 0 @($script:formAsked | Where-Object { $_ -like "CONFIRM*" }).Count
-Check "...an optional answer says how to take it back" $true ($script:formAsked -contains "ASK Schema (optional) (- clears it) [ops]")
+Check "...an optional answer says how to take it back" $true ($script:formAsked -contains "ASK Schema (- clears it) [ops]")
 Check "...and - did: the default stands again" $true $script:formOut.Contains("  5  " + (Row "Schema" "public"))
 Check "...skip left the source out" "FORM left-out" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
 
@@ -570,7 +609,7 @@ Set-Content -LiteralPath $pwFileForm -Value $env:FORM_SECRET -Encoding UTF8 -NoN
 $env:FORM_PWFILE = $pwFileForm
 Invoke-FormChild @("", "pspw", "pg.example.com", "", "sales", "", "reader", "", "", "7", "", "")
 Remove-Item Env:\FORM_PWFILE
-Check "a password file, picked in the summary: Enter keeps it" $true ($script:formAsked -contains "HIDDEN Password (required) (hidden, Enter keeps the one given)")
+Check "a password file, picked in the summary: Enter keeps it" $true ($script:formAsked -contains "HIDDEN Password * (hidden, Enter keeps the one given)")
 Check "...the file still the credential" "SECRETFILE True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRETFILE *" })[0])
 
 # 56 columns: a row too narrow for its value and "(from the string)" drops the
@@ -580,7 +619,7 @@ Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sale
 Remove-Item Env:\FORM_COLS
 $wide = @($script:formOut -split "`n" | Where-Object { $_ -like "  |*" -and $_.TrimEnd("`r").Length -gt 54 })
 Check "56 columns: no panel row wider than the panel" 0 $wide.Count
-Check "...the value kept" $true $script:formOut.Contains((Row "Host name or address" "pg.example.com"))
+Check "...the value kept" $true $script:formOut.Contains((Row "Host name or address *" "pg.example.com"))
 Check "...its mark dropped" $false $script:formOut.Contains("(from the string)")
 
 # A line exactly as wide as the console is one row: the console holds the wrap
@@ -673,8 +712,10 @@ Check "...the password in it noted, not used" $true $script:formOut.Contains("it
 Check "...what it filled is said" $true $script:formOut.Contains("From the connection string: database, host, port, user")
 Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
 Check "...the fields it filled are not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
-Check "...each question says (required)" $true ($script:formAsked -contains "ASK Name for this connection (lower case, e.g. sales) (required) []")
-Check "...or (optional), with its default" $true ($script:formAsked -contains "ASK Schema (optional) [public]")
+Check "...one legend line above the questions says what the star means" $true $script:formOut.Contains("    * required")
+Check "...a required question ends in the star" $true ($script:formAsked -contains "ASK Name for this connection (lower case, e.g. sales) * []")
+Check "...an optional one shows its default, no star" $true ($script:formAsked -contains "ASK Schema [public]")
+Check "...and the words are gone" 0 @($script:formAsked | Where-Object { $_ -like "*(required)*" -or $_ -like "*(optional)*" }).Count
 Check "...an empty required answer is refused" $true $script:formOut.Contains("Name for this connection is required")
 Check "...the credential still asked hidden" $true ($script:formAsked -contains "HIDDEN Password")
 $db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
@@ -684,7 +725,8 @@ Check "...and the string's password is in none of the output" $false $script:for
 Invoke-LineChild @("", "sales", "", "reader", "", "") @("pg", "--name", "psdry", "--set", "host=pg.example.com", "--dry-run")
 Check "--dry-run on a console: exit 0" 0 $script:lineCode
 Check "...the questions as before" $true ($script:formAsked -contains "ASK Database []")
-Check "...no marks" 0 @($script:formAsked | Where-Object { $_ -like "*(required)*" -or $_ -like "*(optional)*" }).Count
+Check "...no marks" 0 @($script:formAsked | Where-Object { $_.Contains(" * [") }).Count
+Check "...no legend" $false $script:formOut.Contains("* required")
 Check "...no connection string" 0 @($script:formAsked | Where-Object { $_ -like "*Connection string*" }).Count
 Remove-Item Env:\FORM_SECRET
 
@@ -753,7 +795,7 @@ $cases = @(
     @("an unknown connector", 2, "input", @("nosuchdb", "--name", "x", "--json")),
     @("no credential", 2, "input", (@("pg", "--name", "jsonnopw") + $pgSet + @("--json"))),
     @("a bad input", 2, "input", @("pg", "--name", "jsonbad", "--set", "host=pg.example.com", "--set", "database=sales", "--set", "user=reader", "--set", "port=70000", "--json")),
-    @("a name already taken", 3, "conflict", (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))),
+    @("a name another connector holds", 3, "conflict", (@("mysql", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))),
     @("an unknown option", 2, "input", @("pg", "--name", "x", "--bogus", "--json")),
     @("no name", 2, "input", @("pg", "--json")),
     @("a credential as an argument", 2, "input", @("pg", "--name", "x", "--password=hunter2", "--json")))
@@ -764,11 +806,90 @@ foreach ($c in $cases) {
 }
 [void](Invoke-JsonConnect @("nosuchdb", "--name", "x", "--json"))
 Check "the unknown connector's command lists the connectors" "exakit source catalog" $jsonDoc.command
-[void](Invoke-JsonConnect (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json")))
+[void](Invoke-JsonConnect (@("mysql", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json")))
 Check "the taken name's fix names the source" $true ("$($jsonDoc.remedy)".Contains("exakit source remove jsonps"))
-Check "...and its error is what happened, without the fix" "a source named jsonps already exists (postgresql)" $jsonDoc.error
+Check "...and its error is what happened, without the fix" "a source named jsonps already exists (postgresql), so it cannot be connected as mysql" $jsonDoc.error
 [void](Invoke-JsonConnect @("pg", "--name", "x", "--password=hunter2", "--json"))
 Check "a credential given as an argument is not echoed" $false ($jsonText.Contains("hunter2"))
+
+Write-Host ""
+Write-Host "== exakit connect re-points a connected source in place (the twin of the bash cases) =="
+# The source moved: the same connect with the new address and the credential
+# again updates it. The credential is always given again (the database never
+# returns a stored one, and moving a CONNECTION clears it); VS_<NAME> keeps its
+# name; the new address and credential are tried before anything changes;
+# --json without --yes changes nothing (exit 5, declined); the same inputs and
+# no credential are 'unchanged', exit 0.
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db.sources | Add-Member -NotePropertyName "pgnew.example.com" -NotePropertyValue ([pscustomobject]@{ tables = @("ORDERS", "ITEMS"); secret = "Json-Pw-2" }) -Force
+$db.sources | Add-Member -NotePropertyName "pgauth.example.com" -NotePropertyValue ([pscustomobject]@{ tables = @("ORDERS"); secret = "Another-Pw" }) -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+function Get-RepointConn { param([string]$Key) $d = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json; return ("" + $d.connections.EXAKIT_SRC_JSONPS.$Key) }
+function Get-RepointHost { return (Get-Content -Raw -LiteralPath (Join-Path $home2 "sources/jsonps/config.json") | ConvertFrom-Json).inputs.host }
+$jsonPw2 = Join-Path $work "json2.pw"
+Set-Content -LiteralPath $jsonPw2 -Value "Json-Pw-2" -Encoding ASCII -NoNewline
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--json")
+Check "a re-point without --yes or a credential: one object, exit 5, kind declined, no command to run as is, nothing changed" "True 5 declined True pg.example.com" `
+    "$one $jsonCode $($jsonDoc.kind) $($null -eq $jsonDoc.command) $(Get-RepointHost)"
+Check "...its fix names the credential" $true ("$($jsonDoc.remedy)".Contains("--password-file <file> or --password-stdin"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--password-file", $jsonPw2, "--json")
+Check "...with --password-file, no --yes: declined, the --yes form names the file" "True 5 exakit connect postgresql --name jsonps --set host=pgnew.example.com --password-file $jsonPw2 --yes --json" `
+    "$one $jsonCode $($jsonDoc.command)"
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--dry-run", "--json")
+Check "...--dry-run --json: the plan, exit 0, the change and the credential required" "True 0 repoint host pg.example.com pgnew.example.com required" `
+    ("$one $jsonCode $($jsonDoc.action) " + (@($jsonDoc.changes) | ForEach-Object { "$($_.input) $($_.from) $($_.to)" }) + " $($jsonDoc.credential)")
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "user=read,er", "--dry-run", "--json")
+Check "...its command quoted for PowerShell (a comma would split the word there)" "exakit connect postgresql --name jsonps --set 'user=read,er'" $jsonDoc.command
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--yes", "--json")
+Check "...--yes without a credential: exit 2, kind input, nothing changed" "True 2 input pg.example.com" "$one $jsonCode $($jsonDoc.kind) $(Get-RepointHost)"
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--password-file", $jsonPw2, "--yes", "--json")
+Check "...--yes and the credential: exit 0, repointed, replaced" "True 0 repointed replaced" "$one $jsonCode $($jsonDoc.action) $($jsonDoc.credential)"
+Check "...the CONNECTION holds the new host and the credential given; the record follows" "True Json-Pw-2 pgnew.example.com" `
+    ("{0} {1} {2}" -f (Get-RepointConn "url").StartsWith("jdbc:postgresql://pgnew.example.com:5432/"), (Get-RepointConn "secret"), (Get-RepointHost))
+Check "...VS_JSONPS kept its name and reads the new source" "ITEMS ORDERS" ((@((Get-Content -Raw -LiteralPath $state | ConvertFrom-Json).virtual.VS_JSONPS.tables) | Sort-Object) -join " ")
+Check "...no credential in the answer" $false ($jsonText.Contains("Json-Pw-"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgnew.example.com", "--json")
+Check "...the same again, no credential: exit 0, unchanged, ready" "True 0 unchanged ready" "$one $jsonCode $($jsonDoc.action) $($jsonDoc.status)"
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=pgauth.example.com", "--password-file", $jsonPw2, "--yes", "--json")
+Check "a new host that refuses the credential given: exit 1, kind auth, nothing changed" "True 1 auth True pgnew.example.com" `
+    ("$one $jsonCode $($jsonDoc.kind) " + "$($jsonDoc.remedy)".Contains("nothing was changed") + " $(Get-RepointHost)")
+Check "...the CONNECTION as it was" "True Json-Pw-2" `
+    ("{0} {1}" -f (Get-RepointConn "url").StartsWith("jdbc:postgresql://pgnew.example.com:5432/"), (Get-RepointConn "secret"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "host=localhost", "--password-file", $jsonPw2, "--yes", "--json")
+Check "a re-point to localhost: exit 2, kind input, the loopback advice" "True 2 input True" `
+    ("$one $jsonCode $($jsonDoc.kind) " + "$($jsonDoc.error)".Contains("would be the database itself"))
+$one = Invoke-JsonConnect @("pg", "--name", "jsonps", "--set", "password=Hunter-2", "--json")
+Check "a credential given with --set: refused before the engine runs, exit 2, its value never repeated" "True 2 input True False" `
+    "$one $jsonCode $($jsonDoc.kind) $($jsonDoc.rejected) $($jsonText.Contains('Hunter-2'))"
+# Without --json and without a console: the plan says what changes, and only --yes agrees.
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "exakit connect (no --json, no console), a re-point without --yes: exit 5, nothing changed" "5 5432" `
+    "$childCode $((Get-Content -Raw -LiteralPath (Join-Path $home2 "sources/jsonps/config.json") | ConvertFrom-Json).inputs.port)"
+Check "...the plan says what changes and that the credential is required, never kept" "True True False" `
+    ("{0} {1} {2}" -f $text.Contains("port: 5432 -> 5433"), $text.Contains("Credential: required"), $text.Contains("Credential: kept"))
+Check "...and how to agree" $true $text.Contains("Nothing was changed. Confirm it with --yes.")
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 --yes 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+Check "...--yes without a credential: exit 2, nothing changed" "2 5432" `
+    "$childCode $((Get-Content -Raw -LiteralPath (Join-Path $home2 "sources/jsonps/config.json") | ConvertFrom-Json).inputs.port)"
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 --password-file $jsonPw2 --yes 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "...--yes and --password-file: exit 0, re-pointed, said" "0 True" ("$childCode " + $text.Contains("Re-pointed jsonps (port 5432 -> 5433) with the credential given; VS_JSONPS kept its name"))
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name jsonps --set port=5433 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "...and again: nothing to change, exit 0, said" "0 True" ("$childCode " + $text.Contains("Nothing to change: jsonps already reads from"))
 # Java missing and no --yes: no question, the engine's nojava answer, exit 21.
 $db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
 $db | Add-Member -NotePropertyName java -NotePropertyValue $false -Force
@@ -1173,6 +1294,118 @@ $env:FAKE_START_RC = "0"
 $said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
 Check "...the start succeeds: True, retried" "True stop|start" ("$($said[-1]) " + (Calls))
 $script:ExakitVsAssumeYes = $previousYes
+
+Write-Host ""
+Write-Host "== preparing the database for a source: said at a console, never asked; a script keeps its contract =="
+# The real Install-ExakitVsJava, Install-ExakitVsRust, Repair-ExakitVsForRetry
+# and Confirm-ExakitVs over the stand-ins above (the launcher, exakit.cmd); a
+# question would be a Read-ExakitPrompt call, recorded. Twin of the bash
+# bridge's prep cases.
+foreach ($def in @($vsAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and
+        (@("Confirm-ExakitVs", "Test-ExakitVsInteractive", "Get-ExakitVsFor", "Restart-ExakitVsForDns", "Install-ExakitVsRust") -contains $n.Name) }, $true))) {
+    . ([scriptblock]::Create($def.Extent.Text))
+}
+$script:asked = New-Object System.Collections.ArrayList
+function Read-ExakitPrompt { param([string]$Question, [string]$Default = "") [void]$script:asked.Add($Question); return "y" }
+function Test-ExakitInteractive { return [bool]$script:consoleHere }
+$script:BinDir = $fakeBin
+$env:FAKE_START_RC = "0"
+$previousJson = $script:ExakitVsJson
+function Set-Prep([bool]$Interactive, [bool]$Json, [bool]$Yes, [bool]$Console) {
+    $script:ExakitVsInteractive = $Interactive; $script:ExakitVsJson = $Json; $script:ExakitVsAssumeYes = $Yes
+    $script:consoleHere = $Console; $script:ExakitVsFor = "PostgreSQL"
+    $script:asked.Clear(); $script:shown.Clear(); [void](Calls)
+}
+function Shown { return ((@($script:shown) + @($script:said | ForEach-Object { "$_" })) -join "|") }
+$script:stubNeedsStart = $false
+Set-Prep $true $false $false $true
+$script:said = @(Install-ExakitVsJava 6>&1)
+Check "a connect at a console, Java missing: installed with no question, one restart" "True 0 stop|start" ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
+Check "...one line says what it does and why" $true ((Shown).Contains("INFO Installing the Java language container for PostgreSQL: about 250 MiB, and the database restarts once"))
+Set-Prep $true $true $false $true
+$script:said = @(Install-ExakitVsJava 6>&1)
+Check "--json at the same console: the contract - nothing installed, nothing asked" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
+Check "...and the remedy said" $true ((Shown).Contains("Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"))
+Set-Prep $false $false $false $false
+$script:said = @(Install-ExakitVsJava 6>&1)
+Check "no console, no --yes: nothing installed, nothing asked (exit 21 follows)" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
+Set-Prep $false $false $true $false
+$script:said = @(Install-ExakitVsJava 6>&1)
+Check "no console, --yes: installed" "True stop|start" ("$($script:said[-1]) " + (Calls))
+Set-Prep $false $false $false $true
+$script:said = @(Install-ExakitVsJava 6>&1)
+Check "a console but not a connect (exakit source refresh): still asked, as before" "Install the Java language container now? [y/N]" ($script:asked -join "|")
+$script:stubNeedsStart = $true
+Set-Prep $true $false $false $true
+$script:said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
+Check "a connect at a console, Docker's DNS repair: one restart with no question" "True 0 stop|start" ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
+Check "...one line says what it does and why" $true ((Shown).Contains("INFO Restarting the database once, so Java in it can resolve host names for PostgreSQL"))
+Set-Prep $false $false $false $false
+$script:said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
+Check "...no console, no --yes: no restart, nothing asked (exit 20 follows)" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
+Check "...and the restart named" $true ((Shown).Contains("Run: exakit stop, then exakit start - and try again."))
+Set-Prep $true $true $false $true
+$script:said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
+Check "...--json at a console: no restart, nothing asked" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
+$script:stubNeedsStart = $false
+# Rust: the download is the first thing done; here it fails at once.
+function Get-ExakitFile { param([string]$Url, [string]$Dest) [void]$script:asked.Add("DOWNLOAD"); throw "no download in a test" }
+Set-Prep $true $false $false $true
+$err = ""; try { $script:said = @(Install-ExakitVsRust 6>&1) } catch { $err = "$_" }
+Check "a connect at a console, Rust missing: the download starts with no question" "DOWNLOAD" ($script:asked -join "|")
+Check "...one line says what it does and why" $true ((Shown).Contains("INFO Installing the Rust language container for PostgreSQL:"))
+Set-Prep $false $false $false $false
+$script:said = @(Install-ExakitVsRust 6>&1)
+Check "...no console, no --yes: nothing downloaded, nothing asked (exit 23 follows)" "False 0" ("$($script:said[-1]) " + $script:asked.Count)
+Check "...and it says so" $true ((Shown).Contains("Nothing was installed. Run the same exakit connect again when you are ready."))
+$script:ExakitVsInteractive = $false; $script:ExakitVsJson = $previousJson; $script:ExakitVsAssumeYes = $false
+$script:ExakitVsFor = ""
+
+Write-Host ""
+Write-Host "== the connect menu: the Source column alone, this computer's public IP first =="
+# The real Invoke-ExakitVsPick, the real engine (the stand-ins above restored),
+# and ui.ps1's table; only the menu that reads keys is replaced by one that
+# records the table it was given.
+. (J @("setup", "lib", "ui.ps1"))
+foreach ($def in @($vsAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and
+        (@("Invoke-ExakitVsEngine", "Show-ExakitVsLines", "Get-ExakitVsResultOf", "Get-ExakitVsCatalog", "Invoke-ExakitVsPick") -contains $n.Name) }, $true))) {
+    . ([scriptblock]::Create($def.Extent.Text))
+}
+function Invoke-ExakitTableMenu { param([hashtable]$Table, [int]$ExclusiveIndex = 0, [int]$StartRow = 0)
+    $script:menuTable = $Table; [void]$script:shown.Add("MENU"); $script:ExakitTableConfirmed = $false; return @() }
+$ipFile = Join-Path $work "public-ip-menu.txt"
+Set-Content -LiteralPath $ipFile -Value "203.0.113.7" -Encoding ASCII
+$ipUrl = "file:///" + (($ipFile -replace '\\', '/') -replace ' ', '%20').TrimStart('/')
+Remove-Item Env:\EXAKIT_NO_IP_LOOKUP -ErrorAction SilentlyContinue
+Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
+$env:EXAKIT_PUBLIC_IP_URL = $ipUrl
+$script:shown.Clear()
+$picked = @(Invoke-ExakitVsPick)
+Check "the menu's first line is this computer's public IP, then its own, then the table" `
+    "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|INFO Tick one or more sources; the details for each are asked next.|MENU" `
+    ((@($script:shown) | Select-Object -First 3) -join "|")
+Check "...the answer is kept for the rest of the command" "203.0.113.7" $env:_EXAKIT_VS_PUBLIC_IP
+$t = $script:menuTable
+Check "the table: the Source column alone, no Status column either" "Source||0" ("{0}|{1}{2}|{3}" -f $t.Col1, $t.Col2, $t.Col3, $t.StatMin)
+Check "...no row carries a version or a tier" 0 @($t.Rows | Where-Object { $_.Col2 -or $_.Col3 -or ("" + $_.Label) -match '\d+\.\d+\.\d+|\bGA\b|\bBeta\b' }).Count
+Check "...a gated connector says why after its name" "Gated Test - not available yet disabled" (@($t.Rows | Where-Object { $_.Label -like "Gated Test*" } | ForEach-Object { "$($_.Label) $($_.State)" }) -join "")
+$frame = (Get-ExakitTableFrame -Table $t -Cursor 1) -replace "$([char]27)\[[0-9;?]*[A-Za-z]", ""
+Check "...drawn: a Source heading, no Version, Release or Status" "True False False False" `
+    ("{0} {1} {2} {3}" -f $frame.Contains("Source"), $frame.Contains("Version"), $frame.Contains("Release"), $frame.Contains("Status"))
+# A plan later in the same command takes the kept answer: its URL would fail now.
+$env:EXAKIT_PUBLIC_IP_URL = "file:///nonexistent/public-ip"
+$r = Invoke-ExakitVsEngine -Arguments @("plan", "postgresql", "--name", "ipreuse", "--set", "host=pg.example.com", "--set", "database=sales", "--set", "user=reader")
+Check "...a plan after it says the same IP without asking again" $true (($r.Lines -join "`n").Contains("This computer's public IP is 203.0.113.7: pg.example.com must allow it"))
+$env:EXAKIT_NO_IP_LOOKUP = "1"
+Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
+$env:EXAKIT_PUBLIC_IP_URL = $ipUrl
+$script:shown.Clear()
+$picked = @(Invoke-ExakitVsPick)
+Check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line first" "INFO Tick one or more sources; the details for each are asked next.|MENU" `
+    ((@($script:shown) | Select-Object -First 2) -join "|")
+Remove-Item Env:\EXAKIT_PUBLIC_IP_URL, Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
+$catalogDoc = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("catalog")).Lines
+Check "no connector reports Beta: every tier is GA" "GA" ((@($catalogDoc.connectors | ForEach-Object { "" + $_.tier }) | Sort-Object -Unique) -join " ")
 $script:BinDir = $previousBin
 Remove-Item Env:\FAKE_START_RC
 

@@ -6981,7 +6981,19 @@ function Show-ExakitMarketplaceList {
         if ($entry.PSObject.Properties["version"]) { $line += " " + $entry.version }
         Write-Host $line
         if ($entry.PSObject.Properties["reason"]) {
-            Write-Host ("{0,-16} ({1})" -f "", $entry.reason)
+            # Wrapped to the console, under the status. Twin of the fold in exakit_marketplace_list.
+            $width = 80
+            try { if ([Console]::WindowWidth -gt 0) { $width = [Console]::WindowWidth } } catch { }
+            if ($env:COLUMNS -match '^\d+$') { $width = [int]$env:COLUMNS }
+            $avail = [Math]::Max(30, $width - 17)
+            $current = ""
+            foreach ($word in ("(" + $entry.reason + ")").Split(" ")) {
+                if ($current -and ($current.Length + 1 + $word.Length) -gt $avail) {
+                    Write-Host ((" " * 17) + $current)
+                    $current = $word
+                } elseif ($current) { $current = $current + " " + $word } else { $current = $word }
+            }
+            if ($current) { Write-Host ((" " * 17) + $current) }
         }
     }
     # The reference pages exist (exakit help <id> renders ten of them, offline)
@@ -7372,32 +7384,6 @@ function Write-ExakitReadyLine {
     }
 }
 
-# Write-ExakitModelSetupHint - after the persona's add-ons and before the closing
-# panel: how to give the notebooks a model and Langfuse, once, in this terminal.
-# Only when the notebook add-on is installed and no model is set yet. The keys
-# are typed into a hidden prompt, never into a command. Twin of
-# exakit_model_setup_hint in common.sh.
-function Write-ExakitModelSetupHint {
-    # -Mode installer|marketplace. The installer shows it only to a Data
-    # Scientist; `marketplace` is the caller that has just installed the
-    # notebook add-on, for anyone. Twin of exakit_model_setup_hint.
-    param([string]$Mode = "installer")
-    if ($env:EXAKIT_MODEL_ID) { return }
-    try { if (-not (Test-ExakitMarketplaceAddonInstalled notebook)) { return } } catch { return }
-    if ($Mode -eq "installer" -and ((",$(Get-ExakitManifestValue 'persona.id')," -notlike "*,data-scientist,*"))) { return }
-    Write-Host ""
-    Start-ExakitPanel "Optional: your AI model for the notebooks"
-    Write-ExakitPanelLine "Run these here, then: exakit notebook"
-    Write-ExakitPanelLine '  $env:EXAKIT_MODEL_ID = "claude-opus-5-5"'
-    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"'
-    Write-ExakitPanelLine '  $k = Read-Host "Model API key" -AsSecureString'
-    Write-ExakitPanelLine '  $c = [Net.NetworkCredential]::new("", $k)'
-    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_API_KEY = $c.Password'
-    Write-ExakitPanelLine "Skip it and the notebooks still run; only the AI steps are skipped."
-    Write-ExakitPanelLine "More, Langfuse included: nb.model_setup() in a notebook"
-    Complete-ExakitPanel
-}
-
 function Request-ExakitMarketplaceOffer {
     # Several checks per add-on and a description fetched for each take
     # seconds: a turning spinner says the install is still going, not stuck.
@@ -7429,7 +7415,11 @@ function Request-ExakitMarketplaceOffer {
     # ticked: "all" is not an id, and as a filter it matched nothing, which ended
     # the offer with "Everything available is already covered." Twin of
     # exakit_marketplace_offer.
-    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $softFailed -and $interactive) {
+    # Independent of the data: a dataset that failed to download is repaired with
+    # `exakit data-load` and is no reason to withhold the persona's notebooks and
+    # dashboards. Only a database that never installed holds them back.
+    $runtimeFailed = ($softState -and $softState.Value -and $softState.Value.Contains("runtime"))
+    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $runtimeFailed -and $interactive) {
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         Write-ExakitHeading "Add-ons for your personas"

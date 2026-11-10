@@ -14,6 +14,10 @@
 #   5. Failures are classified (auth, tls, unreachable, dns, no Java) with an
 #      exit code or status the shell and `exakit source issues` act on.
 #   6. Every input is validated before it reaches a template.
+#   7. connect --name of a connected source re-points it in place: the new
+#      address and the credential (always given again) tried before anything
+#      changes, VS_<NAME> kept, every failure puts the source back as it was,
+#      and an interrupted re-point is settled by the next command on it.
 #
 #   bash tests/virtual-schemas.sh
 set -u
@@ -482,8 +486,8 @@ run_secret "$SECRET" connect postgresql --name warehouses --set host=wh.example.
 check "connect warehouses: exit 0" "0" "$RC"
 check "the shared driver lists both consumers" '["sales", "warehouses"]' \
     "$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["artifacts"]; print(json.dumps(next(v["consumers"] for k,v in r.items() if k.endswith("POSTGRES_JDBC_DRIVER/postgresql-42.7.14.jar"))))' "$HOME_K/sources/registry.json")"
-run_secret "$SECRET" connect postgresql --name sales $PG_SET --secret-stdin
-check "a name already in use is a conflict, exit 3" "3" "$RC"
+run_secret "$SECRET" connect mysql --name sales $PG_SET --secret-stdin
+check "a name already in use by another connector is a conflict, exit 3" "3" "$RC"
 
 printf '\n== a staged file reaches the database a moment after it is written ==\n'
 # Measured on Exasol Personal: the jar staged on this computer was loaded
@@ -856,6 +860,68 @@ dnsline() { ( EXAKIT_HOME="$HOME_K"; STUB_OS="$1"; STUB_ENGINE="$2"
 for _e in "linux docker" "linux podman" "macos docker"; do
     has "a failed repair ($_e): the stop and start that fix it" "Restart the database (exakit stop, exakit start) and try again." "$(dnsline $_e)"
 done
+
+printf '\n== preparing the database for a source: said at a terminal, never asked; a script keeps its contract ==\n'
+# The real _exakit_vs_install_java, _exakit_vs_install_rust and _exakit_vs_repair;
+# only what they call is a stand-in: the launcher, the kit's exakit, a download.
+# prep <interactive> <json> <yes> <terminal> <function> [args] - interactive is a
+# person connecting (cmd_connect or the terminal flow set it), terminal whether
+# one is reachable. Every question, launcher call, download and stop/start lands
+# in $WORK/prep.calls.
+mkdir -p "$WORK/prepbin"
+printf '#!/bin/sh\necho "EXAKIT $1" >> "%s/prep.calls"\n' "$WORK" > "$WORK/prepbin/exakit"; chmod +x "$WORK/prepbin/exakit"
+prep() {
+    : > "$WORK/prep.calls"
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+      _EXAKIT_VS_INTERACTIVE="$1"; EXAKIT_VS_JSON="$2"; EXAKIT_VS_ASSUME_YES="$3"; _p_tty="$4"; shift 4
+      _EXAKIT_VS_FOR=PostgreSQL
+      _exakit_prompt_tty() { [ "$_p_tty" = 1 ] && printf '/dev/tty\n'; return 0; }
+      prompt_text() { echo "ASKED $1" >> "$WORK/prep.calls"; printf 'y\n'; }
+      personal_cli() { printf 'exasol\n'; }
+      personal_auto_approve_flag() { :; }
+      personal_slc_dns_prepare() { :; }
+      personal_slc_dns_repair() { return "${PREP_DNS:-0}"; }
+      run_logged() { echo "RUN $*" >> "$WORK/prep.calls"; }
+      fetch() { echo "FETCH" >> "$WORK/prep.calls"; return 1; }
+      EXAKIT_BIN_DIR="$WORK/prepbin"
+      "$@"; echo "rc=$?" ) 2>&1
+}
+calls() { tr '\n' '|' < "$WORK/prep.calls"; }
+OUT="$(prep 1 0 0 1 _exakit_vs_install_java)"
+check "a connect at a terminal, Java missing: installed with no question, one restart" \
+    "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...one line says what it does and why" "Installing the Java language container for PostgreSQL: about 250 MiB, and the database restarts once" "$OUT"
+lacks "...and nothing asked" "ASKED" "$(calls)"
+OUT="$(prep 1 1 0 1 _exakit_vs_install_java)"
+check "--json at the same terminal: the contract - nothing installed, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...and the remedy said" "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start" "$OUT"
+OUT="$(prep 0 0 0 0 _exakit_vs_install_java)"
+check "no terminal, no --yes: nothing installed, nothing asked (exit 21 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+OUT="$(prep 0 0 1 0 _exakit_vs_install_java)"
+check "no terminal, --yes: installed" "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+OUT="$(prep 0 0 0 1 _exakit_vs_install_java)"
+check "a terminal but not a connect (exakit source refresh): still asked, as before" "ASKED Install the Java language container now? [y/N]" \
+    "$(grep '^ASKED' "$WORK/prep.calls")"
+OUT="$(PREP_DNS=2 prep 1 0 0 1 _exakit_vs_repair 20)"
+check "a connect at a terminal, Docker's DNS repair: one restart with no question" "rc=0 EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...one line says what it does and why" "Restarting the database once, so Java in it can resolve host names for PostgreSQL" "$OUT"
+OUT="$(PREP_DNS=2 prep 0 0 0 0 _exakit_vs_repair 20)"
+check "...no terminal, no --yes: no restart, nothing asked (exit 20 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...and the restart named" "Run: exakit stop, then exakit start - and try again." "$OUT"
+OUT="$(PREP_DNS=2 prep 1 1 0 1 _exakit_vs_repair 20)"
+check "...--json at a terminal: no restart, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+OUT="$(prep 1 0 0 1 _exakit_vs_install_rust)"
+check "a connect at a terminal, Rust missing: the download starts with no question" "FETCH|" "$(calls)"
+has "...one line says what it does and why" "Installing the Rust language container for PostgreSQL:" "$OUT"
+OUT="$(prep 0 0 0 0 _exakit_vs_install_rust)"
+check "...no terminal, no --yes: nothing downloaded, nothing asked (exit 23 follows)" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
+has "...and it says so" "Nothing was installed. Run the same exakit connect again when you are ready." "$OUT"
+# The whole connect, unattended: the engine's exit 21 and its remedy, unchanged.
+reset_bridge 0 0 21
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
+check "unattended connect, Java missing: exit 21, nothing retried" "21 1" "$RC $(grep -c '^connect' "$B/argv")"
 has "...the offer was made" "JAVA-ASKED" "$(cat "$B/argv")"
 reset_bridge 0
 OUT="$(bridge cmd_source remove sales --dry-run </dev/null)"
@@ -991,6 +1057,17 @@ check "...and is in no child's environment" "0" "$(grep -c 'Exp0rted-Val' "$B/en
 reset_bridge 0 0
 OUT="$(printf 'Exp0rted-Val' | env _cs_secret= _evx_secret= bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source reauth docs --password-stdin)" 2>/dev/null
 check "review 5: reauth, _cs_secret exported empty: in no child's environment" "1 0" "$(grep -c '^reauth' "$B/argv") $(grep -c 'Exp0rted-Val' "$B/env")"
+# A public IP or a person's go-ahead from an earlier command (a restart's
+# `exakit start` hands its environment to the add-on services it brings back)
+# is never trusted by a later one: each command starts without them.
+reset_bridge 0 0
+OUT="$(env _EXAKIT_VS_PUBLIC_IP=198.51.100.9 _EXAKIT_VS_INTERACTIVE=1 bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_connect pg --name sales --set host=h --dry-run --json </dev/null)" 2>/dev/null
+check "connect: an inherited public IP and go-ahead reach no engine run" "0 0" \
+    "$(grep -c '^_EXAKIT_VS_PUBLIC_IP=198.51.100.9' "$B/env") $(grep -c '^_EXAKIT_VS_INTERACTIVE=1' "$B/env")"
+reset_bridge 0
+OUT="$(env _EXAKIT_VS_PUBLIC_IP=198.51.100.9 _EXAKIT_VS_INTERACTIVE=1 bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source list --json </dev/null)" 2>/dev/null
+check "source: the same" "1 0 0" \
+    "$(grep -c '^--json list' "$B/argv") $(grep -c '^_EXAKIT_VS_PUBLIC_IP=198.51.100.9' "$B/env") $(grep -c '^_EXAKIT_VS_INTERACTIVE=1' "$B/env")"
 
 # Security review 12: under bash -x the credential is not in the trace.
 traced() { set -x; "$@"; }
@@ -1530,6 +1607,45 @@ has "...and the scan UDF" "import script EXAKIT_VS.MONGODB_SCAN (no other mongod
 run remove mgt
 check "...and drops both" "[]" "$(dbq '[s for s in d["scripts"] if "MONGODB" in s]')"
 
+printf '\n== a fresh database: MongoDB first, nothing else connected ==\n'
+# Every adapter script goes into EXAKIT_VS, which only the Java probes made: a
+# MongoDB source asks neither (no host, a Rust profile), so on a fresh
+# database - or after the last source took the schema away - its CREATE ...
+# SCRIPT went into a schema that did not exist ("schema EXAKIT_VS not found").
+# Its own kit home and deployment, so no source of the cases above counts.
+FR_SAVED_HOME="$HOME_K"; FR_SAVED_DEPLOY="$DEPLOY"; FR_SAVED_EXA="$EXA"
+HOME_K="$WORK/kit-fresh"; DEPLOY="$WORK/deploy-fresh"; EXA="$DEPLOY/local/runtime/exa"
+mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
+cp -R "$FR_SAVED_HOME/cache" "$HOME_K/cache"
+# "yes" when CREATE SCHEMA EXAKIT_VS came before the first Rust script, since statement $1.
+schema_first() { dbq '(lambda s: "yes" if "CREATE SCHEMA EXAKIT_VS" in s and s.index("CREATE SCHEMA EXAKIT_VS") < min([i for i, x in enumerate(s) if x.startswith("CREATE OR REPLACE RUST")] + [len(s)]) else "no")(d["statements"]['"${1:-0}"':])'; }
+fr_sources() { eng --json list 2>/dev/null | python3 -c 'import json, sys; print(json.dumps([s["name"] for s in json.load(sys.stdin)["sources"]]))'; }
+db '{"sources": {"cluster0.example.net": {"tables": ["MOVIES"], "secret": "'"$SECRET"'"}, "pg.example.com": {"tables": ["ORDERS"]}}}'
+run_secret "wrong" connect mongodb --name fr_bad $MG_SET --set collection=movies --secret-stdin
+check "a wrong password, the first connect of all: exit 1, refused by the source after EXAKIT_VS and the scripts were made" \
+    "1 yes" "$RC $(schema_first)"
+lacks "...not by the database for a missing schema" "schema EXAKIT_VS not found" "$OUT"
+check "...and the rollback leaves nothing: no source, CONNECTION, script or EXAKIT_VS" "[] {} [] []" \
+    "$(fr_sources) $(dbq 'd["connections"]') $(dbq 'd["scripts"]') $(dbq 'd["schemas"]')"
+FR0="$(dbq 'len(d["statements"])')"
+run_secret "$SECRET" connect mongodb --name fr_m $MG_SET --set collection=movies --secret-stdin
+check "MongoDB connected first on a fresh database: exit 0" "0" "$RC"
+check "...EXAKIT_VS made before its adapter script, no Java probe asked" "yes 0" \
+    "$(schema_first "$FR0") $(dbq 'sum("EXAKIT_DNS_PROBE_V2(" in s or "EXAKIT_FILES_PROBE_V1(" in s for s in d["statements"]['"$FR0"':])')"
+check "...the adapter and its scan UDF in it" '["EXAKIT_VS.MONGODB_ADAPTER", "EXAKIT_VS.MONGODB_SCAN"]' "$(dbq 'sorted(d["scripts"])')"
+run remove fr_m
+check "the last source out drops EXAKIT_VS and everything in it" "0 [] []" "$RC $(dbq 'd["schemas"]') $(dbq 'd["scripts"]')"
+# The other way to reach a database without EXAKIT_VS: another source made it, and left.
+run_secret "$SECRET" connect postgresql --name fr_pg $PG_SET --secret-stdin; FR_RC="$RC"
+run remove fr_pg
+check "a PostgreSQL source connected and removed: EXAKIT_VS gone with it" "0 0 []" "$FR_RC $RC $(dbq 'd["schemas"]')"
+FR1="$(dbq 'len(d["statements"])')"
+run_secret "$SECRET" connect mongodb --name fr_m $MG_SET --set collection=movies --secret-stdin
+check "...then MongoDB connects: exit 0, EXAKIT_VS made again first" "0 yes" "$RC $(schema_first "$FR1")"
+run remove fr_m
+check "...and leaves with it" "0 [] []" "$RC $(fr_sources) $(dbq 'd["schemas"]')"
+HOME_K="$FR_SAVED_HOME"; DEPLOY="$FR_SAVED_DEPLOY"; EXA="$FR_SAVED_EXA"
+
 check "the Rust container is pinned for both CPUs, size and SHA-256" "aarch64 x86_64" "$(python3 - "$ROOT" <<'PYR'
 import json, re, sys
 c = json.load(open(sys.argv[1] + "/setup/virtual-schemas/profiles/rust-native/profile.json"))["slc"]["custom"]
@@ -1834,14 +1950,17 @@ PYS
 
 run plan iceberg-rest --name rest1 $IR_SET
 check "plan iceberg-rest: exit 0" "0" "$RC"
-has "...Beta, a candidate" '"tier": "Beta", "status": "candidate"' "$OUT"
-has "...says it is untested live" "not been run against a live Iceberg REST catalog" "$OUT"
+has "...GA, a candidate" '"tier": "GA", "status": "candidate"' "$OUT"
+lacks "...with no Beta caveat any more" "not been run against a live" "$OUT"
 has "...states the MCP exposure" "MCP read-only user can read every table of VS_REST1" "$OUT"
 has "...the scripts shared with every lakehouse engine source" "shared by every lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)" "$OUT"
 PLAN_IR="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
 run plan unity --name uc $UC_SET
 check "plan unity: exit 0" "0" "$RC"
-has "...says it is untested live" "not been run against a live Unity Catalog" "$OUT"
+has "...GA, a candidate" '"tier": "GA", "status": "candidate"' "$OUT"
+lacks "...with no Beta caveat any more" "not been run against a live" "$OUT"
+check "no connector reports Beta: every tier in the catalog is GA" "GA" \
+    "$(eng --json catalog </dev/null 2>/dev/null | python3 -c 'import json,sys; print(" ".join(sorted({c["tier"] for c in json.load(sys.stdin)["connectors"]})))')"
 has "...states the MCP exposure" "MCP read-only user can read every table of VS_UC" "$OUT"
 PLAN_UC="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
 run plan lakehouse --name glake $LK_SET
@@ -2407,15 +2526,15 @@ pasted() { printf '\\x0e%s\\x0f' "$1"; }
 LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
 Q_PASTE="$(when 'Connection string (hidden; Enter to type the fields):')"
-Q_NAME="$(when 'Name for this connection (required):')"
-Q_HOST="$(when 'Host name or address (required):')"
-Q_PORT="$(when 'Port (optional)')"
-Q_DB="$(when 'Database (required):')"
-Q_SCHEMA="$(when 'Schema (optional) [public]:')"
-Q_USER="$(when 'Reader account (required):')"
-Q_PW="$(when 'Password (required) (hidden')"
-Q_TLS="$(when 'TLS (optional)')"
-Q_CA="$(when 'CA certificate file (optional)')"
+Q_NAME="$(when 'Name for this connection *:')"
+Q_HOST="$(when 'Host name or address *:')"
+Q_PORT="$(when 'Port [')"
+Q_DB="$(when 'Database *:')"
+Q_SCHEMA="$(when 'Schema [public]:')"
+Q_USER="$(when 'Reader account *:')"
+Q_PW="$(when 'Password * (hidden')"
+Q_TLS="$(when 'TLS (')"
+Q_CA="$(when 'CA certificate file:')"
 Q_SUM="$(when 'Number to change, Enter to continue')"
 Q_GO="$(when 'now? [y/N]')"
 if command -v python3 >/dev/null 2>&1; then
@@ -2424,17 +2543,22 @@ if command -v python3 >/dev/null 2>&1; then
     # is no "Select All" above it - Enter passes the connection string by, then
     # one wrong answer, corrected; Enter leaves the summary. The public IP lookup
     # is on (a file:// URL): the review says the address.
-    EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
+    TTY_REPLAY_RAW="$WORK/tui.raw" EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
         "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
+    check "the first line is this computer's public IP, before the menu's own line" \
+        "    • Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|    • Tick one or more sources; the details for each are asked next." \
+        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print("|".join([l for l in t.split("\n") if l.strip()][:2]))' "$WORK/tui.raw")"
     has "...the review names this computer's public IP for a source on the internet" \
         "tuione: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
     has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
-    has "...with the adapter version each one pins" "4.1.0" "$TUI_SCREEN"
-    has "...and its release" "GA" "$TUI_SCREEN"
-    has "...under the three column heads" "Version" "$TUI_SCREEN"
+    has "...under the Source column" "Source" "$TUI_SCREEN"
+    lacks "...no Version column" "Version" "$TUI_SCREEN"
+    lacks "...no Release column" "Release" "$TUI_SCREEN"
+    lacks "...no adapter version on a row" "4.1.0" "$TUI_SCREEN"
+    lacks "...no tier on a row" " GA " "$TUI_SCREEN"
     lacks "...no Kind column any more" "REST + JDBC" "$TUI_SCREEN"
-    has "...the panel shows every answer" "Host name or address      pg.example.com" "$TUI_SCREEN"
+    has "...the panel shows every answer" "Host name or address *      pg.example.com" "$TUI_SCREEN"
     has "...the credential as given, never its value" "(given, hidden)" "$TUI_SCREEN"
     has "...the review says who can read the result" "MCP read-only user can read every table of VS_TUIONE" "$TUI_SCREEN"
     has "...and the row ends with the schema and its tables" "✓ VS_TUIONE · 2 tables" "$TUI_SCREEN"
@@ -2458,18 +2582,44 @@ PY
     has "...and in the engine's words below the table" "tuimy did not connect:" "$TUI_SCREEN"
     check "...nothing kept for the failed one" "no" "$([ -d "$HOME_K/sources/tuimy" ] && echo yes || echo no)"
 
-    # Java missing: the row says so, the question comes once below the table, and
-    # an Enter pressed while the table ran (its bar is up: a "%"; each connect
-    # takes two seconds here) does not answer it.
+    # Java missing: the row says so, and below the table the kit installs it with
+    # no question - picking the source was the permission - in one line that
+    # says what and why, then the source runs again in a table of its own. The
+    # real _exakit_vs_install_java runs; only the launcher and exakit stop and
+    # start are stand-ins (TUI_FAKE_JAVA_INSTALL). An Enter pressed while the
+    # table ran (its bar is up: a "%"; each connect takes two seconds here) is
+    # thrown away, not typed into anything.
     python3 - "$STATE" <<'PY'
 import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
 PY
-    TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
-        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r$(when '%')\r$(when 'Install the Java language container now?')y\r"
-    check "a missing Java container: one question, then a table of its own" "0" "$TUI_RC"
+    export TUI_FAKE_CALLS="$WORK/fake-calls"
+    TTY_REPLAY_RAW="$WORK/tui.raw" TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
+        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r$(when '%')\r"
+    check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
+    check "...the one y/N was Connect it now?" "1" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "✗ needs Java in the database" "$TUI_SCREEN"
-    has "...the answer was the one typed after the question" "Java language container installed" "$TUI_SCREEN"
+    has "...one line says what the kit does and why" "Installing the Java language container for PostgreSQL: about 250 MiB, and the database restarts once" "$(tr -d '\r' < "$WORK/tui.raw")"
+    lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
+    lacks "...no y/N after the connect question" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
+    has "...the launcher installed it, with no restart of its own" "slc install java --no-restart" "$(cat "$TUI_FAKE_CALLS" 2>/dev/null)"
+    has "...then the kit's own stop and start: the one restart" "exakit stop|exakit start" "$(tr '\n' '|' < "$TUI_FAKE_CALLS" 2>/dev/null)"
+    has "...the install said done" "Java language container installed" "$TUI_SCREEN"
     has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
+
+    # The same at the line-by-line questions (a terminal without the drawn
+    # form): "Connect now?" is the question, and the Java install after it is not.
+    python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
+PY
+    TTY_REPLAY_RAW="$WORK/tui.raw" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_FAKE_JAVA_INSTALL=1 \
+        TUI_ARGS="pg --name linejava --set host=pg.example.com --set database=sales --set user=reader" \
+        tui connect-tui-scenario.sh "none" 0 \
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+    TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+    has "line by line, Java missing: one line says what the kit does and why" "Installing the Java language container for PostgreSQL: about 250 MiB" "$TUI_RAW"
+    lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
+    check "...the one question was Connect now?" "1" "$(printf '%s\n' "$TUI_RAW" | grep -c '\[y/N\]')"
+    check "...and the source connects after it" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEJAVA"]["secret"]')"
 
     # The command line names the connector and some answers: no menu, no
     # connection string asked for, those answers ticked, only the rest asked. The
@@ -2482,16 +2632,24 @@ PY
     lacks "...no menu" "Connect external sources" "$TUI_SCREEN"
     lacks "...no connection string asked for" "Connection string" "$(cat "$WORK/tui.raw")"
     has "...the given credential file is used, not asked for" "(read from a file)" "$TUI_SCREEN"
-    has "...picked in the summary, Enter keeps it" "Password (required) (hidden, Enter keeps the one given):" "$(cat "$WORK/tui.raw")"
+    has "...picked in the summary, Enter keeps it" "Password * (hidden, Enter keeps the one given):" "$(cat "$WORK/tui.raw")"
     has "...and it connects" "✓ VS_TUIARGS · 1 table" "$TUI_SCREEN"
     check "...with the file's credential" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIARGS"]["secret"]')"
 
     # Skip closes the menu with nothing done.
-    # Skip sits below every connector of the catalog (GA and Beta); the cursor
-    # steps over a gated one.
+    # Skip sits below every connector of the catalog; the cursor steps over a
+    # gated one.
     _skip_keys="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated"))' "$DEFS/catalog.json")"
-    tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
+    TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
     has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
+    check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line comes first" \
+        "    • Tick one or more sources; the details for each are asked next." \
+        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print([l for l in t.split("\n") if l.strip()][0])' "$WORK/tui.raw")"
+    lacks "...nothing about the public IP anywhere" "public IP" "$(cat "$WORK/tui.raw")"
+    has "the menu: the Source column alone" "│     Source " "$TUI_SCREEN"
+    lacks "...no Status column in a menu that runs nothing" "Status" "$TUI_SCREEN"
+    lacks "...no Version" "Version" "$TUI_SCREEN"
+    lacks "...no Release" "Release" "$TUI_SCREEN"
 
     if command -v pwsh >/dev/null 2>&1; then
         # The PowerShell twin, under the same terminal model. pwsh starts slower:
@@ -2515,16 +2673,16 @@ PY
     TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
         "${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuilong\r$Q_SCHEMA\r${Q_PW}\x04"
     check "a 1500-character paste with a second line, then Ctrl-D: one panel" "0" "$TUI_RC"
-    has "...the long string was read whole: its port" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
-    has "...the second line answered nothing: the name is the one typed" "Name for this connection  tuilong" "$TUI_SCREEN"
+    has "...the long string was read whole: its port" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+    has "...the second line answered nothing: the name is the one typed" "Name for this connection *  tuilong" "$TUI_SCREEN"
     lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
     has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
     if command -v pwsh >/dev/null 2>&1; then
         TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
             "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
         check "PowerShell: the same paste and Ctrl-D: one menu, one panel" "0" "$TUI_RC"
-        has "...the long string was read whole" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
-        has "...the second line answered nothing" "Name for this connection  tuipslong" "$TUI_SCREEN"
+        has "...the long string was read whole" "$(printf '%-26s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+        has "...the second line answered nothing" "Name for this connection *  tuipslong" "$TUI_SCREEN"
         lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
         has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
     else
@@ -2897,11 +3055,11 @@ printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
 TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
     tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
 check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
-has "...the panel holds the string's host" "Host name or address      pg.example.com" "$TUI_SCREEN"
+has "...the panel holds the string's host" "Host name or address *      pg.example.com" "$TUI_SCREEN"
 has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
 has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
 
-printf '\n== the connect form: required or optional, a pasted string, one answer changed ==\n'
+printf '\n== the connect form: a red * for a required field, a pasted string, one answer changed ==\n'
 # What a person sees on the way (TTY_REPLAY_RAW: the whole stream, colours out)
 # as well as what the screen is left holding. The pasted string carries a
 # password: it is read hidden, not used, the hidden prompt still asks, and the
@@ -2909,32 +3067,38 @@ printf '\n== the connect form: required or optional, a pasted string, one answer
 if command -v python3 >/dev/null 2>&1; then
     URLPW='Url-pa55-zz7'
     RAW="$WORK/tui.raw"
-    prow() { printf '%-24s  %s' "$1" "$2"; }  # a PostgreSQL panel row: label, value
+    # A PostgreSQL panel row: label, value. The label column holds a required
+    # field's " *" (26: "Name for this connection *").
+    prow() { printf '%-26s  %s' "$1" "$2"; }
     # Enter on a required name is refused; on an optional one with a default
     # (schema) it takes it, on one without (ca) it leaves it empty; 3 asks the
     # port again.
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r${Q_PORT}5432\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
     check "a pasted string, a refused Enter, one answer changed: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
-    has "the panel marks a required field" "$(prow 'Host name or address' '(required)')" "$TUI_RAW"
-    has "...and an optional one, with its default" "$(prow Port '(optional) [5432]')" "$TUI_RAW"
+    has "the panel marks a required field with a star after its label" "│     Host name or address *      " "$TUI_RAW"
+    has "...an optional one has no star, and keeps its default" "$(prow Port '[5432]')" "$TUI_RAW"
+    lacks "...no star on an optional one" "Port *" "$TUI_RAW"
+    has "...one legend line in the box says what the star means" "│     * required " "$TUI_RAW"
+    lacks "...and the words are gone" "(required)" "$TUI_RAW"
+    lacks "...both of them" "(optional)" "$TUI_RAW"
     has "the first question is the connection string, read hidden" "Connection string (hidden; Enter to type the fields):" "$TUI_RAW"
     has "...its help names the forms the connector reads" "as it shows it: jdbc:postgresql://host:5432/db," "$TUI_RAW"
     has "...all of them" "postgres://user@host:5432/db or host[:port][/database]" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
-    has "the question says (required), dim like the notes" "Name for this connection (required):" "$TUI_RAW"
+    has "the question ends in the star too" "Name for this connection *:" "$TUI_RAW"
     has "...Enter on an empty required field is refused, in one line" "Name for this connection is required" "$TUI_RAW"
-    has "...an optional one says so, with the default Enter takes" "Schema (optional) [public]:" "$TUI_RAW"
-    has "the fields the string filled are marked" "$(prow 'Host name or address' 'pg.example.com (from the string)')" "$TUI_SCREEN"
-    lacks "...and not asked" "Host name or address (required):" "$TUI_RAW"
+    has "...an optional one shows the default Enter takes, no star" "Schema [public]:" "$TUI_RAW"
+    has "the fields the string filled are marked" "$(prow 'Host name or address *' 'pg.example.com (from the string)')" "$TUI_SCREEN"
+    lacks "...and not asked" "Host name or address *:" "$TUI_RAW"
     has "a password in the string: the note says it was not used" "(a password, token or key): it was not used." "$TUI_SCREEN"
     lacks "...without the command-line sentence a typed string does not earn" "The string was on the command line" "$TUI_RAW"
-    has "...and the hidden prompt still asks for it" "Password (required) (hidden):" "$TUI_RAW"
+    has "...and the hidden prompt still asks for it" "Password * (hidden):" "$TUI_RAW"
     has "...whose empty answer is refused too" "Password is required; it stays in memory" "$TUI_RAW"
     has "the summary numbers every answer" "  3  $(prow Port '5433 (from the string)')" "$TUI_RAW"
     has "...asks for a number, Enter to go on" "Number to change, Enter to continue:" "$TUI_RAW"
-    has "...the number asked that one field again, which can be taken back" "Port (optional) (- clears it) [5433]:" "$TUI_RAW"
+    has "...the number asked that one field again, which can be taken back" "Port (- clears it) [5433]:" "$TUI_RAW"
     has "...and the changed answer is no longer the string's" "$(prow Port '5432      ')" "$TUI_SCREEN"
     has "an optional field left empty" "$(prow 'CA certificate file' '(none)')" "$TUI_SCREEN"
     has "...and it connects" "✓ VS_TUIPASTE" "$TUI_SCREEN"
@@ -2947,27 +3111,27 @@ if command -v python3 >/dev/null 2>&1; then
     # fields. A plan that refuses one input goes straight back to that field.
     TTY_REPLAY_RAW="$RAW" TUI_PLAN_FAIL="host=old.example.com is not a host this test lets through" TUI_ARGS="pg" \
         tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address (required) [old.example.com]:')pg.example.com\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address * [old.example.com]:')pg.example.com\r$Q_SUM\r${Q_GO}y\r"
     check "a garbage string, then a plan refusing the host: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "a string with a space is refused in the engine's words" "the connection string has a space, line break or control character in it" "$TUI_RAW"
     has "...so is another connector's" "the kit does not read this as a PostgreSQL connection string; it reads:" "$TUI_RAW"
     has "the plan's refusal is said above the field it names" "host=old.example.com is not a host this test lets through" "$TUI_RAW"
-    has "...which is asked again, its answer the default" "Host name or address (required) [old.example.com]:" "$TUI_RAW"
+    has "...which is asked again, its answer the default" "Host name or address * [old.example.com]:" "$TUI_RAW"
     lacks "...instead of asking to change every answer" "Change the answers?" "$TUI_RAW"
     has "...and the summary after it offers to leave the source out" "Number to change, Enter to continue, skip to leave this source out" "$TUI_RAW"
     has "...and the new answer connects" "✓ VS_TUIJUMP" "$TUI_SCREEN"
-    has "...from the corrected host" "$(prow 'Host name or address' 'pg.example.com ')" "$TUI_SCREEN"
+    has "...from the corrected host" "$(prow 'Host name or address *' 'pg.example.com ')" "$TUI_SCREEN"
 
     # A refusal naming two inputs (ca needs tls=verify) opens the summary with its
     # reason; "-" takes the optional CA back; skip leaves the source out. (Root B:
     # the private-CA tests above move root A away.)
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
-        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}require\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r${Q_CA}-\r${Q_SUM}skip\r"
+        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}require\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r$(when 'CA certificate file (- clears it)')-\r${Q_SUM}skip\r"
     check "a refusal naming two inputs, a cleared answer, skip: one panel" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "...the summary comes back with the reason" "ca is used to verify the server, so it needs tls=verify (not require)" "$TUI_RAW"
-    has "...an optional answer says how to take it back" "CA certificate file (optional) (- clears it)" "$TUI_RAW"
+    has "...an optional answer says how to take it back" "CA certificate file (- clears it)" "$TUI_RAW"
     has "...and - did" "  9  $(prow 'CA certificate file' '(none)')" "$TUI_RAW"
     has "...skip left the source out" "Left out: postgresql" "$TUI_SCREEN"
     has "...with nothing changed" "Nothing was changed." "$TUI_SCREEN"
@@ -2981,16 +3145,16 @@ if command -v python3 >/dev/null 2>&1; then
     TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
         "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
     check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
-    has "...the value kept" "$(prow 'Host name or address' 'pg.example.com')" "$TUI_SCREEN"
+    has "...the value kept" "$(prow 'Host name or address *' 'pg.example.com')" "$TUI_SCREEN"
     lacks "...its mark dropped" "(from the string)" "$TUI_SCREEN"
     has "...and declined, nothing changed" "Nothing was changed." "$TUI_SCREEN"
 
     # The line-by-line questions (a terminal without the drawn form), on a pty
     # that is the scenario's /dev/tty, as a real terminal is.
-    Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) (required)')"
+    Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) *')"
     Q_LPASTE="$(when 'Connection string (Enter to type the fields) (input hidden):')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema (optional) [public]')\r$(when 'TLS (verify/require/disable) (optional) [verify]')\r$(when 'Enter to skip (optional)')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the connection string is asked first, hidden" "Connection string (Enter to type the fields) (input hidden):" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
@@ -2999,8 +3163,12 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...without the command-line sentence" "The string was on the command line" "$TUI_RAW"
     has "...what it filled is said" "From the connection string: database, host, port, user" "$TUI_RAW"
     lacks "...and not asked" "Host name or address" "$TUI_RAW"
-    has "...each question says (required)" "Name for this connection (lower case, e.g. sales) (required)" "$TUI_RAW"
-    has "...or (optional), with its default" "Schema (optional) [public]" "$TUI_RAW"
+    has "...one legend line above the questions says what the star means" "    * required" "$TUI_RAW"
+    has "...a required question ends in the star" "Name for this connection (lower case, e.g. sales) *" "$TUI_RAW"
+    has "...an optional one shows its default, no star" "Schema [public]" "$TUI_RAW"
+    lacks "...no star on it" "Schema *" "$TUI_RAW"
+    lacks "...and the words are gone" "(required)" "$TUI_RAW"
+    lacks "...both of them" "(optional)" "$TUI_RAW"
     has "...an empty required answer is refused" "Name for this connection is required" "$TUI_RAW"
     has "...and the credential is asked hidden" "Password (input hidden):" "$TUI_RAW"
     lacks "...a 1500-character paste read whole, its second line answering nothing, never shown" "zz2nd" "$TUI_RAW"
@@ -3016,8 +3184,8 @@ if command -v python3 >/dev/null 2>&1; then
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "--dry-run on a terminal: the questions as before" "? Database " "$TUI_RAW"
     has "...and the plan" "Plan for linedry" "$TUI_RAW"
-    lacks "...no (required)" "(required)" "$TUI_RAW"
-    lacks "...no (optional)" "(optional)" "$TUI_RAW"
+    lacks "...no star" "Database *" "$TUI_RAW"
+    lacks "...no legend" "* required" "$TUI_RAW"
     lacks "...no connection string" "Connection string" "$TUI_RAW"
 
     # A pipe on stdin with a terminal behind /dev/tty: the questions come from
@@ -3029,8 +3197,8 @@ if command -v python3 >/dev/null 2>&1; then
         "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "stdin a pipe, /dev/tty a terminal: the questions as before" "Schema [public]" "$TUI_RAW"
-    lacks "...no (required)" "(required)" "$TUI_RAW"
-    lacks "...no (optional)" "(optional)" "$TUI_RAW"
+    lacks "...no star" "Port *" "$TUI_RAW"
+    lacks "...no legend" "* required" "$TUI_RAW"
     lacks "...no connection string" "Connection string" "$TUI_RAW"
     check "...and it connects" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPIPE"]["secret"]')"
 
@@ -3058,15 +3226,48 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...nothing asked" "Port [5432]" "$TUI_RAW"
     check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_TTYSTDIN" in d.get("connections", {})')"
 fi
+# The star itself: red from the palette's own UI_ERR where there is colour, a
+# plain * where there is none (NO_COLOR here; EXAKIT_NO_FANCY and no terminal
+# load the same plain palette). The real panel and the real line-by-line
+# question, a PostgreSQL-like form of one required and one optional field.
+starform() { # starform <colour:1|0> - the panel, the question, the legend; ESC shown as <E>
+    ( if [ "$1" = 1 ]; then unset NO_COLOR; else NO_COLOR=1; export NO_COLOR; fi
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      [ "$1" = 1 ] && UI_ERR=$'\033[1;31m' UI_RESET=$'\033[0m'
+      _EVT_COLS=80; _EVT_IN=72; _EVT_SP="$(printf '%160s' '')"; _EVT_HR="$(printf '%160s' '' | tr ' ' '-')"
+      _EVT_NF=2; _EVT_LW=22; _EVT_NOTES=""
+      _EVT_LAB=("Host name or address" "Port"); _EVT_KIND=(host port); _EVT_REQ=(1 ""); _EVT_DEF=("" 5432)
+      _EVT_VAL=("" ""); _EVT_DONE=("" ""); _EVT_FROM=("" "")
+      _exakit_vs_tui_frame "1 of 1" -1; printf '%s' "$_EVT_BUF"
+      _exakit_prompt_tty() { printf 'stdin\n'; }
+      prompt_text() { printf 'ASK %s [%s]\n' "$1" "$2" >&2; printf 'x\n'; }
+      _exakit_vs_prompt "Host name or address" "" 1 1 >/dev/null
+      _exakit_vs_prompt "Port" "5432" "" 1 >/dev/null
+      _exakit_vs_legend ) 2>&1 | sed $'s/\033/<E>/g'
+}
+OUT="$(starform 0)"
+has "no colour: a required field's label ends in a plain *" "|     Host name or address *" "$OUT"
+has "...an optional one keeps its default, no star" "$(printf '|     %-22s  [5432]' Port)" "$OUT"
+has "...the legend in the box" "|     * required" "$OUT"
+has "...the question ends in the plain * too" "ASK Host name or address * []" "$OUT"
+has "...an optional question: its default, no star" "ASK Port [5432]" "$OUT"
+has "...and the line-by-line legend" "    * required" "$OUT"
+lacks "...no colour code anywhere" "<E>" "$OUT"
+lacks "...no (required) or (optional)" "(required)" "$OUT"
+OUT="$(starform 1)"
+has "colour: the star is the palette's red (UI_ERR)" "Host name or address<E>[0m <E>[1;31m*<E>[0m" "$OUT"
+has "...in the question too" "ASK Host name or address <E>[1;31m*<E>[0m []" "$OUT"
+has "...and the legend's" "<E>[1;31m*<E>[0m" "$OUT"
+
 # Without a terminal - a pipe, --json - nothing is asked and nothing is marked.
 OUT="$(printf '%s' "$SECRET" | urlsh cmd_connect pg --name pipeform $PG_SET)"; RC=$?
 check "a pipe: the credential on stdin connects as before, exit 0" "0" "$RC"
-lacks "...no marks" "(required)" "$OUT"
+lacks "...no marks" "* required" "$OUT"
 lacks "...no connection string" "Connection string" "$OUT"
 run remove pipeform
 OUT="$(urlsh cmd_connect pg --name jsonform $PG_SET --dry-run --json </dev/null)"; RC=$?
 check "--json: exit 0" "0" "$RC"
-lacks "...no marks" "(optional)" "$OUT"
+lacks "...no marks" "* required" "$OUT"
 lacks "...no connection string" "Connection string" "$OUT"
 # Which field a plan's refusal names: input names first, as whole words; labels
 # only when no name is named, as whole words too; several named is -2 (the
@@ -3219,6 +3420,39 @@ lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep 
 # address when it is passed straight as an argument (tests/bash32-guard.sh).
 _null_ip="$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
 check "...and public_ip is null" "None" "$_null_ip"
+# The connect menu's first line: catalog --public-ip asks once, says it as one
+# INFO line, and its answer is handed on to the rest of the command
+# (_EXAKIT_VS_PUBLIC_IP), so a later plan does not ask again.
+OUT="$(ipeng catalog --public-ip </dev/null 2>&1)"
+check "catalog --public-ip: the menu's line, first" "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." \
+    "$(printf '%s\n' "$OUT" | head -n 1)"
+check "...and --json carries it" "203.0.113.7" "$(ipeng --json catalog --public-ip </dev/null 2>/dev/null | pubip)"
+# On a colour screen the tip shows the address in green (UI_ACCENT); the log
+# and a screen without colour keep the plain words. <G> and </G> stand in for
+# the colour codes.
+_tipshow() { ( EXAKIT_HOME="$WORK/tiphome"; mkdir -p "$EXAKIT_HOME"
+    . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    exakit_vs_engine() { printf '%s\n' "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." \
+        'RESULT {"connectors": [], "public_ip": "203.0.113.7"}'; }
+    UI_ACCENT="$1"; UI_RESET="$2"; UI_DIM=""; UI_BULLET="-"; EXAKIT_LOG_FILE="$WORK/tip.log"; : > "$EXAKIT_LOG_FILE"
+    _exakit_vs_catalog "$WORK/tipcat"; printf 'KEPT=%s RESULT=%s\n' "${_EXAKIT_VS_PUBLIC_IP:-}" "$EXAKIT_VS_RESULT" ) 2>&1; }
+OUT="$(_tipshow '<G>' '</G>')"
+check "the tip: the address in green on a colour screen" \
+    "    -</G> Tip: cloud sources see you as <G>203.0.113.7</G> - allow it if the source has an IP allowlist." "$(printf '%s\n' "$OUT" | head -n 1)"
+has "...the catalog is still read, the address kept" 'KEPT=203.0.113.7 RESULT={"connectors": [], "public_ip": "203.0.113.7"}' "$OUT"
+lacks "...the log has the plain words" "<G>" "$(cat "$WORK/tip.log" 2>/dev/null)"
+has "...and the tip" "Tip: cloud sources see you as 203.0.113.7" "$(cat "$WORK/tip.log" 2>/dev/null)"
+OUT="$(_tipshow '' '')"
+check "...plain without colour" \
+    "    - Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." "$(printf '%s\n' "$OUT" | head -n 1)"
+OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$IPURL" eng catalog --public-ip </dev/null 2>&1)"
+lacks "EXAKIT_NO_IP_LOOKUP=1: the menu says nothing about it" "public IP" "$OUT"
+lacks "a catalog without --public-ip asks nothing" "public IP" "$(ipeng catalog </dev/null 2>&1)"
+OUT="$(_EXAKIT_VS_PUBLIC_IP=198.51.100.9 IP_URL="file://$WORK/no-such-file" ipeng plan pg --name ipsales $PG_SET 2>&1)"
+has "an answer handed on: the plan says it without asking (its URL would fail)" "This computer's public IP is 198.51.100.9: pg.example.com must allow it" "$OUT"
+_t0="$(date +%s)"; OUT="$(_EXAKIT_VS_PUBLIC_IP=none IP_URL="$BH_URL" ipeng --json plan pg --name ipsales $PG_SET 2>/dev/null)"; _t1="$(date +%s)"
+check "...a lookup that failed earlier: not asked again (no wait on a URL that never answers), public_ip null" "yes None" \
+    "$([ $((_t1 - _t0)) -le 2 ] && echo yes || echo no) $(printf '%s\n' "$OUT" | pubip)"
 kill "$BH_PID" 2>/dev/null; wait "$BH_PID" 2>/dev/null
 
 # connect: the lookup runs beside it; a failed one changes nothing.
@@ -3380,10 +3614,10 @@ check "no credential (nothing on stdin): exit 2, one failure object, nothing ask
 has "...its remedy says how to give it" "--password-file" "$(one 'd["remedy"]')"
 jsonsh /dev/null pg --name jsonbad --set host=pg.example.com --set database=sales --set user=reader --set port=70000 --json
 check "a bad input: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
-jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
-check "a name already taken: exit 3, one failure object" "3 [False, 'conflict', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh "$WORK/json.secret" mysql --name jsonok $PG_SET --json
+check "a name already taken by another connector: exit 3, one failure object" "3 [False, 'conflict', True, True, True, True]" "$JRC $(one "$SHAPE")"
 check "...error is what happened, remedy the fix (once in each)" \
-    "['a source named jsonok already exists (postgresql)', 'choose another name or remove it first: exakit source remove jsonok']" \
+    "['a source named jsonok already exists (postgresql), so it cannot be connected as mysql', 'choose another name or remove it first: exakit source remove jsonok']" \
     "$(one '[d["error"], d["remedy"]]')"
 jsonsh "$WORK/json.secret" gatedtest --name jsongt --set project=p --set dataset=d --json
 check "a gated connector: exit 5, one failure object" "5 [False, 'gated', True, True, True, True]" "$JRC $(one "$SHAPE")"
@@ -4215,6 +4449,405 @@ check "review 4: no kit Python to read the credential: exit 2, one object, kind 
 _reader_range='/^_exakit_vs_secret_text()/,/^}/p'
 check "...and the reader never falls back to another Python (no run_python_any)" "0" \
     "$(sed -n "$_reader_range" "$ROOT/setup/lib/virtual-schemas.sh" | grep -c run_python_any)"
+
+printf '\n== re-point: exakit connect --name of a connected source updates it in place ==\n'
+# The source moved (a new host, port or database): the same connect, with the
+# new address and the credential again, updates it. VS_<NAME> keeps its name,
+# so saved queries keep working. The credential is always given again: the
+# database never returns a stored one, and moving a CONNECTION clears it
+# (ALTER CONNECTION ... TO without USER, measured on Exasol 2026.2.0-nano.8 -
+# the fake does the same). The new address and credential are tried on a
+# pending CONNECTION before anything changes, swapped in, and any failure puts
+# everything back, the CONNECTION first. An interrupted re-point is put back
+# (or, once verified, finished) by the next command on the source.
+python3 - "$STATE" <<'PY'
+import json, sys
+json.dump({"sources": {"old.example.com": {"tables": ["ORDERS"], "secret": "Old-Pw-1"},
+                       "new.example.com": {"tables": ["ORDERS", "CUSTOMERS"], "secret": "New-Pw-2"},
+                       "auth.example.com": {"tables": ["ORDERS"], "secret": "Another-Pw"},
+                       "readerr.example.com": {"tables": ["T1"], "secret": "New-Pw-2",
+                                               "read_error": "ERROR: permission denied for table t1"},
+                       "fresh.example.com": {"tables": ["ORDERS", "ITEMS"], "secret": "Fresh-Pw-3"}},
+           "unreachable": ["gone.example.com"]}, open(sys.argv[1], "w"))
+PY
+RP_SET="--set host=old.example.com --set database=sales --set user=reader"
+# The engine's --json object among its event lines (run keeps stderr): the
+# range is assigned first, as bash 3.2 needs it (tests/bash32-guard.sh).
+_obj_range='/^{/,/^}/p'
+jone() { JOUT="$(printf '%s' "$OUT" | sed -n "$_obj_range")"; one "$1"; }
+conn() { dbq "d['connections'].get('EXAKIT_SRC_MOVED', {}).get('$1')"; }
+url() { conn url | sed 's|?.*||'; }
+aside() { dbq '"EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED" in d["connections"]'; }
+inputs() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["inputs"][sys.argv[2]])' "$HOME_K/sources/moved/config.json" "$1"; }
+status_of() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status"))' "$HOME_K/sources/moved/state.json"; }
+journal() { [ -f "$HOME_K/sources/moved/journal.json" ] && echo yes || echo no; }
+stmts() { dbq 'len(d["statements"])'; }
+since() { dbq "[s for s in d['statements'][$1:] if $2]"; }
+setk() { python3 - "$STATE" "$1" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); exec(sys.argv[2]); json.dump(d, open(sys.argv[1], "w"))
+PY
+}
+# The source as it was: the same address, credential and state, nothing aside, no journal.
+intact() { printf '%s %s %s %s %s' "$(url)" "$(conn secret)" "$(status_of)" "$(aside)" "$(journal)"; }
+setjournal() { printf '%s\n' "$1" > "$HOME_K/sources/moved/journal.json"; }
+run_secret "Old-Pw-1" connect postgresql --name moved $RP_SET --secret-stdin
+check "a source to move: connected, exit 0" "0" "$RC"
+has "...the first connect's result says connected" '"action": "connected"' "$OUT"
+OLD="jdbc:postgresql://old.example.com:5432/sales Old-Pw-1 ready false no"
+
+# The fake models the measurement: ALTER CONNECTION ... TO clears the credential.
+OUT="$(FAKE_VS_STATE="$WORK/alter.json" python3 - "$ROOT/tests/lib/fake-exasol-vs.py" <<'PY'
+import importlib.util, json, os, sys
+open(os.environ["FAKE_VS_STATE"], "w").write("{}")
+spec = importlib.util.spec_from_file_location("fake", sys.argv[1]); fake = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(fake)
+db = fake.connect()
+db.execute("CREATE CONNECTION \"X\" TO 'a' USER 'u' IDENTIFIED BY 'p'")
+db.execute("ALTER CONNECTION \"X\" TO 'b'")
+c = json.load(open(os.environ["FAKE_VS_STATE"]))["connections"]["X"]
+print(c["url"], repr(c["user"]), repr(c["secret"]))
+PY
+)"
+check "the fake database: ALTER CONNECTION ... TO without USER clears the user and the password (as measured)" "b '' ''" "$OUT"
+
+# Nothing given that differs, no credential: nothing to change.
+N="$(stmts)"
+run --json plan postgresql --name moved $RP_SET
+check "the same inputs, no credential: the plan is 'unchanged', exit 0" "0 unchanged" "$RC $(jone 'd["action"]')"
+run --json connect postgresql --name moved $RP_SET </dev/null
+check "...and connect: exit 0, status ready, the tables and a first query" "0 ['unchanged', 'ready', 1, 'SELECT * FROM VS_MOVED.ORDERS LIMIT 10']" \
+    "$RC $(jone '[d["action"], d["status"], d["tables"], d["example"]]')"
+check "...nothing sent but the local catalog's table list: no refresh, no CONNECTION touched" "[]" \
+    "$(since "$N" '"VIRTUAL_TABLES" not in s')"
+has "...said in words" "Nothing to change: moved already reads from old.example.com:5432 (sales/public)" "$OUT"
+run connect postgresql --name moved $RP_SET </dev/null
+check "...without --json too: exit 0, the same words" "0 True" \
+    "$RC $(printf '%s' "$OUT" | grep -c 'INFO Nothing to change: moved already reads from' | sed 's/^[1-9].*/True/')"
+
+# The plan: what changes, from what to what, and that the credential is required.
+N="$(stmts)"
+run --json plan postgresql --name moved --set host=new.example.com --set port=5433
+check "plan of a re-point: exit 0, action repoint, the credential required" "0 ['repoint', 'required']" \
+    "$RC $(jone '[d["action"], d["credential"]]')"
+check "...each change from old to new" "[('host', 'old.example.com', 'new.example.com'), ('port', '5432', '5433')]" \
+    "$(jone '[(c["input"], c["from"], c["to"]) for c in d["changes"]]')"
+check "...the command that makes it (the credential and --yes added by the shell)" \
+    "exakit connect postgresql --name moved --set host=new.example.com --set port=5433" "$(jone 'd["command"]')"
+lacks "...and no claim that a credential is kept" '"kept"' "$OUT"
+check "...nothing sent to the database" "$N" "$(stmts)"
+run connect postgresql --name moved --set host=new.example.com --dry-run </dev/null
+check "connect --dry-run: exit 0, nothing sent" "0 $N" "$RC $(stmts)"
+check "the command for PowerShell: quoted for PowerShell (the Windows bridge sets EXAKIT_VS_QUOTE)" \
+    "'a b''c' 'a b'\"'\"'c' host=db.example.com" \
+    "$( (cd "$ROOT/setup/virtual-schemas/engine" && python3 -c 'import os, lifecycle
+os.environ["EXAKIT_VS_QUOTE"] = "powershell"; a = lifecycle.shell_word("a b'"'"'c")
+del os.environ["EXAKIT_VS_QUOTE"]; print(a, lifecycle.shell_word("a b'"'"'c"), lifecycle.shell_word("host=db.example.com"))') )"
+
+# No credential: refused, nothing sent - a re-point always takes it again.
+N="$(stmts)"
+run --json connect postgresql --name moved --set host=new.example.com </dev/null
+check "a re-point without the credential: exit 2, kind input, nothing sent" "2 input $N" "$RC $(jone 'd["kind"]') $(stmts)"
+check "...the fix names --password-file and --password-stdin" "True True" \
+    "$(jone '"--password-file" in d["remedy"], "--password-stdin" in d["remedy"]' | tr -d '(),')"
+check "...the source as it was" "$OLD" "$(intact)"
+
+# The re-point itself: tried on a pending CONNECTION, swapped in, VS_MOVED
+# refreshed in place.
+N="$(stmts)"
+run_secret "New-Pw-2" --json connect postgresql --name moved --set host=new.example.com --set port=5433 --secret-stdin
+check "re-point with the credential: exit 0" "0" "$RC"
+check "...the result: repointed, the credential replaced" "['repointed', 'replaced']" "$(jone '[d["action"], d["credential"]]')"
+check "...the CONNECTION holds the new address and the credential given; nothing aside" \
+    "jdbc:postgresql://new.example.com:5433/sales New-Pw-2 false" "$(url) $(conn secret) $(aside)"
+check "...VS_MOVED kept its name and reads the new source's tables" '["CUSTOMERS", "ORDERS"]' \
+    "$(dbq 'sorted(d["virtual"]["VS_MOVED"]["tables"])')"
+check "...refreshed in place, never dropped or created again" "0 1" \
+    "$(since "$N" "('DROP' in s and '\"VS_MOVED\"' in s) or s.startswith('CREATE VIRTUAL SCHEMA \"VS_MOVED\"')" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))') $(since "$N" "s == 'ALTER VIRTUAL SCHEMA \"VS_MOVED\" REFRESH'" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+check "...never relies on ALTER CONNECTION (it clears the credential): none sent" "[]" "$(since "$N" "s.startswith('ALTER CONNECTION')")"
+check "...the order: tried on the pending CONNECTION, then set aside, then created anew" \
+    '["CREATE OR REPLACE CONNECTION \"EXAKIT_PENDING_EXAKIT_SRC_MOVED\"", "RENAME CONNECTION \"EXAKIT_SRC_MOVED\" TO \"EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED\"", "CREATE CONNECTION \"EXAKIT_SRC_MOVED\""]' \
+    "$(dbq "[s.split(' TO ')[0] if s.startswith('CREATE') else s for s in d['statements'][$N:] if s.startswith(('CREATE OR REPLACE CONNECTION', 'RENAME', 'CREATE CONNECTION'))]")"
+check "...the record holds the new inputs, says ready, no journal" "new.example.com 5433 ready no" \
+    "$(inputs host) $(inputs port) $(status_of) $(journal)"
+lacks "...no credential in the output" "New-Pw-2" "$OUT"
+check "...nor under the kit home (records, journal, the day log)" "" "$(grep -rlE 'New-Pw-2|Old-Pw-1' "$HOME_K" 2>/dev/null)"
+has "...the day log records the swap" 'RENAME CONNECTION "EXAKIT_SRC_MOVED" TO "EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"' \
+    "$(cat "$HOME_K"/logs/virtual-schemas-*.log)"
+has "...with the credential masked" "IDENTIFIED BY '***'" "$(grep 'CREATE CONNECTION \"EXAKIT_SRC_MOVED\"' "$HOME_K"/logs/virtual-schemas-*.log)"
+
+# A new database: the URL and the virtual schema's property, SET in place.
+run_secret "New-Pw-2" connect postgresql --name moved --set database=archive --secret-stdin
+check "a new database: exit 0; the URL and VS_MOVED's CATALOG_NAME carry it" \
+    "0 jdbc:postgresql://new.example.com:5433/archive archive" \
+    "$RC $(url) $(dbq 'd["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"]')"
+NOW="jdbc:postgresql://new.example.com:5433/archive New-Pw-2 ready false no"
+
+# Test first: a failure before the swap leaves the source untouched.
+N="$(stmts)"
+run_secret "New-Pw-2" --json connect postgresql --name moved --set host=gone.example.com --secret-stdin
+check "a new host that does not answer: exit 1, kind unreachable" "1 unreachable" "$RC $(jone 'd["kind"]')"
+check "...the remedy says nothing changed and where it still reads from" "True" \
+    "$(jone '"nothing was changed - moved still reads from new.example.com:5433 (archive/public)" in d["remedy"]')"
+check "...its CONNECTION never touched, the source as it was" "[] $NOW" "$(since "$N" "'EXAKIT_SRC_MOVED\"' in s and s.startswith(('RENAME', 'CREATE CONNECTION'))") $(intact)"
+N="$(stmts)"
+run_secret "New-Pw-2" connect postgresql --name moved --set host=auth.example.com --secret-stdin
+check "a new host that refuses the credential given: exit 1, nothing renamed" "1 []" \
+    "$RC $(since "$N" "s.startswith('RENAME')")"
+has "...said with the fix" "the source at the new address refused the credential given; nothing was changed" "$OUT"
+check "...the source as it was, no pending CONNECTION left" "$NOW []" "$(intact) $(pending)"
+
+# Failures after the swap: everything put back, the CONNECTION first.
+setk 'd["create_fail"] = ["EXAKIT_SRC_MOVED"]'
+run_secret "Fresh-Pw-3" connect postgresql --name moved --set host=fresh.example.com --set database=sales --secret-stdin
+check "the new CONNECTION cannot be created after the old one was set aside: exit 1, the source as it was" \
+    "1 $NOW" "$RC $(intact)"
+setk 'd.pop("create_fail"); d["rename_fail"] = ["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"]'
+run_secret "Fresh-Pw-3" connect postgresql --name moved --set host=fresh.example.com --set database=sales --secret-stdin
+check "the RENAME that sets the old one aside fails: exit 1, the source as it was" "1 $NOW" "$RC $(intact)"
+has "...said: nothing was changed" "nothing was changed - moved still reads from" "$OUT"
+setk 'd.pop("rename_fail")'
+# E1 (review): a host and database move whose REFRESH fails after the SET. The
+# CONNECTION goes back before the old properties are SET - a SET makes the
+# adapter read through it, and through the new address it would fail.
+setk 'd["refresh_fail"] = ["VS_MOVED"]'
+N="$(stmts)"
+run_secret "Fresh-Pw-3" connect postgresql --name moved --set host=fresh.example.com --set database=sales --secret-stdin
+check "E1: REFRESH fails after the SET: exit 1, the source as it was" "1 $NOW" "$RC $(intact)"
+check "...its CATALOG_NAME back to archive" "archive" "$(dbq 'd["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"]')"
+check "...the CONNECTION renamed back before the SET of the old properties" "true" \
+    "$(dbq "(lambda l: l.index([s for s in l if s.startswith('RENAME CONNECTION \"EXAKIT_PREVIOUS')][0]) < l.index([s for s in l if ' SET CATALOG_NAME' in s and 'archive' in s][0]))(d['statements'][$N:])")"
+setk 'd.pop("refresh_fail")'
+# E2 (review): the SET itself fails: no undo SET is sent, and the status says ready.
+setk 'd["set_fail"] = "adapter refused the properties"'
+N="$(stmts)"
+run_secret "Fresh-Pw-3" connect postgresql --name moved --set host=fresh.example.com --set database=sales --secret-stdin
+check "E2: the SET fails: exit 1, the source as it was (status ready, nothing aside, no journal)" "1 $NOW" "$RC $(intact)"
+check "...one SET sent, the failed one: no undo SET" "1" \
+    "$(since "$N" "s.startswith('ALTER VIRTUAL SCHEMA \"VS_MOVED\" SET')" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+has "...said: nothing was changed" "nothing was changed - moved still reads from new.example.com:5433 (archive/public)" "$OUT"
+lacks "...and not that something could not be put back" "could not be put back" "$OUT"
+setk 'd.pop("set_fail")'
+# The verify fails (a read the new source refuses): REFRESHed back from the old address.
+run_secret "New-Pw-2" connect postgresql --name moved --set host=readerr.example.com --secret-stdin
+check "the bounded read fails after the REFRESH: exit 1, the source as it was" "1 $NOW" "$RC $(intact)"
+check "...its table list read again from the old address" '["CUSTOMERS", "ORDERS"]' "$(dbq 'sorted(d["virtual"]["VS_MOVED"]["tables"])')"
+# Something cannot be put back: said, recorded as failed, the journal kept -
+# and the next command on the source tries again.
+setk 'd["refresh_fail"] = ["VS_MOVED"]; d["set_fail_when"] = "CATALOG_NAME = '"'"'archive'"'"'"'
+run_secret "Fresh-Pw-3" connect postgresql --name moved --set host=fresh.example.com --set database=sales --secret-stdin
+check "the old properties cannot be SET back: exit 1, recorded failed, the journal kept, the CONNECTION back" \
+    "1 failed yes jdbc:postgresql://new.example.com:5433/archive New-Pw-2" "$RC $(status_of) $(journal) $(url) $(conn secret)"
+has "...said: what could not be put back, and that the next command tries again" \
+    "its properties could not be put back after the failure, so moved is recorded as failed and the next exakit command on it tries again" "$OUT"
+setk 'd.pop("refresh_fail"); d.pop("set_fail_when")'
+run check moved </dev/null
+check "...exakit source check puts it back, then reads it: ready" "0 ready no archive" \
+    "$RC $(status_of) $(journal) $(dbq 'd["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"]')"
+has "...said" "An earlier re-point of moved was interrupted; putting back what it changed first" "$OUT"
+
+# Kills, simulated: the journal and the database as a killed re-point left them.
+# The inputs before and after, as the journal holds them: the record's, and
+# the record's with another host and database.
+BEFORE="$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))["inputs"]))' "$HOME_K/sources/moved/config.json")"
+AFTER="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))["inputs"]; d.update(host="fresh.example.com", database="sales"); print(json.dumps(d))' "$HOME_K/sources/moved/config.json")"
+# E4 (review): killed right after the RENAME - the journal says swapped (marked
+# before it), the live CONNECTION is gone, the old one is aside.
+setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = d["connections"].pop("EXAKIT_SRC_MOVED")'
+setjournal '{"operation": "repoint", "connector": "postgresql", "inputs_before": '"$BEFORE"', "inputs_after": '"$AFTER"', "swapped": true}'
+run --json plan postgresql --name moved --set port=5434
+check "a plan with an interrupted re-point's journal says so" "True" "$(jone 'd["interrupted"]')"
+run connect postgresql --name moved </dev/null
+check "E4/E3: killed after the RENAME, then a connect with nothing to change: exit 0, put back first" "0 $NOW" "$RC $(intact)"
+has "...said" "An earlier re-point of moved was interrupted; putting back what it changed first" "$OUT"
+has "...then nothing to change, from the address it really reads" "Nothing to change: moved already reads from new.example.com:5433 (archive/public)" "$OUT"
+# Killed after the SET: the CONNECTION and the properties are the new ones.
+setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = dict(d["connections"]["EXAKIT_SRC_MOVED"]); d["connections"]["EXAKIT_SRC_MOVED"] = {"url": "jdbc:postgresql://fresh.example.com:5433/sales?x", "user": "reader", "secret": "Fresh-Pw-3"}; d["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"] = "sales"; d["virtual"]["VS_MOVED"]["tables"] = ["ITEMS", "ORDERS"]'
+setjournal '{"operation": "repoint", "connector": "postgresql", "inputs_before": '"$BEFORE"', "inputs_after": '"$AFTER"', "swapped": true, "props_set": true}'
+run check moved </dev/null
+check "killed after the SET (props_set): exakit source check puts it all back, then reads it" "0 $NOW archive" \
+    "$RC $(intact) $(dbq 'd["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"]')"
+check "...its table list from the old address again" '["CUSTOMERS", "ORDERS"]' "$(dbq 'sorted(d["virtual"]["VS_MOVED"]["tables"])')"
+# E5 (review): killed mid-swap, then a reauth: the reauth puts the re-point
+# back first, so it is the reauthed credential that stays - never a stale one.
+setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = dict(d["connections"]["EXAKIT_SRC_MOVED"]); d["connections"]["EXAKIT_SRC_MOVED"]["secret"] = "Half-New"; d["sources"]["new.example.com"]["secret"] = "Rotated-4"'
+setjournal '{"operation": "repoint", "connector": "postgresql", "inputs_before": '"$BEFORE"', "inputs_after": '"$AFTER"', "swapped": true}'
+run_secret "Rotated-4" reauth moved --secret-stdin
+check "E5: killed mid-swap, then exakit source reauth: exit 0, put back first, the new credential kept" \
+    "0 jdbc:postgresql://new.example.com:5433/archive Rotated-4 ready false no" "$RC $(intact)"
+run_secret "Rotated-4" connect postgresql --name moved --set port=5433 --secret-stdin
+check "...and a later re-point does not restore a stale CONNECTION" "0 Rotated-4" "$RC $(conn secret)"
+NOW="jdbc:postgresql://new.example.com:5433/archive Rotated-4 ready false no"
+# Killed after it was verified (committed): finished, not undone - the record
+# first, then the old CONNECTION dropped.
+setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = dict(d["connections"]["EXAKIT_SRC_MOVED"]); d["connections"]["EXAKIT_SRC_MOVED"] = {"url": "jdbc:postgresql://fresh.example.com:5433/sales?x", "user": "reader", "secret": "Fresh-Pw-3"}; d["virtual"]["VS_MOVED"]["properties"]["CATALOG_NAME"] = "sales"; d["virtual"]["VS_MOVED"]["tables"] = ["ITEMS", "ORDERS"]'
+setjournal '{"operation": "repoint", "connector": "postgresql", "inputs_before": '"$BEFORE"', "inputs_after": '"$AFTER"', "swapped": true, "props_set": true, "refreshed": true, "committed": true}'
+run refresh moved </dev/null
+check "killed after it was verified: exakit source refresh finishes it - the record follows, the old CONNECTION dropped" \
+    "0 fresh.example.com sales false no Fresh-Pw-3" "$RC $(inputs host) $(inputs database) $(aside) $(journal) $(conn secret)"
+has "...said" "An earlier re-point of moved was interrupted after it was verified; finishing it" "$OUT"
+run_secret "Rotated-4" connect postgresql --name moved --set host=new.example.com --set database=archive --secret-stdin
+check "(moved back for the cases below)" "0 jdbc:postgresql://new.example.com:5433/archive" "$RC $(url)"
+
+# Two commands at once: one planned from a record the other changed in the
+# meantime is refused, and changes nothing (exit 3).
+N="$(stmts)"
+OUT="$( (cd "$ROOT/setup/virtual-schemas/engine" && EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$STATE" \
+    FAKE_VS_EXA="$EXA" EXAKIT_VS_SETTLE_SECONDS=0 python3 - "$DEFS" "$HOME_K" "$DEPLOY" <<'PY'
+import argparse, json, os, sys
+import lifecycle, plan as planner
+defs, home, deploy = sys.argv[1:4]
+args = argparse.Namespace(defs=defs, kit_home=home, deployment_dir=deploy, dsn="127.0.0.1:8563", user="sys",
+                          password_file="/nonexistent", json=True)
+planner.use_engine(home)
+engine = lifecycle.Engine(args, lambda level, text: None)
+real = engine.credential
+def credential(*a):
+    # Between the plan and the lock: another command moves the port.
+    path = os.path.join(home, "sources", "moved", "config.json")
+    doc = json.load(open(path)); doc["inputs"]["port"] = "6000"; json.dump(doc, open(path, "w"))
+    return real(*a)
+engine.credential = credential
+try:
+    engine.connect("postgresql", "moved", {"host": "fresh.example.com"}, "Fresh-Pw-3")
+    print("no failure")
+except lifecycle.Failure as error:
+    print(error.code, error.kind, error.remedy)
+PY
+) 2>&1)"
+check "a record changed by another command between the plan and the lock: exit 3, kind conflict" \
+    "3 conflict nothing was changed - run the same exakit connect again: its plan is made from the source as it is now" "$OUT"
+check "...nothing renamed or created" "[]" "$(since "$N" "s.startswith(('RENAME', 'CREATE CONNECTION'))")"
+python3 - "$HOME_K/sources/moved/config.json" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["inputs"]["port"] = "5433"; json.dump(d, open(sys.argv[1], "w"))
+PY
+
+# Not ready, nothing to change: the real state, exit 1, its fix.
+python3 - "$HOME_K/sources/moved/state.json" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["status"] = "unreachable"
+d["last_check"] = {"outcome": "failed", "kind": "unreachable", "evidence": "Connection refused"}; json.dump(d, open(sys.argv[1], "w"))
+PY
+run --json connect postgresql --name moved </dev/null
+check "nothing to change but the source is not ready: exit 1, its status, kind and fix" \
+    "1 [False, 'unchanged', 'unreachable', 'unreachable', 'exakit source check moved']" \
+    "$RC $(jone '[d["ok"], d["action"], d["status"], d["kind"], d["command"]]')"
+python3 - "$HOME_K/sources/moved/state.json" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["status"] = "ready"; json.dump(d, open(sys.argv[1], "w"))
+PY
+
+# localhost is the database itself: refused with the advice a first connect gets.
+run_secret "New-Pw-2" connect postgresql --name moved --set host=localhost --secret-stdin
+check "a re-point to localhost: exit 2, nothing changed" "2 $NOW" "$RC $(intact)"
+has "...with the loopback advice" "host=localhost would be the database itself, not this computer" "$OUT"
+run --json plan postgresql --name moved --set host=127.0.0.1
+check "...the plan refuses it too, kind input" "2 input" "$RC $(jone 'd["kind"]')"
+
+# Another connector under the name: refused by the plan, before any credential.
+run --json plan mysql --name moved --set host=new.example.com --set database=x --set user=u
+check "another connector under the same name: exit 3, kind conflict" "3 conflict" "$RC $(jone 'd["kind"]')"
+check "...its error and fix" "['a source named moved already exists (postgresql), so it cannot be connected as mysql', 'choose another name or remove it first: exakit source remove moved']" \
+    "$(jone '[d["error"], d["remedy"]]')"
+OUT="$(printf 'moved' | eng field pg name 2>&1)"; RC=$?
+check "the terminal form refuses a connected name (exit 3), with the re-point command as the other fix" "3" "$RC"
+has "...named" "to point it at a new address instead: exakit connect postgresql --name moved --set <input>=<new value>" "$OUT"
+
+# What a re-point does not change in place.
+run_secret "New-Pw-2" connect postgresql --name moved --set tls=require --secret-stdin
+check "tls is not changed in place: exit 2, the fix a reconnect" "2 True" "$RC $(printf '%s' "$OUT" | grep -c 'exakit source disconnect moved --yes' | sed 's/^[1-9].*/True/')"
+
+# E7 (review): a credential given with --set is refused (exit 2) - never dropped -
+# by the plan of a re-point and of a first connect alike, its value never repeated.
+run --json plan postgresql --name moved --set password=Hunter-2
+check "E7: --set password=... on a connected source: exit 2, kind input" "2 input" "$RC $(jone 'd["kind"]')"
+has "...said" "password is a credential and is never taken with --set" "$OUT"
+lacks "...the value never repeated" "Hunter-2" "$OUT"
+run --json plan postgresql --name brandnew $PG_SET --set password=Hunter-2
+check "...and on a first connect" "2 input" "$RC $(jone 'd["kind"]')"
+jsonsh /dev/null pg --name moved --set password=Hunter-2 --json
+check "...the shell refuses it before the engine runs: exit 2, one object, rejected" "2 [False, 'input', True]" \
+    "$JRC $(one '[d["ok"], d["kind"], d["rejected"]]')"
+lacks "...its value on neither stream" "Hunter-2" "$JOUT $JERR"
+
+# A document source holds its bucket and region inside its credential; a
+# BigQuery key is a file staged for the source and is not re-pointed in place.
+mkdir -p "$HOME_K/sources/docmove" "$HOME_K/sources/bqmove"
+printf '%s\n' '{"schema_version": 1, "id": "docmove", "connector": "s3", "profile": "java-document-files",
+  "inputs": {"bucket": "docs-bucket", "region": "ap-south-1", "mapping": "/no/such/mapping.json", "access_key_id": "AKIAIOSFODNN7EXAMPLE"},
+  "objects": {"connection": "EXAKIT_SRC_DOCMOVE", "schema": "VS_DOCMOVE", "script_schema": "EXAKIT_VS", "script": "ADAPTER_DOCMOVE"}}' \
+    > "$HOME_K/sources/docmove/config.json"
+printf '%s\n' '{"status": "ready"}' > "$HOME_K/sources/docmove/state.json"
+run --json plan s3 --name docmove --set region=eu-west-1
+check "an S3 source's region: a re-point plan, the credential required (its mapping file not read again)" "0 required" \
+    "$RC $(jone 'd["credential"]')"
+printf '%s\n' '{"schema_version": 1, "id": "bqmove", "connector": "bigquery", "profile": "java-jdbc",
+  "inputs": {"project": "p1", "dataset": "d1"}, "key_file": "/buckets/bfsdefault/default/exakit/vs/keys/bqmove.json",
+  "sa_email": "r@p1.iam.gserviceaccount.com",
+  "objects": {"connection": "EXAKIT_SRC_BQMOVE", "schema": "VS_BQMOVE", "script_schema": "EXAKIT_VS", "script": "ADAPTER_BQMOVE"}}' \
+    > "$HOME_K/sources/bqmove/config.json"
+printf '%s\n' '{"status": "ready"}' > "$HOME_K/sources/bqmove/state.json"
+run --json plan bigquery --name bqmove --set dataset=d2
+check "a BigQuery source: not re-pointed in place (its key is a file staged for it), exit 2, the fix named" "2 input True" \
+    "$RC $(jone '[d["kind"], "exakit source remove bqmove --yes" in d["remedy"]]' | tr -d "[],'" )"
+
+# The shell: --json never takes silence for consent; the credential is always given.
+jsonsh /dev/null pg --name moved --set host=fresh.example.com --set database=sales --json
+check "exakit connect --json, a re-point without --yes or a credential: exit 5, declined, no command to run as is" \
+    "5 ['declined', None] new.example.com" "$JRC $(one '[d["kind"], d["command"]]') $(inputs host)"
+has "...its fix names the credential" "--password-file <file> or --password-stdin" "$(one 'd["remedy"]')"
+printf 'Fresh-Pw-3' > "$WORK/repoint.pw"
+jsonsh /dev/null pg --name moved --set host=fresh.example.com --set database=sales --password-file "$WORK/repoint.pw" --json
+check "...with --password-file, without --yes: declined, the --yes form names the file" \
+    "5 exakit connect postgresql --name moved --set host=fresh.example.com --set database=sales --password-file $WORK/repoint.pw --yes --json" \
+    "$JRC $(one 'd["command"]')"
+jsonsh /dev/null pg --name moved --set host=fresh.example.com --set database=sales --dry-run --json
+check "...--dry-run --json: the plan, the credential required, nothing changed" "0 ['repoint', 'required'] new.example.com" \
+    "$JRC $(one '[d["action"], d["credential"]]') $(inputs host)"
+jsonsh /dev/null pg --name moved --set host=fresh.example.com --set database=sales --yes --json
+check "...--yes with no credential (an empty stdin): exit 2, kind input, nothing changed" "2 input new.example.com" \
+    "$JRC $(one 'd["kind"]') $(inputs host)"
+jsonsh /dev/null pg --name moved --set host=fresh.example.com --set database=sales --password-file "$WORK/repoint.pw" --yes --json
+check "...--yes and the credential: exit 0, repointed, replaced" "0 ['repointed', 'replaced'] Fresh-Pw-3" \
+    "$JRC $(one '[d["action"], d["credential"]]') $(conn secret)"
+jsonsh /dev/null pg --name moved --set host=fresh.example.com --json
+check "...the same again, no credential: exit 0, unchanged, ready" "0 ['unchanged', 'ready']" "$JRC $(one '[d["action"], d["status"]]')"
+jsonsh /dev/null mysql --name moved --set host=new.example.com --set database=x --set user=u --json
+check "...another connector: exit 3, kind conflict" "3 conflict" "$JRC $(one 'd["kind"]')"
+OUT="$(urlsh cmd_connect pg --name moved --set port=5434 </dev/null)"; RC=$?
+check "exakit connect (no --json, no terminal), a re-point without --yes: exit 5, nothing changed" "5 5433" "$RC $(inputs port)"
+has "...the plan says what changes" "port: 5433 -> 5434" "$OUT"
+has "...and that the credential is required" "Credential: required" "$OUT"
+lacks "...never that it is kept" "Credential: kept" "$OUT"
+has "...and how to agree" "Nothing was changed. Confirm it with --yes." "$OUT"
+OUT="$(urlsh cmd_connect pg --name moved --set port=5434 --yes </dev/null)"; RC=$?
+check "...--yes without a credential: exit 2, nothing changed" "2 5433" "$RC $(inputs port)"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["fresh.example.com"]["secret"] = "Fresh-Pw-3"; json.dump(d, open(sys.argv[1], "w"))
+PY
+OUT="$(urlsh cmd_connect pg --name moved --set port=5434 --password-file "$WORK/repoint.pw" --yes </dev/null)"; RC=$?
+check "...--yes and --password-file: exit 0, re-pointed" "0 5434" "$RC $(inputs port)"
+has "...said" "Re-pointed moved (port 5433 -> 5434) with the credential given; VS_MOVED kept its name" "$OUT"
+OUT="$(urlsh cmd_connect pg --name moved --set port=5434 </dev/null)"; RC=$?
+check "...and again: nothing to change, exit 0" "0" "$RC"
+has "...said" "Nothing to change: moved already reads from" "$OUT"
+
+# A native adapter (MongoDB): tried on a throwaway virtual schema over the
+# pending CONNECTION, dropped after; the source's own is swapped only then.
+setk 'd["sources"]["cluster0.example.net"] = {"tables": ["MOVIES"], "secret": "Mg-Pw-1", "collections": ["sample_mflix.movies"]}; d["sources"]["cluster1.example.net"] = {"tables": ["THEATERS"], "secret": "Mg-Pw-2", "collections": ["sample_mflix.theaters"]}'
+run_secret "Mg-Pw-1" connect mongodb --name mgmove --set "uri=mongodb+srv://cluster0.example.net/?authSource=admin" \
+    --set database=sample_mflix --set collection=movies --set user=reader --secret-stdin
+check "a MongoDB source to move: exit 0" "0" "$RC"
+run_secret "Mg-Pw-2" connect mongodb --name mgmove --set "uri=mongodb+srv://cluster1.example.net/?authSource=admin" --set collection=theaters --secret-stdin
+check "...re-pointed to another cluster and collection: exit 0" "0" "$RC"
+check "...its CONNECTION's URI and password the new ones; VS_MGMOVE's COLLECTION set; the throwaway gone" \
+    "mongodb+srv://cluster1.example.net/?authSource=admin Mg-Pw-2 theaters [\"THEATERS\"] false" \
+    "$(dbq 'd["connections"]["EXAKIT_SRC_MGMOVE"]["url"]') $(dbq 'd["connections"]["EXAKIT_SRC_MGMOVE"]["secret"]') $(dbq 'd["virtual"]["VS_MGMOVE"]["properties"]["COLLECTION"]') $(dbq 'd["virtual"]["VS_MGMOVE"]["tables"]') $(dbq '"EXAKIT_PENDING_VS_MGMOVE" in d["virtual"]')"
+has "...the throwaway was made on the pending CONNECTION" "MONGODB_CONNECTION = 'EXAKIT_PENDING_EXAKIT_SRC_MGMOVE'" \
+    "$(dbq '[s for s in d["statements"] if s.startswith("CREATE VIRTUAL SCHEMA \"EXAKIT_PENDING_VS_MGMOVE\"")][-1]')"
+
+# disconnect and remove drop a CONNECTION a re-point left aside.
+setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = dict(d["connections"]["EXAKIT_SRC_MOVED"])'
+setjournal '{"operation": "repoint", "connector": "postgresql", "swapped": true}'
+run disconnect moved </dev/null
+check "disconnect after an interrupted re-point: neither CONNECTION kept, no journal" "0 null false no" "$RC $(conn url) $(aside) $(journal)"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
