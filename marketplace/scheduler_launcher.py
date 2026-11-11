@@ -79,7 +79,8 @@ def main() -> int:
         if stop:
             return 0
         try:
-            with socket.create_connection((env["EXA_HOST"], int(env["EXA_PORT"])), timeout=2):
+            with socket.create_connection((env.get("EXA_HOST") or host or "127.0.0.1", int(env.get("EXA_PORT") or port)),
+                                          timeout=2):
                 break
         except OSError:
             time.sleep(3)

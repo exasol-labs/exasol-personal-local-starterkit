@@ -92,6 +92,29 @@ class SchedulerTest(unittest.TestCase):
         self.assertNotIn("EXA_DSN", env)
         self.assertEqual("db.example", env["EXA_HOST"])
 
+    def test_pinned_the_launcher_waits_for_the_database_and_starts_the_engine(self):
+        """Pinned there is no EXA_HOST: the wait for the database used it and the launcher died with KeyError before
+        the engine ever started ("Scheduler stopped during startup")."""
+        from unittest import mock
+
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            manifest = home / "manifest.json"
+            manifest.write_text(json.dumps({**self.DOC, **PINNED}), encoding="utf-8")
+            credential = home / "pw"
+            credential.write_text("x", encoding="utf-8")
+            engine = mock.Mock()
+            engine.wait.return_value = 0
+            argv = ["scheduler_launcher.py", str(home / "run"), str(home / "engine"), str(manifest), str(credential)]
+            with mock.patch.object(sys, "argv", argv), \
+                 mock.patch.dict(scheduler_launcher.os.environ, {}, clear=True), \
+                 mock.patch.object(scheduler_launcher.socket, "create_connection") as connect, \
+                 mock.patch.object(scheduler_launcher.subprocess, "Popen", return_value=engine) as popen, \
+                 mock.patch.object(scheduler_launcher.signal, "signal"):
+                self.assertEqual(0, scheduler_launcher.main())
+        self.assertEqual(("127.0.0.1", 8563), connect.call_args.args[0])
+        self.assertIn("EXA_DSN", popen.call_args.kwargs["env"])
+
 
 if __name__ == "__main__":
     unittest.main()
