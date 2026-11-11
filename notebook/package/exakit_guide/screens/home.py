@@ -300,11 +300,17 @@ class Home(Screen):
             if not all(str(form.get(k) or "").strip() for k in ("public", "secret_key")):
                 raise ValueError("Enter both Langfuse keys: the public key and the secret key.")
             secret = {"ask": lambda _question, answers=answers: next(answers, "")}
-        actions.run(action_id, secret=secret, **values)
-        row = next((r["id"] for r in self._rows() + self._other_rows()
-                    if any(a.get("id") == "run:" + json.dumps([action_id, values]) for a in r.get("actions", []))), "database")
-        if SESSION.said:
-            self.outputs[row] = SESSION.said
+        SESSION.said = ""
+        try:
+            actions.run(action_id, secret=secret, **values)
+        finally:
+            # What the kit printed stays under its row, open, whether the command worked or not.
+            event = "run:" + json.dumps([action_id, values])
+            row = next((r["id"] for r in self._rows() + self._other_rows()
+                        if any(a.get("id") == event or a.get("id", "").startswith(f'run:["{action_id}"')
+                               for a in r.get("actions", []))), "database")
+            if SESSION.said:
+                self.outputs[row] = SESSION.said
         self._reload()
         self.flash = {"kind": "ok", "v": f"Done: {actions.code(action_id, **values).splitlines()[0]}"}
 

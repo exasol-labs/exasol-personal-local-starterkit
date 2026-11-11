@@ -250,7 +250,7 @@ class ChooseData(Screen):
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
             blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
         if self.kit_said:
-            blocks.append({"t": "details", "title": "What the kit said", "blocks": [{"t": "pre", "v": self.kit_said}]})
+            blocks.append({"t": "details", "title": "What the kit said", "open": True, "blocks": [{"t": "pre", "v": self.kit_said}]})
         if SESSION.code:
             blocks.append({"t": "code", "code_only": True, "title": "The code behind this step", "v": "\n".join(SESSION.code)})
         return blocks
@@ -467,7 +467,7 @@ class ColumnMap(Screen):
         if self.first:
             blocks += self._first_blocks()
         if self.kit_said:
-            blocks.append({"t": "details", "title": "What the kit said", "blocks": [{"t": "pre", "v": self.kit_said}]})
+            blocks.append({"t": "details", "title": "What the kit said", "open": True, "blocks": [{"t": "pre", "v": self.kit_said}]})
         if SESSION.code:
             blocks.append({"t": "code", "code_only": True, "title": "The kit calls behind this step", "v": "\n".join(SESSION.code)})
         return blocks

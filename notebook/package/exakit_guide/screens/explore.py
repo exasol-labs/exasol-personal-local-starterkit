@@ -187,7 +187,7 @@ class Prepare(Screen):
         elif t is not None:
             blocks.append({"t": "p", "muted": True, "v": "No cleaned copy needed: every column already has the right type and nothing needs fixing."})
         if self.kit_said:
-            blocks.append({"t": "details", "title": "What the kit said", "blocks": [{"t": "pre", "v": self.kit_said}]})
+            blocks.append({"t": "details", "title": "What the kit said", "open": True, "blocks": [{"t": "pre", "v": self.kit_said}]})
         return blocks
 
     def on_clean(self, _v: dict) -> None:

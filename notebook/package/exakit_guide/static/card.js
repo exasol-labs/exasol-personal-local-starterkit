@@ -245,7 +245,7 @@ function render({ model, el }) {
             confirming ? h("div", { class: "guide-confirm" }, h("span", {}, confirming.confirm),
               button("Yes, continue", confirming.id, { primary: true, busyLabel: "Updating…" }), button("Cancel", "cancel")) : null,
             formAction ? form(r, formAction) : null,
-            r.output ? h("details", { class: "guide-output" }, h("summary", {}, "What the kit said"), h("pre", {}, r.output)) : null),
+            r.output ? kitSaid(r) : null),
           h("div", { class: "guide-row-actions" }, actions.map((a) => a.href
             ? button(a.label, a.id, { href: a.href })
             : a.form
@@ -299,7 +299,8 @@ function render({ model, el }) {
         h("pre", {}, b.v));
     },
     details(b) {
-      const d = h("details", { class: "guide-details", open: !!ui.values["open:" + b.title] },
+      // Open as the screen asks (the kit's own words always are), until the reader closes it.
+      const d = h("details", { class: "guide-details", open: ui.values["open:" + b.title] ?? !!b.open },
         h("summary", {}, b.title), h("div", { class: "guide-details-body" }, (b.blocks || []).map(block).filter(Boolean)));
       d.addEventListener("toggle", () => { ui.values["open:" + b.title] = d.open; });
       return d;
@@ -699,6 +700,15 @@ function render({ model, el }) {
           disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = e.target.value; } });
     if (f.type === "password") st.secret.add(f.id);
     return h("label", { class: "guide-field" }, h("span", {}, f.label), input);
+  }
+
+  // What the kit printed for a row's action: open, so the reason is read without a click; closing it is remembered.
+  function kitSaid(r) {
+    const key = "out:" + r.id;
+    const d = h("details", { class: "guide-output", open: ui.values[key] ?? true },
+      h("summary", {}, "What the kit said"), h("pre", {}, r.output));
+    d.addEventListener("toggle", () => { ui.values[key] = d.open; });
+    return d;
   }
 
   function form(r, a) {
