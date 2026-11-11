@@ -342,7 +342,7 @@ def _run_live(command: list[str], *, input: str | None = None, timeout: float = 
     """Run a kit command that answers with one JSON document on standard output, handing what it says while it
     works to ``on_line`` as it happens, in this thread (so a card that follows this cell's output sees it): the
     lines on its standard error, the steps its engine writes to the kit's log (``log``), and the kit's own progress
-    (the share done and the phase of a download or an install, EXAKIT_PROGRESS_LOG), the way the nb.exakit helper does.
+    (the share done and the phase of a download or an install, EXAKIT_PROGRESS_LOG), the way a kit command run from a cell is followed.
     ``input`` goes to standard input and is never echoed. Returns what subprocess.run would; a command over
     ``timeout`` seconds is stopped (TimeoutExpired)."""
     import queue
