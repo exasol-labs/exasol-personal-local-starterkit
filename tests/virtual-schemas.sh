@@ -820,6 +820,56 @@ reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes" "$B/env" "$B/dnsrc"; prin
 # The same bridge for a fresh bash started with a given environment (review 5).
 { printf 'ROOT=%q; B=%q\n' "$ROOT" "$B"; declare -f bridge; } > "$WORK/bridge-fn.sh"
 
+# The lakehouse bridge: two secrets, the second from --storage-secret-file, both
+# on the engine's stdin as base64 "." base64 and never in its arguments.
+lhbridge() {
+    ( EXAKIT_HOME="$B/home"; mkdir -p "$EXAKIT_HOME"
+      . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/detect.sh"; . "$ROOT/setup/lib/runtime-personal.sh"
+      . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { :; }
+      pyexasol_venv_python() { command -v python3; }
+      exakit_vs_engine() {
+          printf '%s\n' "$*" >> "$B/argv"
+          [ -t 0 ] || cat >> "$B/stdin"
+          case "$1" in
+              resolve) echo 'RESULT {"connector": "lakehouse"}' ;;
+              inputs) echo 'RESULT {"connector": "lakehouse", "name": "x", "inputs": [{"name": "secret", "label": "Catalog token", "kind": "secret", "secret": true}, {"name": "storage_secret", "label": "Account key or SAS", "kind": "secret", "secret": true, "storage": true}]}' ;;
+              plan) echo 'RESULT {"name": "x", "connector": "lakehouse", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;;
+              show) echo 'RESULT {"name": "lk", "connector": "lakehouse", "storage_secret": "Account key or SAS"}' ;;
+          esac
+          return 0
+      }
+      "$@" ) 2>&1
+}
+rm -f "$B/argv" "$B/stdin"
+printf 'tok-ONE' > "$B/tok"; printf 'sv=2024&sig=TWO' > "$B/sto"
+LKS="--set catalog=iceberg-rest --set files=azure --set catalog_url=https://r.example.com --set warehouse=w --set namespace=s --set account_name=acct1"
+# shellcheck disable=SC2086
+OUT="$(lhbridge cmd_connect lakehouse --name lk $LKS --password-file "$B/tok" --storage-secret-file "$B/sto" --yes </dev/null)"; RC=$?
+check "lakehouse, two secrets from two files: exit 0, connect with --secret-pair-base64" "0 1" \
+    "$RC $(grep -c '^connect lakehouse .*--secret-pair-base64$' "$B/argv")"
+check "...both on stdin, base64 joined by a dot" "tok-ONE|sv=2024&sig=TWO" \
+    "$(python3 -c 'import base64,sys; a,b=open(sys.argv[1]).read().split("."); print(base64.b64decode(a).decode() + "|" + base64.b64decode(b).decode())' "$B/stdin")"
+lacks "...neither in any argument" "tok-ONE" "$(cat "$B/argv")"; lacks "...(the storage one)" "sig=TWO" "$(cat "$B/argv")"
+lacks "...nor on the screen" "sig=TWO" "$OUT"
+rm -f "$B/argv" "$B/stdin"
+# shellcheck disable=SC2086
+OUT="$(lhbridge cmd_connect lakehouse --name lk $LKS --password-file "$B/tok" --yes </dev/null)"; RC=$?
+check "...the storage secret missing and no terminal: exit 2, no connect" "2 0" "$RC $(grep -c '^connect' "$B/argv")"
+has "...said how to give it" "--storage-secret-file <file>" "$OUT"
+OUT="$(lhbridge cmd_connect lakehouse --name lk --storage-secret=abc </dev/null)"; RC=$?
+check "--storage-secret=VALUE is a credential argument: refused, exit 2" "2" "$RC"; lacks "...not echoed" "abc" "$OUT"
+OUT="$(lhbridge cmd_connect lakehouse --name lk --set storage_secret=abc </dev/null)"; RC=$?
+check "--set storage_secret=... is refused before anything runs" "2" "$RC"; lacks "...not echoed" "=abc" "$OUT"
+rm -f "$B/argv" "$B/stdin"
+OUT="$(lhbridge cmd_source reauth lk --password-file "$B/tok" --storage-secret-file "$B/sto" </dev/null)"; RC=$?
+check "source reauth of a two-secret source: both, as a pair" "0 1" "$RC $(grep -c '^reauth lk --secret-pair-base64$' "$B/argv")"
+lacks "...neither in an argument" "sig=TWO" "$(cat "$B/argv")"
+rm -f "$B/argv" "$B/stdin"
+OUT="$(lhbridge cmd_source reauth lk --password-file "$B/tok" </dev/null)"; RC=$?
+check "...with one: exit 2, no reauth" "2 0" "$RC $(grep -c '^reauth' "$B/argv")"
+has "...says both" "--storage-secret-file <file>" "$OUT"
+
 reset_bridge
 OUT="$(bridge cmd_connect pg --name sales --password=hunter2 </dev/null)"; RC=$?
 check "a password argument is refused before anything runs, exit 2" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
@@ -1644,7 +1694,7 @@ has "...the virtual schema names the connection the adapter's way" "MONGODB_CONN
 lacks "...the password is not printed" "$SECRET" "$OUT"
 OUT="$(eng --json list 2>/dev/null)"
 check "list --json: every row keeps its keys and adds host and tls, nothing renamed" \
-    "connector host last_check name needs_refresh schema status tls" \
+    "connector connector_name host last_check name needs_refresh schema status tls" \
     "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(" ".join(sorted(set(k for s in json.load(sys.stdin)["sources"] for k in s))))')"
 check "...a MongoDB source: the URI's host, and verify for mongodb+srv://" "cluster0.example.net verify" \
     "$(printf '%s' "$OUT" | python3 -c 'import json, sys; s = [s for s in json.load(sys.stdin)["sources"] if s["name"] == "mg"][0]; print(s["host"], s["tls"])')"
@@ -2330,11 +2380,12 @@ lacks "...the key is not printed" "$AZK" "$OUT"
 check "...nor in the kit's records or log" "0" "$(grep -rlF -- "$AZK" "$HOME_K" | wc -l | tr -d ' ')"
 check "...nor in any statement but the CONNECTION's" "0" \
     "$(dbq 'len([x for x in d["statements"] if "QUFBQUFB" in x and not x.startswith("CREATE CONNECTION")])')"
+cname() { printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("connector_name") or d.get("name")).replace(chr(183), "|"))'; }
 run show raz
-has "source show names the combination" '"connector_name": "Lakehouse · Iceberg REST catalog · Azure ADLS Gen2"' "$OUT"
+check "source show names the combination" "Lakehouse | Iceberg REST catalog | Azure ADLS Gen2" "$(cname)"
 has "...and says reauth needs the storage secret too" '"storage_secret": "Account key or SAS"' "$OUT"
 run card raz
-has "the card names the combination" "Lakehouse · Iceberg REST catalog · Azure ADLS Gen2" "$OUT"
+check "the card names the combination" "Lakehouse | Iceberg REST catalog | Azure ADLS Gen2" "$(cname)"
 has "...its settings by their labels" '["Catalog", "Iceberg REST catalog"]' "$OUT"
 run_secret "t0k-AZ" reauth raz --secret-stdin
 check "reauth of a two-secret source with one: exit 2" "2" "$RC"; has "...says both" "reauth of raz needs the storage's account key or sas" "$OUT"
@@ -2362,7 +2413,7 @@ run inputs lakehouse --set catalog=unity --set files=azure
 check "inputs for unity+azure: the spec's fields in order, the storage secret flagged" \
     "name catalog files login workspace_url namespace secret account_name storage_secret*" \
     "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(f["name"] + ("*" if f.get("storage") else "") for f in json.load(sys.stdin)["inputs"]))')"
-has "...named for the combination" '"name": "Lakehouse · Unity Catalog · Azure ADLS Gen2"' "$OUT"
+check "...named for the combination" "Lakehouse | Unity Catalog | Azure ADLS Gen2" "$(cname)"
 has "...Unity's token label" '"label": "Databricks token"' "$OUT"
 run inputs lakehouse --set catalog=glue
 check "inputs for glue: files s3 only, no login" "name catalog files region database access_key_id secret catalog_id" \
@@ -2397,7 +2448,7 @@ check "source list after the update: every old source is lakehouse" "lakehouse l
 check "...each migrated on disk with its catalog and files" "iceberg-rest/s3/token/iceberg-rest unity/vended/token/unity glue/s3/-/lakehouse" \
     "$(for n in old_icebergrest old_unity old_lakehouse; do python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); i=c["inputs"]; print("%s/%s/%s/%s" % (i["catalog"], i["files"], i.get("login","-"), c["migrated_from"]))' "$HOME_K/sources/$n/config.json"; done | tr '\n' ' ' | sed 's/ $//')"
 run show old_unity
-has "...show names its combination" '"connector_name": "Lakehouse · Unity Catalog · Let the catalog give access"' "$OUT"
+check "...show names its combination" "Lakehouse | Unity Catalog | Let the catalog give access" "$(cname)"
 check "...its inputs kept" "https://dbc-1.cloud.databricks.com main.sales us-east-2" \
     "$(python3 -c 'import json,sys; i=json.load(open(sys.argv[1]))["inputs"]; print(i["workspace_url"], i["namespace"], i["region"])' "$HOME_K/sources/old_unity/config.json")"
 run show old_icebergrest
@@ -4807,7 +4858,7 @@ has "...Enter opens it: the card and its menu" "Tables and columns" "$ROWS"
 printf '\n== exakit source catalog ==\n'
 jsonsrc /dev/null catalog
 check "catalog: exit 0" "0" "$JRC"
-has "...a box of id, name and aliases" "ID            NAME" "$JOUT"
+has "...a box of id, name and aliases" "ID          NAME" "$JOUT"
 has "...aliases trimmed" "aws-s3, s3-files, s3-documents, +1" "$JOUT"
 lacks "...no GA column" " GA " "$JOUT"
 lacks "...no status column" "candidate" "$JOUT"

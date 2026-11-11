@@ -399,7 +399,7 @@ class Engine(object):
         as "PermissionDenied ... status: 403" (measured, a database 42 min
         behind after the laptop slept), which reads like a missing grant.
         With the clock that far off, the clock is the cause to name."""
-        if kind not in ("error", "denied", "auth") or connector.get("auth") not in ("aws-keys", "azure-sas-or-key"):
+        if kind not in ("error", "denied", "auth") or connector.get("auth") not in ("aws-keys", "azure-sas-or-key", "lakehouse"):
             return kind
         self.clock()
         return "clock" if abs(getattr(self, "_skew", 0)) >= SIGNED_LIMIT else kind
@@ -948,11 +948,11 @@ class Engine(object):
         the second one too: refused, kind input, before anything changes."""
         spec = planner.storage_secret_input(connector)
         if spec and not self.storage_secret:
-            label = spec.get("label", "storage secret")
-            raise Failure("%s needs the storage's %s as well as the catalog's credential (it is never taken as an "
-                          "argument)" % (what, label.lower()), EXIT["input"], "input",
-                          remedy="give it with --storage-secret-file <file> (a file holding only the %s), or "
-                                 "answer the hidden prompt at a terminal" % label.lower())
+            label = spec.get("label", "storage secret").lower()
+            message = "%s needs the storage's %s as well as the catalog's credential" % (what, label)
+            remedy = ("give it with --storage-secret-file <file> (a file holding only the %s), or answer the hidden "
+                      "prompt at a terminal; it is never taken as an argument" % label)
+            raise Failure(message, EXIT["input"], "input", remedy=remedy, said="%s: %s" % (message, remedy))
 
     def adapter_sql(self, names, jars, profile=None):
         script = (profile or self.profile)["adapter_script"]

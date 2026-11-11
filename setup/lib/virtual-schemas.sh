@@ -2881,7 +2881,12 @@ EOF
     fi
     # The labels of the combination's secrets (engine inputs): a lakehouse
     # source can have two, the second on --storage-secret-file or asked hidden.
-    _cc_labels="$(_exakit_vs_secret_labels "$_cc_resolved")"
+    if grep -q '"settings"' "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null; then
+        _cc_labels="$(_exakit_vs_secret_labels "$_cc_resolved")"
+    else
+        _cc_labels="$(run_python_any -c 'import json,sys; c=json.load(open(sys.argv[1])); print(next((s.get("label","password") for s in c["inputs"] if s["kind"] in ("secret","secret-file")), "") + "|")' \
+            "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
+    fi
     _cc_label="${_cc_labels%%|*}"; _cc_slabel="${_cc_labels#*|}"
     if [ -z "$_cc_slabel" ] && [ -n "$_cc_sfile" ]; then
         _exakit_vs_refuse 2 "--storage-secret-file is for a lakehouse source with a catalog login and storage keys; this one has one secret." \

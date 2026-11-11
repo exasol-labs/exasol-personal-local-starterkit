@@ -600,10 +600,11 @@
   "paste": {
     "style": "lakehouse",
     "forms": [
-      "https://<catalog-host>[:port][/path]  (Iceberg REST catalog)",
-      "https://<workspace-host>  (Unity Catalog on Databricks)",
+      "https://<catalog-host>[:port][/path] (Iceberg REST)",
+      "https://<workspace-host> (Unity Catalog)",
       "arn:aws:glue:<region>:<account>:database/<name>",
-      "s3://<bucket>/<prefix>/  or  abfss://<container>@<account>.dfs.core.windows.net/<prefix>/"
+      "s3://<bucket>/<prefix>/",
+      "abfss://<container>@<account>.dfs.core.windows.net/<prefix>/"
     ]
   },
   "auth": "lakehouse",

@@ -100,7 +100,17 @@ $connectLines = @($r.Lines)
 $result = Show-ExakitVsLines -Lines (Invoke-ExakitVsEngine -Arguments @("list")).Lines
 Check "list comes back parsed" "sales" (@($result.sources)[0].name)
 Check "...each row adds where it lives and its TLS level (host, tls)" "pg.example.com verify" ("" + @($result.sources)[0].host + " " + @($result.sources)[0].tls)
-Check "...and keeps every key it had" "connector host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
+Check "...and keeps every key it had" "connector connector_name host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
+# A lakehouse source's two secrets: one pipe, base64 "." base64 (--secret-pair-base64),
+# non-ASCII intact. A pair the engine could not split is exit 2; this one reaches
+# the source lookup (no such source: exit 4).
+$r = Invoke-ExakitVsEngine -Arguments @("reauth", "nosuch", "--secret-stdin") -Secret "t$([char]0x00F6)ken" -StorageSecret "sv=2024&sig=$([char]0x00E9)x"
+Check "two secrets through the bridge: parsed by the engine (exit 4, not 2)" 4 $r.Code
+$bridgeText = Get-Content -Raw -LiteralPath (J @("setup", "lib", "virtual-schemas.ps1"))
+Check "...sent as --secret-pair-base64, never as an argument value" $true ($bridgeText.Contains('"--secret-pair-base64"') -and $bridgeText.Contains('$encoded + "." +'))
+$r = Invoke-ExakitVsEngine -Arguments @("inputs", "lakehouse", "--set", "catalog=unity", "--set", "files=s3")
+$doc = Show-ExakitVsLines -Lines $r.Lines
+Check "inputs for unity+s3: the storage secret flagged, after the token" "secret storage_secret" ((@($doc.inputs | Where-Object { $_.kind -eq "secret" } | ForEach-Object { $_.name })) -join " ")
 $r = Invoke-ExakitVsEngine -Arguments @("paste", "pg", "--base64") -Secret "jdbc:postgresql://h/db?user=r&password=Abc&Xyz9"
 Check "paste through the bridge: a password's unencoded & leaks no name" $false (($r.Lines -join "`n").Contains("Xyz9"))
 Check "...the string comes back masked by the engine, the password and its unencoded tail hidden" "jdbc:postgresql://h/db?user=r&password=****&****" (Get-ExakitVsResultOf $r.Lines).masked
