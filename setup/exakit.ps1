@@ -4916,6 +4916,15 @@ function Show-ExakitUsage {
     if ($All) { Show-ExakitHelpAll | Out-Null; return }
     if (-not $Topic) { Show-ExakitHelpOverview | Out-Null; return }
     if (Test-ExakitHelpId $Topic) { Show-ExakitHelpComponent -Id $Topic | Out-Null; return }
+    # `exakit help <connector>` (or `help connect <connector>`) is `exakit
+    # connect <connector> --help`. Twin of usage() in the bash CLI.
+    $vsWord = ""
+    if ($Topic -like "connect *") { $vsWord = $Topic.Substring(8) }
+    elseif ($Topic -ne "connect" -and $Topic -notlike "* *") { $vsWord = $Topic }
+    if ($vsWord -and (Get-Command Show-ExakitVsGuide -ErrorAction SilentlyContinue)) {
+        $guideCode = Show-ExakitVsGuide -Connector $vsWord -Exact
+        if ($guideCode -ne 10) { if ($guideCode) { exit $guideCode }; return }
+    }
     $helpResult = Show-ExakitHelpCommand -Name $Topic
     if ($helpResult) { exit $helpResult }
 }
@@ -4948,7 +4957,15 @@ if ($Command -and $Command -ne "sql" -and -not $_helpSelf -and ($RestArgs -conta
         if ("$word" -like '-*') { break }
         $helpWords += $word
     }
-    Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:($RestArgs -contains '--json' -or $RestArgs -contains '-j')
+    # `exakit connect [<connector>] --help`: the connector guide
+    # (Show-ExakitVsGuide); --json keeps the help document, and
+    # `exakit help connect` the command's whole page. Twin of the bash hook.
+    $helpJson = ($RestArgs -contains '--json' -or $RestArgs -contains '-j')
+    if ($Command -eq "connect" -and -not $helpJson -and (Get-Command Show-ExakitVsGuide -ErrorAction SilentlyContinue)) {
+        $guideCode = Show-ExakitVsGuide -Connector (@($helpWords | Select-Object -Skip 1) -join ' ')
+        exit $guideCode
+    }
+    Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:$helpJson
     exit 0
 }
 

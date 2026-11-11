@@ -12754,7 +12754,7 @@ kit_helper_step() {
                               "$EXAKIT_HOME/kit/mcp" "$EXAKIT_HOME/kit/sql" \
                               "$EXAKIT_HOME/kit/skills" "$EXAKIT_HOME/kit/marketplace" \
                               "$EXAKIT_HOME/kit/setup/core" "$EXAKIT_HOME/kit/setup/preprocessor" \
-                              "$EXAKIT_HOME/kit/setup/virtual-schemas"; do
+                              "$EXAKIT_HOME/kit/setup/virtual-schemas" "$EXAKIT_HOME/kit/docs/virtual-schemas"; do
                 rm -rf "$_kss_stale"
             done
             cp -R "$_script_dir/lib" "$EXAKIT_HOME/kit/setup/" \
@@ -12787,6 +12787,11 @@ kit_helper_step() {
             # "no skills/ directory in this kit build" on a working install.
             [ -d "$_kit_root/skills" ] && cp -R "$_kit_root/skills" "$EXAKIT_HOME/kit/"
             [ -d "$_kit_root/marketplace" ] && cp -R "$_kit_root/marketplace" "$EXAKIT_HOME/kit/"
+            # docs/virtual-schemas/ is what `exakit connect <connector> --help`
+            # draws its guide from (engine/guide.py), and the full guide it names.
+            if [ -d "$_kit_root/docs/virtual-schemas" ]; then
+                mkdir -p "$EXAKIT_HOME/kit/docs" && cp -R "$_kit_root/docs/virtual-schemas" "$EXAKIT_HOME/kit/docs/"
+            fi
             # setup/help/ is the WHOLE help corpus -- one JSON per topic, and
             # `exakit help <topic>` resolves through exakit_repo_root, which
             # PREFERS this staged copy once kit/mcp exists. Omitting it did not

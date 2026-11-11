@@ -107,8 +107,8 @@ exakit source check <name> --json                                   # later: a f
   Oracle) or "Could not load trustJKS keystore from null" (MySQL). Give
   `--set ca=<PEM file or bundle>`: a public CA's root (ISRG Root X1 for Let's
   Encrypt), the RDS region bundle, a company root. SQL Server on Linux sends only its
-  leaf certificate, so its PEM holds the root plus the intermediates. The form's CA
-  prompt says "Enter to skip": with `verify` do not skip it.
+  leaf certificate, so its PEM holds the root plus the intermediates. The plan warns
+  when `verify` has no CA: do not connect past that warning.
 - **"PKIX path building failed"** (MySQL: "Path does not chain with any of the trust
   anchors"): the PEM given does not sign the server - give the right one. Never answer
   it with `tls=require`: `require` encrypts without checking the certificate, so it

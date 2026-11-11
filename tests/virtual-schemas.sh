@@ -1361,6 +1361,26 @@ has "...for Snowflake (no ca, no tls choice): says it cannot connect here, offer
 lacks "...and does not offer tls=require, which Snowflake does not have" "tls=require" "$(printf '%s\n' "$E6" | sed -n 2p)"
 has "...MySQL keeps the ca advice" "give the CA as PEM with --set ca=<file>" "$(printf '%s\n' "$E6" | sed -n 3p)"
 check "...and the error is filed as TLS, so the remedy is shown (measured: Snowflake fell to 'see the log')" "tls" "$(printf '%s\n' "$E6" | sed -n 4p)"
+E7="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan, sql
+load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
+text = "Cannot create PoolableConnectionFactory (Could not load trustJKS keystore from null)"
+print(sql.classify(text))
+print(lifecycle.tls_remedy(text, load("mysql")))
+for c in ("postgresql", "mysql", "sqlserver", "oracle"):
+    w = plan.tls_warning(load(c), {"tls": "verify", "host": "h"})
+    print("%s|%s|%s" % (c, w, plan.tls_warning(load(c), {"tls": "verify", "ca": "x.pem"})))
+PYE
+)"
+check "C4: MySQL's 'Could not load trustJKS keystore from null' is filed as TLS" "tls" "$(printf '%s\n' "$E7" | sed -n 1p)"
+has "...with the same CA remedy as trustAnchors" "give the CA as PEM with --set ca=<file>" "$(printf '%s\n' "$E7" | sed -n 2p)"
+for c in postgresql mysql sqlserver oracle; do
+    has "C1: $c plan warns that tls=verify needs a CA file, a public CA too" "tls=verify needs a CA file here" "$(printf '%s\n' "$E7" | grep "^$c|")"
+    has "...and not once a CA is given" "|None" "$(printf '%s\n' "$E7" | grep "^$c|")"
+    lacks "C1: $c's CA prompt no longer says it is only for a private CA" "only for a private CA" "$(cat "$ROOT/setup/virtual-schemas/connectors/$c/connector.json")"
+done
 
 printf '\n== Snowflake: the loader trusts the container'"'"'s CA store ==\n'
 # Measured on Exasol Personal 2.3.0 against a real account: the JDBC loader's
@@ -2624,7 +2644,7 @@ PY
     TTY_REPLAY_RAW="$WORK/tui.raw" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_FAKE_JAVA_INSTALL=1 \
         TUI_ARGS="pg --name linejava --set host=pg.example.com --set database=sales --set user=reader" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
     has "line by line, Java missing: one line says what the kit does and why" "Preparing the database" "$TUI_RAW"
     lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
@@ -3264,7 +3284,7 @@ if command -v python3 >/dev/null 2>&1; then
     Q_LNAME="$(when 'Name (alias) for this connection (lower case, e.g. sales) *')"
     Q_LPASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the connection string is asked first, hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
     has "...under the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db' '        postgres://user@host:5432/db' '        host[:port][/database]')" "$TUI_RAW"
@@ -3320,7 +3340,7 @@ if command -v python3 >/dev/null 2>&1; then
     # Line by line too: e asks again, n types the fields; the hidden password
     # prompt (a canonical read) drops an arrow pressed in it.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
+        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the first string shown back" "    • Read: postgres://reader@first.example.com/one" "$TUI_RAW"
     has "...e asked again" "    • Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
@@ -3333,7 +3353,7 @@ if command -v python3 >/dev/null 2>&1; then
     # connection string.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg --name linedry --set host=pg.example.com --dry-run" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r"
+        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "--dry-run on a terminal: the questions as before" "? Database " "$TUI_RAW"
     has "...and the plan" "Plan for linedry" "$TUI_RAW"
@@ -3347,7 +3367,7 @@ if command -v python3 >/dev/null 2>&1; then
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_STDIN=piped \
         TUI_ARGS="pg --name linepipe --set host=pg.example.com --set database=sales --set user=reader" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "stdin a pipe, /dev/tty a terminal: the questions as before" "Schema [public]" "$TUI_RAW"
     lacks "...no star" "Port *" "$TUI_RAW"
@@ -3362,7 +3382,7 @@ if command -v python3 >/dev/null 2>&1; then
 " \
         TUI_ARGS="pg --name linestdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     lacks "--password-stdin, /dev/tty a terminal: no hidden prompt" "(input hidden)" "$TUI_RAW"
     has "...the questions from the terminal as before" "Schema [public]" "$TUI_RAW"
@@ -5001,6 +5021,67 @@ setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = dict(d["connections
 setjournal '{"operation": "repoint", "connector": "postgresql", "swapped": true}'
 run disconnect moved </dev/null
 check "disconnect after an interrupted re-point: neither CONNECTION kept, no journal" "0 null false no" "$RC $(conn url) $(aside) $(journal)"
+
+printf '\n== connect --help: the connector guides (docs/virtual-schemas) ==\n'
+# The shipped command, from this checkout, with nothing installed: the guide
+# needs no database and no kit Python.
+GH="$WORK/guide-home"; mkdir -p "$GH"
+guide() { HOME="$GH" EXAKIT_HOME="$GH/.exasol-starter-kit" COLUMNS=80 bash "$ROOT/setup/exakit" "$@" 2>&1; }
+G="$(guide connect postgresql --help)"; RC=$?
+check "connect postgresql --help: exit 0" "0" "$RC"
+has "...names the agent skill" "exasol-vs-postgresql" "$G"
+has "...says what is still needed on this computer" "You still need, on your computer:" "$G"
+has "...lists where to find each value, required ones starred" "* Host and port" "$G"
+has "...has the CA line, from the guide's own words" "  The CA certificate (for" "$G"
+has "...and the CA wording: verify needs one, a public CA too" "even for a public CA" "$G"
+has "...gives one connection string to paste" "postgres://exakit_reader@" "$G"
+has "...the connect command" "Connect: exakit connect postgresql" "$G"
+has "...and where the full guide is" "docs/virtual-schemas/postgresql.md" "$G"
+has "...the connect options stay, as a short block" "Every option: exakit help connect" "$G"
+lacks "...Markdown syntax stripped" '**' "$G"
+lacks "...no code ticks" '`' "$G"
+check "...fits about one screen (at most 32 lines)" "yes" "$([ "$(printf '%s\n' "$G" | wc -l)" -le 32 ] && echo yes || echo no)"
+check "...no line wider than the terminal except the paste example" "" \
+    "$(printf '%s\n' "$G" | grep -v '^  postgres://' | awk 'length($0) > 80 && !/Full guide:/')"
+lacks "...offline: no public IP is asked for (EXAKIT_NO_IP_LOOKUP=1)" "see you as" "$G"
+has "...the network line then names what to allow, from the README" "Network: A source on the internet must allow" "$G"
+G2="$(EXAKIT_NO_IP_LOOKUP=0 EXAKIT_PUBLIC_IP_URL="$IPURL" guide connect postgresql --help)"
+has "...with the lookup on, the network line names this computer's public IP" "Network: cloud sources see you as 203.0.113.7" "$G2"
+check "help pg is the same guide (an alias)" "$G" "$(guide help pg)"
+check "help connect postgresql is the same guide" "$G" "$(guide help connect postgresql)"
+check "connect pg -h is the same guide" "$G" "$(guide connect pg -h)"
+L="$(guide connect --help)"; RC=$?
+check "connect --help: exit 0" "0" "$RC"
+for c in $(python3 -c 'import json,sys; print(" ".join(e["id"] for e in json.load(open(sys.argv[1]))["connectors"]))' "$ROOT/setup/virtual-schemas/catalog.json"); do
+    has "connect --help lists $c" "
+  $c " "
+$L"
+    GC="$(guide connect "$c" --help)"; RC=$?
+    check "connect $c --help: exit 0 and the connect line" "0 yes" "$RC $(printf '%s\n' "$GC" | grep -qx "Connect: exakit connect $c" && echo yes || echo no)"
+done
+has "...the CA file where it applies" "its password; CA file" "$L"
+has "...and how to get one connector's guide" "exakit connect <connector> --help" "$L"
+lacks "...not the command page" "Connects PostgreSQL, MySQL" "$L"
+has "help connect keeps the whole command page" "Connects PostgreSQL, MySQL" "$(guide help connect)"
+has "connect --help --json keeps the help document" '"command": "connect"' "$(guide connect --help --json)"
+has "help mcp keeps the add-on/component page" "MCP server" "$(guide help mcp)"
+has "help status keeps the command page" "exakit status" "$(guide help status)"
+G3="$(guide connect nosuch --help)"; RC=$?
+check "connect nosuch --help: exit 2, the list after it" "2 yes" "$RC $(printf '%s\n' "$G3" | grep -q '^  postgresql ' && echo yes || echo no)"
+check "connector ids and aliases are no help id and no command (exakit help <word> is unambiguous)" "set()" \
+    "$(python3 - "$ROOT" <<'PYC'
+import glob, json, os, sys
+root = sys.argv[1]
+keys = set()
+for e in json.load(open(os.path.join(root, "setup/virtual-schemas/catalog.json")))["connectors"]:
+    keys |= {e["id"]} | set(e.get("aliases", []))
+taken = set()
+for path in glob.glob(os.path.join(root, "setup/help/*.json")):
+    taken.add(os.path.basename(path)[:-5])
+    taken |= {c["command"].split()[0] for c in json.load(open(path)).get("commands", [])}
+print(keys & taken)
+PYC
+)"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

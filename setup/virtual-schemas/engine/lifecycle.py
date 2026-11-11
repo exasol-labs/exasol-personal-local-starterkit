@@ -188,10 +188,12 @@ def tls_remedy(message, connector, clock=None):
     text = str(message)
     has_ca = any(spec["kind"] == "ca-file" for spec in connector["inputs"])
     has_tls = any(spec["name"] == "tls" for spec in connector["inputs"])
-    if re.search(r"trustAnchors parameter must be non-empty", text, re.I):
+    if re.search(r"trustAnchors parameter must be non-empty|Could not load trustJKS keystore", text, re.I):
         # Measured on Exasol Personal 2.3.0: the JDBC loader runs the language
         # container's Java outside it, and that Java's cacerts is an absolute
         # symlink into the container's /etc - so the loader trusts nothing.
+        # MySQL's Connector/J says it as "Could not load trustJKS keystore
+        # from null" (measured on 2.4).
         return ("the database's JDBC loader has no CA store of its own (an Exasol Personal issue), so it cannot "
                 "verify any certificate without one given to it" +
                 ("; give the CA as PEM with --set ca=<file> - for a public CA too, its root certificate"

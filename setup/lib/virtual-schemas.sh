@@ -2257,6 +2257,41 @@ EOF
 # engine's events go to the log; what this bridge says while it repairs DNS
 # or installs a language container goes to stderr. A failure ends naming the
 # engine's day log, every statement it sent (_exakit_vs_exit).
+# exakit_vs_guide [--exact] [connector] - `exakit connect <connector> --help`
+# (and `exakit help <connector>`): the connector's guide, drawn by
+# engine/guide.py from docs/virtual-schemas/<connector>.md, coloured here.
+# Without a connector, every connector on one line each (the README index).
+# --exact answers 10 and prints nothing for a word that is no connector's id
+# or alias, so the caller's own help answers it. No credential is read, so
+# any python3 runs it when the kit's own is not installed yet.
+# Twin of Show-ExakitVsGuide.
+exakit_vs_guide() {
+    _evg_exact=""; [ "${1:-}" = --exact ] && _evg_exact=1
+    _evg_defs="$(exakit_vs_defs 2>/dev/null)" || {
+        [ -n "$_evg_exact" ] && return 10
+        error "This kit copy has no setup/virtual-schemas. Update it: exakit update"; return 2; }
+    _evg_py="$(_exakit_vs_kit_python 2>/dev/null)" || _evg_py="$(command -v python3 2>/dev/null)" || {
+        [ -n "$_evg_exact" ] && return 10
+        error "python3 is needed to show the connector guide."; return 2; }
+    _evg_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || die "Could not create a temporary file."
+    _exakit_vs_python "$_evg_py" "$_evg_defs/engine/guide.py" --defs "$_evg_defs" \
+        --width "$(_ui_term_cols 2>/dev/null || echo 80)" --shell bash "$@" \
+        > "$_evg_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    _evg_rc=$?
+    # One "<style>|<text>" per line: T title, H heading, D dimmed, A a command.
+    while IFS= read -r _evg_line || [ -n "$_evg_line" ]; do
+        _evg_text="${_evg_line#?|}"
+        case "$_evg_line" in
+            T\|*)      printf '%s%s%s\n' "${UI_BOLD:-}" "$_evg_text" "${UI_RESET:-}" ;;
+            H\|*|D\|*) printf '%s%s%s\n' "${UI_DIM:-}" "$_evg_text" "${UI_RESET:-}" ;;
+            A\|*)      printf '%s%s%s\n' "${UI_ACCENT:-}" "$_evg_text" "${UI_RESET:-}" ;;
+            *)         printf '%s\n' "$_evg_text" ;;
+        esac
+    done < "$_evg_out"
+    rm -f "$_evg_out"
+    return "$_evg_rc"
+}
+
 cmd_connect() {
     _exakit_vs_quiet
     _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""; _cc_pwstdin=0
