@@ -169,6 +169,7 @@ class ChooseData(Screen):
         self.own: list[dict] = []
         self.sources: list[str] = []
         self.connectors: list[dict] = []
+        self.forms: dict[str, dict] = {}       # each connector's inputs, as `exakit connect` asks them (nb.connector_inputs)
         self.rows: dict[str, str] = {}
         self.kit_said = ""
         self.done = False
@@ -184,6 +185,7 @@ class ChooseData(Screen):
         try:
             self.samples = [s for s in actions.run("kit.datasets") if s.get("described")]
             self.connectors = actions.run("data.connectors")
+            self.forms = actions.run("data.connector_forms")
             approved = {a["table"].upper(): a for a in actions.run("kit.approved")}
             found = actions.run("data.map")
             self.rows = {r["table"].upper(): r["rows_shown"] for r in found.table_rows}
@@ -237,15 +239,14 @@ class ChooseData(Screen):
                         {"id": "table", "type": "text", "label": "Table (empty: its one table, or the list of them)", "placeholder": "ORDERS"},
                         {"id": "connector", "type": "select", "label": "Kind of source",
                          "value": connectors[0]["value"] if connectors else "", "options": connectors, "show_if": connect_only},
-                        {"id": "src_name", "type": "text", "label": "Name for it (becomes VS_<NAME>)", "placeholder": "sales",
-                         "show_if": connect_only},
-                        {"id": "src_url", "type": "text", "label": "Connection string, without the password",
-                         "placeholder": "postgres://reader@db.example.com:5432/shop", "show_if": connect_only},
-                        {"id": "src_password", "type": "password", "label": "Password (sent to the kit only, never shown or saved here)",
-                         "show_if": connect_only}]},
+                        {"id": "src_name", "type": "text", "label": "Name for it * (its tables appear as VS_<NAME>)",
+                         "placeholder": "sales", "show_if": connect_only}]
+                       + self._connector_fields(connect_only)},
         ]
+        connecting = [{"field": "kind", "equals": "source"}, connect_only]
         blocks = [head, {"t": "choice", "id": "kind", "value": "sample" if samples else "file", "options": options},
-                  {"t": "actions", "items": [{"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}]}]
+                  {"t": "actions", "items": [{"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
+                                             {"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}]}]
         if self.done and SESSION.source is not None:
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
             blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
@@ -315,17 +316,82 @@ class ChooseData(Screen):
             self.kit_said = SESSION.said or self.kit_said
         return variable
 
-    def _connect(self, v: dict) -> str:
-        """Connect an external source with the kit's own `exakit connect` (nb.connect_source): the password goes to it
-        on standard input, never into a cell, a log or this card. Returns the new schema (VS_<NAME>)."""
+    @staticmethod
+    def _fid(connector: str, name: str) -> str:
+        return f"cx_{connector.replace('-', '_')}__{name}"
+
+    def _connector_fields(self, connect_only: dict) -> list[dict]:
+        """Every connector's own inputs, as `exakit connect` asks them (its connector.json, via nb.connector_inputs):
+        label, required (*), default, choices, password or key file. Only the chosen connector's are shown."""
+        fields: list[dict] = []
+        for cid, form in self.forms.items():
+            only = [connect_only, {"field": "connector", "equals": cid}]
+            for spec in form.get("inputs", []):
+                label = spec["label"].split(" - ")[0] + (" *" if spec["required"] else "")
+                field = {"id": self._fid(cid, spec["name"]), "label": label, "value": spec["default"], "show_if": only,
+                         "placeholder": spec["default"] or ("path to the file" if spec["file"] else "")}
+                if spec["kind"] == "secret":
+                    field.update(type="password", value="",
+                                 label=label + " (goes to the kit only, never shown, saved or logged here)")
+                elif spec["choices"]:
+                    field.update(type="select", options=[{"value": c, "label": c} for c in spec["choices"]])
+                else:
+                    field.update(type="text")
+                fields.append(field)
+            if form.get("forms"):
+                fields.append({"id": self._fid(cid, "url"), "type": "text", "show_if": only, "optional": True,
+                               "label": "Or paste its connection string (fills the inputs it holds)",
+                               "placeholder": form["forms"][0]})
+            notes = ([f"Access the reader needs: {form['access']}."] if form.get("access") else []) + form.get("tips", [])[:1]
+            if notes:
+                fields.append({"id": self._fid(cid, "note"), "type": "note", "show_if": only, "v": " ".join(notes)})
+        return fields
+
+    def _source_inputs(self, v: dict) -> tuple[str, str, dict, str]:
+        """The chosen connector, the source's name, its settings for nb.connect_source / nb.test_source (url=,
+        password_file=, and each input by name) and the typed password, from the card's fields."""
         connector = str(v.get("connector") or "").strip()
+        form = self.forms.get(connector)
+        if not form:
+            raise ValueError("Choose the kind of source first.")
         name = str(v.get("src_name") or "").strip().lower()
-        url = str(v.get("src_url") or "").strip()
-        if not (connector and name and url):
-            raise ValueError("To connect a source, choose its kind, give it a name and paste its connection string.")
-        typed = str(v.get("src_password") or "")
+        if not name:
+            raise ValueError("Give the source a name (lower case, e.g. sales): its tables appear as VS_<NAME>.")
+        url = str(v.get(self._fid(connector, "url")) or "").strip()
+        settings: dict = {"url": url} if url else {}
+        password, missing = "", []
+        for spec in form["inputs"]:
+            value = str(v.get(self._fid(connector, spec["name"])) or "").strip()
+            if spec["kind"] == "secret":
+                password = str(v.get(self._fid(connector, spec["name"])) or "")
+            elif spec["kind"] == "secret-file":
+                if value:
+                    settings["password_file"] = value
+            elif value and value != spec["default"]:
+                settings[spec["name"]] = value
+            if spec["required"] and not value and spec["kind"] != "secret" and not url:
+                missing.append(spec["label"].split(" - ")[0])
+        if missing:
+            raise ValueError("Fill in: " + ", ".join(missing) + (" (or paste a connection string)" if form.get("forms") else ""))
+        return connector, name, settings, password
+
+    def on_test_source(self, v: dict) -> None:
+        """Test connection: the kit's own check of the inputs, then whether this computer reaches the source
+        (nb.test_source). Nothing is connected or changed, and no password is needed."""
+        connector, name, settings, _ = self._source_inputs(v)
+        result = actions.run("data.test_source", connector=connector, name=name, settings=settings)
+        self.kit_said = SESSION.said or self.kit_said
+        lines = "; ".join(f"{'✓' if ok else '✗'} {what}: {said}" for what, ok, said in result.checks)
+        self.flash = {"kind": "ok" if result.ok else "error",
+                      "v": (f"Ready to connect {name}. " if result.ok else "Not ready yet. ") + lines}
+
+    def _connect(self, v: dict) -> str:
+        """Connect an external source with the kit's own `exakit connect` (nb.connect_source), from the connector's
+        own inputs: the password goes to it on standard input, never into a cell, a log or this card. Returns the new
+        schema (VS_<NAME>)."""
+        connector, name, settings, typed = self._source_inputs(v)
         # The card's box answers the kit's own password question (a source without one: Enter, empty).
-        schema = actions.run("data.connect_source", connector=connector, name=name, url=url,
+        schema = actions.run("data.connect_source", connector=connector, name=name, settings=settings,
                              secret={"secret": lambda _question: typed})
         self.kit_said = SESSION.said or self.kit_said
         if schema and schema not in self.sources:

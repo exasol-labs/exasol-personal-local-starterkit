@@ -207,8 +207,10 @@ def _(mo):
     mo.md(r"""
     **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
 
-    1. Not connected yet? Fill in `CONNECTOR`, `SOURCE_NAME` and `SOURCE_URL` (the source's connection string). The password is asked in a hidden box. On a Mac, use `192.168.64.1` for a database on this computer.
-    2. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
+    1. Not connected yet? Pick `CONNECTOR`; `connector_forms[CONNECTOR]["inputs"]` lists what `exakit connect` asks for it (the same form as the card). Fill in `SOURCE_NAME` and `SOURCE_INPUTS` by those names, or `{"url": ...}` with its connection string. On a Mac, use `192.168.64.1` for a database on this computer.
+    2. Test it: the kit checks the inputs and this computer tries the source's host and port. Nothing is changed and no password is needed.
+    3. Connect it: the password is asked in a hidden box and goes to the kit only.
+    4. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
     """)
     return
 
@@ -217,10 +219,24 @@ def _(mo):
 def _(nb):
     # Cell tags: load
     connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
+    connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
     CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
     SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
-    SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
-    connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL) if CONNECTOR else None
+    SOURCE_INPUTS = {}  # e.g. {"host": "192.168.64.1", "database": "shop", "user": "reader"}, or {"url": "postgres://reader@192.168.64.1:5432/shop"}
+    return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
+
+
+@app.cell
+def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
+    # Cell tags: load
+    source_test = nb.test_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
+    return
+
+
+@app.cell
+def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
+    # Cell tags: load
+    connected = nb.connect_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
     return (connected,)
 
 

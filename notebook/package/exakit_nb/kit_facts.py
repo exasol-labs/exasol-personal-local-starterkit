@@ -95,6 +95,31 @@ def connectors() -> list[dict[str, Any]]:
     return [{k: r.get(k) for k in ("id", "name", "summary", "aliases", "tier")} for r in rows]
 
 
+def connector_inputs(connector: str) -> dict[str, Any]:
+    """What `exakit connect <connector>` asks, from the kit's own definition of it (the file its connect form reads):
+    {id, name, summary, tier, access, tips, forms, inputs}. Each input is {name, label, kind, required, default,
+    choices, secret, file, hint}: ``secret`` is a password or key (never a cell's text), ``file`` a path to a file.
+    ``forms`` are the connection-string shapes it also takes (``url=``). The connector may be named by id or alias."""
+    root = _kit_root()
+    if root is None:
+        raise ValueError("The kit copy was not found, so its connectors cannot be read (EXAKIT_NB_KIT).")
+    wanted = str(connector or "").strip().lower()
+    rows = json.loads((root / "setup" / "virtual-schemas" / "catalog.json").read_text(encoding="utf-8")).get("connectors", [])
+    row = next((r for r in rows if wanted == r["id"] or wanted in [a.lower() for a in r.get("aliases") or []]), None)
+    if row is None:
+        raise ValueError(f"No connector {connector!r}: the kit has {', '.join(r['id'] for r in rows)}.")
+    doc = json.loads((root / "setup" / "virtual-schemas" / "connectors" / row["id"] / "connector.json")
+                     .read_text(encoding="utf-8"))
+    inputs = [{"name": spec["name"], "label": spec.get("label", spec["name"]), "kind": spec["kind"],
+               "required": bool(spec.get("required")), "default": "" if spec.get("default") is None else str(spec["default"]),
+               "choices": [str(c) for c in spec.get("choices") or []],
+               "secret": spec["kind"] in ("secret", "secret-file"), "file": spec["kind"] in ("ca-file", "secret-file"),
+               "hint": list(spec.get("hint") or [])} for spec in doc.get("inputs", [])]
+    return {"id": row["id"], "name": row.get("name") or doc.get("name"), "summary": row.get("summary") or "",
+            "tier": row.get("tier") or "", "access": doc.get("access") or "", "tips": list(doc.get("tips") or []),
+            "forms": list((doc.get("paste") or {}).get("forms") or []), "inputs": inputs}
+
+
 def addons() -> list[dict[str, Any]]:
     """The marketplace's add-ons as `exakit marketplace --list --json` reports them: {id, name, about, status,
     installed, version, url}."""

@@ -190,14 +190,22 @@ function render({ model, el }) {
   const collect = () => ({ ...st.fields, ...st.choice, roles: { ...(st.roles || {}) }, slots: { ...(st.slots || {}) } });
   const mapDirty = () => !!st.mapInit && JSON.stringify({ r: st.roles, s: st.slots }) !== st.mapInit;
 
-  const send = (id, values = {}) => {
+  // A field's or a button's condition: one {field, equals}, or a list that must all hold (a choice or a field).
+  const shown = (cond) => !cond || (Array.isArray(cond) ? cond : [cond]).every((c) =>
+    String(st.fields[c.field] ?? st.choice[c.field] ?? "") === String(c.equals));
+
+  const send = (id, values = {}, opts = {}) => {
     if (ui.busy) return;
     ui.busy = id;
     draw();
     ui.fading.clear(); ui.dismissed.clear();
+    if (opts.noSecret) {               // an action that needs no password is never sent one, and keeps it typed
+      values = { ...values };
+      st.secret.forEach((k) => { delete values[k]; });
+    }
     model.send({ type: "event", id, values });
     // A password goes to Python once and is not kept in the card (nor drawn back into its box).
-    st.secret.forEach((k) => { st.fields[k] = ""; });
+    if (!opts.noSecret) st.secret.forEach((k) => { st.fields[k] = ""; });
   };
 
   function button(label, id, opts = {}) {
@@ -206,7 +214,7 @@ function render({ model, el }) {
       return h("a", { class: `guide-btn ${opts.primary ? "guide-btn-primary" : "guide-btn-quiet"}`, href: opts.href, target: opts.target || "_blank", rel: "noopener" }, label, icon("arrow"));
     }
     return h("button", { type: "button", class: `guide-btn ${opts.primary ? "guide-btn-primary" : "guide-btn-quiet"}`, disabled: !!ui.busy,
-      onClick: opts.onClick || (() => send(id, opts.values ? opts.values() : {})) },
+      onClick: opts.onClick || (() => send(id, opts.values ? opts.values() : {}, { noSecret: !!opts.noSecret })) },
       busy ? h("span", { class: "guide-spinner" }) : null, busy ? (opts.busyLabel || "Working…") : label);
   }
 
@@ -319,9 +327,9 @@ function render({ model, el }) {
       return h("div", { class: "guide-nextrow" }, h("a", { class: "guide-btn guide-btn-primary", href: labUrl(b.path), onClick: (e) => openInLab(b.path, e) }, b.v, icon("arrow")));
     },
     actions(b) {
-      return h("div", { class: "guide-actions" }, b.items.map((a) => {
+      return h("div", { class: "guide-actions" }, b.items.filter((a) => shown(a.show_if)).map((a) => {
         const label = a.changed_label ? (mapDirty() ? a.changed_label : (a.unchanged_label || a.label)) : a.label;
-        return button(label, a.id, { primary: a.primary, busyLabel: a.busy, values: collect });
+        return button(label, a.id, { primary: a.primary, busyLabel: a.busy, values: collect, noSecret: !!a.no_secret });
       }));
     },
     choice(b) {
@@ -684,7 +692,8 @@ function render({ model, el }) {
 
   function field(f) {
     if (st.fields[f.id] === undefined) st.fields[f.id] = f.value ?? "";
-    if (f.show_if && st.fields[f.show_if.field] !== f.show_if.equals) return null;
+    if (!shown(f.show_if)) return null;
+    if (f.type === "note") return h("p", { class: "guide-p guide-muted guide-field-note" }, f.v);
     const opt = (o) => h("option", { value: o.value, selected: String(st.fields[f.id]) === String(o.value) ? "selected" : null }, o.hint ? `${o.label} · ${o.hint}` : o.label);
     const grouped = () => {
       const out = [], groups = new Map();

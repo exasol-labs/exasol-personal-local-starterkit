@@ -124,10 +124,41 @@ class ParityTest(unittest.TestCase):
 
     def test_a_secret_is_never_in_the_code_shown(self):
         code = self.actions.code("data.connect_source", connector="postgresql", name="sales",
-                                 url="postgres://reader@db.example.com/shop", secret={"secret": lambda _q: "s3cret"})
+                                 settings={"url": "postgres://reader@db.example.com/shop"},
+                                 secret={"secret": lambda _q: "s3cret"})
         self.assertNotIn("s3cret", code)
         self.assertNotIn("__secret__", code)
         self.assertEqual('connected = nb.connect_source("postgresql", "sales", url="postgres://reader@db.example.com/shop")', code)
+
+
+class SourceFormTest(unittest.TestCase):
+    """The external source's form is the kit's own: every connector's inputs from its connector.json."""
+
+    def test_every_connector_has_its_inputs(self):
+        nb = importlib.import_module("exakit_nb")
+        for connector in nb.connectors():
+            form = nb.connector_inputs(connector["id"])
+            self.assertEqual(connector["id"], form["id"])
+            self.assertTrue(form["inputs"], connector["id"])
+            for spec in form["inputs"]:
+                self.assertTrue(spec["label"] and spec["kind"], (connector["id"], spec))
+        self.assertEqual("postgresql", nb.connector_inputs("pg")["id"])           # an alias, as exakit connect takes
+        self.assertEqual("secret-file", next(i["kind"] for i in nb.connector_inputs("bigquery")["inputs"] if i["file"]
+                                             and i["secret"]))
+
+    def test_a_test_checks_the_inputs_then_the_network_and_sends_no_password(self):
+        sources = importlib.import_module("exakit_nb.sources")
+        with mock.patch.object(sources, "connect_source") as plan, \
+             mock.patch.object(sources.socket, "create_connection", side_effect=OSError(61, "Connection refused")):
+            result = sources.test_source("postgresql", "sales", host="db.example.com", database="shop", user="reader")
+        self.assertTrue(plan.call_args.kwargs["dry_run"])                 # the kit's own check, nothing connected
+        self.assertNotIn("password", plan.call_args.kwargs)
+        self.assertFalse(result.ok)
+        self.assertEqual("this computer reaches db.example.com:5432", result.checks[1][0])    # the connector's own port
+        with mock.patch.object(sources, "connect_source", side_effect=sources.SourceProblem("sales was not connected: "
+                                                                                              "host is not a host name")):
+            result = sources.test_source("postgresql", "sales", host="bad host")
+        self.assertEqual([("the kit's check of the inputs", False, "host is not a host name")], result.checks)
 
 
 class RunIsTheCodeTest(unittest.TestCase):
@@ -303,16 +334,36 @@ class CardTest(unittest.TestCase):
 
     def test_connecting_a_source_keeps_the_password_out_of_the_code(self):
         understand = importlib.import_module("exakit_guide.screens.understand")
+        nb = importlib.import_module("exakit_nb")
         card = understand.ChooseData.__new__(understand.ChooseData)
         card.sources, card.kit_said = [], ""
+        card.forms = {"postgresql": nb.connector_inputs("postgresql")}          # the kit's own form for it
+        f = card._fid
         with mock.patch.object(understand.actions, "run", return_value="VS_SALES") as run:
-            schema = card._connect({"connector": "postgresql", "src_name": "Sales", "src_password": "s3cret",
-                                    "src_url": "postgres://reader@db.example.com:5432/shop"})
+            schema = card._connect({"connector": "postgresql", "src_name": "Sales", f("postgresql", "password"): "s3cret",
+                                    f("postgresql", "host"): "db.example.com", f("postgresql", "database"): "shop",
+                                    f("postgresql", "user"): "reader", f("postgresql", "port"): "5432",
+                                    f("postgresql", "tls"): "require"})
         self.assertEqual("VS_SALES", schema)
         kwargs = run.call_args.kwargs
         self.assertEqual("s3cret", kwargs["secret"]["secret"]("Password"))
+        # Each input by its own name; one left at the kit's default (port 5432) is not repeated.
+        self.assertEqual({"host": "db.example.com", "database": "shop", "user": "reader", "tls": "require"}, kwargs["settings"])
         actions = importlib.import_module("exakit_guide.actions")
-        self.assertNotIn("s3cret", actions.code("data.connect_source", **kwargs))
+        shown = actions.code("data.connect_source", **kwargs)
+        self.assertNotIn("s3cret", shown)
+        self.assertEqual('connected = nb.connect_source("postgresql", "sales", host="db.example.com", database="shop", '
+                         'user="reader", tls="require")', shown)
+
+    def test_a_missing_required_input_is_named_before_anything_runs(self):
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        nb = importlib.import_module("exakit_nb")
+        card = understand.ChooseData.__new__(understand.ChooseData)
+        card.forms = {"postgresql": nb.connector_inputs("postgresql")}
+        with mock.patch.object(understand.actions, "run") as run:
+            with self.assertRaisesRegex(ValueError, "Fill in: Host name or address, Database, Reader account"):
+                card._connect({"connector": "postgresql", "src_name": "sales"})
+        run.assert_not_called()
 
     def test_run_logs_exactly_what_it_ran_and_returns_the_result(self):
         actions = importlib.import_module("exakit_guide.actions")

@@ -14,15 +14,17 @@ import getpass
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Any, Callable
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 from ._kit import exakit_command
 
-__all__ = ["SourceProblem", "clean_path", "clean_text", "connect_source"]
+__all__ = ["SourceProblem", "SourceTest", "clean_path", "clean_text", "connect_source", "test_source"]
 
 MAC_HOST = "192.168.64.1"           # where the database (in its VM) reaches this Mac
 LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
@@ -186,6 +188,78 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     schema = str(answer.get("schema") or _schema_name(name))
     print(f"Connected: {schema}. Set SOURCE = \"{schema}.<TABLE>\"; nb.load_source(connection, \"{schema}\") lists its tables.")
     return schema
+
+
+@dataclass
+class SourceTest:
+    """What test_source found, one check per line: (what was checked, passed, what it said)."""
+
+    connector: str
+    name: str
+    checks: list[tuple[str, bool, str]] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return bool(self.checks) and all(passed for _, passed, _ in self.checks)
+
+    def __bool__(self) -> bool:
+        return self.ok
+
+    def __str__(self) -> str:
+        lines = [f"{'ok  ' if passed else 'FAIL'}  {what}: {said}" for what, passed, said in self.checks]
+        verdict = (f"Ready: nb.connect_source({self.connector!r}, {self.name!r}, ...) connects it." if self.ok
+                   else "Not ready: fix the line marked FAIL, then test again.")
+        return "\n".join(lines + [verdict])
+
+    def _repr_html_(self) -> str:
+        import html
+
+        rows = "".join(f"<tr><td>{'✓' if passed else '✗'}</td><td>{html.escape(what)}</td><td>{html.escape(said)}</td></tr>"
+                       for what, passed, said in self.checks)
+        return f"<table>{rows}</table><p>{html.escape(str(self).splitlines()[-1])}</p>"
+
+
+def test_source(connector: str, name: str, url: str | None = None, *, password_file: str | Path | None = None,
+                timeout: float = 5, **settings: Any) -> SourceTest:
+    """Test a source before connecting it, changing nothing: first the kit's own check of every input
+    (`exakit connect ... --dry-run`), then whether this computer reaches the source's host and port. No password is
+    needed or sent. The sign-in itself is checked by nb.connect_source, from the database (exakit source check)."""
+    result = SourceTest(str(connector), str(name))
+    try:
+        connect_source(connector, name, url, password_file=password_file, dry_run=True, show=False, **settings)
+        result.checks.append(("the kit's check of the inputs", True, "every input is complete and well formed"))
+    except SourceProblem as problem:
+        result.checks.append(("the kit's check of the inputs", False, str(problem).replace(f"{name} was not connected: ", "")))
+        print(result)
+        return result
+    host = clean_text(settings.get("host") or "")
+    port = str(settings.get("port") or "").strip()
+    if url and not host:
+        try:
+            parts = urlsplit(clean_text(url)[5:] if clean_text(url).lower().startswith("jdbc:") else clean_text(url))
+            host, port = parts.hostname or "", str(parts.port or port or "")
+        except ValueError:
+            host = ""
+    if host and not port:
+        from .kit_facts import connector_inputs
+
+        try:
+            port = next((i["default"] for i in connector_inputs(connector)["inputs"] if i["name"] == "port"), "")
+        except (OSError, ValueError):
+            port = ""
+    if host and port.isdigit():
+        target = MAC_HOST if host.strip().lower().strip("[]") in LOOPBACK else host
+        try:
+            with socket.create_connection((target, int(port)), timeout=timeout):
+                result.checks.append((f"this computer reaches {target}:{port}", True, "the port answered"))
+        except OSError as error:
+            reason = getattr(error, "strerror", None) or type(error).__name__
+            result.checks.append((f"this computer reaches {target}:{port}", False,
+                                  f"{reason}: check the address, the port, and that the source allows this computer"))
+    else:
+        result.checks.append(("network", True, "no host and port to try here (a cloud service): connecting checks it"))
+    print(result)
+    return result
 
 
 def _shown(args: list[str]) -> list[str]:
