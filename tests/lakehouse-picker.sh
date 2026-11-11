@@ -151,7 +151,7 @@ check "the pick reaches the form as presets (exakit_vs_preset)" \
 pick "${LAKE}jjj \\r"
 check "...Glue's implied files too" \
     "PRESET=lakehouse catalog=glue;lakehouse files=s3" "$(printf '%s\n' "$PICK_OUT" | grep '^PRESET=')"
-pick 'jjjjjjjj \\r'
+pick 'jjjjjjjj \r'
 check "...and nothing for a source without a subtree" "PRESET=" "$(printf '%s\n' "$PICK_OUT" | grep '^PRESET=')"
 
 printf '\n== the subtree is the lakehouse connector'"'"'s own settings ==\n'
