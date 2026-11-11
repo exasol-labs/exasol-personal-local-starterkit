@@ -4291,7 +4291,7 @@ function Invoke-CmdInfoJson {
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
-    $pwStdin = $false
+    $pwStdin = $false; $setUri = ""; $pastedSecret = ""
     $script:ExakitVsAssumeYes = $false
     # This command's own public IP only: an earlier command's answer reaches
     # later ones through the processes it started, and could name a network
@@ -4316,7 +4316,10 @@ function Invoke-CmdConnect {
             if ($key -in @("password", "passwd", "pwd", "secret", "token", "key_file")) {
                 Deny-ExakitVsInput "--set $key=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." "--set $key gives a credential as an argument, where other users can read it in the process list" "give it with --password-file <file> or pipe it in with --password-stdin"
             }
-            $sets += @("--set", $pair); $given += $key
+            # A URI with user[:password]@ is a connection string: read as
+            # --url is, its credential taken out and used.
+            if ($key -eq "uri" -and $pair.Substring(4).Contains("@")) { $setUri = $pair.Substring(4) }
+            else { $sets += @("--set", $pair); $given += $key }
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
@@ -4333,6 +4336,10 @@ function Invoke-CmdConnect {
         else { $source = $arg }
     }
     if ($pwStdin -and $pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
+    if ($setUri -and $url) { Deny-ExakitVsInput "--url and --set uri=... both give the connection string; use one." "--url and --set uri were both given" "give the connection string one way: --url or --set uri=..." }
+    # A credential from the command line's own options wins over one in a
+    # connection string (Invoke-ExakitVsPaste -Given).
+    $pwGiven = ($pwStdin -or [bool]$pwFile)
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
@@ -4342,21 +4349,29 @@ function Invoke-CmdConnect {
     if ($pwStdin) { $stdinSecret = Read-ExakitVsStdinSecret }
     # A pasted connection string fills what it names, for every path below. It
     # goes to the engine on stdin (base64, as a secret does), never as an
-    # argument; its pairs go BEFORE the command line's --set, so those win.
+    # argument; its pairs go BEFORE the command line's --set, so those win. The
+    # credential it holds where the connector's stands is used, not asked again
+    # (unless --password-file or --password-stdin gives one); given on the
+    # command line it is in the shell history, and a line says so.
+    $pasteAs = ""
+    if ($setUri) { $url = $setUri; $setUri = $null; $pasteAs = "uri" }
     if ($url) {
         if (-not $source) { Deny-ExakitVsInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" "--url needs the source it is for" "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
         if ($json) {
             # Its notes go to the log; a refusal is the answer, as it stands.
-            $pasted = Invoke-ExakitVsEngine -Arguments @("--json", "paste", $source, "--base64") -Secret $url
+            $pasted = Invoke-ExakitVsPaste -Connector $source -Text $url -As $pasteAs -Given:$pwGiven -Json
             $url = $null
             if ($pasted.Code -ne 0) { foreach ($line in $pasted.Lines) { Write-Output $line }; Exit-ExakitVs $pasted.Code }
             $answer = (@($pasted.Lines) -join "`n") | ConvertFrom-Json
+            # stdout is the one JSON object: the shell-history line goes to stderr.
+            if ($pasted.Secret) { [Console]::Error.WriteLine("      ! The password from the command line is now in your shell history - next time paste it at the prompt or use --password-file.") }
         } else {
-            $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
+            $pasted = Invoke-ExakitVsPaste -Connector $source -Text $url -As $pasteAs -Given:$pwGiven
             $url = $null
             $answer = Show-ExakitVsLines -Lines $pasted.Lines
             if ($pasted.Code -ne 0) { Exit-ExakitVs $pasted.Code }
         }
+        $pastedSecret = $pasted.Secret; $pasted = $null
         $urlSets = @()
         if ($answer -and $answer.values) {
             foreach ($p in @($answer.values.PSObject.Properties)) { $urlSets += @("--set", "$($p.Name)=$($p.Value)"); $given += $p.Name }
@@ -4369,7 +4384,7 @@ function Invoke-CmdConnect {
     # A person at a console gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if (-not $dry -and -not $json -and -not $live -and (Test-ExakitVsTuiOk)) {
-        Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
+        Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets -Secret $pastedSecret)
     }
     # --json never asks: a console is as good as none.
     $interactive = (-not $json) -and (Test-ExakitInteractive)
@@ -4398,8 +4413,10 @@ function Invoke-CmdConnect {
     }
     if ($interactive) { $script:ExakitVsFor = Get-ExakitVsLabel $connector }
     if ($ask -and $given.Count -eq 0) {
-        $pasted = Read-ExakitVsLinePaste -Connector $connector
+        $pasted = Read-ExakitVsLinePaste -Connector $connector -Given:$pwGiven
         $sets = @($pasted.Sets) + $sets; $given += @($pasted.Names)
+        if ($pasted.Secret) { $pastedSecret = $pasted.Secret }
+        $pasted = $null
     }
     if ($ask) { Write-ExakitVsLegend }
     # With --json a missing name is the plan's refusal, after the gate, as
@@ -4432,7 +4449,7 @@ function Invoke-CmdConnect {
     # A connected source with nothing else given and a credential to come is a
     # re-point of the credential alone, not "unchanged": the plan is told.
     $givenFlag = @()
-    if ($live -and ($pwStdin -or $pwFile)) { $givenFlag = @("--secret-given") }
+    if ($live -and ($pwStdin -or $pwFile -or $pastedSecret)) { $givenFlag = @("--secret-given") }
     $action = ""
     if ($json) {
         # The plan checks every input before the credential is read; a refusal,
@@ -4491,13 +4508,15 @@ function Invoke-CmdConnect {
     if ($secretSpec) {
         $what = ("" + $secretSpec.label).ToLower()
         if ($pwStdin) { $secret = $stdinSecret }
+        # Taken out of the pasted connection string: not asked again.
+        elseif (-not $pwFile -and $pastedSecret) { $secret = $pastedSecret }
         else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }
         if (-not $secret) { Deny-ExakitVsInput "No $what was given (use --password-file or --password-stdin)." "no $what was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
     } else {
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
     }
-    $secret = $null; $stdinSecret = $null
+    $secret = $null; $stdinSecret = $null; $pastedSecret = $null
     if ($json) {
         foreach ($line in $script:ExakitVsLastLines) { Write-Output $line }
         Exit-ExakitVs $code

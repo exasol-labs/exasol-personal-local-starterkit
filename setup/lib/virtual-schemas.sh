@@ -298,7 +298,7 @@ _exakit_vs_secret_failed() {
 _exakit_vs_quiet() {
     case "$-" in *x*) { set +x; } 2>/dev/null ;; esac
     unset EXAKIT_VS_STDIN_SECRET _cc_secret _cs_secret _evx_secret _evo_secret _evo_v _EVH_LINE _EVT_ANSWER \
-        _eap_url _etf_v _erh_value
+        _eap_url _etf_v _erh_value _EVP_SECRET
     # This command's own answers only. A public IP looked up by an earlier
     # command reaches later ones through the processes it started (a restart's
     # `exakit start` brings back the add-on services with it), and could name a
@@ -919,12 +919,13 @@ _exakit_vs_paste_masked() {
 }
 
 # _exakit_vs_paste_typed — the engine's paste lines on stdin, for a string typed
-# at a prompt: its credential note (a WARN line) ends by saying the string was on
-# the command line, which a typed one was not, so that sentence is dropped. The
-# RESULT line, which repeats the notes, is left whole. ⇄ twin:
+# at a prompt: its credential notes (WARN lines) say the string was on the
+# command line, which a typed one was not, so the shell-history line and that
+# sentence are dropped. The RESULT line, which repeats the notes, is left
+# whole. ⇄ twin:
 # Format-ExakitVsPasteTyped.
 _exakit_vs_paste_typed() {
-    sed '/^WARN /s/ The string was on the command line.*$//'
+    sed -e '/^WARN The password from the command line/d' -e '/^WARN /s/ The string was on the command line.*$//'
 }
 
 # _exakit_vs_ask_paste <connector> — the line-by-line twin of the form's first
@@ -1221,8 +1222,11 @@ _exakit_vs_tui_frame() {
             # The summary's number takes the tick's place, in as many columns.
             [ -n "${3:-}" ] && printf -v _evf_lead ' %s%2d%s  ' "$UI_ACCENT" $(( _evf_i + 1 )) "$UI_RESET"
             _evf_val="${_EVT_VAL[$_evf_i]}"
+            _evf_from=""; [ -n "${_EVT_FROM[$_evf_i]:-}" ] && _evf_from=" (from the string)"
             if [ "$_evf_kind" = secret ]; then
-                if [ -n "$_evf_val" ]; then _evf_val="(given, hidden)"; else _evf_val="(read from a file)"; fi
+                # Taken out of a pasted connection string: said in one.
+                if [ -n "$_evf_from" ]; then _evf_val="(from the string, hidden)"; _evf_from=""
+                elif [ -n "$_evf_val" ]; then _evf_val="(given, hidden)"; else _evf_val="(read from a file)"; fi
             fi
             # Emptied with "-": the default is what the plan will use.
             [ -n "$_evf_val" ] || _evf_val="${_EVT_DEF[$_evf_i]:-(none)}"
@@ -1233,7 +1237,6 @@ _exakit_vs_tui_frame() {
                     auto:*) _evf_val="auto (drafted from ${_EVT_VAL[$_evf_i]#auto:})" ;;
                 esac
             fi
-            _evf_from=""; [ -n "${_EVT_FROM[$_evf_i]:-}" ] && _evf_from=" (from the string)"
             # Too narrow for both: the mark goes first, then the value is cut.
             [ $(( ${#_evf_val} + ${#_evf_from} )) -le "$_evf_room" ] || _evf_from=""
             _evf_plain="$(_exakit_vs_tui_fit "$_evf_val" "$_evf_room")"
@@ -1695,14 +1698,29 @@ _exakit_vs_tui_choose() {
     _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 3 ))) ))
 }
 
+# _exakit_vs_tui_secret_from <value> — the form's credential field answered by a
+# pasted connection string: given, marked "from the string" (the panel shows
+# "(from the string, hidden)") and not asked. Twin of Set-ExakitVsTuiSecretFrom.
+_exakit_vs_tui_secret_from() {
+    _ets_f=0
+    while [ "$_ets_f" -lt "$_EVT_NF" ]; do
+        if [ "${_EVT_KIND[$_ets_f]}" = secret ]; then
+            _EVT_VAL[$_ets_f]="$1"; _EVT_DONE[$_ets_f]=1; _EVT_FROM[$_ets_f]=1
+            return 0
+        fi
+        _ets_f=$(( _ets_f + 1 ))
+    done
+}
+
 # _exakit_vs_tui_paste — the form's first question, for a connector that reads a
 # connection string (its paste block), under a hint and one example per line:
 # read hidden, the string goes to the engine's paste on stdin, never in argv,
 # and is not kept. It is shown back with its credentials masked by the engine
 # ("Read: ..."), and one key decides: Enter uses it, e asks for it again, Esc or
 # n types the fields instead. What it names is answered, marked "from the
-# string" and not asked; the engine's notes (a credential in it ignored, to be
-# asked for hidden) and the masked string stay under the panel. A string it
+# string" and not asked - its credential too, "(from the string, hidden)",
+# unless --password-file gives one; the engine's notes and the masked string
+# stay under the panel. A string it
 # cannot read is said, in the engine's words, and asked again; Enter types the
 # fields instead. Returns 1 at end of input. Twin of Invoke-ExakitVsTuiPaste.
 _exakit_vs_tui_paste() {
@@ -1734,10 +1752,18 @@ EOF
             return 1
         fi
         [ -n "$_EVT_ANSWER" ] || return 0
-        printf '%s' "$_EVT_ANSWER" | exakit_vs_engine paste "$_evo_id" > "$_EVT_DIR/paste" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        # The string's credential, where the connector's stands, lands in
+        # this run's own folder (owner-only) - unless --password-file gives one.
+        if [ -n "$_evo_pwfile" ]; then
+            printf '%s' "$_EVT_ANSWER" | exakit_vs_engine paste "$_evo_id" --credential-given > "$_EVT_DIR/paste" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        else
+            : > "$_EVT_DIR/paste.secret"; chmod 600 "$_EVT_DIR/paste.secret"
+            printf '%s' "$_EVT_ANSWER" | exakit_vs_engine paste "$_evo_id" --secret-out "$_EVT_DIR/paste.secret" > "$_EVT_DIR/paste" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        fi
         _etp_rc=$?
         _EVT_ANSWER=""
         if [ "$_etp_rc" -ne 0 ]; then
+            rm -f "$_EVT_DIR/paste.secret"
             _etp_why="$(sed -n 's/^FAIL //p' "$_EVT_DIR/paste" | head -1)"
             [ -n "$_etp_why" ] || _etp_why="the connection string could not be read"
             continue
@@ -1746,9 +1772,9 @@ EOF
         _exakit_vs_tui_say "$UI_DIM$UI_BULLET$UI_RESET" "Read: $_etp_masked"
         _exakit_vs_tui_choose "$_etp_c" "$UI_ASK$_etp_c$UI_RESET"
         case "$_EVK" in
-            e|E) rm -f "$_EVT_DIR/paste"; continue ;;
-            n|N|esc) rm -f "$_EVT_DIR/paste"; return 0 ;;
-            eof) rm -f "$_EVT_DIR/paste"; return 1 ;;
+            e|E) rm -f "$_EVT_DIR/paste" "$_EVT_DIR/paste.secret"; continue ;;
+            n|N|esc) rm -f "$_EVT_DIR/paste" "$_EVT_DIR/paste.secret"; return 0 ;;
+            eof) rm -f "$_EVT_DIR/paste" "$_EVT_DIR/paste.secret"; return 1 ;;
         esac
         _etp_pairs="$(_exakit_vs_result "$_EVT_DIR/paste" | run_python_any -c 'import json, sys
 for k, v in json.load(sys.stdin)["values"].items():
@@ -1765,6 +1791,8 @@ for k, v in json.load(sys.stdin)["values"].items():
         done <<EOF
 $_etp_pairs
 EOF
+        [ -s "$_EVT_DIR/paste.secret" ] && _exakit_vs_tui_secret_from "$(cat "$_EVT_DIR/paste.secret")"
+        rm -f "$_EVT_DIR/paste.secret"
         _EVT_NOTES="INFO Read: $_etp_masked
 $(grep -E '^(WARN|INFO) ' "$_EVT_DIR/paste" | _exakit_vs_paste_typed)"
         rm -f "$_EVT_DIR/paste"
@@ -1857,6 +1885,12 @@ PY
     done
     _evo_title="$_evo_pos of $_evo_total · $_evo_label"
     _EVT_ON_SCREEN=0
+    # A credential --url's string held (_exakit_vs_paste) answers this one
+    # form's, unless --password-file gives it.
+    if [ -n "${_EVP_SECRET:-}" ]; then
+        [ -n "$_evo_pwfile" ] || _exakit_vs_tui_secret_from "$_EVP_SECRET"
+        unset _EVP_SECRET; _EVP_SECRET=""
+    fi
     # 1. A connection string first, when the command line answered nothing but
     # the name: what it names is answered (and marked so), the rest asked next.
     _evo_asked=""; _evo_f=0
@@ -2205,7 +2239,7 @@ _exakit_vs_tui() {
     printf '\n'
     _evt_sets=""
     [ "$_evt_total" -eq 1 ] && _evt_sets="$(printf '%s\n' "${EXAKIT_VS_SETS:-}" | grep -v '^--set$' | grep -v '^$')"
-    [ "$_evt_total" -eq 1 ] || { _evt_name=""; _evt_pwfile=""; }
+    [ "$_evt_total" -eq 1 ] || { _evt_name=""; _evt_pwfile=""; _EVP_SECRET=""; }
     _evt_pos=0
     for _evt_id in "$@"; do
         _evt_pos=$(( _evt_pos + 1 ))
@@ -2344,28 +2378,49 @@ for w in p["warnings"]:
     return "$_EVT_RC"
 }
 
-# _exakit_vs_paste <connector> <string> [typed] - the inputs a pasted connection
-# string names (engine paste, the string on its stdin, never an argument), its
-# notes shown, as --set pairs put BEFORE the command line's own in EXAKIT_VS_SETS
-# - the engine's pairs() keeps the last, so an explicit --set wins - and their
-# names added to EXAKIT_VS_GIVEN, so they are not asked for again. typed: the
-# string was typed at a prompt, not given with --url (_exakit_vs_paste_typed):
-# it is shown back first, its credentials masked by the engine ("Read: ..."),
-# and one key at the terminal decides - Enter uses it, e returns 7 (paste it
-# again), Esc or n returns 6 (type the fields instead), nothing used.
+# _exakit_vs_paste <connector> <string> [typed] [input] - the inputs a pasted
+# connection string names (engine paste, the string on its stdin, never an
+# argument), its notes shown, as --set pairs put BEFORE the command line's own
+# in EXAKIT_VS_SETS - the engine's pairs() keeps the last, so an explicit --set
+# wins - and their names added to EXAKIT_VS_GIVEN, so they are not asked for
+# again. typed: the string was typed at a prompt, not given with --url
+# (_exakit_vs_paste_typed): it is shown back first, its credentials masked by
+# the engine ("Read: ..."), and one key at the terminal decides - Enter uses
+# it, e returns 7 (paste it again), Esc or n returns 6 (type the fields
+# instead), nothing used. input: the string is that input's value (--set
+# uri=...). The credential the string holds where the connector's stands is
+# taken out of it by the engine and lands in _EVP_SECRET (never exported,
+# never an argument), used as if typed at the hidden prompt - unless
+# --password-file or --password-stdin gives one (_EVP_GIVEN), which wins.
+# Given on the command line, it is in the shell history, and a line says so.
+# ⇄ twin: the --url branch of Invoke-CmdConnect and Read-ExakitVsLinePaste.
 _exakit_vs_paste() {
     _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || {
         _exakit_vs_no_tmp && return 1
         error "Could not create a temporary file."; return 1; }
+    # Owner-only (mktemp): the engine writes the string's credential here.
+    _evp_sec="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || {
+        rm -f "$_evp_out"; _exakit_vs_no_tmp && return 1
+        error "Could not create a temporary file."; return 1; }
+    set -- "$1" "$2" "${3:-}" "${4:-}" --secret-out "$_evp_sec"
+    [ -n "${_EVP_GIVEN:-}" ] && set -- "$1" "$2" "$3" "$4" --credential-given
+    [ -n "$4" ] && set -- "$@" --as "$4"
+    unset _EVP_SECRET; _EVP_SECRET=""
     if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
         # Its notes go to the log; a refusal is the answer, as it stands.
-        printf '%s' "$2" | exakit_vs_engine --json paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-        _evp_rc=$?
-        [ "$_evp_rc" -eq 0 ] || { cat "$_evp_out"; rm -f "$_evp_out"; return "$_evp_rc"; }
+        _evp_s="$2"; _evp_c="$1"; shift 4
+        printf '%s' "$_evp_s" | exakit_vs_engine --json paste "$_evp_c" "$@" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _evp_rc=$?; _evp_s=""
+        [ "$_evp_rc" -eq 0 ] || { cat "$_evp_out"; rm -f "$_evp_out" "$_evp_sec"; return "$_evp_rc"; }
         EXAKIT_VS_RESULT="$(cat "$_evp_out")"; rm -f "$_evp_out"
+        _EVP_SECRET="$(cat "$_evp_sec")"; rm -f "$_evp_sec"
+        # stdout is the one JSON object: the shell-history line goes to stderr.
+        [ -n "$_EVP_SECRET" ] && warn "The password from the command line is now in your shell history - next time paste it at the prompt or use --password-file."
     else
-        printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-        _evp_rc=$?
+        _evp_s="$2"; _evp_c="$1"; _evp_typed="$3"; shift 4
+        printf '%s' "$_evp_s" | exakit_vs_engine paste "$_evp_c" "$@" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _evp_rc=$?; _evp_s=""
+        set -- "$_evp_c" "" "$_evp_typed"
         if [ -n "${3:-}" ]; then
             if [ "$_evp_rc" -eq 0 ]; then
                 info "Read: $(_exakit_vs_paste_masked "$_evp_out")"
@@ -2377,8 +2432,8 @@ _exakit_vs_paste() {
                 done
                 printf '\n' >&2
                 case "$_EVK" in
-                    e|E) rm -f "$_evp_out"; return 7 ;;
-                    n|N|esc|eof) rm -f "$_evp_out"; return 6 ;;
+                    e|E) rm -f "$_evp_out" "$_evp_sec"; return 7 ;;
+                    n|N|esc|eof) rm -f "$_evp_out" "$_evp_sec"; return 6 ;;
                 esac
             fi
             _exakit_vs_render <(_exakit_vs_paste_typed < "$_evp_out")
@@ -2386,7 +2441,8 @@ _exakit_vs_paste() {
             _exakit_vs_render "$_evp_out"
         fi
         rm -f "$_evp_out"
-        [ "$_evp_rc" -eq 0 ] || return "$_evp_rc"
+        [ "$_evp_rc" -eq 0 ] || { rm -f "$_evp_sec"; return "$_evp_rc"; }
+        _EVP_SECRET="$(cat "$_evp_sec")"; rm -f "$_evp_sec"
     fi
     _evp_pairs="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
 for k, v in json.load(sys.stdin)["values"].items():
@@ -2455,8 +2511,8 @@ exakit_vs_guide() {
 
 cmd_connect() {
     _exakit_vs_quiet
-    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""; _cc_pwstdin=0
-    EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""
+    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""; _cc_pwstdin=0; _cc_seturi=""
+    EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""; _EVP_SECRET=""; _EVP_GIVEN=""
     # Known before anything is refused, so every refusal answers in its shape.
     for _cc_word in "$@"; do case "$_cc_word" in --json|-j) _cc_json=1 ;; esac; done
     EXAKIT_VS_JSON="$_cc_json"
@@ -2477,9 +2533,14 @@ cmd_connect() {
                        _exakit_vs_refuse 2 "--set ${2%%=*}=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." \
                            "--set ${2%%=*} gives a credential as an argument, where other users can read it in the process list" \
                            "give it with --password-file <file> or pipe it in with --password-stdin" ;; esac
-                   EXAKIT_VS_SETS="$EXAKIT_VS_SETS
+                   # A URI with user[:password]@ is a connection string: read
+                   # as --url is, its credential taken out and used.
+                   case "$2" in
+                       uri=*@*) _cc_seturi="${2#uri=}" ;;
+                       *) EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
-$2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
+$2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}" ;;
+                   esac; shift ;;
             --password-file) _cc_pwfile="${2:-}"; shift ;;
             --password-stdin) _cc_pwstdin=1 ;;
             --dry-run|-n) _cc_dry=1 ;;
@@ -2501,6 +2562,11 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done
     [ "$_cc_pwstdin" = 1 ] && [ -n "$_cc_pwfile" ] && _exakit_vs_refuse 2 "--password-stdin and --password-file both give the credential; use one." \
         "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>"
+    [ -n "$_cc_seturi" ] && [ -n "$_cc_url" ] && _exakit_vs_refuse 2 "--url and --set uri=... both give the connection string; use one." \
+        "--url and --set uri were both given" "give the connection string one way: --url or --set uri=..."
+    # A credential from the command line's own options wins over one in a
+    # connection string (_exakit_vs_paste).
+    if [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ]; then _EVP_GIVEN=1; fi
     _require_install "$_cc_json"
     exakit_init_logging
     _exakit_vs_log_mark
@@ -2511,12 +2577,16 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     [ "$_cc_pwstdin" = 1 ] && _exakit_vs_stdin_secret
     # A pasted connection string fills what it names, for every path below:
     # the terminal's panel shows those answers, --yes and --dry-run use them.
-    if [ -n "$_cc_url" ]; then
+    if [ -n "$_cc_url" ] || [ -n "$_cc_seturi" ]; then
         [ -n "$_cc_source" ] || _exakit_vs_refuse 2 "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" \
             "--url needs the source it is for" \
             "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'"
-        _exakit_vs_paste "$_cc_source" "$_cc_url" || _exakit_vs_exit $?
-        _cc_url=""
+        if [ -n "$_cc_seturi" ]; then
+            _exakit_vs_paste "$_cc_source" "$_cc_seturi" "" uri || _exakit_vs_exit $?
+        else
+            _exakit_vs_paste "$_cc_source" "$_cc_url" || _exakit_vs_exit $?
+        fi
+        _cc_url=""; _cc_seturi=""
     fi
     # A name that is a connected source is re-pointed in place, or left as it
     # is: on the line-by-line path, which asks nothing the record holds.
@@ -2594,7 +2664,7 @@ EOF
     # A connected source with nothing else given and a credential to come is a
     # re-point of the credential alone, not "unchanged": the plan is told.
     _cc_given=""
-    if [ -n "$_cc_live" ] && { [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ]; }; then _cc_given="--secret-given"; fi
+    if [ -n "$_cc_live" ] && { [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ] || [ -n "$_EVP_SECRET" ]; }; then _cc_given="--secret-given"; fi
     _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp && exit 1; die "Could not create a temporary file."; }
     _cc_action=""
     if [ "$_cc_json" = 1 ]; then
@@ -2667,6 +2737,9 @@ EOF
         fi
         if [ "$_cc_pwstdin" = 1 ]; then
             _cc_secret="$EXAKIT_VS_STDIN_SECRET"
+        elif [ -z "$_cc_pwfile" ] && [ -n "$_EVP_SECRET" ]; then
+            # Taken out of the pasted connection string: not asked again.
+            _cc_secret="$_EVP_SECRET"
         else
             _cc_secret="$(_exakit_vs_read_secret "$_cc_label" "$_cc_pwfile" "$(_exakit_vs_secret_kind "$_cc_resolved")")" \
                 || _exakit_vs_secret_failed $?
@@ -2680,7 +2753,7 @@ EOF
         _exakit_vs_run "" connect "$@"
     fi
     _cc_rc=$?
-    unset _cc_secret EXAKIT_VS_STDIN_SECRET
+    unset _cc_secret EXAKIT_VS_STDIN_SECRET _EVP_SECRET
     if [ "$_cc_rc" -eq 0 ] && [ "$_cc_json" = 0 ]; then
         _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"

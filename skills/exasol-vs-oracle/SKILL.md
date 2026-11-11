@@ -57,7 +57,8 @@ Connection-string forms, read by the form's first question and by `--url`:
 
 `tcps://` sets `tls=verify`; a plain `//` keeps it at `verify` too, with a note
 (use `--set tls=disable` if the listener offers no TCPS). A user before the `@`
-fills `user`; a password there is dropped and asked for separately. A SID
+fills `user`; a password there (`user/password@`) is the credential, taken out
+of the string and not asked again. A SID
 (`host:port:SID`) and a TNS descriptor `(DESCRIPTION=...)` are refused: give
 host, port and service with `--set` (`SELECT value FROM v$parameter WHERE name = 'service_names'`
 lists the services).

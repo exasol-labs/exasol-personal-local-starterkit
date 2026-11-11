@@ -21,14 +21,33 @@ The connector's "paste" block in connector.json says which strings it reads:
                null for "consumed, no change"}
     implied    parameters the kit sets itself: consumed without a note
     secret     more parameter names that carry a credential
+    credential where the connector's own credential (its secret input) may
+               stand in the string, in order: "userinfo" (user:password@, or
+               Oracle's user/password@) or a parameter name (lower case). The
+               first one present with a value is used; the azure style knows
+               its own (below), whatever the block says
     tls        a named rule over several parameters (sqlserver)
     instance   the refusal for a SQL Server named instance (host\\instance)
     forms      the accepted forms, for the message that refuses another one
 
 A credential in the string - user:password@, or a parameter named like one -
-is never used, stored or echoed: a note says it was ignored and asked for
-separately. Every other parameter the kit does not read is dropped by name
-(never by value). Messages never quote the string.
+is never stored or echoed: it is taken out of the string before anything
+else sees it. When it is where the connector's credential stands (the
+block's "credential"), read() gives its value, percent-decoded, as
+"secret_value" - for cli.py to write to the shell's --secret-out file, never
+to stdout, --json or the log - and the shell uses it as if it had been
+typed at the hidden credential prompt (credential="use"). When the command
+line gives the credential too (--password-file, --password-stdin;
+credential="given") that one wins and a note says the string's was not used.
+Any other credential (a presigned URL's signature, a catalog's user:secret@,
+or every credential when the caller asks for none) is not used: a note says
+it is asked for separately. An empty password (user:@) is none. Every other
+parameter the kit does not read is dropped by name (never by value).
+Messages never quote the string.
+
+The azure style's credential is the connector's own three forms: an https
+URL's whole query string is the SAS token (sv=...&sig=...), and a storage
+connection string gives its SharedAccessSignature, else its AccountKey.
 
 The answer's "masked" is the string as read with every credential value
 replaced by **** (user:****@, password=****, AccountKey=****, sig=****), the
@@ -54,6 +73,14 @@ SECRET_NOTE = ("The connection string held a credential (a password, token or ke
                "credential is asked for separately (hidden prompt, --password-file or standard input) and kept "
                "only inside the database. The string was on the command line, where other local users and the "
                "shell history can see it - if this computer is shared, change that credential.")
+# A string given on the command line (--url, --set uri=...) whose credential is
+# used: the shells drop this line for a string pasted at the hidden prompt.
+HISTORY_NOTE = ("The password from the command line is now in your shell history - next time paste it at the "
+                "prompt or use --password-file.")
+GIVEN_NOTE = ("The credential from --password-file or --password-stdin is used; the one in the connection "
+              "string is not.")
+# Where the azure style finds the connector's credential (see the docstring).
+AZURE_CREDENTIAL = ("sas", "sharedaccesssignature", "accountkey")
 
 
 def _first(text, chars):
@@ -71,6 +98,11 @@ class Reading(object):
         self.events = []
         self.dropped = []
         self.secret = False
+        # Where a credential stood (userinfo or a parameter's lower-case
+        # name) -> its value: the first of each, for credential_value().
+        self.found = {}
+        self.shown = {}
+        self.order = [c.lower() for c in block.get("credential", [])]
 
     def refuse(self, why):
         raise planner.PlanError(why)
@@ -97,10 +129,29 @@ class Reading(object):
             return False  # where a key is, not the key: OAuthPvtKeyPath
         return low in [s.lower() for s in self.block.get("secret", [])] or any(w in low for w in SECRET_WORDS)
 
+    def offer(self, where, value, shown=None):
+        """A credential stood at where (userinfo, or a parameter's lower-case
+        name, shown as it was written) with this value, already decoded; an
+        empty one is none."""
+        if value not in (None, "") and where not in self.found:
+            self.found[where] = value
+            if shown and PARAM_NAME.match(shown):
+                self.shown[where] = shown
+
+    def credential_value(self):
+        """(where, value) of the connector's credential in the string, the
+        block's "credential" order deciding; (None, None) without one."""
+        for where in self.order:
+            if self.found.get(where):
+                return where, self.found[where]
+        return None, None
+
     def userinfo(self, info, separator=":"):
         user, sep, password = info.partition(separator)
         if sep and password:
             self.secret = True
+            self.offer("userinfo", unquote(password))
+            self.userinfo_form = "user%spassword@" % separator
         self.put("user", unquote(user).strip())
 
     def host_port(self, authority):
@@ -170,13 +221,45 @@ class Reading(object):
             if not (low in mapping or low in implied or low in CONSUMED.get(rule, ())):
                 if secret:
                     self.secret = True
+                    self.offer(low, found[low], name)
                 # After a credential, a "parameter" may be the rest of a
                 # password whose & or ; was not percent-encoded (password=Abc&Xyz9):
                 # dropped like the rest, counted, never named.
                 self.drop(name if secret or not after_secret else "?")
             after_secret = after_secret or secret
 
-    def result(self, masked=""):
+    def secret_name(self):
+        """The connector's credential input (kind secret), or None."""
+        return next((s["name"] for s in self.connector["inputs"] if s["kind"] == "secret"), None)
+
+    def where_text(self, where):
+        """Where a credential stood, in words: never a name that might be a
+        piece of a password (PARAM_NAME)."""
+        if where in self.shown:
+            return self.shown[where] + "="
+        named = {"userinfo": getattr(self, "userinfo_form", "user:password@"), "sas": "the SAS query, ?sv=...&sig=..."}
+        return named.get(where, where + "=" if PARAM_NAME.match(where) else "a parameter")
+
+    def credential_notes(self, credential):
+        """The notes on the string's credential and its value (or None) for
+        credential: "use", "given" or None (see the module docstring)."""
+        where, value = self.credential_value() if self.secret_name() else (None, None)
+        if not self.secret:
+            return [], None
+        if where is None or credential not in ("use", "given"):
+            return [("WARN", SECRET_NOTE)], None
+        if credential == "given":
+            return [("INFO", GIVEN_NOTE)], None
+        notes = [("INFO", "The credential in the connection string (%s) is used, hidden: it is not asked again, "
+                          "and the string is kept without it" % self.where_text(where))]
+        others = [w for w in self.found if w != where]
+        if others:
+            notes.append(("INFO", "Not used from the connection string: %s (the credential is %s)"
+                                  % (", ".join(self.where_text(w) for w in others), self.where_text(where))))
+        notes.append(("WARN", HISTORY_NOTE))
+        return notes, value
+
+    def result(self, masked="", credential=None):
         values = {}
         for name in [s["name"] for s in self.connector["inputs"]]:
             if name not in self.values:
@@ -190,9 +273,7 @@ class Reading(object):
                 self.note("WARN", "%s from the connection string is not used: %s" % (name, problem))
                 continue
             values[name] = value
-        notes = []
-        if self.secret:
-            notes.append(("WARN", SECRET_NOTE))
+        notes, secret_value = self.credential_notes(credential)
         shown = [n for n in self.dropped if PARAM_NAME.match(n) and not self.is_secret(n)]
         hidden = len([n for n in self.dropped if not PARAM_NAME.match(n)])
         if shown:
@@ -206,7 +287,8 @@ class Reading(object):
             notes.append(("INFO", "From the connection string: %s" % ", ".join(sorted(values))))
         return {"values": values, "notes": [text for _, text in notes],
                 "dropped": [n if PARAM_NAME.match(n) else "?" for n in self.dropped], "events": notes,
-                "masked": masked}
+                "masked": masked, "credential": self.secret_name() if secret_value else None,
+                "secret_value": secret_value}
 
 
 # --- the parameters a rule reads together -------------------------------------
@@ -354,6 +436,7 @@ def style_mongodb(reading, text):
         name = unquote(segment.partition("=")[0]).strip()
         if reading.is_secret(name):
             reading.secret = True
+            reading.offer(name.lower(), unquote(segment.partition("=")[2]).strip(), name)
             reading.drop(name)
         else:
             kept.append(segment)
@@ -399,6 +482,7 @@ def style_s3(reading, text):
 
 
 def style_azure(reading, text):
+    reading.order = list(AZURE_CREDENTIAL)
     low = text.lower()
     if "://" not in text and "accountname=" in low:
         # A storage connection string: AccountName=...;AccountKey=...
@@ -423,6 +507,10 @@ def style_azure(reading, text):
         reading.put("container", container)
         if query:
             reading.secret = True
+            # The whole query is the SAS token, as Azure prints it (still
+            # percent-encoded: the connector reads a token so).
+            if "sig=" in query.lower():
+                reading.offer("sas", query.strip())
     else:
         reading.not_a_form()
     account = re.match(r"^([a-z0-9]+)\.(blob|dfs)\.core\.windows\.net$", host)
@@ -638,9 +726,13 @@ def masked(reading, text):
     return mask.result()
 
 
-def read(connector, text):
+def read(connector, text, credential=None, only=None):
     """The inputs a connection string names: {"values", "notes", "dropped",
-    "events"}. A string the connector cannot read is a PlanError that does
+    "events", "masked", "credential", "secret_value"}. credential: "use" (the
+    string's credential is the connector's, in secret_value), "given" (the
+    command line gives it) or None (see the module docstring). only: the
+    string is that input's value (--set uri=...), refused for a connector
+    without it. A string the connector cannot read is a PlanError that does
     not quote it."""
     block = connector.get("paste")
     if not block:
@@ -654,6 +746,11 @@ def read(connector, text):
     if re.search(r"[\x00-\x1f\x7f\s]", text):
         raise planner.PlanError("the connection string has a space, line break or control character in it; "
                                 "give it on one line, as the source shows it")
+    if only and only not in [s["name"] for s in connector["inputs"]]:
+        raise planner.PlanError("%s is not an input of %s" % (only, connector["id"]))
     reading = Reading(connector, block)
     STYLES[block.get("style", "url")](reading, text)
-    return reading.result(masked(reading, text))
+    answer = reading.result(masked(reading, text), credential)
+    if only and only not in answer["values"]:
+        raise planner.PlanError("%s could not be read from the value given" % only)
+    return answer

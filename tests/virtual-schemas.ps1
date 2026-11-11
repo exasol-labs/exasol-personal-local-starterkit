@@ -480,11 +480,49 @@ $childCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 $calls = @(Get-Content -LiteralPath $urlRecord -ErrorAction SilentlyContinue)
 Check "connect --url --dry-run: exit 0" 0 $childCode
-Check "...paste ran first, the string not among its arguments" "paste pg --base64" $calls[0]
+Check "...paste ran first, the string not among its arguments" "paste pg --base64 --secret-out F" ($calls[0] -replace '--secret-out \S+', '--secret-out F')
 Check "...the string's inputs come before the command line's --set, which wins" "plan postgresql --name urlps --set host=pg.example.com --set port=5433 --set database=sales --set user=reader --set tls=require --set port=5432" $calls[2]
 Check "...the password is in no argument" $false ((($calls -join "`n")).Contains("url9"))
 Check "...nor in the output" $false (((@($out) -join "`n")).Contains("url9"))
-Check "...whose note says it was not used" $true (((@($out) -join "`n")).Contains("The string was on the command line"))
+Check "...one warning: the password is used, and in the shell history" $true (((@($out) -join "`n")).Contains("The password from the command line is now in your shell history - next time paste it at the prompt or use --password-file."))
+# A password in the --url string is the credential: no prompt, non-ASCII intact.
+Remove-Item -LiteralPath $urlRecord -ErrorAction SilentlyContinue
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name urlpwps --url ("postgres://reader:" + $urlPw + "@pg.example.com/sales") --yes 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+$db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
+Check "connect --url with user:password@ --yes, no password file: exit 0, the string's password in the CONNECTION" "0 True" ("$childCode " + ($db.connections.EXAKIT_SRC_URLPWPS.secret -eq $urlPw))
+Check "...the password in no argument or output" $false (((Get-Content -Raw -LiteralPath $urlRecord) + $text).Contains("url9"))
+Check "...nor under the kit home" 0 @(Get-ChildItem -Recurse -File -LiteralPath $home2 | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName -ErrorAction SilentlyContinue) -like "*url9*" }).Count
+Check "...the secret file is gone" 0 @(Get-ChildItem -LiteralPath ([System.IO.Path]::GetTempPath()) -Filter "tmp*" -File -ErrorAction SilentlyContinue | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName -ErrorAction SilentlyContinue) -like "*url9*" }).Count
+# --password-file wins over the string's password, with one line.
+$urlPwFile = Join-Path $work "url-file.pw"
+Set-Content -LiteralPath $urlPwFile -Value "File-pw-zz4" -Encoding ASCII -NoNewline
+Remove-Item -LiteralPath $urlRecord -ErrorAction SilentlyContinue
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name urlfileps --url ("postgres://reader:" + $urlPw + "@pg.example.com/sales") --password-file $urlPwFile --yes 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+$db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
+Check "--url with a password and --password-file: exit 0, the file's credential used" "0 File-pw-zz4" ("$childCode " + $db.connections.EXAKIT_SRC_URLFILEPS.secret)
+Check "...one line says the string's is not" $true $text.Contains("The credential from --password-file or --password-stdin is used; the one in the connection string is not.")
+Check "...the engine was told" "paste pg --base64 --credential-given" @(Get-Content -LiteralPath $urlRecord)[0]
+# --set uri=... with user:password@ (MongoDB): read as --url is, not refused.
+Remove-Item -LiteralPath $urlRecord -ErrorAction SilentlyContinue
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord mongodb --name urlmgps --set ("uri=mongodb+srv://reader:" + $urlPw + "@cluster0.example.net/sample_mflix?authSource=admin") --set collection=movies --dry-run 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+$calls = @(Get-Content -LiteralPath $urlRecord -ErrorAction SilentlyContinue)
+Check "--set uri= with user:password@: not refused, exit 0" 0 $childCode
+Check "...it went to paste as the uri" "paste mongodb --base64 --as uri --secret-out F" ($calls[0] -replace '--secret-out \S+', '--secret-out F')
+Check "...the plan's uri is clean, its user and database read from it" $true (($calls -join "`n").Contains("--set uri=mongodb+srv://cluster0.example.net/?authSource=admin --set database=sample_mflix --set user=reader --set collection=movies"))
+Check "...one warning" $true $text.Contains("The password from the command line is now in your shell history")
+Check "...not the old refusal, and the password nowhere" "False False" ("{0} {1}" -f $text.Contains("carries credentials"), (($calls -join "`n") + $text).Contains("url9"))
 
 Write-Host ""
 Write-Host "== the connect form: a * for a required field, a pasted string, one answer changed =="
@@ -571,11 +609,11 @@ function Invoke-FormChild([string[]]$Answers, [string]$PlanFail = "") {
 function Row([string]$Label, [string]$Value) { return ($Label.PadRight(34) + "  " + $Value) }
 # Enter on the required name is refused; on the optional schema it takes the
 # default, on the optional CA it leaves it empty; 3 asks the port again.
-Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
+Invoke-FormChild @("postgres://reader@pg.example.com:5433/sales", "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
 Check "the first question is the connection string, read hidden" "HIDDEN Connection string (hidden) - paste + Enter, or Enter alone for the fields" $script:formAsked[0]
 Check "...its hint says what to paste" $true $script:formOut.Contains("Paste the source's connection string, for example:")
 Check "...then one form per line, indented under the text" $true $script:formOut.Contains("        jdbc:postgresql://host:5432/db`n        postgres://user@host:5432/db`n        host[:port][/database]")
-Check "...the string is shown back, its password masked by the engine" $true $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales")
+Check "...the string is shown back" $true $script:formOut.Contains("Read: postgres://reader@pg.example.com:5433/sales")
 Check "...then one key decides, and Enter used it" "KEY enter" $script:formAsked[1]
 Check "...the question names the three keys" $true $script:formOut.Contains("Enter to use it - e to paste it again - Esc/n to type the fields instead")
 Check "the panel marks a required field with a star after its label" $true $script:formOut.Contains("|     Host name or address *      ")
@@ -588,19 +626,30 @@ Check "...an empty required answer is refused, in one line" $true $script:formOu
 Check "...an optional one shows the default Enter takes, no star" $true ($script:formAsked -contains "ASK Schema [public]")
 Check "the fields the string filled are marked" $true $script:formOut.Contains((Row "Host name or address *" "pg.example.com (from the string)"))
 Check "...and not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
-Check "a password in the string: the note says it was not used" $true $script:formOut.Contains("it was not used.")
-Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
-Check "...the hidden prompt still asks for it" $true ($script:formAsked -contains "HIDDEN Password * (hidden)")
+Check "no password in the string: the hidden prompt asks for it" $true ($script:formAsked -contains "HIDDEN Password * (hidden)")
 Check "...whose empty answer is refused too" $true $script:formOut.Contains("Password is required; it stays in memory")
 Check "the summary numbers every answer" $true $script:formOut.Contains("  3  " + (Row "Port" "5433 (from the string)"))
 Check "...a number asks that field again" $true ($script:formAsked -contains "ASK Port (- clears it) [5433]")
 Check "...one change, the rest as given" "FORM postgresql --name psform --set host=pg.example.com --set port=5432 --set database=sales --set schema=public --set user=reader --set tls=verify" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
-Check "...the typed credential kept for the connect, not the string's" "SECRET True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRET *" })[0])
-Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
+Check "...the typed credential kept for the connect" "SECRET True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRET *" })[0])
+
+# A pasted string WITH a password: it is the credential - the hidden prompt
+# never asks, and the panel says "(from the string, hidden)".
+$typedSecret = $env:FORM_SECRET
+$env:FORM_SECRET = $pastePw
+Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "psfromstr", "", "", "", "")
+$env:FORM_SECRET = $typedSecret
+Check "a pasted string with a password: shown back masked" $true $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales")
+Check "...the hidden password prompt is skipped" 0 @($script:formAsked | Where-Object { $_ -like "HIDDEN Password*" }).Count
+Check "...the panel shows the password row from the string, hidden" $true $script:formOut.Contains((Row "Password *" "(from the string, hidden)"))
+Check "...the note says it is used" $true $script:formOut.Contains("The credential in the connection string (user:password@) is used, hidden")
+Check "...without the shell-history line a typed string does not earn" $false $script:formOut.Contains("shell history")
+Check "...the string's password kept for the connect" "SECRET True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRET *" })[0])
+Check "...and in none of the output" $false $script:formOut.Contains($pastePw)
 
 # e asks for the string again, and the second one is used; n or Esc types the
 # fields instead, nothing from the string kept.
-Invoke-FormChild @("postgres://reader@first.example.com/one", "<e>", ("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "<enter>", "psagain", "", $env:FORM_SECRET, "", "", "")
+Invoke-FormChild @("postgres://reader@first.example.com/one", "<e>", ("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "<enter>", "psagain", "", "", "", "")
 Check "e: the string asked again" 2 @($script:formAsked | Where-Object { $_ -like "HIDDEN Connection string*" }).Count
 Check "...both shown back" $true ($script:formOut.Contains("Read: postgres://reader@first.example.com/one") -and $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales"))
 Check "...and the second one is used" $true $script:formOut.Contains("FORM postgresql --name psagain --set host=pg.example.com --set port=5433 ")
@@ -643,7 +692,7 @@ Check "...the file still the credential" "SECRETFILE True" (@($script:formOut -s
 # 56 columns: a row too narrow for its value and "(from the string)" drops the
 # mark; no row is wider than the panel.
 $env:FORM_COLS = "56"
-Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "psnarrow", "", $env:FORM_SECRET, "", "", "")
+Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "psnarrow", "", "", "", "")
 Remove-Item Env:\FORM_COLS
 $wide = @($script:formOut -split "`n" | Where-Object { $_ -like "  |*" -and $_.TrimEnd("`r").Length -gt 54 })
 Check "56 columns: no panel row wider than the panel" 0 $wide.Count
@@ -746,18 +795,18 @@ Check "...under the hint" $true $script:formOut.Contains("INFO Paste the source'
 Check "...shown back masked" $true $script:formOut.Contains("INFO Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****")
 Check "...then one key decides, Enter used it" 1 @($script:formAsked | Where-Object { $_ -eq "KEY enter" }).Count
 Check "...a garbage string is said and asked again" $true $script:formOut.Contains("the connection string has a space, line break or control character in it")
-Check "...the password in it noted, not used" $true $script:formOut.Contains("it was not used.")
+Check "...the password in it is used, and said so" $true $script:formOut.Contains("The credential in the connection string (password=) is used, hidden: it is not asked again")
 Check "...what it filled is said" $true $script:formOut.Contains("From the connection string: database, host, port, user")
-Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
+Check "...without the command-line sentence or the shell-history line" "False False" ("{0} {1}" -f $script:formOut.Contains("The string was on the command line"), $script:formOut.Contains("shell history"))
 Check "...the fields it filled are not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
 Check "...one legend line above the questions says what the star means" $true $script:formOut.Contains("    * required")
 Check "...a required question ends in the star" $true ($script:formAsked -contains "ASK Name (alias) for this connection (lower case, e.g. sales) * []")
 Check "...an optional one shows its default, no star" $true ($script:formAsked -contains "ASK Schema [public]")
 Check "...and the words are gone" 0 @($script:formAsked | Where-Object { $_ -like "*(required)*" -or $_ -like "*(optional)*" }).Count
 Check "...an empty required answer is refused" $true $script:formOut.Contains("Name (alias) for this connection is required")
-Check "...the credential still asked hidden" $true ($script:formAsked -contains "HIDDEN Password")
+Check "...the password prompt is skipped" $false ($script:formAsked -contains "HIDDEN Password")
 $db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
-Check "...the typed one reaches the CONNECTION" $env:FORM_SECRET $db.connections.EXAKIT_SRC_PSLINE.secret
+Check "...the string's password reaches the CONNECTION" $pastePw $db.connections.EXAKIT_SRC_PSLINE.secret
 Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
 # e asks again and the second is used; n types the fields.
 Invoke-LineChild @("postgres://reader@first.example.com/one", "<e>", "postgres://reader@pg.example.com:5433/sales", "<n>", "pslineno", "pg.example.com", "", "sales", "", "reader", "", "", "y") @("pg")
@@ -772,6 +821,10 @@ Check "--url: exit 0" 0 $script:lineCode
 Check "...no hidden question for a string, no key asked" 0 @($script:formAsked | Where-Object { $_ -like "HIDDEN Connection string*" -or $_ -like "KEY *" }).Count
 Check "...nothing shown back" $false $script:formOut.Contains("Read:")
 Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
+Check "...it is the credential: no password prompt" $false ($script:formAsked -contains "HIDDEN Password")
+$db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
+Check "...it reaches the CONNECTION" $pastePw $db.connections.EXAKIT_SRC_PSURL.secret
+Check "...with the shell-history warning" $true $script:formOut.Contains("The password from the command line is now in your shell history")
 # --dry-run at the same console asks as it always did.
 Invoke-LineChild @("", "sales", "", "reader", "", "") @("pg", "--name", "psdry", "--set", "host=pg.example.com", "--dry-run")
 Check "--dry-run on a console: exit 0" 0 $script:lineCode

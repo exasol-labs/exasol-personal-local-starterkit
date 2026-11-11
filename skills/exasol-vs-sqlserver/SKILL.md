@@ -59,7 +59,8 @@ The form's first question, and `--url '<string>'`, read:
 inputs. `encrypt` and `trustServerCertificate` together set `tls`:
 `encrypt=false` is `disable`, `encrypt=strict` is `verify`, `encrypt=true` with
 `trustServerCertificate=true` is `require`, `encrypt=true` alone is `verify`.
-A password in the string is dropped and asked for separately. The `;`
+A `password=` (or `pwd=`) in the string is the credential: taken out of the
+string (never stored, logged or shown) and not asked again. The `;`
 separators pass through Windows unharmed.
 
 ## 4. Prepare a reader at the source (show, then run on a yes)

@@ -140,7 +140,8 @@ mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
 
 The first fills host, port, database, schema, user and TLS; the second fills
 host, port and database. `jdbc:postgresql://...` works too. A password in the
-string is never used: the kit asks for it separately.
+string (`user:password@` or `password=`) is the credential: taken out of the
+string and not asked again.
 
 ## Common problems
 

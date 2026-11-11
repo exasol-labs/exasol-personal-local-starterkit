@@ -135,7 +135,9 @@ jdbc:oracle:thin:@tcps://hr.abc123.eu-central-1.rds.amazonaws.com:2484/ORCL
 hr.abc123.eu-central-1.rds.amazonaws.com:1521/ORCL
 ```
 
-Both fill host, port and service; the first also sets TLS to `verify`. The
+Both fill host, port and service; the first also sets TLS to `verify`. A
+`user/password@` after `thin:` gives the user and the password: taken out of
+the string and not asked again. The
 second is plain TCP: TLS stays at `verify`, so change the port to the TCPS one
 or set TLS to `disable`. A SID (`host:port:SID`) and a TNS descriptor
 `(DESCRIPTION=...)` are not read: type the fields.

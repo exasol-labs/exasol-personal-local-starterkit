@@ -50,6 +50,9 @@ snow sql -q "SHOW PARAMETERS LIKE 'NETWORK_POLICY' IN ACCOUNT"
 - `https://<account>.snowflakecomputing.com` - fills `account`
 - a bare `<account>`
 
+A `token=` (else `password=`) in the string is the programmatic access token:
+taken out of the string (never stored, logged or shown) and not asked again.
+
 On Windows an `&` inside `--url` is split by cmd.exe (through `exakit.cmd`):
 there, paste the string at the hidden prompt of `exakit connect`, or give the
 fields with `--set`.

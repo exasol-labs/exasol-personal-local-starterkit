@@ -117,7 +117,9 @@ dbc-1234abcd-5678.cloud.databricks.com
 ```
 
 The first fills host, HTTP path, catalog and schema (without `ConnCatalog` and
-`ConnSchema` you type those two). The second fills the host only.
+`ConnSchema` you type those two). The second fills the host only. A `PWD=` (or
+`password=`, `token=`) in the string is the personal access token: taken out
+of the string and not asked again.
 
 ## Common problems
 

@@ -130,7 +130,8 @@ jdbc:snowflake://myorg-myaccount.snowflakecomputing.com/?db=SALES&warehouse=COMP
 ```
 
 The first fills the account; the second fills account, database, schema,
-warehouse, role and user.
+warehouse, role and user. A `token=` (or else `password=`) in the string is
+the programmatic access token: taken out of the string and not asked again.
 
 ## Common problems
 

@@ -55,8 +55,9 @@ The form's first question, and `--url '<string>'`, read:
 
 `currentSchema` fills `schema`, `user` fills `user`, `sslmode` fills `tls`
 (`verify-full` and `verify-ca` are `verify`; `require` and `prefer` are
-`require`; `disable`). A password in the string is dropped and asked for
-separately. `--set` wins over the string.
+`require`; `disable`). A password in the string (`user:password@` or
+`password=`) is the credential: taken out of the string and not asked again.
+`--set` wins over the string.
 
 On Windows an `&` inside `--url` is split by cmd.exe (through `exakit.cmd`), so
 a string with two parameters breaks there: paste it at the form's hidden prompt,
