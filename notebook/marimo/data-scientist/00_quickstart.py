@@ -4,7 +4,7 @@ __generated_with = "0.25.2"
 app = marimo.App()
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     import marimo as mo
 
@@ -24,7 +24,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
     # Your kit and your data: the guided view of this page. Guided / Code, top right, switches to the code cells below.
@@ -73,7 +73,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     import exakit.nb as nb
 
@@ -81,7 +81,7 @@ def _():
     return (nb,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     # What the kit has, read live: the same calls the Home card shows.
     components = nb.components()            # the kit's parts, their versions and pending updates
@@ -99,7 +99,7 @@ def _(nb):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     # Change the kit from here: set what you want, run the cell; each runs as `exakit` would, its log in the cell.
     START_DATABASE = False   # start the database after a restart of this computer
@@ -125,7 +125,7 @@ def _(nb):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     # Your AI model and Langfuse tracing, remembered for every notebook of this kit (readable by you only). The keys are
     # asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered.
@@ -162,7 +162,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     import os
     workflow_id = nb.workflow('data-scientist-quickstart', resume=os.environ.get('EXAKIT_WORKFLOW_ID'))
@@ -181,7 +181,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     # Cell tags: connect
     connection = nb.connect()
@@ -189,7 +189,7 @@ def _(nb):
     return (connection,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, nb):
     # Cell tags: connect
     nb.list_schemas(connection)
@@ -212,7 +212,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, nb):
     # Cell tags: load
     SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
@@ -231,7 +231,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, nb):
     # Cell tags: load
     MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
@@ -256,7 +256,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     # Cell tags: load
     connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
@@ -271,21 +271,21 @@ def _(nb):
     return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
     # Cell tags: load
     source_test = nb.test_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
     # Cell tags: load
     connected = nb.connect_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
     return (connected,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connected, connection, nb):
     # Cell tags: load
     SOURCE = None   # e.g. "VS_SALES.ORDERS" (None after a connect above: the new source's tables)
@@ -302,7 +302,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb, own_data, sample_data, source_data):
     # Cell tags: load
     chosen_data = nb.first(source_data, own_data, sample_data)
@@ -320,7 +320,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, nb):
     # Cell tags: load
     nb.data_map(connection)
@@ -374,14 +374,14 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(chosen_data, connection, nb):
     # Cell tags: review
     role_review = nb.review_roles(connection, chosen_data)
     return (role_review,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(role_review):
     # Cell tags: review
     # Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
@@ -393,7 +393,7 @@ def _(role_review):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb, role_review):
     # Cell tags: review
     dataset = role_review.dataset()
@@ -401,7 +401,7 @@ def _(nb, role_review):
     return (dataset,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, dataset, nb):
     # Cell tags: review
     leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
@@ -420,7 +420,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, dataset, nb):
     # Cell tags: review
     dataset  # read after the approval above, so this map shows it
@@ -438,7 +438,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, dataset, nb):
     missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
     GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target

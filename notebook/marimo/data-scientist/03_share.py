@@ -4,7 +4,7 @@ __generated_with = "0.25.2"
 app = marimo.App()
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     import marimo as mo
 
@@ -24,7 +24,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
     # Share and hand off: the guided view of this page. Guided / Code, top right, switches to the code cells below.
@@ -61,7 +61,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     import exakit.nb as nb
 
@@ -109,7 +109,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     dash_server_state = nb.addon_ready("dash-server")
     return
@@ -128,7 +128,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(dashboard_draft, nb):
     dash_server = nb.dash_tools()
     preview_path = dashboard_draft.preview(dash_server)
@@ -146,7 +146,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(dash_server, dashboard_draft):
     FIGURES_CHECKED = False
     if FIGURES_CHECKED:
@@ -167,7 +167,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(connection, dataset, nb):
     handoff = nb.handoff_bundle(connection, dataset)
     handoff

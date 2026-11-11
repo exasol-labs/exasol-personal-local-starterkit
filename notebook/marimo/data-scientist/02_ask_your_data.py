@@ -4,7 +4,7 @@ __generated_with = "0.25.2"
 app = marimo.App()
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     import marimo as mo
 
@@ -24,7 +24,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
     # Ask in plain words: the guided view of this page. Guided / Code, top right, switches to the code cells below.
@@ -63,7 +63,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _():
     import exakit.nb as nb
 
@@ -110,7 +110,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(nb):
     MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
     PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
@@ -129,7 +129,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(DRAFT_WITH_MODEL, QUESTION, connection, dataset, nb):
     GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
     GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
@@ -148,7 +148,7 @@ def _(DRAFT_WITH_MODEL, QUESTION, connection, dataset, nb):
     return (proposal,)
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(dataset, nb):
     examples = nb.example_questions(dataset)   # questions this column map can answer: try one as QUESTION
     examples
@@ -170,7 +170,7 @@ def _(mo):
     return
 
 
-@app.cell(hide_code=True)
+@app.cell
 def _(proposal):
     APPROVE_SQL = False
     if APPROVE_SQL:

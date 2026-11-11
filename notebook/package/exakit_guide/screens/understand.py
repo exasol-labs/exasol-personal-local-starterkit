@@ -264,8 +264,8 @@ class ChooseData(Screen):
             items += [{"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
                       {**use, "label": "Connect and use this data", "show_if": connecting},
                       {**use, "show_if": {"field": "kind", "in": ["sample", "file"]}}]
-        blocks = [head, {"t": "choice", "id": "kind", "value": "sample" if samples else "file", "options": options, "below": True},
-                  {"t": "actions", "items": items}]
+        blocks = [head, {"t": "choice", "id": "kind", "value": "sample" if samples else "file", "options": options, "below": True,
+                         "actions": items}]     # the buttons sit inside the picked option's box
         if self.done and SESSION.source is not None:
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
             blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})

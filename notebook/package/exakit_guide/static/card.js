@@ -380,8 +380,12 @@ function render({ model, el }) {
           on && !b.below ? h("div", { class: "guide-choice-fields", onClick: (e) => e.stopPropagation() }, (o.fields || []).map(field)) : null);
       }));
       if (!b.below) return boxes;
+      // The block's own actions (Back / Next / Use this data) sit inside the picked option's box, under its fields.
+      // The fields are drawn first: drawing one records its value, which decides the buttons that show.
+      const fields = (picked ? (picked.fields || []) : []).map(field).filter(Boolean);
+      const acts = b.actions && b.actions.some((a) => shown(a.show_if)) ? B.actions({ items: b.actions }) : null;
       return h("div", { class: "guide-choice-wrap" }, boxes,
-        picked && (picked.fields || []).length ? h("div", { class: "guide-choice-panel guide-choice-fields" }, picked.fields.map(field)) : null);
+        fields.length || acts ? h("div", { class: "guide-choice-panel guide-choice-fields" }, fields, acts) : null);
     },
     fields(b) { return h("div", { class: "guide-fieldrow" }, b.items.map(field)); },
     checks(b) {

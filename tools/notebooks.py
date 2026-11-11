@@ -221,17 +221,6 @@ def marimo(notebooks: list[tuple[Path, Path]]) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         subprocess.run(["uvx", "--from", pinned, "marimo", "convert", str(ipynb), "-o", str(target)],
                        check=True, capture_output=True)
-        hide_code_behind_page(target)
-
-
-def hide_code_behind_page(target: Path) -> None:
-    """A notebook with a guided view opens in Marimo with its code hidden: every cell of it gets hide_code=True, so the
-    cards and the notebook's text show and "The code behind this page" is one click away (a cell's code button),
-    never in the way. Notebooks without the guided view are left as converted."""
-    text = target.read_text(encoding="utf-8")
-    if CODE_START_MARKER not in text:
-        return
-    target.write_text(re.sub(r"(?m)^@app\.cell$", "@app.cell(hide_code=True)", text), encoding="utf-8")
 
 
 def _marimo_sources() -> list[tuple[Path, str]]:
