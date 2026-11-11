@@ -61,6 +61,25 @@ installs and starts an add-on when it is missing or stopped. The command runs wi
 ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`).
 `nb.handoff_bundle(conn, ds)` writes the hand-off into `~/.exasol-starter-kit/bundles/<workflow id>/` (and `.zip`).
 
+## Guided and Code: the cards and the cells behind them
+
+Each Data Scientist notebook opens with its **guided view**: interactive cards (`exakit.guide`, shipped in the same
+package as `exakit.nb` and drawn with anywidget) that do the page's steps with buttons and forms -
+`guide.start()` in `00_quickstart` (Home: the kit's state, the AI model and Langfuse tracing; then choose the data - a
+kit dataset, your own file, or an external source connected from the card with the kit's `exakit connect` - approve
+the column map, and the map of all your data), `guide.explore()` in `01_explore`, `guide.ask()` in `02_ask_your_data`
+and `guide.share()` in `03_share`. Below the cards, under **The code behind this page**, are the notebook's own
+cells, unchanged.
+
+The **Guided / Code** switch at the top right of every card chooses the view: Guided hides everything from that
+heading down; Code shows it, and the kit call behind each card's buttons too. The choice is remembered for the whole
+JupyterLab, every notebook. Until a card has run (Shift + Enter on the cell under the hint), the cells show as they
+always did. Every card calls the kit's own helpers and commands, and none opens a connection of its own: questions
+run through the read-only MCP service, a source's password goes to `exakit connect` on standard input, and the AI
+model and Langfuse keys are saved for every step's kernel in `~/.exasol-starter-kit/credentials` (0600), never in a
+notebook. In Marimo the cards show stacked, and Marimo's own app view hides the code. A headless run (`--run`) skips
+the card cells (`skip-ci`).
+
 ## Rules every notebook follows
 
 - **Descriptor-driven**: queries come from the dataset's approved roles (`ds.col("label")`, `ds.fact_table`); no table

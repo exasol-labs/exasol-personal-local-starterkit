@@ -13,8 +13,44 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
+    # Cell tags: exakit-guide-hint
     mo.md(r"""
-    # Prepare, explore, model, validate
+    <div class="guide-start-hint">
+
+    **Step 2 · Explore and predict.** Click into the cell below and press **Shift + Enter** to open it: checks, a cleaned view, groups and trends, and a first model. Its **Guided / Code** switch, top right, shows the code behind this page.
+
+    </div>
+    """)
+    return
+
+
+@app.cell
+def _():
+    # Cell tags: exakit-guide, skip-ci
+    # Explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+    import exakit.guide as guide
+
+    guide.explore()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: exakit-code-start
+    mo.md(r"""
+    # The code behind this page
+
+    <div class="guide-code-start"></div>
+
+    The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Prepare, explore, model, validate
 
     **Dataset:** the one you approved last (else `amazon_sales`). Change `DATASET` for `fraud_transactions` or your own file.
 

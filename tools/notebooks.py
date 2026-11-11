@@ -55,6 +55,7 @@ CATALOG = FOLDER.parent / "catalog.json"
 VERSIONS = ROOT / "versions.json"
 KERNEL = {"display_name": "Exasol (Starter Kit)", "language": "python", "name": "exasol-starter-kit"}
 _TAGS = re.compile(r"\btags=(\[[^\]]*\])")
+CODE_START_TAG = "exakit-code-start"                       # the heading the code section starts with (Easy mode hides it and what follows)
 SKIP_TAG = "skip-ci"                                       # a cell tagged so is left out of a --run
 DATASET_NAMES = ("DATASET", "SAMPLE")                      # the one assignment that picks the data, per notebook kind
 _DATASET_LINE = re.compile(r'^(?P<name>' + "|".join(DATASET_NAMES) + r')(?P<gap>\s*=\s*)(?:"[^"\n]*"|None)', re.M)

@@ -1,0 +1,51 @@
+"""The guided view for the Exasol starter kit's JupyterLab.
+
+    import exakit.guide as guide
+    guide.start()         # 00_quickstart: Home, then step 1, in one cell
+    guide.home()          # the kit Home screen: setup, next step, continue
+    guide.understand()    # step 1: choose data, approve what each column means
+    guide.explore()       # step 2: check and clean, compare, predict, test feature ideas
+    guide.ask()           # step 3: ask in plain words (also: a cell starting with %%ask)
+    guide.share()         # step 4: preview and publish a dashboard, then the hand-off bundle
+
+Runs in the kit's notebook environment, on top of exakit.nb. Nothing here replaces the kit: every
+screen calls the kit's own commands and helpers. Importing it registers %%ask; the screens load
+when first used, so the import is quick.
+"""
+
+from .magic import register as _register_magic
+
+__version__ = "0.1.0"
+__all__ = ["start", "home", "understand", "explore", "ask", "share", "Home", "ChooseData", "ColumnMap"]
+
+_LAZY = {"home": ".home", "Home": ".home", "understand": ".understand", "ChooseData": ".understand",
+         "ColumnMap": ".understand", "explore": ".explore", "ask": ".ask", "share": ".share"}
+
+
+def __getattr__(name):
+    if name in _LAZY:
+        import importlib
+
+        value = getattr(importlib.import_module(_LAZY[name], __name__), name)
+        # Importing the submodule binds e.g. exakit_guide.home to the MODULE, so a second guide.home() would fail
+        # with "'module' object is not callable". Bind the name to the function itself.
+        globals()[name] = value
+        return value
+    raise AttributeError(name)
+
+
+def start():
+    """The quickstart's cards in one cell: Home (the kit), then step 1 (your data and its column map)."""
+    from .card import show
+    from .home import Home
+    from .understand import ChooseData, ColumnMap, DataMap
+
+    return show(Home(), ChooseData(), ColumnMap(), DataMap())
+
+
+def load_ipython_extension(ip) -> None:
+    """`%load_ext exakit_guide`, or listed in a kernel's IPython extensions: enables %%ask."""
+    _register_magic(ip)
+
+
+_register_magic()   # importing exakit_guide in a notebook also enables %%ask

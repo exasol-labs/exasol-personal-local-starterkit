@@ -6,8 +6,28 @@
 #     name: exasol-starter-kit
 # ---
 
+# %% [markdown] tags=["exakit-guide-hint"]
+# <div class="guide-start-hint">
+#
+# **Step 2 · Explore and predict.** Click into the cell below and press **Shift + Enter** to open it: checks, a cleaned view, groups and trends, and a first model. Its **Guided / Code** switch, top right, shows the code behind this page.
+#
+# </div>
+
+# %% tags=["exakit-guide", "skip-ci"]
+# Explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+import exakit.guide as guide
+
+guide.explore()
+
+# %% [markdown] tags=["exakit-code-start"]
+# # The code behind this page
+#
+# <div class="guide-code-start"></div>
+#
+# The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+
 # %% [markdown]
-# # Prepare, explore, model, validate
+# ## Prepare, explore, model, validate
 #
 # **Dataset:** the one you approved last (else `amazon_sales`). Change `DATASET` for `fraud_transactions` or your own file.
 #

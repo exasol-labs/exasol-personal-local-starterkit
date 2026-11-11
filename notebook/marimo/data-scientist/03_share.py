@@ -13,8 +13,44 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
+    # Cell tags: exakit-guide-hint
     mo.md(r"""
-    # Share the insight and hand it off
+    <div class="guide-start-hint">
+
+    **Step 4 · Share and hand off.** Click into the cell below and press **Shift + Enter** to open it: a dashboard preview, its publication and the hand-off bundle. Its **Guided / Code** switch, top right, shows the code behind this page.
+
+    </div>
+    """)
+    return
+
+
+@app.cell
+def _():
+    # Cell tags: exakit-guide, skip-ci
+    # Share and hand off: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+    import exakit.guide as guide
+
+    guide.share()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: exakit-code-start
+    mo.md(r"""
+    # The code behind this page
+
+    <div class="guide-code-start"></div>
+
+    The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Share the insight and hand it off
 
     **Dataset:** the one you approved last (else `amazon_sales`), `fraud_transactions` or your own approved descriptor.
 

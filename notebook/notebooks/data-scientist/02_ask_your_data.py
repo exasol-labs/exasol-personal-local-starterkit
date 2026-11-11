@@ -6,8 +6,28 @@
 #     name: exasol-starter-kit
 # ---
 
+# %% [markdown] tags=["exakit-guide-hint"]
+# <div class="guide-start-hint">
+#
+# **Step 3 · Ask in plain words.** Click into the cell below and press **Shift + Enter** to open it: a question drafted into SQL, run only after you approve it. Its **Guided / Code** switch, top right, shows the code behind this page.
+#
+# </div>
+
+# %% tags=["exakit-guide", "skip-ci"]
+# Ask in plain words: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+import exakit.guide as guide
+
+guide.ask()
+
+# %% [markdown] tags=["exakit-code-start"]
+# # The code behind this page
+#
+# <div class="guide-code-start"></div>
+#
+# The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+
 # %% [markdown]
-# # Ask your data with AI
+# ## Ask your data with AI
 #
 # **Dataset:** the one you approved last (else `amazon_sales`), `fraud_transactions` or your own approved descriptor.
 #

@@ -6,8 +6,28 @@
 #     name: exasol-starter-kit
 # ---
 
+# %% [markdown] tags=["exakit-guide-hint"]
+# <div class="guide-start-hint">
+#
+# **Start here · Your kit and your data.** Click into the cell below and press **Shift + Enter** to open it: the kit's state, then your data and its column map. Its **Guided / Code** switch, top right, shows the code behind this page.
+#
+# </div>
+
+# %% tags=["exakit-guide", "skip-ci"]
+# Your kit and your data: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+import exakit.guide as guide
+
+guide.start()
+
+# %% [markdown] tags=["exakit-code-start"]
+# # The code behind this page
+#
+# <div class="guide-code-start"></div>
+#
+# The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+
 # %% [markdown]
-# # Start here: access and understand your data
+# ## Start here: access and understand your data
 #
 # **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 #
