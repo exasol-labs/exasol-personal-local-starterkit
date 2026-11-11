@@ -231,6 +231,11 @@ class Screen:
             blocks = [{"t": "msg", "kind": "warn",
                        "v": f"Step 1 approved {newer} after this page opened its data. This page still shows "
                             f"{getattr(SESSION.dataset, 'id', 'the earlier data')}. Run this cell again (Shift+Enter) to switch."}] + blocks
+        if getattr(self, "brand", None) is not None:      # the first card of a page carries the kit's mark
+            for block in blocks:
+                if block.get("t") in ("head", "home_head"):
+                    block["brand"] = self.brand
+                    break
         self._code_since(mark)
         if self.ran:
             blocks = blocks + [{"t": "ran", "v": "\n".join(self.ran)}]
@@ -293,9 +298,25 @@ def _plain(exc: Exception) -> str:
     return text if text.endswith((".", "!", "?")) else text + "."
 
 
+def _persona_title() -> str:
+    """The persona whose notebook this is, by its title in the kit (personas/*.json): the notebook's folder is the
+    persona's id. Empty when the folder is no persona's."""
+    try:
+        import exakit.nb as nb
+        from pathlib import Path
+
+        here = Path.cwd().name
+        return next((str(p["title"]) for p in nb.personas() if p["id"] == here), "")
+    except Exception:
+        return ""
+
+
 def show(*screens: "Screen"):
     """Display a step's cards: one after another in JupyterLab (the cell's result is None); in Marimo, which has no
     display(), they come back stacked as the cell's result."""
+    if screens:
+        screens[0].brand = _persona_title()
+        screens[0].refresh()
     try:
         import marimo as mo
 

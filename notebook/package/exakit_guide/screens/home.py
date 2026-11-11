@@ -257,6 +257,8 @@ class Home(Screen):
             if not isinstance(c, dict) or not c.get("id") or c.get("add_on"):
                 continue
             status, installed = str(c.get("status") or ""), c.get("installed") or "not installed"
+            if status == "external":      # a tool of this computer the kit only uses (never installs or updates it)
+                continue
             words = {"current": "up to date", "ahead": "newer than the kit's pin", "missing": "needs a repair",
                      "update_available": f"update to {c.get('available') or 'the newer version'}",
                      "blocked_on_kit": "update the kit itself first"}.get(status, status.replace("_", " "))

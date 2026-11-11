@@ -448,11 +448,16 @@ class ChooseData(Screen):
             fields.append({"id": "connector", "type": "select", "label": "Data source",
                            "value": cid or (connectors[0]["value"] if connectors else ""), "options": connectors})
         elif step == "string":
-            fields.append({"id": self._fid(cid, "url"), "type": "text",
+            how = self._fid(cid, "how")
+            fields.append({"id": how, "type": "select", "label": "How to connect", "value": "string",
+                           "options": [{"value": "string", "label": "Connection string", "hint": "paste it, the kit reads it"},
+                                       {"value": "manual", "label": "Manual configuration", "hint": "type each detail"}]})
+            fields.append({"id": self._fid(cid, "url"), "type": "text", "by": {"field": how, "equals": "string"},
                            "label": f"Connection string ({' or '.join(form['forms'][:2])})", "placeholder": form["forms"][0]})
-            fields.append({"id": self._fid(cid, "hint"), "type": "note",
-                           "v": "Paste it and press Next: the kit reads it and asks only for what it does not hold. "
-                                "No connection string? Leave it empty and press Next."})
+            fields.append({"id": self._fid(cid, "hint"), "type": "note", "by": {"field": how, "equals": "string"},
+                           "v": "Paste it and press Next: the kit reads it and asks only for what it does not hold."})
+            fields.append({"id": self._fid(cid, "manual"), "type": "note", "by": {"field": how, "equals": "manual"},
+                           "v": "Next asks for each detail: the host, the database, the account and so on."})
         elif step == "name":
             fields.append({"id": "src_name", "type": "text", "placeholder": "sales",
                            "label": self._name_label() + " * (lower case; its tables appear as VS_<NAME>)"})
@@ -470,7 +475,7 @@ class ChooseData(Screen):
             if self.tip:
                 fields.append({"id": "src_tip", "type": "note", "v": self.tip})
         for field in fields[1:]:
-            field["show_if"] = connect_only
+            field["show_if"] = [connect_only, field.pop("by")] if "by" in field else connect_only
         return fields
 
     def on_src_back(self, _v: dict) -> None:
@@ -492,7 +497,10 @@ class ChooseData(Screen):
                 raise ValueError(f"{form['name']} is not available yet: {form['gate']}")
             self.connector = connector
         elif step == "string":
-            text = str(v.get(self._fid(self.connector, "url")) or "").strip()
+            manual = v.get(self._fid(self.connector, "how")) == "manual"
+            text = "" if manual else str(v.get(self._fid(self.connector, "url")) or "").strip()
+            if not text and not manual:
+                raise ValueError("Paste the connection string, or choose Manual configuration.")
             if text:
                 read = self.parsed.get(self.connector)
                 if not read or read.get("text") != text:
@@ -541,6 +549,8 @@ class ChooseData(Screen):
         password = ""
         prefix = self._sid(connector) if connector in self.parsed else connector     # the fields on screen when pressed
         text = str(v.get(self._fid(connector, "url")) or "").strip() if form.get("forms") else ""
+        if v.get(self._fid(connector, "how")) == "manual":
+            text = ""
         if text:
             read = self.parsed.get(connector)
             if not read or read.get("text") != text:

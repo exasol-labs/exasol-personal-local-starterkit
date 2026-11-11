@@ -1557,6 +1557,7 @@ class SourcesTest(unittest.TestCase):
         self.assertIn("--password-stdin", command)
         self.assertIn("postgres://u@192.168.64.1:5432/shop", command)
         self.assertEqual(command[-2:], ["--yes", "--json"])
+        self.assertEqual(command[:3], ["exakit", "connect", "pg"])      # the kit's connect command, then the connector
 
     def test_connect_asks_the_password_hidden_and_reports_the_kits_reason(self):
         sources = importlib.import_module("exakit_nb.sources")

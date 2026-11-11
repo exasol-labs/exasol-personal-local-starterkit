@@ -405,7 +405,10 @@ class CardTest(unittest.TestCase):
         card.on_src_next({"connector": "postgresql"})
         self.assertEqual(["connection", "source", "string", "name", "needed", "optional"], card._steps())
         self.assertEqual("string", card.step)
-        card.on_src_next({})                                                    # no string: every input is asked
+        with self.assertRaisesRegex(ValueError, "Paste the connection string, or choose Manual configuration"):
+            card.on_src_next({})
+        self.assertEqual(["string", "manual"], [o["value"] for o in card._source_fields(only)[1]["options"]])
+        card.on_src_next({card._fid("postgresql", "how"): "manual"})            # manual: every input is asked
         self.assertEqual("name", card.step)
         with self.assertRaisesRegex(ValueError, "Give the connection a name"):
             card.on_src_next({"src_name": "My Sales"})
@@ -791,6 +794,7 @@ class HomeAddonsTest(unittest.TestCase):
                                    "installed": False},
                                   {"id": "udf-devkit", "status": "available", "installed": False, "offered": False}]}
         screen.data["components"] = [{"id": "dash-server", "add_on": True, "status": "update_available", "available": "0.3.0"},
+                                     {"id": "uv", "installed": "0.13.6", "status": "external"},     # this computer's: not listed
                                      {"id": "exapump", "installed": "0.13.1", "status": "current"},
                                      {"id": "mcp_server", "installed": "2.4.0", "status": "update_available",
                                       "available": "2.5.0"}]

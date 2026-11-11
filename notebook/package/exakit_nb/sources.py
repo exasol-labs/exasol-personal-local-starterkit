@@ -171,7 +171,7 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     if show:
         print(f"exakit connect {' '.join(_shown(args))}")
     try:
-        done = subprocess.run([*command, *args], input=(password or "") if "--password-stdin" in args else None,
+        done = subprocess.run([*command, "connect", *args], input=(password or "") if "--password-stdin" in args else None,
                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
                               errors="replace", timeout=TIMEOUT, stdin=None if "--password-stdin" in args else subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
