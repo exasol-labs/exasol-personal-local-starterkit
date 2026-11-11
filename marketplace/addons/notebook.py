@@ -18,7 +18,7 @@ from pathlib import Path
 
 import kit_telemetry
 from model import load_addons
-from runtime import AddonFailure, KitContext, venv_executable, venv_python, write_private, host_machine
+from runtime import AddonFailure, KitContext, venv_executable, venv_python, write_private, host_machine, probe
 
 ID = "notebook"
 RECEIPT = "components.notebook"
@@ -431,9 +431,12 @@ def validate(ctx: KitContext) -> bool:
     if not python.is_file():
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
         return False
-    result = subprocess.run([str(python), "-c", IMPORT_CHECK],
-                            capture_output=True, check=False, timeout=30)
-    if result.returncode:
+    # The first import after an install compiles every .pyc of a large environment (the notebook connector, its
+    # widgets, MLflow): on a real install it took longer than the 30 seconds once allowed, and the add-on step
+    # ended with "validation reported: TimeoutExpired" for an environment that was fine. probe waits the kit's
+    # first-import time and answers None, never an exception, when even that passes.
+    result = probe([str(python), "-c", IMPORT_CHECK])
+    if result is None or result.returncode:
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
         return False
     dsn = ctx.manifest.get("runtime.dsn", "")
