@@ -597,6 +597,17 @@ class LoadIntoSchemaTest(unittest.TestCase):
         load.assert_called_once()
 
 
+class MarimoHiddenCodeTest(unittest.TestCase):
+    def test_guided_notebooks_open_in_marimo_with_their_code_hidden(self):
+        """In Marimo every cell of a guided notebook hides its code by default: the cards and the text show, the code
+        behind the page is one click away. tools/notebooks.py sets it after `marimo convert`."""
+        folder = ROOT / "notebook" / "marimo" / "data-scientist"
+        for path in sorted(folder.glob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            self.assertIn(build_tool.CODE_START_MARKER, text, path.name)
+            self.assertNotRegex(text, r"(?m)^@app\.cell$", f"{path.name}: a cell shows its code")
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

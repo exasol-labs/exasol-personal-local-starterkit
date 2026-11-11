@@ -71,7 +71,7 @@ code - what it ran this session, in order, and the exact call behind each of its
 and **Guided** turns it back. Only that card changes; the session (connection, chosen data, approvals) stays as it
 is, and a new card opens in the view chosen last. The notebook's own cells, under **The code behind this page**, stay
 hidden in the kit's JupyterLab; **Show all the notebook's code cells**, at the foot of a card's Code view, shows them.
-In Marimo the cards show stacked, and Marimo's app view hides the code. A headless run (`--run`) skips the card cells
+In Marimo the cards show stacked and every cell opens with its code hidden (its code button shows it); Marimo's app view hides the code too. A headless run (`--run`) skips the card cells
 (`skip-ci`).
 
 **An external source, the kit's own form.** *An external source* on the Choose your data card shows, for the chosen connector, exactly what `exakit connect` asks (`nb.connector_inputs(connector)`, read from the kit's connector definitions). **Test connection** is `nb.test_source(...)`: the kit's input check and a reach from this computer, nothing changed. **Use this data** is `nb.connect_source(...)` with those inputs; the password goes to the kit on standard input only.

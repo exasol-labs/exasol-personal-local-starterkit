@@ -4,7 +4,7 @@ __generated_with = "0.25.2"
 app = marimo.App()
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import marimo as mo
 
@@ -24,7 +24,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     # Cell tags: exakit-guide, skip-ci
     # Explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
@@ -61,7 +61,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
@@ -84,7 +84,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _():
     import exakit.nb as nb
 
@@ -105,7 +105,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(DATASET, nb):
     import os
     workflow_id = nb.continue_workflow('explore')
@@ -136,7 +136,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(connection, loaded_dataset, nb):
     findings = nb.data_checks(connection, loaded_dataset)
     findings
@@ -155,7 +155,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(connection, loaded_dataset, nb):
     schema_map = nb.describe_schema(connection, loaded_dataset)
     schema_map
@@ -170,7 +170,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(USE_JOINED, connection, loaded_dataset, schema_map):
     joined_view_proposal = schema_map.joined_view(loaded_dataset)
     joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joined_view_proposal.needed else loaded_dataset
@@ -190,7 +190,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(USE_PREPARED, connection, joined_dataset, nb):
     typed_view_proposal = nb.typed_view(connection, joined_dataset)
     dataset = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset   # the dataset every step below reads
@@ -218,7 +218,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(dataset):
     ENTITY_COLUMN = dataset.col("entity") if dataset.has("entity") else None
     CATEGORY_COLUMN = dataset.col("category") if dataset.has("category") else None
@@ -251,7 +251,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     CATEGORY_COLUMN,
     ENTITY_COLUMN,
@@ -302,7 +302,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(landscape_grid):
     landscape_grid
     return
@@ -318,7 +318,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     COUNT_HEADER,
     DATE_COLUMN,
@@ -370,7 +370,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(connection, dataset, nb):
     LEAKING_COLUMNS = nb.leakage_check(connection, dataset)
     return (LEAKING_COLUMNS,)
@@ -390,7 +390,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     CATEGORY_COLUMN,
     DATE_COLUMN,
@@ -476,7 +476,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     dataset,
     label_values,
@@ -506,7 +506,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(FEATURE_LABELS, LABEL_COLUMN, feature_columns, model):
     import numpy as np
 
@@ -535,7 +535,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(connection, dataset, nb):
     # Cell tags: skip-ci
     LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
@@ -547,7 +547,7 @@ def _(connection, dataset, nb):
     return LAB_TASK, kept_features, lab
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(LAB_TASK, connection, kept_features, lab, nb):
     # Cell tags: skip-ci
     ideas = nb.feature_ideas(lab, ai=False, conn=connection)   # ai=True: your AI model adds more (names and roles only)
@@ -576,7 +576,7 @@ def _(mo):
     return
 
 
-@app.cell
+@app.cell(hide_code=True)
 def _(
     LABEL_COLUMN,
     TEXT_SQL,
