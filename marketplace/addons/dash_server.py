@@ -68,6 +68,21 @@ def installed_version(ctx: KitContext) -> str | None:
     return package_version(ctx) if ctx.manifest.get(f"{RECEIPT}.version") else None
 
 
+def system_present(ctx: KitContext) -> bool:
+    """A Dash Server the user installed (a `dash-server` command on PATH that is not the kit's own launcher), and no
+    kit receipt: listed as managed outside the kit - never installed over, updated or removed by the kit."""
+    if ctx.manifest.get(f"{RECEIPT}.version"):
+        return False
+    found = shutil.which("dash-server")
+    if not found:
+        return False
+    own = paths(ctx)[2]
+    try:
+        return not Path(found).samefile(own)
+    except OSError:
+        return Path(found) != own
+
+
 def _settle_port(ctx: KitContext) -> int:
     port = _port(ctx)
     service = _service(ctx)

@@ -293,6 +293,41 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertEqual([str(cli), "--extensions-dir", str(extension_dir),
                           "--list-extensions", "--show-versions"], invoke.call_args.args[0])
 
+    def test_no_add_on_touches_a_copy_the_user_owns(self) -> None:
+        """The rule every add-on keeps: one the user installed is seen (system_present) and never updated or removed
+        by the kit. Two cannot be had outside the kit and say why: the notebook add-on is the kit's own notebook
+        environment (it uses the user's JupyterLab when there is one), udf-devkit is built by the kit."""
+        import importlib
+
+        built_by_the_kit = {"notebook", "udf-devkit"}
+        catalog = json.loads((ROOT / "marketplace" / "catalog.json").read_text(encoding="utf-8"))["addons"]
+        for row in catalog:
+            module = importlib.import_module("addons." + row["id"].replace("-", "_"))
+            with self.subTest(addon=row["id"]):
+                if row["id"] not in built_by_the_kit:
+                    self.assertTrue(callable(getattr(module, "system_present", None)),
+                                    f"{row['id']} cannot tell a copy the user installed")
+                receipt = f"components.{row['id'].replace('-', '_')}"
+                self.manifest.set_many({f"{receipt}.ownership": "user", f"{receipt}.version": "1.0.0"})
+                with self.assertRaises(AddonFailure):
+                    module.update(self.ctx)
+                with self.assertRaises(AddonFailure):
+                    module.uninstall(self.ctx)
+
+    def test_a_dash_server_the_user_installed_is_managed_outside_the_kit(self) -> None:
+        own = self.home / "bin" / "dash-server"
+        theirs = Path(self.temp.name) / "user" / "dash-server"
+        theirs.parent.mkdir(parents=True)
+        theirs.write_text("", encoding="utf-8")
+        with patch.object(dash_server, "paths", return_value=(self.home / "venv", self.home, own)), \
+             patch("addons.dash_server.shutil.which", return_value=str(theirs)):
+            self.assertTrue(dash_server.system_present(self.ctx))
+            self.manifest.set_many({"components.dash_server.version": "0.2.1"})
+            self.assertFalse(dash_server.system_present(self.ctx))
+        with patch.object(dash_server, "paths", return_value=(self.home / "venv", self.home, own)), \
+             patch("addons.dash_server.shutil.which", return_value=None):
+            self.assertFalse(dash_server.system_present(self.ctx))
+
     def test_vscode_extension_found_in_an_editor_folder_without_its_cli_is_managed_outside(self) -> None:
         """No editor command on PATH (common on a Mac), but the extension in ~/.vscode/extensions: the user has it, so
         it is listed as managed outside the kit - never offered for install, never "not available"."""
