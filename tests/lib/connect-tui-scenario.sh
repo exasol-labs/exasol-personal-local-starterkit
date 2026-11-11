@@ -27,18 +27,31 @@ exakit_vs_engine() {
         --deployment-dir "$TUI_DEPLOY" --dsn 127.0.0.1:8563 --user sys --password-file /nonexistent "$@"
 }
 
-# The Java language container's install is a download and a restart; here it is
-# the fake database learning that Java is there, after the same question.
+# The Java language container's install is a download and a restart. The real
+# _exakit_vs_install_java runs; what it calls is a stand-in: the launcher (its
+# `slc install java` makes the fake database learn that Java is there) and the
+# kit's own exakit stop and start. Each records its arguments in
+# TUI_FAKE_CALLS.
 if [ -n "${TUI_FAKE_JAVA_INSTALL:-}" ]; then
-    _exakit_vs_install_java() {
-        info "Virtual schemas run Java inside the database, and its Java language container is not installed."
-        _exakit_vs_confirm "Install the Java language container now?" || return 1
-        python3 - "$TUI_STATE" <<'PY'
-import json, sys
-d = json.load(open(sys.argv[1])); d["java"] = True; json.dump(d, open(sys.argv[1], "w"))
-PY
-        ok "Java language container installed"
-    }
+    _tui_fake="$(mktemp -d "${TMPDIR:-/tmp}/tui-fake.XXXXXX")"
+    : "${TUI_FAKE_CALLS:=$_tui_fake/calls}"
+    : > "$TUI_FAKE_CALLS"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "exasol %%s\\n" "$*" >> %q\n' "$TUI_FAKE_CALLS"
+        printf 'exec python3 -c %q %q\n' \
+            'import json, sys; d = json.load(open(sys.argv[1])); d["java"] = True; json.dump(d, open(sys.argv[1], "w"))' \
+            "$TUI_STATE"
+    } > "$_tui_fake/exasol"
+    {
+        printf '#!/bin/sh\n'
+        printf 'printf "exakit %%s\\n" "$*" >> %q\n' "$TUI_FAKE_CALLS"
+    } > "$_tui_fake/exakit"
+    chmod +x "$_tui_fake/exasol" "$_tui_fake/exakit"
+    EXAKIT_BIN_DIR="$_tui_fake"
+    personal_cli() { printf '%s\n' "$_tui_fake/exasol"; }
+    personal_auto_approve_flag() { :; }
+    personal_slc_dns_prepare() { :; }
 fi
 
 # TUI_SLOW_CONNECT=<seconds>: each connect takes at least that long, so a key

@@ -49,7 +49,7 @@
     },
     {
       "name": "catalog",
-      "label": "Unity Catalog catalog",
+      "label": "Catalog (Unity Catalog)",
       "kind": "databricks-name",
       "required": true
     },
@@ -67,6 +67,7 @@
     }
   ],
   "paste": {
+    "credential": ["pwd", "password", "token", "userinfo"],
     "schemes": ["jdbc:databricks", "jdbc:spark", "https"],
     "bare": true,
     "params": {"httppath": "http_path", "conncatalog": "catalog", "connschema": "schema"},

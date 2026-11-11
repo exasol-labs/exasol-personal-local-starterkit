@@ -67,6 +67,9 @@ for needed in \
     setup/help/exakit.json \
     setup/help/exapump.json \
     setup/exakit \
+    setup/virtual-schemas/engine/guide.py \
+    docs/virtual-schemas/README.md \
+    docs/virtual-schemas/postgresql.md \
     data/datasets/tpch/data/lineitem.csv
 do
     if printf '%s\n' "$listing" | grep -qxF "$needed"; then

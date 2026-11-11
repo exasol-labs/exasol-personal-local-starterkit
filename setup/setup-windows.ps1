@@ -474,7 +474,8 @@ try {
                 (Join-Path $kitSetupDir "virtual-schemas"),
                 (Join-Path $script:ExakitHome "kit\mcp"), (Join-Path $script:ExakitHome "kit\sql"),
                 (Join-Path $script:ExakitHome "kit\skills"),
-                (Join-Path $script:ExakitHome "kit\marketplace"))) {
+                (Join-Path $script:ExakitHome "kit\marketplace"),
+                (Join-Path $script:ExakitHome "kit\docs\virtual-schemas"))) {
                 Remove-Item -Recurse -Force $stale -ErrorAction SilentlyContinue
             }
         }
@@ -494,6 +495,12 @@ try {
         foreach ($dir in @("mcp", "sql", "data", "skills", "marketplace")) {
             Copy-ExakitAsset -Source (Join-Path $KitRoot $dir) -Destination (Join-Path $script:ExakitHome "kit\$dir")
         }
+        # docs\virtual-schemas\ is what `exakit connect <connector> --help` draws
+        # its guide from (engine\guide.py). Twin of the copy in kit_helper_step.
+        if (Test-Path (Join-Path $KitRoot "docs\virtual-schemas")) {
+            New-Item -ItemType Directory -Force -Path (Join-Path $script:ExakitHome "kit\docs") | Out-Null
+        }
+        Copy-ExakitAsset -Source (Join-Path $KitRoot "docs\virtual-schemas") -Destination (Join-Path $script:ExakitHome "kit\docs\virtual-schemas")
         # The versions manifest travels with the copy: it is the offline tier of
         # version resolution and the record of which kit version this is.
         Copy-ExakitAsset -Source (Join-Path $KitRoot "versions.json") -Destination (Join-Path $script:ExakitHome "kit\versions.json")

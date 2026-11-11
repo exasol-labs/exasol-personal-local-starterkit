@@ -74,11 +74,12 @@
     },
     {
       "name": "ca",
-      "label": "CA certificate file (PEM) - only for a private CA such as AWS RDS or Azure; Enter to skip",
+      "label": "CA certificate file (PEM) - needed with TLS verify, a public CA too: its root (e.g. ISRG Root X1)",
       "kind": "ca-file"
     }
   ],
   "paste": {
+    "credential": ["userinfo", "password"],
     "style": "oracle",
     "bare": true,
     "forms": ["jdbc:oracle:thin:@//host:1521/service", "jdbc:oracle:thin:@tcps://host:2484/service", "host[:port]/service"]

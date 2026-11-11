@@ -63,7 +63,7 @@
     },
     {
       "name": "warehouse",
-      "label": "Warehouse the catalog knows it by (e.g. s3://warehouse/ or a catalog name)",
+      "label": "Warehouse (catalog name)",
       "kind": "warehouse",
       "required": true
     },
@@ -75,7 +75,7 @@
     },
     {
       "name": "endpoint",
-      "label": "S3-compatible storage endpoint, with an access key (Enter for AWS S3)",
+      "label": "Storage endpoint (MinIO etc.)",
       "kind": "endpoint-url"
     },
     {
@@ -90,7 +90,7 @@
     },
     {
       "name": "secret",
-      "label": "Storage secret key, or the catalog token",
+      "label": "Catalog token or storage secret",
       "kind": "secret",
       "required": true
     }
@@ -113,7 +113,7 @@
     "One namespace is one virtual schema: connect again with another --name for the next namespace."
   ],
   "notes": [
-    "The Glue lakehouse connector's engine over an Iceberg REST catalog: the same pinned lakehouse-engine-rs build, the same LAKEHOUSE_ADAPTER and companion scripts in EXAKIT_VS and the same Rust language container, so a Glue source and a REST source share them. Not yet run against a live catalog (Beta).",
+    "The Glue lakehouse connector's engine over an Iceberg REST catalog: the same pinned lakehouse-engine-rs build, the same LAKEHOUSE_ADAPTER and companion scripts in EXAKIT_VS and the same Rust language container, so a Glue source and a REST source share them.",
     "The CONNECTION goes TO the catalog URL with an empty user; its password is JSON the kit writes: the warehouse plus either storage keys (access_key, secret_key, region and, for MinIO and other S3-compatible stores, endpoint with path-style addressing) or a catalog token with use_vended_credentials, so the catalog hands out short-lived storage credentials per table.",
     "https by default. Plain http is accepted only when typed, and only towards this computer (on macOS 192.168.64.1; on Linux and WSL the address the database sees this computer at - Podman: host.containers.internal; Docker: host.docker.internal where the deployment provides it, else the bridge gateway) or a private network; the virtual schema then carries ALLOW_HTTP = 'true'. localhost is refused: inside the database it is the database itself."
   ],

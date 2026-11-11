@@ -1924,6 +1924,10 @@ exakit_load_local_file() {
         warn "File not found or empty: $_path"
         [ -n "$(_exakit_prompt_tty)" ] || _llf_refuse "File not found or empty: $_path"
     done
+    # The installer names the file if it does not load (read only on failure).
+    if [ -n "${EXAKIT_LOCAL_FILE_NAMES:-}" ]; then
+        printf '%s\n' "${_path##*/}" > "$EXAKIT_LOCAL_FILE_NAMES" 2>/dev/null || true
+    fi
     # Every file kind is asked the same two things, in the same order, before
     # any work starts: the file, then SCHEMA.TABLE. What has to happen after
     # that - an engine to install, a conversion to run - is this command's
@@ -2312,6 +2316,15 @@ exakit_bulk_label() {
     esac
 }
 
+# _exakit_note_local_file_failed <path> — the installer's record of a file in
+# a folder that did not load (EXAKIT_LOCAL_FILE_NAMES), so its closing note can
+# name it. Nothing when the installer did not ask.
+_exakit_note_local_file_failed() {
+    [ -n "${EXAKIT_LOCAL_FILE_NAMES:-}" ] || return 0
+    printf '%s\n' "${1##*/}" >> "$EXAKIT_LOCAL_FILE_NAMES" 2>/dev/null || true
+    return 0
+}
+
 # exakit_load_local_folder <dir> — load every data file in one folder.
 #
 # The schema is asked once, not once per file: a folder is one job, and its
@@ -2504,6 +2517,7 @@ EXAKIT_BULK_WEIGH_EOF
                 _blf_failed=$((_blf_failed + 1))
                 [ -n "$_blf_out" ] && printf 'fail\t%s\t%s\tnot loaded%s\t%s\n' \
                     "$(basename "$_blf_path")" "$_blf_table" "$_blf_gone" "$_blf_why" >> "$_blf_out"
+                _exakit_note_local_file_failed "$_blf_path"
             fi
             continue
         fi
@@ -2533,6 +2547,7 @@ EXAKIT_BULK_WEIGH_EOF
             _blf_failed=$((_blf_failed + 1))
             [ -n "$_blf_out" ] && printf 'fail\t%s\t%s\tnot loaded%s\t%s\n' \
                 "$(basename "$_blf_path")" "$_blf_table" "$_blf_gone" "$_blf_why" >> "$_blf_out"
+            _exakit_note_local_file_failed "$_blf_path"
         fi
     done <<EXAKIT_BULK_LOAD_EOF
 $_blf_chosen

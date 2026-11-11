@@ -4291,8 +4291,12 @@ function Invoke-CmdInfoJson {
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
-    $pwStdin = $false
+    $pwStdin = $false; $setUri = ""; $pastedSecret = ""
     $script:ExakitVsAssumeYes = $false
+    # This command's own public IP only: an earlier command's answer reaches
+    # later ones through the processes it started, and could name a network
+    # this computer has left.
+    Remove-Item Env:_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
     # Known before anything is refused, so every refusal answers in its shape.
     $script:ExakitVsJson = ((@($Arguments) -contains "--json") -or (@($Arguments) -contains "-j"))
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
@@ -4306,7 +4310,16 @@ function Invoke-CmdConnect {
         elseif ($arg -eq "--set") {
             $i++; $pair = "" + $Arguments[$i]
             if ($pair -notlike "*=*") { Deny-ExakitVsInput "--set takes KEY=VALUE (exakit help connect)" "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" }
-            $sets += @("--set", $pair); $given += $pair.Split("=")[0]
+            # A connector's credential input by name: refused before anything
+            # runs, the value never repeated (engine: plan.py).
+            $key = $pair.Split("=")[0]
+            if ($key -in @("password", "passwd", "pwd", "secret", "token", "key_file")) {
+                Deny-ExakitVsInput "--set $key=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." "--set $key gives a credential as an argument, where other users can read it in the process list" "give it with --password-file <file> or pipe it in with --password-stdin"
+            }
+            # A URI with user[:password]@ is a connection string: read as
+            # --url is, its credential taken out and used.
+            if ($key -eq "uri" -and $pair.Substring(4).Contains("@")) { $setUri = $pair.Substring(4) }
+            else { $sets += @("--set", $pair); $given += $key }
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
@@ -4323,6 +4336,10 @@ function Invoke-CmdConnect {
         else { $source = $arg }
     }
     if ($pwStdin -and $pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
+    if ($setUri -and $url) { Deny-ExakitVsInput "--url and --set uri=... both give the connection string; use one." "--url and --set uri were both given" "give the connection string one way: --url or --set uri=..." }
+    # A credential from the command line's own options wins over one in a
+    # connection string (Invoke-ExakitVsPaste -Given).
+    $pwGiven = ($pwStdin -or [bool]$pwFile)
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
@@ -4332,40 +4349,58 @@ function Invoke-CmdConnect {
     if ($pwStdin) { $stdinSecret = Read-ExakitVsStdinSecret }
     # A pasted connection string fills what it names, for every path below. It
     # goes to the engine on stdin (base64, as a secret does), never as an
-    # argument; its pairs go BEFORE the command line's --set, so those win.
+    # argument; its pairs go BEFORE the command line's --set, so those win. The
+    # credential it holds where the connector's stands is used, not asked again
+    # (unless --password-file or --password-stdin gives one); given on the
+    # command line it is in the shell history, and a line says so.
+    $pasteAs = ""
+    if ($setUri) { $url = $setUri; $setUri = $null; $pasteAs = "uri" }
     if ($url) {
         if (-not $source) { Deny-ExakitVsInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" "--url needs the source it is for" "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
         if ($json) {
             # Its notes go to the log; a refusal is the answer, as it stands.
-            $pasted = Invoke-ExakitVsEngine -Arguments @("--json", "paste", $source, "--base64") -Secret $url
+            $pasted = Invoke-ExakitVsPaste -Connector $source -Text $url -As $pasteAs -Given:$pwGiven -Json
             $url = $null
             if ($pasted.Code -ne 0) { foreach ($line in $pasted.Lines) { Write-Output $line }; Exit-ExakitVs $pasted.Code }
             $answer = (@($pasted.Lines) -join "`n") | ConvertFrom-Json
+            # stdout is the one JSON object: the shell-history line goes to stderr.
+            if ($pasted.Secret) { [Console]::Error.WriteLine("      ! The password from the command line is now in your shell history - next time paste it at the prompt or use --password-file.") }
         } else {
-            $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
+            $pasted = Invoke-ExakitVsPaste -Connector $source -Text $url -As $pasteAs -Given:$pwGiven
             $url = $null
             $answer = Show-ExakitVsLines -Lines $pasted.Lines
             if ($pasted.Code -ne 0) { Exit-ExakitVs $pasted.Code }
         }
+        $pastedSecret = $pasted.Secret; $pasted = $null
         $urlSets = @()
         if ($answer -and $answer.values) {
             foreach ($p in @($answer.values.PSObject.Properties)) { $urlSets += @("--set", "$($p.Name)=$($p.Value)"); $given += $p.Name }
         }
         $sets = $urlSets + $sets
     }
+    # A name that is a connected source is re-pointed in place, or left as it
+    # is: on the line-by-line path, which asks nothing the record holds.
+    $live = Test-ExakitVsSourceLive -Name $name
     # A person at a console gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
-    if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {
-        Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
+    if (-not $dry -and -not $json -and -not $live -and (Test-ExakitVsTuiOk)) {
+        Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets -Secret $pastedSecret)
     }
     # --json never asks: a console is as good as none.
     $interactive = (-not $json) -and (Test-ExakitInteractive)
-    # Someone answering at a console: each question says (required) or
-    # (optional), and a connection string can stand for the fields. --yes,
+    # A person at a console (asked "Connect now?" below, or gave --yes): what
+    # the source needs first - a language container, a restart - is said, not
+    # asked (Test-ExakitVsInteractive). Without one, the contract stands.
+    $script:ExakitVsInteractive = $interactive
+    # Someone answering at a console: a required question ends in a red *
+    # (the legend says so), and a connection string can stand for the fields. --yes,
     # --dry-run and --json ask exactly as they always did.
-    $ask = ($interactive -and -not $dry -and -not $json -and -not $script:ExakitVsAssumeYes)
+    $ask = ($interactive -and -not $dry -and -not $json -and -not $script:ExakitVsAssumeYes -and -not $live)
     if (-not $source) {
         if (-not $interactive) { Deny-ExakitVsInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" "exakit source catalog" }
+        # The wizard's first line, as above the menu: this computer's public IP.
+        [void](Get-ExakitVsCatalog)
+        Show-ExakitVsClockCheck
         $source = Read-ExakitPrompt "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" ""
     }
     # With --json the plan below resolves the source (an unknown or gated one
@@ -4376,23 +4411,33 @@ function Invoke-CmdConnect {
         if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
         $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
     }
+    if ($interactive) { $script:ExakitVsFor = Get-ExakitVsLabel $connector }
     if ($ask -and $given.Count -eq 0) {
-        $pasted = Read-ExakitVsLinePaste -Connector $connector
+        $pasted = Read-ExakitVsLinePaste -Connector $connector -Given:$pwGiven
         $sets = @($pasted.Sets) + $sets; $given += @($pasted.Names)
+        if ($pasted.Secret) { $pastedSecret = $pasted.Secret }
+        $pasted = $null
     }
+    if ($ask) { Write-ExakitVsLegend }
     # With --json a missing name is the plan's refusal, after the gate, as
     # resolve orders them here without it.
     if (-not $name -and -not $json) {
         if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
-        $name = Read-ExakitVsLineAnswer -Question "Name for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name for this connection"
+        $name = Read-ExakitVsLineAnswer -Question "Name (alias) for this connection (lower case, e.g. sales)" -Default "" -Required $true -Marks $ask -Label "Name (alias) for this connection"
+        # A name typed here can be a connected source too: re-pointed, not asked again.
+        $live = Test-ExakitVsSourceLive -Name $name
     }
-    if ($interactive) {
+    # A connected source's inputs are its record's: only what was given changes.
+    if ($interactive -and -not $live) {
         $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
         foreach ($spec in @($definition.inputs)) {
             if ($spec.kind -in @("secret", "secret-file") -or $given -contains $spec.name) { continue }
             $label = "" + $spec.label
             $short = $label
             foreach ($cut in @(" - ", " (", "; ")) { $short = $short.Split(@($cut), [StringSplitOptions]::None)[0] }
+            # The words of the question when it has them, and the lines said above it.
+            if ($spec.prompt) { $label = "" + $spec.prompt }
+            foreach ($line in @($spec.hint)) { if ($line) { Write-Host ("  " + $script:UiDim + $line + $script:UiReset) } }
             if ($spec.choices) { $label = "$label ($((@($spec.choices)) -join '/'))" }
             $default = ""
             if ($null -ne $spec.default) { $default = "" + $spec.default }
@@ -4401,36 +4446,77 @@ function Invoke-CmdConnect {
         }
     }
     $base = @($connector, "--name", $name) + $sets
+    # A connected source with nothing else given and a credential to come is a
+    # re-point of the credential alone, not "unchanged": the plan is told.
+    $givenFlag = @()
+    if ($live -and ($pwStdin -or $pwFile -or $pastedSecret)) { $givenFlag = @("--secret-given") }
+    $action = ""
     if ($json) {
         # The plan checks every input before the credential is read; a refusal,
         # or with --dry-run the plan itself, is the answer. --name=VALUE: an
         # empty name stays one argument (5.1 drops an empty one).
         $base = @($connector, "--name=$name") + $sets
-        $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base)
+        $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base + $givenFlag)
         if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; Exit-ExakitVs $planned.Code }
-        $connector = "" + ((@($planned.Lines) -join "`n") | ConvertFrom-Json).connector
+        $planDoc = (@($planned.Lines) -join "`n") | ConvertFrom-Json
+        $connector = "" + $planDoc.connector
+        if ($planDoc.PSObject.Properties["action"]) { $action = "" + $planDoc.action }
+        if ($action -eq "repoint" -and -not $script:ExakitVsAssumeYes) {
+            # --json never asks, and asking is how a person agrees: without
+            # --yes nothing changes (exit 5), as source disconnect and remove.
+            # The --yes form is named only with the credential it needs.
+            $cmd = "" + $planDoc.command
+            if (-not $cmd) { $cmd = "exakit connect $connector --name $name" }
+            $fix = "preview it with --dry-run, then confirm it with --yes"
+            if ($pwFile) { $cmd = "$cmd --password-file " + (Format-ExakitVsWord $pwFile) + " --yes --json" }
+            elseif ($pwStdin) { $cmd = "$cmd --password-stdin --yes --json" }
+            else {
+                $cmd = ""
+                $fix = "preview it with --dry-run, then run it with --yes and the credential (--password-file <file> or --password-stdin): a re-point always takes it again"
+            }
+            if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "DECLINED" "connect $($name): a re-point, --json without --yes" }
+            Write-Output (New-ExakitVsFailureJson -Kind "declined" -Problem "re-pointing $name was not confirmed; nothing was changed" -Remedy $fix -Command $cmd)
+            exit 5
+        }
         $base = @($connector, "--name=$name") + $sets
     } else {
-        $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
+        $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base + $givenFlag)
         $plan = Show-ExakitVsLines -Lines $planned.Lines
         if ($planned.Code -ne 0) { Exit-ExakitVs $planned.Code }
-        Show-ExakitVsPlan $plan
+        if ($null -ne $plan -and $plan.PSObject.Properties["action"]) { $action = "" + $plan.action }
+        # Nothing to change: the connect below says so, without the plan.
+        if (-not ($action -eq "unchanged" -and -not $dry)) { Show-ExakitVsPlan $plan }
         if ($dry) { exit 0 }
     }
-    if ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
+    if ($action -eq "unchanged") {
+        # Nothing to change and no credential: connect settles what an
+        # interrupted re-point left, then answers with the source's real
+        # state (exit 1 when it is not ready). Nothing is asked.
+        $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
+        if ($json) { foreach ($line in $script:ExakitVsLastLines) { Write-Output $line } }
+        Exit-ExakitVs $code
+    }
+    if ($action -eq "repoint") {
+        # Asked at a console (no by default); without one only --yes agrees.
+        if (-not (Confirm-ExakitVs "Re-point $name now?")) { Info "Nothing was changed. Confirm it with --yes."; exit 5 }
+    } elseif ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
     $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
+    # A re-point takes the credential as a connect does: the database never
+    # returns a stored one, and moving a CONNECTION clears it.
     $secret = ""
     if ($secretSpec) {
         $what = ("" + $secretSpec.label).ToLower()
         if ($pwStdin) { $secret = $stdinSecret }
+        # Taken out of the pasted connection string: not asked again.
+        elseif (-not $pwFile -and $pastedSecret) { $secret = $pastedSecret }
         else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }
         if (-not $secret) { Deny-ExakitVsInput "No $what was given (use --password-file or --password-stdin)." "no $what was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
     } else {
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
     }
-    $secret = $null; $stdinSecret = $null
+    $secret = $null; $stdinSecret = $null; $pastedSecret = $null
     if ($json) {
         foreach ($line in $script:ExakitVsLastLines) { Write-Output $line }
         Exit-ExakitVs $code
@@ -4453,6 +4539,10 @@ function Invoke-CmdSource {
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
     $table = ""; $ddl = $false; $into = ""; $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
+    # This command's own public IP only: an earlier command's answer reaches
+    # later ones through the processes it started, and could name a network
+    # this computer has left.
+    Remove-Item Env:_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
     # --json is known before anything is refused: the bridge's own refusals
     # and failures then come in the engine's shape, and nothing is asked.
     $script:ExakitVsJson = ((@($rest) -contains "--json") -or (@($rest) -contains "-j"))
@@ -4848,6 +4938,15 @@ function Show-ExakitUsage {
     if ($All) { Show-ExakitHelpAll | Out-Null; return }
     if (-not $Topic) { Show-ExakitHelpOverview | Out-Null; return }
     if (Test-ExakitHelpId $Topic) { Show-ExakitHelpComponent -Id $Topic | Out-Null; return }
+    # `exakit help <connector>` (or `help connect <connector>`) is `exakit
+    # connect <connector> --help`. Twin of usage() in the bash CLI.
+    $vsWord = ""
+    if ($Topic -like "connect *") { $vsWord = $Topic.Substring(8) }
+    elseif ($Topic -ne "connect" -and $Topic -notlike "* *") { $vsWord = $Topic }
+    if ($vsWord -and (Get-Command Show-ExakitVsGuide -ErrorAction SilentlyContinue)) {
+        $guideCode = Show-ExakitVsGuide -Connector $vsWord -Exact
+        if ($guideCode -ne 10) { if ($guideCode) { exit $guideCode }; return }
+    }
     $helpResult = Show-ExakitHelpCommand -Name $Topic
     if ($helpResult) { exit $helpResult }
 }
@@ -4880,7 +4979,15 @@ if ($Command -and $Command -ne "sql" -and -not $_helpSelf -and ($RestArgs -conta
         if ("$word" -like '-*') { break }
         $helpWords += $word
     }
-    Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:($RestArgs -contains '--json' -or $RestArgs -contains '-j')
+    # `exakit connect [<connector>] --help`: the connector guide
+    # (Show-ExakitVsGuide); --json keeps the help document, and
+    # `exakit help connect` the command's whole page. Twin of the bash hook.
+    $helpJson = ($RestArgs -contains '--json' -or $RestArgs -contains '-j')
+    if ($Command -eq "connect" -and -not $helpJson -and (Get-Command Show-ExakitVsGuide -ErrorAction SilentlyContinue)) {
+        $guideCode = Show-ExakitVsGuide -Connector (@($helpWords | Select-Object -Skip 1) -join ' ')
+        exit $guideCode
+    }
+    Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:$helpJson
     exit 0
 }
 

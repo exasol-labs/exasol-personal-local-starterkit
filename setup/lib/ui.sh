@@ -473,6 +473,29 @@ ui_step_fail() {
 # calls this itself, so a trap here would clobber the installer's cleanup.
 ui_restore_cursor() { ui_mouse_off; [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; _ui_input_release; return 0; }
 
+# _ui_interrupted <INT|TERM> <prefix> — Ctrl-C (or TERM) while a menu or a live
+# table owns the terminal: mouse reporting off, the cursor back, the saved
+# stty state (echo) back - a terminal left reporting the wheel as
+# "64;78;13M" and typing nothing it shows is what an untrapped Ctrl-C left -
+# then the traps that stood before (<prefix>_INT, <prefix>_TERM, as trap -p
+# printed them) are put back and the one for this signal runs, so its owner
+# says what was cancelled; with none, exit 130. ⇄ twin: the finally blocks
+# around Read-ExakitTableMenu and Invoke-ExakitVsTui (ui.ps1 has no signals).
+_ui_interrupted() {
+    ui_restore_cursor
+    printf '\n'
+    eval "_uii_int=\${${2}_INT:-}; _uii_term=\${${2}_TERM:-}"
+    if [ -n "$_uii_int" ]; then eval "$_uii_int"; else trap - INT; fi
+    if [ -n "$_uii_term" ]; then eval "$_uii_term"; else trap - TERM; fi
+    _uii_prev="$_uii_int"; [ "$1" = TERM ] && _uii_prev="$_uii_term"
+    if [ -n "$_uii_prev" ]; then
+        # "trap -- '<command>' SIGINT": the command is the third word.
+        eval "set -- $_uii_prev"
+        eval "$3"
+    fi
+    exit 130
+}
+
 # --- mouse in the menus -------------------------------------------------------
 # A click on a row of ui_checkbox_menu or ui_table_menu ticks or unticks it, the
 # same as Space on it; only Enter moves on. xterm SGR reporting (modes 1000 and
@@ -1108,6 +1131,10 @@ ui_table_widths() {
         _UI_TABLE_COLS="$_utw_cols"
     fi
     UI_TABLE_NAME_W=10
+    # Never narrower than its own heading ("Name (alias)" is 12): the frame
+    # pads the heading to this width. ⇄ twin: Get-ExakitTableWidths.
+    _utw_h1="${UI_TABLE_COL1:-Dataset}"
+    [ "${#_utw_h1}" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="${#_utw_h1}"
     # A FLOOR, not a starting guess. The status column is measured from the
     # finished statuses, and while the work is still running there are none — so
     # a column sized to what it holds today would be twenty wide during the load
@@ -1130,6 +1157,9 @@ ui_table_widths() {
     # to barely wider than the longest name, then doubles the moment the first
     # row starts. The marketplace table has a description holding the width
     # either way, so the column can come and go without the box lurching.
+    # UI_TABLE_STAT_MIN=0 is a pick-only menu that never runs anything in its
+    # rows (the connect menu): no Status column at all. ⇄ twin: the table's
+    # StatMin in Get-ExakitTableWidths (ui.ps1).
     UI_TABLE_STAT_W="${UI_TABLE_STAT_MIN:-44}"
     if [ -n "${UI_TABLE_COL2:-}" ] || [ -n "${UI_TABLE_COL3:-}" ]; then
         UI_TABLE_STAT_W=0
@@ -1842,7 +1872,12 @@ ui_table_begin() {
     # no error shown" looks like from the outside.
     _UI_TABLE_ACTIVE="$1"
     _UI_LINE_BUSY=1
-    trap 'ui_table_abort; exit 130' INT TERM
+    # The traps that stood before run after the abort (_ui_interrupted), so
+    # their owner can say what was cancelled; ui_table_end puts them back.
+    _UI_TABLE_PREV_INT="$(trap -p INT)"; _UI_TABLE_PREV_TERM="$(trap -p TERM)"
+    trap 'ui_table_abort; _ui_interrupted INT _UI_TABLE_PREV' INT
+    trap 'ui_table_abort; _ui_interrupted TERM _UI_TABLE_PREV' TERM
+    _UI_TABLE_TRAPPED=1
     [ -n "$(trap -p EXIT)" ] || trap 'ui_table_abort' EXIT
     # Out of the job table right away, or bash ANNOUNCES the kill: killing a
     # tracked background job prints "line N: 12345 Terminated: 15 ( ... )" —
@@ -1861,6 +1896,11 @@ ui_table_begin() {
 ui_table_end() {
     _UI_TABLE_ACTIVE=''
     _UI_LINE_BUSY=''
+    if [ "${_UI_TABLE_TRAPPED:-0}" = 1 ]; then
+        _UI_TABLE_TRAPPED=0
+        if [ -n "${_UI_TABLE_PREV_INT:-}" ]; then eval "$_UI_TABLE_PREV_INT"; else trap - INT; fi
+        if [ -n "${_UI_TABLE_PREV_TERM:-}" ]; then eval "$_UI_TABLE_PREV_TERM"; else trap - TERM; fi
+    fi
 # Set while a table owns the terminal, and DELIBERATELY survives ui_table_detach:
 # it is the one signal a subshell can still read to know it must not start an
 # animation of its own. _UI_SPIN_PID cannot serve that purpose, because detach
@@ -2035,6 +2075,10 @@ ui_table_menu() {
         return 0
     fi
     _utm_first=1
+    # Ctrl-C here gives the terminal back first (_ui_interrupted).
+    _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_interrupted INT _UI_MENU_PREV' INT
+    trap '_ui_interrupted TERM _UI_MENU_PREV' TERM
     # A click ticks or unticks the row under it, like Space; Enter still confirms.
     ui_mouse_on
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
@@ -2096,6 +2140,8 @@ ui_table_menu() {
         esac
     done
     ui_mouse_off
+    if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
     # Redraw once without the pointer or the hint: the selection is made, and
     # the same table is about to become the progress display.
     ui_table_tick "$_utm_f" "$_utm_sel"

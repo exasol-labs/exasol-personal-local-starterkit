@@ -277,6 +277,13 @@ has "the failure names the file" "orders.parquet" "$OUT"
 check "...on a row that says it did not load" "1" \
     "$(printf '%s\n' "$OUT" | grep -c 'orders\.parquet.*not loaded')"
 has "and the rest are counted" "STARTER_KIT: 3 files loaded, 1 not loaded" "$OUT"
+# The installer asks for the names of the files that did not load, so its
+# closing note can name them (EXAKIT_LOCAL_FILE_NAMES); only the failed one.
+: > "$LOADED"
+_lfn="$(mktemp)"
+( EXAKIT_LOCAL_FILE_NAMES="$_lfn"; exakit_load_local_folder "$D" >/dev/null 2>&1 )
+check "...and the installer is told which file did not load" "orders.parquet" "$(tr '\n' ' ' < "$_lfn" | sed 's/ $//')"
+rm -f "$_lfn"
 FAIL_ON=""
 
 printf '\n== a file that will not load says why, and the rest still load ==\n'
@@ -819,8 +826,18 @@ has   "...naming the switch"                     "EXAKIT_ON_EXISTING=replace" "$
 _b3="$(_installer_books 3)"
 has   "a refused file (3) is not booked either"  "failed=0 noted=0" "$_b3"
 has   "...but is reported"                       "The local file was refused" "$_b3"
+# A file that did not load is the file, not the install, too: booking it said
+# "sample data is not installed" over loaded datasets and skipped the
+# marketplace offer.
 _b1="$(_installer_books 1)"
-has   "a real failure (1) is booked"             "failed=1 noted=1" "$_b1"
+has   "a file that did not load (1) is not booked" "failed=0 noted=0" "$_b1"
+has   "...but is reported, with the retry"       "did not load (reason above). Retry any time with: exakit data-load" "$_b1"
+# The Windows twin: the installer's helper says it and does not throw, so
+# Request-ExakitDataLoadOffer has no reason to book.
+_ps_olf="$(sed -n '/^function Invoke-ExakitOfferLocalFile/,/^}/p' "$ROOT/setup/lib/exapump.ps1")"
+has   "...on Windows too: the failure is a warning naming the file(s)" 'did not load (reason above).' "$_ps_olf"
+lacks "...and it never rethrows"                 'throw' "$_ps_olf"
+has   "...a folder's \"failed\" is said too"     '$failed = ($result -eq "failed")' "$_ps_olf"
 has   "a clean load (0) leaves no note"          "failed=0 noted=0 notes=" "$(_installer_books 0)"
 has "exakit data-load answers 5 for it" '_menu_status=5' "$BULK_SH"
 # The help says the rule covers one file too.

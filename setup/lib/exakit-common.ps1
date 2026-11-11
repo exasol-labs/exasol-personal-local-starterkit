@@ -2591,6 +2591,11 @@ function Get-ExakitRuntimeStatus {
 # `exakit start database` and by `exakit notebook` (so it lives here, where the
 # notebook module can reach it), so they cannot drift. Twin of _start_database.
 function Start-ExakitDatabase {
+    # Asked for (exakit start): the stopped database is started, not healed.
+    $script:ExakitStartAsked = $true
+    try { Start-ExakitDatabaseRun } finally { $script:ExakitStartAsked = $false }
+}
+function Start-ExakitDatabaseRun {
     if ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
         Ok "Database is already running"
     } elseif ((Get-RuntimeType) -eq "personal" -and (Get-PersonalStatus) -eq "conflict") {
@@ -5712,7 +5717,9 @@ function Confirm-ExakitRuntimeRunning {
         if (-not (Get-Command Get-PersonalStatus -ErrorAction SilentlyContinue)) { return }
         if (Test-PersonalDeploymentRunning) { return }
         if (Test-PersonalDeploymentExists) {
-            Info "Self-heal: the database is deployed but not running - starting it"
+            # Asked for (exakit start, Start-ExakitDatabase): a start, not a heal.
+            if ($script:ExakitStartAsked) { Info "Starting the database" }
+            else { Info "Self-heal: the database is deployed but not running - starting it" }
             Start-Personal
             # The same repair the install uses: a start the launcher took
             # without acting on is finished by its own deploy. NOT followed by

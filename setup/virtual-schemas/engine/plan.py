@@ -89,12 +89,13 @@ def resolve_arch(pin):
 # network (exasol-db-<id>-services) with no --add-host, so host.docker.internal
 # resolves only where the Docker installation itself provides it (Docker
 # Desktop does; a plain Docker Engine on Linux does not), and without it the
-# address of this computer is that bridge's gateway. Not measured on a live
-# 2.4 deployment, so the advice names both rather than promising one.
+# address of this computer is that bridge's gateway, which the kit does not
+# know. Measured on Docker Desktop: host.docker.internal is 192.168.65.254
+# inside the database, so the advice names that.
 LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "localhost.localdomain")
 THIS_COMPUTER = {
     "podman": "on macOS 192.168.64.1, on Linux and WSL host.containers.internal",
-    "docker": "on Docker host.docker.internal where the deployment provides it, else the bridge gateway",
+    "docker": "on Docker host.docker.internal (192.168.65.254 on Docker Desktop)",
 }
 
 # The engine the kit recorded for the deployment (manifest runtime.engine,
@@ -326,6 +327,12 @@ def check_value(spec, raw):
             document.load_mappings(raw)
         except document.DocumentError as error:
             return None, str(error)
+    elif kind == "warehouse" and re.match(r"^https?://", raw, re.I):
+        # Measured: the catalog URL typed here failed deep in the UDF (HTTP 400,
+        # "not a valid name"). A storage location (s3://bucket/) stays: the
+        # Iceberg REST reference catalog and MinIO setups take one.
+        return None, ("warehouse is the catalog's name (e.g. exakit_uc for Databricks, the catalog name for "
+                      "Polaris), not a URL - the URL goes in catalog_url")
     elif kind == "mongodb-uri" and "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
         return None, ("the MongoDB URI carries credentials (user:password@): give the user with --set user=... "
                       "and the password on standard input, so the database keeps it hidden")
@@ -353,18 +360,63 @@ def check_value(spec, raw):
     return (raw.upper() if spec.get("upper") else raw), None
 
 
+def draft_value(raw):
+    """A drafted mapping's value: (None, None) for a mapping path, ("", None) for
+    auto (the whole bucket or container), ("auto:<folder>/", None) for one folder,
+    or (None, the problem)."""
+    text = str(raw).strip()
+    if text.lower() == "auto":
+        return "", None
+    if not text.lower().startswith("auto:"):
+        return None, None
+    folder = text[5:].strip().lstrip("/")
+    if not folder:
+        return "", None
+    if "://" in folder or ".." in folder.split("/") or re.search(r"[*?\[\]\\]", folder):
+        return None, "mapping=auto:<folder>/ names a folder inside the bucket, e.g. auto:data/ (got %s)" % folder
+    return "auto:" + folder.rstrip("/") + "/", None
+
+
+def draft_prefix(connector, values):
+    """None when the source's mapping is a path (or it takes none); else the
+    folder the draft lists, "" for the whole bucket or container."""
+    if not any(s["kind"] == "edml" and s.get("draft") for s in connector["inputs"]):
+        return None
+    mapping = values.get("mapping") or ""
+    if not mapping:
+        return ""
+    return mapping[5:] if mapping.startswith("auto:") else None
+
+
 def validate_inputs(connector, given):
     """Defaults applied, every value checked by kind; secrets are not taken here."""
     values, problems = {}, []
     known = {spec["name"] for spec in connector["inputs"]}
+    secrets = {spec["name"] for spec in connector["inputs"] if spec["kind"] in ("secret", "secret-file")}
     for key in given:
-        if key not in known:
+        if key in secrets:
+            # Refused, never dropped: a credential on the command line is
+            # readable by every local user, and dropping it would let a
+            # command "succeed" without the credential it was given.
+            problems.append("%s is a credential and is never taken with --set (other users can read the command "
+                            "line): give it with --password-file <file> or --password-stdin" % key)
+        elif key not in known:
             problems.append("%s is not an input of %s (inputs: %s)" % (key, connector["id"], ", ".join(sorted(known))))
     for spec in connector["inputs"]:
         name, kind = spec["name"], spec["kind"]
         if kind in ("secret", "secret-file"):
             continue
         raw = given.get(name)
+        if kind == "edml" and spec.get("draft") and raw is not None:
+            # auto (or empty): drafted at connect; auto:<folder>/ drafts from that folder only.
+            value, problem = draft_value(raw)
+            if problem:
+                problems.append(problem)
+                continue
+            if value is not None:
+                if value:
+                    values[name] = value
+                continue
         if raw is None or raw == "":
             if "default" in spec:
                 raw = spec["default"]
@@ -486,6 +538,21 @@ def jdbc_url(connector, values, extra=None):
     return connector["url"].format(**fields)
 
 
+def languages(connector, values, profile):
+    """The language containers a connect of this source runs in the database:
+    rust for a native adapter, java for a Java adapter and for the kit's own
+    Java probes (the route check of a source with a host, the staged-file wait
+    of a profile that needs DNS). The terminal flow installs the missing ones
+    before its table, so no row has to fail for one."""
+    slc = profile.get("slc") or {}
+    needs = []
+    if slc.get("language") == "rust":
+        needs.append("rust")
+    if slc.get("language") != "rust" or slc.get("needs_dns") or source_host(connector, values):
+        needs.append("java")
+    return needs
+
+
 def tls_warning(connector, values):
     if plain_http(connector, values):
         return ("plain http: the catalog token or storage keys and the rows cross the network unencrypted "
@@ -495,6 +562,14 @@ def tls_warning(connector, values):
         return "TLS encrypts the connection but does NOT check the server's identity"
     if mode == "disable":
         return "TLS is off: credentials and rows cross the network unencrypted"
+    if mode == "verify" and not values.get("ca") and any(s["kind"] == "ca-file" for s in connector["inputs"]):
+        # Measured on Exasol Personal 2.4: the JDBC loader has an empty Java
+        # trust store, so verify without a CA fails later on "trustAnchors"
+        # (MySQL: "Could not load trustJKS keystore from null").
+        return ("tls=verify needs a CA file here: the database's JDBC loader has no CA store of its own, so "
+                "without one the connect fails on trustAnchors - give the CA as PEM with --set ca=<file>, for a "
+                "public CA too (its root, e.g. ISRG Root X1%s)"
+                % ("; SQL Server: the root plus its intermediates" if connector["id"] == "sqlserver" else ""))
     return None
 
 
@@ -521,24 +596,30 @@ def describe(defs, connector_id, name, values, runtime, cache, store):
     if values.get("ca"):
         count = len(tlsca.certificates(values["ca"]))
         if connector.get("tls_truststore"):
-            how = "%d certificate%s, in a truststore for the adapter and the loader" % (count, "" if count == 1 else "s")
+            how = "%d certificate%s, for the adapter and the loader" % (count, "" if count == 1 else "s")
         elif connector.get("ca_encoding") == "base64-bundle":
-            how = "%d certificate%s, as a wallet inside the connection" % (count, "" if count == 1 else "s")
+            how = "%d certificate%s, kept inside the connection" % (count, "" if count == 1 else "s")
         elif connector.get("tls_class"):
-            how = ("%d certificate%s, checked with the host name by the kit's TLS helper class"
-                   % (count, "" if count == 1 else "s"))
+            how = "%d certificate%s, verified against the host name" % (count, "" if count == 1 else "s")
         elif count == 1:
             how = "1 certificate"
         else:
             how = ("%d certificates; a verified handshake from this computer picks the one that signs %s"
                    % (count, source_host(connector, values)))
         steps.append("trust the CA in %s for this source only (%s)" % (values["ca"], how))
-    if values.get("mapping"):
-        tables = document.load_mappings(values["mapping"])
-        steps += ["stage the mapping from %s (%d mapped table%s: %s)" % (values["mapping"], len(tables),
-                                                                "" if len(tables) == 1 else "s",
-                                                                ", ".join(t["table"] for t in tables)),
-                  "create CONNECTION %s (the credential as JSON, inside the database only)" % names["connection"],
+    prefix = draft_prefix(connector, values)
+    if values.get("mapping") or prefix is not None:
+        if prefix is not None:
+            steps += ["draft the mapping from the %s%s with the credential (one table per folder and file type, "
+                      "written to %s), then stage it" % (connector.get("store", "bucket"),
+                                                         " folder %s" % prefix if prefix else "",
+                                                         os.path.join(store.path(name), "edml"))]
+        else:
+            tables = document.load_mappings(values["mapping"])
+            steps += ["stage the mapping from %s (%d mapped table%s: %s)" % (values["mapping"], len(tables),
+                                                                    "" if len(tables) == 1 else "s",
+                                                                    ", ".join(t["table"] for t in tables))]
+        steps += ["create CONNECTION %s (the credential as JSON, inside the database only)" % names["connection"],
                   "create adapter script %s.%s and its import script %s.%s"
                   % (names["script_schema"], names["script"], names["script_schema"], connector["import_script"]),
                   "create virtual schema %s" % names["schema"],
@@ -576,6 +657,7 @@ def describe(defs, connector_id, name, values, runtime, cache, store):
         "objects": names, "downloads": downloads, "steps": steps,
         "download_bytes": sum(d["bytes"] for d in downloads if not d["cached"]),
         "exposure": "the kit's MCP read-only user can read every table of %s (SELECT ANY TABLE)" % names["schema"],
+        "languages": languages(connector, values, profile),
         "restart": False,
         "warnings": [w for w in [tls_warning(connector, values), entry.get("caveat")] if w],
         "gate": entry.get("gate") if entry["status"] == "gated" else None,

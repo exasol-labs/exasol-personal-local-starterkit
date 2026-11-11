@@ -69,7 +69,7 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertEqual("kit", self.manifest.get("components.dash_server.ownership"))
 
     def test_dash_validation_restarts_owned_process_after_broken_ui(self) -> None:
-        python = venv_python(self.home / "dash-server-venv")  # Scripts/python.exe on Windows
+        python = venv_python(self.home / "dash-server-venv")
         python.parent.mkdir(parents=True)
         python.write_text("python", encoding="utf-8")
         service = Mock()
@@ -84,7 +84,7 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertTrue(self.manifest.get("components.dash_server.ui_validated"))
 
     def test_dash_install_repairs_pip_in_existing_environment(self) -> None:
-        python = venv_python(self.home / "dash-server-venv")  # Scripts/python.exe on Windows
+        python = venv_python(self.home / "dash-server-venv")
         python.parent.mkdir(parents=True)
         python.write_text("python", encoding="utf-8")
         with patch.object(KitContext, "require_uv"), \
@@ -101,7 +101,7 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertTrue(any("Installing Dash Server 0.1.1" == args[0] for args in commands))
 
     def test_dash_validation_probes_fresh_server_before_stopping_it(self) -> None:
-        python = venv_python(self.home / "dash-server-venv")  # Scripts/python.exe on Windows
+        python = venv_python(self.home / "dash-server-venv")
         python.parent.mkdir(parents=True)
         python.write_text("python", encoding="utf-8")
         service = Mock()
@@ -150,7 +150,7 @@ class AddonSafetyTest(unittest.TestCase):
         class Response(io.BytesIO):
             url = "https://example.test/engine"
 
-        with patch("addons.json_tables.open_url", return_value=Response(b"wrong")):
+        with patch("addons.json_tables.urllib.request.urlopen", return_value=Response(b"wrong")):
             with self.assertRaisesRegex(AddonFailure, "Checksum mismatch"):
                 json_tables._asset(self.ctx, "owner/repo", "v1", "engine.bin", "macos-aarch64",
                                    {"sha256": {"macos-aarch64": "0" * 64}}, None, target)
@@ -163,7 +163,7 @@ class AddonSafetyTest(unittest.TestCase):
         class Response(io.BytesIO):
             url = "https://example.test/engine"
 
-        with patch("addons.json_tables.open_url", return_value=Response(content)):
+        with patch("addons.json_tables.urllib.request.urlopen", return_value=Response(content)):
             json_tables._asset(self.ctx, "owner/repo", "v1", "engine.bin", "macos-aarch64",
                                {"sha256": {"macos-aarch64": digest}}, None, target)
         self.assertEqual(content, target.read_bytes())
@@ -173,7 +173,7 @@ class AddonSafetyTest(unittest.TestCase):
     def test_json_missing_digest_refuses_before_download_with_remedy(self) -> None:
         target = self.home / "engine.bin"
         with patch.dict(os.environ, {"EXAKIT_ALLOW_UNVERIFIED_JSON_TABLES": ""}), \
-             patch.object(json_tables, "open_url") as fetch:
+             patch.object(json_tables.urllib.request, "urlopen") as fetch:
             with self.assertRaises(AddonFailure) as failure:
                 json_tables._asset(self.ctx, "owner/repo", "tag", "engine.bin", "linux-x86_64",
                                    {}, None, target)

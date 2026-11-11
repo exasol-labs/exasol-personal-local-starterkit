@@ -896,6 +896,9 @@ function Split-ExakitWrap {
 function Get-ExakitTableWidths {
     param([Parameter(Mandatory)][hashtable]$Table)
     $nameW = 10
+    # Never narrower than its own heading ("Name (alias)" is 12): the frame
+    # pads the heading to this width. Twin of the same lines in ui_table_widths.
+    if (("" + $Table.Col1).Length -gt $nameW) { $nameW = ("" + $Table.Col1).Length }
     # A FLOOR, not a starting guess. The status column is measured from the
     # finished statuses, and while the work is still running there are none - so a
     # column sized to what it holds today would be twenty wide during the load and
@@ -909,13 +912,18 @@ function Get-ExakitTableWidths {
     # beside a description squeezed to fit around it. A name-and-status menu has
     # nothing else holding the width, so it keeps its floor: withhold Status
     # there and the box shrinks to barely wider than the longest name, then
-    # doubles the moment the first row starts.
-    # Twin of the same block in ui_table_widths (ui.sh).
+    # doubles the moment the first row starts. A table whose StatMin is 0 is a
+    # pick-only menu that never runs anything in its rows (the connect menu): no
+    # Status column at all.
+    # Twin of the same block in ui_table_widths (ui.sh), and StatMin of its
+    # UI_TABLE_STAT_MIN.
     $statW = 44
+    if ($Table.ContainsKey("StatMin") -and $null -ne $Table.StatMin) { $statW = [int]$Table.StatMin }
+    $statMin = $statW
     if ($Table.Col2 -or $Table.Col3) {
         $statW = 0
         foreach ($r in $Table.Rows.ToArray()) {
-            if ($r.State -and $r.State -ne "idle" -and $r.State -ne "disabled") { $statW = 44; break }
+            if ($r.State -and $r.State -ne "idle" -and $r.State -ne "disabled") { $statW = $statMin; break }
         }
     }
     # Zero unless a heading names the column, so a table that asks for neither
@@ -924,7 +932,12 @@ function Get-ExakitTableWidths {
     if ($Table.Col2) { $col2W = ([string]$Table.Col2).Length }
     # FIXED, never measured: the Description column wraps to fill it rather than
     # growing to fit the longest About.
-    if ($Table.Col3) { $col3W = $script:UiTableCol3Fixed }
+    # A table may set its own (Col3Fixed, the connect table's Downloads): the
+    # twin of a caller's UI_TABLE_COL3_FIXED in ui.sh. On the table, not in a
+    # script variable, because the animator's runspace loads this file afresh.
+    $col3Max = $script:UiTableCol3Max
+    if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3Max = [int]$Table.Col3Fixed }
+    if ($Table.Col3) { $col3W = $script:UiTableCol3Fixed; if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3W = [int]$Table.Col3Fixed } }
     foreach ($row in $Table.Rows.ToArray()) {
         $len = $row.Label.Length
         if ($col2W -gt 0 -and ("" + $row.Col2).Length -gt $col2W) { $col2W = ("" + $row.Col2).Length }
@@ -984,7 +997,7 @@ function Get-ExakitTableWidths {
     # Slack, not overflow: spend it on the Description rather than leave it as a
     # gap beside an empty Status column.
     if ($over -lt 0 -and $col3W -gt 0) {
-        $grow = $script:UiTableCol3Max - $col3W
+        $grow = $col3Max - $col3W
         if ($grow -lt 0) { $grow = 0 }
         if ((-$over) -lt $grow) { $grow = -$over }
         $col3W += $grow
