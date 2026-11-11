@@ -270,6 +270,7 @@ Parquet (`none`: Parquet only); ORC and Hudi are not read.
 | "Glue GetTables failed ... AccessDeniedException" (`denied`) | the key may not list that database, or it does not exist (AWS answers both the same): check the name, else grant the action |
 | "The security token included in the request is invalid" (`auth`) | AWS does not know the key: a new one, then `exakit source reauth lake --password-file <file>` |
 | "incorrectly configured region", "x-amz-bucket-region" (`region`) | connect again with `--set region=<the bucket's region>` |
+| "the catalog vended S3 credentials but no region was given" ("s3..amazonaws.com" in the raw error) (`region`) | Unity or Iceberg REST with `vended` on S3 and no `region`: connect again with `--set region=<the bucket's region>`; the bucket is in the table's `s3://` storage URL (Unity: Catalog > External data > External locations), its region in S3 > the bucket > Properties or `aws s3api get-bucket-location --bucket <bucket>` (`null` is `us-east-1`) |
 | "AuthenticationFailed" (Azure) | wrong key, expired SAS, or a SAS without Read and List: a new one, then `exakit source reauth lake` with both secret files (`catalog=none`: `--password-file` only) |
 | "... is plain http to <host>, a public host" | use `https`; http only for this computer or a private network |
 | `clock` (RequestTimeTooSkewed, "Signature expired", a 403 with the clock far off) | `exakit stop`, then `exakit start` |

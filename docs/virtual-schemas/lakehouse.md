@@ -130,7 +130,8 @@ login.
 
 - **Region with vended files.** Leave it empty on Azure. On S3, give the
   bucket's region when the catalog does not send one: Unity's vended
-  credentials carry no region.
+  credentials carry no region. Without it, the connect fails with kind
+  `region` and names the bucket.
 - **Account key or SAS.** A query string (a leading `?` is dropped) that holds
   `sig=` and at least one of `sv=`, `se=` or `sp=`, in any order, is a SAS;
   anything else is taken as the account key.
@@ -434,6 +435,7 @@ the kit never stores secrets, so a reauth gives all of them again:
 | "AccessDeniedException ... not authorized to perform: glue:GetTables" | The key may not read that database, or the name is wrong (AWS answers both the same). Check the name, else grant the action. |
 | "The security token included in the request is invalid" | AWS does not know the key: make a new one, then `exakit source reauth <name> --password-file F`. |
 | "x-amz-bucket-region", "incorrectly configured region" | The bucket is in another region: connect again with `--set region=<the bucket's region>`. |
+| "the catalog vended S3 credentials but no region was given" (kind `region`; the raw error names "s3..amazonaws.com") | Unity or Iceberg REST with `files=vended` on S3 and no `region`. Connect again with `--set region=<the bucket's region>`. The bucket is in the table's `s3://` storage URL (for Unity: Catalog > External data > External locations); its region is in the AWS console under S3 > the bucket > Properties, or `aws s3api get-bucket-location --bucket <bucket>` (`null` means `us-east-1`). |
 | "AuthenticationFailed" (Azure) | A wrong key, an expired SAS, or a SAS without Read and List: make a new one, then `exakit source reauth <name>` with both secret files (with `catalog=none`, `--password-file` only). |
 | Every bucket answers "NoSuchBucket" on a non-AWS store | Give the store's endpoint with `--set endpoint=`; the kit adds `path_style`. Leave it empty for Amazon S3. |
 | A signed request refused for the clock | The database clock is off by more than 15 minutes (after the laptop slept): `exakit stop`, then `exakit start`. |
