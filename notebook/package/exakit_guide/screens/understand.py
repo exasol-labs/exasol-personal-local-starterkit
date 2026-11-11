@@ -1104,7 +1104,7 @@ def understand():
     """Step 1 in the guided view: choose the data, approve what each column means, and see it on the map of all your data."""
     from ..card import show
 
-    return show(ChooseData(), ColumnMap(), DataMap())
+    return show(ChooseData(), ColumnMap(), DataMap(), docs="guides/approve-column-map")
 
 
 def _publish_note(said: str) -> str:

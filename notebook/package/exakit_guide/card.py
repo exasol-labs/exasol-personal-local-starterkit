@@ -235,6 +235,8 @@ class Screen:
             for block in blocks:
                 if block.get("t") in ("head", "home_head"):
                     block["brand"] = self.brand
+                    if getattr(self, "docs_url", ""):     # and a Docs button, to this page's documentation
+                        block["docs"] = self.docs_url
                     break
         self._code_since(mark)
         if self.ran:
@@ -311,12 +313,34 @@ def _persona_title() -> str:
         return ""
 
 
-def show(*screens: "Screen"):
+def _docs_url(page: str) -> str:
+    """Where this page's documentation is: the kit's own site, served from this computer by nb.docs() (it starts the
+    server on the first call). The page of this notebook when the site has it, else this persona's section; empty
+    when the kit copy has no documentation, and then no button shows."""
+    try:
+        import exakit.nb as nb
+
+        found = nb.docs(page).url if page else ""
+        return found if found and "?q=" not in found else nb.docs().url
+    except Exception:
+        return ""
+
+
+def mark(screen: "Screen", docs: str = "") -> "Screen":
+    """Make a card the first of its page: the kit's mark (the logo, Starter Kit - <persona>) and the Docs button,
+    which opens ``docs``, this page's guide in the kit's documentation."""
+    screen.brand = _persona_title()
+    screen.docs_url = _docs_url(docs)
+    screen.refresh()
+    return screen
+
+
+def show(*screens: "Screen", docs: str = ""):
     """Display a step's cards: one after another in JupyterLab (the cell's result is None); in Marimo, which has no
-    display(), they come back stacked as the cell's result."""
+    display(), they come back stacked as the cell's result. ``docs`` is the page of the documentation the first
+    card's Docs button opens."""
     if screens:
-        screens[0].brand = _persona_title()
-        screens[0].refresh()
+        mark(screens[0], docs)
     try:
         import marimo as mo
 

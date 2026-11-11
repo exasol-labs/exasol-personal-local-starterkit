@@ -215,4 +215,6 @@ class Ask(Screen):
 
 def ask(question: str | None = None) -> Ask:
     """Step 3 in the guided view: an Ask card. With a question, drafts it right away."""
-    return Ask(question, box=True)
+    from ..card import mark
+
+    return mark(Ask(question, box=True), docs="guides/ask")     # the page's first card: the kit's mark and Docs

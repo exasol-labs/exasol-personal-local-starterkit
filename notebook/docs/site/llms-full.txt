@@ -212,6 +212,642 @@ nb.workflow_log(nb.current_workflow())     # everything this workflow did
 ```
 
 
+# Add a command (/data-scientist/develop/add-a-command)
+
+
+
+<Steps>
+  <Step>
+    ### Write the helper [#write-the-helper]
+
+    Add a function to a module in `notebook/package/exakit_nb/`, with a docstring. The first sentence becomes its one-line summary here; the rest becomes its reference text. Indented lines in a docstring are shown as code.
+
+    Export it: import it in `exakit_nb/__init__.py` and add its name to `__all__`.
+  </Step>
+
+  <Step>
+    ### Put it in a notebook [#put-it-in-a-notebook]
+
+    Add the call to the code section of the notebook it belongs to, guarded by a variable when it is optional:
+
+    ```python
+    if ADD_ON:
+        nb.addon_ready(ADD_ON)
+    ```
+  </Step>
+
+  <Step>
+    ### Give a card a button for it [#give-a-card-a-button-for-it]
+
+    Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`: the code and the notebook it belongs to. Have the screen call `actions.run(...)`.
+  </Step>
+
+  <Step>
+    ### Regenerate [#regenerate]
+
+    ```bash
+    python3 tools/notebooks.py --marimo     # the .ipynb and Marimo notebooks
+    python3 tools/nb_docs.py                # the command reference
+    ```
+
+    The new helper now has an entry in its module's reference page and a row in [All commands](/data-scientist/reference). `nb.docs(nb.your_helper)` opens it once the site is rebuilt.
+  </Step>
+
+  <Step>
+    ### Test [#test]
+
+    ```bash
+    python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs
+    ```
+  </Step>
+</Steps>
+
+<Callout>
+  A whole new module gets its own reference page automatically, titled from its file name. Give it a proper title and a place in the order by adding one line to `PAGES` in `tools/nb_docs.py`.
+</Callout>
+
+
+# These docs (/data-scientist/develop/docs-site)
+
+
+
+## How it works [#how-it-works]
+
+* **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
+* **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
+* **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
+* **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
+
+Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
+
+## Change a page [#change-a-page]
+
+<Steps>
+  <Step>
+    ### Edit [#edit]
+
+    Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
+
+    ```text
+    ---
+    title: Page title
+    description: One sentence that says what the page covers.
+    ---
+    ```
+
+    `Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
+  </Step>
+
+  <Step>
+    ### Preview while you write [#preview-while-you-write]
+
+    ```bash
+    npm install
+    ```
+
+    ```bash
+    npm run dev
+    ```
+
+    Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
+  </Step>
+
+  <Step>
+    ### Build and publish [#build-and-publish]
+
+    ```bash
+    npm run build
+    ```
+
+    ```bash
+    python3 tools/nb_docs.py --publish
+    ```
+
+    The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
+  </Step>
+
+  <Step>
+    ### Check [#check]
+
+    ```bash
+    python3 tools/nb_docs.py --check
+    ```
+
+    It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
+  </Step>
+</Steps>
+
+## Pages you do not edit [#pages-you-do-not-edit]
+
+Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
+
+## Links [#links]
+
+Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/reference/describe#describe`. A test fails on a link that leads nowhere.
+
+
+# How it fits together (/data-scientist/develop/how-it-fits)
+
+
+
+## Three layers [#three-layers]
+
+| Layer           | Where                                                    | What it owns                                                                  |
+| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The kit         | `setup/`, the `exakit` command                           | The database, connections, loading, connectors, add-ons, the describe service |
+| The helpers     | `notebook/package/exakit_nb/` (`import exakit.nb as nb`) | One Python call for each thing a notebook does                                |
+| The guided view | `notebook/package/exakit_guide/` (`exakit.guide`)        | Cards that call the helpers; UI only                                          |
+
+A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
+
+## The helpers [#the-helpers]
+
+`exakit.nb` exports about 110 names, listed in [All commands](/data-scientist/reference). The rules they follow:
+
+* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
+* **The kit does the work.** Describing a table is the kit's describe service; loading is `exakit data-load`; connecting a source is `exakit connect`. The helpers call these, they do not reimplement them.
+* **SQL is shown.** `nb.sql` records the statement, `nb.show_sql()` prints it, and the workflow logs it.
+* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when called.
+
+## The guided view [#the-guided-view]
+
+```text
+notebook/package/exakit_guide/
+  actions.py     every action: one or more lines of exakit.nb code, and its notebook
+  session.py     the notebook's namespace the actions run in
+  card.py        the widget; a button's code comes from its action
+  screens/       one module per page (home, understand, explore, ask, share): UI only
+  static/        card.js and card.css: the renderer, no facts
+```
+
+`actions.code(id, **values)` is the exact cell text. `actions.run(id, **values)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why **Code** can always show what a card did.
+
+## Rules the tests enforce [#rules-the-tests-enforce]
+
+* An action's call exists in its notebook's code section, and calls something `exakit.nb` exports.
+* No screen names a dataset, connector, add-on or notebook. Those are read from the kit.
+* No action shows a secret: a key is bound at run time, never written into the code.
+* Every exported helper has a page in these docs, and every link in them leads somewhere.
+
+## Notebooks [#notebooks]
+
+Sources are `notebook/notebooks/<persona>/<NN>_<name>.py` in jupytext percent format. The `.ipynb` and the Marimo version are built from them:
+
+```bash
+python3 tools/notebooks.py --marimo            # rebuild
+python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
+```
+
+
+# Where things live (/data-scientist/develop/where-things-live)
+
+
+
+Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` when set).
+
+| Path                                         | What it holds                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `notebooks/starter-kit-notebooks/<persona>/` | Your copies of the notebooks                                                 |
+| `notebooks/marimo/<persona>/`                | The Marimo versions                                                          |
+| `descriptors/`                               | Approved column maps, one folder per table, every version kept               |
+| `last-dataset`                               | The dataset approved last, which the notebooks follow                        |
+| `workflows/<id>.jsonl`                       | Workflow logs                                                                |
+| `last-workflow`                              | The workflow started or resumed last                                         |
+| `bundles/<workflow id>/`                     | Hand-off bundles, each also as a zip                                         |
+| `handoffs/`                                  | Training handoffs for the ML Engineer                                        |
+| `exakit.env`                                 | Settings such as the model's id and address                                  |
+| `credentials/`                               | Secrets, readable by you only. Never read or print these from a notebook.    |
+| `kit/`                                       | The kit copy: scripts, datasets, the notebook package and this documentation |
+
+## In the database [#in-the-database]
+
+| Schema            | What it holds                                             |
+| ----------------- | --------------------------------------------------------- |
+| `EXAKIT_SEMANTIC` | Views whose column comments carry the approved roles      |
+| `EXAKIT_PREPARED` | Joined views and typed, cleaned views you chose to create |
+| `VS_<NAME>`       | The tables of an external source named `<NAME>`           |
+
+## What an update touches [#what-an-update-touches]
+
+* A kit notebook you did not edit is refreshed when the kit's version changes.
+* A notebook you edited, or a file of your own, is never overwritten.
+* A notebook you deleted is not copied back.
+* Approved column maps, workflow logs and bundles are yours and are left alone.
+
+
+# Review and approve the column map (/data-scientist/guides/approve-column-map)
+
+
+
+This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and Share have nothing to read. For what the roles and slots mean, see [Descriptor and approval](/data-scientist/concepts/descriptor).
+
+<Steps>
+  <Step>
+    ### Open the review [#open-the-review]
+
+    ```python
+    role_review = nb.review_roles(connection, chosen_data)
+    ```
+
+    The kit profiles the table and proposes a role for every column.
+  </Step>
+
+  <Step>
+    ### Check the uncertain columns first [#check-the-uncertain-columns-first]
+
+    **Check these first** lists the columns the kit was least sure about, each with the evidence that chose its role. Start there.
+  </Step>
+
+  <Step>
+    ### Correct roles and choose the target [#correct-roles-and-choose-the-target]
+
+    Change a role where it is wrong. Choose the **target**: the outcome you want to predict. The kit never chooses it. Leave a slot empty when no column fits.
+  </Step>
+
+  <Step>
+    ### Approve [#approve]
+
+    Press **Approve column map**, or in code:
+
+    ```python
+    role_review.approve({"ZIP_CODE": "identifier"}, {"target": "CANCELLED"})
+    ```
+
+    The first argument is the roles you change, the second the slots. With nothing to change, the saved approval stands.
+  </Step>
+
+  <Step>
+    ### Read it back [#read-it-back]
+
+    ```python
+    dataset = role_review.dataset()
+    nb.show_roles(dataset)
+    ```
+  </Step>
+</Steps>
+
+## After approving [#after-approving]
+
+```python
+leaking = nb.leakage_check(connection, dataset)       # columns that give the outcome away
+versions = nb.column_map_versions(dataset.id)         # every saved version
+nb.data_map(connection)                               # all your data in one map
+```
+
+<Callout>
+  Approval checks the data again. A warning about a column that gives the target away is not an error: the column stays in the map and is left out of the model.
+</Callout>
+
+## Change your mind later [#change-your-mind-later]
+
+Open the quickstart, change the roles and approve again. That writes a new version. The other notebooks follow the newest approval when you run their first cell again.
+
+
+# Ask your data (/data-scientist/guides/ask)
+
+
+
+This is step 7, in `02_ask_your_data`.
+
+<Steps>
+  <Step>
+    ### Ask [#ask]
+
+    ```python
+    QUESTION = "How many rows are in each category?"
+    dataset = nb.dataset(connection, nb.chosen_dataset(None))
+    nb.example_questions(dataset)      # questions this column map can answer
+    ```
+  </Step>
+
+  <Step>
+    ### Get a proposal [#get-a-proposal]
+
+    Three ways to draft the SQL:
+
+    ```python
+    proposal = nb.draft_question(connection, dataset, QUESTION)     # the kit's rules: no model, nothing leaves this computer
+    proposal = nb.ask(dataset, QUESTION)                            # your model drafts it from the column map
+    proposal = nb.ask(dataset, QUESTION, proposed_sql="SELECT ...") # your own SQL
+    ```
+
+    With a model, only the approved column map and the question are sent. No rows.
+  </Step>
+
+  <Step>
+    ### Read it, and edit if needed [#read-it-and-edit-if-needed]
+
+    A proposed query can be wrong: a wrong column, a missing filter. Read it.
+
+    ```python
+    proposal.edit("SELECT ...")        # replaces the SQL and removes any approval
+    ```
+  </Step>
+
+  <Step>
+    ### Approve and run [#approve-and-run]
+
+    ```python
+    proposal.approve()
+    answer = proposal.run()
+    ```
+
+    Only the exact approved text runs, through the kit's read-only service as the read-only user. Check the figures against the SQL.
+  </Step>
+</Steps>
+
+<Callout type="warn">
+  Nothing runs before `approve()`. In the notebook, set `APPROVE_SQL = True` and run the cell again.
+</Callout>
+
+See [AI and tracing](/data-scientist/concepts/ai-and-tracing) and [Set up a model](/data-scientist/guides/set-up-a-model).
+
+
+# Explore and model (/data-scientist/guides/explore-and-model)
+
+
+
+`01_explore` reads the dataset you approved. Its first cell holds the choices:
+
+```python
+DATASET = None          # None: the dataset approved last in the quickstart
+USE_AI_THEMES = False   # True: your model sorts the texts into themes
+USE_JOINED = False      # True: create and use the joined view
+USE_PREPARED = False    # True: create and use the typed, cleaned view
+```
+
+## Prepare [#prepare]
+
+```python
+workflow_id = nb.continue_workflow("explore")
+connection = nb.connect()
+dataset = nb.review_roles(connection, nb.chosen_dataset(DATASET)).dataset(draft_ok=True)
+
+findings = nb.data_checks(connection, dataset)
+schema_map = nb.describe_schema(connection, dataset)
+typed_view_proposal = nb.typed_view(connection, dataset)
+```
+
+Read the findings and the two proposals. Nothing is created until you set `USE_JOINED` or `USE_PREPARED`. See [Prepared views](/data-scientist/concepts/prepared-views).
+
+## Explore [#explore]
+
+Each query shows its SQL before its result, and a plain-language note under it.
+
+```python
+rows = nb.sql(connection, f"""
+SELECT {dataset.col("category")} AS GROUP_, COUNT(*) AS N
+FROM {dataset.fact_table}
+GROUP BY 1 ORDER BY N DESC""")
+nb.show_sql()
+```
+
+`nb.note_groups` and `nb.note_trend` write the notes under the group and over-time results.
+
+## Model and validate [#model-and-validate]
+
+```python
+leaking = nb.leakage_check(connection, dataset)
+```
+
+The notebook then reads up to 20,000 rows, trains a small baseline model on the category, the entity and the month, scores it on rows it has not seen, and shows what it leans on. `nb.note_model` says in plain words what the score means.
+
+For more control, the **model lab** lets you choose the task, the model and the split:
+
+```python
+lab = nb.model_lab(connection, dataset)        # task, model and split are arguments
+ideas = nb.feature_ideas(lab)                  # ideas, each with the SQL that would make it
+result = nb.try_feature(lab, ideas[0])         # retrain with one idea added, on the same split
+```
+
+See [Model lab](/data-scientist/reference/lab).
+
+<Callout>
+  A dataset with no target skips the model steps and says so. Choose a target in the column map to run them.
+</Callout>
+
+
+# Load data (/data-scientist/guides/load-data)
+
+
+
+All of this happens in step 1 of `00_quickstart`. On the **Choose your data** card you pick one of three boxes. The code below is what each box runs.
+
+```python
+import exakit.nb as nb
+
+connection = nb.connect()
+nb.check_connection(connection)
+```
+
+<Tabs items="['A kit dataset', 'Your own data', 'An external source']">
+  <Tab value="A kit dataset">
+    ```python
+    nb.sample_datasets()                                   # what the kit has, and which are loaded
+    sample_data = nb.load_sample(connection, "amazon_sales")
+    ```
+
+    A dataset that is not loaded yet is loaded first. Nothing else is needed.
+  </Tab>
+
+  <Tab value="Your own data">
+    A file or a folder:
+
+    ```python
+    own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
+    ```
+
+    CSV, Parquet, JSON and Excel work. Leave the schema empty and it is named after the folder: `~/sales-data` becomes `SALES_DATA`.
+
+    A table that is already in the database:
+
+    ```python
+    own_data = nb.use_table(connection, "MY_DATA.ORDERS")
+    ```
+
+    `nb.data_map(connection)` lists every table the database holds.
+  </Tab>
+
+  <Tab value="An external source">
+    The card walks through it one step at a time: an existing connection or a new one, the kind of source, a connection string or manual details, a name, the password, and optional settings.
+
+    ```python
+    nb.connectors()                                         # every kind of source
+    reading = nb.read_connection_string("postgresql", "postgres://reader@192.168.64.1:5432/shop")
+    reading["missing"]                                      # what the string did not give
+
+    test = nb.test_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
+    connected = nb.connect_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
+    source_data = nb.load_source(connection, "VS_SALES.ORDERS")
+    ```
+
+    A source with several kinds in one, such as a Lakehouse, shows its choices as a tree under it in the **Data source** list. Pick the catalog and where its files are; the steps after it ask only what that combination needs. See [Sources](/data-scientist/concepts/sources).
+
+    * **Test connection** checks the inputs and reaches the source from this computer. It changes nothing.
+    * **Connect and use this data** runs `exakit connect`. The tables then appear as `VS_SALES`.
+    * The password is asked in a hidden box. It is never part of the code.
+  </Tab>
+</Tabs>
+
+## Use what you chose [#use-what-you-chose]
+
+```python
+chosen_data = nb.first(source_data, own_data, sample_data)   # the first one that is set
+```
+
+Next: [approve the column map](/data-scientist/guides/approve-column-map).
+
+<Callout type="warn">
+  A source on this computer is not `localhost` from the database's point of view. On macOS use `192.168.64.1`. For a cloud source, allow this computer's public IP there; the card shows it.
+</Callout>
+
+
+# Run the kit from a notebook (/data-scientist/guides/run-the-kit)
+
+
+
+Step 0 of the quickstart is the kit itself. Every command here is the same `exakit` a terminal runs, with its output streaming into the cell.
+
+## See what is there [#see-what-is-there]
+
+```python
+kit_state = nb.kit_check()      # what is installed and running; changes nothing
+nb.components()                 # the kit's parts, their versions and pending updates
+nb.addons()                     # the marketplace's add-ons and their state
+nb.sample_datasets()            # the kit's datasets, and which are loaded
+nb.loaded_files()               # the files you loaded
+nb.notebooks("data-scientist")  # this persona's notebooks, in order
+```
+
+## Change it [#change-it]
+
+```python
+nb.exakit("start")                                  # start the database
+nb.addon_ready("dash-server")                       # install and start an add-on
+nb.exakit("data-load", "fraud_transactions")        # load a kit dataset, a file or a folder
+nb.exakit("logs", "dash-server")                    # a service's log
+nb.kit_update()                                     # bring the kit and its add-ons up to date
+```
+
+`nb.exakit(...)` returns the run with its exit code, so a cell can act on it.
+
+<Callout>
+  A command run from a cell has no terminal, so a question it would ask takes its default. Give a choice up front instead: `nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`.
+</Callout>
+
+## Reference [#reference]
+
+[Kit commands](/data-scientist/reference/kit-commands), [Kit facts](/data-scientist/reference/kit-facts).
+
+
+# Set up a model (/data-scientist/guides/set-up-a-model)
+
+
+
+A model is optional. It is used to draft SQL in Ask and to sort texts into themes in Explore. Any endpoint that speaks the Chat Completions API works: an external provider or a model on your own machine.
+
+## The quickest way [#the-quickest-way]
+
+```python
+nb.model_setup()
+```
+
+It asks for anything missing, with the keys in a hidden box, says what is set, and prints the lines that set the same thing for every notebook.
+
+## In a cell [#in-a-cell]
+
+```python
+nb.use_model("your-model-id", "https://your-provider/v1/")                     # this kernel only
+nb.use_model("your-model-id", "https://your-provider/v1/", remember=True)      # every notebook of this kit
+nb.use_model(langfuse_base_url="https://cloud.langfuse.com", remember=True)    # tracing
+```
+
+The API key is asked in a hidden box. With `remember=True` it is kept in the kit's credentials, readable by you only.
+
+## Check and forget [#check-and-forget]
+
+```python
+nb.model_settings()                            # what is set, without secrets
+nb.tracing()                                   # is Langfuse tracing on?
+nb.forget_model(model=True, langfuse=True)     # delete what was remembered
+```
+
+## The settings behind it [#the-settings-behind-it]
+
+| Setting                                                           | What it is             |
+| ----------------------------------------------------------------- | ---------------------- |
+| `EXAKIT_MODEL_ID`                                                 | The model's id         |
+| `EXAKIT_PROVIDER_BASE_URL`                                        | The endpoint's address |
+| `EXAKIT_PROVIDER_API_KEY`                                         | The key                |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Turn tracing on        |
+
+The model's id and address can also live in `~/.exasol-starter-kit/exakit.env`. Provider recipes are in `MODEL-PROVIDERS.md`, copied beside the notebooks.
+
+<Callout type="warn">
+  Never type a key into a cell. Use the hidden box, so the key is not saved in the notebook file.
+</Callout>
+
+
+# Share a dashboard and hand off (/data-scientist/guides/share)
+
+
+
+<Steps>
+  <Step>
+    ### Prepare the dashboard [#prepare-the-dashboard]
+
+    ```python
+    dataset = nb.dataset(connection, nb.chosen_dataset(None))
+    dashboard_draft = nb.share(dataset, dashboard_query, "Orders by category", "orders-by-category", measure="count")
+    ```
+
+    The dashboard is built from approved roles and a query you can read.
+  </Step>
+
+  <Step>
+    ### Start Dash Server [#start-dash-server]
+
+    ```python
+    nb.addon_ready("dash-server")
+    ```
+
+    It installs Dash Server when it is missing and starts it when it is stopped. This is what `exakit marketplace dash-server` and `exakit start dash-server` do. You can skip this step: the preview sets the server up by itself, on the card and in `nb.dash_tools()`.
+  </Step>
+
+  <Step>
+    ### Preview [#preview]
+
+    ```python
+    dash_server = nb.dash_tools()
+    preview_path = dashboard_draft.preview(dash_server)
+    print("Preview:", dash_server.url + preview_path)
+    ```
+
+    Open it. Check that the categories and counts match your SQL, and that the filters update both charts and the table.
+  </Step>
+
+  <Step>
+    ### Publish [#publish]
+
+    ```python
+    live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
+    ```
+
+    Set `figures_checked=True` only when the preview matches the query. Keep the live address with your workflow id.
+  </Step>
+
+  <Step>
+    ### Hand off [#hand-off]
+
+    ```python
+    handoff = nb.handoff_bundle(connection, dataset)
+    ```
+
+    One folder and a zip under `~/.exasol-starter-kit/bundles/`. It needs no Dash Server and holds no password. See [Sharing and hand-off](/data-scientist/concepts/sharing-and-handoff).
+  </Step>
+</Steps>
+
+
 # AI and tracing (/data-scientist/concepts/ai-and-tracing)
 
 
@@ -639,642 +1275,6 @@ A secret-named value or a connection string with a password is refused before an
 [Workflows](/data-scientist/reference/workflow).
 
 
-# Review and approve the column map (/data-scientist/guides/approve-column-map)
-
-
-
-This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and Share have nothing to read. For what the roles and slots mean, see [Descriptor and approval](/data-scientist/concepts/descriptor).
-
-<Steps>
-  <Step>
-    ### Open the review [#open-the-review]
-
-    ```python
-    role_review = nb.review_roles(connection, chosen_data)
-    ```
-
-    The kit profiles the table and proposes a role for every column.
-  </Step>
-
-  <Step>
-    ### Check the uncertain columns first [#check-the-uncertain-columns-first]
-
-    **Check these first** lists the columns the kit was least sure about, each with the evidence that chose its role. Start there.
-  </Step>
-
-  <Step>
-    ### Correct roles and choose the target [#correct-roles-and-choose-the-target]
-
-    Change a role where it is wrong. Choose the **target**: the outcome you want to predict. The kit never chooses it. Leave a slot empty when no column fits.
-  </Step>
-
-  <Step>
-    ### Approve [#approve]
-
-    Press **Approve column map**, or in code:
-
-    ```python
-    role_review.approve({"ZIP_CODE": "identifier"}, {"target": "CANCELLED"})
-    ```
-
-    The first argument is the roles you change, the second the slots. With nothing to change, the saved approval stands.
-  </Step>
-
-  <Step>
-    ### Read it back [#read-it-back]
-
-    ```python
-    dataset = role_review.dataset()
-    nb.show_roles(dataset)
-    ```
-  </Step>
-</Steps>
-
-## After approving [#after-approving]
-
-```python
-leaking = nb.leakage_check(connection, dataset)       # columns that give the outcome away
-versions = nb.column_map_versions(dataset.id)         # every saved version
-nb.data_map(connection)                               # all your data in one map
-```
-
-<Callout>
-  Approval checks the data again. A warning about a column that gives the target away is not an error: the column stays in the map and is left out of the model.
-</Callout>
-
-## Change your mind later [#change-your-mind-later]
-
-Open the quickstart, change the roles and approve again. That writes a new version. The other notebooks follow the newest approval when you run their first cell again.
-
-
-# Ask your data (/data-scientist/guides/ask)
-
-
-
-This is step 7, in `02_ask_your_data`.
-
-<Steps>
-  <Step>
-    ### Ask [#ask]
-
-    ```python
-    QUESTION = "How many rows are in each category?"
-    dataset = nb.dataset(connection, nb.chosen_dataset(None))
-    nb.example_questions(dataset)      # questions this column map can answer
-    ```
-  </Step>
-
-  <Step>
-    ### Get a proposal [#get-a-proposal]
-
-    Three ways to draft the SQL:
-
-    ```python
-    proposal = nb.draft_question(connection, dataset, QUESTION)     # the kit's rules: no model, nothing leaves this computer
-    proposal = nb.ask(dataset, QUESTION)                            # your model drafts it from the column map
-    proposal = nb.ask(dataset, QUESTION, proposed_sql="SELECT ...") # your own SQL
-    ```
-
-    With a model, only the approved column map and the question are sent. No rows.
-  </Step>
-
-  <Step>
-    ### Read it, and edit if needed [#read-it-and-edit-if-needed]
-
-    A proposed query can be wrong: a wrong column, a missing filter. Read it.
-
-    ```python
-    proposal.edit("SELECT ...")        # replaces the SQL and removes any approval
-    ```
-  </Step>
-
-  <Step>
-    ### Approve and run [#approve-and-run]
-
-    ```python
-    proposal.approve()
-    answer = proposal.run()
-    ```
-
-    Only the exact approved text runs, through the kit's read-only service as the read-only user. Check the figures against the SQL.
-  </Step>
-</Steps>
-
-<Callout type="warn">
-  Nothing runs before `approve()`. In the notebook, set `APPROVE_SQL = True` and run the cell again.
-</Callout>
-
-See [AI and tracing](/data-scientist/concepts/ai-and-tracing) and [Set up a model](/data-scientist/guides/set-up-a-model).
-
-
-# Explore and model (/data-scientist/guides/explore-and-model)
-
-
-
-`01_explore` reads the dataset you approved. Its first cell holds the choices:
-
-```python
-DATASET = None          # None: the dataset approved last in the quickstart
-USE_AI_THEMES = False   # True: your model sorts the texts into themes
-USE_JOINED = False      # True: create and use the joined view
-USE_PREPARED = False    # True: create and use the typed, cleaned view
-```
-
-## Prepare [#prepare]
-
-```python
-workflow_id = nb.continue_workflow("explore")
-connection = nb.connect()
-dataset = nb.review_roles(connection, nb.chosen_dataset(DATASET)).dataset(draft_ok=True)
-
-findings = nb.data_checks(connection, dataset)
-schema_map = nb.describe_schema(connection, dataset)
-typed_view_proposal = nb.typed_view(connection, dataset)
-```
-
-Read the findings and the two proposals. Nothing is created until you set `USE_JOINED` or `USE_PREPARED`. See [Prepared views](/data-scientist/concepts/prepared-views).
-
-## Explore [#explore]
-
-Each query shows its SQL before its result, and a plain-language note under it.
-
-```python
-rows = nb.sql(connection, f"""
-SELECT {dataset.col("category")} AS GROUP_, COUNT(*) AS N
-FROM {dataset.fact_table}
-GROUP BY 1 ORDER BY N DESC""")
-nb.show_sql()
-```
-
-`nb.note_groups` and `nb.note_trend` write the notes under the group and over-time results.
-
-## Model and validate [#model-and-validate]
-
-```python
-leaking = nb.leakage_check(connection, dataset)
-```
-
-The notebook then reads up to 20,000 rows, trains a small baseline model on the category, the entity and the month, scores it on rows it has not seen, and shows what it leans on. `nb.note_model` says in plain words what the score means.
-
-For more control, the **model lab** lets you choose the task, the model and the split:
-
-```python
-lab = nb.model_lab(connection, dataset)        # task, model and split are arguments
-ideas = nb.feature_ideas(lab)                  # ideas, each with the SQL that would make it
-result = nb.try_feature(lab, ideas[0])         # retrain with one idea added, on the same split
-```
-
-See [Model lab](/data-scientist/reference/lab).
-
-<Callout>
-  A dataset with no target skips the model steps and says so. Choose a target in the column map to run them.
-</Callout>
-
-
-# Load data (/data-scientist/guides/load-data)
-
-
-
-All of this happens in step 1 of `00_quickstart`. On the **Choose your data** card you pick one of three boxes. The code below is what each box runs.
-
-```python
-import exakit.nb as nb
-
-connection = nb.connect()
-nb.check_connection(connection)
-```
-
-<Tabs items="['A kit dataset', 'Your own data', 'An external source']">
-  <Tab value="A kit dataset">
-    ```python
-    nb.sample_datasets()                                   # what the kit has, and which are loaded
-    sample_data = nb.load_sample(connection, "amazon_sales")
-    ```
-
-    A dataset that is not loaded yet is loaded first. Nothing else is needed.
-  </Tab>
-
-  <Tab value="Your own data">
-    A file or a folder:
-
-    ```python
-    own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
-    ```
-
-    CSV, Parquet, JSON and Excel work. Leave the schema empty and it is named after the folder: `~/sales-data` becomes `SALES_DATA`.
-
-    A table that is already in the database:
-
-    ```python
-    own_data = nb.use_table(connection, "MY_DATA.ORDERS")
-    ```
-
-    `nb.data_map(connection)` lists every table the database holds.
-  </Tab>
-
-  <Tab value="An external source">
-    The card walks through it one step at a time: an existing connection or a new one, the kind of source, a connection string or manual details, a name, the password, and optional settings.
-
-    ```python
-    nb.connectors()                                         # every kind of source
-    reading = nb.read_connection_string("postgresql", "postgres://reader@192.168.64.1:5432/shop")
-    reading["missing"]                                      # what the string did not give
-
-    test = nb.test_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
-    connected = nb.connect_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
-    source_data = nb.load_source(connection, "VS_SALES.ORDERS")
-    ```
-
-    A source with several kinds in one, such as a Lakehouse, shows its choices as a tree under it in the **Data source** list. Pick the catalog and where its files are; the steps after it ask only what that combination needs. See [Sources](/data-scientist/concepts/sources).
-
-    * **Test connection** checks the inputs and reaches the source from this computer. It changes nothing.
-    * **Connect and use this data** runs `exakit connect`. The tables then appear as `VS_SALES`.
-    * The password is asked in a hidden box. It is never part of the code.
-  </Tab>
-</Tabs>
-
-## Use what you chose [#use-what-you-chose]
-
-```python
-chosen_data = nb.first(source_data, own_data, sample_data)   # the first one that is set
-```
-
-Next: [approve the column map](/data-scientist/guides/approve-column-map).
-
-<Callout type="warn">
-  A source on this computer is not `localhost` from the database's point of view. On macOS use `192.168.64.1`. For a cloud source, allow this computer's public IP there; the card shows it.
-</Callout>
-
-
-# Run the kit from a notebook (/data-scientist/guides/run-the-kit)
-
-
-
-Step 0 of the quickstart is the kit itself. Every command here is the same `exakit` a terminal runs, with its output streaming into the cell.
-
-## See what is there [#see-what-is-there]
-
-```python
-kit_state = nb.kit_check()      # what is installed and running; changes nothing
-nb.components()                 # the kit's parts, their versions and pending updates
-nb.addons()                     # the marketplace's add-ons and their state
-nb.sample_datasets()            # the kit's datasets, and which are loaded
-nb.loaded_files()               # the files you loaded
-nb.notebooks("data-scientist")  # this persona's notebooks, in order
-```
-
-## Change it [#change-it]
-
-```python
-nb.exakit("start")                                  # start the database
-nb.addon_ready("dash-server")                       # install and start an add-on
-nb.exakit("data-load", "fraud_transactions")        # load a kit dataset, a file or a folder
-nb.exakit("logs", "dash-server")                    # a service's log
-nb.kit_update()                                     # bring the kit and its add-ons up to date
-```
-
-`nb.exakit(...)` returns the run with its exit code, so a cell can act on it.
-
-<Callout>
-  A command run from a cell has no terminal, so a question it would ask takes its default. Give a choice up front instead: `nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`.
-</Callout>
-
-## Reference [#reference]
-
-[Kit commands](/data-scientist/reference/kit-commands), [Kit facts](/data-scientist/reference/kit-facts).
-
-
-# Set up a model (/data-scientist/guides/set-up-a-model)
-
-
-
-A model is optional. It is used to draft SQL in Ask and to sort texts into themes in Explore. Any endpoint that speaks the Chat Completions API works: an external provider or a model on your own machine.
-
-## The quickest way [#the-quickest-way]
-
-```python
-nb.model_setup()
-```
-
-It asks for anything missing, with the keys in a hidden box, says what is set, and prints the lines that set the same thing for every notebook.
-
-## In a cell [#in-a-cell]
-
-```python
-nb.use_model("your-model-id", "https://your-provider/v1/")                     # this kernel only
-nb.use_model("your-model-id", "https://your-provider/v1/", remember=True)      # every notebook of this kit
-nb.use_model(langfuse_base_url="https://cloud.langfuse.com", remember=True)    # tracing
-```
-
-The API key is asked in a hidden box. With `remember=True` it is kept in the kit's credentials, readable by you only.
-
-## Check and forget [#check-and-forget]
-
-```python
-nb.model_settings()                            # what is set, without secrets
-nb.tracing()                                   # is Langfuse tracing on?
-nb.forget_model(model=True, langfuse=True)     # delete what was remembered
-```
-
-## The settings behind it [#the-settings-behind-it]
-
-| Setting                                                           | What it is             |
-| ----------------------------------------------------------------- | ---------------------- |
-| `EXAKIT_MODEL_ID`                                                 | The model's id         |
-| `EXAKIT_PROVIDER_BASE_URL`                                        | The endpoint's address |
-| `EXAKIT_PROVIDER_API_KEY`                                         | The key                |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Turn tracing on        |
-
-The model's id and address can also live in `~/.exasol-starter-kit/exakit.env`. Provider recipes are in `MODEL-PROVIDERS.md`, copied beside the notebooks.
-
-<Callout type="warn">
-  Never type a key into a cell. Use the hidden box, so the key is not saved in the notebook file.
-</Callout>
-
-
-# Share a dashboard and hand off (/data-scientist/guides/share)
-
-
-
-<Steps>
-  <Step>
-    ### Prepare the dashboard [#prepare-the-dashboard]
-
-    ```python
-    dataset = nb.dataset(connection, nb.chosen_dataset(None))
-    dashboard_draft = nb.share(dataset, dashboard_query, "Orders by category", "orders-by-category", measure="count")
-    ```
-
-    The dashboard is built from approved roles and a query you can read.
-  </Step>
-
-  <Step>
-    ### Start Dash Server [#start-dash-server]
-
-    ```python
-    nb.addon_ready("dash-server")
-    ```
-
-    It installs Dash Server when it is missing and starts it when it is stopped. This is what `exakit marketplace dash-server` and `exakit start dash-server` do.
-  </Step>
-
-  <Step>
-    ### Preview [#preview]
-
-    ```python
-    dash_server = nb.dash_tools()
-    preview_path = dashboard_draft.preview(dash_server)
-    print("Preview:", dash_server.url + preview_path)
-    ```
-
-    Open it. Check that the categories and counts match your SQL, and that the filters update both charts and the table.
-  </Step>
-
-  <Step>
-    ### Publish [#publish]
-
-    ```python
-    live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
-    ```
-
-    Set `figures_checked=True` only when the preview matches the query. Keep the live address with your workflow id.
-  </Step>
-
-  <Step>
-    ### Hand off [#hand-off]
-
-    ```python
-    handoff = nb.handoff_bundle(connection, dataset)
-    ```
-
-    One folder and a zip under `~/.exasol-starter-kit/bundles/`. It needs no Dash Server and holds no password. See [Sharing and hand-off](/data-scientist/concepts/sharing-and-handoff).
-  </Step>
-</Steps>
-
-
-# Add a command (/data-scientist/develop/add-a-command)
-
-
-
-<Steps>
-  <Step>
-    ### Write the helper [#write-the-helper]
-
-    Add a function to a module in `notebook/package/exakit_nb/`, with a docstring. The first sentence becomes its one-line summary here; the rest becomes its reference text. Indented lines in a docstring are shown as code.
-
-    Export it: import it in `exakit_nb/__init__.py` and add its name to `__all__`.
-  </Step>
-
-  <Step>
-    ### Put it in a notebook [#put-it-in-a-notebook]
-
-    Add the call to the code section of the notebook it belongs to, guarded by a variable when it is optional:
-
-    ```python
-    if ADD_ON:
-        nb.addon_ready(ADD_ON)
-    ```
-  </Step>
-
-  <Step>
-    ### Give a card a button for it [#give-a-card-a-button-for-it]
-
-    Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`: the code and the notebook it belongs to. Have the screen call `actions.run(...)`.
-  </Step>
-
-  <Step>
-    ### Regenerate [#regenerate]
-
-    ```bash
-    python3 tools/notebooks.py --marimo     # the .ipynb and Marimo notebooks
-    python3 tools/nb_docs.py                # the command reference
-    ```
-
-    The new helper now has an entry in its module's reference page and a row in [All commands](/data-scientist/reference). `nb.docs(nb.your_helper)` opens it once the site is rebuilt.
-  </Step>
-
-  <Step>
-    ### Test [#test]
-
-    ```bash
-    python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs
-    ```
-  </Step>
-</Steps>
-
-<Callout>
-  A whole new module gets its own reference page automatically, titled from its file name. Give it a proper title and a place in the order by adding one line to `PAGES` in `tools/nb_docs.py`.
-</Callout>
-
-
-# These docs (/data-scientist/develop/docs-site)
-
-
-
-## How it works [#how-it-works]
-
-* **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
-* **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
-* **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
-* **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
-
-Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
-
-## Change a page [#change-a-page]
-
-<Steps>
-  <Step>
-    ### Edit [#edit]
-
-    Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
-
-    ```text
-    ---
-    title: Page title
-    description: One sentence that says what the page covers.
-    ---
-    ```
-
-    `Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
-  </Step>
-
-  <Step>
-    ### Preview while you write [#preview-while-you-write]
-
-    ```bash
-    npm install
-    ```
-
-    ```bash
-    npm run dev
-    ```
-
-    Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
-  </Step>
-
-  <Step>
-    ### Build and publish [#build-and-publish]
-
-    ```bash
-    npm run build
-    ```
-
-    ```bash
-    python3 tools/nb_docs.py --publish
-    ```
-
-    The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
-  </Step>
-
-  <Step>
-    ### Check [#check]
-
-    ```bash
-    python3 tools/nb_docs.py --check
-    ```
-
-    It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
-  </Step>
-</Steps>
-
-## Pages you do not edit [#pages-you-do-not-edit]
-
-Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
-
-## Links [#links]
-
-Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/reference/describe#describe`. A test fails on a link that leads nowhere.
-
-
-# How it fits together (/data-scientist/develop/how-it-fits)
-
-
-
-## Three layers [#three-layers]
-
-| Layer           | Where                                                    | What it owns                                                                  |
-| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| The kit         | `setup/`, the `exakit` command                           | The database, connections, loading, connectors, add-ons, the describe service |
-| The helpers     | `notebook/package/exakit_nb/` (`import exakit.nb as nb`) | One Python call for each thing a notebook does                                |
-| The guided view | `notebook/package/exakit_guide/` (`exakit.guide`)        | Cards that call the helpers; UI only                                          |
-
-A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
-
-## The helpers [#the-helpers]
-
-`exakit.nb` exports about 110 names, listed in [All commands](/data-scientist/reference). The rules they follow:
-
-* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
-* **The kit does the work.** Describing a table is the kit's describe service; loading is `exakit data-load`; connecting a source is `exakit connect`. The helpers call these, they do not reimplement them.
-* **SQL is shown.** `nb.sql` records the statement, `nb.show_sql()` prints it, and the workflow logs it.
-* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when called.
-
-## The guided view [#the-guided-view]
-
-```text
-notebook/package/exakit_guide/
-  actions.py     every action: one or more lines of exakit.nb code, and its notebook
-  session.py     the notebook's namespace the actions run in
-  card.py        the widget; a button's code comes from its action
-  screens/       one module per page (home, understand, explore, ask, share): UI only
-  static/        card.js and card.css: the renderer, no facts
-```
-
-`actions.code(id, **values)` is the exact cell text. `actions.run(id, **values)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why **Code** can always show what a card did.
-
-## Rules the tests enforce [#rules-the-tests-enforce]
-
-* An action's call exists in its notebook's code section, and calls something `exakit.nb` exports.
-* No screen names a dataset, connector, add-on or notebook. Those are read from the kit.
-* No action shows a secret: a key is bound at run time, never written into the code.
-* Every exported helper has a page in these docs, and every link in them leads somewhere.
-
-## Notebooks [#notebooks]
-
-Sources are `notebook/notebooks/<persona>/<NN>_<name>.py` in jupytext percent format. The `.ipynb` and the Marimo version are built from them:
-
-```bash
-python3 tools/notebooks.py --marimo            # rebuild
-python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
-```
-
-
-# Where things live (/data-scientist/develop/where-things-live)
-
-
-
-Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` when set).
-
-| Path                                         | What it holds                                                                |
-| -------------------------------------------- | ---------------------------------------------------------------------------- |
-| `notebooks/starter-kit-notebooks/<persona>/` | Your copies of the notebooks                                                 |
-| `notebooks/marimo/<persona>/`                | The Marimo versions                                                          |
-| `descriptors/`                               | Approved column maps, one folder per table, every version kept               |
-| `last-dataset`                               | The dataset approved last, which the notebooks follow                        |
-| `workflows/<id>.jsonl`                       | Workflow logs                                                                |
-| `last-workflow`                              | The workflow started or resumed last                                         |
-| `bundles/<workflow id>/`                     | Hand-off bundles, each also as a zip                                         |
-| `handoffs/`                                  | Training handoffs for the ML Engineer                                        |
-| `exakit.env`                                 | Settings such as the model's id and address                                  |
-| `credentials/`                               | Secrets, readable by you only. Never read or print these from a notebook.    |
-| `kit/`                                       | The kit copy: scripts, datasets, the notebook package and this documentation |
-
-## In the database [#in-the-database]
-
-| Schema            | What it holds                                             |
-| ----------------- | --------------------------------------------------------- |
-| `EXAKIT_SEMANTIC` | Views whose column comments carry the approved roles      |
-| `EXAKIT_PREPARED` | Joined views and typed, cleaned views you chose to create |
-| `VS_<NAME>`       | The tables of an external source named `<NAME>`           |
-
-## What an update touches [#what-an-update-touches]
-
-* A kit notebook you did not edit is refreshed when the kit's version changes.
-* A notebook you edited, or a file of your own, is never overwritten.
-* A notebook you deleted is not copied back.
-* Approved column maps, workflow logs and bundles are yours and are left alone.
-
-
 # Ask your data (/data-scientist/reference/ask)
 
 
@@ -1541,10 +1541,13 @@ records to the user's Langfuse.
 ## nb.dash_tools [#dash_tools]
 
 ```python
-nb.dash_tools() -> DashTools
+nb.dash_tools(ready: bool=True) -> DashTools
 ```
 
-The notebook's Dash Server tool adapter; each call is an MCP tool call.
+The notebook's Dash Server tool adapter; each call is an MCP tool call. When Dash Server is not installed or
+not running, it is installed and started first, the way nb.addon_ready("dash-server") does it (`exakit
+marketplace dash-server`, `exakit start dash-server`), with its progress shown: a cell that previews a dashboard
+works on its own, and nothing is asked. `ready=False` only reports: it raises when the server is not there.
 
 **Used in:** `data-scientist/03_share`
 
@@ -3577,6 +3580,10 @@ Each Data Scientist notebook opens with cards that do the page's steps with butt
 | `01_explore`       | `guide.explore()`   |
 | `02_ask_your_data` | `guide.ask()`       |
 | `03_share`         | `guide.share()`     |
+
+## The Docs button [#the-docs-button]
+
+The first card of every notebook has a **Docs** button beside the logo. It opens this documentation in a new tab, on the guide for that notebook: loading data from the quickstart, exploring from `01_explore`, asking from `02_ask_your_data`, sharing from `03_share`.
 
 ## The Code switch [#the-code-switch]
 

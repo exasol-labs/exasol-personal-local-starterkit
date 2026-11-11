@@ -21,7 +21,7 @@
     nb.addon_ready("dash-server")
     ```
 
-    It installs Dash Server when it is missing and starts it when it is stopped. This is what `exakit marketplace dash-server` and `exakit start dash-server` do.
+    It installs Dash Server when it is missing and starts it when it is stopped. This is what `exakit marketplace dash-server` and `exakit start dash-server` do. You can skip this step: the preview sets the server up by itself, on the card and in `nb.dash_tools()`.
   </Step>
 
   <Step>

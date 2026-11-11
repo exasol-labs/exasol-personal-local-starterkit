@@ -1559,6 +1559,27 @@ class SourcesTest(unittest.TestCase):
         self.assertEqual(command[-2:], ["--yes", "--json"])
         self.assertEqual(command[:3], ["exakit", "connect", "pg"])      # the kit's connect command, then the connector
 
+    def test_the_dashboard_tools_set_up_the_server_when_it_is_not_there(self):
+        """nb.dash_tools() in a cell of its own: a Dash Server that is not installed or not running is installed and
+        started first with the kit's addon_ready, then the tools come back. One that is there is not touched, and
+        ready=False only reports."""
+        dash_mcp = importlib.import_module("exakit_nb.dash_mcp")
+        kit_commands = importlib.import_module("exakit_nb.kit_commands")
+        tools = object()
+        with mock.patch.object(dash_mcp, "DashTools", side_effect=[RuntimeError("Dash Server is not running."), tools]), \
+                mock.patch.object(kit_commands, "addon_ready", return_value={"state": "running"}) as ready:
+            self.assertIs(exakit_nb.dash_tools(), tools)
+        ready.assert_called_once_with("dash-server")
+        with mock.patch.object(dash_mcp, "DashTools", return_value=tools), \
+                mock.patch.object(kit_commands, "addon_ready") as ready:
+            self.assertIs(exakit_nb.dash_tools(), tools)
+        ready.assert_not_called()
+        with mock.patch.object(dash_mcp, "DashTools", side_effect=RuntimeError("Dash Server is stopped.")), \
+                mock.patch.object(kit_commands, "addon_ready") as ready:
+            with self.assertRaisesRegex(RuntimeError, "stopped"):
+                exakit_nb.dash_tools(ready=False)
+        ready.assert_not_called()
+
     def test_a_second_secret_reaches_the_kit_in_a_private_file_that_is_gone_afterwards(self):
         """A Lakehouse with a catalog login and storage keys has two secrets: the login goes on standard input, the
         storage secret in a file only this user can read (exakit connect --storage-secret-file), removed after the

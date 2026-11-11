@@ -665,6 +665,34 @@ class CardTest(unittest.TestCase):
         self.assertEqual({"state": "running"}, result)
         self.assertEqual(['dash_server_state = nb.addon_ready("dash-server")'], fake.code)
 
+    def test_the_first_card_of_a_page_gets_the_mark_and_a_docs_button(self):
+        """card.mark makes a card the first of its page: the persona's title beside the logo and the Docs button's
+        address, this page's guide in the kit's documentation. A page the site does not have opens the persona's
+        section instead of a search; a kit without the documentation shows no button."""
+        card = importlib.import_module("exakit_guide.card")
+        exakit_nb = importlib.import_module("exakit_nb")
+        screen = mock.Mock()
+        with mock.patch.object(card, "_persona_title", return_value="Data Scientist"), \
+                mock.patch.object(card, "_docs_url", return_value="http://h:1/docs/data-scientist/guides/ask") as url:
+            self.assertIs(screen, card.mark(screen, docs="guides/ask"))
+        url.assert_called_once_with("guides/ask")
+        self.assertEqual(("Data Scientist", "http://h:1/docs/data-scientist/guides/ask"), (screen.brand, screen.docs_url))
+        screen.refresh.assert_called_once()
+
+        def docs(what=None, **_):
+            return mock.Mock(url="http://h:1/docs/data-scientist/guides/ask" if what == "guides/ask" else
+                             "http://h:1/docs?q=guides%2Fgone" if what else "http://h:1/docs/data-scientist")
+
+        with mock.patch.object(exakit_nb, "docs", side_effect=docs):
+            self.assertEqual("http://h:1/docs/data-scientist/guides/ask", card._docs_url("guides/ask"))
+            self.assertEqual("http://h:1/docs/data-scientist", card._docs_url("guides/gone"))
+            self.assertEqual("http://h:1/docs/data-scientist", card._docs_url(""))
+        with mock.patch.object(exakit_nb, "docs", side_effect=RuntimeError("no site in this kit copy")):
+            self.assertEqual("", card._docs_url("guides/ask"))
+        script = (ROOT / "notebook/package/exakit_guide/static/card.js").read_text(encoding="utf-8")
+        self.assertIn('class: "guide-docs", href: docs, target: "_blank", rel: "noopener"', script)
+        self.assertEqual(2, script.count("brand(b.brand, b.docs)"))          # the Home card's head and every other head
+
     def test_marimo_gets_the_cards_stacked(self):
         card = importlib.import_module("exakit_guide.card")
         screen = mock.Mock()

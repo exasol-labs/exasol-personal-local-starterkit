@@ -76,7 +76,7 @@ dash_server_state = nb.addon_ready("dash-server")
 # %% [markdown]
 # ### Preview
 #
-# Open the printed URL. Make sure that:
+# Dash Server is installed and started first when this cell runs on its own. Open the printed URL. Make sure that:
 #
 # - the categories and counts match your SQL;
 # - the filters update both charts and the table.

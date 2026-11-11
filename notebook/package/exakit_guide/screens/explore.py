@@ -617,4 +617,4 @@ def explore():
     """Step 2 in the guided view: check and clean, compare, then predict and test feature ideas."""
     from ..card import show
 
-    return show(WorkingOn(), Prepare(), Compare(), Predict(), Ideas())
+    return show(WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="guides/explore-and-model")

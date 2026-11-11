@@ -465,6 +465,12 @@
 /* The kit's mark: the Exasol logo, then STARTER KIT - <persona>, top left of a page's first card. */
 .guide-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; color: var(--guide-text, inherit); }
 .guide-brand-logo { display: inline-flex; }
+.guide-docs { display: inline-flex; align-items: center; gap: 4px; margin-left: 2px; padding: 2px 9px; font-size: 12px; font-weight: 600;
+  line-height: 18px; color: var(--guide-text, inherit); text-decoration: none; border: 1px solid var(--guide-border); border-radius: 999px;
+  background: var(--guide-surface); }
+.guide-docs:hover { border-color: var(--guide-accent); color: var(--guide-accent); }
+.guide-docs:focus-visible { outline: 2px solid var(--guide-accent); outline-offset: 2px; }
+.guide-docs .guide-icon { display: inline-flex; }
 .guide-brand-logo svg { height: 18px; width: auto; display: block; }
 .guide-brand-text { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--guide-muted);
   padding-left: 10px; border-left: 1px solid var(--guide-border); line-height: 18px; }

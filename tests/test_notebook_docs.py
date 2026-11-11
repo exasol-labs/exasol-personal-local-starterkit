@@ -120,6 +120,16 @@ class PagesTest(unittest.TestCase):
             for target in re.findall(r"\]\(([^)\s]+\.mdx[^)\s]*)\)", text):
                 self.fail(f"{route(path)} links to a file ({target}); link to the page's address instead")
 
+    def test_every_notebooks_docs_button_opens_a_page_that_exists(self):
+        """The first card of each guided notebook has a Docs button; the page it names is one of these."""
+        named = []
+        for path in sorted((ROOT / "notebook" / "package" / "exakit_guide").rglob("*.py")):
+            named += re.findall(r'\bdocs="([^"]+)"', path.read_text(encoding="utf-8"))
+        self.assertGreaterEqual(len(named), 5, "start, understand, explore, ask and share each name their page")
+        for page in named:
+            with self.subTest(page=page):
+                self.assertTrue((CONTENT / tool.SECTION / f"{page}.mdx").is_file())
+
     def test_no_page_shows_a_password_or_a_key(self):
         for path in pages():
             with self.subTest(page=route(path)):

@@ -13,6 +13,10 @@ Each Data Scientist notebook opens with cards that do the page's steps with butt
 | `02_ask_your_data` | `guide.ask()`       |
 | `03_share`         | `guide.share()`     |
 
+## The Docs button [#the-docs-button]
+
+The first card of every notebook has a **Docs** button beside the logo. It opens this documentation in a new tab, on the guide for that notebook: loading data from the quickstart, exploring from `01_explore`, asking from `02_ask_your_data`, sharing from `03_share`.
+
 ## The Code switch [#the-code-switch]
 
 Every card has a **Guided / Code** switch at its top right.

@@ -270,4 +270,4 @@ def share():
     """Step 4 in the guided view: preview and publish a dashboard, then create the hand-off bundle."""
     from ..card import show
 
-    return show(Dashboard(), Handoff())
+    return show(Dashboard(), Handoff(), docs="guides/share")
