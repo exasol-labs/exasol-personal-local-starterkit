@@ -11,6 +11,7 @@ a plain sentence, never a traceback; details go to the log file.
 
 from __future__ import annotations
 
+import json
 import logging
 import weakref
 import traceback
@@ -140,7 +141,15 @@ class Screen:
             flash = {k: v for k, v in self.flash.items() if k != "said"}
             said = [{"t": "details", "title": "What the kit said", "open": True, "blocks": [{"t": "pre", "v": self.flash["said"]}]}] \
                 if self.flash.get("said") else []
-            blocks = [{"t": "msg", **flash}] + said + blocks
+            lines = flash.pop("lines", None) or []
+            note = [{"t": "msg", **flash}] + [{"t": "msg", "kind": kind, "v": text, "keep": True} for kind, text in lines] + said
+            # Said where it was asked: under the buttons that were pressed (a long card's top is out of sight
+            # from there), else at the top.
+            pressed = getattr(self, "last_event", None)
+            holds = [i for i, b in enumerate(blocks) if pressed and pressed in json.dumps(b)]
+            buttons = [i for i, b in enumerate(blocks) if b.get("t") == "actions"]
+            at = (holds or buttons or [-1])[-1] + 1
+            blocks = blocks[:at] + note + blocks[at:]
         try:
             from .session import SESSION
 
@@ -169,6 +178,7 @@ class Screen:
         except Exception:
             pass
         mark, error = self._code_mark(), None
+        self.last_event = f'"{action}"'          # the message goes under the block holding this button
         try:
             handler = getattr(self, f"on_{action}", None)
             if handler is None:

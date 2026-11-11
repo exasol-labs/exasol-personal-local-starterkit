@@ -381,9 +381,10 @@ class ChooseData(Screen):
         connector, name, settings, _ = self._source_inputs(v)
         result = actions.run("data.test_source", connector=connector, name=name, settings=settings)
         self.kit_said = SESSION.said or self.kit_said
-        lines = "; ".join(f"{'✓' if ok else '✗'} {what}: {said}" for what, ok, said in result.checks)
-        self.flash = {"kind": "ok" if result.ok else "error",
-                      "v": (f"Ready to connect {name}. " if result.ok else "Not ready yet. ") + lines}
+        self.flash = {"kind": "ok" if result.ok else "error", "keep": True,
+                      "v": (f"Connection test for {name}: ready. Use this data connects it." if result.ok
+                            else f"Connection test for {name}: not ready yet. Fix the line marked below, then test again."),
+                      "lines": [("ok" if ok else "error", f"{what}: {said}") for what, ok, said in result.checks]}
 
     def _connect(self, v: dict) -> str:
         """Connect an external source with the kit's own `exakit connect` (nb.connect_source), from the connector's

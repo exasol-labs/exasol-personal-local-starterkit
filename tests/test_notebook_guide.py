@@ -494,6 +494,30 @@ class WorkflowTest(unittest.TestCase):
                          tuple(actions[0][k] for k in ("card", "action", "code", "ok", "error")))
 
 
+class MessagePlaceTest(unittest.TestCase):
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_a_result_shows_under_the_button_that_asked_for_it(self):
+        """Test connection's answer was drawn at the top of a long card, out of sight of the button: nothing seemed
+        to happen. It now sits under the block holding the pressed button, one line per check, and stays."""
+        card = importlib.import_module("exakit_guide.card")
+
+        class Long(card.Screen):
+            def build(self):
+                return [{"t": "head", "title": "Choose"}, {"t": "p", "v": "lots of text"},
+                        {"t": "actions", "items": [{"id": "test_source", "label": "Test connection"}]}, {"t": "p", "v": "end"}]
+
+            def on_test_source(self, _v):
+                self.flash = {"kind": "error", "keep": True, "v": "not ready",
+                              "lines": [("ok", "inputs: fine"), ("error", "network: refused")]}
+
+        screen = Long()
+        screen._on_msg(None, {"type": "event", "id": "test_source", "values": {}}, None)
+        kinds = [(b["t"], b.get("v")) for b in screen.widget.blocks if b["t"] != "ran"]
+        self.assertEqual([("head", None), ("p", "lots of text"), ("actions", None), ("msg", "not ready"),
+                          ("msg", "inputs: fine"), ("msg", "network: refused"), ("p", "end")], kinds)
+        self.assertTrue(all(b.get("keep") for b in screen.widget.blocks if b["t"] == "msg"))
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

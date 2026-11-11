@@ -240,10 +240,10 @@ function render({ model, el }) {
     msg(b) {
       const kind = b.kind || "info";
       // A success note has done its job after a few seconds; warnings and errors stay until acted on.
-      if (kind === "ok" && ui.dismissed.has(b.v)) return null;
+      if (kind === "ok" && !b.keep && ui.dismissed.has(b.v)) return null;
       const node = h("div", { class: `guide-msg guide-msg-${kind}`, role: kind === "error" ? "alert" : "status" },
         icon(kind === "ok" ? "check" : kind === "error" || kind === "warn" ? "warn" : "info"), h("span", {}, b.v));
-      if (kind === "ok" && !ui.fading.has(b.v)) {
+      if (kind === "ok" && !b.keep && !ui.fading.has(b.v)) {   // a result asked for (a test) stays until the next action
         ui.fading.add(b.v);
         setTimeout(() => { node.classList.add("guide-fade"); setTimeout(() => { ui.dismissed.add(b.v); draw(); }, 400); }, 6000);
       }
