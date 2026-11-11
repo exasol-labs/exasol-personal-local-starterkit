@@ -328,6 +328,21 @@ def render_parameters(entry, indent="    "):
         para(entry["parameter_note"], indent=indent)
 
 def render_command_detail(doc, entry, prefix=""):
+    # An approved layout is the page, verbatim (exakit source); --json still
+    # carries options, description and examples.
+    if entry.get("layout"):
+        # layout_highlight: the leading text of a line whose command is shown
+        # bold in the kit's command green (the two commands to remember).
+        out()
+        for line in entry["layout"]:
+            lead = next((h for h in entry.get("layout_highlight", []) if line.startswith(h)), None)
+            if lead:
+                cmd = lead.rstrip()
+                out("%s%s%s%s%s%s" % (cmd[:len(cmd) - len(cmd.lstrip())], B, GN, cmd.lstrip(), R, line[len(cmd):]))
+            else:
+                out(line)
+        out()
+        return
     label = ("%s %s" % (prefix, entry.get("command", ""))).strip()
     opts = entry.get("options", "")
     out()
@@ -604,7 +619,8 @@ def catalog_rows(include_hidden=False):
                    "source": key, "topics": [key], "hidden": hidden, "invocation": full,
                    "usage": invocation_with_options(key, entry),
                    "help_command": 'exakit help "%s" --json' % full}
-            for field in ("parameters", "parameter_note", "examples", "exit_codes", "environment", "warning"):
+            for field in ("parameters", "parameter_note", "examples", "exit_codes", "environment", "warning",
+                          "primary", "subcommands", "example_notes"):
                 if field in entry:
                     row[field] = entry[field]
             rows.append(row)

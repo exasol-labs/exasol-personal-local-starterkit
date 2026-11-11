@@ -43,6 +43,8 @@ def certificates(path):
         raise CaError("the CA file %s cannot be read (%s)" % (path, error.strerror or error))
     if len(data) > MAX_BYTES:
         raise CaError("the CA file %s is larger than 2 MB; give the PEM certificate (or bundle) itself" % path)
+    if data.startswith(b"\xef\xbb\xbf"):
+        data = data[3:]
     found = certificates_from_text(data.decode("ascii", "replace"))
     if not found:
         raise CaError("the CA file %s holds no PEM certificate (-----BEGIN CERTIFICATE-----); "
@@ -50,8 +52,17 @@ def certificates(path):
     return found
 
 
+def normalise(text):
+    """A PEM as every driver reads it: no byte-order mark, LF line ends, no
+    trailing whitespace on a line. A Windows editor (or git autocrlf) writes
+    CRLF, and Oracle's wallet parser refuses the \\r in the base64 the kit
+    embeds (measured: the same file with LF connects)."""
+    text = (text or "").lstrip("\ufeff").replace("\r\n", "\n").replace("\r", "\n")
+    return "\n".join(line.rstrip() for line in text.split("\n"))
+
+
 def certificates_from_text(text):
-    return [m.group(0) + "\n" for m in PEM.finditer(text or "")]
+    return [m.group(0) + "\n" for m in PEM.finditer(normalise(text))]
 
 
 def handshake(host, port, protocol, pem, timeout):
