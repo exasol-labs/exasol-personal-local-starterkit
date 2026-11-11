@@ -146,10 +146,22 @@ def note_trend(frame, ds, period: str = "PERIOD", rows: str = "ROW_COUNT", pct: 
     return text
 
 
+def _model_event(ds, rows: int, score: float) -> None:
+    """One line in the active workflow's log: a model was trained and scored on this dataset."""
+    try:
+        import importlib
+
+        wf = importlib.import_module("exakit_nb.workflow")       # the module: exakit_nb.workflow is a function too
+        wf.log_event(wf.MODEL, dataset=getattr(ds, "id", None), rows=int(rows), score=round(float(score), 4))
+    except Exception:
+        pass                                                      # a note never fails over its log line
+
+
 def note_model(auc: float, ds, rows: int, share: float | None = None) -> str:
     """Print (and return) the note under the small model's score, in words."""
     things, label = noun(ds), _label(ds) or "the outcome"
     chance = round(100 * float(auc))
+    _model_event(ds, rows, auc)
     verdict = ("about as good as guessing" if auc < 0.6 else "a weak signal" if auc < 0.7
                else "a useful signal" if auc < 0.85 else "a strong signal - check it is not too good to be true")
     lines = [f"What this means: shown one {noun(ds, one=True)} where {label} is 1 and one where it is 0, the model gives "

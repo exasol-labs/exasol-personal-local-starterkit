@@ -45,7 +45,8 @@ nb.continue_workflow(name: str | None=None) -> str
 
 The workflow already going, without an id to paste: this kernel's, else the one inherited through
 EXAKIT_WORKFLOW_ID, else the last one started or resumed on this machine (a quickstart starts one); a new one named
-`name` only when there is none. Says which, and returns the id.
+`name` only when there is none. Says which, and returns the id. The first time a notebook continues a
+workflow the log gets one `step` line with `name`, so the kit can tell which notebooks took part.
 
 **Used in:** `data-scientist/01_explore`, `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/01_train`, `ml-engineer/02_rust_score`
 

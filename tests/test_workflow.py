@@ -183,7 +183,8 @@ class TestContinue(WorkflowCase):
 
     def test_nothing_going_starts_one(self):
         wid, _ = self.quiet("explore")
-        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START])
+        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START])     # its own start line names it
+        self.assertEqual(wf.read_log(wid)[-1]["name"], "explore")
         self.assertEqual(wf.last_workflow(), wid)
 
     def test_a_new_kernel_continues_the_last_one_started(self):
@@ -192,7 +193,10 @@ class TestContinue(WorkflowCase):
         wid, out = self.quiet("explore")
         self.assertEqual(wid, started)
         self.assertIn("Continuing the last workflow", out)
-        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START], "continuing adds no start line")
+        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START, wf.STEP], "continuing adds no start line")
+        self.assertEqual(wf.read_log(wid)[-1]["name"], "explore", "the notebook that took the work up says so")
+        self.quiet("explore")
+        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START, wf.STEP], "once: running the cell again adds nothing")
 
     def test_this_kernels_and_the_inherited_one_come_first(self):
         first, _ = self.start("one")
@@ -282,7 +286,7 @@ class TestLogEvent(WorkflowCase):
 
     def test_kinds(self):
         self.assertEqual(wf.KINDS, ("start", "describe.draft", "describe.approve", "sql", "trace", "mlflow.run",
-                                    "handoff", "dashboard.revision", "model.put", "ask.approve", "ask.answer"))
+                                    "handoff", "dashboard.revision", "model.put", "ask.approve", "ask.answer", "step", "model"))
 
 
 class TestLogSql(WorkflowCase):

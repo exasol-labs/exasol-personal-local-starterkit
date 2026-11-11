@@ -373,6 +373,37 @@ class CardTest(unittest.TestCase):
         steps = home._journey(notebooks, [{"kind": wf.DESCRIBE_APPROVE}])
         self.assertEqual(["done", "next", "todo", "todo"], [s["state"] for s in steps])
 
+    def test_a_first_run_marks_nothing_done(self):
+        """Opening the quickstart runs several queries and, after approval, creates a view: neither makes the second
+        notebook done. It is done once a model was trained there, or - on data with no target - once a later notebook
+        took the work on."""
+        home = importlib.import_module("exakit_guide.screens.home")
+        wf = importlib.import_module("exakit_nb.workflow")
+        notebooks = [{"id": f"n{i}", "title": f"T{i}", "summary": "S.", "file": f"f{i}"} for i in range(4)]
+
+        def states(events):
+            return [s["state"] for s in home._journey(notebooks, events)]
+
+        opened = [{"kind": wf.START, "name": "n0"}] + [{"kind": wf.SQL, "sql": "SELECT 1"}] * 8
+        self.assertEqual(["next", "todo", "todo", "todo"], states(opened))
+        approved = opened + [{"kind": wf.DESCRIBE_APPROVE}, {"kind": wf.SQL, "sql": "CREATE OR REPLACE VIEW EXAKIT_SEMANTIC.X AS SELECT 1"}]
+        self.assertEqual(["done", "next", "todo", "todo"], states(approved))
+        exploring = approved + [{"kind": wf.STEP, "name": "n1"}] + [{"kind": wf.SQL, "sql": "SELECT 2"}] * 6
+        self.assertEqual(["done", "next", "todo", "todo"], states(exploring))
+        self.assertEqual(["done", "done", "next", "todo"], states(exploring + [{"kind": wf.MODEL}]))
+        self.assertEqual(["done", "done", "next", "todo"], states(exploring + [{"kind": wf.STEP, "name": "n2"}]))
+
+    def test_continuing_a_workflow_and_training_a_model_leave_their_line(self):
+        wf = importlib.import_module("exakit_nb.workflow")
+        readout = importlib.import_module("exakit_nb.readout")
+        logged = []
+        with mock.patch.object(wf, "_continued", return_value="wf-1"), mock.patch.object(wf, "read_log", return_value=[]), \
+                mock.patch.object(wf, "log_event", side_effect=lambda kind, **payload: logged.append((kind, payload))):
+            self.assertEqual("wf-1", wf.continue_workflow("explore"))
+            wf.continue_workflow()
+            readout._model_event(mock.Mock(id="d"), 1000, 0.8123456)
+        self.assertEqual([(wf.STEP, {"name": "explore"}), (wf.MODEL, {"dataset": "d", "rows": 1000, "score": 0.8123})], logged)
+
     def test_connecting_a_source_keeps_the_password_out_of_the_code(self):
         understand = importlib.import_module("exakit_guide.screens.understand")
         nb = importlib.import_module("exakit_nb")

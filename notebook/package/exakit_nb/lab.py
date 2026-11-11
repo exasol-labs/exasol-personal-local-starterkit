@@ -638,6 +638,13 @@ def model_lab(conn, ds, task: str = "predict_yes_no", *, model: str = "all", tar
         result = find_groups(data, run, settings, model if model != "all" else "kmeans")
     else:
         result = find_unusual(data, run, settings, model if model != "all" else "isolation_forest")
+    try:
+        import importlib
+
+        wf = importlib.import_module("exakit_nb.workflow")       # the module: exakit_nb.workflow is a function too
+        wf.log_event(wf.MODEL, dataset=getattr(ds, "id", None), task=task, rows=int(len(run.X)))
+    except Exception:
+        pass                                                      # training never fails over its log line
     return Lab(task, model, dict(settings), data, run, result, target_number, features, note, ds)
 
 

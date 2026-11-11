@@ -45,7 +45,7 @@ from typing import Any
 from ._kit import recall, remember
 
 __all__ = ["continue_workflow", "last_workflow", "DASHBOARD_REVISION", "DESCRIBE_APPROVE", "DESCRIBE_DRAFT", "ENV_VARIABLE", "HANDOFF", "KINDS", "MLFLOW_RUN",
-           "MODEL_PUT", "REDACTED_SQL", "SQL", "START", "TRACE", "current_workflow", "list_workflows", "log_event", "log_path",
+           "MODEL", "MODEL_PUT", "REDACTED_SQL", "SQL", "START", "STEP", "TRACE", "current_workflow", "list_workflows", "log_event", "log_path",
            "log_sql", "read_log", "workflow"]
 
 ENV_VARIABLE = "EXAKIT_WORKFLOW_ID"
@@ -65,8 +65,10 @@ DASHBOARD_REVISION = "dashboard.revision"
 MODEL_PUT = "model.put"
 ASK_APPROVE = "ask.approve"
 ASK_ANSWER = "ask.answer"
+STEP = "step"          # a later notebook continued the work: {name} is that notebook (continue_workflow("explore"))
+MODEL = "model"        # a model was trained and scored (the model lab, or the small model of 01_explore)
 KINDS = (START, DESCRIBE_DRAFT, DESCRIBE_APPROVE, SQL, TRACE, MLFLOW_RUN, HANDOFF, DASHBOARD_REVISION,
-         MODEL_PUT, ASK_APPROVE, ASK_ANSWER)
+         MODEL_PUT, ASK_APPROVE, ASK_ANSWER, STEP, MODEL)
 
 # What a payload may never be named, and what a value may never look like (user:password@ inside a URL).
 _SECRET_KEY = re.compile(r"(^|[^a-z0-9])(password|passwd|token|secret|api_key|apikey)([^a-z0-9]|$)")
@@ -168,7 +170,17 @@ def last_workflow() -> str | None:
 def continue_workflow(name: str | None = None) -> str:
     """The workflow already going, without an id to paste: this kernel's, else the one inherited through
     EXAKIT_WORKFLOW_ID, else the last one started or resumed on this machine (a quickstart starts one); a new one named
-    ``name`` only when there is none. Says which, and returns the id."""
+    ``name`` only when there is none. Says which, and returns the id. The first time a notebook continues a
+    workflow the log gets one ``step`` line with ``name``, so the kit can tell which notebooks took part."""
+    found = _continued(name)
+    # Which notebooks took part is what "done" and "next" are read from: one line the first time this one does (a
+    # workflow it started itself already carries its name).
+    if name and name not in {e.get("name") for e in read_log(found) if e.get("kind") in (START, STEP)}:
+        log_event(STEP, name=name)
+    return found
+
+
+def _continued(name: str | None) -> str:
     active = recall(SESSION_KEY)
     if active and log_path(str(active)).is_file():
         print(f"Continuing workflow {active} (this notebook's).")

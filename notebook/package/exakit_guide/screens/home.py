@@ -54,10 +54,15 @@ def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
     wf = importlib.import_module("exakit_nb.workflow")   # the module (exakit_nb.workflow is also a function)
 
     kinds = [e.get("kind") for e in events]
-    sqls = " ".join(str(e.get("sql", "")) for e in events if e.get("kind") == wf.SQL).upper()
     asked_no_answer = wf.ASK_APPROVE in kinds and wf.ASK_ANSWER not in kinds
+    # Which notebooks took part: each says so when it starts or continues the workflow (its id as the name).
+    took_part = {e.get("name") for e in events if e.get("kind") in (wf.START, wf.STEP)}
+    opened = [bool(row.get("id")) and row.get("id") in took_part for row in notebooks]
+    # The second notebook is done once a model was trained there - or, on data with no target to predict, once the
+    # work moved on to a later notebook. Queries alone say nothing: opening the first notebook already runs several.
+    explored = (wf.MODEL in kinds or wf.MLFLOW_RUN in kinds) or (len(opened) > 1 and opened[1] and any(opened[2:]))
     done_when = [wf.DESCRIBE_APPROVE in kinds,
-                 wf.MLFLOW_RUN in kinds or "VIEW" in sqls or kinds.count(wf.SQL) > 2,
+                 explored,
                  wf.ASK_ANSWER in kinds,
                  wf.HANDOFF in kinds or any(e.get("kind") == wf.DASHBOARD_REVISION and e.get("state") == "live" for e in events)]
     out, next_set = [], False
