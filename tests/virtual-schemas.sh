@@ -2904,8 +2904,9 @@ PY
 
     # Skip closes the menu with nothing done.
     # Skip sits below every connector of the catalog; the cursor steps over a
-    # gated one.
-    _skip_keys="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated"))' "$DEFS/catalog.json")"
+    # gated one, and the menu's one Lakehouse row stands for iceberg-rest and
+    # unity too (their rows are folded into it).
+    _skip_keys="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated" and e["id"] not in ("iceberg-rest", "unity")))' "$DEFS/catalog.json")"
     TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
     has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
     check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line comes first" \

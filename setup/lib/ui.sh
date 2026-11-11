@@ -1192,9 +1192,16 @@ ui_table_widths() {
         # "│  ├─ " -- which is 6. Measured short, the deeper label would be cut.
         case "$_utw_kind" in
             tee|corner) _utw_len=$(( ${#_utw_label} + 3 )) ;;
+            # Three levels and deeper (the connect menu's files under a
+            # catalog under Lakehouse): three columns a level.
+            *-*-*) _utw_parts="${_utw_kind//[!-]/}"
+                   _utw_len=$(( ${#_utw_label} + 3 * (${#_utw_parts} + 1) )) ;;
             *-tee|*-corner) _utw_len=$(( ${#_utw_label} + 6 )) ;;
             *) _utw_len="${#_utw_label}" ;;
         esac
+        # A radio row (a "one" group in ui_table_menu) carries "( ) " after
+        # its connector.
+        case "${_UI_TREE_RADIO:- }" in *" $_utw_i "*) _utw_len=$(( _utw_len + 4 )) ;; esac
         [ "$_utw_len" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="$_utw_len"
         if [ "$UI_TABLE_COL2_W" -gt 0 ] && [ "${#_utw_c2}" -gt "$UI_TABLE_COL2_W" ]; then
             UI_TABLE_COL2_W="${#_utw_c2}"
@@ -1419,6 +1426,24 @@ _ui_table_cell() {
     return 0
 }
 
+# _ui_table_tree_conn <kind> — _utr_conn and _utr_spine for a row three or more
+# levels deep ("tee-corner-tee"): every level but the last draws its spine
+# ("│  ", or three spaces after a corner), the last its connector. Parameter
+# expansion only: it runs per row per frame.
+_ui_table_tree_conn() {
+    _uttc_k="$1-"; _utr_conn=""; _utr_spine=""
+    while [ -n "$_uttc_k" ]; do
+        _uttc_w="${_uttc_k%%-*}"; _uttc_k="${_uttc_k#*-}"
+        if [ -n "$_uttc_k" ]; then
+            if [ "$_uttc_w" = tee ]; then _utr_conn="$_utr_conn${UI_VB:-|}  "; else _utr_conn="$_utr_conn   "; fi
+        elif [ "$_uttc_w" = tee ]; then
+            _utr_spine="$_utr_conn${UI_VB:-|}"; _utr_conn="$_utr_conn${UI_TEE:-|-} "
+        else
+            _utr_spine="$_utr_conn"; _utr_conn="$_utr_conn${UI_CORNER:-\`-} "
+        fi
+    done
+}
+
 # ui_table_frame <state-file> <cursor> — the whole table, as a STRING in
 # UI_TABLE_FRAME, with its height in UI_TABLE_LINES. One write is what keeps a
 # redraw from flickering, and a string is what lets the caller do the clear and
@@ -1498,6 +1523,9 @@ ui_table_frame() {
                           _utr_c2 _utr_c3; do
         [ -n "$_utr_kind" ] || continue
         _utr_i=$(( _utr_i + 1 ))
+        # A row a closed "collapse" group hides (ui_table_menu): not drawn, and
+        # a click can never land on it (its line is the next row's).
+        case "${_UI_TREE_HIDDEN:- }" in *" $_utr_i "*) _UI_TABLE_AT[$_utr_i]="$_utr_lines"; continue ;; esac
         # _utr_spine is what a wrapped description's continuation lines draw in
         # the name cell: every spine that carries on PAST this row. A tee's
         # spine goes on to its next sibling; a corner's ends with it. A row one
@@ -1510,6 +1538,7 @@ ui_table_frame() {
             tee-corner)    _utr_conn="${UI_VB:-|}  ${UI_CORNER:-\`-} "; _utr_spine="${UI_VB:-|}" ;;
             corner-tee)    _utr_conn="   ${UI_TEE:-|-} "; _utr_spine="   ${UI_VB:-|}" ;;
             corner-corner) _utr_conn="   ${UI_CORNER:-\`-} "; _utr_spine="" ;;
+            *-*-*)         _ui_table_tree_conn "$_utr_kind" ;;
             *)             _utr_conn=""; _utr_spine="" ;;
         esac
         # A row with children: its continuation lines also start the children's
@@ -1549,6 +1578,17 @@ ui_table_frame() {
         else
             _utr_ptr=" "
         fi
+        # A radio row (a "one" group): no checkbox; "(•)" or "( )" after its
+        # tree connector, in the row's own colour.
+        case "${_UI_TREE_RADIO:- }" in
+            *" $_utr_i "*)
+                _utr_box="   "; _utr_boxlen=3
+                if [ "$_utr_tick" = "1" ]; then
+                    if [ "${UI_FANCY:-0}" = 1 ]; then _utr_conn="$_utr_conn(${UI_BULLET:-*}) "; else _utr_conn="$_utr_conn(*) "; fi
+                else
+                    _utr_conn="$_utr_conn( ) "
+                fi ;;
+        esac
         # MEASURED plain, PRINTED possibly dim: a disabled row's name carries
         # colour escapes, and ${#...} would count those bytes as width and pad
         # the row short by exactly the length of the escape sequence.
@@ -2014,8 +2054,14 @@ ui_table_menu() {
     done < "$_utm_f"
     _utm_pickable() { # _utm_pickable <row>
         case " $_utm_dis " in *" $1 "*) return 1 ;; esac
+        # A row a closed "collapse" group hides cannot be reached either.
+        case "$_UI_TREE_HIDDEN" in *" $1 "*) return 1 ;; esac
         return 0
     }
+    # The tree modes (collapse, one): which rows are radio buttons, which a
+    # closed group hides. Empty sets for every other table.
+    _ui_checkbox_tree_begin "${EXAKIT_TABLE_GROUP:-}"
+    _ui_checkbox_tree_refresh "${EXAKIT_TABLE_DEFAULTS:-}"
     _utm_move() { # _utm_move <dir:+1|-1> — move the cursor, stepping over disabled rows
         _utm_tries=0
         while [ "$_utm_tries" -lt "$_utm_n" ]; do
@@ -2051,6 +2097,7 @@ ui_table_menu() {
         EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
         EXAKIT_TABLE_CONFIRMED=1
         _UI_CHECKBOX_SELECTABLE=""
+        _ui_checkbox_tree_end
         return 0
     fi
     _utm_tty="$(_exakit_prompt_tty)"
@@ -2061,9 +2108,11 @@ ui_table_menu() {
         ui_table_render "$_utm_f" 0
         EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
         _UI_CHECKBOX_SELECTABLE=""
+        _ui_checkbox_tree_end
         return 0
     fi
     _utm_first=1
+    _utm_note=""
     # Ctrl-C here gives the terminal back first (_ui_interrupted).
     _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
     trap '_ui_interrupted INT _UI_MENU_PREV' INT
@@ -2081,12 +2130,20 @@ ui_table_menu() {
         # region was genuinely empty for that whole time.
         ui_table_frame "$_utm_f" "$_utm_cur"
         _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle · Enter to confirm${UI_RESET:-}"
+        # Enter refused for an open "one" group with nothing picked: said under
+        # the hint until the next key.
+        _utm_extra=0
+        if [ -n "$_utm_note" ]; then
+            _utm_hint="$_utm_hint
+    ${UI_WARN:-}!${UI_RESET:-} $_utm_note"
+            _utm_extra=1; _utm_note=""
+        fi
         if [ "$_utm_drawn" -gt 0 ]; then
             printf '\033[%dA\033[0J%s\n%s\n' "$_utm_drawn" "$UI_TABLE_FRAME" "$_utm_hint"
         else
             printf '%s\n%s\n' "$UI_TABLE_FRAME" "$_utm_hint"
         fi
-        _utm_drawn=$(( UI_TABLE_LINES + 1 ))
+        _utm_drawn=$(( UI_TABLE_LINES + 1 + _utm_extra ))
         _utm_first=0
         _ui_cursor_ask
         _ui_menu_key "$_utm_tty" || break
@@ -2098,6 +2155,13 @@ ui_table_menu() {
                 # Enter" used to load them anyway.
                 if [ -n "${EXAKIT_TABLE_EXCLUSIVE:-}" ] && [ "$_utm_cur" = "$EXAKIT_TABLE_EXCLUSIVE" ]; then
                     _utm_sel="$_utm_cur"
+                fi
+                if [ "$_UI_TREE_ON" = 1 ]; then
+                    _utm_miss="$(_ui_checkbox_tree_missing "$_utm_sel")"
+                    if [ -n "$_utm_miss" ]; then
+                        _utm_note="Pick one of the options under $(sed -n "${_utm_miss}p" "$_utm_f" | cut -d'|' -f2)."
+                        continue
+                    fi
                 fi
                 [ -n "$_utm_sel" ] && { EXAKIT_TABLE_CONFIRMED=1; break; } ;;
             " ")
@@ -2127,6 +2191,11 @@ ui_table_menu() {
             k|K) _utm_move -1 ;;
             j|J) _utm_move 1 ;;
         esac
+        if [ "$_UI_TREE_ON" = 1 ]; then
+            _ui_checkbox_tree_refresh "$_utm_sel"
+            # The cursor's row closed under it: back up to the nearest row shown.
+            case "$_UI_TREE_HIDDEN" in *" $_utm_cur "*) _utm_move -1 ;; esac
+        fi
     done
     ui_mouse_off
     if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
@@ -2138,6 +2207,7 @@ ui_table_menu() {
     ui_table_redraw "$_utm_f" 0
     EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
     _UI_CHECKBOX_SELECTABLE=""
+    _ui_checkbox_tree_end
     return 0
 }
 

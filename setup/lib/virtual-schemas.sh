@@ -1125,44 +1125,129 @@ _exakit_vs_clock_check() {
     fi
 }
 
+# --- Lakehouse (Iceberg / Delta): the picker's subtree ---------------------
+# One connector, "lakehouse", answers for every catalog and file store; the
+# menu opens it into a subtree: the catalog (one of four), then where the files
+# are (one of what that catalog can use). These two functions are the whole
+# interface between the picker and the rest of connect. ⇄ twins:
+# Get-ExakitVsLakehouseTree, Get-ExakitVsLakehouseHandoff.
+
+# _exakit_vs_lakehouse_tree — the subtree as JSON: "catalogs" in menu order,
+# each with the "files" it can use (none for Glue, whose files are "auto"),
+# "files" with every store's label ("supported": false is shown, never
+# picked), and "folds": the connector ids the one row replaces, left out of
+# the menu. The spec's names (catalog iceberg-rest|unity|glue|none, files
+# vended|s3|azure). A catalog entry that carries "catalogs" and "files" of its
+# own (the connector's definitions, from the engine) is used instead.
+_exakit_vs_lakehouse_tree() {
+    cat <<'JSON'
+{"catalogs": [
+  {"id": "iceberg-rest", "label": "Iceberg REST catalog", "files": ["vended", "s3", "azure"]},
+  {"id": "unity", "label": "Unity Catalog", "files": ["vended", "s3", "azure"]},
+  {"id": "glue", "label": "AWS Glue", "files": [], "auto": "s3"},
+  {"id": "none", "label": "No catalog - Parquet files in a folder", "files": ["s3", "azure"]}],
+ "files": [
+  {"id": "vended", "label": "Let the catalog give access"},
+  {"id": "s3", "label": "Amazon S3 / S3-compatible"},
+  {"id": "azure", "label": "Azure ADLS Gen2"},
+  {"id": "gcs", "label": "Google Cloud Storage - not supported yet", "supported": false}],
+ "folds": ["iceberg-rest", "unity"]}
+JSON
+}
+
+# _exakit_vs_lakehouse_handoff — what the Lakehouse pick hands the form, as
+# KEY=VALUE lines (the form's --set answers): the catalog and the files picked
+# in the menu (EXAKIT_VS_LAKEHOUSE_CATALOG, EXAKIT_VS_LAKEHOUSE_FILES). Nothing
+# when the menu did not pick them (the command named the connector).
+_exakit_vs_lakehouse_handoff() {
+    [ -n "${EXAKIT_VS_LAKEHOUSE_CATALOG:-}" ] || return 0
+    printf 'catalog=%s\nfiles=%s\n' "$EXAKIT_VS_LAKEHOUSE_CATALOG" "$EXAKIT_VS_LAKEHOUSE_FILES"
+}
+
 # _exakit_vs_pick <work-dir> — the connector menu, under the line that names
 # this computer's public IP (_exakit_vs_catalog). Sets EXAKIT_VS_PICKED to the
-# chosen connector ids, space separated; returns 5 when nothing was chosen.
+# chosen connector ids, space separated, and for Lakehouse
+# EXAKIT_VS_LAKEHOUSE_CATALOG and _FILES; returns 5 when nothing was chosen.
 _exakit_vs_pick() {
     _evp_dir="$1"
+    EXAKIT_VS_LAKEHOUSE_CATALOG=""; EXAKIT_VS_LAKEHOUSE_FILES=""
     _exakit_vs_catalog "$_evp_dir/catalog"
-    # id|label|gate, in the catalog's order: each source by its name and nothing
-    # more - the adapter version and tier are `exakit source catalog`'s.
-    run_python_any - "$EXAKIT_VS_RESULT" > "$_evp_dir/rows" <<'PY'
+    # tree|label|gate|key, in the catalog's order: each source by its name and
+    # nothing more - the adapter version and tier are `exakit source catalog`'s.
+    # Lakehouse's subtree follows its row (key cat:<catalog>, file:<catalog>:<files>,
+    # or empty for a row nobody picks), and the last line is the menu's group
+    # specs, innermost first: each catalog's files ("collapse+one+first": shown
+    # once the catalog is picked, the first pre-selected), then the catalogs
+    # under Lakehouse ("collapse+one").
+    _exakit_vs_lakehouse_tree > "$_evp_dir/lakehouse.json"
+    run_python_any - "$EXAKIT_VS_RESULT" "$_evp_dir/lakehouse.json" > "$_evp_dir/rows" <<'PY'
 import json, sys
 catalog = json.loads(sys.argv[1] or "{}").get("connectors", [])
-for e in catalog:
+tree = json.load(open(sys.argv[2]))
+folds = set(tree.get("folds") or [])
+entries = [e for e in catalog if e["id"] not in folds]
+rows, specs = [], []
+def row(kind, label, gate, key):
+    rows.append("|".join(x.replace("|", "/") for x in (kind, label, gate, key)))
+    return len(rows)
+for n, e in enumerate(entries):
     gate = e.get("gate", "") if e.get("status") == "gated" else ""
-    print("|".join(x.replace("|", "/") for x in (e["id"], e["name"], gate)))
+    top = "corner" if n == len(entries) - 1 else "tee"
+    at = row(top, e["name"], gate, e["id"])
+    if e["id"] != "lakehouse" or gate:
+        continue
+    cats = e.get("catalogs") or tree["catalogs"]
+    files = e.get("files") or tree["files"]
+    for i, c in enumerate(cats):
+        mid = top + "-" + ("corner" if i == len(cats) - 1 else "tee")
+        # A catalog with no files choice (Glue) names its own: cat:<id>:<files>.
+        ca = row(mid, c["label"], "", "cat:" + c["id"] + ("" if c.get("files") else ":" + (c.get("auto") or "")))
+        if not c.get("files"):
+            # Glue: its files are found from the catalog - a note, not a choice.
+            auto = next((f["label"].split(" / ")[0] for f in files if f["id"] == c.get("auto")), c.get("auto") or "")
+            row(mid + "-corner", "files: %s (automatic)" % auto, "note", "")
+            specs.append("%d:%d:%d:collapse" % (ca, ca + 1, ca + 1))
+            continue
+        shown = [f for f in files if f["id"] in c["files"] or f.get("supported") is False]
+        for j, f in enumerate(shown):
+            leaf = mid + "-" + ("corner" if j == len(shown) - 1 else "tee")
+            if f.get("supported") is False:
+                row(leaf, f["label"], "off", "")
+            else:
+                row(leaf, f["label"], "", "file:%s:%s" % (c["id"], f["id"]))
+        specs.append("%d:%d:%d:collapse+one+first" % (ca, ca + 1, ca + len(shown)))
+    specs.append("%d:%d:%d:collapse+one" % (at, at + 1, len(rows)))
+print("\n".join(rows))
+print("GROUP|" + " ".join(specs))
 PY
     [ -s "$_evp_dir/rows" ] || { error "The connector catalog could not be read. Details: exakit logs"; return 2; }
     _evp_state="$_evp_dir/menu"
     : > "$_evp_state"
-    _evp_n="$(grep -c . "$_evp_dir/rows")"
-    _evp_i=0; _evp_ids=""
-    while IFS='|' read -r _evp_id _evp_label _evp_gate; do
+    _evp_i=0; _evp_ids=""; _evp_group=""
+    while IFS='|' read -r _evp_tree _evp_label _evp_gate _evp_id; do
+        [ "$_evp_tree" = GROUP ] && { _evp_group="$_evp_label"; continue; }
         _evp_i=$(( _evp_i + 1 ))
-        _evp_tree=tee; [ "$_evp_i" -eq "$_evp_n" ] && _evp_tree=corner
         # kind|label|tick|state|pct|ceiling|secs|t0|phase|final|col2|col3; a
         # gated connector is shown, never pickable, its reason read on from its
-        # name: the menu has no Status column to say it in.
+        # name: the menu has no Status column to say it in. A Lakehouse note
+        # and a store not supported yet are shown the same way.
+        case "$_evp_gate" in
+            ''|note|off) ;;
+            *) _evp_label="$_evp_label - not available yet" ;;
+        esac
         if [ -n "$_evp_gate" ]; then
-            printf '%s|%s|0|disabled||||||||\n' "$_evp_tree" "$_evp_label - not available yet" >> "$_evp_state"
+            printf '%s|%s|0|disabled||||||||\n' "$_evp_tree" "$_evp_label" >> "$_evp_state"
         else
             printf '%s|%s|0|idle||||||||\n' "$_evp_tree" "$_evp_label" >> "$_evp_state"
         fi
         _evp_ids="$_evp_ids
 $_evp_id"
     done < "$_evp_dir/rows"
+    _evp_n="$_evp_i"
     printf 'plain|Skip|0|idle||||||||\n' >> "$_evp_state"
     _evp_skip=$(( _evp_n + 1 ))
     EXAKIT_TABLE_DEFAULTS=""            # nothing ticked: a connect is always a choice
-    EXAKIT_TABLE_GROUP=""
+    EXAKIT_TABLE_GROUP="$_evp_group"
     EXAKIT_TABLE_EXCLUSIVE="$_evp_skip"
     UI_TABLE_TITLE="Connect external sources"
     UI_TABLE_COL1="Source"; UI_TABLE_COL2=""; UI_TABLE_COL3=""
@@ -1178,13 +1263,22 @@ $_evp_id"
     ui_table_menu "$_evp_state"
     if [ -n "$_evp_statmin" ]; then UI_TABLE_STAT_MIN="$_evp_statmin"; else unset UI_TABLE_STAT_MIN; fi
     EXAKIT_TABLE_EXCLUSIVE=""
+    EXAKIT_TABLE_GROUP=""
     EXAKIT_VS_PICKED=""
     [ "${EXAKIT_TABLE_CONFIRMED:-0}" = 1 ] || return 5
     for _evp_row in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         case "$_evp_row" in ''|*[!0-9]*) continue ;; esac
         [ "$_evp_row" = "$_evp_skip" ] && { EXAKIT_VS_PICKED=""; return 5; }
         _evp_id="$(printf '%s\n' "$_evp_ids" | sed -n "$(( _evp_row + 1 ))p")"
-        [ -n "$_evp_id" ] && EXAKIT_VS_PICKED="${EXAKIT_VS_PICKED:+$EXAKIT_VS_PICKED }$_evp_id"
+        case "$_evp_id" in
+            '') ;;
+            cat:*)
+                _evp_c="${_evp_id#cat:}"
+                case "$_evp_c" in *:*) EXAKIT_VS_LAKEHOUSE_FILES="${_evp_c#*:}"; _evp_c="${_evp_c%%:*}" ;; esac
+                EXAKIT_VS_LAKEHOUSE_CATALOG="$_evp_c" ;;
+            file:*) _evp_f="${_evp_id#file:}"; EXAKIT_VS_LAKEHOUSE_FILES="${_evp_f#*:}" ;;
+            *) EXAKIT_VS_PICKED="${EXAKIT_VS_PICKED:+$EXAKIT_VS_PICKED }$_evp_id" ;;
+        esac
     done
     [ -n "$EXAKIT_VS_PICKED" ] || return 5
     return 0
@@ -2217,6 +2311,7 @@ _exakit_vs_tui() {
     _evt_name="$2"; _evt_pwfile="$3"; _evt_named="$1"
 
     # 1. which sources
+    EXAKIT_VS_LAKEHOUSE_CATALOG=""; EXAKIT_VS_LAKEHOUSE_FILES=""
     if [ -n "$1" ]; then
         exakit_vs_engine resolve "$1" < /dev/null > "$_EVT_DIR/resolve" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _evt_rc=$?
@@ -2243,7 +2338,12 @@ _exakit_vs_tui() {
     _evt_pos=0
     for _evt_id in "$@"; do
         _evt_pos=$(( _evt_pos + 1 ))
-        _exakit_vs_tui_form "$_evt_id" "$_evt_pos" "$_evt_total" "$_evt_name" "$_evt_sets" "$_evt_pwfile"
+        _evt_given="$_evt_sets"
+        # Lakehouse picked in the menu: its catalog and files are answers too.
+        if [ "$_evt_id" = lakehouse ] && [ -n "${EXAKIT_VS_LAKEHOUSE_CATALOG:-}" ]; then
+            _evt_given="$(printf '%s\n%s' "$_evt_sets" "$(_exakit_vs_lakehouse_handoff)" | grep -v '^$')"
+        fi
+        _exakit_vs_tui_form "$_evt_id" "$_evt_pos" "$_evt_total" "$_evt_name" "$_evt_given" "$_evt_pwfile"
         case "$?" in
             2) rm -rf "$_EVT_DIR"; return 2 ;;
             5) printf '\n'; info "Left out: $_evt_id" ;;
