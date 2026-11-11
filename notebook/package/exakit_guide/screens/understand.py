@@ -164,6 +164,10 @@ class ChooseData(Screen):
     kind = "card"
     step, connector, src_name, conn_n, tip = "connection", None, "", 0, ""
     preset, settings_step, typed_storage = None, False, ""   # a source's settings (a Lakehouse's catalog and files)
+    # The password typed for the connection being set up, held here until it connects: the card's own box is emptied
+    # the moment it is sent, and it sits on an earlier step, so a connect tried again (the source refused, a name did
+    # not resolve) would go out with no password. Never shown, logged or saved; forgotten on success or a new source.
+    _kept_secret = ""
 
     def __init__(self) -> None:
         super().__init__()
@@ -516,6 +520,8 @@ class ChooseData(Screen):
                 raise ValueError("Choose the data source first.")
             if form.get("gate"):
                 raise ValueError(f"{form['name']} is not available yet: {form['gate']}")
+            if (connector, preset) != (self.connector, self.preset or {}):
+                self._kept_secret, self.typed_storage = "", ""     # another source: its own secrets
             self.connector, self.preset = connector, preset
             if form.get("tree"):
                 # What this combination asks, from the kit's engine (`exakit connect lakehouse --set catalog=...`).
@@ -633,7 +639,7 @@ class ChooseData(Screen):
             raw = v.get(self._fid(prefix, spec["name"]))
             value = str(raw or "").strip()
             if spec["kind"] == "secret" and spec.get("storage"):
-                self.typed_storage = str(raw or "")         # the second secret: its own file, never the password's way
+                self.typed_storage = str(raw or "") or self.typed_storage   # the second secret: its own file, never the password's way
                 if spec["name"] in required and not self.typed_storage and not needed_only:
                     missing.append(spec["label"].split(" - ")[0])
             elif spec["kind"] == "secret":
@@ -648,6 +654,7 @@ class ChooseData(Screen):
                 missing.append(spec["label"].split(" - ")[0])
         if missing:
             raise ValueError("Fill in: " + ", ".join(missing))
+        self._kept_secret = password = password or self._kept_secret        # as typed this time, else as typed before
         return connector, name, {**(self.preset or {}), **settings}, password
 
     def on_test_source(self, v: dict) -> None:
@@ -671,6 +678,7 @@ class ChooseData(Screen):
                              secret={"secret": lambda _question: typed,
                                      **({"storage_secret": lambda _question: self.typed_storage} if self.typed_storage else {})})
         self.kit_said = SESSION.said or self.kit_said
+        self._kept_secret, self.typed_storage = "", ""         # connected: nothing is held any longer
         if schema and schema not in self.sources:
             self.sources.append(schema)
         return schema

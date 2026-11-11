@@ -566,6 +566,44 @@ class CardTest(unittest.TestCase):
         self.assertNotIn("STORAGEKEY", repr(settings))
         self.assertNotIn("LOGINTOKEN", repr(settings))
 
+    def test_a_connect_tried_again_still_has_its_password(self):
+        """The password is typed on an earlier step and its box is emptied when it is sent. A connect that fails (the
+        source refused, a name did not resolve) and is tried again from the last step goes out with the password
+        typed before, not with none; a new one typed wins; it is forgotten once connected and for another source."""
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        nb = importlib.import_module("exakit_nb")
+        card = understand.ChooseData.__new__(understand.ChooseData)
+        card.sources, card.kit_said, card.parsed, card.source_tables = [], "", {}, {}
+        card.connectors = nb.connectors()
+        card.forms = {"postgresql": nb.connector_inputs("postgresql")}
+        card.connector, card.src_name = "postgresql", "sales"
+        f = card._fid
+        typed = {f("postgresql", "host"): "db.example.com", f("postgresql", "database"): "shop", f("postgresql", "user"): "reader",
+                 f("postgresql", "how"): "manual"}
+        sent = []
+
+        def run(action_id, **values):
+            sent.append(values["secret"]["secret"]("Password"))
+            if len(sent) == 1:
+                raise RuntimeError("sales was not connected: the host name does not resolve")
+            return "VS_SALES"
+
+        with mock.patch.object(understand.actions, "run", side_effect=run):
+            with self.assertRaises(RuntimeError):
+                card._connect({**typed, f("postgresql", "password"): "s3cret"})
+            self.assertEqual("VS_SALES", card._connect({**typed, f("postgresql", "password"): ""}))   # the box is empty now
+        self.assertEqual(["s3cret", "s3cret"], sent)
+        self.assertEqual("", card._kept_secret)                                          # connected: forgotten
+        with mock.patch.object(understand.actions, "run", side_effect=lambda action_id, **values: sent.append(
+                values["secret"]["secret"]("Password")) or "VS_SALES"):
+            card._kept_secret = "old"
+            card._connect({**typed, f("postgresql", "password"): "new"})
+        self.assertEqual("new", sent[-1])
+        card._kept_secret, card.step = "held", "source"
+        card.on_src_next({"connector": "mysql"}) if "mysql" in card.forms else card.forms.update(mysql=nb.connector_inputs("mysql")) or card.on_src_next({"connector": "mysql"})
+        self.assertEqual("", card._kept_secret)                                          # another source: its own
+        self.assertNotIn("_kept_secret", repr(vars(card).get("flash", "")))
+
     def test_a_new_connection_is_entered_one_step_at_a_time(self):
         """Connection, data source, connection string, name, details, optional settings: Next checks each answer and
         shows only the next step; Back returns. A data source without a connection string has no such step."""
