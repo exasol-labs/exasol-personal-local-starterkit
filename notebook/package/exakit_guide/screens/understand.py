@@ -400,6 +400,13 @@ class ChooseData(Screen):
         return schema
 
     def on_session(self, what: str) -> None:
+        if what == "data":     # a load (Home's Add data): read again what is in the database, so it can be picked
+            import threading
+
+            self.loading = True
+            self.refresh()
+            threading.Thread(target=self._load_options, daemon=True).start()
+            return
         self.refresh()
 
 
@@ -809,7 +816,7 @@ class DataMap(Screen):
         self._load()
 
     def on_session(self, what: str) -> None:
-        if what in ("source", "dataset"):
+        if what in ("source", "dataset", "data"):
             import threading
 
             self.loading = True

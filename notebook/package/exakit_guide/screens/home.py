@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 
 import json
+import re
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
@@ -146,7 +147,10 @@ class Home(Screen):
                      "actions": [self._act("kit.data_load", f"Load {p}", what=p) for p in pending]
                                 + [{**self._act("kit.data_load", "Add data", what="<file, folder or dataset>"),
                                     "form": [{"id": "what", "type": "text", "label": "A file or folder on this computer, or a kit dataset",
-                                              "placeholder": "~/Downloads/sales.csv"}], "submit": "Load it"}]})
+                                              "placeholder": "~/Downloads/sales.csv"},
+                                             {"id": "schema", "type": "text", "optional": True,
+                                              "label": "Into the schema (a file or folder; empty: STARTER_KIT, the kit's default)",
+                                              "placeholder": "STARTER_KIT"}], "submit": "Load it"}]})
 
         clients = [c for c in d.get("clients") or [] if isinstance(c, dict)]
         on = [c["name"] for c in clients if c.get("connected")]
@@ -289,6 +293,12 @@ class Home(Screen):
             return
         self.confirm = None
         values = {**values, **{k: v for k, v in form.items() if k in values and str(v).strip()}}
+        schema = str(form.get("schema") or "").strip().upper()
+        if action_id == "kit.data_load" and schema:
+            # exakit data-load's own schema setting (EXAKIT_SCHEMA): what the terminal asks, given here.
+            if not re.fullmatch(r"[A-Z][A-Z0-9_]{0,127}", schema):
+                raise ValueError("A schema name is letters, digits and _, starting with a letter (e.g. MY_DATA).")
+            action_id, values = "kit.data_load_into", {**values, "schema": schema}
         empty = [k for k, v in values.items() if str(v).startswith("<") and str(v).endswith(">")]
         if empty:   # a form left blank: its placeholder is not something to run
             raise ValueError("Type a file or folder path, or a kit dataset's name, first."
@@ -320,6 +330,8 @@ class Home(Screen):
                 SESSION.said = ""      # shown open under its own row; not a second time under the error
         self._reload()
         self.flash = {"kind": "ok", "v": f"Done: {actions.code(action_id, **values).splitlines()[0]}"}
+        if action_id.startswith("kit.data_load"):
+            SESSION.changed("data", self)      # the other cards list what is in the database again
 
     def on_refresh(self, _v: dict) -> None:
         self._reload()

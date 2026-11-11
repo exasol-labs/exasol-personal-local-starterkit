@@ -66,6 +66,7 @@ model, tracing = nb.model_settings(), nb.tracing()
 START_DATABASE = False   # start the database after a restart of this computer
 ADD_ON = ""              # an add-on to install and start, e.g. one of [a["id"] for a in addons]
 LOAD = ""                # a kit dataset (sample_datasets), a file or a folder, loaded with exakit data-load
+LOAD_SCHEMA = ""         # where a file or folder lands (empty: STARTER_KIT, exakit's default)
 SERVICE = ""             # a service to start (kit_state["services"]), then its log
 CHECK_AI = False         # check the AI clients' connection to the database (mcp-doctor)
 UPDATE_KIT = False       # bring the kit and its add-ons up to date
@@ -74,7 +75,7 @@ if START_DATABASE:
 if ADD_ON:
     nb.addon_ready(ADD_ON)
 if LOAD:
-    nb.exakit("data-load", LOAD)
+    nb.exakit("data-load", LOAD, env={"EXAKIT_SCHEMA": LOAD_SCHEMA.upper()} if LOAD_SCHEMA else None)
 if SERVICE:
     nb.exakit("start", SERVICE)
     nb.exakit("logs", SERVICE)

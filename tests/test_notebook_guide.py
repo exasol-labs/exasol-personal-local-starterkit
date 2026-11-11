@@ -565,6 +565,38 @@ class ProgressTest(unittest.TestCase):
         self.assertEqual("done", sent[-1]["type"])
 
 
+class LoadIntoSchemaTest(unittest.TestCase):
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_add_data_asks_the_schema_and_tells_the_other_cards(self):
+        """Add data loaded into STARTER_KIT only, and Choose your data did not list what it loaded."""
+        actions = importlib.import_module("exakit_guide.actions")
+        home = importlib.import_module("exakit_guide.screens.home")
+        screen = home.Home.__new__(home.Home)
+        screen.confirm, screen.outputs, screen.failed = None, {}, set()
+        with mock.patch.object(home.actions, "run") as run, mock.patch.object(screen, "_rows", return_value=[]), \
+             mock.patch.object(screen, "_other_rows", return_value=[]), mock.patch.object(screen, "_reload"), \
+             mock.patch.object(home.SESSION, "changed") as changed:
+            screen._run("kit.data_load", {"what": "<file, folder or dataset>"}, {"what": "~/data/retail", "schema": "retail"})
+        self.assertEqual(("kit.data_load_into",), run.call_args.args)
+        self.assertEqual({"what": "~/data/retail", "schema": "RETAIL"}, {k: run.call_args.kwargs[k] for k in ("what", "schema")})
+        self.assertEqual('nb.exakit("data-load", "~/data/retail", env={"EXAKIT_SCHEMA": "RETAIL"})',
+                         actions.code("kit.data_load_into", what="~/data/retail", schema="RETAIL"))
+        changed.assert_called_once_with("data", screen)
+        with self.assertRaisesRegex(ValueError, "letters, digits and _"):
+            screen._run("kit.data_load", {"what": "x"}, {"what": "x", "schema": "bad name"})
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_choose_your_data_reads_the_database_again_after_a_load(self):
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        card = understand.ChooseData.__new__(understand.ChooseData)
+        with mock.patch.object(card, "refresh"), mock.patch.object(card, "_load_options") as load:
+            card.on_session("data")
+            for thread in __import__("threading").enumerate():
+                if thread is not __import__("threading").current_thread() and thread.daemon:
+                    thread.join(timeout=2)
+        load.assert_called_once()
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")
