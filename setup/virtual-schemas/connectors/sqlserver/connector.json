@@ -75,11 +75,12 @@
     },
     {
       "name": "ca",
-      "label": "CA certificate file (PEM) - only for a private CA such as AWS RDS or Azure; Enter to skip",
+      "label": "CA certificate file (PEM) - needed with TLS verify, a public CA too: its root plus intermediates",
       "kind": "ca-file"
     }
   ],
   "paste": {
+    "credential": ["password", "pwd", "userinfo"],
     "schemes": ["jdbc:sqlserver"],
     "bare": true,
     "path": "database",

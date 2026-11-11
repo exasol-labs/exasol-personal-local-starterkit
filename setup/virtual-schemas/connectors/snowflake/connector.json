@@ -73,6 +73,7 @@
     }
   ],
   "paste": {
+    "credential": ["token", "password", "userinfo"],
     "schemes": ["jdbc:snowflake", "https"],
     "bare": true,
     "host": "account",

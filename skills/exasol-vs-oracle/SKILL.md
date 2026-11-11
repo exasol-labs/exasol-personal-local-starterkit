@@ -1,12 +1,12 @@
 ---
 name: exasol-vs-oracle
-description: Connect an Oracle database to local Exasol as a virtual schema with exakit connect oracle. Covers the inputs to collect (service name, schema owner), finding them with SQLcl or SQL*Plus and the AWS CLI, a read-only reader account, allowing this computer's public IP, TCPS on port 2484 with the RDS CA, SIDs and TNS descriptors, the unattended connect line, and the ORA- errors that matter. Connector id oracle, aliases oracle-db and ora, tier GA. Triggers — "connect Oracle to Exasol", "query Oracle from Exasol", "query RDS Oracle from Exasol", "Oracle TCPS from exakit", "Oracle service name for exakit", "exakit connect oracle", "ORA-01017 from exakit".
+description: Connect an Oracle database to local Exasol as a virtual schema with exakit connect oracle. Covers the inputs (service name, schema owner) and where each is in the AWS console or SQLcl, the connection-string forms, a read-only reader account, allowing this computer's public IP, TCPS on port 2484 and the CA PEM that tls=verify always needs on Exasol Personal 2.4, SIDs and TNS descriptors, the unattended connect line, and the ORA- errors that matter. Connector id oracle, aliases oracle-db and ora, tier GA. Triggers — "connect Oracle to Exasol", "query Oracle from Exasol", "query RDS Oracle from Exasol", "Oracle TCPS from exakit", "Oracle service name for exakit", "exakit connect oracle", "ORA-01017 from exakit".
 ---
 
 # Oracle → local Exasol
 
-Shared rules (credential handling, TLS and a private CA, the reader-password
-recipe, the `--json` answer and failure kinds, disconnect versus remove) live in
+Shared rules (credential handling, the `--json` answer and failure kinds, the
+reader-password recipe, re-point, disconnect versus remove) live in
 [exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
 skill adds only what is Oracle's own.
 
@@ -14,22 +14,24 @@ skill adds only what is Oracle's own.
 
 An Oracle database - self-hosted, Amazon RDS for Oracle - to query from local
 Exasol without copying it. One source is one schema (owner). The Java-only thin
-driver: no Oracle Client install. Tier GA.
+driver: no Oracle Client install; `IMPORT FROM ORA` stays off. Adapter 5.0.2
+with ojdbc 23.26.3.
 
-## 2. What to get from the user
+## 2. The fields and where to find them
 
-| Input | Required | Default | Kind | Meaning |
-|---|---|---|---|---|
-| `host` | yes | | host | the listener's host name - the name in its certificate, not an IP |
-| `port` | no | 1521 | port | the listener port; TCPS is often 2484 |
-| `service` | yes | | name | the service name (not a SID) |
-| `schema` | yes | | name | the owner whose tables to expose, as Oracle stores it (upper case) |
-| `user` | yes | | text | the reader account |
-| `password` | yes | | secret | its password - only through `--password-file` |
-| `tls` | no | `verify` | choice: `verify`, `disable` | `verify` is TCPS with the certificate's name checked; `disable` is plain TCP |
-| `ca` | no | | ca-file | a PEM file or bundle of the CA that signs the listener |
+The form first asks "Name (alias) for this connection" (`--name`, lower case,
+e.g. `hr`): the tables appear as `VS_HR`.
 
-Plus `--name`: the source name, which becomes schema `VS_<NAME>`.
+| Input | Required | Default | Where to find it |
+|---|---|---|---|
+| `host` | yes | | RDS: console > RDS > Databases > *db* > Connectivity & security > Endpoint. The name in the listener's certificate, not an IP. Never `localhost` |
+| `port` | no | 1521 | the listener port; TCPS is often 2484 (RDS: the SSL option in the instance's option group) |
+| `service` | yes | | the service name, not a SID: `SELECT sys_context('USERENV','SERVICE_NAME') FROM dual` (RDS: Configuration > DB name) |
+| `schema` | yes | | the owner whose tables to expose, as Oracle stores it (upper case): `SELECT username FROM all_users` |
+| `user` | yes | | the reader account (section 4) |
+| `password` | yes | | its password - only through `--password-file` or `--password-stdin` |
+| `tls` | no | `verify` | `verify` (TCPS, certificate and host name checked) or `disable` (plain TCP); there is no `require` |
+| `ca` | no | | a PEM file or bundle of the CA that signs the listener - required in practice with `verify` (section 6) |
 
 ## 3. Find each value (read-only)
 
@@ -47,9 +49,16 @@ SELECT username FROM all_users ORDER BY 1;                   -- schema owners
 SELECT table_name FROM all_tables WHERE owner = 'HR';        -- an owner's tables
 ```
 
-A connection string fills host, port, service and tls:
-`--url 'jdbc:oracle:thin:@tcps://<host>:2484/<service>'` (TCPS sets
-`tls=verify`; `//host:1521/service` keeps it at verify too, with a note). A SID
+Connection-string forms, read by the form's first question and by `--url`:
+
+- `jdbc:oracle:thin:@//host:1521/service`
+- `jdbc:oracle:thin:@tcps://host:2484/service`
+- `host[:port]/service`
+
+`tcps://` sets `tls=verify`; a plain `//` keeps it at `verify` too, with a note
+(use `--set tls=disable` if the listener offers no TCPS). A user before the `@`
+fills `user`; a password there (`user/password@`) is the credential, taken out
+of the string and not asked again. A SID
 (`host:port:SID`) and a TNS descriptor `(DESCRIPTION=...)` are refused: give
 host, port and service with `--set` (`SELECT value FROM v$parameter WHERE name = 'service_names'`
 lists the services).
@@ -88,12 +97,28 @@ the source: show it, run it only after a yes.
 - **RDS**: `public` must be `True`; open the listener port (2484 for TCPS) from the IP:
   `aws ec2 authorize-security-group-ingress --group-id <sg> --protocol tcp --port 2484 --cidr <public-ip>/32`
 - **Self-hosted**: the listener must accept TCPS on its port (or plain TCP for
-  `tls=disable`) and the firewall must pass it. On this computer use host
-  `192.168.64.1` (macOS); on Linux and WSL the address the database sees this computer at (Podman:
-  `host.containers.internal`; Docker: `host.docker.internal` where the deployment
-  provides it, else the bridge gateway).
+  `tls=disable`) and the firewall must pass it.
+- **On this computer**: `localhost` is refused. Use `192.168.64.1` on macOS; on
+  Linux and WSL with Podman `host.containers.internal`; with Docker
+  `host.docker.internal` (192.168.65.254 inside the database on Docker Desktop).
 
-## 6. Connect
+## 6. TLS and the CA file
+
+- **`verify` always needs `ca` on Exasol Personal 2.4**, even for a public CA:
+  the database's JDBC loader has an empty Java trust store, and the connect fails
+  with "the trustAnchors parameter must be non-empty". The plan warns when
+  `verify` has no CA; do not connect past that warning.
+- What to give: RDS, the region's bundle
+  `https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`; a
+  public CA, its root; a company CA, its root. A download: ask first.
+- The CA travels inside the URL as a trust-only PEM wallet
+  (`wallet_location=data:;base64,...`), so no file has to reach the loader.
+  ojdbc 23 checks the host name whatever `ssl_server_dn_match` says: connect by
+  the certificate's name, not by IP. Verified against RDS Oracle 19c SE2 over TCPS 2484.
+- Oracle has no `require` level. `tls=disable` (plain TCP, often 1521) sends the
+  password in clear: only when the user says so.
+
+## 7. Connect
 
 ```bash
 exakit connect oracle --name hr --set host=<host> --set port=2484 --set service=<service> \
@@ -103,26 +128,38 @@ exakit connect oracle --name hr --set host=<host> --set port=2484 --set service=
   --password-file ~/.config/exakit/hr.pw --yes --json
 ```
 
-- `verify` is TCPS: set the TCPS port. The CA travels inside the URL as a
-  trust-only wallet, so the loader's empty CA store does not matter. RDS: the
-  region's bundle from `https://truststore.pki.rds.amazonaws.com/<region>/<region>-bundle.pem`
-  (a download: ask first). Verified against RDS Oracle 19c over TCPS 2484.
-- `tls=disable` (plain TCP, often 1521) sends the password in clear: only when
-  the user says so.
-- The tables appear as `VS_HR`.
+`verify` is TCPS: set the TCPS port. PowerShell takes the same line on one
+line, with `$HOME\.config\exakit\...` paths.
 
-## 7. Verify
+## 8. Verify and query
 
 ```bash
 exakit source check hr
 exakit source describe hr
-exakit sql "SELECT * FROM VS_HR.EMPLOYEES LIMIT 10"   # names arrive as Oracle stores them, normally upper case
 ```
 
-## 8. When it fails
+Names arrive as Oracle stores them, normally upper case, so most queries need no
+quotes and run the same in bash, zsh and PowerShell:
+
+```bash
+exakit sql 'SELECT * FROM VS_HR.EMPLOYEES LIMIT 10'
+exakit sql 'SELECT DEPARTMENT_ID, COUNT(*) AS N FROM VS_HR.EMPLOYEES GROUP BY DEPARTMENT_ID'
+```
+
+A name created quoted in mixed case needs double quotes; Windows PowerShell 5.1
+drops them from an argument, so pipe the query or use `--file`:
+
+```powershell
+'SELECT "FirstName" FROM VS_HR."Contacts" LIMIT 10' | exakit sql
+exakit sql --file .\contacts.sql
+```
+
+## 9. When it fails
 
 | Message | Fix |
 |---|---|
+| "the trustAnchors parameter must be non-empty" | `tls=verify` without a CA: connect again with `--set ca=<PEM>`, a public CA's root too (section 6) |
+| "validity check failed", "not yet valid" | the database clock is behind (the laptop slept): `exakit stop`, then `exakit start` |
 | "ORA-01017" (invalid username/password) | wrong user or password: `exakit source reauth hr --password-file <file>` |
 | "ORA-01031" (insufficient privileges), "ORA-01045" (no CREATE SESSION), "ORA-41900" (missing READ, 23ai) (`privilege`) | grant CREATE SESSION and READ on each table (23ai: READ ANY TABLE ON SCHEMA), section 4 |
 | "ORA-00942" (table or view does not exist) (`missing_or_denied`) | Oracle says this for a table the account may not read too: dropped or renamed, `exakit source refresh hr`; else grant READ on it - a table added after the grants needs its own (section 4) |
@@ -135,15 +172,15 @@ exakit sql "SELECT * FROM VS_HR.EMPLOYEES LIMIT 10"   # names arrive as Oracle s
 
 Types: Oracle `DATE` carries a time of day, so it arrives as `TIMESTAMP(0)`.
 
-## 9. Keep it working
+## 10. Keep it working
 
 - New password: `ALTER USER exakit_reader IDENTIFIED BY "@PW@"` with a fresh
   file, then `exakit source reauth hr --password-file ~/.config/exakit/hr.pw`.
 - The database moved (a new host, port or service): `exakit connect oracle --name hr
   --set host=<new host> --password-file ~/.config/exakit/hr.pw --yes` (`--dry-run`
-  first). The password is given again; `VS_HR` keeps its name, and the new address is
-  tried before anything changes - see the shared skill.
+  first). `VS_HR` keeps its name; the password is asked for again; the recorded CA
+  is kept. A new CA or TLS level: `exakit source disconnect hr --yes`, then connect again.
 - Tables added at the source: grant `READ` on them (before 23ai), then
   `exakit source refresh hr`.
 - Stop: `exakit source disconnect hr` or `exakit source remove hr`
-  (`--dry-run` first, then ask) - see the shared skill.
+  (`--dry-run` first, then ask).

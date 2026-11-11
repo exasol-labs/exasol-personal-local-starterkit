@@ -26,6 +26,7 @@ import time
 
 import artifacts
 import document
+import edml_draft
 import plan as planner
 import sources
 import sql
@@ -64,7 +65,8 @@ STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreac
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
               "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
               "schema_missing": "failed", "external": "access-denied", "managed": "failed",
-              "privilege": "access-denied", "missing_or_denied": "failed"}
+              "privilege": "access-denied", "missing_or_denied": "failed", "sandbox": "failed",
+              "catalog": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
@@ -72,8 +74,8 @@ REMEDY_FOR = {
     "unreachable": "the source did not answer from inside the database: check the host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then: exakit source check {name}",
     "nohost": "the host name no longer resolves: check it (a private name may need a VPN), then: exakit source check {name}",
     "dns": "Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS) - then: exakit source check {name}",
-    "nojava": "the Java language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
-    "norust": "the Rust language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script",
+    "nojava": "exakit connect installs the Java language container with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+    "norust": "exakit connect installs the Rust language container with one database restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "denied": "the account signs in but may not read this data: grant it what the message names ({access}), then: exakit source check {name}",
     "privilege": "the source took the credentials, but the account lacks a privilege: grant it what the message names ({access}), then: exakit source check {name}",
@@ -84,6 +86,8 @@ REMEDY_FOR = {
     "schema_missing": "the schema the source was connected with is gone or no longer visible to the account; check it at the source, then: exakit source check {name}",
     "external": "Unity Catalog does not let engines outside Databricks read this schema's files: the metastore needs External Data Access switched on and the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside) - or read it through the SQL warehouse: exakit connect databricks; then: exakit source check {name}",
     "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; read it through the SQL warehouse instead: exakit connect databricks",
+    "sandbox": "the database's Java sandbox stopped the driver before it reached the source (it tried a file or a connection the sandbox does not allow) - not the network or the credentials; update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then: exakit source check {name}",
+    "catalog": "the catalog does not know warehouse {warehouse} - give the catalog's name (e.g. exakit_uc for Databricks), then: exakit source check {name}",
     "error": "see the log: exakit logs",
 }
 
@@ -120,12 +124,19 @@ def command_for(kind, name, first=False):
 
 
 
+def catalog_warehouse(message):
+    """The warehouse a catalog-config failure names, quoted, or "it was given"."""
+    m = re.search(r"catalog config for warehouse '([^']*)'", str(message or ""))
+    return "'%s'" % m.group(1) if m else "it was given"
+
+
 def remedy_for(kind, name, connector, message=None):
     """The fix for a failure class, in the words of the connector's store.
     An error_hint given as {"match", "text"} is said only for a message it
     matches; a plain string, for every unclassified failure."""
     text = remedy_text(kind).format(
-        name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"))
+        name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"),
+        warehouse=catalog_warehouse(message))
     if kind == "auth" and connector.get("auth_hint"):
         text += "; %s" % connector["auth_hint"]
     hint = connector.get("error_hint")
@@ -188,10 +199,12 @@ def tls_remedy(message, connector, clock=None):
     text = str(message)
     has_ca = any(spec["kind"] == "ca-file" for spec in connector["inputs"])
     has_tls = any(spec["name"] == "tls" for spec in connector["inputs"])
-    if re.search(r"trustAnchors parameter must be non-empty", text, re.I):
+    if re.search(r"trustAnchors parameter must be non-empty|Could not load trustJKS keystore", text, re.I):
         # Measured on Exasol Personal 2.3.0: the JDBC loader runs the language
         # container's Java outside it, and that Java's cacerts is an absolute
         # symlink into the container's /etc - so the loader trusts nothing.
+        # MySQL's Connector/J says it as "Could not load trustJKS keystore
+        # from null" (measured on 2.4).
         return ("the database's JDBC loader has no CA store of its own (an Exasol Personal issue), so it cannot "
                 "verify any certificate without one given to it" +
                 ("; give the CA as PEM with --set ca=<file> - for a public CA too, its root certificate"
@@ -312,6 +325,23 @@ class ScopeFailure(Failure):
     connect adds only that nothing was kept."""
     def __init__(self, message, kind, remedy):
         super().__init__(message, EXIT["failed"], kind, remedy=remedy, said="%s; %s" % (message, remedy))
+
+
+def draft_into(connector, values, secret, folder):
+    """edml_draft.draft for a connector's inputs and credential, its failure a
+    Failure (kind draft) that says to give a mapping instead."""
+    prefix = planner.draft_prefix(connector, values) or ""
+    try:
+        return edml_draft.draft(edml_draft.store_for(connector["id"], values, secret), folder, prefix)
+    except (edml_draft.DraftError, document.DocumentError) as error:
+        remedy = "give a mapping path instead (--set mapping=<folder>)"
+        if "(s3:ListBucket)" in str(error) and not prefix:
+            # A key limited to a prefix, as the kit advises, may list only that folder.
+            remedy += ", or the bucket folder the key may list (--set mapping=auto:<folder>/, e.g. auto:data/)"
+        if re.search(r"\((s3:\w+|it needs \w+ \(\w\))\)", str(error)):
+            remedy += ", or add that right"
+        message = "the mapping could not be drafted: %s" % error
+        raise Failure(message, EXIT["input"], "draft", remedy=remedy, said="%s - %s" % (message, remedy))
 
 
 class Engine(object):
@@ -486,6 +516,30 @@ class Engine(object):
             raise Failure("the Rust language container is not installed in the database (no %s language alias)"
                           % slc["alias"], EXIT["norust"], "norust")
 
+    def missing_languages(self, need):
+        """Which of the language containers in `need` (java, rust) the database
+        lacks, asked before anything is connected: Rust by its alias, as
+        ensure_language asks; Java by running the kit's own file probe on a
+        path that is not a file (an empty one is NULL to the database), which
+        touches no network."""
+        missing = []
+        if "java" in need:
+            try:
+                self.ensure_probe()
+                self.java_query("SELECT EXAKIT_VS.%s('-') AS R" % FILES)
+            except Failure as error:
+                if error.kind != "nojava":
+                    raise
+                missing.append("java")
+        if "rust" in need:
+            try:
+                self.ensure_language(self.defs.profile("rust-native"))
+            except Failure as error:
+                if error.kind != "norust":
+                    raise
+                missing.append("rust")
+        return missing
+
     def probe(self, host, port):
         """'ok <ip>' | 'dns ...' | 'tcp <ip> ...', from inside the database's Java."""
         self.ensure_probe()
@@ -646,6 +700,27 @@ class Engine(object):
             self.emit("WARN", "%s's key file is in BucketFS, which any user who may create scripts can read - and %s "
                       "may: %s. Revoke CREATE SCRIPT from them, or accept that they can read this key"
                       % (name, "this user" if len(readers) == 1 else "these users", ", ".join(readers)))
+
+    @staticmethod
+    def drafts(connector):
+        """True for a connector whose mapping the kit drafts when none is given."""
+        return any(spec["kind"] == "edml" and spec.get("draft") for spec in connector["inputs"])
+
+    def draft_mapping(self, connector, values, secret, name):
+        """(folder, draft) for a connect without a mapping: drafted from the
+        bucket or container (edml_draft) into <kit home>/sources/<name>/edml,
+        its tables said in one summary. A store that cannot be listed is a
+        failure that says to give a mapping folder instead."""
+        where = connector.get("store", "bucket")
+        self.emit("INFO", "Drafting the mapping from the %s..." % where)
+        result = draft_into(connector, values, secret, self.store.path(name, "edml"))
+        self.emit("OK", "Mapping drafted from the %s: %d table%s in %s" % (
+            where, len(result["tables"]), "" if len(result["tables"]) == 1 else "s", result["folder"]))
+        for line in edml_draft.summary_lines(result):
+            self.emit("INFO", "  " + line)
+        for note in result["notes"]:
+            self.emit("WARN", note)
+        return result["folder"], result
 
     def stage_mapping(self, values, name, created):
         """The EDML files, copied into mappings/<name>/ in the kit's bucket
@@ -1072,6 +1147,7 @@ class Engine(object):
                           % (connector_id, spec["label"].lower()), EXIT["input"], "input",
                           remedy="pipe it on standard input or give it with --password-file <file>")
         created = {"files": [], "connection": False, "script": False, "schema": False}
+        drafted = None
         journal = {"operation": "reconnect" if reconnect else "connect", "connector": connector_id,
                    "started": sources.now(), "created": created}
         with self.store.lock():
@@ -1102,6 +1178,9 @@ class Engine(object):
                 # Checked first: a malformed credential is named here, not as a
                 # Java stack from inside the database after files were staged.
                 url, user, conn_secret, hidden, notes = self.credential(connector, values, secret)
+                if planner.draft_prefix(connector, values) is not None and not reconnect:
+                    # No mapping given: drafted from the bucket with the credential just checked.
+                    values["mapping"], drafted = self.draft_mapping(connector, values, secret, name)
                 self.warn_clock()
                 self.ensure_language(profile)
                 self.require_route(connector, values, name)
@@ -1189,7 +1268,7 @@ class Engine(object):
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
                 elif not reconnect and kind in ("auth", "tls", "unreachable", "nohost", "denied", "region", "nobucket",
                                                 "clock", "external", "managed", "schema_missing", "privilege",
-                                                "missing_or_denied"):
+                                                "missing_or_denied", "sandbox", "catalog"):
                     remedy = {"denied": "the account signs in but may not read this data; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
                               "privilege": "the source took the credentials, but the account lacks a privilege; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
                               "missing_or_denied": "the source answers that the object the message names does not exist for this account; nothing was kept - check that name as the source spells it, or grant the account %s, then connect again" % connector.get("access", "read access"),
@@ -1203,6 +1282,8 @@ class Engine(object):
                               "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again",
                               "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",
                               "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
+                              "catalog": "the catalog does not know warehouse %s; nothing was kept - give the catalog's name (e.g. exakit_uc for Databricks, the catalog name for Polaris), not a URL, then connect again" % catalog_warehouse(error),
+                              "sandbox": "the database's Java sandbox stopped the driver before it reached the source - not the network or the credentials; nothing was kept - update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then connect again",
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
                 if kind in ADDRESS_KINDS:
                     remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
@@ -1216,8 +1297,10 @@ class Engine(object):
                     # check); only the driver's raw text needs it restated.
                     raise Failure(str(error), code, kind, remedy=remedy, command=command,
                                   said="%s; %s" % (error, remedy.split("; ", 1)[-1]))
+                # A catalog-config failure is said in the kit's words alone: the
+                # VM's raw text (in the log and in error) helps nobody here.
                 raise Failure(str(error), code, kind, remedy=remedy, command=command,
-                              said="%s (%s)" % (error, remedy))
+                              said=remedy if kind == "catalog" else "%s (%s)" % (error, remedy))
             pins = self.pins(connector)
             record = {"schema_version": 1, "id": name, "connector": connector_id,
                       "profile": connector["profile"], "inputs": values, "objects": names,
@@ -1240,7 +1323,7 @@ class Engine(object):
         return {"name": name, "connector": connector_id, "action": "reconnected" if reconnect else "connected",
                 "objects": names, "tables": len(tables), "status": "ready",
                 "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"]),
-                "public_ip": self.egress(connector, values)[0]}
+                "public_ip": self.egress(connector, values)[0], **({"mapping_draft": drafted} if drafted else {})}
 
     # --- re-pointing a connected source -------------------------------------------
     # `exakit connect <connector> --name N` for a source N that is connected
@@ -1630,7 +1713,8 @@ class Engine(object):
                         "credential" % (name, connector["id"], name)))
             if remedy is None:
                 remedy = "%s; %s" % (kept, remedy_text(kind).format(name=name, access=access,
-                                                                      store=connector.get("store", "bucket")))
+                                                                      store=connector.get("store", "bucket"),
+                                                                      warehouse=catalog_warehouse(error)))
             if kind in ADDRESS_KINDS:
                 remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
         return Failure(str(error), code, kind, remedy=remedy, said="%s; %s" % (error, remedy))

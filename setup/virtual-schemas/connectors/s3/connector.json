@@ -29,9 +29,14 @@
     },
     {
       "name": "mapping",
-      "label": "EDML mapping on this computer: a .json file, or a folder of them",
+      "label": "EDML mapping",
+      "prompt": "EDML mapping path",
       "kind": "edml",
-      "required": true
+      "draft": true,
+      "hint": [
+        "EDML mapping: a .json file or a folder of them on this computer.",
+        "Leave empty and the kit drafts it from the bucket after you give the access key."
+      ]
     },
     {
       "name": "access_key_id",

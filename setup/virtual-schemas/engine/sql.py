@@ -84,9 +84,17 @@ _KINDS = (
     # Snowflake answer for an object the account may not see as if it did not
     # exist, so the fix names both - never "denied" alone.
     ("missing_or_denied", r"ORA-00942|does not exist or not authorized"),
+    # The database's Java sandbox refused the driver something (a file read,
+    # a socket) before it reached the source: pgjdbc says it so for any
+    # AccessControlException, whichever permission it was.
+    # An Iceberg REST catalog that does not know the warehouse it was given
+    # (measured: the catalog URL typed as the warehouse answered HTTP 400).
+    ("catalog", r"failed to read the catalog config for warehouse"),
+    ("sandbox", r"security policy has prevented the connection|AccessControlException"),
     ("dns", r"UnknownHostException|Name or service not known|nodename nor servname|unable to resolve host"),
     ("tls", r"PKIX|certificate|SSLHandshake|SSL connection|ssl_server_dn_match|TLS|SSLException|"
-            r"trustAnchors parameter must be non-empty"),
+            r"trustAnchors parameter must be non-empty|"
+            r"Could not load trustJKS keystore"),            # MySQL Connector/J: verify with no CA on Exasol Personal
     ("auth", r"password authentication failed|Access denied for user|Login failed for user|ORA-01017|"
              r"Incorrect username or password|invalid username/password|authentication failed|"
              r"JWT token is invalid|Programmatic access token is invalid|token has expired|"

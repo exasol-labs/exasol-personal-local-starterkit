@@ -140,6 +140,16 @@ class Store(object):
     def delete_source(self, name):
         """Remove the source folder: the kit's own three files and nothing else."""
         folder = self.path(name)
+        drafts = os.path.join(folder, "edml")
+        if os.path.isdir(drafts):
+            # The mapping the kit drafted for it (edml_draft): its .json files only.
+            for leaf in os.listdir(drafts):
+                if leaf.endswith(".json") and os.path.isfile(os.path.join(drafts, leaf)):
+                    os.remove(os.path.join(drafts, leaf))
+            try:
+                os.rmdir(drafts)
+            except OSError:
+                pass
         for leaf in ("config.json", "state.json", "journal.json"):
             try:
                 os.remove(os.path.join(folder, leaf))
