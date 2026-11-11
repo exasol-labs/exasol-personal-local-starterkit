@@ -208,7 +208,8 @@ class Home(Screen):
         d = self.data or {}
         kit = d.get("kit") if isinstance(d.get("kit"), dict) else {}
         plan = d.get("plan") if isinstance(d.get("plan"), dict) else {}
-        addons = {a["id"]: a for a in d.get("addons") or [] if isinstance(a, dict) and a.get("id")}
+        addons = {a["id"]: a for a in d.get("addons") or [] if isinstance(a, dict) and a.get("id")
+                  and (a.get("offered", True) or a.get("installed"))}     # one the kit does not offer yet: only if installed
         parts = {c["id"]: c for c in d.get("components") or [] if isinstance(c, dict) and c.get("id")}
         persona = (plan.get("addons") or {}).get("installed", []) + (plan.get("addons") or {}).get("pending", [])
         order = [i for i in persona if i in addons] + [i for i in addons if i not in persona]

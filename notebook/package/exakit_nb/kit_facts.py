@@ -148,9 +148,18 @@ def connector_inputs(connector: str) -> dict[str, Any]:
 
 def addons() -> list[dict[str, Any]]:
     """The marketplace's add-ons as `exakit marketplace --list --json` reports them: {id, name, about, status,
-    installed, version, url}."""
+    installed, version, url}, and `offered`: False for one the kit's catalog does not offer yet (its
+    marketplace/catalog.json says "visible": false, so no marketplace screen lists it)."""
     rows = _json("marketplace", "--list").get("addons", [])
-    return [{k: r.get(k) for k in ("id", "name", "about", "status", "installed", "version", "url")} for r in rows]
+    hidden: set[str] = set()
+    root = _kit_root()
+    try:
+        catalog = json.loads((root / "marketplace" / "catalog.json").read_text(encoding="utf-8")) if root else {}
+        hidden = {str(r.get("id")) for r in catalog.get("addons", []) if isinstance(r, dict) and r.get("visible") is False}
+    except (OSError, ValueError):
+        pass
+    return [{**{k: r.get(k) for k in ("id", "name", "about", "status", "installed", "version", "url")},
+             "offered": r.get("id") not in hidden} for r in rows]
 
 
 # An adapter names itself either in its methods or in the arguments it hands its base class (mcp/adapters).

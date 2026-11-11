@@ -105,7 +105,9 @@ class Session:
         """A dataset approved in step 1 after this step opened its data (None when there is nothing newer)."""
         latest = self.latest_approved()
         ds_id = getattr(self.dataset, "id", None)
-        if self.dataset is None or not latest or latest == self.followed or latest == ds_id:
+        # Only a step that follows the approved-last dataset (open_latest) can fall behind it. Step 1 chooses its own
+        # data, and running its cell again would change nothing.
+        if self.followed is None or self.dataset is None or not latest or latest == self.followed or latest == ds_id:
             return None
         return latest
 

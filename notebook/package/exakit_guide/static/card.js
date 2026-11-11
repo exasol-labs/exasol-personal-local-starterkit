@@ -193,8 +193,11 @@ function render({ model, el }) {
   const mapDirty = () => !!st.mapInit && JSON.stringify({ r: st.roles, s: st.slots }) !== st.mapInit;
 
   // A field's or a button's condition: one {field, equals}, or a list that must all hold (a choice or a field).
-  const shown = (cond) => !cond || (Array.isArray(cond) ? cond : [cond]).every((c) =>
-    String(st.fields[c.field] ?? st.choice[c.field] ?? "") === String(c.equals));
+  // {field, in: [...]} holds when the field is one of them.
+  const shown = (cond) => !cond || (Array.isArray(cond) ? cond : [cond]).every((c) => {
+    const now = String(st.fields[c.field] ?? st.choice[c.field] ?? "");
+    return Array.isArray(c.in) ? c.in.map(String).includes(now) : now === String(c.equals);
+  });
 
   const send = (id, values = {}, opts = {}) => {
     if (ui.busy) return;
@@ -359,7 +362,9 @@ function render({ model, el }) {
     choice(b) {
       if (st.choice[b.id] === undefined) st.choice[b.id] = b.value;
       const sel = st.choice[b.id];
-      return h("div", { class: `guide-choices${b.cols ? " guide-choices-" + b.cols : ""}`, role: "radiogroup" }, b.options.map((o) => {
+      // below: the options are boxes of one size in a row, and the chosen one's fields sit under the row, full width.
+      const picked = b.below ? b.options.find((o) => o.value === sel) : null;
+      const boxes = h("div", { class: `guide-choices${b.cols ? " guide-choices-" + b.cols : ""}${b.below ? " guide-choices-even" : ""}`, role: "radiogroup" }, b.options.map((o) => {
         const on = sel === o.value;
         const pick = () => { if (o.disabled || on) return; st.choice[b.id] = o.value; draw(); };
         return h("div", { class: `guide-choice${on ? " is-on" : ""}${o.disabled ? " is-off" : ""}`, role: "radio", tabindex: o.disabled ? "-1" : "0",
@@ -367,8 +372,11 @@ function render({ model, el }) {
           onClick: pick, onKeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } },
           h("div", { class: "guide-choice-head" }, h("span", { class: "guide-radio" }), h("strong", {}, o.title)),
           h("div", { class: "guide-choice-text" }, o.disabled && o.disabled_reason ? o.disabled_reason : o.text),
-          on ? h("div", { class: "guide-choice-fields", onClick: (e) => e.stopPropagation() }, (o.fields || []).map(field)) : null);
+          on && !b.below ? h("div", { class: "guide-choice-fields", onClick: (e) => e.stopPropagation() }, (o.fields || []).map(field)) : null);
       }));
+      if (!b.below) return boxes;
+      return h("div", { class: "guide-choice-wrap" }, boxes,
+        picked && (picked.fields || []).length ? h("div", { class: "guide-choice-panel guide-choice-fields" }, picked.fields.map(field)) : null);
     },
     fields(b) { return h("div", { class: "guide-fieldrow" }, b.items.map(field)); },
     checks(b) {

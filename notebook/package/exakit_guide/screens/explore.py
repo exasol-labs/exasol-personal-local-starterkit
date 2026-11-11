@@ -114,6 +114,7 @@ class WorkingOn(Screen):
     def on_switch(self, v: dict) -> None:
         ds_id = str(v.get("pick") or "")
         actions.run("explore.open", dataset_id=ds_id)
+        SESSION.followed = SESSION.latest_approved() or SESSION.followed     # chosen here on purpose: not "behind"
         self._count()
         _state().clear()
         self.flash = {"kind": "ok", "v": f"Now working on {ds_id}."}

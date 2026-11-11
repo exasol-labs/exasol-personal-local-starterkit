@@ -55,7 +55,8 @@ def _answers(ds_id: str) -> list[dict]:
     SQL can become a dashboard."""
     wf = importlib.import_module("exakit_nb.workflow")   # the module (exakit_nb.workflow is also a function)
 
-    last = actions.run("kit.last_workflow")
+    workflows = actions.run("kit.workflows") or []       # nb.list_workflows(): the last one written to
+    last = max(workflows, key=lambda r: r.get("last") or "")["id"] if workflows else None
     events = actions.run("kit.workflow_log", workflow_id=last) if last else []
     approved = {e.get("sql_digest"): e for e in events if e.get("kind") == wf.ASK_APPROVE and e.get("dataset") == ds_id}
     seen, asked, out = set(), set(), []

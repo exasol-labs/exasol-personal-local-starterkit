@@ -452,3 +452,12 @@
 .guide-tabs button { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 14px; font: inherit; font-size: 14px; color: var(--guide-muted); cursor: pointer; }
 .guide-tabs button:hover { color: var(--guide-text); }
 .guide-tabs button.is-on { color: var(--guide-text); font-weight: 600; border-bottom-color: var(--guide-accent); }
+
+/* A choice whose fields sit under the row: every option is a box of the same size. */
+.guide-choice-wrap { display: flex; flex-direction: column; gap: 12px; }
+.guide-choices-even { grid-template-columns: repeat(3, minmax(0, 1fr)); grid-auto-rows: 1fr; }
+.guide-choices-even .guide-choice { min-height: 86px; }
+@media (max-width: 860px) { .guide-choices-even { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; } .guide-choices-even .guide-choice { padding: 10px; } }
+@media (max-width: 520px) { .guide-choices-even { grid-template-columns: 1fr; } .guide-choices-even .guide-choice { min-height: 0; } }
+.guide-choice-panel { border: 1px solid var(--guide-border); border-radius: 12px; padding: 14px; gap: 10px; margin-top: 0; }
+.guide-choice-panel .guide-input, .guide-choice-panel .guide-select { width: 100%; max-width: 560px; }

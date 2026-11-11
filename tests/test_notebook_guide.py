@@ -354,11 +354,11 @@ class CardTest(unittest.TestCase):
         understand = importlib.import_module("exakit_guide.screens.understand")
         nb = importlib.import_module("exakit_nb")
         card = understand.ChooseData.__new__(understand.ChooseData)
-        card.sources, card.kit_said = [], ""
+        card.sources, card.kit_said, card.parsed = [], "", {}
         card.forms = {"postgresql": nb.connector_inputs("postgresql")}          # the kit's own form for it
         f = card._fid
         with mock.patch.object(understand.actions, "run", return_value="VS_SALES") as run:
-            schema = card._connect({"connector": "postgresql", "src_name": "Sales", "src_how": "form",
+            schema = card._connect({"connector": "postgresql", "src_name": "Sales",
                                     f("postgresql", "password"): "s3cret",
                                     f("postgresql", "host"): "db.example.com", f("postgresql", "database"): "shop",
                                     f("postgresql", "user"): "reader", f("postgresql", "port"): "5432",
@@ -378,13 +378,51 @@ class CardTest(unittest.TestCase):
         understand = importlib.import_module("exakit_guide.screens.understand")
         nb = importlib.import_module("exakit_nb")
         card = understand.ChooseData.__new__(understand.ChooseData)
-        card.forms = {"postgresql": nb.connector_inputs("postgresql")}
+        card.forms, card.parsed = {"postgresql": nb.connector_inputs("postgresql")}, {}
         with mock.patch.object(understand.actions, "run") as run:
             with self.assertRaisesRegex(ValueError, "Fill in: Host name or address, Database, Reader account"):
-                card._connect({"connector": "postgresql", "src_name": "sales", "src_how": "form"})
-            with self.assertRaisesRegex(ValueError, "Paste the connection string"):
-                card._connect({"connector": "postgresql", "src_name": "sales"})        # a string is asked first
+                card._connect({"connector": "postgresql", "src_name": "sales"})
         run.assert_not_called()
+
+    def test_a_new_connection_is_entered_one_step_at_a_time(self):
+        """Connection, data source, connection string, name, details, optional settings: Next checks each answer and
+        shows only the next step; Back returns. A data source without a connection string has no such step."""
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        nb = importlib.import_module("exakit_nb")
+        card = understand.ChooseData.__new__(understand.ChooseData)
+        card.sources, card.kit_said, card.parsed, card.source_tables = ["VS_OLD"], "", {}, {}
+        card.connectors = nb.connectors()
+        card.forms = {c["id"]: nb.connector_inputs(c["id"]) for c in card.connectors}
+        only = {"field": "src_schema", "equals": "__connect__"}
+        first = card._source_fields(only)
+        self.assertEqual("Connection", first[0]["label"])                       # the connections there are, first
+        self.assertEqual(["VS_OLD", "__connect__"], [o["value"] for o in first[0]["options"]])
+        card.on_src_next({})
+        self.assertEqual("source", card.step)
+        self.assertEqual(["Data source"], [f["label"] for f in card._source_fields(only) if f.get("type") == "select"])
+        with self.assertRaisesRegex(ValueError, "Choose the data source"):
+            card.on_src_next({"connector": "nope"})
+        card.on_src_next({"connector": "postgresql"})
+        self.assertEqual(["connection", "source", "string", "name", "needed", "optional"], card._steps())
+        self.assertEqual("string", card.step)
+        card.on_src_next({})                                                    # no string: every input is asked
+        self.assertEqual("name", card.step)
+        with self.assertRaisesRegex(ValueError, "Give the connection a name"):
+            card.on_src_next({"src_name": "My Sales"})
+        card.on_src_next({"src_name": "sales"})
+        labels = [f["label"] for f in card._source_fields(only)[1:]]
+        self.assertEqual(["Host name or address *", "Database *", "Reader account *"], labels[:3])
+        self.assertIn("Password", labels[3])
+        with self.assertRaisesRegex(ValueError, "Fill in: Host name or address"):
+            card.on_src_next({})
+        self.assertEqual("needed", card.step)
+        card.on_src_back({})
+        self.assertEqual("name", card.step)
+        card.forms["plain"] = {**card.forms["postgresql"], "forms": []}          # a data source that takes no string
+        card.step = "source"
+        card.on_src_next({"connector": "plain"})
+        self.assertEqual("name", card.step)
+        self.assertNotIn("string", card._steps())
 
     def test_a_connection_string_is_read_first_and_only_the_rest_is_asked(self):
         """The string is read as `exakit connect --url` reads it; then only what it did not give is required, every
@@ -403,12 +441,15 @@ class CardTest(unittest.TestCase):
             return "VS_SALES"
 
         with mock.patch.object(understand.actions, "run", side_effect=run):
-            card.on_read_source({"connector": "postgresql",
-                                 card._fid("postgresql", "url"): "postgres://db.example.com:5433/shop"})
+            card.connector, card.step = "postgresql", "string"
+            card.on_src_next({card._fid("postgresql", "url"): "postgres://db.example.com:5433/shop"})
             self.assertEqual(["user", "password"], card.parsed["postgresql"]["missing"])
-            fields = {f["id"]: f for f in card._connector_fields({"field": "src_schema", "equals": "__connect__"})}
+            self.assertEqual("name", card.step)
+            needed, rest = card._groups("postgresql")
+            fields = {f["id"]: f for f in needed + rest}
             sid = card._sid("postgresql")
             self.assertEqual("Reader account *", fields[card._fid(sid, "user")]["label"])              # required
+            self.assertEqual([card._fid(sid, "user"), card._fid(sid, "password")], [f["id"] for f in needed])
             self.assertEqual("db.example.com", fields[card._fid(sid, "host")]["value"])               # read, optional
             self.assertIn("(optional)", fields[card._fid(sid, "host")]["label"])
             self.assertEqual("public", fields[card._fid(sid, "schema")]["value"])                     # kit default
@@ -428,6 +469,33 @@ class CardTest(unittest.TestCase):
         self.assertEqual('connected = nb.connect_source("postgresql", "sales", url=SOURCE_URL, tls="require")', shown)
         self.assertNotIn("s3cret", shown)
         self.assertEqual("****", card.parsed["postgresql"]["masked"].split(":")[2].split("@")[0])   # the engine's mask
+
+    def test_only_a_step_that_follows_the_approved_data_can_fall_behind_it(self):
+        """Step 1 chooses its own data: an older approval of another dataset is not "newer", and running its cell
+        again would change nothing. A later step that opened the approved-last data is told when that moves on."""
+        session = importlib.import_module("exakit_guide.session")
+        fake = session.Session()
+        fake._ns = {"dataset": mock.Mock(id="amazon_sales")}
+        with mock.patch.object(session.Session, "latest_approved", return_value="amazon_sales_prepared"):
+            self.assertIsNone(fake.newer_approved())                    # step 1: follows nothing
+            fake.followed = "amazon_sales"
+            self.assertEqual("amazon_sales_prepared", fake.newer_approved())
+            fake.followed = "amazon_sales_prepared"                     # opened again, or picked here on purpose
+            self.assertIsNone(fake.newer_approved())
+
+    def test_share_reads_the_answers_of_the_last_workflow(self):
+        share = importlib.import_module("exakit_guide.screens.share")
+        wf = importlib.import_module("exakit_nb.workflow")
+        events = [{"kind": wf.ASK_APPROVE, "dataset": "d", "sql_digest": "x", "question": "How many?", "sql": "SELECT 1"},
+                  {"kind": wf.ASK_ANSWER, "sql_digest": "x", "row_count": 3}]
+
+        def run(action_id, **values):
+            self.assertIn(action_id, share.actions.ACTIONS)             # only actions there are
+            return {"kit.workflows": [{"id": "old", "last": "2026-01-01"}, {"id": "new", "last": "2026-02-01"}],
+                    "kit.workflow_log": events if values.get("workflow_id") == "new" else []}[action_id]
+
+        with mock.patch.object(share.actions, "run", side_effect=run):
+            self.assertEqual(["How many? · 3 rows"], [a["label"] for a in share._answers("d")])
 
     def test_run_logs_exactly_what_it_ran_and_returns_the_result(self):
         actions = importlib.import_module("exakit_guide.actions")
@@ -719,8 +787,9 @@ class HomeAddonsTest(unittest.TestCase):
                                   {"id": "exasol-scheduler", "status": "installed", "installed": True},
                                   {"id": "exasol-vscode", "status": "managed outside the kit", "installed": False},
                                   {"id": "notebook", "status": "available", "installed": False},
-                                  {"id": "udf-devkit", "name": "script-languages-release", "status": "available",
-                                   "installed": False}]}
+                                  {"id": "json-tables", "name": "exasol-json-tables", "status": "available",
+                                   "installed": False},
+                                  {"id": "udf-devkit", "status": "available", "installed": False, "offered": False}]}
         screen.data["components"] = [{"id": "dash-server", "add_on": True, "status": "update_available", "available": "0.3.0"},
                                      {"id": "exapump", "installed": "0.13.1", "status": "current"},
                                      {"id": "mcp_server", "installed": "2.4.0", "status": "update_available",
@@ -729,7 +798,7 @@ class HomeAddonsTest(unittest.TestCase):
         # The Marketplace tab: every add-on, the persona's first, with versions and updates.
         rows = {r["id"]: r for r in screen._addon_rows(everything=True)}
         self.assertEqual(["addon_dash-server", "addon_notebook", "addon_dbt-exasol", "addon_exasol-scheduler",
-                          "addon_exasol-vscode", "addon_udf-devkit"], list(rows))
+                          "addon_exasol-vscode", "addon_json-tables"], list(rows))      # one the kit does not offer yet: not listed
         label = lambda r: [a["label"] for a in r["actions"]]
         self.assertEqual("Installed 0.2.1 · Running · update to 0.3.0", rows["addon_dash-server"]["text"])
         self.assertEqual(["Update", "Open"], label(rows["addon_dash-server"]))
@@ -737,7 +806,7 @@ class HomeAddonsTest(unittest.TestCase):
         self.assertEqual("Not installed (for your persona)", rows["addon_notebook"]["text"])
         self.assertEqual(["Start"], label(rows["addon_exasol-scheduler"]))
         self.assertEqual([], label(rows["addon_exasol-vscode"]))                          # the user's own: never touched
-        self.assertEqual("script-languages-release", rows["addon_udf-devkit"]["name"])
+        self.assertEqual("exasol-json-tables", rows["addon_json-tables"]["name"])
         self.assertEqual('nb.addon_ready("dbt-exasol")', rows["addon_dbt-exasol"]["actions"][0]["cmd"])
         # The kit's own parts, with Update where the kit has a newer version.
         parts = {r["id"]: r for r in screen._component_rows()}
