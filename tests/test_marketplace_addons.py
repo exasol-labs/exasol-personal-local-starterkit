@@ -267,6 +267,7 @@ class AddonSafetyTest(unittest.TestCase):
 
         with patch.object(exasol_vscode, "code_cli", return_value=cli), \
              patch.object(exasol_vscode, "live_version", return_value=None), \
+             patch.object(exasol_vscode, "folder_version", return_value=None), \
              patch.object(exasol_vscode, "expected_digest", return_value="0" * 64), \
              patch("addons.exasol_vscode.urllib.request.urlopen", return_value=Response(b"bad")), \
              patch.object(KitContext, "run_logged") as install:
@@ -348,6 +349,21 @@ class AddonSafetyTest(unittest.TestCase):
             self.assertIsNone(exasol_vscode.live_version(self.ctx))
             self.assertFalse(exasol_vscode.system_present(self.ctx))
             self.assertFalse(exasol_vscode.applicable(self.ctx))
+
+    def test_vscode_slow_editor_still_finds_the_users_extension(self) -> None:
+        """The editor's tool timing out (a slow first start during an install) once made the install table offer the
+        extension the install then refused as the user's: the folder answers without starting the editor."""
+        user_home = Path(self.temp.name) / "user"
+        (user_home / ".vscode" / "extensions" / "exasol.exasol-vscode-1.7.0").mkdir(parents=True)
+        timeout = exasol_vscode.subprocess.TimeoutExpired("code", 20)
+        with patch.object(exasol_vscode, "code_cli", return_value=Path("/Applications/code")), \
+             patch.object(exasol_vscode.subprocess, "run", side_effect=timeout) as run, \
+             patch.object(exasol_vscode.Path, "home", return_value=user_home), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXAKIT_EXASOL_VSCODE_EXTDIR", None)
+            self.assertTrue(exasol_vscode.system_present(self.ctx))
+            run.assert_not_called()                       # the folder answered first
+            self.assertEqual("1.7.0", exasol_vscode.live_version(self.ctx))   # and after a timeout too
 
     def test_vscode_wsl_stages_extension_on_windows_drive(self) -> None:
         source = self.home / "extension.vsix"

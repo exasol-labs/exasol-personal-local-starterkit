@@ -122,7 +122,9 @@ def live_version(ctx: KitContext) -> str | None:
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True,
                                 check=False, timeout=20)
     except (OSError, subprocess.TimeoutExpired):
-        return None
+        # A slow first start of the editor (macOS checks an app it has not run for a while) must not read as "the
+        # extension is not here": the folders still answer.
+        return folder_version(ctx)
     if result.returncode != 0:
         return folder_version(ctx)
     for line in result.stdout.splitlines():
@@ -140,7 +142,11 @@ def installed_version(ctx: KitContext) -> str | None:
 def system_present(ctx: KitContext) -> bool:
     """Installed by the user, not the kit: the kit lists it as managed outside the kit and never offers to install,
     update or remove it."""
-    return not ctx.manifest.get(f"{RECEIPT}.version") and bool(live_version(ctx))
+    if ctx.manifest.get(f"{RECEIPT}.version"):
+        return False
+    # The extensions folders first: no editor started, so the answer cannot time out. The install table and the
+    # install itself ask this separately; a slow editor once let the table offer what the install then refused.
+    return bool(folder_version(ctx) or live_version(ctx))
 
 
 def applicable(ctx: KitContext) -> bool:
