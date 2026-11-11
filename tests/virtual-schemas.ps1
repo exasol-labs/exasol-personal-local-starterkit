@@ -1480,6 +1480,44 @@ $script:shown.Clear()
 $script:BinDir = $previousBin
 Remove-Item Env:\FAKE_START_RC
 
+
+# --- connect --help: the connector guides (docs\virtual-schemas) ----------------
+# The shipped command, with nothing installed: the same guide as the bash CLI,
+# ASCII only, and the Windows paste note from the guide's own words.
+$guideHome = Join-Path $work "guide-home"; New-Item -ItemType Directory -Force -Path $guideHome | Out-Null
+$savedHome = $env:HOME; $savedExakitHome = $env:EXAKIT_HOME; $savedLookup = $env:EXAKIT_NO_IP_LOOKUP
+$env:HOME = $guideHome; $env:EXAKIT_HOME = Join-Path $guideHome ".exasol-starter-kit"; $env:EXAKIT_NO_IP_LOOKUP = "1"
+function Guide {
+    param([string[]]$Words)
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $out = @(& $pwsh -NoProfile -File (J @("setup", "exakit.ps1")) @Words 2>&1)
+    } finally { $ErrorActionPreference = $previous }
+    return (($out | ForEach-Object { "$_" }) -join "`n")
+}
+$g = Guide @("connect", "postgresql", "--help"); $gCode = $LASTEXITCODE
+Check "connect postgresql --help: exit 0" 0 $gCode
+Check "...names the agent skill" $true ($g.Contains("exasol-vs-postgresql"))
+Check "...has the CA line" $true ($g.Contains("  The CA certificate (for"))
+Check "...gives one connection string to paste" $true ($g.Contains("postgres://exakit_reader@"))
+Check "...says on Windows to paste at the prompt, never --url with &" $true ($g.Contains("Windows: paste the connection string at the prompt; do not use --url with a") -and $g.Contains("contains &."))
+Check "...the connect command" $true ($g.Contains("Connect: exakit connect postgresql"))
+Check "...ASCII only" $true (-not ($g -match '[^\x00-\x7F]'))
+Check "help pg is the same guide (an alias)" $g (Guide @("help", "pg"))
+Check "help connect postgresql is the same guide" $g (Guide @("help", "connect", "postgresql"))
+$l = Guide @("connect", "--help")
+$ids = @((Get-Content -Raw -LiteralPath (J @("setup", "virtual-schemas", "catalog.json")) | ConvertFrom-Json).connectors | ForEach-Object { $_.id })
+$listed = @($ids | Where-Object { $l -match ("(?m)^  " + [regex]::Escape($_) + " ") }).Count
+Check "connect --help lists every connector" $ids.Count $listed
+Check "...the CA file where it applies" $true ($l.Contains("its password; CA file"))
+Check "...not the command page" $false ($l.Contains("Connects PostgreSQL, MySQL"))
+Check "help connect keeps the whole command page" $true ((Guide @("help", "connect")).Contains("Connects PostgreSQL, MySQL"))
+Check "help mcp keeps the component page" $true ((Guide @("help", "mcp")).Contains("MCP server"))
+$env:HOME = $savedHome; $env:EXAKIT_HOME = $savedExakitHome; $env:EXAKIT_NO_IP_LOOKUP = $savedLookup
+if ($null -eq $savedExakitHome) { Remove-Item Env:\EXAKIT_HOME -ErrorAction SilentlyContinue }
+if ($null -eq $savedLookup) { Remove-Item Env:\EXAKIT_NO_IP_LOOKUP -ErrorAction SilentlyContinue }
+
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }
 Write-Host ""

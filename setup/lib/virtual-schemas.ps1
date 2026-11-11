@@ -28,6 +28,68 @@ function Get-ExakitVsDefs {
     return $null
 }
 
+# Show-ExakitVsGuide - `exakit connect <connector> --help` (and `exakit help
+# <connector>`): the connector's guide, drawn by engine\guide.py from
+# docs\virtual-schemas\<connector>.md, coloured here. Without a connector,
+# every connector on one line each. -Exact returns 10 and prints nothing for a
+# word that is no connector's id or alias, so the caller's own help answers
+# it. No credential is read, so any python runs it when the kit's own is not
+# installed yet. Returns the exit code. Twin of exakit_vs_guide.
+function Show-ExakitVsGuide {
+    param([string]$Connector = "", [switch]$Exact)
+    $defs = Get-ExakitVsDefs
+    if (-not $defs) {
+        if ($Exact) { return 10 }
+        Write-Host "This kit copy has no setup\virtual-schemas. Update it: exakit update" -ForegroundColor Red
+        return 2
+    }
+    $python = ""
+    if (Get-Command Get-PyexasolVenvPython -ErrorAction SilentlyContinue) {
+        $venv = "" + (Get-PyexasolVenvPython)
+        if ($venv -and (Test-Path -LiteralPath $venv)) { $python = $venv }
+    }
+    if (-not $python -and (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue)) { $python = "" + (Get-ExakitPersonaPython) }
+    if (-not $python) {
+        if ($Exact) { return 10 }
+        Write-Host "Python 3 is needed to show the connector guide." -ForegroundColor Red
+        return 2
+    }
+    $width = 80
+    try { if ([Console]::WindowWidth -gt 0) { $width = [Console]::WindowWidth } } catch { }
+    $argv = @("-I", (Join-ExakitCorePath $defs "engine" "guide.py"), "--defs", $defs, "--width", "$width", "--shell", "powershell")
+    if ($Exact) { $argv += "--exact" }
+    # An empty value is never passed: 5.1 drops it.
+    if ($Connector) { $argv += $Connector }
+    $previous = $ErrorActionPreference
+    $previousExecutable = $env:PYTHONEXECUTABLE
+    $previousLauncher = $env:__PYVENV_LAUNCHER__
+    try {
+        $ErrorActionPreference = "Continue"
+        Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__ -ErrorAction SilentlyContinue
+        $lines = @(& $python @argv 2>$null)
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+        if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
+        if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
+    }
+    # One "<style>|<text>" per line: T title, H heading, D dimmed, A a command.
+    foreach ($line in $lines) {
+        $line = "" + $line
+        $style = ""
+        $text = $line
+        if ($line.Length -ge 2 -and $line[1] -eq '|') { $style = $line.Substring(0, 1); $text = $line.Substring(2) }
+        switch ($style) {
+            "T" { Write-Host ("{0}{1}{2}" -f $script:UiBold, $text, $script:UiReset) }
+            "H" { Write-Host ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
+            "D" { Write-Host ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
+            "A" { Write-Host ("{0}{1}{2}" -f $script:UiAccent, $text, $script:UiReset) }
+            default { Write-Host $text }
+        }
+    }
+    return $code
+}
+
 # Test-ExakitVsAvailable - can a source be connected from here? Twin of
 # exakit_vs_available: the definitions are present and the kit's pyexasol,
 # which runs the engine, is installed.
