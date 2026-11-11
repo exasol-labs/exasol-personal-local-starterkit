@@ -30,9 +30,9 @@ below for its inputs, preparation and fixes; this one holds what they all share.
 
 Every connector is `candidate`: tested against a simulated database, not yet qualified
 against every real server.
-`exakit source catalog` is the live list. `iceberg` asks between Glue (`lakehouse`) and a
-REST catalog (`iceberg-rest`); `unity-catalog` between the SQL warehouse (`databricks`)
-and the engine reading storage (`unity`).
+`exakit source catalog` is the live list; every alias names one connector. `iceberg`
+asks between Glue (`lakehouse`) and a REST catalog (`iceberg-rest`); `unity-catalog` is
+the engine reading storage (`unity`) - the SQL warehouse is `databricks`.
 
 ## Connect — the unattended shape
 

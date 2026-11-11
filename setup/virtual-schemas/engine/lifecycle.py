@@ -124,6 +124,18 @@ def command_for(kind, name, first=False):
 
 
 
+def tls_fix(connector):
+    """What fixes a TLS failure for this connector: the CA where it takes one,
+    tls=require only where it has that level (Oracle has none)."""
+    choices = next((spec.get("choices", []) for spec in connector["inputs"] if spec["name"] == "tls"), [])
+    fix = "fix the server certificate"
+    if any(spec["kind"] == "ca-file" for spec in connector["inputs"]):
+        fix += " or give the CA that signs it with --set ca=<PEM file or bundle>"
+    if "require" in choices:
+        fix += " (tls=require encrypts without checking it - only knowingly)"
+    return fix
+
+
 def catalog_warehouse(message):
     """The warehouse a catalog-config failure names, quoted, or "it was given"."""
     m = re.search(r"catalog config for warehouse '([^']*)'", str(message or ""))
@@ -1277,7 +1289,7 @@ class Engine(object):
                               "clock": "the database clock is too far from the store's for a signed request; nothing was kept - restart the database (exakit stop, then exakit start), then connect again",
                               "auth": "the source rejected the credentials; nothing was kept - correct them and run the same exakit connect again"
                                       + ("; %s" % connector["auth_hint"] if connector.get("auth_hint") else ""),
-                              "tls": "the source's certificate or host name did not verify; nothing was kept - fix the server certificate or choose tls=require knowingly, then connect again",
+                              "tls": "the source's certificate or host name did not verify; nothing was kept - %s, then connect again" % tls_fix(connector),
                               "unreachable": "the source did not answer from inside the database; nothing was kept - check host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then connect again",
                               "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again",
                               "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",

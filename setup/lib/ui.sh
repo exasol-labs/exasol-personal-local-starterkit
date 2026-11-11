@@ -2152,6 +2152,129 @@ ui_table_menu() {
     return 0
 }
 
+# --- single-choice picker ---------------------------------------------------
+# ui_pick_menu <rows-file> [title] [head] — one choice by the arrows and Enter,
+# for a menu whose answer is an action, not a set of ticks (ui_table_menu,
+# ui_checkbox_menu). One row a line of the file, drawn as given (plain text; a
+# ✓ or ✗ in it is coloured) and cut to the terminal, so every row is one line
+# and the redraw is exact. With a title the rows sit in a box under it, the
+# head (when given) a dim first line nobody can pick; without one they are a
+# list under the question the caller printed. UI_PICK is the row chosen
+# (1-based), 0 for q, Esc or the end of the input; UI_PICK_START is the row the
+# cursor starts on (then cleared) and UI_PICK_HINT the Enter words ("Enter to
+# open"). Returns 1, with nothing drawn, without a fancy terminal to ask on:
+# the caller prints its plain answer instead. Ctrl-C gives the terminal back
+# first (_ui_interrupted). ⇄ twin: Read-ExakitPickMenu in ui.ps1.
+ui_pick_menu() {
+    _upm_f="$1"; _upm_title="${2:-}"; _upm_head="${3:-}"
+    UI_PICK=0
+    _upm_start="${UI_PICK_START:-1}"; UI_PICK_START=""
+    _upm_enter="${UI_PICK_HINT:-Enter to choose}"
+    _upm_tty="$(_exakit_prompt_tty)"
+    [ -n "$_upm_tty" ] && [ "${UI_FANCY:-0}" = 1 ] || return 1
+    _upm_rows=()
+    while IFS= read -r _upm_l || [ -n "$_upm_l" ]; do _upm_rows[${#_upm_rows[@]}]="$_upm_l"; done < "$_upm_f"
+    _upm_n=${#_upm_rows[@]}
+    [ "$_upm_n" -gt 0 ] || return 1
+    case "$_upm_start" in ''|*[!0-9]*) _upm_start=1 ;; esac
+    { [ "$_upm_start" -ge 1 ] && [ "$_upm_start" -le "$_upm_n" ]; } || _upm_start=1
+    _upm_cur="$_upm_start"
+    # Chrome: "  │ ❯ " and " │" in a box, "    ❯ " in a list; one column spare.
+    _upm_cols="$(_ui_term_cols)"
+    if [ -n "$_upm_title" ]; then _upm_chrome=9; else _upm_chrome=7; fi
+    _upm_w=${#_upm_head}
+    _upm_i=0
+    while [ "$_upm_i" -lt "$_upm_n" ]; do
+        _upm_rows[$_upm_i]="$(_ui_fit_row "${_upm_rows[$_upm_i]}" "$_upm_chrome" "$_upm_cols")"
+        [ "${#_upm_rows[$_upm_i]}" -gt "$_upm_w" ] && _upm_w=${#_upm_rows[$_upm_i]}
+        _upm_i=$(( _upm_i + 1 ))
+    done
+    [ -n "$_upm_head" ] && _upm_head="$(_ui_fit_row "$_upm_head" "$_upm_chrome" "$_upm_cols")"
+    if [ -n "$_upm_title" ]; then
+        _upm_t=" $_upm_title "
+        _upm_tw=$(( _upm_w + 4 ))
+        [ $(( ${#_upm_t} + 1 )) -gt "$_upm_tw" ] && _upm_tw=$(( ${#_upm_t} + 1 ))
+        [ "$_upm_tw" -gt $(( _upm_cols - 5 )) ] && _upm_tw=$(( _upm_cols - 5 ))
+        _upm_w=$(( _upm_tw - 4 ))
+        _upm_fill=$(( _upm_tw - ${#_upm_t} - 1 )); [ "$_upm_fill" -ge 0 ] || _upm_fill=0
+        _upm_top="  ${UI_ACCENT}${UI_TL}${UI_HR}${UI_RESET}${UI_BOLD}$_upm_t${UI_RESET}${UI_ACCENT}$(ui_repeat "${UI_HR}" "$_upm_fill")${UI_TR}${UI_RESET}"
+        _upm_bot="  ${UI_ACCENT}${UI_BL}$(ui_repeat "${UI_HR}" "$_upm_tw")${UI_BR}${UI_RESET}"
+    fi
+    # Taller than the terminal, the rows scroll in a window that follows the
+    # cursor: a redraw cannot climb above the top of the screen.
+    set -- $(stty size < /dev/tty 2>/dev/null || true)
+    _upm_tall="${LINES:-${1:-24}}"; case "$_upm_tall" in ''|*[!0-9]*|0) _upm_tall=24 ;; esac
+    _upm_view=$(( _upm_tall - 8 )); [ "$_upm_view" -ge 5 ] || _upm_view=5
+    [ "$_upm_view" -gt "$_upm_n" ] && _upm_view="$_upm_n"
+    _upm_off=0
+    _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_interrupted INT _UI_MENU_PREV' INT
+    trap '_ui_interrupted TERM _UI_MENU_PREV' TERM
+    _upm_drawn=0
+    while :; do
+        _upm_frame=""; _upm_lines=0
+        if [ -n "$_upm_title" ]; then
+            _upm_frame="$_upm_top"$'\n'; _upm_lines=1
+            if [ -n "$_upm_head" ]; then
+                _upm_frame="$_upm_frame  ${UI_ACCENT}${UI_VB}${UI_RESET}   ${UI_DIM}$_upm_head$(ui_repeat ' ' $(( _upm_w - ${#_upm_head} )))${UI_RESET} ${UI_ACCENT}${UI_VB}${UI_RESET}"$'\n'
+                _upm_lines=$(( _upm_lines + 1 ))
+            fi
+        fi
+        [ "$_upm_cur" -le "$_upm_off" ] && _upm_off=$(( _upm_cur - 1 ))
+        [ "$_upm_cur" -gt $(( _upm_off + _upm_view )) ] && _upm_off=$(( _upm_cur - _upm_view ))
+        _upm_i="$_upm_off"
+        while [ "$_upm_i" -lt $(( _upm_off + _upm_view )) ]; do
+            _upm_r="${_upm_rows[$_upm_i]}"
+            _upm_pad="$(ui_repeat ' ' $(( _upm_w - ${#_upm_r} )))"
+            _upm_r="${_upm_r//✓/${UI_OK}✓${UI_RESET}}"; _upm_r="${_upm_r//✗/${UI_ERR}✗${UI_RESET}}"
+            if [ $(( _upm_i + 1 )) -eq "$_upm_cur" ]; then
+                _upm_r="${UI_ACCENT}❯${UI_RESET} ${UI_BOLD}$_upm_r${UI_RESET}"
+            else
+                _upm_r="  $_upm_r"
+            fi
+            if [ -n "$_upm_title" ]; then
+                _upm_frame="$_upm_frame  ${UI_ACCENT}${UI_VB}${UI_RESET} $_upm_r$_upm_pad ${UI_ACCENT}${UI_VB}${UI_RESET}"$'\n'
+            else
+                _upm_frame="$_upm_frame    $_upm_r"$'\n'
+            fi
+            _upm_lines=$(( _upm_lines + 1 ))
+            _upm_i=$(( _upm_i + 1 ))
+        done
+        [ -n "$_upm_title" ] && { _upm_frame="$_upm_frame$_upm_bot"$'\n'; _upm_lines=$(( _upm_lines + 1 )); }
+        _upm_more=""
+        [ "$_upm_view" -lt "$_upm_n" ] && _upm_more=" · $(( _upm_off + 1 ))-$(( _upm_off + _upm_view )) of $_upm_n"
+        _upm_hint="$(_ui_fit_row "↑/↓ to move · $_upm_enter · q to quit$_upm_more" 6 "$_upm_cols")"
+        _upm_frame="$_upm_frame      ${UI_DIM}$_upm_hint${UI_RESET}"$'\n'
+        _upm_lines=$(( _upm_lines + 1 ))
+        if [ "$_upm_drawn" -gt 0 ]; then
+            printf '\033[%dA\033[0J%s' "$_upm_drawn" "$_upm_frame"
+        else
+            printf '%s' "$_upm_frame"
+        fi
+        _upm_drawn="$_upm_lines"
+        _ui_menu_key "$_upm_tty" || { UI_PICK=0; break; }
+        case "${UI_KEY}" in
+            "") UI_PICK="$_upm_cur"; break ;;
+            q|Q) UI_PICK=0; break ;;
+            k|K) _upm_cur=$(( _upm_cur - 1 )) ;;
+            j|J) _upm_cur=$(( _upm_cur + 1 )) ;;
+            "$(printf '\033')")
+                case "${UI_KEY_SEQ}" in
+                    '[A') _upm_cur=$(( _upm_cur - 1 )) ;;
+                    '[B') _upm_cur=$(( _upm_cur + 1 )) ;;
+                    '') UI_PICK=0; break ;;
+                esac ;;
+        esac
+        [ "$_upm_cur" -lt 1 ] && _upm_cur="$_upm_n"
+        [ "$_upm_cur" -gt "$_upm_n" ] && _upm_cur=1
+    done
+    # The hint goes: the choice is made. The rows stay, as a record of it.
+    printf '\033[1A\033[0J'
+    if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
+    return 0
+}
+
 # --- direct-invocation render entry points ----------------------------------
 # When this file is EXECUTED (not sourced), it exposes render helpers so a
 # POSIX-sh caller (install.sh, which can't source a bash lib) can reuse this

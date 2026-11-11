@@ -1247,6 +1247,30 @@ has "...whose remedy names the warehouse and asks for the catalog's name" "the c
 run plan iceberg-rest --name rest1 --set catalog_url=https://rest.example.com --set warehouse=https://rest.example.com/api --set namespace=sales
 check "...plan with a URL warehouse: exit 2" "2" "$RC"
 
+E10="$(python3 - "$ROOT" "$WORK" <<'PYE'
+import base64, json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql, tlsca
+pem = "-----BEGIN CERTIFICATE-----\nQUJDRA==\nRUZHSA==\n-----END CERTIFICATE-----\n"
+lf, crlf = os.path.join(sys.argv[2], "lf.pem"), os.path.join(sys.argv[2], "crlf.pem")
+open(lf, "wb").write(pem.encode("ascii"))
+open(crlf, "wb").write(b"\xef\xbb\xbf" + pem.replace("\n", "  \r\n").encode("ascii"))
+print("same" if tlsca.certificates(lf) == tlsca.certificates(crlf) else "differs")
+print("no-cr" if "\r" not in "".join(tlsca.certificates(crlf)) else "has-cr")
+w = base64.b64encode(b"x" * 2000).decode()
+print(sql.redact("Connecting to 'jdbc:oracle:thin:@tcps://h:2484/ORCL?wallet_location=data:;base64,%s' failed: IO Error: ORA-17957" % w, ()))
+load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
+print(lifecycle.tls_fix(load("oracle")))
+print(lifecycle.tls_fix(load("postgresql")))
+PYE
+)"
+check "R3: a CRLF + BOM PEM gives the same certificates as the LF one" "same" "$(printf '%s\n' "$E10" | sed -n 1p)"
+check "...with no carriage return left (Oracle's wallet parser refuses one)" "no-cr" "$(printf '%s\n' "$E10" | sed -n 2p)"
+has "...an Oracle wallet in an error is said as its size" "wallet_location=data:<wallet, 2000 bytes>" "$(printf '%s\n' "$E10" | sed -n 3p)"
+has "...and the cause after it stays visible" "ORA-17957" "$(printf '%s\n' "$E10" | sed -n 3p)"
+lacks "...Oracle's TLS remedy never offers tls=require (it has no such level)" "tls=require" "$(printf '%s\n' "$E10" | sed -n 4p)"
+has "...PostgreSQL's still names it, as a knowing choice" "tls=require encrypts without checking it" "$(printf '%s\n' "$E10" | sed -n 5p)"
+
 printf '\n== a database clock left behind by a sleeping laptop ==\n'
 # Measured on Exasol Personal (macOS): the VM's clock does not catch up after
 # the Mac sleeps (32 min to 2 h 26 min behind), and an RDS certificate issued
@@ -2004,7 +2028,7 @@ run resolve unity; has "unity resolves to the Unity Catalog route" '"connector":
 run resolve lakehouse; has "lakehouse still resolves to Glue" '"connector": "lakehouse"' "$OUT"
 run resolve glue; has "...and glue" '"connector": "lakehouse"' "$OUT"
 run resolve iceberg; check "iceberg names two catalogs, so it asks: exit 2" "2" "$RC"; has "...Glue or REST" "choices: lakehouse, iceberg-rest" "$OUT"
-run resolve unity-catalog; check "unity-catalog names two routes, so it asks: exit 2" "2" "$RC"; has "...the SQL warehouse or the engine" "choices: databricks, unity" "$OUT"
+run resolve unity-catalog; has "unity-catalog is the engine's alias only (the SQL warehouse is databricks)" '"connector": "unity"' "$OUT"
 check "the three routes pin one engine: archive, member and companion scripts identical" "same" "$(python3 - "$ROOT" <<'PYS'
 import json, sys
 load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
@@ -4449,6 +4473,129 @@ check "...a missing name's command lists the sources" "exakit source list" "$(on
 jsonsrc /dev/null show nosuch --json
 check "source show of no such source: exit 4, one object" "4 [False, 'missing', 'exakit source list']" "$JRC $(one '[d["ok"], d["kind"], d["command"]]')"
 
+
+printf '\n== exakit source --json: every sub-command keeps its keys and exit code ==\n'
+# Agents and scripts read these objects: the menu and the card are for people
+# and change none of them. KEYS is each answer's shape - its keys, nested, the
+# first item of a list for all of them - with its exit code, as origin/main
+# answered before the menu existed (SNAPSHOT_OUT=<file> writes what this gives).
+jkeys() { printf '%s' "$JOUT" | python3 -c 'import json, sys
+def shape(v):
+    if isinstance(v, dict):
+        return {k: shape(v[k]) for k in sorted(v)}
+    if isinstance(v, list):
+        return [shape(v[0])] if v else []
+    return ""
+try:
+    print(json.dumps(shape(json.load(sys.stdin)), sort_keys=True, separators=(",", ":")))
+except ValueError:
+    print("NOT-ONE-OBJECT")'; }
+_snap=""
+for args in "list" "issues" "show jsonok" "describe jsonok" "catalog" "check jsonok" "refresh jsonok" \
+            "disconnect jsonok --dry-run" "remove jsonok --dry-run" "disconnect jsonok" "remove jsonok"; do
+    # shellcheck disable=SC2086
+    jsonsrc /dev/null $args --json
+    _snap="$_snap$args=$JRC $(jkeys)
+"
+done
+[ -n "${SNAPSHOT_OUT:-}" ] && printf '%s' "$_snap" > "$SNAPSHOT_OUT"
+check "the --json keys and exit codes of list, issues, show, describe, catalog, check, refresh, disconnect, remove: as before" \
+    "$(cat "$ROOT/tests/lib/source-json-keys.txt")" "$(printf '%s' "$_snap")"
+jsonsrc /dev/null list --json; _list="$(jkeys)"
+jsonsrc /dev/null --json
+check "exakit source --json is the list's object" "0 $_list" "$JRC $(jkeys)"
+jsonsrc /dev/null show jsonok --json; _show="$JOUT"
+jsonsrc /dev/null jsonok --json
+check "exakit source <name> --json is show's object, byte for byte" "0 same" "$JRC $([ "$JOUT" = "$_show" ] && echo same || echo differs)"
+
+printf '\n== exakit source <name>: the card ==\n'
+jsonsrc /dev/null show jsonok
+check "show: exit 0" "0" "$JRC"
+has "...a box titled with the source and its connector" "jsonok - PostgreSQL" "$JOUT"
+has "...its status first" "Status" "$(printf '%s\n' "$JOUT" | sed -n 2p)"
+has "...the schema" "VS_JSONOK" "$JOUT"
+has "...the host on its own line, with the port" "Host           pg.example.com:5432" "$JOUT"
+has "...the inputs by their labels" "Reader         reader" "$JOUT"
+has "...the connector's tips as Notes" "Notes" "$JOUT"
+has "...a first query" "Try:    exakit sql 'SELECT * FROM VS_JSONOK.<table> LIMIT 10'" "$JOUT"
+has "...and the menu's command" "Manage: exakit source jsonok   (menu)" "$JOUT"
+lacks "...no raw JSON" '{"' "$JOUT"
+lacks "...no internal object names" "EXAKIT_SRC_JSONOK" "$JOUT"
+lacks "...no pins" "sha256" "$JOUT"
+lacks "...no tips label" "tips " "$JOUT"
+lacks "...and never the credential" "$SECRET" "$JOUT$JERR"
+jsonsrc /dev/null show jsonok --details
+has "show --details adds the object names" "Connection     EXAKIT_SRC_JSONOK" "$JOUT"
+has "...and the adapter's SHA-256" "Adapter SHA" "$JOUT"
+jsonsrc /dev/null show jsonok; _card="$JOUT"
+jsonsrc /dev/null jsonok
+check "no terminal: exakit source <name> prints the card only" "0 same" "$JRC $([ "$JOUT" = "$_card" ] && echo same || echo differs)"
+jsonsrc /dev/null
+check "no terminal: exakit source prints the list only" "0 yes" "$JRC $(printf '%s\n' "$JOUT" | grep -q '^  NAME .*STATUS' && echo yes || echo no)"
+jsonsrc /dev/null bogus
+check "a word that is no action and no source: still the unknown action, exit 2" "2 1" "$JRC $(printf '%s\n' "$JOUT$JERR" | grep -c "Unknown source action 'bogus'")"
+
+printf '\n== exakit source <name> at a terminal: the menu ==\n'
+# menusrc <picks> <function> <args> - the menu's own functions, the picker
+# answering from the list of picks (0 quits) and recording each menu it drew.
+menusrc() {
+    _ms_picks="$1"; shift
+    printf '%s\n' $_ms_picks > "$WORK/menu.picks"; : > "$WORK/menu.rows"; rm -f "$WORK/json.argv"
+    JOUT="$( ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      pyexasol_venv_python() { command -v python3; }
+      exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/json.argv"; eng "$@"; }
+      ui_pick_menu() {
+          { printf -- '-- %s\n' "${2:-menu}"; cat "$1"; } >> "$WORK/menu.rows"
+          UI_PICK="$(sed -n 1p "$WORK/menu.picks")"; sed 1d "$WORK/menu.picks" > "$WORK/menu.picks.n"
+          mv "$WORK/menu.picks.n" "$WORK/menu.picks"; UI_PICK="${UI_PICK:-0}"; return 0; }
+      "$@" ) < /dev/null 2> "$WORK/json.err" )"; JRC=$?
+}
+menusrc "0" _exakit_vs_source_menu jsonok
+ROWS="$(cat "$WORK/menu.rows")"
+has "the menu lists describe" "Tables and columns          (describe)" "$ROWS"
+has "...check" "Test it now                 (check)" "$ROWS"
+has "...refresh" "Pick up new tables          (refresh)" "$ROWS"
+has "...reauth" "New password or token       (reauth)" "$ROWS"
+has "...re-point" "Move to a new host          (re-point)" "$ROWS"
+has "...disconnect" "Disconnect for now          (disconnect)" "$ROWS"
+has "...remove" "Remove it                   (remove)" "$ROWS"
+has "...under the card" "VS_JSONOK" "$JOUT"
+lacks "...the card above it has no Manage line" "Manage:" "$JOUT"
+# jsonok now fails its check: the source takes another credential.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="moved-on"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+eng check jsonok >/dev/null 2>&1
+menusrc "2 0" _exakit_vs_source_menu jsonok
+ROWS="$(cat "$WORK/menu.rows")"
+check "a broken source puts its fix first" "✗ password rejected - enter the new password" "$(printf '%s\n' "$ROWS" | sed -n 2p)"
+has "...its card says why" "password rejected" "$JOUT"
+has "...and the whole fix" "Fix:    the source rejected the credentials: exakit source reauth jsonok" "$JOUT"
+check "under the fix the rows move down one: row 2 is Tables and columns, then the card again" \
+    "card jsonok|describe jsonok|card jsonok|" "$(grep -v '^$' "$WORK/json.argv" | tr '\n' '|')"
+menusrc "3 0" _exakit_vs_source_menu jsonok
+check "picking Test it now runs the check, then the card again" "card jsonok|check jsonok|card jsonok|" \
+    "$(tr '\n' '|' < "$WORK/json.argv")"
+menusrc "1 0 0" _exakit_vs_source_picker
+ROWS="$(cat "$WORK/menu.rows")"
+has "exakit source at a terminal: a box of every source" "-- Sources" "$ROWS"
+check "...a row each: name, connector, status, tables" "1" \
+    "$(printf '%s\n' "$ROWS" | grep -c '^jsonok  *PostgreSQL  *✗ password rejected  *[0-9-]*$')"
+has "...Enter opens it: the card and its menu" "Tables and columns" "$ROWS"
+
+printf '\n== exakit source catalog ==\n'
+jsonsrc /dev/null catalog
+check "catalog: exit 0" "0" "$JRC"
+has "...a box of id, name and aliases" "ID            NAME" "$JOUT"
+has "...aliases trimmed" "aws-s3, s3-files, s3-documents, +1" "$JOUT"
+lacks "...no GA column" " GA " "$JOUT"
+lacks "...no status column" "candidate" "$JOUT"
+has "...and where each connector's inputs are" "What each needs: exakit connect <id> --help" "$JOUT"
+check "every alias names one connector" "[]" "$(python3 -c 'import collections, json, sys
+c = collections.Counter(a for e in json.load(open(sys.argv[1]))["connectors"] for a in e["aliases"] + [e["id"]])
+print(sorted(k for k, n in c.items() if n > 1))' "$ROOT/setup/virtual-schemas/catalog.json")"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="rotated"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+
 run remove jsonok
 run remove jsonjava
 
@@ -5498,6 +5645,16 @@ for path in glob.glob(os.path.join(root, "setup/help/*.json")):
 print(keys & taken)
 PYC
 )"
+
+printf '\n== exakit source --help: the approved layout ==\n'
+SH="$(guide source --help)"
+check "source --help is the layout in setup/help/exakit.json, verbatim" \
+    "$(python3 -c 'import json,sys; print("\n".join([c for c in json.load(open(sys.argv[1]))["commands"] if c["command"] == "source"][0]["layout"]))' "$ROOT/setup/help/exakit.json")" \
+    "$(printf '%s\n' "$SH" | sed '1d')"
+has "...grouped: Observe, Check and fix, Remove" "  Check and fix" "$SH"
+has "...<name>, not N" "show <name>" "$SH"
+check "help source is the same page" "$SH" "$(guide help source)"
+has "...--json keeps the options" '"options": "list|issues [--status S]|catalog|show <name>' "$(guide help source --json)"
 
 printf '\n== the Read: line breaks a connection string only at a separator ==\n'
 RW="$( . "$ROOT/setup/lib/virtual-schemas.sh" 2>/dev/null

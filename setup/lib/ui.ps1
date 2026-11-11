@@ -1940,6 +1940,96 @@ function Invoke-ExakitTableMenu {
     return @($sel | Sort-Object)
 }
 
+# Read-ExakitPickMenu -Rows <string[]> [-Title] [-Head] [-Start] [-Enter] - one
+# choice by the arrows and Enter, for a menu whose answer is an action, not a
+# set of ticks (Invoke-ExakitTableMenu). Each row drawn as given (plain text; a
+# tick or cross glyph in it is coloured) and cut to the console, so every row is
+# one line and the redraw is exact. With a title the rows sit in a box under
+# it, the head a dim first line nobody can pick; without one they are a list
+# under the question the caller printed. Taller than the console, the rows
+# scroll in a window that follows the cursor. Returns the row chosen (1-based),
+# 0 for q, Esc or the end of the input, -1 with nothing drawn when there is no
+# fancy console to ask on (the caller prints its plain answer instead).
+# Twin of ui_pick_menu in ui.sh.
+function Read-ExakitPickMenu {
+    param([string[]]$Rows = @(), [string]$Title = "", [string]$Head = "", [int]$Start = 1, [string]$Enter = "Enter to choose")
+    $n = @($Rows).Count
+    if ($n -eq 0 -or -not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return -1 }
+    $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+    if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+    if ($cols -lt 20) { $cols = 80 }
+    $tall = 24; try { $tall = [Console]::WindowHeight } catch { }
+    if ($tall -lt 10) { $tall = 24 }
+    $chrome = 7; if ($Title) { $chrome = 9 }
+    $fit = {
+        param([string]$Text, [int]$Chrome)
+        if (($Text.Length + $Chrome) -gt $cols) {
+            $keep = $cols - $Chrome - 1; if ($keep -lt 1) { $keep = 1 }
+            return ($Text.Substring(0, $keep) + $script:UiEllipsis)
+        }
+        return $Text
+    }
+    $list = @(); foreach ($r in $Rows) { $list += (& $fit ("" + $r) $chrome) }
+    if ($Head) { $Head = & $fit $Head $chrome }
+    $w = $Head.Length; foreach ($r in $list) { if ($r.Length -gt $w) { $w = $r.Length } }
+    $top = ""; $bot = ""; $tw = 0
+    if ($Title) {
+        $t = " $Title "
+        $tw = $w + 4
+        if (($t.Length + 1) -gt $tw) { $tw = $t.Length + 1 }
+        if ($tw -gt ($cols - 5)) { $tw = $cols - 5 }
+        $w = $tw - 4
+        $fill = $tw - $t.Length - 1; if ($fill -lt 0) { $fill = 0 }
+        $top = "  " + $script:UiAccent + $script:UiTL + $script:UiHr + $script:UiReset + $script:UiBold + $t + $script:UiReset + $script:UiAccent + ($script:UiHr * $fill) + $script:UiTR + $script:UiReset
+        $bot = "  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $tw) + $script:UiBR + $script:UiReset
+    }
+    $vb = $script:UiAccent + $script:UiVB + $script:UiReset
+    $view = $tall - 8; if ($view -lt 5) { $view = 5 }; if ($view -gt $n) { $view = $n }
+    $cur = $Start; if ($cur -lt 1 -or $cur -gt $n) { $cur = 1 }
+    $off = 0; $drawn = 0; $pick = 0
+    $e = $script:UiEsc
+    while ($true) {
+        if ($cur -le $off) { $off = $cur - 1 }
+        if ($cur -gt ($off + $view)) { $off = $cur - $view }
+        $lines = New-Object System.Collections.Generic.List[string]
+        if ($Title) {
+            [void]$lines.Add($top)
+            if ($Head) { [void]$lines.Add("  $vb   " + $script:UiDim + $Head.PadRight($w) + $script:UiReset + " $vb") }
+        }
+        for ($i = $off; $i -lt ($off + $view); $i++) {
+            $r = $list[$i]
+            $pad = " " * [Math]::Max(0, $w - $r.Length)
+            $r = $r.Replace($script:UiTick, $script:UiOk + $script:UiTick + $script:UiReset).Replace($script:UiCross, $script:UiErr + $script:UiCross + $script:UiReset)
+            if (($i + 1) -eq $cur) { $r = $script:UiAccent + [string][char]0x276F + $script:UiReset + " " + $script:UiBold + $r + $script:UiReset }
+            else { $r = "  " + $r }
+            if ($Title) { [void]$lines.Add("  $vb $r$pad $vb") } else { [void]$lines.Add("    $r") }
+        }
+        if ($Title) { [void]$lines.Add($bot) }
+        $more = ""
+        if ($view -lt $n) { $more = " " + $script:UiMidDot + (" {0}-{1} of {2}" -f ($off + 1), ($off + $view), $n) }
+        $hint = & $fit ([string][char]0x2191 + "/" + [string][char]0x2193 + " to move " + $script:UiMidDot + " $Enter " + $script:UiMidDot + " q to quit$more") 6
+        [void]$lines.Add("      " + $script:UiDim + $hint + $script:UiReset)
+        $frame = ($lines.ToArray() -join "`r`n") + "`r`n"
+        if ($drawn -gt 0) { [Console]::Write("`r$($e)[${drawn}A$($e)[0J" + $frame) } else { [Console]::Write("`r" + $frame) }
+        $drawn = $lines.Count
+        $key = Read-ExakitMenuKey
+        if ($key.Name -eq 'Enter') { $pick = $cur; break }
+        if ($key.Name -eq 'Escape') { $pick = 0; break }
+        if ($key.Name -eq 'Up') { $cur-- }
+        elseif ($key.Name -eq 'Down') { $cur++ }
+        elseif ($key.Name -eq 'Char') {
+            if ($key.Char -match '^[qQ]$') { $pick = 0; break }
+            if ($key.Char -match '^[kK]$') { $cur-- }
+            if ($key.Char -match '^[jJ]$') { $cur++ }
+        }
+        if ($cur -lt 1) { $cur = $n }
+        if ($cur -gt $n) { $cur = 1 }
+    }
+    # The hint goes: the choice is made. The rows stay, as a record of it.
+    [Console]::Write("`r$($e)[1A$($e)[0J")
+    return $pick
+}
+
 # Render the install banner + plan (used by install.ps1 after download).
 function Write-ExakitInstallPlan {
     param([string]$Platform, [string]$Database, [string]$KitDir, [string]$StateDir)

@@ -2770,6 +2770,13 @@ _exakit_vs_source_live() {
     ! grep -q '^  "status": "disconnected"' "$EXAKIT_HOME/sources/$1/state.json" 2>/dev/null
 }
 
+# _exakit_vs_source_exists <name> — a source the kit connected, disconnected
+# or not: `exakit source <name>` opens it. ⇄ twin: Test-ExakitVsSourceExists.
+_exakit_vs_source_exists() {
+    case "$1" in ""|[!a-z]*|*[!a-z0-9_]*) return 1 ;; esac
+    [ -f "$EXAKIT_HOME/sources/$1/config.json" ]
+}
+
 # _exakit_vs_word <text> — the text as one shell word: as it is when it needs
 # no quoting, else in single quotes. For a command the --json answer names.
 _exakit_vs_word() {
@@ -2842,12 +2849,237 @@ if p.get("gate"):
     print("    Not available yet: " + p["gate"])' 2>/dev/null
 }
 
+# --- exakit source and exakit source <name>: the card and the menus ---------
+# The engine decides the words (engine/card.py: `card`, `cards`), the shell
+# draws them; `--json` of every sub-command stays the engine's own answer.
+# ⇄ twins in exakit.ps1: Show-ExakitVsCard, Invoke-ExakitVsSourceMenu,
+# Invoke-ExakitVsSourcePicker.
+
+# _exakit_vs_mid — the separator a status line joins its parts with.
+_exakit_vs_mid() { if [ "${UI_FANCY:-0}" = 1 ]; then printf '·'; else printf -- '-'; fi; }
+
+# _exakit_vs_menu_ok — a person at a terminal: both ends a terminal, a fancy
+# one (the picker redraws in place), and not --yes. A pipe gets the plain answer.
+_exakit_vs_menu_ok() {
+    [ -t 0 ] && [ -t 1 ] && [ "${UI_FANCY:-0}" = 1 ] && [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ]
+}
+
+# _exakit_vs_card <card-json> [menu] — the source card: a box of labelled
+# rows (never raw JSON, never a secret), the connector's notes, a first query
+# and, without "menu" (the menu is under it then), how to manage it.
+_exakit_vs_card() {
+    _evc_lines="$(printf '%s' "$1" | run_python_any -c 'import json, sys
+r = json.load(sys.stdin)
+tick, cross, mid = sys.argv[1:4]
+print("TITLE\t%s %s %s" % (r["name"], mid, r["connector_name"]))
+width = max(len(label) for label, _ in r["rows"]) + 2
+for label, value in r["rows"]:
+    if label == "Status":
+        value = "%s %s" % (tick if r["ready"] else cross, (" %s " % mid).join(r["status_parts"]))
+    print("ROW\t%s%s" % (label.ljust(width), " ".join(str(value).split())))
+for n in r.get("notes") or []:
+    print("NOTE\t" + " ".join(n.split()))
+if r.get("remedy"):
+    print("FIX\t" + r["remedy"])
+print("TRY\t" + r["example"])
+print("NAME\t" + r["name"])' "${UI_TICK}" "${UI_CROSS}" "$(_exakit_vs_mid)" 2>/dev/null)" || return 1
+    _evc_cols="$(_ui_term_cols 2>/dev/null || echo 80)"
+    _evc_notes=0
+    while IFS="$(printf '\t')" read -r _evc_k _evc_v; do
+        case "$_evc_k" in
+            TITLE) ui_panel_begin "$_evc_v" ;;
+            ROW)
+                case "${UI_FANCY}:$_evc_v" in
+                    "1:Status "*)
+                        _evc_v="${_evc_v//${UI_TICK}/${UI_OK}${UI_TICK}${UI_RESET}}"
+                        _evc_v="${_evc_v//${UI_CROSS}/${UI_ERR}${UI_CROSS}${UI_RESET}}" ;;
+                esac
+                ui_panel_line "$_evc_v" ;;
+            NOTE)
+                if [ "$_evc_notes" = 0 ]; then ui_panel_end; printf '  %sNotes%s\n' "${UI_BOLD}" "${UI_RESET}"; _evc_notes=1; fi
+                _ui_wrap "$_evc_v" $(( _evc_cols - 9 ))
+                _evc_i=0
+                while [ "$_evc_i" -lt "$_UI_WRAP_N" ]; do
+                    if [ "$_evc_i" = 0 ]; then printf '    %s%s%s %s\n' "${UI_DIM}" "${UI_BULLET}" "${UI_RESET}" "${_UI_WRAP[$_evc_i]}"
+                    else printf '      %s\n' "${_UI_WRAP[$_evc_i]}"; fi
+                    _evc_i=$(( _evc_i + 1 ))
+                done ;;
+            FIX)
+                [ "$_evc_notes" = 0 ] && { ui_panel_end; _evc_notes=1; }
+                printf '  %sFix:%s    %s\n' "${UI_BOLD}" "${UI_RESET}" "$_evc_v" ;;
+            TRY)
+                [ "$_evc_notes" = 0 ] && { ui_panel_end; _evc_notes=1; }
+                printf '  %sTry:%s    exakit sql %s\n' "${UI_BOLD}" "${UI_RESET}" "$(_exakit_vs_quoted "$_evc_v")" ;;
+            NAME)
+                [ -n "${2:-}" ] || printf '  %sManage:%s exakit source %s   (menu)\n' "${UI_BOLD}" "${UI_RESET}" "$_evc_v" ;;
+        esac
+    done <<EOF2
+$_evc_lines
+EOF2
+    return 0
+}
+
+# _exakit_vs_card_json <name> — the engine's card for one source, quietly:
+# EXAKIT_VS_CARD, return 1 (said) when there is none.
+_exakit_vs_card_json() {
+    _evcj_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp; return 1; }
+    exakit_vs_engine card "$1" < /dev/null > "$_evcj_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    _evcj_rc=$?
+    _exakit_vs_render "$_evcj_out"; rm -f "$_evcj_out"
+    EXAKIT_VS_CARD="$EXAKIT_VS_RESULT"
+    [ "$_evcj_rc" -eq 0 ] && [ -n "$EXAKIT_VS_CARD" ]
+}
+
+# _exakit_vs_card_field <card-json> <python-expression on r> — one value of it.
+_exakit_vs_card_field() {
+    printf '%s' "$1" | run_python_any -c 'import json, sys
+r = json.load(sys.stdin)
+v = eval(sys.argv[1], {"r": r})
+print("" if v is None else v)' "$2" 2>/dev/null
+}
+
+# _exakit_vs_repoint <name> <connector> <card-json> — "Move to a new host":
+# each input that says where the source is, asked again with its value as the
+# default, then the re-point connect (exakit connect <c> --name <name> --set
+# ...), which shows the change and asks for the credential before anything moves.
+_exakit_vs_repoint() {
+    set --  "$2" --name "$1"
+    _evrp_list="$(_exakit_vs_card_field "$3" '"\n".join("%s\t%s\t%s" % (a["input"], a["label"], a["value"]) for a in r["address"])')"
+    while IFS="$(printf '\t')" read -r _evrp_in _evrp_label _evrp_val; do
+        [ -n "$_evrp_in" ] || continue
+        _evrp_new="$(prompt_text "$_evrp_label (Enter keeps it)" "$_evrp_val" < /dev/tty)"
+        [ -n "$_evrp_new" ] && [ "$_evrp_new" != "$_evrp_val" ] && set -- "$@" --set "$_evrp_in=$_evrp_new"
+    done <<EOF2
+$_evrp_list
+EOF2
+    ( cmd_connect "$@" )
+}
+
+# _exakit_vs_source_menu <name> — exakit source <name> at a terminal: the
+# card, then what to do with it; a source that is not ready has its fix
+# first. After each action the card again, its state as it is now; q quits.
+# Returns 0 when the source is gone (removed).
+_exakit_vs_source_menu() {
+    _evsm_name="$1"
+    _evsm_rows="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp; return 1; }
+    while :; do
+        _exakit_vs_card_json "$_evsm_name" || { rm -f "$_evsm_rows"; return 1; }
+        _evsm_card="$EXAKIT_VS_CARD"
+        printf '\n'
+        _exakit_vs_card "$_evsm_card" menu
+        _evsm_conn="$(_exakit_vs_card_field "$_evsm_card" 'r["connector"]')"
+        _evsm_fix="$(_exakit_vs_card_field "$_evsm_card" '(r["fix"] or {}).get("action", "")')"
+        _evsm_acts=""
+        : > "$_evsm_rows"
+        if [ -n "$_evsm_fix" ]; then
+            printf '✗ %s\n' "$(_exakit_vs_card_field "$_evsm_card" 'r["fix"]["label"]')" >> "$_evsm_rows"
+            _evsm_acts="$_evsm_fix"
+        fi
+        printf '%s\n' "Tables and columns          (describe)" "Test it now                 (check)" \
+            "Pick up new tables          (refresh)" "New password or token       (reauth)" \
+            "Move to a new host          (re-point)" "Disconnect for now          (disconnect)" \
+            "Remove it                   (remove)" >> "$_evsm_rows"
+        _evsm_acts="$_evsm_acts describe check refresh reauth repoint disconnect remove"
+        printf '\n  %sWhat do you want to do?%s\n' "${UI_BOLD}" "${UI_RESET}"
+        UI_PICK_HINT="Enter to choose"
+        ui_pick_menu "$_evsm_rows" || { rm -f "$_evsm_rows"; return 1; }
+        [ "${UI_PICK}" -gt 0 ] || { rm -f "$_evsm_rows"; return 1; }
+        # shellcheck disable=SC2086 — the action words, split on purpose
+        set -- $_evsm_acts
+        eval "_evsm_act=\${${UI_PICK}}"
+        printf '\n'
+        case "$_evsm_act" in
+            repoint) _exakit_vs_repoint "$_evsm_name" "$_evsm_conn" "$_evsm_card" ;;
+            reconnect) ( cmd_connect "$_evsm_conn" --name "$_evsm_name" ) ;;
+            *) ( cmd_source "$_evsm_act" "$_evsm_name" ) ;;
+        esac
+        if [ ! -f "$EXAKIT_HOME/sources/$_evsm_name/config.json" ]; then rm -f "$_evsm_rows"; return 0; fi
+    done
+}
+
+# _exakit_vs_source_picker — exakit source at a terminal: every source in a
+# box (name, connector, status, tables); Enter opens one (its card and menu),
+# q quits. Back from a source, the box again, as the sources are now.
+_exakit_vs_source_picker() {
+    _evsp_rows="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp; return 1; }
+    _evsp_at=1
+    while :; do
+        _evsp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp; return 1; }
+        exakit_vs_engine cards < /dev/null > "$_evsp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _exakit_vs_render "$_evsp_out"; rm -f "$_evsp_out"
+        [ -n "$EXAKIT_VS_RESULT" ] || { rm -f "$_evsp_rows"; return 1; }
+        # The rows (the head first) to one file, the names in their order to another.
+        printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+rows = [[s["name"], s["connector_name"], ("\u2713 " if s["ready"] else "\u2717 ") + s["reason"],
+         "-" if s.get("tables") is None else str(s["tables"])] for s in json.load(sys.stdin)["sources"]]
+rows = [[c if len(c) <= 34 else c[:33] + "\u2026" for c in r] for r in rows]
+head = ["NAME", "CONNECTOR", "STATUS", "TABLES"]
+width = [max([len(head[i])] + [len(r[i]) for r in rows]) for i in range(4)]
+line = lambda r: "  ".join([r[0].ljust(width[0]), r[1].ljust(width[1]), r[2].ljust(width[2]), r[3].rjust(width[3])])
+with open(sys.argv[1], "w", encoding="utf-8") as out, open(sys.argv[1] + ".names", "w") as names:
+    print(line(head), file=out)
+    for r in rows:
+        print(line(r), file=out)
+        print(r[0], file=names)' "$_evsp_rows.all" 2>/dev/null
+        _evsp_head="$(sed -n 1p "$_evsp_rows.all")"
+        sed 1d "$_evsp_rows.all" > "$_evsp_rows"
+        if [ ! -s "$_evsp_rows" ]; then
+            rm -f "$_evsp_rows" "$_evsp_rows.all" "$_evsp_rows.all.names"
+            info "No sources yet. Connect one: exakit connect"
+            return 0
+        fi
+        printf '\n'
+        UI_PICK_HINT="Enter to open"; UI_PICK_START="$_evsp_at"
+        ui_pick_menu "$_evsp_rows" "Sources" "$_evsp_head" || { rm -f "$_evsp_rows" "$_evsp_rows.all" "$_evsp_rows.all.names"; return 1; }
+        [ "${UI_PICK}" -gt 0 ] || { rm -f "$_evsp_rows" "$_evsp_rows.all" "$_evsp_rows.all.names"; return 0; }
+        _evsp_at="${UI_PICK}"
+        _evsp_name="$(sed -n "${UI_PICK}p" "$_evsp_rows.all.names")"
+        _exakit_vs_source_menu "$_evsp_name" && _evsp_at=1
+    done
+}
+
+# _exakit_vs_catalog_box <catalog-json> — exakit source catalog for a person:
+# id, name and the first aliases in a box (--json has every alias, the tier
+# and the status), then where each connector's inputs are said.
+_exakit_vs_catalog_box() {
+    _evcb_lines="$(printf '%s' "$1" | run_python_any -c 'import json, sys
+rows = []
+for c in json.load(sys.stdin)["connectors"]:
+    a = list(c.get("aliases", []))
+    rows.append([c["id"], c["name"], ", ".join(a[:3]) + (", +%d" % (len(a) - 3) if len(a) > 3 else "")])
+head = ["ID", "NAME", "ALIASES"]
+w = [max([len(head[i])] + [len(r[i]) for r in rows]) for i in range(3)]
+for r in [head] + rows:
+    print(("  ".join([r[0].ljust(w[0]), r[1].ljust(w[1]), r[2]])).rstrip())' 2>/dev/null)"
+    ui_panel_begin "Connectors"
+    _evcb_first=1
+    while IFS= read -r _evcb_l; do
+        if [ "$_evcb_first" = 1 ]; then ui_panel_line "${UI_DIM}$_evcb_l${UI_RESET}"; _evcb_first=0
+        else ui_panel_line "$_evcb_l"; fi
+    done <<EOF2
+$_evcb_lines
+EOF2
+    ui_panel_end
+    printf '  What each needs: exakit connect <id> --help\n'
+}
+
 # cmd_source <action> [name] [options] — the lifecycle of a connected source.
+# `exakit source` alone, at a terminal, is the picker; `exakit source <name>`
+# the card and its menu (a pipe: the list, the card). Every sub-command, and
+# --json of each, answers as it always has.
 cmd_source() {
     # An option where the action goes (`exakit source --json`) means the
     # default action, list, with that option.
     _exakit_vs_quiet
-    case "${1:-}" in -*) _cs_action=list ;; *) _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift ;; esac
+    _cs_bare=0
+    case "${1:-}" in
+        ""|-*) _cs_action=list; _cs_bare=1 ;;
+        list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove) _cs_action="$1"; shift ;;
+        # A word that is no action but names a source: that source (open). Any
+        # other word stays an unknown action, refused below as it always was.
+        *) if _exakit_vs_source_exists "$1"; then _cs_action=open; else _cs_action="$1"; shift; fi ;;
+    esac
+    _cs_details=0
     _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
     _cs_pwstdin=0
     # --json is known before anything is refused: the bridge's own refusals
@@ -2865,6 +3097,7 @@ cmd_source() {
             --password-stdin) _cs_pwstdin=1 ;;
             --password*|--passwd*|--secret*|--token*) _exakit_vs_credential_argument ;;
             --ddl) _cs_ddl=1 ;;
+            --details) _cs_details=1 ;;
             --schema) _cs_into="${2:-}"; shift ;;
             --schema=*) _cs_into="${1#--schema=}" ;;
             -*) _exakit_vs_refuse 2 "Unknown option '${1%%=*}' for source $_cs_action (exakit help source)." \
@@ -2888,6 +3121,19 @@ cmd_source() {
     _require_install "$_cs_json"
     exakit_init_logging
     _exakit_vs_log_mark
+    if [ "$_cs_action" = open ]; then
+        # exakit source <name>: --json is show's answer, a pipe the card, a
+        # person the card and its menu.
+        _cs_action=show
+        if [ "$_cs_json" = 0 ] && _exakit_vs_menu_ok; then
+            _exakit_vs_source_menu "$_cs_name"
+            exit 0
+        fi
+    fi
+    if [ "$_cs_bare" = 1 ] && [ "$_cs_json" = 0 ] && [ -z "$_cs_name" ] && _exakit_vs_menu_ok; then
+        _exakit_vs_source_picker
+        exit 0
+    fi
     case "$_cs_action" in
         list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove) ;;
         *) _exakit_vs_refuse 2 "Unknown source action '$_cs_action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." \
@@ -2985,6 +3231,20 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
     if [ "$_cs_json" = 1 ]; then
         exakit_vs_engine "$@" < /dev/null 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _exakit_vs_exit $?
+    fi
+    if [ "$_cs_action" = show ]; then
+        # The card: labelled rows, never the record's JSON (that is --json's;
+        # the object names and pins are --details').
+        if [ "$_cs_details" = 1 ]; then _exakit_vs_run "" card "$_cs_name" --details; else _exakit_vs_run "" card "$_cs_name"; fi
+        _cs_rc=$?
+        [ "$_cs_rc" -eq 0 ] && [ -n "$EXAKIT_VS_RESULT" ] && _exakit_vs_card "$EXAKIT_VS_RESULT"
+        _exakit_vs_exit "$_cs_rc"
+    fi
+    if [ "$_cs_action" = catalog ]; then
+        _exakit_vs_run "" "$@"
+        _cs_rc=$?
+        [ "$_cs_rc" -eq 0 ] && [ -n "$EXAKIT_VS_RESULT" ] && _exakit_vs_catalog_box "$EXAKIT_VS_RESULT"
+        _exakit_vs_exit "$_cs_rc"
     fi
     _exakit_vs_run "" "$@"
     _cs_rc=$?
