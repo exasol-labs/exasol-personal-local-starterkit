@@ -817,6 +817,12 @@ function Read-ExakitCheckboxMenu {
     # inner group has to settle its own parent before the outer group re-reads
     # that parent as one of its children. Twin of the whitespace-separated
     # EXAKIT_CHECKBOX_GROUP in common.sh.
+    # The TREE modes (a "+"-joined mode of collapse, one, first - see the
+    # *-ExakitTree* functions in ui.ps1): "collapse" hides the children until
+    # the parent is ticked and clears them when it is unticked; "one" makes the
+    # direct children radio rows, "( )" / "(*)"; "first" picks the first one
+    # when the parent opens. Enter is refused while an open "one" group has
+    # nothing picked. Nested like the other specs, innermost first.
     Info $Title
     $sel = New-Object 'System.Collections.Generic.List[int]'
     foreach ($d in $Defaults) {
@@ -848,11 +854,30 @@ function Read-ExakitCheckboxMenu {
     if ($GroupParent -ge 1) {
         $groupSpecs += @{ Parent = $GroupParent; First = $GroupFirst; Last = $GroupLast; Mode = $GroupMode }
     }
+    # The rows that can be ticked at all, for the tree modes.
+    $cbPickable = @()
+    for ($c = 1; $c -le $Options.Count; $c++) {
+        if ($Options[$c - 1].StartsWith("#") -or $Options[$c - 1].StartsWith("!")) { continue }
+        $cbPickable += $c
+    }
+    $treeOn = $false
+    $treeRadio = @()
+    $script:cbHidden = @()
+    if (Get-Command Test-ExakitTreeSpecs -ErrorAction SilentlyContinue) { $treeOn = Test-ExakitTreeSpecs -Specs $groupSpecs }
+    if ($treeOn) {
+        $treeRadio = @(Get-ExakitTreeRadio -Specs $groupSpecs -Pickable $cbPickable)
+        $script:cbHidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+    }
     $applyGroup = {
         param($toggled)
+        if ($treeOn -and (Test-ExakitTreeRadioRepick -Selection $sel -Toggled $toggled -Radio $treeRadio)) { return }
         foreach ($spec in $groupSpecs) {
             $gp = [int]$spec.Parent; $gf = [int]$spec.First; $gl = [int]$spec.Last; $gmode = [string]$spec.Mode
             if ($gp -lt 1 -or $gf -lt 1 -or $gl -lt $gf) { continue }
+            if ($treeOn -and ((Test-ExakitTreeMode $gmode "collapse") -or (Test-ExakitTreeMode $gmode "one"))) {
+                Update-ExakitTreeGroup -Selection $sel -Toggled $toggled -Spec $spec -Specs $groupSpecs -Pickable $cbPickable
+                continue
+            }
             $children = @()
             for ($c = $gf; $c -le $gl; $c++) {
                 if ($c -lt 1 -or $c -gt $Options.Count) { continue }
@@ -929,6 +954,7 @@ function Read-ExakitCheckboxMenu {
             $script:cbCur += $dir
             if ($script:cbCur -lt 1) { $script:cbCur = $Options.Count }
             if ($script:cbCur -gt $Options.Count) { $script:cbCur = 1 }
+            if ($script:cbHidden -contains $script:cbCur) { continue }
             if (-not (& $isHeader $script:cbCur) -and -not (& $isDisabled $script:cbCur)) { return }
         }
     }
@@ -937,16 +963,33 @@ function Read-ExakitCheckboxMenu {
     $firstDraw = $true
     # A click ticks or unticks the row under it, like Space; Enter still confirms.
     # Every option is one line, then the hint: entry i starts on line i-1.
+    # A row a closed group hides takes no line, so the entries are counted as
+    # drawn: $starts[i-1] is the line entry i starts on, $cbDrawn the lines the
+    # last frame took (options, hint, and a refused Enter's note).
     $starts = @(0..$Options.Count)
+    $cbDrawn = $Options.Count + 1
+    $note = ""
+    if ($script:UiFancy) { $dot = $script:UiBullet } else { $dot = "*" }
+    if (-not $dot) { $dot = "*" }
     if (Get-Command Enable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Enable-ExakitMenuMouse }
     try {
     while ($true) {
+        if ($treeOn) {
+            # Every key may open or close a group: the rows shown follow.
+            $script:cbHidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+            # The cursor's row closed under it: back up to the nearest row shown.
+            if ($script:cbHidden -contains $script:cbCur) { & $step -1 }
+        }
         if (-not $firstDraw -and $script:UiFancy) {
             # redraw the block in place: options + hint line
-            Write-Host ("{0}[{1}A{0}[0J" -f $script:UiEsc, ($Options.Count + 1)) -NoNewline
+            Write-Host ("{0}[{1}A{0}[0J" -f $script:UiEsc, $cbDrawn) -NoNewline
         }
         $firstDraw = $false
+        $line = 0
         for ($i = 1; $i -le $Options.Count; $i++) {
+            $starts[$i - 1] = $line
+            if ($script:cbHidden -contains $i) { continue }
+            $line++
             if (& $isHeader $i) {
                 Write-Host ("    {0}" -f $Options[$i - 1].Substring(1)) -ForegroundColor Cyan
                 continue
@@ -957,17 +1000,29 @@ function Read-ExakitCheckboxMenu {
                 continue
             }
             $ptr = if ($i -eq $script:cbCur) { ">" } else { " " }
-            if ($sel.Contains($i)) {
+            if ($treeRadio -contains $i) {
+                # A radio row (a "one" group): "(*)" picked, "( )" not.
+                if ($sel.Contains($i)) { Write-Host ("    {0} ({1}) {2}" -f $ptr, $dot, $Options[$i - 1]) }
+                else { Write-Host ("    {0} ( ) {1}" -f $ptr, $Options[$i - 1]) }
+            } elseif ($sel.Contains($i)) {
                 if ($script:UiFancy) { Write-Host ("    {0} {1}[{2}]{3} {4}" -f $ptr, $script:UiOk, $script:UiTick, $script:UiReset, $Options[$i - 1]) }
                 else { Write-Host ("    {0} [x] {1}" -f $ptr, $Options[$i - 1]) }
             } else {
                 Write-Host ("    {0} [ ] {1}" -f $ptr, $Options[$i - 1])
             }
         }
+        $starts[$Options.Count] = $line
         Write-ExakitMenuHint "Up/Down to move - $spaceVerb - Enter to confirm"
+        $cbDrawn = $line + 1
+        if ($note) {
+            if ($script:UiFancy) { Write-Host ("    {0}!{1} {2}" -f $script:UiWarn, $script:UiReset, $note) }
+            else { Write-Host ("    ! {0}" -f $note) }
+            $cbDrawn++
+            $note = ""
+        }
         $key = Read-ExakitMenuKey
         if ($key.Name -eq 'Click') {
-            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn ($Options.Count + 1) -Starts $starts
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn $cbDrawn -Starts $starts
             if ($hit -ge 1 -and -not (& $isHeader $hit) -and -not (& $isDisabled $hit)) {
                 $script:cbCur = $hit
                 $key = @{ Name = 'Space' }
@@ -981,7 +1036,10 @@ function Read-ExakitCheckboxMenu {
                 # instead. Twin of ui_checkbox_menu; same rule as
                 # Invoke-ExakitTableMenu.
                 if ($ExclusiveIndex -ge 1 -and $script:cbCur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
-                if ($sel.Count -gt 0) { return @($sel | Sort-Object) }
+                $miss = 0
+                if ($treeOn) { $miss = Get-ExakitTreeMissing -Specs $groupSpecs -Selection $sel -Pickable $cbPickable }
+                if ($miss -gt 0) { $note = "Pick one of the options under " + $Options[$miss - 1] + "." }
+                elseif ($sel.Count -gt 0) { return @($sel | Sort-Object) }
             }
             "Space"     {
                 if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
@@ -1000,6 +1058,9 @@ function Read-ExakitCheckboxMenu {
                 # rows, never the exclusive option.
                 $sel.Clear()
                 for ($i = 1; $i -le $Options.Count; $i++) {
+                    # Never a row a closed group hides, nor a radio row: one of
+                    # N is a choice, not "all".
+                    if ($script:cbHidden -contains $i -or $treeRadio -contains $i) { continue }
                     if ($i -ne $ExclusiveIndex -and -not (& $isHeader $i) -and -not (& $isDisabled $i)) { [void]$sel.Add($i) }
                 }
             }

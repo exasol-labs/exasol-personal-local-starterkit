@@ -1493,44 +1493,175 @@ function Show-ExakitVsClockCheck {
     } else { Info "Database clock: in sync with this computer." }
 }
 
+# --- Lakehouse (Iceberg / Delta): the picker's subtree ---------------------
+# One connector, "lakehouse", answers for every catalog and file store; the
+# menu opens it into a subtree: the catalog (one of four), then where the files
+# are (one of what that catalog can use). These two functions are the whole
+# interface between the picker and the rest of connect. Twins of
+# _exakit_vs_lakehouse_tree and _exakit_vs_lakehouse_handoff.
+
+# Get-ExakitVsLakehouseTree - the subtree, read from the lakehouse connector's
+# own "settings" (connectors/lakehouse/connector.json): "catalogs" in menu
+# order, each with the "files" it can choose from (none when only one is valid
+# - Glue - whose files are then "auto"), "files" with every store's label
+# ("supported": false is shown, never picked), and "folds": the connector ids
+# the one row replaces, left out of the menu. A kit copy older than those
+# settings gets the same tree from the spec's names below.
+function Get-ExakitVsLakehouseTree {
+    try {
+        $defs = Get-ExakitVsDefs
+        if ($defs) {
+            $st = (Get-Content -Raw -LiteralPath (Join-ExakitCorePath $defs "connectors" "lakehouse" "connector.json") | ConvertFrom-Json).settings
+            if ($null -ne $st) {
+                $cats = @()
+                foreach ($c in @($st.catalog.choices)) {
+                    $ok = @($st.files.valid.("" + $c.value))
+                    $entry = [pscustomobject]@{ id = "" + $c.value; label = "" + $c.label; files = @() }
+                    if ($ok.Count -gt 1) { $entry.files = $ok }
+                    elseif ($ok.Count -eq 1) { $entry | Add-Member -NotePropertyName auto -NotePropertyValue ("" + $ok[0]) }
+                    $cats += $entry
+                }
+                $files = @()
+                foreach ($f in @($st.files.choices)) {
+                    $dis = ($null -ne $f.PSObject.Properties["disabled"] -and $f.disabled)
+                    $files += [pscustomobject]@{ id = "" + $f.value; label = "" + $f.label; supported = (-not $dis) }
+                }
+                return [pscustomobject]@{ catalogs = $cats; files = $files; folds = @("iceberg-rest", "unity") }
+            }
+        }
+    } catch { }
+    $json = @'
+{"catalogs": [
+  {"id": "iceberg-rest", "label": "Iceberg REST catalog", "files": ["vended", "s3", "azure"]},
+  {"id": "unity", "label": "Unity Catalog", "files": ["vended", "s3", "azure"]},
+  {"id": "glue", "label": "AWS Glue", "files": [], "auto": "s3"},
+  {"id": "none", "label": "No catalog - Parquet files in a folder", "files": ["s3", "azure"]}],
+ "files": [
+  {"id": "vended", "label": "Let the catalog give access"},
+  {"id": "s3", "label": "Amazon S3 / S3-compatible"},
+  {"id": "azure", "label": "Azure ADLS Gen2"},
+  {"id": "gcs", "label": "Google Cloud Storage - not supported yet", "supported": false}],
+ "folds": ["iceberg-rest", "unity"]}
+'@
+    return ($json | ConvertFrom-Json)
+}
+
+# Add-ExakitVsLakehouseHandoff - the Lakehouse pick, handed to the form as
+# presets (Add-ExakitVsPreset): the catalog and the files picked in the menu
+# ($script:ExakitVsLakehouseCatalog, $script:ExakitVsLakehouseFiles), Glue's
+# implied files included. Nothing when the menu did not pick them (the command
+# named the connector). Called after the pick, before the forms open.
+function Add-ExakitVsLakehouseHandoff {
+    if (-not $script:ExakitVsLakehouseCatalog) { return }
+    Add-ExakitVsPreset -Connector lakehouse -Key catalog -Value $script:ExakitVsLakehouseCatalog
+    if ($script:ExakitVsLakehouseFiles) { Add-ExakitVsPreset -Connector lakehouse -Key files -Value $script:ExakitVsLakehouseFiles }
+}
+
+# Test-ExakitVsUnsupported - a files entry shown but never picked.
+function Test-ExakitVsUnsupported {
+    param($Entry)
+    return ($null -ne $Entry.PSObject.Properties["supported"] -and $Entry.supported -eq $false)
+}
+
 # Invoke-ExakitVsPick - the connector menu, under the line that names this
 # computer's public IP (Get-ExakitVsCatalog). Returns the chosen connector ids;
-# none when nothing was chosen. Twin of _exakit_vs_pick.
+# none when nothing was chosen. For Lakehouse, the catalog and files picked
+# land in $script:ExakitVsLakehouseCatalog and $script:ExakitVsLakehouseFiles.
+# Twin of _exakit_vs_pick.
 function Invoke-ExakitVsPick {
+    $script:ExakitVsLakehouseCatalog = ""; $script:ExakitVsLakehouseFiles = ""
     $catalog = Get-ExakitVsCatalog
     if ($null -eq $catalog) { Write-Host ("  {0} The connector catalog could not be read. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red; return @() }
+    $tree = Get-ExakitVsLakehouseTree
+    $folds = @($tree.folds)
     # Each source by its name and nothing more, in the catalog's order: the
-    # adapter version and tier are `exakit source catalog`'s. Twin of _exakit_vs_pick.
-    $entries = @($catalog.connectors)
+    # adapter version and tier are `exakit source catalog`'s. Lakehouse's
+    # subtree follows its row; $keys holds what each row picks (an id,
+    # cat:<catalog>[:<files>], file:<catalog>:<files>, or "" for a row nobody
+    # picks). Twin of _exakit_vs_pick.
+    $entries = @(@($catalog.connectors) | Where-Object { $folds -notcontains ("" + $_.id) })
     $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source"
     # The Source column alone: nothing runs in this menu's rows, so it has no
     # Status column either.
     $t.StatMin = 0
-    $ids = @()
+    $keys = @()
+    # Innermost first: each catalog's files ("collapse+one+first": shown once
+    # the catalog is picked, the first pre-selected), then the catalogs under
+    # Lakehouse ("collapse+one").
+    $groups = @()
     for ($i = 0; $i -lt $entries.Count; $i++) {
         $e = $entries[$i]
-        $tree = "tee"
-        if ($i -eq $entries.Count - 1) { $tree = "corner" }
+        $top = "tee"
+        if ($i -eq $entries.Count - 1) { $top = "corner" }
         $label = "" + $e.name
-        if ("" + $e.status -eq "gated") {
+        $gated = ("" + $e.status -eq "gated")
+        if ($gated) {
             # Its reason read on from its name: there is no Status column to say it in.
-            $row = Add-ExakitTableRow -Kind $tree -Label ($label + " - not available yet") -Table $t
+            $row = Add-ExakitTableRow -Kind $top -Label ($label + " - not available yet") -Table $t
             Disable-ExakitTableRow -Row $row -Table $t
         } else {
-            [void](Add-ExakitTableRow -Kind $tree -Label $label -Table $t)
+            $row = Add-ExakitTableRow -Kind $top -Label $label -Table $t
         }
-        $ids += ("" + $e.id)
+        $keys += ("" + $e.id)
+        if (("" + $e.id) -ne "lakehouse" -or $gated) { continue }
+        $cats = @($tree.catalogs); $files = @($tree.files)
+        for ($c = 0; $c -lt $cats.Count; $c++) {
+            $cat = $cats[$c]
+            $mid = $top + "-tee"
+            if ($c -eq $cats.Count - 1) { $mid = $top + "-corner" }
+            $allowed = @($cat.files)
+            $auto = ""
+            if ($null -ne $cat.PSObject.Properties["auto"]) { $auto = "" + $cat.auto }
+            $key = "cat:" + $cat.id
+            if ($allowed.Count -eq 0) { $key += ":" + $auto }
+            $ca = Add-ExakitTableRow -Kind $mid -Label ("" + $cat.label) -Table $t
+            $keys += $key
+            if ($allowed.Count -eq 0) {
+                # Glue: its files are found from the catalog - a note, not a choice.
+                $autoLabel = $auto
+                foreach ($f in $files) { if (("" + $f.id) -eq $auto) { $autoLabel = ("" + $f.label).Split(@(" / "), [StringSplitOptions]::None)[0] } }
+                $nr = Add-ExakitTableRow -Kind ($mid + "-corner") -Label ("files: " + $autoLabel + " (automatic)") -Table $t
+                Disable-ExakitTableRow -Row $nr -Table $t
+                $keys += ""
+                $groups += ("{0}:{1}:{2}:collapse" -f $ca, ($ca + 1), ($ca + 1))
+                continue
+            }
+            $shown = @($files | Where-Object { ($allowed -contains ("" + $_.id)) -or (Test-ExakitVsUnsupported $_) })
+            for ($j = 0; $j -lt $shown.Count; $j++) {
+                $f = $shown[$j]
+                $leaf = $mid + "-tee"
+                if ($j -eq $shown.Count - 1) { $leaf = $mid + "-corner" }
+                $fr = Add-ExakitTableRow -Kind $leaf -Label ("" + $f.label) -Table $t
+                if (Test-ExakitVsUnsupported $f) { Disable-ExakitTableRow -Row $fr -Table $t; $keys += "" }
+                else { $keys += ("file:" + $cat.id + ":" + $f.id) }
+            }
+            $groups += ("{0}:{1}:{2}:collapse+one+first" -f $ca, ($ca + 1), ($ca + $shown.Count))
+        }
+        $groups += ("{0}:{1}:{2}:collapse+one" -f $row, ($row + 1), $keys.Count)
     }
     $skip = Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $t
     Show-ExakitVsClockCheck
     Write-Host ""
     Info "Tick one or more sources; the details for each are asked next."
     Write-Host ""
-    $sel = @(Invoke-ExakitTableMenu -Table $t -ExclusiveIndex $skip -StartRow 1)
+    $sel = @(Invoke-ExakitTableMenu -Table $t -ExclusiveIndex $skip -StartRow 1 -Groups $groups)
     if (-not $script:ExakitTableConfirmed) { return @() }
     if ($sel -contains $skip) { return @() }
     $picked = @()
-    foreach ($r in $sel) { if ($r -ge 1 -and $r -le $ids.Count) { $picked += $ids[$r - 1] } }
+    foreach ($r in $sel) {
+        if ($r -lt 1 -or $r -gt $keys.Count) { continue }
+        $k = "" + $keys[$r - 1]
+        if (-not $k) { continue }
+        if ($k.StartsWith("cat:")) {
+            $c = $k.Substring(4)
+            $at = $c.IndexOf(":")
+            if ($at -ge 0) { $script:ExakitVsLakehouseFiles = $c.Substring($at + 1); $c = $c.Substring(0, $at) }
+            $script:ExakitVsLakehouseCatalog = $c
+        } elseif ($k.StartsWith("file:")) {
+            $f = $k.Substring(5)
+            $script:ExakitVsLakehouseFiles = $f.Substring($f.IndexOf(":") + 1)
+        } else { $picked += $k }
+    }
     return $picked
 }
 
@@ -2655,6 +2786,7 @@ function Invoke-ExakitVsTuiFlow {
     $script:EvtIn = $w - 4
     $script:EvtOnScreen = 0
     # 1. which sources
+    $script:ExakitVsLakehouseCatalog = ""; $script:ExakitVsLakehouseFiles = ""
     if ($Source) {
         $resolved = Invoke-ExakitVsEngine -Arguments @("resolve", $Source)
         if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); return $resolved.Code }
@@ -2662,6 +2794,7 @@ function Invoke-ExakitVsTuiFlow {
     } else {
         $picked = @(Invoke-ExakitVsPick)
         if ($picked.Count -eq 0) { Info "Nothing was chosen; nothing was changed."; return 5 }
+        Add-ExakitVsLakehouseHandoff
     }
     # 2. the details, one panel each; --name, --set and --password-file belong
     # to the one source the command named

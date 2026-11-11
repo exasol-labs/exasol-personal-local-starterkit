@@ -686,6 +686,26 @@ _ui_checkbox_toggle() {
 # that row and the add-ons together. The inner spec must come FIRST, so it has
 # settled its own parent before the outer spec re-reads that parent as one of
 # its own children.
+#
+# Two TREE modes build a small dynamic subtree (exakit connect's "Lakehouse":
+# catalogs under the source, files under the picked catalog). A tree mode is
+# one or more words joined by "+", e.g. "collapse+one+first":
+#   "collapse" — the children are HIDDEN until the parent is ticked: not drawn,
+#                skipped by the cursor. Ticking the parent ticks no child;
+#                unticking it hides them again and clears every row in the
+#                range, so nothing hidden is ever selected.
+#   "one"      — the parent's DIRECT children are one-of-N, drawn as radio
+#                buttons "( )" / "(•)": picking one unpicks the others and
+#                clears the rows under them (the old branch closes), and Space
+#                on the picked one changes nothing. A direct child is a row in
+#                the range that is not inside another spec's range whose
+#                parent sits in this range - so a radio row can be a collapse
+#                parent of its own. Enter is refused while a ticked parent's
+#                "one" group has nothing picked.
+#   "first"    — with "one": opening the parent picks its first selectable
+#                direct child (a disabled row is never picked).
+# Tree specs nest like the others, innermost first. They never change how the
+# modes above behave, so a menu without them draws and answers as before.
 EXAKIT_CHECKBOX_SELECTION=""
 EXAKIT_CHECKBOX_EXCLUSIVE=""
 EXAKIT_CHECKBOX_GROUP=""
@@ -723,6 +743,20 @@ _ui_checkbox_group_children() {
 _ui_checkbox_apply_group() {
     _cga_sel="$1"; _cga_toggled="$2"; _cga_specs="$3"
     [ -n "$_cga_specs" ] || { printf '%s' "$_cga_sel"; return 0; }
+    # The tree modes read the whole spec list (a radio row's own branch, the
+    # ranges nested in a group).
+    _UI_CHECKBOX_SPECS="$_cga_specs"
+    # Space on the picked radio row picks it again: nothing changes, and its
+    # branch stays as it was (the toggle already took it out; put it back
+    # before any spec sees it off).
+    case ",$_cga_sel,|$_cga_specs" in
+        *",$_cga_toggled,"*'|'*) ;;
+        *'|'*one*)
+            if _ui_checkbox_is_radio "$_cga_toggled"; then
+                printf '%s' "${_cga_sel:+$_cga_sel,}$_cga_toggled"
+                return 0
+            fi ;;
+    esac
     for _cga_spec in $_cga_specs; do
         _cga_sel="$(_ui_checkbox_apply_one_group "$_cga_sel" "$_cga_toggled" "$_cga_spec")"
     done
@@ -732,6 +766,11 @@ _ui_checkbox_apply_group() {
 _ui_checkbox_apply_one_group() {
     _cg_sel="$1"; _cg_toggled="$2"; _cg_spec="$3"
     [ -n "$_cg_spec" ] || { printf '%s' "$_cg_sel"; return 0; }
+    case "$_cg_spec" in
+        *:*:*:*collapse*|*:*:*:*one*)
+            _ui_checkbox_apply_tree "$_cg_sel" "$_cg_toggled" "$_cg_spec"
+            return 0 ;;
+    esac
     _cg_parent="${_cg_spec%%:*}"
     _cg_rest="${_cg_spec#*:}"
     _cg_first="${_cg_rest%%:*}"
@@ -811,6 +850,184 @@ _ui_checkbox_apply_one_group() {
     printf '%s' "$_cg_sel"
 }
 
+# --- the tree modes (collapse, one, first) ----------------------------------
+# Pure helpers over _UI_CHECKBOX_SPECS (the menu's whole spec list) and
+# _UI_CHECKBOX_SELECTABLE. ⇄ twins: the *-ExakitTree* functions in ui.ps1.
+_UI_CHECKBOX_SPECS=""
+
+# _ui_checkbox_spec_split <spec> — the spec's fields into _ucs_p _ucs_f _ucs_l
+# _ucs_m (mode, "any" when absent).
+_ui_checkbox_spec_split() {
+    _ucs_p="${1%%:*}"; _ucs_r="${1#*:}"
+    _ucs_f="${_ucs_r%%:*}"; _ucs_r="${_ucs_r#*:}"
+    _ucs_l="${_ucs_r%%:*}"
+    case "$1" in *:*:*:*) _ucs_m="${1##*:}" ;; *) _ucs_m="any" ;; esac
+}
+
+# _ui_checkbox_has_mode <mode> <word> — whether a "+"-joined mode holds <word>.
+_ui_checkbox_has_mode() {
+    case "+$1+" in *"+$2+"*) return 0 ;; esac
+    return 1
+}
+
+# _ui_checkbox_tree_members <parent> <first> <last> — the parent's DIRECT
+# children: the selectable rows of the range that no spec nested in it (a spec
+# whose parent sits in the range) claims for itself.
+_ui_checkbox_tree_members() {
+    _utm2_out=""
+    for _utm2_r in $(_ui_checkbox_group_children "$2" "$3"); do
+        _utm2_in=0
+        for _utm2_s in $_UI_CHECKBOX_SPECS; do
+            _ui_checkbox_spec_split "$_utm2_s"
+            [ "$_ucs_p" = "$1" ] && continue
+            [ "$_ucs_p" -ge "$2" ] && [ "$_ucs_p" -le "$3" ] || continue
+            if [ "$_utm2_r" -ge "$_ucs_f" ] && [ "$_utm2_r" -le "$_ucs_l" ]; then _utm2_in=1; break; fi
+        done
+        [ "$_utm2_in" = 0 ] && _utm2_out="$_utm2_out $_utm2_r"
+    done
+    printf '%s' "${_utm2_out# }"
+}
+
+# _ui_checkbox_is_radio <row> — whether the row is a direct child of a "one"
+# group (drawn "( )", picked and never unpicked by Space).
+_ui_checkbox_is_radio() {
+    for _ucr_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_ucr_s"
+        _ui_checkbox_has_mode "$_ucs_m" one || continue
+        [ "$1" -ge "$_ucs_f" ] && [ "$1" -le "$_ucs_l" ] || continue
+        _ucr_p="$_ucs_p"; _ucr_f="$_ucs_f"; _ucr_l="$_ucs_l"
+        case " $(_ui_checkbox_tree_members "$_ucr_p" "$_ucr_f" "$_ucr_l") " in *" $1 "*) return 0 ;; esac
+    done
+    return 1
+}
+
+# _ui_checkbox_tree_radio — every radio row, space separated (for the renderer).
+_ui_checkbox_tree_radio() {
+    _uctr_out=""
+    for _uctr_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_uctr_s"
+        _ui_checkbox_has_mode "$_ucs_m" one || continue
+        _uctr_out="$_uctr_out $(_ui_checkbox_tree_members "$_ucs_p" "$_ucs_f" "$_ucs_l")"
+    done
+    printf '%s' "$_uctr_out" | tr -s ' ' | sed 's/^ //; s/ $//'
+}
+
+# _ui_checkbox_tree_hidden <selected_csv> — the rows a closed "collapse" group
+# hides: every row in the range of one whose parent is not ticked.
+_ui_checkbox_tree_hidden() {
+    _ucth_out=""
+    for _ucth_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_ucth_s"
+        _ui_checkbox_has_mode "$_ucs_m" collapse || continue
+        case ",$1," in *",$_ucs_p,"*) continue ;; esac
+        _ucth_i="$_ucs_f"
+        while [ "$_ucth_i" -le "$_ucs_l" ]; do
+            case " $_ucth_out " in *" $_ucth_i "*) ;; *) _ucth_out="$_ucth_out $_ucth_i" ;; esac
+            _ucth_i=$(( _ucth_i + 1 ))
+        done
+    done
+    printf '%s' "${_ucth_out# }"
+}
+
+# _ui_checkbox_tree_missing <selected_csv> — the parent of the first "one"
+# group that is open (its parent ticked) with nothing picked; empty when every
+# open group has its pick. Enter is refused while there is one.
+_ui_checkbox_tree_missing() {
+    for _uctm_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_uctm_s"
+        _ui_checkbox_has_mode "$_ucs_m" one || continue
+        case ",$1," in *",$_ucs_p,"*) ;; *) continue ;; esac
+        _uctm_p="$_ucs_p"
+        _uctm_members="$(_ui_checkbox_tree_members "$_ucs_p" "$_ucs_f" "$_ucs_l")"
+        [ -n "$_uctm_members" ] || continue
+        _uctm_any=0
+        for _uctm_m in $_uctm_members; do
+            case ",$1," in *",$_uctm_m,"*) _uctm_any=1; break ;; esac
+        done
+        [ "$_uctm_any" = 1 ] || { printf '%s' "$_uctm_p"; return 0; }
+    done
+    return 0
+}
+
+# _ui_checkbox_tree_begin <specs> — a menu's tree state: _UI_TREE_ON (1 when a
+# spec uses a tree mode), _UI_TREE_RADIO (" r1 r2 ", the radio rows) and
+# _UI_TREE_HIDDEN, refreshed by _ui_checkbox_tree_refresh <selected_csv>. A menu
+# without tree specs gets empty sets and is drawn exactly as before.
+_UI_TREE_ON=0; _UI_TREE_RADIO=" "; _UI_TREE_HIDDEN=" "
+_ui_checkbox_tree_begin() {
+    _UI_CHECKBOX_SPECS="$1"; _UI_TREE_ON=0; _UI_TREE_RADIO=" "; _UI_TREE_HIDDEN=" "
+    case " $1" in *:*:*:*collapse*|*:*:*:*one*) _UI_TREE_ON=1 ;; *) return 0 ;; esac
+    _UI_TREE_RADIO=" $(_ui_checkbox_tree_radio) "
+}
+_ui_checkbox_tree_refresh() {
+    [ "$_UI_TREE_ON" = 1 ] || { _UI_TREE_HIDDEN=" "; return 0; }
+    _UI_TREE_HIDDEN=" $(_ui_checkbox_tree_hidden "$1") "
+}
+_ui_checkbox_tree_end() {
+    _UI_CHECKBOX_SPECS=""; _UI_TREE_ON=0; _UI_TREE_RADIO=" "; _UI_TREE_HIDDEN=" "
+}
+
+# _ui_checkbox_apply_tree <selected_csv> <toggled_idx> <spec> — one tree spec's
+# post-toggle rule, echoing the adjusted csv.
+_ui_checkbox_apply_tree() {
+    _uat_sel="$1"; _uat_t="$2"
+    _ui_checkbox_spec_split "$3"
+    _uat_p="$_ucs_p"; _uat_f="$_ucs_f"; _uat_l="$_ucs_l"; _uat_m="$_ucs_m"
+    _uat_on() { case ",$_uat_sel," in *",$1,"*) return 0 ;; esac; return 1; }
+    if [ "$_uat_t" = "$_uat_p" ]; then
+        if _uat_on "$_uat_p"; then
+            # Opened: nothing under it is ticked, unless "first" picks its first
+            # direct child.
+            if _ui_checkbox_has_mode "$_uat_m" one && _ui_checkbox_has_mode "$_uat_m" first; then
+                _uat_first="$(_ui_checkbox_tree_members "$_uat_p" "$_uat_f" "$_uat_l")"
+                _uat_first="${_uat_first%% *}"
+                [ -n "$_uat_first" ] && ! _uat_on "$_uat_first" && _uat_sel="${_uat_sel:+$_uat_sel,}$_uat_first"
+            fi
+        else
+            # Closed: nothing under it stays ticked.
+            _uat_out=""
+            for _uat_tok in $(printf '%s' "$_uat_sel" | tr ',' ' '); do
+                [ "$_uat_tok" -ge "$_uat_f" ] && [ "$_uat_tok" -le "$_uat_l" ] && continue
+                _uat_out="${_uat_out:+$_uat_out,}$_uat_tok"
+            done
+            _uat_sel="$_uat_out"
+        fi
+        printf '%s' "$_uat_sel"
+        return 0
+    fi
+    if [ "$_uat_t" -lt "$_uat_f" ] || [ "$_uat_t" -gt "$_uat_l" ]; then
+        printf '%s' "$_uat_sel"; return 0
+    fi
+    _uat_on "$_uat_t" || { printf '%s' "$_uat_sel"; return 0; }
+    if _ui_checkbox_has_mode "$_uat_m" one; then
+        case " $(_ui_checkbox_tree_members "$_uat_p" "$_uat_f" "$_uat_l") " in
+            *" $_uat_t "*)
+                # Picked: every other row of the range goes - the other radio
+                # rows and their branches - but the picked row's own branch
+                # (an inner spec, applied first, may have just filled it) stays.
+                _uat_keep=" $_uat_t "
+                for _uat_s in $_UI_CHECKBOX_SPECS; do
+                    _ui_checkbox_spec_split "$_uat_s"
+                    [ "$_ucs_p" = "$_uat_t" ] || continue
+                    _uat_i="$_ucs_f"
+                    while [ "$_uat_i" -le "$_ucs_l" ]; do _uat_keep="$_uat_keep$_uat_i "; _uat_i=$(( _uat_i + 1 )); done
+                done
+                _uat_out=""
+                for _uat_tok in $(printf '%s' "$_uat_sel" | tr ',' ' '); do
+                    if [ "$_uat_tok" -ge "$_uat_f" ] && [ "$_uat_tok" -le "$_uat_l" ]; then
+                        case "$_uat_keep" in *" $_uat_tok "*) ;; *) continue ;; esac
+                    fi
+                    _uat_out="${_uat_out:+$_uat_out,}$_uat_tok"
+                done
+                _uat_sel="$_uat_out" ;;
+        esac
+    fi
+    # A row under the parent went on: the parent is on (it always is when the
+    # group collapses, since its rows are hidden otherwise).
+    _uat_on "$_uat_p" || _uat_sel="${_uat_sel:+$_uat_sel,}$_uat_p"
+    printf '%s' "$_uat_sel"
+}
+
 # _ui_checkbox_apply_exclusive <selected_csv> <toggled_idx> <exclusive_idx> —
 # pure post-toggle rule, echoing the adjusted csv.
 _ui_checkbox_apply_exclusive() {
@@ -862,11 +1079,15 @@ ui_checkbox_menu() {
             [ "$_cb_cur" -lt 1 ] && _cb_cur=$_cb_n
             [ "$_cb_cur" -gt "$_cb_n" ] && _cb_cur=1
             if ! _cb_is_header "$_cb_cur" && ! _cb_is_disabled "$_cb_cur"; then
-                return 0
+                case "$_UI_TREE_HIDDEN" in *" $_cb_cur "*) ;; *) return 0 ;; esac
             fi
             _cb_steps=$((_cb_steps + 1))
         done
     }
+    # The tree modes (collapse, one): which rows are radio buttons, and which a
+    # closed group hides. Empty sets for every other menu.
+    _ui_checkbox_tree_begin "${EXAKIT_CHECKBOX_GROUP:-}"
+    _ui_checkbox_tree_refresh "$_cb_sel"
     _cb_cur=0
     _cb_step 1                                            # first selectable row
 
@@ -906,6 +1127,7 @@ ui_checkbox_menu() {
         EXAKIT_CHECKBOX_EXCLUSIVE=""
         EXAKIT_CHECKBOX_GROUP=""
         _UI_CHECKBOX_SELECTABLE=""
+        _ui_checkbox_tree_end
         _cb_i=1
         for _cb_label in "$@"; do
             case ",$_cb_defaults," in *",$_cb_i,"*) ok "$_cb_label (selected by default)" ;; esac
@@ -916,6 +1138,10 @@ ui_checkbox_menu() {
     # Checked mark: the palette tick in fancy mode; plain "x" otherwise (the
     # plain-palette tick is the multi-char "[ok]", which would double-bracket).
     if [ "${UI_FANCY:-0}" = 1 ]; then _cb_mark="${UI_TICK:-x}"; else _cb_mark="x"; fi
+    # A picked radio row: the palette bullet, "*" without one (the plain bullet
+    # is "-", which reads as "not picked").
+    if [ "${UI_FANCY:-0}" = 1 ]; then _cb_dot="${UI_BULLET:-*}"; else _cb_dot="*"; fi
+    _cb_note=""
     _cb_first=1
     _cb_drawn=0
     # A click ticks or unticks the row under it, like Space; Enter still
@@ -939,6 +1165,8 @@ ui_checkbox_menu() {
         _cb_i=1
         for _cb_label in "$@"; do
             _cb_at[$_cb_i]="$_cb_drawn"
+            # A row a closed group hides is not drawn (and takes no line).
+            case "$_UI_TREE_HIDDEN" in *" $_cb_i "*) _cb_i=$((_cb_i + 1)); continue ;; esac
             if _cb_is_header "$_cb_i"; then
                 _cb_text="$(_ui_fit_row "${_cb_label#\#}" 4 "$_cb_cols")"
                 printf '    %s%s%s\n' "${UI_ACCENT:-}" "$_cb_text" "${UI_RESET:-}"
@@ -967,8 +1195,15 @@ ui_checkbox_menu() {
             _cb_chrome=$((9 + ${#_cb_mark}))
             [ "$_cb_chrome" -lt 10 ] && _cb_chrome=10
             _cb_text="$(_ui_fit_row "$_cb_label" "$_cb_chrome" "$_cb_cols")"
-            case ",$_cb_sel," in
-                *",$_cb_i,"*)
+            case "$_UI_TREE_RADIO|,$_cb_sel," in
+                *" $_cb_i "*"|"*",$_cb_i,"*)
+                    # A radio row (a "one" group): "(•)" picked, "( )" not.
+                    printf '    %s (%s) %s\n' "$_cb_ptr" "$_cb_dot" "$_cb_text"
+                    ;;
+                *" $_cb_i "*"|"*)
+                    printf '    %s ( ) %s\n' "$_cb_ptr" "$_cb_text"
+                    ;;
+                *"|"*",$_cb_i,"*)
                     printf '    %s %s[%s]%s %s\n' \
                         "$_cb_ptr" "${UI_OK:-}" "$_cb_mark" "${UI_RESET:-}" "$_cb_text"
                     ;;
@@ -983,6 +1218,14 @@ ui_checkbox_menu() {
         _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space · Enter to confirm" 6 "$_cb_cols")"
         ui_menu_hint "$_cb_hint"
         _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_hint})) "$_cb_cols")))
+        # Enter refused for an open "one" group with nothing picked: said once,
+        # under the hint, until the next key.
+        if [ -n "$_cb_note" ]; then
+            _cb_note="$(_ui_fit_row "$_cb_note" 6 "$_cb_cols")"
+            printf '    %s!%s %s\n' "${UI_WARN:-}" "${UI_RESET:-}" "$_cb_note"
+            _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_note})) "$_cb_cols")))
+            _cb_note=""
+        fi
         _ui_cursor_ask
         # One raw keypress, no echo. Enter arrives as an empty read; IFS= keeps
         # a Space keypress from being stripped to an empty string.
@@ -996,6 +1239,13 @@ ui_checkbox_menu() {
                 # them instead. Same rule as ui_table_menu.
                 if [ -n "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" ] && [ "$_cb_cur" = "$EXAKIT_CHECKBOX_EXCLUSIVE" ]; then
                     _cb_sel="$_cb_cur"
+                fi
+                if [ "$_UI_TREE_ON" = 1 ]; then
+                    _cb_miss="$(_ui_checkbox_tree_missing "$_cb_sel")"
+                    if [ -n "$_cb_miss" ]; then
+                        _cb_note="Pick one of the options under ${_cb_labels[$(( _cb_miss - 1 ))]}."
+                        continue
+                    fi
                 fi
                 [ -n "$_cb_sel" ] && break
                 continue                                 # at least one selection required
@@ -1030,18 +1280,29 @@ ui_checkbox_menu() {
                 _cb_i=1
                 while [ "$_cb_i" -le "$_cb_n" ]; do
                     if ! _cb_is_header "$_cb_i" && ! _cb_is_disabled "$_cb_i" && [ "$_cb_i" != "$EXAKIT_CHECKBOX_EXCLUSIVE" ]; then
-                        _cb_sel="${_cb_sel:+$_cb_sel,}$_cb_i"
+                        # Never a row a closed group hides, nor a radio row:
+                        # one of N is a choice, not "all".
+                        case "$_UI_TREE_HIDDEN$_UI_TREE_RADIO" in
+                            *" $_cb_i "*) ;;
+                            *) _cb_sel="${_cb_sel:+$_cb_sel,}$_cb_i" ;;
+                        esac
                     fi
                     _cb_i=$((_cb_i + 1))
                 done
                 ;;
         esac
+        if [ "$_UI_TREE_ON" = 1 ]; then
+            _ui_checkbox_tree_refresh "$_cb_sel"
+            # The cursor's row closed under it: back up to the nearest row shown.
+            case "$_UI_TREE_HIDDEN" in *" $_cb_cur "*) _cb_step -1 ;; esac
+        fi
     done
     ui_mouse_off
     EXAKIT_CHECKBOX_SELECTION="$(printf '%s' "$_cb_sel" | tr ',' '\n' | sort -n | paste -sd, -)"
     EXAKIT_CHECKBOX_EXCLUSIVE=""
     EXAKIT_CHECKBOX_GROUP=""
     _UI_CHECKBOX_SELECTABLE=""
+    _ui_checkbox_tree_end
     return 0
 }
 
