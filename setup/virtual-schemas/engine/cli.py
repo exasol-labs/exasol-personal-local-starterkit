@@ -11,6 +11,7 @@
     cli.py [context] plan       CONNECTOR --name N [--set KEY=VALUE ...] [--secret-given]
     cli.py [context] connect    CONNECTOR --name N [--set KEY=VALUE ...] [--secret-stdin]
     cli.py [context] list | issues [--status S] | show N | check N|--all
+    cli.py [context] card N [--details] | cards   (the terminal's card and picker: card.py)
     cli.py [context] reauth     N --secret-stdin
     cli.py [context] refresh    N
     cli.py [context] describe   N [TABLE] [--ddl] [--into SCHEMA]
@@ -82,6 +83,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # A kit copy updated by halves can fail here, before main() runs; that too is
 # answered in the one shape below (kind "internal"), not with a bare traceback.
 try:
+    import card  # noqa: E402
     import lifecycle  # noqa: E402
     import paste  # noqa: E402
     import plan as planner  # noqa: E402
@@ -150,6 +152,10 @@ def parse(argv):
     sub.add_parser("list")
     sub.add_parser("issues").add_argument("--status", default="")
     sub.add_parser("show").add_argument("name")
+    cmd = sub.add_parser("card")
+    cmd.add_argument("name")
+    cmd.add_argument("--details", action="store_true")
+    sub.add_parser("cards")
     cmd = sub.add_parser("check")
     cmd.add_argument("name", nargs="?")
     cmd.add_argument("--all", action="store_true")
@@ -198,7 +204,7 @@ COMMAND_FOR_KIND = {"missing": "exakit source list", "gated": "exakit source cat
 
 # The commands that act on a source that exists: a failure of theirs takes the
 # fix `check` would name for its class, when it names none of its own.
-SOURCE_COMMANDS = ("show", "check", "reauth", "refresh", "describe", "disconnect", "remove")
+SOURCE_COMMANDS = ("show", "card", "check", "reauth", "refresh", "describe", "disconnect", "remove")
 
 # The commands the day's log records (vslog). Not the catalog and resolve
 # lookups, nor the terminal form's inputs and field: no database, nothing to
@@ -542,6 +548,10 @@ def main(argv=None):
                 result = {"issues": engine.issues(args.status or None)}
             elif args.command == "show":
                 result = engine.show(args.name)
+            elif args.command == "card":
+                result = card.card(engine, args.name, args.details)
+            elif args.command == "cards":
+                result = card.cards(engine)
             elif args.command == "check":
                 if args.all:
                     results = [engine.check(name) for name in engine.store.names()]

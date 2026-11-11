@@ -351,6 +351,8 @@ Write-Host "== exakit source: the name before the credential, (none) for no chec
 $child = @'
 param($cli, $record, $code, $resultFile)
 $result = Get-Content -Raw -LiteralPath $resultFile
+$script:ExakitHome = "" + $env:EXAKIT_TEST_HOME
+. (Join-Path (Split-Path -Parent $cli) "lib/ui.ps1")
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($cli, [ref]$null, [ref]$null)
 foreach ($def in @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq "Invoke-CmdSource" }, $true))) {
     . ([scriptblock]::Create($def.Extent.Text))
@@ -358,6 +360,7 @@ foreach ($def in @($ast.FindAll({ param($n) ($n -is [System.Management.Automatio
 function Assert-ExakitInstalled { param([switch]$Json) }
 function Initialize-ExakitLogging { }
 function Deny-ExakitInput { param([string]$Message, $Remedy = $null) Write-Output "DENY $Message"; exit 2 }
+function Deny-ExakitVsInput { param([string]$Message) Write-Output "DENY $Message"; exit 2 }
 function Read-ExakitVsSecret { param($Label, $PasswordFile) Add-Content -LiteralPath $record -Value "SECRET-READ"; return "pw" }
 function Invoke-ExakitVsEngine { param([string[]]$Arguments = @(), [string]$Secret = "")
     Add-Content -LiteralPath $record -Value ($Arguments -join " ")
@@ -369,7 +372,7 @@ function Confirm-ExakitVs { param([string]$Question) return [bool]$script:Exakit
 function Ok([string]$M) { Write-Host "OK $M" }
 function Info([string]$M) { Write-Host "INFO $M" }
 $lib = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $cli) "lib/virtual-schemas.ps1"), [ref]$null, [ref]$null)
-foreach ($def in @($lib.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -in @("Show-ExakitVsDropPlan", "Exit-ExakitVs", "Get-ExakitVsLogMark", "Get-ExakitVsLogPath", "Get-ExakitVsLogFolder") }, $true))) {
+foreach ($def in @($lib.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -in @("Show-ExakitVsDropPlan", "Exit-ExakitVs", "Get-ExakitVsLogMark", "Get-ExakitVsLogPath", "Get-ExakitVsLogFolder", "Show-ExakitVsCard", "Show-ExakitVsCatalogBox", "Format-ExakitVsSqlLine", "Test-ExakitVsSourceExists", "Test-ExakitVsMenuOk") }, $true))) {
     . ([scriptblock]::Create($def.Extent.Text))
 }
 Invoke-CmdSource -Arguments $args
@@ -1612,6 +1615,66 @@ foreach ($pair in @(@("catalog", "the catalog does not know that warehouse"), @(
 Check "Read: wraps only after & ; ? /, each continuation under the string" "Read: jdbc:databricks://|      dbc-1234abcd-5678.cloud.databricks.com:443/|      default;transportMode=http;ssl=1;AuthMech=3;|      httpPath=/sql/1.0/warehouses/abc;|      ConnCatalog=workspace;ConnSchema=sales;|      user=EXAKIT_READER" ((Split-ExakitVsReadWrap -Text "Read: jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc;ConnCatalog=workspace;ConnSchema=sales;user=EXAKIT_READER" -Width 52) -join "|")
 Check "...a string that fits stays on one line" "Read: postgres://reader@h:5432/db" ((Split-ExakitVsReadWrap -Text "Read: postgres://reader@h:5432/db" -Width 52) -join "|")
 
+Write-Host ""
+Write-Host "== exakit source <name>: the card, the menu, the catalog (twins of the bash checks) =="
+$cardJson = 'RESULT {"name": "sales", "connector": "postgresql", "connector_name": "PostgreSQL", "status": "auth-failed", "ready": false, "reason": "password rejected", "status_parts": ["password rejected", "2 tables", "checked 9 Nov 10:22 (failed)"], "fix": {"action": "reauth", "label": "password rejected - enter the new password"}, "remedy": "the source rejected the credentials: exakit source reauth sales", "rows": [["Status", ""], ["Schema", "VS_SALES"], ["Host", "pg.example.com:5432"], ["Reader", "reader"]], "address": [{"input": "host", "label": "Host", "value": "pg.example.com"}], "notes": ["Names arrive in upper case."], "example": "SELECT * FROM VS_SALES.<table> LIMIT 10"}'
+$srcHome = Join-Path $work "card-home"
+New-Item -ItemType Directory -Force -Path (Join-Path $srcHome "sources/sales") | Out-Null
+Set-Content -LiteralPath (Join-Path $srcHome "sources/sales/config.json") -Value "{}" -Encoding ASCII
+$env:EXAKIT_TEST_HOME = $srcHome
+function Invoke-SourceChild([string]$CannedText, [string[]]$SourceArgs) {
+    if (Test-Path -LiteralPath $record) { Remove-Item -LiteralPath $record }
+    $ErrorActionPreference = "Continue"
+    $o = & $pwsh -NoProfile -File $childFile (J @("setup", "exakit.ps1")) $record 0 (Canned $CannedText) @SourceArgs 2>&1
+    $script:childCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $script:childCalls = ""
+    if (Test-Path -LiteralPath $record) { $script:childCalls = (Get-Content -LiteralPath $record) -join "|" }
+    return (@($o | ForEach-Object { "$_" }) -join "`n")
+}
+$out = Invoke-SourceChild $cardJson @("show", "sales")
+Check "show: the engine's card, exit 0" "0 card sales" ("$script:childCode " + $script:childCalls)
+Check "...a box titled with the source and its connector" $true $out.Contains("sales - PostgreSQL")
+Check "...the status with its reason" $true $out.Contains("password rejected - 2 tables - checked 9 Nov 10:22 (failed)")
+Check "...the host on its own line" $true $out.Contains("Host    pg.example.com:5432")
+Check "...the notes, the fix, a first query and the menu's command" $true ($out.Contains("Notes") -and $out.Contains("Fix:    the source rejected") -and $out.Contains("Try:    exakit sql 'SELECT * FROM VS_SALES.<table> LIMIT 10'") -and $out.Contains("Manage: exakit source sales   (menu)"))
+Check "...no raw JSON" $false $out.Contains('{"')
+$out = Invoke-SourceChild $cardJson @("show", "sales", "--details")
+Check "show --details asks the engine for the details" "card sales --details" $script:childCalls
+$out = Invoke-SourceChild $cardJson @("sales")
+Check "no console: exakit source <name> prints the card only" "card sales True" ($script:childCalls + " " + $out.Contains("Manage: exakit source sales"))
+$out = Invoke-SourceChild '{"name": "sales"}' @("sales", "--json")
+Check "exakit source <name> --json is show's object" "--json show sales" $script:childCalls
+$out = Invoke-SourceChild 'RESULT {"sources": []}' @()
+Check "no console: exakit source prints the list only" "list True" ($script:childCalls + " " + $out.Contains("(none)"))
+$out = Invoke-SourceChild 'RESULT {"sources": []}' @("--json")
+Check "exakit source --json is the list's object" "--json list" $script:childCalls
+$out = Invoke-SourceChild 'RESULT {"sources": []}' @("bogus")
+Check "a word that is no action and no source: still the unknown action" $true $out.Contains("DENY Unknown source action 'bogus'")
+$catalogJson = 'RESULT {"connectors": [{"id": "s3", "name": "Amazon S3", "tier": "GA", "status": "candidate", "aliases": ["aws-s3", "s3-files", "s3-documents", "amazon-s3"]}]}'
+$out = Invoke-SourceChild $catalogJson @("catalog")
+Check "catalog: a box of id, name and the first aliases" $true $out.Contains("s3  Amazon S3  aws-s3, s3-files, s3-documents, +1")
+Check "...no GA or status column" "False False" ("" + $out.Contains(" GA ") + " " + $out.Contains("candidate"))
+Check "...and where each connector's inputs are" $true $out.Contains("What each needs: exakit connect <id> --help")
+Remove-Item Env:\EXAKIT_TEST_HOME
+& {
+    $vsAst2 = [System.Management.Automation.Language.Parser]::ParseFile((J @("setup", "lib", "virtual-schemas.ps1")), [ref]$null, [ref]$null)
+    foreach ($def in @($vsAst2.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -in @("Invoke-ExakitVsSourceMenu", "Show-ExakitVsCard") }, $true))) {
+        . ([scriptblock]::Create($def.Extent.Text))
+    }
+    $script:menuCard = ($cardJson.Substring(7) | ConvertFrom-Json)
+    $script:menuRows = @(); $script:menuPicks = New-Object System.Collections.Queue; $script:menuRuns = @()
+    function Get-ExakitVsCard { param([string]$Name) $script:menuRuns += "card $Name"; return $script:menuCard }
+    function Read-ExakitPickMenu { param([string[]]$Rows = @(), $Title, $Head, $Start, $Enter) $script:menuRows += , @($Rows); if ($script:menuPicks.Count) { return [int]$script:menuPicks.Dequeue() }; return 0 }
+    function Invoke-ExakitVsMenuChild { param([string]$Command, [string[]]$Arguments = @()) $script:menuRuns += ("$Command " + ($Arguments -join " ")) }
+    function Test-ExakitVsSourceExists { param([string]$Name) return $true }
+    $script:menuPicks.Enqueue(3); $script:menuPicks.Enqueue(0)
+    [void](Invoke-ExakitVsSourceMenu -Name "sales" 6>$null)
+    $first = @($script:menuRows[0])
+    Check "the menu: a broken source puts its fix first" ($script:UiCross + " password rejected - enter the new password") $first[0]
+    Check "...then every action, in the bash order" "Tables and columns|Test it now|Pick up new tables|New password or token|Move to a new host|Disconnect for now|Remove it" ((@($first | Select-Object -Skip 1) | ForEach-Object { ($_ -split "  ")[0] }) -join "|")
+    Check "...picking Test it now (row 3 under the fix) runs the check, then the card again" "card sales|source check sales|card sales" ($script:menuRuns -join "|")
+}
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }
 Write-Host ""

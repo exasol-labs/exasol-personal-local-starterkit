@@ -118,8 +118,7 @@
       "name": "Databricks", "summary": "a Unity Catalog schema",
       "aliases": [
         "dbx",
-        "databricks-sql",
-        "unity-catalog"
+        "databricks-sql"
       ],
       "profile": "lua-jdbc",
       "tier": "GA",
@@ -129,7 +128,6 @@
       "id": "lakehouse",
       "name": "Lakehouse (Iceberg on AWS Glue)", "summary": "Iceberg tables in an AWS Glue catalog",
       "aliases": [
-        "iceberg",
         "glue",
         "aws-glue",
         "lakehouse-iceberg"
@@ -142,7 +140,6 @@
       "id": "iceberg-rest",
       "name": "Iceberg REST catalog", "summary": "Iceberg tables behind an Iceberg REST catalog (Polaris, Lakekeeper, Nessie, Gravitino)",
       "aliases": [
-        "iceberg",
         "rest",
         "rest-catalog",
         "iceberg-rest-catalog"
