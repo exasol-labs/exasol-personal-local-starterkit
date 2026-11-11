@@ -4202,6 +4202,9 @@ check "a real connect: exit 0, one object - the engine's result" "0 [True, 'json
     "$JRC $(one '[d["ok"], d["name"], d["objects"]["schema"], d["public_ip"]]')"
 lacks "...no query hint or Manage line on stdout" "Manage it with" "$JOUT"
 lacks "...and the credential is nowhere in it" "$SECRET" "$JOUT$JERR"
+# jsonok's database objects as connected: the db resets below drop them, and
+# the menu tests put them back before they break the source (jsonok_db_back).
+cp "$STATE" "$WORK/jsonok.db"
 # A credential kept off disk: --password-file <(pass show db) hands over a
 # pipe, not a regular file. A named pipe stands in for it here (bash 3.2 closes
 # a <(...) of its own as soon as a function it is given to runs a command;
@@ -4535,6 +4538,19 @@ check "no terminal: exakit source prints the list only" "0 yes" "$JRC $(printf '
 jsonsrc /dev/null bogus
 check "a word that is no action and no source: still the unknown action, exit 2" "2 1" "$JRC $(printf '%s\n' "$JOUT$JERR" | grep -c "Unknown source action 'bogus'")"
 
+# The resets since the connect dropped VS_JSONOK and its CONNECTION; the kit
+# still lists jsonok as ready. Put both back, with the source taking their
+# credential, so the menu works on a real source - and its check, reading a
+# table, finds a credential the source no longer takes once it moves on.
+python3 -c 'import json,sys
+d, old = json.load(open(sys.argv[1])), json.load(open(sys.argv[2]))
+vs = old["virtual"]["VS_JSONOK"]; con = old["connections"][vs["connection"]]
+d.setdefault("virtual", {})["VS_JSONOK"] = vs
+d.setdefault("connections", {})[vs["connection"]] = con
+src = d["sources"]["pg.example.com"]; src["tables"] = list(vs["tables"]); src["secret"] = con["secret"]
+json.dump(d, open(sys.argv[1], "w"))' "$STATE" "$WORK/jsonok.db"
+eng check jsonok >/dev/null 2>&1
+
 printf '\n== exakit source <name> at a terminal: the menu ==\n'
 # menusrc <picks> <function> <args> - the menu's own functions, the picker
 # answering from the list of picks (0 quits) and recording each menu it drew.
@@ -4580,7 +4596,7 @@ menusrc "1 0 0" _exakit_vs_source_picker
 ROWS="$(cat "$WORK/menu.rows")"
 has "exakit source at a terminal: a box of every source" "-- Sources" "$ROWS"
 check "...a row each: name, connector, status, tables" "1" \
-    "$(printf '%s\n' "$ROWS" | grep -c '^jsonok  *PostgreSQL  *✗ password rejected  *[0-9-]*$')"
+    "$(printf '%s\n' "$ROWS" | awk '/^-- /{n++} n==1' | grep -c '^jsonok  *PostgreSQL  *✗ password rejected  *[0-9-]*$')"
 has "...Enter opens it: the card and its menu" "Tables and columns" "$ROWS"
 
 printf '\n== exakit source catalog ==\n'
