@@ -38,7 +38,8 @@ database and inspect it afterwards:
     the host of its URL and takes "catalog" ("rest" | "unity"), "namespaces"
     ({name: [tables]}), "token" (the token it accepts), "key_id" and
     "secret_key" (the storage keys it accepts), "warehouse" (the one it
-    knows), "region" (the bucket's) and "fail": "external" (Unity closed to
+    knows), "region" (the bucket's; vended credentials with none given fail
+    as S3 with an empty region does) and "fail": "external" (Unity closed to
     outside engines) | "managed" (a catalog-managed table, at the read)
     sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied"|"echo",
                         "secret": "<the credential the source accepts>",
@@ -384,6 +385,14 @@ def _catalog_source(doc, con, props, at_read=False):
                             % namespace)
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
                         "NoSuchNamespaceException: Namespace does not exist: %s (HTTP 404)" % namespace)
+    if at_read and src.get("region") and not cred.get("region") and cred.get("use_vended_credentials"):
+        # Vended S3 credentials with no region given: object_store builds the
+        # endpoint from an empty region (measured live, Databricks on AWS).
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: failed to resolve the current Delta version for "
+                        "table root 's3://uc-bucket-1/ext/%s': Error interacting with object store: Generic S3 "
+                        "error: Error performing GET https://s3..amazonaws.com/uc-bucket-1/ext/%s/_delta_log/"
+                        "_last_checkpoint in 2.5s, after 10 retries, max_retries: 10, retry_timeout: 180s - HTTP "
+                        "error: error sending request" % (namespace, namespace))
     if at_read and src.get("region") and cred.get("region") != src["region"]:
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Received redirect without "
                         "LOCATION, this normally indicates an incorrectly configured region")
