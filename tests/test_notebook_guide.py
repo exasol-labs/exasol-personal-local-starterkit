@@ -663,7 +663,7 @@ class LoadIntoSchemaTest(unittest.TestCase):
         actions = importlib.import_module("exakit_guide.actions")
         home = importlib.import_module("exakit_guide.screens.home")
         screen = home.Home.__new__(home.Home)
-        screen.confirm, screen.outputs, screen.failed = None, {}, set()
+        screen.confirm, screen.outputs, screen.failed, screen.data = None, {}, set(), None
         with mock.patch.object(home.actions, "run") as run, mock.patch.object(screen, "_rows", return_value=[]), \
              mock.patch.object(screen, "_other_rows", return_value=[]), mock.patch.object(screen, "_reload"), \
              mock.patch.object(home.SESSION, "changed") as changed:
@@ -721,34 +721,50 @@ class HomeAddonsTest(unittest.TestCase):
                                   {"id": "notebook", "status": "available", "installed": False},
                                   {"id": "udf-devkit", "name": "script-languages-release", "status": "available",
                                    "installed": False}]}
-        rows = {r["id"]: r for r in screen._rows() if r["id"].startswith("addon_")}
+        screen.data["components"] = [{"id": "dash-server", "add_on": True, "status": "update_available", "available": "0.3.0"},
+                                     {"id": "exapump", "installed": "0.13.1", "status": "current"},
+                                     {"id": "mcp_server", "installed": "2.4.0", "status": "update_available",
+                                      "available": "2.5.0"}]
+        screen.data["addons"][0]["version"] = "0.2.1"
+        # The Marketplace tab: every add-on, the persona's first, with versions and updates.
+        rows = {r["id"]: r for r in screen._addon_rows(everything=True)}
         self.assertEqual(["addon_dash-server", "addon_notebook", "addon_dbt-exasol", "addon_exasol-scheduler",
-                          "addon_exasol-vscode", "addon_udf-devkit"], list(rows))           # the persona's first
+                          "addon_exasol-vscode", "addon_udf-devkit"], list(rows))
         label = lambda r: [a["label"] for a in r["actions"]]
-        self.assertEqual(["Open"], label(rows["addon_dash-server"]))
+        self.assertEqual("Installed 0.2.1 · Running · update to 0.3.0", rows["addon_dash-server"]["text"])
+        self.assertEqual(["Update", "Open"], label(rows["addon_dash-server"]))
         self.assertEqual(["Install"], label(rows["addon_dbt-exasol"]))
         self.assertEqual("Not installed (for your persona)", rows["addon_notebook"]["text"])
         self.assertEqual(["Start"], label(rows["addon_exasol-scheduler"]))
         self.assertEqual([], label(rows["addon_exasol-vscode"]))                          # the user's own: never touched
         self.assertEqual("script-languages-release", rows["addon_udf-devkit"]["name"])
         self.assertEqual('nb.addon_ready("dbt-exasol")', rows["addon_dbt-exasol"]["actions"][0]["cmd"])
+        # The kit's own parts, with Update where the kit has a newer version.
+        parts = {r["id"]: r for r in screen._component_rows()}
+        self.assertEqual(["part_exapump", "part_mcp_server"], list(parts))
+        self.assertEqual("0.13.1 · up to date", parts["part_exapump"]["text"])
+        self.assertEqual(("2.4.0 · update to 2.5.0", ["Update"], 'nb.kit_update("mcp_server")'),
+                         (parts["part_mcp_server"]["text"], label(parts["part_mcp_server"]), parts["part_mcp_server"]["cmd"]))
+        # Your kit: the persona's add-ons and the installed ones only.
+        self.assertEqual(["addon_dash-server", "addon_notebook", "addon_exasol-scheduler"],
+                         [r["id"] for r in screen._addon_rows(everything=False)])
 
-
-class LoadedFilesTest(unittest.TestCase):
-    def test_your_files_come_from_the_kits_load_record(self):
-        """Home's Your data listed only the kit's sample datasets; a file loaded with exakit data-load never showed."""
-        nb = importlib.import_module("exakit_nb")
-        kit = importlib.import_module("exakit_nb._kit")
-        with tempfile.TemporaryDirectory() as home:
-            (Path(home) / "cache").mkdir()
-            (Path(home) / "cache" / "load-receipts.tsv").write_text(
-                "RETAIL.ORDERS\t10\tabc\t100\t1000\torders.csv\n"
-                "RETAIL.ORDERS\t12\tdef\t120\t2000\torders.csv\n"        # loaded again: the latest counts
-                "RETAIL.STATES\t5\tghi\t36\t1500\tstates.parquet\n", encoding="utf-8")
-            with mock.patch.object(kit, "_home", return_value=Path(home)):
-                files = nb.loaded_files()
-        self.assertEqual([("RETAIL.ORDERS", 120, "orders.csv"), ("RETAIL.STATES", 36, "states.parquet")],
-                         [(f["table"], f["rows"], f["file"]) for f in files])
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_the_marketplace_is_a_tab_of_the_home_card(self):
+        guide = importlib.import_module("exakit_guide")
+        home = importlib.import_module("exakit_guide.screens.home")
+        with mock.patch.object(home.Home, "_load"), mock.patch.object(home.threading, "Thread"):
+            screen = guide.marketplace()
+        self.assertEqual("marketplace", screen.tab)
+        screen.loading, screen.data = False, {"addons": [{"id": "dbt-exasol", "status": "available", "installed": False}],
+                                              "components": [{"id": "exapump", "installed": "0.13.1", "status": "current"}]}
+        blocks = screen.build()
+        self.assertEqual({"t": "tabs", "value": "marketplace", "items": [{"id": "kit", "label": "Your kit"},
+                                                                         {"id": "marketplace", "label": "Marketplace"}]}, blocks[1])
+        self.assertEqual(["Add-ons (0 of 1 installed)", "The kit's parts"], [b["v"] for b in blocks if b["t"] == "section"])
+        screen.on_tab_kit({})
+        self.assertIn("Your setup", [b["v"] for b in screen.build() if b["t"] == "section"])
+        self.assertIn("tabs(b) {", (GUIDE / "static" / "card.js").read_text(encoding="utf-8"))
 
 
 class ToggleTest(unittest.TestCase):

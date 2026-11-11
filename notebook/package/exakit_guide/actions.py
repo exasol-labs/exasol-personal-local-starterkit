@@ -62,6 +62,7 @@ ACTIONS: dict[str, Action] = {
     "kit.data_load": Action("00_quickstart", 'nb.exakit("data-load", {what})'),
     "kit.data_load_into": Action("00_quickstart", 'nb.exakit("data-load", {what}, env={{"EXAKIT_SCHEMA": {schema}}})'),
     "kit.update": Action("00_quickstart", "nb.kit_update()"),
+    "kit.update_one": Action("00_quickstart", "nb.kit_update({component})"),
     "model.use": Action("00_quickstart", "nb.use_model({model_id}, {base_url}, remember=True{secret})"),
     "model.langfuse": Action("00_quickstart", "nb.use_model(langfuse_base_url={langfuse_url}, remember=True{secret})"),
     "model.forget": Action("00_quickstart", "nb.forget_model(model={model}, langfuse={langfuse})"),

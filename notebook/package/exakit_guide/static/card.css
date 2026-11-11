@@ -447,3 +447,8 @@
 .guide-progress-bar-busy span { width: 30%; animation: guide-progress-slide 1.2s ease-in-out infinite; }
 @keyframes guide-progress-slide { 0% { left: -30%; } 100% { left: 100%; } }
 .guide-progress-lines { margin: 8px 0 0; max-height: 110px; overflow: auto; font-family: var(--guide-mono); font-size: 11.5px; line-height: 1.5; color: var(--guide-muted); white-space: pre-wrap; }
+
+.guide-tabs { display: flex; gap: 4px; margin: 14px 0 6px; border-bottom: 1px solid var(--guide-border); }
+.guide-tabs button { appearance: none; background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 8px 14px; font: inherit; font-size: 14px; color: var(--guide-muted); cursor: pointer; }
+.guide-tabs button:hover { color: var(--guide-text); }
+.guide-tabs button.is-on { color: var(--guide-text); font-weight: 600; border-bottom-color: var(--guide-accent); }

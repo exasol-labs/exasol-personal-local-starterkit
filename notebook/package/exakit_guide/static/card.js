@@ -251,6 +251,12 @@ function render({ model, el }) {
           b.state !== "loading" ? h("button", { type: "button", class: "guide-iconbtn", title: "Check again", "aria-label": "Check again", disabled: !!ui.busy, onClick: () => send("refresh") },
             ui.busy === "refresh" ? h("span", { class: "guide-spinner" }) : icon("refresh")) : null));
     },
+    // Tabs of one card (Your kit | Marketplace): the screen draws the chosen one.
+    tabs(b) {
+      return h("div", { class: "guide-tabs", role: "tablist" }, b.items.map((i) =>
+        h("button", { type: "button", role: "tab", "aria-selected": i.id === b.value ? "true" : "false",
+          class: i.id === b.value ? "is-on" : "", disabled: !!ui.busy, onClick: () => { if (i.id !== b.value) send(`tab_${i.id}`); } }, i.label)));
+    },
     section(b) { return h("h3", { class: "guide-section" }, b.v); },
     skeleton(b) { return h("div", { class: "guide-rows" }, Array.from({ length: b.rows || 4 }, () => h("div", { class: "guide-row guide-skel" }, h("span", {}), h("span", {}), h("span", {})))); },
     msg(b) {
@@ -794,7 +800,7 @@ function render({ model, el }) {
   }
 
   function codeView(blocks) {
-    const keep = blocks.filter((b) => ["home_head", "head", "msg"].includes(b.t)
+    const keep = blocks.filter((b) => ["home_head", "head", "tabs", "msg"].includes(b.t)
       || (b.t === "details" && b.title === "What the kit said"));
     const ran = blocks.find((b) => b.t === "ran");
     const calls = controlCode(blocks);

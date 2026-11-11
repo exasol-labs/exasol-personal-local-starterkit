@@ -184,11 +184,13 @@ def ai_clients() -> list[dict[str, Any]]:
 
 
 def components() -> list[dict[str, Any]]:
-    """The kit's parts as `exakit version --json` reports them: {id, installed, status, add_on, remedy}, with a
-    status of current, ahead, update_available or missing."""
+    """The kit's parts as `exakit version --json` reports them: {id, installed, available, status, add_on,
+    ownership, remedy}, with a status of current, ahead, update_available, available (an add-on not installed) or
+    missing; ``available`` is the version the kit would install or update to."""
     rows = _json("version").get("components", [])
     return [{"id": r.get("component"), "installed": r.get("installed_label") or r.get("installed"),
-             "status": r.get("status"), "add_on": bool(r.get("addon")), "remedy": r.get("remedy")} for r in rows]
+             "available": r.get("advertised"), "status": r.get("status"), "add_on": bool(r.get("addon")),
+             "ownership": r.get("ownership"), "remedy": r.get("remedy")} for r in rows]
 
 
 def notebooks(persona: str | None = None) -> list[dict[str, Any]]:

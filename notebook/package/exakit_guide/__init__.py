@@ -3,6 +3,7 @@
     import exakit.guide as guide
     guide.start()         # 00_quickstart: Home, then step 1, in one cell
     guide.home()          # the kit Home screen: setup, next step, continue
+    guide.marketplace()   # every add-on and part of the kit: install, start, update (Home's Marketplace tab)
     guide.understand()    # step 1: choose data, approve what each column means
     guide.explore()       # step 2: check and clean, compare, predict, test feature ideas
     guide.ask()           # step 3: ask in plain words (also: a cell starting with %%ask)
@@ -16,9 +17,9 @@ when first used, so the import is quick.
 from .magic import register as _register_magic
 
 __version__ = "0.1.0"
-__all__ = ["start", "home", "understand", "explore", "ask", "share", "Home", "ChooseData", "ColumnMap"]
+__all__ = ["start", "home", "marketplace", "understand", "explore", "ask", "share", "Home", "ChooseData", "ColumnMap"]
 
-_LAZY = {"home": ".screens.home", "Home": ".screens.home", "understand": ".screens.understand",
+_LAZY = {"home": ".screens.home", "Home": ".screens.home", "marketplace": ".screens.home", "understand": ".screens.understand",
          "ChooseData": ".screens.understand", "ColumnMap": ".screens.understand", "explore": ".screens.explore",
          "ask": ".screens.ask", "share": ".screens.share"}
 

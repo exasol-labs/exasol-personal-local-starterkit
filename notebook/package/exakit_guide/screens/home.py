@@ -76,8 +76,9 @@ def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
 class Home(Screen):
     kind = "home"
 
-    def __init__(self) -> None:
+    def __init__(self, tab: str = "kit") -> None:
         super().__init__()
+        self.tab = tab if tab in ("kit", "marketplace") else "kit"     # Your kit | Marketplace
         self.data: dict | None = None
         self.loading = True
         self.outputs: dict[str, str] = {}
@@ -166,31 +167,7 @@ class Home(Screen):
                      "cmd": actions.code("kit.ai_clients"),
                      "actions": [self._act("kit.mcp_doctor", "Check")]})
 
-        # Every add-on the marketplace has (nb.addons(), `exakit marketplace --list`), the persona's first: one not
-        # installed is installed from here (nb.addon_ready, as `exakit marketplace <id>` does), one stopped is started.
-        persona = (plan.get("addons") or {}).get("installed", []) + (plan.get("addons") or {}).get("pending", [])
-        order = [i for i in persona if i in addons] + [i for i in addons if i not in persona]
-        for addon_id in order:
-            a = addons[addon_id]
-            status = str(a.get("status") or "")
-            state = (kit.get("services") or {}).get(addon_id)
-            installed = bool(a.get("installed"))
-            url = (kit.get("urls") or {}).get(addon_id)
-            mine = " (for your persona)" if addon_id in persona and not installed else ""
-            if installed:
-                dot, text = ("ok" if state in (None, "running") else "bad"), ("Running" if state == "running" else
-                                                                             "Installed" if state is None else "Stopped")
-                buttons = [] if state in (None, "running") else [self._act("kit.addon", "Start", addon=addon_id)]
-            elif status == "available":
-                dot, text, buttons = "off", "Not installed" + mine, [self._act("kit.addon", "Install", addon=addon_id)]
-            elif status == "managed outside the kit":
-                dot, text, buttons = "ok", "Yours: installed outside the kit, never changed by it", []
-            else:
-                dot, text, buttons = "off", (status[:1].upper() + status[1:]) if status else "Not available here", []
-            rows.append({"id": f"addon_{addon_id}", "name": a.get("name") or addon_id, "dot": dot, "text": text,
-                         "sub": a.get("about") or "", "cmd": actions.code("kit.addon", addon=addon_id),
-                         "actions": buttons + ([{"id": f"open_{addon_id}", "label": "Open", "href": url}]
-                                               if url and state == "running" else [])})
+        rows += self._addon_rows(everything=False)
 
         model = d.get("model") if isinstance(d.get("model"), dict) else {}
         from exakit_nb.setup_env import EXAMPLE_LANGFUSE, EXAMPLE_MODEL, EXAMPLE_URL
@@ -222,6 +199,81 @@ class Home(Screen):
                                              {"id": "secret_key", "type": "password", "label": "Secret key (saved for every notebook, readable only by you)"}],
                                     "submit": "Trace to Langfuse"}]})
         return rows
+
+    def _addon_rows(self, everything: bool) -> list[dict]:
+        """The marketplace's add-ons (nb.addons(), `exakit marketplace --list`), the persona's first. Your kit shows
+        the persona's and the installed ones; the Marketplace tab every one, with its version and any update. One not
+        installed is installed from here (nb.addon_ready, as `exakit marketplace <id>` does), one stopped is started,
+        one with a newer version is updated (nb.kit_update(<id>)); one you installed yourself is never touched."""
+        d = self.data or {}
+        kit = d.get("kit") if isinstance(d.get("kit"), dict) else {}
+        plan = d.get("plan") if isinstance(d.get("plan"), dict) else {}
+        addons = {a["id"]: a for a in d.get("addons") or [] if isinstance(a, dict) and a.get("id")}
+        parts = {c["id"]: c for c in d.get("components") or [] if isinstance(c, dict) and c.get("id")}
+        persona = (plan.get("addons") or {}).get("installed", []) + (plan.get("addons") or {}).get("pending", [])
+        order = [i for i in persona if i in addons] + [i for i in addons if i not in persona]
+        rows = []
+        for addon_id in order:
+            a = addons[addon_id]
+            status = str(a.get("status") or "")
+            state = (kit.get("services") or {}).get(addon_id)
+            installed = bool(a.get("installed"))
+            if not everything and not installed and addon_id not in persona:
+                continue
+            part = parts.get(addon_id, {})
+            url = (kit.get("urls") or {}).get(addon_id)
+            mine = " (for your persona)" if addon_id in persona and not installed else ""
+            version = f" {a['version']}" if everything and a.get("version") else ""
+            if installed:
+                dot, text = ("ok" if state in (None, "running") else "bad"), ("Running" if state == "running" else
+                                                                             "Installed" if state is None else "Stopped")
+                text = (f"Installed{version} · {text}" if text != "Installed" else f"Installed{version}") if everything else text
+                buttons = [] if state in (None, "running") else [self._act("kit.addon", "Start", addon=addon_id)]
+                if everything and part.get("status") == "update_available":
+                    dot, text = "info", text + f" · update to {part.get('available') or 'the newer version'}"
+                    buttons.append({**self._act("kit.update_one", "Update", component=addon_id),
+                                    "confirm": f"This updates {a.get('name') or addon_id}. Continue?"})
+            elif status == "available":
+                dot, text = "off", f"Not installed{mine}" + (f" · {version.strip()} available" if version else "")
+                buttons = [self._act("kit.addon", "Install", addon=addon_id)]
+            elif status == "managed outside the kit":
+                dot, text, buttons = "ok", "Yours: installed outside the kit, never changed by it", []
+            else:
+                dot, text, buttons = "off", (status[:1].upper() + status[1:]) if status else "Not available here", []
+            links = [{"id": f"open_{addon_id}", "label": "Open", "href": url}] if url and state == "running" else []
+            if everything and a.get("url"):
+                links.append({"id": f"docs_{addon_id}", "label": "Details", "href": a["url"]})
+            rows.append({"id": f"addon_{addon_id}", "name": a.get("name") or addon_id, "dot": dot, "text": text,
+                         "sub": a.get("about") or "", "cmd": actions.code("kit.addon", addon=addon_id),
+                         "actions": buttons + links})
+        return rows
+
+    def _component_rows(self) -> list[dict]:
+        """The kit's own parts (nb.components(), `exakit version`): the version installed, and Update where the kit
+        has a newer one (nb.kit_update(<id>), as `exakit update <id>` does)."""
+        rows = []
+        for c in (self.data or {}).get("components") or []:
+            if not isinstance(c, dict) or not c.get("id") or c.get("add_on"):
+                continue
+            status, installed = str(c.get("status") or ""), c.get("installed") or "not installed"
+            words = {"current": "up to date", "ahead": "newer than the kit's pin", "missing": "needs a repair",
+                     "update_available": f"update to {c.get('available') or 'the newer version'}",
+                     "blocked_on_kit": "update the kit itself first"}.get(status, status.replace("_", " "))
+            needs = status in ("update_available", "missing")
+            rows.append({"id": f"part_{c['id']}", "name": c["id"], "dot": "info" if needs else "ok",
+                         "text": f"{installed} · {words}" if words else str(installed),
+                         "sub": "Yours: installed outside the kit, never changed by it" if c.get("ownership") == "user" else "",
+                         "cmd": actions.code("kit.update_one", component=c["id"]),
+                         "actions": [{**self._act("kit.update_one", "Repair" if status == "missing" else "Update", component=c["id"]),
+                                      "confirm": f"This updates {c['id']}; a database update restarts it for a minute or two. Continue?"}]
+                                    if needs and c.get("ownership") != "user" else []})
+        return rows
+
+    def on_tab_kit(self, _v: dict) -> None:
+        self.tab = "kit"
+
+    def on_tab_marketplace(self, _v: dict) -> None:
+        self.tab = "marketplace"
 
     def _other_rows(self) -> list[dict]:
         """The kit's other services and pending updates: shown folded."""
@@ -258,8 +310,11 @@ class Home(Screen):
     def build(self) -> list[dict]:
         if self.loading and self.data is None:
             return [{"t": "home_head", "summary": "Checking your kit…", "state": "loading"}, {"t": "skeleton", "rows": 6}]
+        tabs = {"t": "tabs", "value": self.tab, "items": [{"id": "kit", "label": "Your kit"},
+                                                           {"id": "marketplace", "label": "Marketplace"}]}
         rows, other = self._rows(), self._other_rows()
-        for r in rows + other:
+        market = self._addon_rows(everything=True) + self._component_rows() if self.tab == "marketplace" else []
+        for r in rows + other + market:
             if r["id"] in self.outputs:
                 r["output"] = self.outputs[r["id"]]
                 r["output_open"] = r["id"] in self.failed
@@ -278,7 +333,24 @@ class Home(Screen):
         journey = _journey(notebooks, d.get("events") or [])
         nxt = next((j for j in journey if j["state"] in ("next", "attention")), None)
         last = d.get("last_workflow")
-        blocks = [{"t": "home_head", "summary": summary, "state": state}]
+        blocks = [{"t": "home_head", "summary": summary, "state": state}, tabs]
+        if self.tab == "marketplace":
+            addon_rows = [r for r in market if r["id"].startswith("addon_")]
+            part_rows = [r for r in market if r["id"].startswith("part_")]
+            updates = sum(1 for r in market if any(a.get("label") in ("Update", "Repair") for a in r.get("actions", [])))
+            blocks += [{"t": "p", "muted": True,
+                        "v": "Everything the kit's marketplace offers and every part it installed, read live. Install, "
+                             "start or update one here: each button runs the kit's own command and shows its progress."
+                             + (f" {updates} update{'s' if updates != 1 else ''} available." if updates else "")},
+                       {"t": "section", "v": f"Add-ons ({sum(1 for r in addon_rows if r['dot'] != 'off')} of {len(addon_rows)} installed)"},
+                       {"t": "setup", "rows": addon_rows},
+                       {"t": "section", "v": "The kit's parts"}, {"t": "setup", "rows": part_rows}]
+            if updates > 1:
+                blocks.append({"t": "setup", "rows": [r for r in other if r["id"] == "updates"]})
+            if SESSION.code:
+                blocks.append({"t": "code", "code_only": True, "title": "The code behind this card", "v": "\n".join(SESSION.code)})
+            blocks.append({"t": "foot", "v": "The same as `exakit marketplace`, `exakit version` and `exakit update` in a terminal."})
+            return blocks
         working = d.get("working_on")
         if last or working:
             blocks += [{"t": "section", "v": "Continue where you left off"},
@@ -306,7 +378,7 @@ class Home(Screen):
         raise AttributeError(name)
 
     def _run(self, action_id: str, values: dict, form: dict) -> None:
-        if action_id == "kit.update" and self.confirm is None:
+        if action_id in ("kit.update", "kit.update_one") and self.confirm is None:
             self.confirm = "run:" + json.dumps([action_id, values])
             return
         self.confirm = None
@@ -346,9 +418,10 @@ class Home(Screen):
         finally:
             # What the kit printed stays under its row, open, whether the command worked or not.
             event = "run:" + json.dumps([action_id, values])
-            row = next((r["id"] for r in self._rows() + self._other_rows()
-                        if any(a.get("id") == event or a.get("id", "").startswith(f'run:["{action_id}"')
-                               for a in r.get("actions", []))), "database")
+            every = self._rows() + self._other_rows() + self._addon_rows(everything=True) + self._component_rows()
+            exact = [r["id"] for r in every if any(a.get("id") == event for a in r.get("actions", []))]
+            same = [r["id"] for r in every if any(a.get("id", "").startswith(f'run:["{action_id}"') for a in r.get("actions", []))]
+            row = (exact or same or ["database"])[0]     # the row whose button it was; else one of the same action
             if SESSION.said:
                 self.outputs[row] = SESSION.said
             (self.failed.discard if ok else self.failed.add)(row)
@@ -370,3 +443,9 @@ class Home(Screen):
 def home() -> Home:
     """Show the kit Home screen."""
     return Home()
+
+
+def marketplace() -> Home:
+    """Show the kit's marketplace: every add-on and every part of the kit, with Install, Start and Update. The Home
+    screen opened on its Marketplace tab."""
+    return Home(tab="marketplace")
