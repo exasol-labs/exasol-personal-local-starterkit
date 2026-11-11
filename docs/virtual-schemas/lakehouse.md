@@ -100,7 +100,7 @@ schema `VS_SALES_LAKE`.
 | | Catalog.schema * | `namespace` | `main.sales` |
 | `glue` | AWS region * | `region` | `eu-central-1` |
 | | Glue database * | `database` | `sales_db` |
-| | Access key ID * | `access_key_id` | `AKIA...` |
+| | Access key ID | `access_key_id` | `AKIA...` (optional when the secret file is the JSON `aws iam create-access-key` prints) |
 | | Secret access key (hidden) * | `secret` (`--password-file`) | |
 | | Glue catalog ID | `catalog_id` | `123456789012` (optional) |
 | `none` | Folder path * | `path` | `s3://sales-lake/orders/` or `abfss://lake@saleslake.dfs.core.windows.net/orders/` |
@@ -122,7 +122,7 @@ login.
 |---|---|---|---|
 | `vended` | AWS region (only if the files are on S3) | `region` | `us-east-2` |
 | `s3` | AWS region * | `region` | `eu-central-1` |
-| | Access key ID * | `access_key_id` | `AKIA...` |
+| | Access key ID * (optional with `catalog=none` when the secret file is the AWS credential JSON) | `access_key_id` | `AKIA...` |
 | | Secret access key (hidden) * | `storage_secret` (`--storage-secret-file`; with `catalog=none`, `--password-file`) | |
 | | Endpoint (S3-compatible store) | `endpoint` | empty for Amazon S3 |
 | `azure` | Azure storage account * | `account_name` | `saleslake` |
@@ -131,7 +131,8 @@ login.
 - **Region with vended files.** Leave it empty on Azure. On S3, give the
   bucket's region when the catalog does not send one: Unity's vended
   credentials carry no region.
-- **Account key or SAS.** A value that starts with `sv=` or `?sv=` is a SAS;
+- **Account key or SAS.** A query string (a leading `?` is dropped) that holds
+  `sig=` and at least one of `sv=`, `se=` or `sp=`, in any order, is a SAS;
   anything else is taken as the account key.
 - **No catalog on Azure.** The storage account comes from the `abfss://` path,
   so it is not asked.
@@ -319,7 +320,7 @@ through [Databricks](databricks.md).
   hierarchical namespace (ADLS Gen2).
 - **Account key:** the account → Security + networking → Access keys.
 - **Or a SAS:** the account → Shared access signature, with Read and List; or
-  a container SAS with Read and List. Use the token that starts with `sv=`.
+  a container SAS with Read and List. Use the token itself (`sv=...&sig=...`), not the full URL.
 - Service principals and managed identities are not supported by the adapter.
 
 ### Network

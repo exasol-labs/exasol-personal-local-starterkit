@@ -79,14 +79,16 @@ appear as `VS_<NAME>`. Then:
 | `token_endpoint` | `login=oauth` | no | the token URL; Unity defaults to `/oidc/v1/token` |
 | `scope` | `login=oauth` | no | e.g. `PRINCIPAL_ROLE:ALL` (Polaris); Unity defaults to `all-apis` |
 | `region` | `glue`, `s3`; `vended` optional | yes for `glue` and `s3` | the bucket's region: S3 > the bucket > Properties, or `aws s3api get-bucket-location` (`null` is `us-east-1`); with `vended`, only when the files are on S3 (Unity's vended credentials carry no region) |
-| `access_key_id` | `glue`, `s3` | yes | IAM > Users > the reader > Security credentials; another store: its own key |
+| `access_key_id` | `glue`, `s3` | yes with a catalog and `s3`; optional for `glue` and `none`+`s3` when the secret file is the JSON `aws iam create-access-key` prints | IAM > Users > the reader > Security credentials; another store: its own key |
 | `endpoint` | `s3` | no | empty for Amazon S3; a non-AWS store's URL (section 4) |
 | `account_name` | `azure` with a catalog | yes | Azure portal > Storage accounts; for `catalog=none` it comes from the `abfss://` path |
 | `secret` | always | yes | the catalog token or client secret; for `glue` the AWS secret key; for `none` the storage secret - `--password-file` or `--password-stdin` only |
 | `storage_secret` | a catalog plus `s3` or `azure` | yes | the S3 secret key, or the Azure account key or SAS - `--storage-secret-file` only |
 
-A value starting with `sv=` or `?sv=` is a SAS (`sas_token`); anything else is
-an account key. Each secret file holds the value alone, not JSON.
+A query string holding `sig=` and one of `sv=`, `se=` or `sp=` (any order, a
+leading `?` dropped) is a SAS (`sas_token`); anything else is an account key.
+Each secret file holds the value alone, not JSON - except for `glue` and
+`none`+`s3`, where it may be the JSON `aws iam create-access-key` prints.
 
 ## 4. Adapter mapping and the S3 endpoint
 
