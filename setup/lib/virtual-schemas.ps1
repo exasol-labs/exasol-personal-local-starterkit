@@ -1310,6 +1310,12 @@ function Show-ExakitVsTuiPanel {
             # Emptied with "-": the default is what the plan will use.
             if (-not $v) { $v = "" + $f.Def }
             if (-not $v) { $v = "(none)" }
+            # A mapping left empty, or the one the kit drafted: auto.
+            if ($f.Draft) {
+                $fv = "" + $f.Val
+                if (-not $fv -or ($f.Drafted -and $fv -eq $f.Drafted)) { $v = "auto (drafted from the " + $f.Draft + ")" }
+                elseif ($fv -like "auto:*") { $v = "auto (drafted from " + $fv.Substring(5) + ")" }
+            }
             $from = ""
             if ($f.From) { $from = " (from the string)" }
             # Too narrow for both: the mark goes first, then the value is cut.
@@ -1597,6 +1603,7 @@ function Read-ExakitVsTuiField {
     Show-ExakitVsTuiPanel -Form $Form -Current $Index
     if ($Why) { Write-ExakitVsTuiSay $Why }
     $f = $Form.Fields[$Index]
+    Write-ExakitVsTuiHint @($f.Hint)
     $old = "" + $f.Val
     $def = $old
     if (-not $def) { $def = "" + $f.Def }
@@ -1665,6 +1672,107 @@ function Read-ExakitVsTuiField {
     # Changed by hand, it is no longer what the connection string said.
     if (("" + $f.Val) -ne $old) { $f.From = $false }
     return $true
+}
+
+# Write-ExakitVsTuiHint - what connector.json says above a question (its
+# "hint"), dim, wrapped and counted for the redraw. Twin of _exakit_vs_tui_hint.
+function Write-ExakitVsTuiHint {
+    param([object[]]$Lines = @())
+    foreach ($line in @($Lines)) {
+        if (-not $line) { continue }
+        $parts = @(Split-ExakitWrap -Text ("" + $line) -Width ($script:EvtCols - 4))
+        foreach ($part in $parts) { [Console]::Write("  " + $script:UiDim + $part + $script:UiReset + "`r`n") }
+        $script:EvtOnScreen += $parts.Count
+    }
+}
+
+# Invoke-ExakitVsTuiDraft - the mapping drafted from the bucket or container
+# when its field was left empty (or auto:<folder>/), after the credential was
+# given: a spinner while the engine lists and samples it (cli.py draft, the
+# credential base64 on its stdin), then its tables under the panel and one key -
+# Enter uses them, e opens the folder to edit them first, n asks for a mapping
+# path instead. A store that cannot be listed is said, and the path asked for
+# (required then). $false at end of input. Twin of _exakit_vs_tui_draft.
+function Invoke-ExakitVsTuiDraft {
+    param([hashtable]$Form)
+    $f = $null
+    foreach ($x in $Form.Fields) { if ($x.Draft) { $f = $x; break } }
+    if ($null -eq $f) { return $true }
+    $index = $Form.Fields.IndexOf($f)
+    while ($true) {
+        $val = "" + $f.Val
+        if ($val -and $val -notlike "auto:*") { return $true }
+        $secret = ""
+        foreach ($x in $Form.Fields) { if ($x.Kind -eq "secret" -and $x.Val) { $secret = "" + $x.Val } }
+        if (-not $secret -and $Form.PwFile) { $secret = "" + (Get-ExakitVsSecretFileText -Path $Form.PwFile) }
+        $engineArgs = @("draft", $Form.Connector)
+        foreach ($x in $Form.Fields) {
+            if ($x.Kind -eq "source-name") { $engineArgs += @("--name", $x.Val) }
+            elseif ($x.Kind -in @("secret", "secret-file")) { }
+            elseif ($x.Val) { $engineArgs += @("--set", ("{0}={1}" -f $x.Name, $x.Val)) }
+        }
+        $engineArgs += "--secret-stdin"
+        Show-ExakitVsTuiPanel -Form $Form -Current -1
+        $spin = [bool](Get-Command Start-ExakitSpinner -ErrorAction SilentlyContinue)
+        if ($spin) { Start-ExakitSpinner ("Drafting the mapping from the " + $f.Draft + "...") }
+        try {
+            if ($secret) { $run = Invoke-ExakitVsEngine -Arguments $engineArgs -Secret $secret }
+            else { $run = [pscustomobject]@{ Code = 2; Lines = @("FAIL the draft reads the " + $f.Draft + " with the credential, and none was given") } }
+        } finally {
+            if ($spin) { Stop-ExakitSpinner }
+        }
+        $secret = $null
+        $res = Get-ExakitVsResultOf $run.Lines
+        if ($run.Code -ne 0 -or $null -eq $res) {
+            $why = (@($run.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
+            if ($why) { $why = $why.Substring(5) } else { $why = "the mapping could not be drafted" }
+            $f.Req = $true
+            $ok = Read-ExakitVsTuiField -Form $Form -Index $index -Why $why
+            $f.Req = $false
+            if (-not $ok) { return $false }
+            continue
+        }
+        $folder = "" + $res.folder
+        foreach ($line in @($res.summary)) { [Console]::Write("    " + $line + "`r`n"); $script:EvtOnScreen += 1 }
+        foreach ($line in @($run.Lines | Where-Object { $_ -like "WARN *" })) {
+            [Console]::Write("    " + $script:UiWarn + "!" + $script:UiReset + " " + $line.Substring(5) + "`r`n"); $script:EvtOnScreen += 1
+        }
+        $q = "Enter to use these " + $script:UiBullet + " e to open the folder and edit " + $script:UiBullet + " n to give a folder instead"
+        while ($true) {
+            $key = Read-ExakitVsTuiChoice -Plain $q -Colour ($script:UiAsk + $q + $script:UiReset)
+            if ($key -eq "eof") { return $false }
+            if ($key -in @("n", "esc")) {
+                $f.Drafted = ""; $f.Req = $true; $f.Val = $folder
+                $ok = Read-ExakitVsTuiField -Form $Form -Index $index
+                $f.Req = $false
+                if (-not $ok) { return $false }
+                break
+            }
+            if ($key -eq "e") {
+                try {
+                    # Windows PowerShell 5.1 has no $IsMacOS or $IsLinux.
+                    $mac = [bool](Get-Variable -Name IsMacOS -ValueOnly -ErrorAction SilentlyContinue)
+                    $linux = [bool](Get-Variable -Name IsLinux -ValueOnly -ErrorAction SilentlyContinue)
+                    if ($mac) { & open $folder }
+                    elseif ($linux) { if (Get-Command xdg-open -ErrorAction SilentlyContinue) { Start-Process xdg-open $folder } }
+                    else { Start-Process explorer.exe $folder }
+                } catch { }
+                Write-ExakitVsTuiSay ("The mapping files are in " + $folder) -Mark ($script:UiDim + $script:UiBullet + $script:UiReset)
+                $a = Read-ExakitVsTuiAnswer -Plain "Enter when the files are saved" -Colour ($script:UiAsk + "Enter when the files are saved" + $script:UiReset)
+                if ($null -eq $a) { return $false }
+                $check = Invoke-ExakitVsEngine -Arguments @("field", $Form.Connector, $f.Name, "--base64") -Secret $folder
+                if ($check.Code -ne 0) {
+                    $why = (@($check.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
+                    if ($why) { $why = $why.Substring(5) } else { $why = "the mapping was refused" }
+                    Write-ExakitVsTuiSay $why
+                    continue
+                }
+            }
+            $f.Val = $folder; $f.Drafted = $folder
+            break
+        }
+        return $true
+    }
 }
 
 # Invoke-ExakitVsTuiWalk - every field not answered yet, in order; $false at end
@@ -1849,8 +1957,13 @@ function Invoke-ExakitVsTuiForm {
         if (("" + $spec.kind) -ne "source-name") {
             foreach ($cut in @(" - ", " (", "; ")) { $label = $label.Split(@($cut), [StringSplitOptions]::None)[0] }
         }
-        $f = @{ Name = "" + $spec.name; Label = $label; LabelFull = $label; Kind = "" + $spec.kind; Req = [bool]$spec.required
-                Def = "" + $spec.default; Choices = @($spec.choices); Val = ""; Done = $false; From = $false }
+        $full = $label
+        if ($spec.PSObject.Properties["prompt"] -and $spec.prompt) { $full = "" + $spec.prompt }
+        $f = @{ Name = "" + $spec.name; Label = $label; LabelFull = $full; Kind = "" + $spec.kind; Req = [bool]$spec.required
+                Def = "" + $spec.default; Choices = @($spec.choices); Val = ""; Done = $false; From = $false
+                Hint = @(); Draft = ""; Drafted = "" }
+        if ($spec.PSObject.Properties["hint"]) { $f.Hint = @($spec.hint | Where-Object { $_ }) }
+        if ($spec.PSObject.Properties["draft"] -and $spec.draft) { $f.Draft = "" + $spec.draft }
         if ($f.Kind -eq "source-name" -and $GivenName) { $f.Val = $GivenName; $f.Done = $true }
         if ($given.ContainsKey($f.Name)) { $f.Val = $given[$f.Name]; $f.Done = $true }
         if ($PasswordFile) {
@@ -1886,6 +1999,8 @@ function Invoke-ExakitVsTuiForm {
     if (-not (Invoke-ExakitVsTuiWalk -Form $form)) { return "left-out" }
     $again = ""
     while ($true) {
+        # A mapping left empty: drafted now that the credential is in (S3, Azure).
+        if (-not (Invoke-ExakitVsTuiDraft -Form $form)) { return "left-out" }
         # 3. the numbered summary: one answer at a time asked again, then Enter
         if ((Invoke-ExakitVsTuiReview -Form $form -Why $again) -ne "go") { return "left-out" }
         $again = ""

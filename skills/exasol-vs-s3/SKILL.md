@@ -23,7 +23,7 @@ override, path-style access or anonymous reads. Tier GA.
 |---|---|---|---|
 | `bucket` | yes | | AWS console > S3 > Buckets: the name. No dots: its HTTPS name would not match the S3 certificate |
 | `region` | yes | | AWS console > S3 > bucket > Properties > AWS Region (code, e.g. `eu-central-1`). China (`cn-`) regions are refused |
-| `mapping` | yes | | a mapping `.json` file on this computer, or a folder of them (at most 50); see the shared skill |
+| `mapping` | no | drafted | a mapping `.json` file on this computer, or a folder of them (at most 50); see the shared skill. Empty (or `auto`, or `auto:<prefix>/ for a key limited to that prefix`): the kit drafts it from the bucket after the access key - one table per folder and file type, JSON fields typed from a 64 KiB sample, CSV and Parquet inferred by the adapter - into `~/.exasol-starter-kit/sources/<name>/edml/` |
 | `access_key_id` | no | | IAM > Users > user > Security credentials > Access keys (`AKIA...`/`ASIA...`). Leave it out when the credential file holds it |
 | `secret` | yes | | the secret access key, or the JSON `aws iam create-access-key` or `aws sts` prints - only through `--password-file` or a closed stdin pipe |
 
@@ -98,6 +98,13 @@ PowerShell takes the same line on one row (or with backtick continuations), with
 `$HOME\.config\exakit\docs-key.json` as the file.
 
 - The plan lists the mapped tables; the kit checks the mapping before anything happens.
+- No mapping yet: leave out `--set mapping` and the connect drafts one from the
+  bucket and prints its tables (Table, Files, Format, Columns). A key limited to
+  one prefix cannot list the whole bucket ("the key cannot list the bucket
+  (s3:ListBucket)"): give `--set mapping=auto:<prefix>/`. Review the drafted
+  files in `~/.exasol-starter-kit/sources/<name>/edml/`. To change them later,
+  copy the folder elsewhere first (remove deletes it with the source), edit,
+  then remove and connect again with `--set mapping=<the copy>`.
 - With only the secret key in the file, add `--set access_key_id=AKIA...`.
 - First use installs the Java language container (`--yes`, one restart): tell the user first.
 

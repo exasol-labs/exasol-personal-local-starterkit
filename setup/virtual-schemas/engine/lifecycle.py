@@ -26,6 +26,7 @@ import time
 
 import artifacts
 import document
+import edml_draft
 import plan as planner
 import sources
 import sql
@@ -324,6 +325,23 @@ class ScopeFailure(Failure):
     connect adds only that nothing was kept."""
     def __init__(self, message, kind, remedy):
         super().__init__(message, EXIT["failed"], kind, remedy=remedy, said="%s; %s" % (message, remedy))
+
+
+def draft_into(connector, values, secret, folder):
+    """edml_draft.draft for a connector's inputs and credential, its failure a
+    Failure (kind draft) that says to give a mapping instead."""
+    prefix = planner.draft_prefix(connector, values) or ""
+    try:
+        return edml_draft.draft(edml_draft.store_for(connector["id"], values, secret), folder, prefix)
+    except (edml_draft.DraftError, document.DocumentError) as error:
+        remedy = "give a mapping path instead (--set mapping=<folder>)"
+        if "(s3:ListBucket)" in str(error) and not prefix:
+            # A key limited to a prefix, as the kit advises, may list only that folder.
+            remedy += ", or the bucket folder the key may list (--set mapping=auto:<folder>/, e.g. auto:data/)"
+        if re.search(r"\((s3:\w+|it needs \w+ \(\w\))\)", str(error)):
+            remedy += ", or add that right"
+        message = "the mapping could not be drafted: %s" % error
+        raise Failure(message, EXIT["input"], "draft", remedy=remedy, said="%s - %s" % (message, remedy))
 
 
 class Engine(object):
@@ -682,6 +700,27 @@ class Engine(object):
             self.emit("WARN", "%s's key file is in BucketFS, which any user who may create scripts can read - and %s "
                       "may: %s. Revoke CREATE SCRIPT from them, or accept that they can read this key"
                       % (name, "this user" if len(readers) == 1 else "these users", ", ".join(readers)))
+
+    @staticmethod
+    def drafts(connector):
+        """True for a connector whose mapping the kit drafts when none is given."""
+        return any(spec["kind"] == "edml" and spec.get("draft") for spec in connector["inputs"])
+
+    def draft_mapping(self, connector, values, secret, name):
+        """(folder, draft) for a connect without a mapping: drafted from the
+        bucket or container (edml_draft) into <kit home>/sources/<name>/edml,
+        its tables said in one summary. A store that cannot be listed is a
+        failure that says to give a mapping folder instead."""
+        where = connector.get("store", "bucket")
+        self.emit("INFO", "Drafting the mapping from the %s..." % where)
+        result = draft_into(connector, values, secret, self.store.path(name, "edml"))
+        self.emit("OK", "Mapping drafted from the %s: %d table%s in %s" % (
+            where, len(result["tables"]), "" if len(result["tables"]) == 1 else "s", result["folder"]))
+        for line in edml_draft.summary_lines(result):
+            self.emit("INFO", "  " + line)
+        for note in result["notes"]:
+            self.emit("WARN", note)
+        return result["folder"], result
 
     def stage_mapping(self, values, name, created):
         """The EDML files, copied into mappings/<name>/ in the kit's bucket
@@ -1108,6 +1147,7 @@ class Engine(object):
                           % (connector_id, spec["label"].lower()), EXIT["input"], "input",
                           remedy="pipe it on standard input or give it with --password-file <file>")
         created = {"files": [], "connection": False, "script": False, "schema": False}
+        drafted = None
         journal = {"operation": "reconnect" if reconnect else "connect", "connector": connector_id,
                    "started": sources.now(), "created": created}
         with self.store.lock():
@@ -1138,6 +1178,9 @@ class Engine(object):
                 # Checked first: a malformed credential is named here, not as a
                 # Java stack from inside the database after files were staged.
                 url, user, conn_secret, hidden, notes = self.credential(connector, values, secret)
+                if planner.draft_prefix(connector, values) is not None and not reconnect:
+                    # No mapping given: drafted from the bucket with the credential just checked.
+                    values["mapping"], drafted = self.draft_mapping(connector, values, secret, name)
                 self.warn_clock()
                 self.ensure_language(profile)
                 self.require_route(connector, values, name)
@@ -1280,7 +1323,7 @@ class Engine(object):
         return {"name": name, "connector": connector_id, "action": "reconnected" if reconnect else "connected",
                 "objects": names, "tables": len(tables), "status": "ready",
                 "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"]),
-                "public_ip": self.egress(connector, values)[0]}
+                "public_ip": self.egress(connector, values)[0], **({"mapping_draft": drafted} if drafted else {})}
 
     # --- re-pointing a connected source -------------------------------------------
     # `exakit connect <connector> --name N` for a source N that is connected

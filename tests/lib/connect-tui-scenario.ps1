@@ -31,4 +31,8 @@ $env:FAKE_VS_EXA = $env:TUI_EXA
 $env:EXAKIT_VS_SETTLE_SECONDS = "0"
 $env:EXAKIT_VS_VISIBLE_TIMEOUT = "5"
 $script:ExakitVsAssumeYes = $false
-exit (Invoke-ExakitVsTui)
+# TUI_PS_SOURCE / TUI_PS_NAME / TUI_PS_SETS: what the command line named (a
+# connector, --name, --set pairs separated by spaces), so the menu is skipped.
+$sets = @()
+if ($env:TUI_PS_SETS) { foreach ($kv in ($env:TUI_PS_SETS -split ' ')) { if ($kv) { $sets += @("--set", $kv) } } }
+exit (Invoke-ExakitVsTui -Source ("" + $env:TUI_PS_SOURCE) -Name ("" + $env:TUI_PS_NAME) -Sets $sets)

@@ -4418,6 +4418,9 @@ function Invoke-CmdConnect {
             $label = "" + $spec.label
             $short = $label
             foreach ($cut in @(" - ", " (", "; ")) { $short = $short.Split(@($cut), [StringSplitOptions]::None)[0] }
+            # The words of the question when it has them, and the lines said above it.
+            if ($spec.prompt) { $label = "" + $spec.prompt }
+            foreach ($line in @($spec.hint)) { if ($line) { Write-Host ("  " + $script:UiDim + $line + $script:UiReset) } }
             if ($spec.choices) { $label = "$label ($((@($spec.choices)) -join '/'))" }
             $default = ""
             if ($null -ne $spec.default) { $default = "" + $spec.default }

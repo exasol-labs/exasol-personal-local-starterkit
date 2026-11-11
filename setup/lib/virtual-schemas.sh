@@ -852,13 +852,17 @@ for spec in json.load(open(sys.argv[1]))["inputs"]:
     short = label
     for cut in (" - ", " (", "; "):
         short = short.split(cut)[0]
-    print("%s|%s|%s|%s|%s|%s" % (spec["name"], label, spec.get("default", ""), choices,
-                                 "1" if spec.get("required") else "", short))
+    # The words of the question when it has them, and the lines said above it.
+    print("%s|%s|%s|%s|%s|%s|%s" % (spec["name"], spec.get("prompt") or label, spec.get("default", ""), choices,
+                                    "1" if spec.get("required") else "", short, "|".join(spec.get("hint", []))))
 PY
 )"
-    while IFS='|' read -r _evi_name _evi_label _evi_default _evi_choices _evi_req _evi_short; do
+    while IFS='|' read -r _evi_name _evi_label _evi_default _evi_choices _evi_req _evi_short _evi_hint; do
         [ -n "$_evi_name" ] || continue
         case " $EXAKIT_VS_GIVEN " in *" $_evi_name "*) continue ;; esac
+        [ -n "$_evi_hint" ] && printf '%s\n' "$_evi_hint" | tr '|' '\n' | while IFS= read -r _evi_line; do
+            printf '  %s%s%s\n' "${UI_DIM:-}" "$_evi_line" "${UI_RESET:-}" >&2
+        done
         [ -n "$_evi_choices" ] && _evi_label="$_evi_label ($_evi_choices)"
         _evi_value="$(_exakit_vs_prompt "$_evi_label" "$_evi_default" "$_evi_req" "${2:-}" "$_evi_short")"
         [ -n "$_evi_value" ] && EXAKIT_VS_SETS="$EXAKIT_VS_SETS
@@ -1222,6 +1226,13 @@ _exakit_vs_tui_frame() {
             fi
             # Emptied with "-": the default is what the plan will use.
             [ -n "$_evf_val" ] || _evf_val="${_EVT_DEF[$_evf_i]:-(none)}"
+            # A mapping left empty, or the one the kit drafted: auto.
+            if [ -n "${_EVT_DRAFT[$_evf_i]:-}" ]; then
+                case "${_EVT_VAL[$_evf_i]}" in
+                    ''|"${_EVT_DRAFTED[$_evf_i]:-.}") _evf_val="auto (drafted from the ${_EVT_DRAFT[$_evf_i]})" ;;
+                    auto:*) _evf_val="auto (drafted from ${_EVT_VAL[$_evf_i]#auto:})" ;;
+                esac
+            fi
             _evf_from=""; [ -n "${_EVT_FROM[$_evf_i]:-}" ] && _evf_from=" (from the string)"
             # Too narrow for both: the mark goes first, then the value is cut.
             [ $(( ${#_evf_val} + ${#_evf_from} )) -le "$_evf_room" ] || _evf_from=""
@@ -1421,6 +1432,7 @@ _exakit_vs_tui_field() {
     _etf_i="$1"
     _exakit_vs_tui_draw "$_evo_title" "$_etf_i"
     [ -n "${2:-}" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$2"
+    _exakit_vs_tui_hint "${_EVT_HINT[$_etf_i]:-}"
     _etf_k="${_EVT_KIND[$_etf_i]}"; _etf_lab="${_EVT_LABF[$_etf_i]}"; _etf_req="${_EVT_REQ[$_etf_i]}"
     _etf_old="${_EVT_VAL[$_etf_i]}"
     _etf_def="${_EVT_VAL[$_etf_i]:-${_EVT_DEF[$_etf_i]}}"
@@ -1501,6 +1513,113 @@ _exakit_vs_tui_field() {
     # Changed by hand, it is no longer what the connection string said.
     [ "${_EVT_VAL[$_etf_i]}" = "$_etf_old" ] || _EVT_FROM[$_etf_i]=""
     return 0
+}
+
+# _exakit_vs_tui_hint <lines> — what connector.json says above a question
+# (its "hint", the lines joined by |), dim, wrapped and counted for the redraw.
+_exakit_vs_tui_hint() {
+    [ -n "$1" ] || return 0
+    _eth_rest="$1|"
+    while [ -n "$_eth_rest" ]; do
+        _eth_line="${_eth_rest%%|*}"; _eth_rest="${_eth_rest#*|}"
+        [ -n "$_eth_line" ] || continue
+        _ui_wrap "$_eth_line" $(( _EVT_COLS - 4 ))
+        _eth_k=0
+        while [ "$_eth_k" -lt "$_UI_WRAP_N" ]; do
+            printf '  %s%s%s\n' "$UI_DIM" "${_UI_WRAP[$_eth_k]}" "$UI_RESET"
+            _eth_k=$(( _eth_k + 1 ))
+        done
+        _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + _UI_WRAP_N ))
+    done
+}
+
+# _exakit_vs_tui_draft — the mapping drafted from the bucket or container when
+# its field was left empty (or auto:<folder>/), after the credential was given:
+# a spinner while the engine lists and samples it (cli.py draft, the
+# credential on its stdin), then its tables under the panel and one key -
+# Enter uses them, e opens the folder to edit them first, n asks for a mapping
+# path instead. A store that cannot be listed is said, and the path asked for
+# (required then). Returns 1 at end of input. Twin of Invoke-ExakitVsTuiDraft.
+_exakit_vs_tui_draft() {
+    _etd_i=0
+    while [ "$_etd_i" -lt "$_EVT_NF" ]; do
+        [ -n "${_EVT_DRAFT[$_etd_i]:-}" ] && break
+        _etd_i=$(( _etd_i + 1 ))
+    done
+    [ "$_etd_i" -lt "$_EVT_NF" ] || return 0
+    _etd_where="${_EVT_DRAFT[$_etd_i]}"
+    while :; do
+        case "${_EVT_VAL[$_etd_i]}" in ''|auto:*) ;; *) return 0 ;; esac
+        _etd_sec=""; _etd_f=0
+        while [ "$_etd_f" -lt "$_EVT_NF" ]; do
+            [ "${_EVT_KIND[$_etd_f]}" = secret ] && _etd_sec="${_EVT_VAL[$_etd_f]}"
+            _etd_f=$(( _etd_f + 1 ))
+        done
+        _exakit_vs_tui_draw "$_evo_title" -1
+        ui_spin_begin "Drafting the mapping from the $_etd_where..."
+        if [ -n "$_etd_sec" ]; then
+            printf '%s' "$_etd_sec" | _exakit_vs_tui_engine "$(_exakit_vs_tui_args)" draft --secret-stdin \
+                > "$_EVT_DIR/draft" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        elif [ -n "$_evo_pwfile" ]; then
+            _exakit_vs_tui_engine "$(_exakit_vs_tui_args)" draft --secret-stdin < "$_evo_pwfile" \
+                > "$_EVT_DIR/draft" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        else
+            : > "$_EVT_DIR/draft"
+        fi
+        _etd_rc=$?
+        ui_spin_end
+        _etd_sec=""
+        if [ "$_etd_rc" -ne 0 ] || ! grep -q '^RESULT ' "$_EVT_DIR/draft"; then
+            _etd_why="$(sed -n 's/^FAIL //p' "$_EVT_DIR/draft" | head -1)"
+            rm -f "$_EVT_DIR/draft"
+            [ -n "$_etd_why" ] || _etd_why="the mapping could not be drafted"
+            _EVT_REQ[$_etd_i]=1
+            _exakit_vs_tui_field "$_etd_i" "$_etd_why" || return 1
+            _EVT_REQ[$_etd_i]=""
+            continue
+        fi
+        _etd_folder="$(_exakit_vs_result "$_EVT_DIR/draft" | run_python_any -c 'import json,sys; print(json.load(sys.stdin)["folder"])')"
+        while IFS= read -r _etd_line; do
+            printf '    %s\n' "$_etd_line"
+            _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + 1 ))
+        done <<EOF
+$(_exakit_vs_result "$_EVT_DIR/draft" | run_python_any -c 'import json,sys; print("\n".join(json.load(sys.stdin)["summary"]))')
+EOF
+        sed -n 's/^WARN //p' "$_EVT_DIR/draft" | while IFS= read -r _etd_line; do
+            printf '    %s!%s %s\n' "$UI_WARN" "$UI_RESET" "$_etd_line"
+        done
+        _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(grep -c '^WARN ' "$_EVT_DIR/draft") ))
+        rm -f "$_EVT_DIR/draft"
+        _etd_q="Enter to use these $UI_BULLET e to open the folder and edit $UI_BULLET n to give a folder instead"
+        while :; do
+            _exakit_vs_tui_choose "$_etd_q" "$UI_ASK$_etd_q$UI_RESET"
+            case "$_EVK" in
+                eof) return 1 ;;
+                n|N|esc)
+                    _EVT_DRAFTED[$_etd_i]=""; _EVT_REQ[$_etd_i]=1
+                    _EVT_VAL[$_etd_i]="$_etd_folder"
+                    _exakit_vs_tui_field "$_etd_i" || return 1
+                    _EVT_REQ[$_etd_i]=""
+                    break ;;
+                e|E)
+                    if command -v open >/dev/null 2>&1 && [ "$(uname -s)" = Darwin ]; then open "$_etd_folder" >/dev/null 2>&1
+                    elif command -v xdg-open >/dev/null 2>&1; then xdg-open "$_etd_folder" >/dev/null 2>&1 &
+                    fi
+                    _exakit_vs_tui_say "$UI_DIM$UI_BULLET$UI_RESET" "The mapping files are in $_etd_folder"
+                    _exakit_vs_tui_ask "Enter when the files are saved" "${UI_ASK}Enter when the files are saved$UI_RESET" 0 || return 1
+                    printf '%s' "$_etd_folder" | exakit_vs_engine field "$_evo_id" "${_EVT_NAME[$_etd_i]}" \
+                        > "$_EVT_DIR/field" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+                    if [ $? -ne 0 ]; then
+                        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$(sed -n 's/^FAIL //p' "$_EVT_DIR/field" | head -1)"
+                        continue
+                    fi
+                    _EVT_VAL[$_etd_i]="$_etd_folder"; _EVT_DRAFTED[$_etd_i]="$_etd_folder"
+                    break ;;
+                *) _EVT_VAL[$_etd_i]="$_etd_folder"; _EVT_DRAFTED[$_etd_i]="$_etd_folder"; break ;;
+            esac
+        done
+        return 0
+    done
 }
 
 # _exakit_vs_tui_walk [why] — every field not answered yet, in order; 1 at end
@@ -1694,16 +1813,20 @@ for f in doc["inputs"]:
     # The kit's own "Name (alias) for this connection" is said whole.
     for cut in (" - ", " (", "; ") if f["kind"] != "source-name" else ():
         label = label.split(cut)[0]
+    # Then what the question is drafted from when left empty, its own words,
+    # and the lines said above it (the rest of the line, one per |).
     print("|".join(str(x).replace("|", "/") for x in
-                   (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]))))
+                   (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]),
+                    f.get("draft") or "", f.get("prompt") or "") + tuple(f.get("hint") or ())))
 PY
     _evo_label=""
     _EVT_NAME=(); _EVT_LAB=(); _EVT_LABF=(); _EVT_KIND=(); _EVT_REQ=(); _EVT_DEF=(); _EVT_CH=(); _EVT_VAL=(); _EVT_DONE=()
-    _EVT_FROM=(); _EVT_NOTES=""
+    _EVT_FROM=(); _EVT_NOTES=""; _EVT_DRAFT=(); _EVT_HINT=(); _EVT_DRAFTED=()
     _EVT_NF=0; _EVT_LW=0
-    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c; do
+    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c _evo_dr _evo_pr _evo_h; do
         if [ -z "$_evo_label" ]; then _evo_label="$_evo_n"; continue; fi
-        _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_LABF[$_EVT_NF]="$_evo_l"; _EVT_KIND[$_EVT_NF]="$_evo_k"
+        _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_LABF[$_EVT_NF]="${_evo_pr:-$_evo_l}"; _EVT_KIND[$_EVT_NF]="$_evo_k"
+        _EVT_DRAFT[$_EVT_NF]="$_evo_dr"; _EVT_HINT[$_EVT_NF]="$_evo_h"; _EVT_DRAFTED[$_EVT_NF]=""
         _EVT_REQ[$_EVT_NF]="$_evo_r"; _EVT_DEF[$_EVT_NF]="$_evo_d"; _EVT_CH[$_EVT_NF]="$_evo_c"
         _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""; _EVT_FROM[$_EVT_NF]=""
         # What the command line already said is an answer, not a question.
@@ -1749,6 +1872,8 @@ PY
     _exakit_vs_tui_walk || return 5
     _evo_refused=""; _evo_again=""
     while :; do
+        # A mapping left empty: drafted now that the credential is in (S3, Azure).
+        _exakit_vs_tui_draft || return 5
         # 3. the numbered summary: one answer at a time asked again, then Enter
         _exakit_vs_tui_review "$_evo_again" || return 5
         _evo_again=""
