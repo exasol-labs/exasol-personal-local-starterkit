@@ -2391,6 +2391,160 @@ check "...and docs_pending's CONNECTION and schema are still there" "true true" 
 run check docs_pending; check "...it still checks ready" "0" "$RC"
 run remove docs_pending
 
+printf '\n== S3 and Azure: an EDML mapping drafted from the bucket (edml_draft.py) ==\n'
+# The signer, the grouping, the JSON inference and the writer, without a
+# network: SigV4 against the two AWS documentation vectors, the rest against
+# fixture files. Then the engine's draft, plan and connect over a folder that
+# stands in for the bucket (EXAKIT_VS_FAKE_STORE, as EXAKIT_VS_FAKE_DB is the
+# database's).
+cat > "$WORK/draft-unit.py" <<'PY'
+import datetime, json, os, sys
+sys.path.insert(0, sys.argv[1])
+import edml_draft as d
+out = []
+def say(name, ok): out.append("%s %s" % ("ok" if ok else "FAIL", name))
+utc = datetime.timezone.utc
+# AWS SigV4 test suite, get-vanilla (service "service", us-east-1).
+h = d.sigv4_headers("GET", "example.amazonaws.com", "/", [], {}, "us-east-1", "service", "AKIDEXAMPLE",
+                    "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", datetime.datetime(2015, 8, 30, 12, 36, 0, tzinfo=utc))
+say("sigv4 get-vanilla", h["authorization"].endswith("Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"))
+# The S3 SigV4 documentation's GET Object example (Range bytes=0-9).
+h = d.sigv4_headers("GET", "examplebucket.s3.amazonaws.com", "/test.txt", [],
+                    {"range": "bytes=0-9", "x-amz-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+                    "us-east-1", "s3", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                    datetime.datetime(2013, 5, 24, 0, 0, 0, tzinfo=utc))
+say("sigv4 S3 GET Object example", h["authorization"].endswith("Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"))
+say("sigv4 signed headers", "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date," in h["authorization"])
+# Grouping: one table per folder and type; markers, empty, _SUCCESS, dot-files skipped.
+objs = [("data/orders/a.jsonl", 9), ("data/orders/b.jsonl", 9), ("data/orders/_SUCCESS", 0), ("data/orders/", 0),
+        ("data/customers/customers.csv", 9), ("data/.hidden/x.json", 9), ("data/events/e-1.json", 9),
+        ("data/events/e-2.json", 9), ("data/mixed/m.csv", 9), ("data/mixed/m.parquet", 9), ("data/empty/z.csv", 0),
+        ("logs/2024/app.ndjson", 9), ("sales/year=2024/month=01/p.parquet", 9), ("sales/year=2024/month=02/q.parquet", 9),
+        ("top.csv", 9), ("1st-run/r.csv", 9)]
+groups, notes = d.group(objs)
+got = sorted((g["table"], g["source"], g["format"]) for g in groups)
+say("grouping", got == sorted([("ORDERS", "data/orders/*.jsonl", "jsonl"), ("CUSTOMERS", "data/customers/*.csv", "csv"),
+                               ("EVENTS", "data/events/*.json", "json"), ("MIXED_CSV", "data/mixed/*.csv", "csv"),
+                               ("MIXED_PARQUET", "data/mixed/*.parquet", "parquet"), ("SALES", "sales/**/*.parquet", "parquet"),
+                               ("TOP", "top.csv", "csv"), ("T_1ST_RUN", "1st-run/*.csv", "csv")]) or got)
+say("ndjson reported", any(".ndjson" in n and ".jsonl" in n for n in notes))
+# Inference over NDJSON: union of keys, types, nested as JSON text.
+ndjson = b'{"id": 1, "price": 2.5, "ok": true, "day": "2024-01-15", "at": "2024-01-15T10:00:00Z", "tags": ["a"], "who": {"n": 1}}\n' \
+         b'{"id": 2, "price": 3, "ok": false, "extra": "x", "day": null, "first name": "Ann"}\n{"id": 3, "pri'
+recs = d.records(ndjson, "jsonl", True)
+say("ndjson records, the cut line dropped", len(recs) == 2)
+kinds = dict(d.infer(recs))
+say("types", kinds == {"id": "int", "price": "float", "ok": "bool", "day": "date", "at": "timestamp", "tags": "json",
+                       "who": "json", "extra": "string", "first name": "string"} or kinds)
+try:
+    d.records(b'[{"a": 1}, {"a": 2}]', "json", False); say("json array refused", False)
+except d.DraftError as e:
+    say("json array refused, with the fix", "JSON Lines" in str(e))
+say("json document", d.records(b'\xef\xbb\xbf{"a": 1}', "json", False) == [{"a": 1}])
+# The writer: EDML 2.1.0, fields only for JSON, lenient conversions, names for odd keys.
+class Fake(object):
+    where = "bucket"
+    files = {"data/orders/a.jsonl": ndjson, "data/customers/c.csv": b"id,name\n1,a\n", "data/p/x.parquet": b"PAR1",
+             "data/arr/one.json": b'[{"a": 1}]'}
+    def objects(self, prefix=""):
+        return sorted((k, len(v)) for k, v in self.files.items() if k.startswith(prefix)), False
+    def head(self, key, size=65536):
+        return self.files[key][:size], len(self.files[key]) > size
+folder = sys.argv[2]
+r = d.draft(Fake(), folder)
+names = sorted(os.listdir(folder))
+say("one file per table", names == ["customers.json", "orders.json", "p.json"] or names)
+o = json.load(open(os.path.join(folder, "orders.json")))
+say("edml header", o["$schema"] == "https://schemas.exasol.com/edml-2.1.0.json" and o["source"] == "data/orders/*.jsonl"
+    and o["destinationTable"] == "ORDERS")
+f = o["mapping"]["fields"]
+say("decimal 36,0", f["id"] == {"toDecimalMapping": {"decimalPrecision": 36, "decimalScale": 0, "overflowBehaviour": "NULL",
+                                                    "notNumericBehaviour": "CONVERT_OR_NULL"}})
+say("double, bool, date, timestamp", list(f["price"]) == ["toDoubleMapping"] and list(f["ok"]) == ["toBoolMapping"]
+    and list(f["day"]) == ["toDateMapping"] and list(f["at"]) == ["toTimestampMapping"])
+say("nested as JSON text", f["who"] == {"toJsonMapping": {"varcharColumnSize": 2000000, "overflowBehaviour": "NULL"}})
+say("varchar 2000", f["extra"]["toVarcharMapping"]["varcharColumnSize"] == 2000)
+say("odd key named", f["first name"]["toVarcharMapping"]["destinationName"] == "FIRST_NAME")
+c = json.load(open(os.path.join(folder, "customers.json")))
+say("csv without fields", "mapping" not in c and c["source"] == "data/customers/*.csv")
+say("parquet without fields", "mapping" not in json.load(open(os.path.join(folder, "p.json"))))
+say("array file reported", any("data/arr/one.json" in n and "JSON Lines" in n for n in r["notes"]))
+lines = d.summary_lines(r)
+say("summary", lines[0].split() == ["Table", "Files", "(glob)", "Format", "Columns"]
+    and any("ORDERS" in l and "JSON Lines" in l and l.rstrip().endswith("9") for l in lines)
+    and any("CSV" in l and "inferred by the adapter" in l for l in lines))
+# Caps: at most 25 tables, the rest named.
+many = [("t%02d/x.csv" % i, 1) for i in range(30)]
+class Many(Fake):
+    def objects(self, prefix=""):
+        return many, False
+r = d.draft(Many(), folder + "-many")
+say("25 tables at most", len(r["tables"]) == 25 and any("5 more folders" in n for n in r["notes"]))
+say("old drafts replaced", sorted(os.listdir(folder + "-many"))[0] == "t00.json")
+print("\n".join(out))
+PY
+UNIT="$(python3 "$WORK/draft-unit.py" "$ROOT/setup/virtual-schemas/engine" "$WORK/draft-unit" 2>&1)"
+printf '%s\n' "$UNIT" | while IFS= read -r line; do
+    case "$line" in "ok "*) pass "draft: ${line#ok }" ;; *) fail "draft: $line" ;; esac
+done
+check "...the unit checks all ran" "22" "$(printf '%s\n' "$UNIT" | grep -c '^ok ')"
+
+# The engine over a stand-in bucket: the same objects the measured test bucket holds.
+STORE="$WORK/store"; mkdir -p "$STORE/data/orders" "$STORE/data/customers" "$STORE/data/events"
+printf '{"order_id": 1, "amount": 9.5, "items": [{"sku": "a"}]}\n{"order_id": 2, "amount": 3}\n' > "$STORE/data/orders/o-1.jsonl"
+printf 'id,name\n1,Ann\n' > "$STORE/data/customers/customers.csv"
+printf '{"event_id": 7, "kind": "click"}\n' > "$STORE/data/events/event-1.json"
+printf '' > "$STORE/data/orders/_SUCCESS"
+dr() { EXAKIT_VS_FAKE_STORE="$STORE" eng "$@"; }
+db '{"sources": {"'"$S3HOST"'": {"secret": "'"$AWSSECRET"'", "region": "ap-south-1"}}}'
+OUT="$(eng inputs s3 2>&1)"
+has "the S3 form: the mapping's label" '"label": "EDML mapping"' "$OUT"
+has "...its question" '"prompt": "EDML mapping path"' "$OUT"
+has "...the line under the panel says it is drafted" 'Leave empty and the kit drafts it from the bucket after you give the access key.' "$OUT"
+has "...and it is optional" '"required": false' "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.dumps([f for f in json.loads(sys.stdin.read().split("RESULT ",1)[1])["inputs"] if f["name"]=="mapping"][0]))')"
+OUT="$(eng inputs azure-blob 2>&1)"
+has "the Azure form says the container and the SAS token" 'Leave empty and the kit drafts it from the container after you give the SAS token.' "$OUT"
+OUT="$(printf 'auto' | eng field s3 mapping 2>&1)"; has "the form takes auto" '"value": ""' "$OUT"
+OUT="$(printf 'auto:data' | eng field s3 mapping 2>&1)"; has "...and auto:<folder>, as a folder" '"value": "auto:data/"' "$OUT"
+OUT="$(printf 'auto:../x' | eng field s3 mapping 2>&1)"; has "...not one that climbs out" 'names a folder inside the bucket' "$OUT"
+run plan s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1
+check "plan without a mapping: exit 0" "0" "$RC"
+has "...says it drafts the mapping from the bucket" 'draft the mapping from the bucket with the credential' "$OUT"
+has "...into the source's own folder" "$HOME_K/sources/drafted/edml" "$OUT"
+run plan s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set mapping=auto:data/
+has "...auto:data/ names the folder it lists" 'draft the mapping from the bucket folder data/' "$OUT"
+OUT="$(printf '%s' "$AWSSECRET" | dr draft s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "the form's draft: exit 0" "0" "$RC"
+has "...its summary table" 'ORDERS     data/orders/*.jsonl' "$OUT"
+has "...CSV inferred by the adapter" 'inferred by the adapter' "$OUT"
+check "...the files written" "customers.json events.json orders.json" "$(ls "$HOME_K/sources/drafted/edml" | tr '\n' ' ' | sed 's/ $//')"
+lacks "...the secret is in none of it" "$AWSSECRET" "$OUT $(cat "$HOME_K"/sources/drafted/edml/*.json)"
+check "...and no source record is made by it" "no" "$([ -f "$HOME_K/sources/drafted/config.json" ] && echo yes || echo no)"
+OUT="$(printf '%s' "$AWSSECRET" | dr connect s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "connect without a mapping: exit 0" "0" "$RC"
+has "...the mapping drafted from the bucket" 'Mapping drafted from the bucket: 3 tables in' "$OUT"
+has "...the summary under it" 'EVENTS     data/events/*.json    JSON        2' "$OUT"
+check "...the drafted tables in the virtual schema" '["CUSTOMERS", "EVENTS", "ORDERS"]' "$(dbq 'd["virtual"]["VS_DRAFTED"]["tables"]')"
+check "...the draft staged" "customers.json events.json orders.json" \
+    "$(ls "$EXA/bucketfs/bfsdefault/default/exakit/vs/mappings/drafted" | tr '\n' ' ' | sed 's/ $//')"
+has "...and recorded as the source's mapping" "$HOME_K/sources/drafted/edml" "$(cat "$HOME_K/sources/drafted/config.json")"
+lacks "...the secret is in none of the output" "$AWSSECRET" "$OUT"
+run remove drafted
+check "remove: exit 0, the draft gone with the source folder" "0 no" "$RC $([ -d "$HOME_K/sources/drafted" ] && echo yes || echo no)"
+: > "$STORE/.deny"
+OUT="$(printf '%s' "$AWSSECRET" | dr connect s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "a key that cannot list the bucket: exit 2" "2" "$RC"
+has "...said plainly, with the right it lacks" 'the mapping could not be drafted: the key cannot list the bucket (s3:ListBucket)' "$OUT"
+has "...and what to give instead" 'give a mapping path instead (--set mapping=<folder>), or the bucket folder the key may list (--set mapping=auto:<folder>/, e.g. auto:data/), or add that right' "$OUT"
+check "...nothing was kept" "no []" "$([ -d "$HOME_K/sources/drafted" ] && echo yes || echo no) $(dbq '[c for c in d["connections"] if "DRAFTED" in c]')"
+OUT="$(printf '%s' "$AWSSECRET" | dr connect s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --set mapping=auto:data/ --secret-stdin 2>&1)"; RC=$?
+check "...auto:data/ drafts from the folder the key may list: exit 0" "0" "$RC"
+run remove drafted
+rm -f "$STORE/.deny"
+run_secret "$AWSSECRET" connect s3 --name given $S3_SET --set access_key_id=$KEYID --secret-stdin
+check "a mapping given: exactly as before, nothing drafted" "0 no" "$RC $(printf '%s' "$OUT" | grep -q 'drafted' && echo yes || echo no)"
+run remove given
+
 printf '\n== Profile B: Azure Blob Storage document files ==\n'
 # Measured against a real storage account (Exasol Personal 2.3.0, adapter
 # 3.1.0): a container SAS with read + list works through the adapter's
@@ -2777,7 +2931,7 @@ PY
         # character; the string is shown back masked, e asks again, and the
         # second one is used.
         TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
-            "$MENU $MENU\r${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}postgres://reader:psPw-zz5@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipsagain\r$Q_SCHEMA\r${Q_PW}\x04"
+            "$MENU $MENU\r${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}postgres://reader:psPw-zz5@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipsagain\r$Q_SCHEMA\r${Q_TLS}\x04"
         check "PowerShell: a string, e, a second string: one menu, one panel" "0" "$TUI_RC"
         TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
         has "...the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db')" "$TUI_RAW"
@@ -2785,8 +2939,59 @@ PY
         has "...the second shown back, its password masked" "Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_RAW"
         lacks "...the password never drawn" "psPw-zz5" "$TUI_RAW"
         has "...and the second one used" "$(printf '%-34s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+        lacks "...its password used: the hidden prompt never asks" "Password * (hidden" "$TUI_RAW"
+        has "...the panel says where it came from" "$(printf '%-34s  %s' 'Password *' '(from the string, hidden)')" "$TUI_RAW"
     else
         pass "PowerShell long paste: skipped (no pwsh)"
+    fi
+    # S3 with the mapping left empty: the hint above the question, the draft
+    # after the credential (over the stand-in bucket), its tables and one key,
+    # the panel's row as auto, and the drafted tables connected.
+    db '{"sources": {"'"$S3HOST"'": {"secret": "'"$AWSSECRET"'", "region": "ap-south-1"}}}'
+    Q_MAP="$(when 'EDML mapping path:')"; Q_KEYID="$(when 'Access key ID:')"; Q_SKEY="$(when 'Secret access key * (hidden')"
+    Q_DRAFT="$(when 'n to give a folder instead')"
+    EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
+    TUI_ARGS="s3 --name s3form --set bucket=docs-bucket --set region=ap-south-1" \
+        tui connect-tui-scenario.sh "1 of 1 · Amazon S3" 2 \
+        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r${Q_GO}y\r"
+    check "S3, mapping left empty: one panel, one table" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+    has "...the two lines above the question, then the question" "$(printf '%s\n' \
+        '  EDML mapping: a .json file or a folder of them on this computer.' \
+        '  Leave empty and the kit drafts it from the bucket after you give the access key.')" "$TUI_RAW"
+    has "...the question in its own words" "EDML mapping path:" "$TUI_RAW"
+    has "...the box label" "EDML mapping  " "$TUI_SCREEN"
+    has "...the draft's tables, after the credential" "ORDERS     data/orders/*.jsonl" "$TUI_RAW"
+    has "...the row reads auto" "auto (drafted from the bucket)" "$TUI_SCREEN"
+    has "...and it connects with the drafted tables" "VS_S3FORM · 3 tables" "$TUI_SCREEN"
+    lacks "...the secret never drawn" "$AWSSECRET" "$TUI_RAW"
+    eng remove s3form >/dev/null 2>&1
+    # A key that cannot list: said, and the mapping path asked for instead.
+    : > "$STORE/.deny"
+    EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
+    TUI_ARGS="s3 --name s3deny --set bucket=docs-bucket --set region=ap-south-1" \
+        tui connect-tui-scenario.sh "1 of 1 · Amazon S3" 2 \
+        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$(when 'EDML mapping path *')$MAPS\r$Q_SUM\r${Q_GO}y\r"
+    check "S3, a key that cannot list: one panel, one table" "0" "$TUI_RC"
+    has "...the reason said plainly" "the key cannot list the bucket (s3:ListBucket)" "$(tr -d '\r' < "$WORK/tui.raw")"
+    has "...and the path given instead is used" "VS_S3DENY · 3 tables" "$TUI_SCREEN"
+    eng remove s3deny >/dev/null 2>&1
+    rm -f "$STORE/.deny"
+    if command -v pwsh >/dev/null 2>&1; then
+        EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" TUI_PS_SOURCE=s3 TUI_PS_NAME=s3psform \
+        TUI_PS_SETS="bucket=docs-bucket region=ap-south-1" \
+            tui connect-tui-scenario-ps.sh "1 of 1 · Amazon S3" 2 \
+            "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r${Q_GO}y\r"
+        check "PowerShell: S3, mapping left empty: one panel, one table" "0" "$TUI_RC"
+        TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+        has "...the two lines above the question" "Leave empty and the kit drafts it from the bucket after you give the access key." "$TUI_RAW"
+        has "...the draft's tables" "ORDERS     data/orders/*.jsonl" "$TUI_RAW"
+        has "...the row reads auto" "auto (drafted from the bucket)" "$TUI_SCREEN"
+        has "...and it connects" "VS_S3PSFORM · 3 tables" "$TUI_SCREEN"
+        lacks "...the secret never drawn" "$AWSSECRET" "$TUI_RAW"
+        eng remove s3psform >/dev/null 2>&1
+    else
+        pass "PowerShell S3 draft: skipped (no pwsh)"
     fi
 fi
 # The twins carry the same flow.
@@ -3118,6 +3323,88 @@ check "--json: the masked string is in the answer too" "jdbc:postgresql://pg.exa
     "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["masked"])' 2>/dev/null)"
 lacks "...and the credential is not" "$MPW" "$OUT"
 check "none of the strings above, nor their credential, is in the kit home (the day's log included)" "" "$(grep -rlF "$MPW" "$HOME_K" 2>/dev/null)"
+
+# --secret-out: the credential a string holds where the connector's stands is
+# taken out (the values, the masked string, the notes and --json never hold
+# it), percent-decoded, and written to the shell's file only - the shells
+# then use it as if typed at the hidden prompt. One per connector type; the
+# mapping (which part of the string is the credential) is the paste block's
+# "credential" list, the azure style's own three forms.
+pcred() { # pcred <connector> <string> [paste options] - OUT, RC, VALS, SEC (the file), MASK, CRED
+    _pc_c="$1"; _pc_s="$2"; shift 2
+    rm -f "$WORK/paste.sec"
+    OUT="$(printf '%s' "$_pc_s" | eng paste "$_pc_c" --secret-out "$WORK/paste.sec" "$@" 2>&1)"; RC=$?
+    VALS="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["values"], sort_keys=True))' 2>/dev/null)"
+    MASK="$(pmask)"
+    CRED="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json, sys; print(json.load(sys.stdin).get("credential"))' 2>/dev/null)"
+    SEC="$(cat "$WORK/paste.sec" 2>/dev/null)"
+}
+CPW='Cr3d-zz8'
+while IFS='|' read -r _c _u _sec _cred _v _m; do
+    [ -n "$_c" ] || continue
+    pcred "$_c" "$_u"
+    check "credential used ($_c): $_u" "0 $_sec $_cred" "$RC $SEC $CRED"
+    check "...the values hold no credential" "$_v" "$VALS"
+    check "...the echo stays masked" "$_m" "$MASK"
+    lacks "...the credential is in no line of the answer" "$CPW" "$OUT"
+    has "...the note says it is used, not asked again" "is used, hidden: it is not asked again" "$OUT"
+    has "...and that a command line keeps it in the shell history" "WARN The password from the command line is now in your shell history - next time paste it at the prompt or use --password-file." "$OUT"
+    lacks "...not the old note" "it was not used" "$OUT"
+done <<EOF
+pg|postgres://reader:$CPW@pg.example.com:5433/sales|$CPW|password|{"database": "sales", "host": "pg.example.com", "port": "5433", "user": "reader"}|postgres://reader:****@pg.example.com:5433/sales
+pg|jdbc:postgresql://pg.example.com/sales?user=reader&password=$CPW|$CPW|password|{"database": "sales", "host": "pg.example.com", "user": "reader"}|jdbc:postgresql://pg.example.com/sales?user=reader&password=****
+pg|postgres://reader:$CPW%40x%3A%2F%3B%25@pg.example.com/sales|$CPW@x:/;%|password|{"database": "sales", "host": "pg.example.com", "user": "reader"}|postgres://reader:****@pg.example.com/sales
+mysql|mysql://reader:$CPW@my.example.com:3307/shop|$CPW|password|{"database": "shop", "host": "my.example.com", "port": "3307", "user": "reader"}|mysql://reader:****@my.example.com:3307/shop
+mysql|jdbc:mysql://my.example.com/shop?user=reader&password=$CPW%26|$CPW&|password|{"database": "shop", "host": "my.example.com", "user": "reader"}|jdbc:mysql://my.example.com/shop?user=reader&password=****
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=$CPW|$CPW|password|{"database": "erp", "host": "sql.example.com", "user": "reader"}|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=****
+oracle|jdbc:oracle:thin:reader/$CPW@//ora.example.com:1521/ORCLPDB1|$CPW|password|{"host": "ora.example.com", "port": "1521", "service": "ORCLPDB1", "user": "reader"}|jdbc:oracle:thin:reader/****@//ora.example.com:1521/ORCLPDB1
+snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&user=bob&token=$CPW|$CPW|password|{"account": "myorg-acct", "database": "SALES", "user": "bob"}|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&user=bob&token=****
+snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&user=bob&password=$CPW|$CPW|password|{"account": "myorg-acct", "database": "SALES", "user": "bob"}|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&user=bob&password=****
+databricks|jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;UID=token;PWD=$CPW|$CPW|password|{"host": "dbc-1.cloud.databricks.com", "http_path": "/sql/1.0/warehouses/abc"}|jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;UID=token;PWD=****
+mongodb|mongodb+srv://exakit_reader:$CPW@cluster0.abc12.mongodb.net/sample_mflix?authSource=admin|$CPW|password|{"database": "sample_mflix", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?authSource=admin", "user": "exakit_reader"}|mongodb+srv://exakit_reader:****@cluster0.abc12.mongodb.net/sample_mflix?authSource=admin
+azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$CPW%2Bx%3D|sv=2022-11-02&sp=rl&sig=$CPW%2Bx%3D|secret|{"account": "mystorage", "container": "data"}|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=****
+azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$CPW/ab+c==;EndpointSuffix=core.windows.net|$CPW/ab+c==|secret|{"account": "mystorage"}|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=****;EndpointSuffix=core.windows.net
+azure|AccountName=mystorage;SharedAccessSignature=sv=2022-11-02&sig=$CPW;EndpointSuffix=core.windows.net|sv=2022-11-02&sig=$CPW|secret|{"account": "mystorage"}|AccountName=mystorage;SharedAccessSignature=****;EndpointSuffix=core.windows.net
+EOF
+# Two credentials in one string: the connector's mapping picks one, the other
+# is named (never valued) as not used.
+pcred snowflake "jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&user=bob&password=Other-zz1&token=$CPW"
+check "snowflake with token= and password=: the token (its PAT) is used" "$CPW" "$SEC"
+has "...the other is named, not used" "Not used from the connection string: password= (the credential is token=)" "$OUT"
+lacks "...and never valued" "Other-zz1" "$OUT"
+pcred databricks "jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;token=Other-zz1;PWD=$CPW"
+check "databricks with PWD= and token=: PWD= is used" "$CPW" "$SEC"
+# Where the credential is not the connector's: not used, asked for as before.
+for _case in "s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$CPW" \
+             "iceberg-rest|https://ak:$CPW@catalog.example.com/api" "unity|https://dbc-1.cloud.databricks.com/?token=$CPW" \
+             "bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=p1;OAuthPvtKey=$CPW;DefaultDataset=d1"; do
+    pcred "${_case%%|*}" "${_case#*|}"
+    check "not the connector's credential (${_case%%|*}): nothing written, none named" "0  None" "$RC $SEC $CRED"
+    has "...the note says it was not used and is asked for" "it was not used. The credential is asked for separately" "$OUT"
+    lacks "...and it is in none of the output" "$CPW" "$OUT"
+done
+pcred pg 'postgres://reader:@pg.example.com/sales'
+check "an empty password (user:@) is none: nothing written, no credential note" "0  None" "$RC $SEC $CRED"
+lacks "...no note about one" "credential" "$(printf '%s\n' "$OUT" | grep -v '^RESULT ')"
+pcred pg "postgres://reader:$CPW@pg.example.com/sales" --credential-given
+check "--password-file or --password-stdin given (--credential-given): the string's is not used" "0  None" "$RC $SEC $CRED"
+has "...one line says which one is" "The credential from --password-file or --password-stdin is used; the one in the connection string is not." "$OUT"
+pcred pg 'postgres://reader:pa?zz9;w@pg.example.com/sales'
+check "an unencoded ? or ; in a password is still refused, nothing written" "2 " "$RC $SEC"
+pcred mongodb "mongodb+srv://exakit_reader:$CPW@cluster0.abc12.mongodb.net/sample_mflix?authSource=admin" --as uri
+check "--as uri (--set uri=...): the URI read the same, credential out" "0 $CPW" "$RC $SEC"
+pcred pg "postgres://reader:$CPW@pg.example.com/sales" --as uri
+check "...refused for a connector without that input, nothing written" "2 " "$RC $SEC"
+has "...in the words --set would get" "uri is not an input of postgresql" "$OUT"
+rm -f "$WORK/paste.sec"
+OUT="$(printf '%s' "postgres://reader:$CPW@pg.example.com/sales" | eng --json paste pg --secret-out "$WORK/paste.sec" 2>/dev/null)"
+check "--json: the answer names the credential input, never its value" "password" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(json.load(sys.stdin)["credential"])' 2>/dev/null)"
+lacks "...the value is in no field of it" "$CPW" "$OUT"
+check "...the file holds it alone" "$CPW" "$(cat "$WORK/paste.sec")"
+check "...owner-only" "600" "$(stat -f %Lp "$WORK/paste.sec" 2>/dev/null || stat -c %a "$WORK/paste.sec")"
+check "none of these credentials is in the kit home, the day's log included" "" "$(grep -rlF "$CPW" "$HOME_K" 2>/dev/null)"
+rm -f "$WORK/paste.sec"
 pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"
 check "mongodb: the uri keeps no credentials and no path" '{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true", "user": "reader"}' "$VALS"
 pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?retryWrites=true&authSource=sales"
@@ -3201,9 +3488,10 @@ rm -f "$WORK/url.argv"
 OUT="$(urlsh cmd_connect pg --name urlpg --url "postgres://reader:$PW@pg.example.com:5433/sales?sslmode=require" --set port=5432 --dry-run </dev/null)"; RC=$?
 check "connect --url --dry-run: exit 0" "0" "$RC"
 check "...the string went to paste on stdin; its inputs come before the command line's --set, which wins" \
-    "paste pg|resolve pg|plan postgresql --name urlpg --set host=pg.example.com --set port=5433 --set database=sales --set user=reader --set tls=require --set port=5432|" \
-    "$(tr '\n' '|' < "$WORK/url.argv")"
-has "...its notes are shown" "The string was on the command line" "$OUT"
+    "paste pg --secret-out F|resolve pg|plan postgresql --name urlpg --set host=pg.example.com --set port=5433 --set database=sales --set user=reader --set tls=require --set port=5432|" \
+    "$(sed 's#--secret-out [^ ]*#--secret-out F#' "$WORK/url.argv" | tr '\n' '|')"
+has "...its notes are shown: the password is used, and it is in the shell history" \
+    "The password from the command line is now in your shell history - next time paste it at the prompt or use --password-file." "$OUT"
 has "...the plan reflects it" "does NOT check the server's identity" "$OUT"
 lacks "...the password is in no argument" "$PW" "$(cat "$WORK/url.argv")"
 lacks "...and not in the output" "$PW" "$OUT"
@@ -3225,12 +3513,66 @@ check "--url without a connector is refused, exit 2" "2" "$RC"
 has "...saying what it needs" "--url needs the source it is for" "$OUT"
 rm -f "$WORK/url.argv"
 OUT="$(urlsh cmd_connect oracle --name urlora --url 'jdbc:oracle:thin:@ora.example.com:1521:ORCL' --dry-run </dev/null)"; RC=$?
-check "a refused string stops connect before any plan, exit 2" "2 paste oracle|" "$RC $(tr '\n' '|' < "$WORK/url.argv")"
+check "a refused string stops connect before any plan, exit 2" "2 paste oracle --secret-out F|" "$RC $(sed 's#--secret-out [^ ]*#--secret-out F#' "$WORK/url.argv" | tr '\n' '|')"
 printf '%s' "$PW" > "$WORK/url.pw"
 OUT="$(urlsh cmd_connect pg --name urlsales --url 'jdbc:postgresql://pg.example.com/sales?user=reader' --password-file "$WORK/url.pw" --yes </dev/null)"; RC=$?
 check "connect --url --yes with a password file: exit 0" "0" "$RC"
 check "...the credential reached the CONNECTION from the file" "$PW" "$(dbq 'd["connections"]["EXAKIT_SRC_URLSALES"]["secret"]')"
 has "...and the string's inputs are the ones recorded" '"host": "pg.example.com"' "$(cat "$HOME_K/sources/urlsales/"*.json 2>/dev/null)"
+# A password in the --url string is the credential: no prompt, one warning.
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect pg --name urlpw --url "postgres://reader:$PW@pg.example.com/sales" --yes </dev/null)"; RC=$?
+check "connect --url with user:password@ --yes and no password file: exit 0" "0" "$RC"
+check "...the string's password reached the CONNECTION" "$PW" "$(dbq 'd["connections"]["EXAKIT_SRC_URLPW"]["secret"]')"
+lacks "...never asked for" "(input hidden)" "$OUT"
+has "...one warning: it is in the shell history" "The password from the command line is now in your shell history" "$OUT"
+lacks "...and the password is in no output" "$PW" "$OUT"
+lacks "...no argument" "$PW" "$(cat "$WORK/url.argv")"
+check "...no source record or log line" "" "$(grep -rlF "$PW" "$HOME_K" "$WORK/url.log" 2>/dev/null)"
+OUT="$(urlsh cmd_source show urlpw </dev/null)"
+lacks "...not in source show" "$PW" "$OUT"
+OUT="$(urlsh cmd_source show urlpw --json </dev/null)"
+lacks "...nor its --json" "$PW" "$OUT"
+check "...no paste file is left in TMPDIR" "" "$(ls "${TMPDIR:-/tmp}" 2>/dev/null | grep exakit-vs-paste)"
+# --password-file wins over the string's password, with one line.
+printf '%s' 'File-pw-zz4' > "$WORK/url2.pw"
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect pg --name urlfile --url "postgres://reader:$PW@pg.example.com/sales" --password-file "$WORK/url2.pw" --yes </dev/null)"; RC=$?
+check "--url with a password and --password-file: exit 0, the file's credential used" "0 File-pw-zz4" "$RC $(dbq 'd["connections"]["EXAKIT_SRC_URLFILE"]["secret"]')"
+has "...one line says the string's is not" "The credential from --password-file or --password-stdin is used; the one in the connection string is not." "$OUT"
+has "...the engine was told, and wrote nothing" "paste pg --credential-given" "$(cat "$WORK/url.argv")"
+lacks "...and the string's password is in no output" "$PW" "$OUT"
+OUT="$(printf '%s' 'Stdin-pw-zz6' | urlsh cmd_connect pg --name urlstdin --url "postgres://reader:$PW@pg.example.com/sales" --password-stdin --yes)"; RC=$?
+check "...--password-stdin wins too" "0 Stdin-pw-zz6" "$RC $(dbq 'd["connections"]["EXAKIT_SRC_URLSTDIN"]["secret"]')"
+# urlsh joins stderr to stdout; here they are kept apart.
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+          . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+          _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/url.log"; }
+          pyexasol_venv_python() { command -v python3; }
+          exakit_vs_engine() { eng "$@"; }
+          cmd_connect pg --name urlpwjson --url "postgres://reader:$PW@pg.example.com/sales" --yes --json ) </dev/null 2>"$WORK/url.err")"; RC=$?
+check "--url with a password --yes --json: exit 0, the string's password used" "0 $PW" "$RC $(dbq 'd["connections"]["EXAKIT_SRC_URLPWJSON"]["secret"]')"
+check "...stdout is one JSON object" "ok" "$(printf '%s' "$OUT" | python3 -c 'import json, sys; json.load(sys.stdin); print("ok")' 2>/dev/null)"
+lacks "...holding no password" "$PW" "$OUT"
+has "...the shell-history warning on stderr" "The password from the command line is now in your shell history" "$(cat "$WORK/url.err")"
+OUT="$(urlsh cmd_connect pg --name urlempty --url "postgres://reader:@pg.example.com/sales" --dry-run </dev/null)"; RC=$?
+check "an empty password (user:@) is none: exit 0, no credential note" "0" "$RC"
+lacks "...no warning" "shell history" "$OUT"
+# --set uri=... with user:password@ (MongoDB): read as --url is, not refused.
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect mongodb --name urlmg --set "uri=mongodb+srv://reader:$PW@cluster0.example.net/sample_mflix?authSource=admin" --set collection=movies --dry-run </dev/null)"; RC=$?
+check "--set uri= with user:password@: not refused, exit 0" "0" "$RC"
+has "...it went to paste as the uri" "paste mongodb --secret-out F --as uri" "$(sed 's#--secret-out [^ ]*#--secret-out F#' "$WORK/url.argv")"
+has "...the plan's uri is clean, its user and database read from it" "--set uri=mongodb+srv://cluster0.example.net/?authSource=admin --set database=sample_mflix --set user=reader --set collection=movies" "$(cat "$WORK/url.argv")"
+has "...one warning" "The password from the command line is now in your shell history" "$OUT"
+lacks "...not the old refusal" "carries credentials" "$OUT"
+lacks "...and the password is in no output or argument" "$PW" "$OUT $(cat "$WORK/url.argv")"
+OUT="$(urlsh cmd_connect pg --name urlmg2 --set "uri=postgres://reader:$PW@pg.example.com/sales" --dry-run </dev/null)"; RC=$?
+check "--set uri= on a connector without a uri input: refused, exit 2" "2" "$RC"
+has "...as --set always said" "uri is not an input of postgresql" "$OUT"
+lacks "...not quoted" "$PW" "$OUT"
+OUT="$(urlsh cmd_connect mongodb --name urlmg3 --url "mongodb+srv://cluster0.example.net/" --set "uri=mongodb+srv://reader:$PW@cluster0.example.net/" --dry-run </dev/null)"; RC=$?
+check "--url and --set uri= with a credential together: refused, exit 2" "2" "$RC"
 
 # On a terminal the panel opens with the string's answers in it.
 printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
@@ -3244,9 +3586,9 @@ has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.
 
 printf '\n== the connect form: a red * for a required field, a pasted string, one answer changed ==\n'
 # What a person sees on the way (TTY_REPLAY_RAW: the whole stream, colours out)
-# as well as what the screen is left holding. The pasted string carries a
-# password: it is read hidden, shown back with the password masked, not used,
-# the hidden prompt still asks, and the CONNECTION gets the typed one.
+# as well as what the screen is left holding. The pasted string carries no
+# password: the hidden prompt asks for it, and the CONNECTION gets the typed
+# one (a string that carries one: the next scenario).
 if command -v python3 >/dev/null 2>&1; then
     URLPW='Url-pa55-zz7'
     RAW="$WORK/tui.raw"
@@ -3257,7 +3599,7 @@ if command -v python3 >/dev/null 2>&1; then
     # (schema) it takes it, on one without (ca) it leaves it empty; 3 asks the
     # port again.
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}postgres://reader@pg.example.com:5433/sales\r$Q_USE\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
     check "a pasted string, a refused Enter, one answer changed: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "the panel marks a required field with a star after its label" "│     Host name or address *              " "$TUI_RAW"
@@ -3270,18 +3612,15 @@ if command -v python3 >/dev/null 2>&1; then
     has "...its hint says what to paste" "    • Paste the source's connection string, for example:" "$TUI_RAW"
     has "...then each form the connector reads on its own line, indented under the text" "$(printf '        %s\n' 'jdbc:postgresql://host:5432/db' 'postgres://user@host:5432/db' 'host[:port][/database]')" "$TUI_RAW"
     lacks "...no list run together any more" "as it shows it:" "$TUI_RAW"
-    lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
-    has "the string is shown back, its password masked by the engine" "    • Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_RAW"
+    has "the string is shown back" "    • Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
     has "...then one key decides" "Enter to use it · e to paste it again · Esc/n to type the fields instead" "$TUI_RAW"
-    has "...and the masked string stays under the panel" "Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_SCREEN"
+    has "...and the string stays under the panel" "Read: postgres://reader@pg.example.com:5433/sales" "$TUI_SCREEN"
     has "the question ends in the star too" "Name (alias) for this connection *:" "$TUI_RAW"
     has "...Enter on an empty required field is refused, in one line" "Name (alias) for this connection is required" "$TUI_RAW"
     has "...an optional one shows the default Enter takes, no star" "Schema [public]:" "$TUI_RAW"
     has "the fields the string filled are marked" "$(prow 'Host name or address *' 'pg.example.com (from the string)')" "$TUI_SCREEN"
     lacks "...and not asked" "Host name or address *:" "$TUI_RAW"
-    has "a password in the string: the note says it was not used" "(a password, token or key): it was not used." "$TUI_SCREEN"
-    lacks "...without the command-line sentence a typed string does not earn" "The string was on the command line" "$TUI_RAW"
-    has "...and the hidden prompt still asks for it" "Password * (hidden):" "$TUI_RAW"
+    has "no password in the string: the hidden prompt asks for it" "Password * (hidden):" "$TUI_RAW"
     has "...whose empty answer is refused too" "Password is required; it stays in memory" "$TUI_RAW"
     has "the summary numbers every answer" "  3  $(prow Port '5433 (from the string)')" "$TUI_RAW"
     has "...asks for a number, Enter to go on" "Number to change, Enter to continue:" "$TUI_RAW"
@@ -3290,10 +3629,29 @@ if command -v python3 >/dev/null 2>&1; then
     has "an optional field left empty" "$(prow 'CA certificate file' '(none)')" "$TUI_SCREEN"
     has "...and it connects" "✓ VS_TUIPASTE" "$TUI_SCREEN"
     has "...with the port as changed" '"port": "5432"' "$(cat "$HOME_K/sources/tuipaste/"*.json 2>/dev/null)"
-    check "the typed credential reached the CONNECTION, not the string's - an arrow and Delete pressed in it dropped" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPASTE"]["secret"]')"
-    check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
-    check "...nor the raw string" "" "$(grep -rlF "postgres://reader:$URLPW@pg.example.com:5433/sales" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+    check "the typed credential reached the CONNECTION - an arrow and Delete pressed in it dropped" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPASTE"]["secret"]')"
     lacks "...and the credential typed is in none of what was drawn" "$TUI_SECRET" "$TUI_RAW"
+
+    # A pasted string WITH a password: read hidden, shown back masked, and the
+    # password is the credential - the hidden prompt never asks, the panel
+    # says "(from the string, hidden)", and the CONNECTION gets it. The source
+    # record, the log and what was drawn never hold it.
+    TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipwstr\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+    check "a pasted string with a password: one panel, one table" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "...shown back, its password masked by the engine" "    • Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_RAW"
+    lacks "...the hidden password prompt is skipped" "Password * (hidden" "$TUI_RAW"
+    has "...the panel shows the password row from the string, hidden" "$(prow 'Password *' '(from the string, hidden)')" "$TUI_RAW"
+    has "...the note says it is used" "The credential in the connection string (user:password@) is used, hidden" "$TUI_SCREEN"
+    lacks "...without the shell-history line a typed string does not earn" "shell history" "$TUI_RAW"
+    lacks "...nor the old command-line sentence" "The string was on the command line" "$TUI_RAW"
+    has "...and it connects" "✓ VS_TUIPWSTR" "$TUI_SCREEN"
+    check "...the string's password reached the CONNECTION" "$URLPW" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPWSTR"]["secret"]')"
+    lacks "...it is in nothing drawn" "$URLPW" "$TUI_RAW"
+    check "...nowhere under the kit home (the source record included) or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+    check "...nor the raw string" "" "$(grep -rlF "postgres://reader:$URLPW@pg.example.com:5433/sales" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
+    check "...and no secret file is left behind" "" "$(find "${TMPDIR:-/tmp}" -maxdepth 2 -name 'paste.secret' 2>/dev/null)"
 
     # A string that does not parse is said and asked again; Enter types the
     # fields. A plan that refuses one input goes straight back to that field.
@@ -3331,7 +3689,7 @@ if command -v python3 >/dev/null 2>&1; then
     # 56 columns wide, on a terminal that holds the wrap (xterm's kind): one row,
     # counted as one, or the next redraw climbs one line too far.
     TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
     check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
     has "...the value kept" "$(printf '%-25s  %s' 'Host name or address *' 'pg.example.com')" "$TUI_SCREEN"
     lacks "...its mark dropped" "(from the string)" "$TUI_SCREEN"
@@ -3342,7 +3700,7 @@ if command -v python3 >/dev/null 2>&1; then
     Q_LNAME="$(when 'Name (alias) for this connection (lower case, e.g. sales) *')"
     Q_LPASTE="$(when 'Connection string (hidden) - paste + Enter, or Enter alone for the fields:')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the connection string is asked first, hidden" "Connection string (hidden) - paste + Enter, or Enter alone for the fields:" "$TUI_RAW"
     has "...under the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db' '        postgres://user@host:5432/db' '        host[:port][/database]')" "$TUI_RAW"
@@ -3350,8 +3708,9 @@ if command -v python3 >/dev/null 2>&1; then
     has "...shown back masked: the password, and what followed it unencoded" "    • Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****&****" "$TUI_RAW"
     has "...then one key decides" "Enter to use it · e to paste it again · Esc/n to type the fields instead" "$TUI_RAW"
     has "...a garbage string is said and asked again" "the connection string has a space, line break or control character in it" "$TUI_RAW"
-    has "...the password in it noted, not used" "it was not used. The credential is asked for separately" "$TUI_RAW"
-    lacks "...without the command-line sentence" "The string was on the command line" "$TUI_RAW"
+    has "...the password in it is used, and said so" "The credential in the connection string (password=) is used, hidden: it is not asked again" "$TUI_RAW"
+    lacks "...without the shell-history line" "shell history" "$TUI_RAW"
+    lacks "...or the command-line sentence" "The string was on the command line" "$TUI_RAW"
     has "...what it filled is said" "From the connection string: database, host, port, user" "$TUI_RAW"
     lacks "...and not asked" "Host name or address" "$TUI_RAW"
     has "...one legend line above the questions says what the star means" "    * required" "$TUI_RAW"
@@ -3361,10 +3720,9 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...and the words are gone" "(required)" "$TUI_RAW"
     lacks "...both of them" "(optional)" "$TUI_RAW"
     has "...an empty required answer is refused" "Name (alias) for this connection is required" "$TUI_RAW"
-    has "...and the credential is asked hidden" "Password (input hidden):" "$TUI_RAW"
+    lacks "...and the password prompt is skipped" "Password (input hidden):" "$TUI_RAW"
     lacks "...a 1500-character paste read whole, its second line answering nothing, never shown" "zz2nd" "$TUI_RAW"
-    check "...the typed one reaches the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPG"]["secret"]')"
-    lacks "...and is never shown" "$TUI_SECRET" "$TUI_RAW"
+    check "...the string's password reaches the CONNECTION" "$URLPW" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPG"]["secret"]')"
     check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
 
     # After a string is read and shown back masked, one key decides: e asks for
@@ -3373,7 +3731,7 @@ if command -v python3 >/dev/null 2>&1; then
     # whole, Backspace and Ctrl-U still edit, and a lone Esc waits for nothing:
     # each of the four strings below is read as "abc" (a bare host).
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
-        "${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[1;5D')$(pasted '\x1bOD')\r${Q_USE}e${Q_PASTE}abcx\x7f\r${Q_USE}e${Q_PASTE}zzz\x15abc$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}abc\x1b\x01\r${Q_USE}e${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuiagain\r$Q_SCHEMA\r${Q_PW}\x04"
+        "${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[1;5D')$(pasted '\x1bOD')\r${Q_USE}e${Q_PASTE}abcx\x7f\r${Q_USE}e${Q_PASTE}zzz\x15abc$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}abc\x1b\x01\r${Q_USE}e${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuiagain\r$Q_SCHEMA\r${Q_TLS}\x04"
     check "e four times, then a fifth string used: one panel" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     check "...an arrow, Ctrl-Left, an application-mode arrow, Backspace, Ctrl-U, Delete and a lone Esc: each string read as abc" \
@@ -3382,7 +3740,7 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...nor the half a Backspace or Ctrl-U removed" "Read: abcx" "$TUI_RAW"
     has "...e asked again, and the last string is the one used: its port" "$(prow Port '5433 (from the string)')" "$TUI_SCREEN"
     lacks "...nothing of the first four kept" "abc (from the string)" "$TUI_SCREEN"
-    lacks "...and the password typed at the hidden prompt was never drawn" "$URLPW" "$TUI_RAW"
+    lacks "...and the password pasted in it was never drawn" "$URLPW" "$TUI_RAW"
 
     # n types the fields instead, and so does Esc; nothing from the string is kept.
     for _key in n '\x1b'; do

@@ -2,7 +2,8 @@
 
 JSON, JSON Lines, CSV or Parquet files in an Azure Blob container, read as
 tables. An EDML mapping file on your computer says which files become which
-table. Public Azure cloud only.
+table; leave it empty and the kit drafts one from the container. Public Azure
+cloud only.
 
 > **Easiest: let your AI agent do it.** The skill `exasol-vs-azure-blob` knows this connector.
 >
@@ -18,7 +19,7 @@ table. Public Azure cloud only.
 | Name (alias) for this connection | yes | `azdocs` |
 | Storage account name | yes | `mystorageacct` |
 | Container name | yes | `docs` |
-| EDML mapping on this computer: a .json file, or a folder of them | yes | `./mapping` |
+| EDML mapping (a .json file or a folder of them) | no: empty drafts it from the container | `./mapping` |
 | SAS token (read + list), connection string or account key | yes | (hidden, or a file) |
 
 ## Where to find each value
@@ -44,6 +45,15 @@ blob name or glob inside the container:
 
 CSV and Parquet may leave out `mapping` and have their columns inferred; JSON
 needs its fields (see the [S3 guide](s3.md#2-the-mapping) for an example).
+
+**Or let the kit draft it.** Leave the mapping empty (or give `--set
+mapping=auto`). After you give the SAS token, the kit lists the container and
+makes one table per folder and file type, with JSON fields typed from a
+sample and CSV and Parquet left to the adapter, as the
+[S3 guide](s3.md#2-the-mapping) describes. The draft goes to
+`~/.exasol-starter-kit/sources/<name>/edml/`; at the terminal you see the
+tables and press Enter to use them, `e` to edit them first, or `n` to give a
+mapping instead. `--set mapping=auto:<folder>/` drafts from one folder only.
 
 ### 3. A read-only SAS token (recommended)
 
@@ -84,7 +94,7 @@ exakit connect azure-blob
 
 The kit asks for a connection string (hidden; press Enter on an empty line to
 type the fields instead), then each field above. It checks the SAS and the
-mapping, shows a plan and asks once, and tells you when the SAS expires. The
+mapping (or drafts it after the SAS), shows a plan and asks once, and tells you when the SAS expires. The
 first connect installs Java in the database (one restart). Your tables appear
 as `VS_AZDOCS.ORDERS`.
 
@@ -96,7 +106,8 @@ exakit connect azure-blob --name azdocs --set account=mystorageacct --set contai
 exakit sql "SELECT * FROM VS_AZDOCS.ORDERS LIMIT 10"
 ```
 
-Add `--dry-run` to see the plan first.
+Add `--dry-run` to see the plan first. Leave out `--set mapping=...` and the
+mapping is drafted from the container; the connect prints its tables.
 
 **Windows:** paste the URL or connection string at the prompt rather than
 `--url`: a SAS contains `&`. For a quoted name in `exakit sql`, pipe the
@@ -112,7 +123,9 @@ abfss://docs@mystorageacct.dfs.core.windows.net
 
 Both fill account and container. A storage connection string
 (`DefaultEndpointsProtocol=https;AccountName=mystorageacct;...`) fills the
-account only; its key is never taken from the string.
+account. A credential in the string is the connector's, taken out of the
+string and not asked again: the URL's SAS query (`?sv=...&sig=...`), else the
+connection string's `SharedAccessSignature`, else its `AccountKey`.
 
 ## Common problems
 

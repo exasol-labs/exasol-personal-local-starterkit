@@ -360,6 +360,34 @@ def check_value(spec, raw):
     return (raw.upper() if spec.get("upper") else raw), None
 
 
+def draft_value(raw):
+    """A drafted mapping's value: (None, None) for a mapping path, ("", None) for
+    auto (the whole bucket or container), ("auto:<folder>/", None) for one folder,
+    or (None, the problem)."""
+    text = str(raw).strip()
+    if text.lower() == "auto":
+        return "", None
+    if not text.lower().startswith("auto:"):
+        return None, None
+    folder = text[5:].strip().lstrip("/")
+    if not folder:
+        return "", None
+    if "://" in folder or ".." in folder.split("/") or re.search(r"[*?\[\]\\]", folder):
+        return None, "mapping=auto:<folder>/ names a folder inside the bucket, e.g. auto:data/ (got %s)" % folder
+    return "auto:" + folder.rstrip("/") + "/", None
+
+
+def draft_prefix(connector, values):
+    """None when the source's mapping is a path (or it takes none); else the
+    folder the draft lists, "" for the whole bucket or container."""
+    if not any(s["kind"] == "edml" and s.get("draft") for s in connector["inputs"]):
+        return None
+    mapping = values.get("mapping") or ""
+    if not mapping:
+        return ""
+    return mapping[5:] if mapping.startswith("auto:") else None
+
+
 def validate_inputs(connector, given):
     """Defaults applied, every value checked by kind; secrets are not taken here."""
     values, problems = {}, []
@@ -379,6 +407,16 @@ def validate_inputs(connector, given):
         if kind in ("secret", "secret-file"):
             continue
         raw = given.get(name)
+        if kind == "edml" and spec.get("draft") and raw is not None:
+            # auto (or empty): drafted at connect; auto:<folder>/ drafts from that folder only.
+            value, problem = draft_value(raw)
+            if problem:
+                problems.append(problem)
+                continue
+            if value is not None:
+                if value:
+                    values[name] = value
+                continue
         if raw is None or raw == "":
             if "default" in spec:
                 raw = spec["default"]
@@ -569,12 +607,19 @@ def describe(defs, connector_id, name, values, runtime, cache, store):
             how = ("%d certificates; a verified handshake from this computer picks the one that signs %s"
                    % (count, source_host(connector, values)))
         steps.append("trust the CA in %s for this source only (%s)" % (values["ca"], how))
-    if values.get("mapping"):
-        tables = document.load_mappings(values["mapping"])
-        steps += ["stage the mapping from %s (%d mapped table%s: %s)" % (values["mapping"], len(tables),
-                                                                "" if len(tables) == 1 else "s",
-                                                                ", ".join(t["table"] for t in tables)),
-                  "create CONNECTION %s (the credential as JSON, inside the database only)" % names["connection"],
+    prefix = draft_prefix(connector, values)
+    if values.get("mapping") or prefix is not None:
+        if prefix is not None:
+            steps += ["draft the mapping from the %s%s with the credential (one table per folder and file type, "
+                      "written to %s), then stage it" % (connector.get("store", "bucket"),
+                                                         " folder %s" % prefix if prefix else "",
+                                                         os.path.join(store.path(name), "edml"))]
+        else:
+            tables = document.load_mappings(values["mapping"])
+            steps += ["stage the mapping from %s (%d mapped table%s: %s)" % (values["mapping"], len(tables),
+                                                                    "" if len(tables) == 1 else "s",
+                                                                    ", ".join(t["table"] for t in tables))]
+        steps += ["create CONNECTION %s (the credential as JSON, inside the database only)" % names["connection"],
                   "create adapter script %s.%s and its import script %s.%s"
                   % (names["script_schema"], names["script"], names["script_schema"], connector["import_script"]),
                   "create virtual schema %s" % names["schema"],

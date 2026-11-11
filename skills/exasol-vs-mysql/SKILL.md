@@ -51,8 +51,9 @@ The form's first question, and `--url '<string>'`, read:
 
 `user` fills `user`; `sslMode` fills `tls` (`VERIFY_IDENTITY` and `VERIFY_CA`
 are `verify`; `REQUIRED` and `PREFERRED` are `require`; `DISABLED`), and
-`useSSL=false` is `disable`. A password in the string is dropped and asked for
-separately. `--set` wins over the string.
+`useSSL=false` is `disable`. A password in the string (`user:password@` or
+`password=`) is the credential: taken out of the string and not asked again.
+`--set` wins over the string.
 
 On Windows an `&` inside `--url` is split by cmd.exe (through `exakit.cmd`):
 paste a string with two parameters at the form's hidden prompt, or use `--set`.

@@ -74,6 +74,7 @@
     }
   ],
   "paste": {
+    "credential": ["userinfo", "password"],
     "schemes": ["jdbc:mysql", "mysql"],
     "bare": true,
     "path": "database",

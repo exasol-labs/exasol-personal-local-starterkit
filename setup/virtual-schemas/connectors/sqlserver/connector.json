@@ -80,6 +80,7 @@
     }
   ],
   "paste": {
+    "credential": ["password", "pwd", "userinfo"],
     "schemes": ["jdbc:sqlserver"],
     "bare": true,
     "path": "database",

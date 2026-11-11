@@ -130,7 +130,8 @@ jdbc:mysql://shop.abc123.eu-central-1.rds.amazonaws.com:3306/shop
 
 The first fills host, port, database, user and TLS; the second fills host,
 port and database. A bare `host:port/database` works too. A password in the
-string is never used.
+string (`user:password@` or `password=`) is the credential: taken out of the
+string and not asked again.
 
 ## Common problems
 

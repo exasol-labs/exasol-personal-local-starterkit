@@ -23,8 +23,10 @@ of the documents.
 | Reader account | yes | `exakit_reader` |
 | Password | yes | (hidden) |
 
-The URI carries no `user:password@`. Keep `authSource=admin` (or leave it
-out): the adapter always signs in against `admin`.
+The URI is kept without `user:password@`: one pasted with them gives the user
+and the password, which the database keeps in the CONNECTION. Keep
+`authSource=admin` (or leave it out): the adapter always signs in against
+`admin`.
 
 ## Where to find each value
 
@@ -112,7 +114,8 @@ mongodb://exakit_reader@mongo.example.com:27017/sales?authSource=admin&tls=true
 ```
 
 Each fills the URI (without the user), database and user; type the
-collection. A password in the string is never used.
+collection. A `user:password@` in the string gives the password too: it is
+taken out of the URI (never stored or shown) and not asked again.
 
 ## Common problems
 
@@ -121,5 +124,5 @@ collection. A password in the string is never used.
 | "error while reading collection metadata" | A wrong password, your IP not in the Atlas access list, or the server unreachable (the adapter does not say which): check all three; `exakit source reauth movies` for the password. |
 | "collection ... does not exist" | A wrong name, or the user has no `read` role on that database (step 3). |
 | "not authorized on <db> to execute command" | Grant role `read` on the database (step 3). |
-| "the MongoDB URI carries credentials" | Remove `user:password@` from the URI. |
+| "the MongoDB URI carries credentials" | Give the URI with `--url` or at the prompt (the kit takes `user:password@` out), or remove it. |
 | New fields do not show | Run `exakit source refresh movies`: the columns come from a sample. |

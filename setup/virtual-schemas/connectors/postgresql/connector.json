@@ -80,6 +80,7 @@
     }
   ],
   "paste": {
+    "credential": ["userinfo", "password"],
     "schemes": ["jdbc:postgresql", "postgresql", "postgres"],
     "bare": true,
     "path": "database",

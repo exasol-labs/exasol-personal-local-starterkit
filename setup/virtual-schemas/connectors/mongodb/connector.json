@@ -58,6 +58,7 @@
     }
   ],
   "paste": {
+    "credential": ["userinfo"],
     "style": "mongodb",
     "schemes": ["mongodb", "mongodb+srv"],
     "secret": ["authmechanismproperties"],
@@ -80,7 +81,7 @@
   ],
   "notes": [
     "One virtual schema per collection: its root table, plus a child table for each nested object and array (measured on sample_mflix.movies: 12 tables). The schema is inferred from a bounded sample.",
-    "The URI carries no password: the user (a user in a pasted URI moves to the Reader account) and the password go into the CONNECTION, where the database keeps them hidden; a URI with user:password@ is refused. Atlas mongodb+srv:// addresses resolve from inside the database (measured).",
+    "The URI is stored without credentials: the user (a user in a pasted URI moves to the Reader account) and the password go into the CONNECTION, where the database keeps them hidden. A URI given with user:password@ (--url, --set uri=, or pasted at the prompt) is read: the user and the password are taken out of it and used, the password never stored, logged or shown; given on the command line it is in the shell history, and a warning says so. Atlas mongodb+srv:// addresses resolve from inside the database (measured).",
     "Needs the Rust language container (exasol-labs/language-container-rs 0.33.0, pinned per CPU architecture): exakit connect installs it with your consent and restarts the database once.",
     "The adapter needs only MongoDB's find permission on the collection (read on the database).",
     "The adapter always signs in against the admin database: it gives the CONNECTION's user and password as the credential, which replaces any authSource in the URI, so a URI or connection string with another authSource is refused. Keep authSource=admin (or leave it out) so the URI says the same, and make the reader a user of admin (an Atlas database user always is).",

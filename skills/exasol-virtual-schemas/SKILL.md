@@ -68,8 +68,10 @@ exakit source check <name> --json                                   # later: a f
 - Give every input with `--set`; under `--json` a missing one is `kind: input` (exit 2).
   `--url '<string>'` fills what a connection string names (JDBC URL, `postgres://`,
   `mongodb+srv://`, `s3://`, an Azure blob URL, a Glue ARN), checked like `--set`, which
-  wins over it. A password in it is never used, unread parameters are dropped by name;
-  prefer one without a password: other local users can read the command line.
+  wins over it. A password in it is taken out and used as the credential (unless
+  `--password-file` or `--password-stdin` gives one), with a warning that it is now in the
+  shell history; unread parameters are dropped by name. An agent always gives a string
+  without a password and the credential in a file: other local users can read the command line.
 - **Name**: the form asks "Name (alias) for this connection" (`--name`): lower case
   letters, digits and `_`, a letter first, at most 40 (`sales`). The tables appear
   as `VS_SALES`, the credential in the CONNECTION `EXAKIT_SRC_SALES`.
@@ -80,7 +82,11 @@ exakit source check <name> --json                                   # later: a f
   pasted; the hint lists the forms the connector reads, one per line). It is then shown
   back with every credential masked (`Read: postgres://reader:****@host/db`, `password=****`):
   Enter uses it, `e` pastes it again, Esc or `n` types the fields instead. A password in
-  the string is dropped and asked for separately, hidden. A language container or
+  the string (`user:password@`, `password=`, a token, a SAS) is the connector's credential:
+  taken out of the string - never stored, logged or shown - and not asked again (the panel
+  says `(from the string, hidden)`). `--password-file` or `--password-stdin` given too wins.
+  Given with `--url` or `--set uri=` it is in the shell history, and a warning says so:
+  an agent never builds such a string; it passes the credential in a file. A language container or
   restart the source needs is made without a question there: picking it was the permission.
   Above the menu it names the database clock: "Database clock: in sync with this
   computer.", or a warning and, at a terminal, an offer to restart the database.

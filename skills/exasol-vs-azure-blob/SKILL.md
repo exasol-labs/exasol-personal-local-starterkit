@@ -24,7 +24,7 @@ Tier GA.
 |---|---|---|---|
 | `account` | yes | | Azure portal > Storage accounts: the name (3-24 lower-case letters and digits) |
 | `container` | yes | | Azure portal > Storage account > Data storage > Containers |
-| `mapping` | yes | | a mapping `.json` file on this computer, or a folder of them (at most 50); see the shared skill |
+| `mapping` | no | drafted | a mapping `.json` file on this computer, or a folder of them (at most 50); see the shared skill. Empty (or `auto`, or `auto:<folder>/ for one folder`): the kit drafts it from the container after the SAS - one table per folder and file type, JSON fields typed from a 64 KiB sample, CSV and Parquet inferred by the adapter - into `~/.exasol-starter-kit/sources/<name>/edml/` |
 | `secret` | yes | | a container SAS (read + list), the account's connection string, or its account key (Storage account > Security + networking > Access keys) - only through `--password-file` or a closed stdin pipe |
 
 The first question, "Name (alias) for this connection", is the source name
@@ -48,11 +48,14 @@ az storage account show -n <account> --query "{firewall:networkRuleSet.defaultAc
 - `abfss://<container>@<account>.dfs.core.windows.net` - the same;
 - `AccountName=...;AccountKey=...` - fills `account`.
 
-The path after the container is not used. A SAS query string or an
-`AccountKey` in the string is a credential: it is dropped, and the credential is
-asked for separately, hidden. A SAS carries `&`, so it always goes in a file
-(`--password-file`), never in an argument: on Windows cmd.exe splits an argument
-at `&` on its way through `exakit.cmd`. The `;` of a connection string is fine.
+The path after the container is not used. A credential in the string is the
+connector's: the URL's SAS query (`?sv=...&sig=...`), else the connection
+string's `SharedAccessSignature`, else its `AccountKey`. It is taken out of the
+string (never stored, logged or shown) and not asked again - paste it at the
+hidden prompt; `--password-file` or `--password-stdin` given too wins. A SAS
+carries `&`, so never give it in an argument: on Windows cmd.exe splits an
+argument at `&` on its way through `exakit.cmd`. The `;` of a connection string
+is fine.
 
 ## 4. Prepare the source (recommended: a container SAS; show, then run on a yes)
 
@@ -109,6 +112,12 @@ PowerShell takes the same line on one row, with
 `$HOME\.config\exakit\docs-sas.txt` as the file. Connect prints when the SAS
 expires. First use installs the Java language container (`--yes`, one
 restart): tell the user first.
+
+No mapping yet: leave out `--set mapping` and the connect drafts one from the
+container and prints its tables (Table, Files, Format, Columns); a SAS without
+list (l) cannot. The draft lives in `~/.exasol-starter-kit/sources/<name>/edml/`;
+to change it later, copy the folder elsewhere first (remove deletes it with the
+source), edit, then remove and connect again with `--set mapping=<the copy>`.
 
 ## 7. Verify and query
 
