@@ -386,6 +386,11 @@ class NotebookShapeTest(unittest.TestCase):
                 # The clear-text check (audit SEC-08) names the loopback host to ALLOW plain http there;
                 # it is a rule about hosts, not a connection value. Exactly that one line is exempt.
                 text = text.replace('if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):', "")
+            if path == ROOT / "notebook/package/exakit_nb/sources.py":
+                # connect_source names the loopback hosts to REPLACE them (a Mac's database reaches this computer
+                # at 192.168.64.1) and the query parameter to TAKE a password out of a pasted URL: rules, not values.
+                text = text.replace('LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0")', "")
+                text = text.replace('_PASSWORD_PARAM = re.compile(r"(?:^|[&;])password=([^&;]*)", re.I)', "")
             for needle in ("127.0.0.1", "localhost", ":8563", "password=", "dsn=", "LANGFUSE_SECRET_KEY=", "sk-"):
                 with self.subTest(file=path.relative_to(ROOT).as_posix(), needle=needle):
                     self.assertNotIn(needle, text)

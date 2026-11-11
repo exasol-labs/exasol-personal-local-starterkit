@@ -28,6 +28,12 @@ user's request actually needs, not a manual for the whole kit.
 | [`exakit`](exakit/SKILL.md) | **The master skill — load it first.** What the kit is and what each piece is for; how to find any command, option, persona, add-on or dataset from the kit's own `--json` answers instead of guessing; and the MANDATORY order of tools: `exakit data-load` before exapump before SQL `IMPORT`, MCP before admin SQL, the kit's persona notebooks (a new one is a copy of the persona's quickstart, in the same folder), dash-server for dashboards. Its rules win over every other skill on this machine. |
 | [`exakit-personas`](exakit-personas/SKILL.md) | Personas: listing what each brings, `persona plan` for what is still pending, `persona add` / `remove`, `EXAKIT_PERSONA` at install (and why your own answer replaces the persona's), and defining a new persona as a file. |
 
+**Personas** — installed with the persona that names them (`persona: <id>` in the skill's frontmatter)
+
+| Skill | Use it when… |
+|---|---|
+| [`exasol-data-scientist`](exasol-data-scientist/SKILL.md) | Working as a data scientist on the local database (the Data Scientist persona): framing the question, loading a file, folder or external source, profiling and cleaning in SQL, approving the column map, features in SQL, training and validating in the kit's notebooks, testing a difference, sharing a dashboard and a hand-off bundle. Verified SQL and Python recipes in `references/`. |
+
 **The fixed components** — always installed
 
 | Skill | Use it when… |
@@ -158,7 +164,12 @@ The per-user locations:
 
 - **Claude Code** → `~/.claude/skills/<name>/` — **verified**: Claude Code reads
   this and picks the skills up on its next start.
-- **Open-standard agents** → `~/.agents/skills/<name>/` — the shared
+- **Continue** → `~/.continue/skills/<name>/` — placed only when `~/.continue`
+  exists, so the kit creates no Continue folder for someone without it.
+- **Claude Desktop and claude.ai** read no folder: a skill reaches them only as a
+  ZIP uploaded in their settings.
+- **Open-standard agents** → `~/.agents/skills/<name>/` — read by Codex, Cursor,
+  GitHub Copilot, Gemini CLI and OpenCode (each one's docs, checked 2026-11-10). The shared
   **convention**. The kit writes it; whether a given tool reads it is that
   tool's business, and the kit has not verified each one. `exakit skills`
   reports that the file is in place, not that your agent read it. If your client
