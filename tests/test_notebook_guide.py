@@ -670,6 +670,23 @@ class HomeAddonsTest(unittest.TestCase):
         self.assertEqual('nb.addon_ready("dbt-exasol")', rows["addon_dbt-exasol"]["actions"][0]["cmd"])
 
 
+class LoadedFilesTest(unittest.TestCase):
+    def test_your_files_come_from_the_kits_load_record(self):
+        """Home's Your data listed only the kit's sample datasets; a file loaded with exakit data-load never showed."""
+        nb = importlib.import_module("exakit_nb")
+        kit = importlib.import_module("exakit_nb._kit")
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / "cache").mkdir()
+            (Path(home) / "cache" / "load-receipts.tsv").write_text(
+                "RETAIL.ORDERS\t10\tabc\t100\t1000\torders.csv\n"
+                "RETAIL.ORDERS\t12\tdef\t120\t2000\torders.csv\n"        # loaded again: the latest counts
+                "RETAIL.STATES\t5\tghi\t36\t1500\tstates.parquet\n", encoding="utf-8")
+            with mock.patch.object(kit, "_home", return_value=Path(home)):
+                files = nb.loaded_files()
+        self.assertEqual([("RETAIL.ORDERS", 120, "orders.csv"), ("RETAIL.STATES", 36, "states.parquet")],
+                         [(f["table"], f["rows"], f["file"]) for f in files])
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

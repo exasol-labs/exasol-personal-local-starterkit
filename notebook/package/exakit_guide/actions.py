@@ -44,6 +44,7 @@ ACTIONS: dict[str, Action] = {
     "kit.addons": Action("00_quickstart", "addons = nb.addons()", "addons", False),
     "kit.ai_clients": Action("00_quickstart", "ai_clients = nb.ai_clients()", "ai_clients", False),
     "kit.datasets": Action("00_quickstart", "sample_datasets = nb.sample_datasets()", "sample_datasets", False),
+    "kit.loaded_files": Action("00_quickstart", "loaded_files = nb.loaded_files()", "loaded_files", False),
     "kit.notebooks": Action("00_quickstart", "notebooks = nb.notebooks({persona})", "notebooks", False),
     "kit.model": Action("00_quickstart", "model = nb.model_settings()", "model", False),
     "kit.tracing": Action("00_quickstart", "tracing = nb.tracing()", "tracing", False),

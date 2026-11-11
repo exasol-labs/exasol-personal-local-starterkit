@@ -95,6 +95,33 @@ def connectors() -> list[dict[str, Any]]:
     return [{k: r.get(k) for k in ("id", "name", "summary", "aliases", "tier")} for r in rows]
 
 
+def loaded_files() -> list[dict[str, Any]]:
+    """The files `exakit data-load` put into the database, as the kit records them (its load receipts): one row per
+    table, the latest load - {table, rows, file, loaded_at}. A kit dataset (sample_datasets) is not a file here."""
+    from datetime import datetime, timezone
+
+    from ._kit import _home
+
+    home = _home()
+    path = home / "cache" / "load-receipts.tsv" if home else None
+    if not path or not path.is_file():
+        return []
+    latest: dict[str, dict[str, Any]] = {}
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 6 or "." not in parts[0]:
+            continue
+        table, _, _, rows, at, name = parts[:6]
+        stamp = int(at) if at.isdigit() else 0
+        if table in latest and latest[table]["_at"] > stamp:
+            continue
+        latest[table] = {"table": table, "rows": int(rows) if rows.isdigit() else None, "file": name,
+                         "loaded_at": datetime.fromtimestamp(stamp, timezone.utc).isoformat() if stamp else None,
+                         "_at": stamp}
+    rows_out = sorted(latest.values(), key=lambda r: -r["_at"])
+    return [{k: v for k, v in r.items() if k != "_at"} for r in rows_out]
+
+
 def connector_inputs(connector: str) -> dict[str, Any]:
     """What `exakit connect <connector>` asks, from the kit's own definition of it (the file its connect form reads):
     {id, name, summary, tier, access, tips, forms, inputs}. Each input is {name, label, kind, required, default,

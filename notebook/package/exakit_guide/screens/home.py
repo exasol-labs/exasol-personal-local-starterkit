@@ -99,7 +99,8 @@ class Home(Screen):
         d = {name: _read(action) for name, action in (
             ("kit", "kit.check"), ("components", "kit.components"), ("addons", "kit.addons"),
             ("clients", "kit.ai_clients"), ("plan", "kit.persona_plan"), ("model", "kit.model"),
-            ("tracing", "kit.tracing"), ("approved", "kit.approved"), ("workflows", "kit.workflows"))}
+            ("tracing", "kit.tracing"), ("approved", "kit.approved"), ("workflows", "kit.workflows"),
+            ("files", "kit.loaded_files"))}
         # The persona whose notebook this is: its folder (starter-kit-notebooks/<persona>/), else the kit's own.
         persona = Path.cwd().name
         notebooks = _read("kit.notebooks", persona=persona)
@@ -134,14 +135,18 @@ class Home(Screen):
                      "actions": [] if running else [self._act("kit.start", "Start")]})
 
         loaded = (plan.get("datasets") or {}).get("loaded") or kit.get("datasets_loaded") or []
+        files = [f for f in d.get("files") or [] if isinstance(f, dict)]       # your own, from the kit's load record
         pending = (plan.get("datasets") or {}).get("pending") or []
         approved = [a for a in d.get("approved") or [] if isinstance(a, dict)]
         working = next((a for a in approved if a["id"] == d.get("working_on")), None)
         text = (f"Working on {working['table']}" if working else
                 f"{len(approved)} column map{'s' if len(approved) != 1 else ''} approved" if approved else
-                "Nothing approved yet: step 1 picks and checks your data" if loaded else "No data loaded yet")
-        rows.append({"id": "data", "name": "Your data", "dot": "ok" if approved or loaded else "warn", "text": text,
-                     "sub": (f"Loaded: {', '.join(loaded)}." if loaded else "")
+                "Nothing approved yet: step 1 picks and checks your data" if loaded or files else "No data loaded yet")
+        shown_files = ", ".join(f"{f['table']} ({f['rows']:,} rows)" if isinstance(f.get("rows"), int) else f["table"]
+                                for f in files[:8]) + (f" and {len(files) - 8} more" if len(files) > 8 else "")
+        rows.append({"id": "data", "name": "Your data", "dot": "ok" if approved or loaded or files else "warn", "text": text,
+                     "sub": (f"Your files: {shown_files}. " if files else "")
+                            + (f"Kit datasets: {', '.join(loaded)}." if loaded else "")
                             + (f" Still to load for this persona: {', '.join(pending)}." if pending else ""),
                      "cmd": actions.code("kit.approved"),
                      "actions": [self._act("kit.data_load", f"Load {p}", what=p) for p in pending]
