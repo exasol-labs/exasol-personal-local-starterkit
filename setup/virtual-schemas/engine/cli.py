@@ -5,6 +5,8 @@
     cli.py [context] inputs     CONNECTOR
     cli.py [context] field      CONNECTOR INPUT [--base64]   (the value on standard input)
     cli.py [context] paste      CONNECTOR [--base64]         (a connection string on standard input)
+    cli.py [context] draft      CONNECTOR --name N [--set KEY=VALUE ...] --secret-stdin
+                                (an EDML mapping drafted from the bucket or container, edml_draft.py)
     cli.py [context] plan       CONNECTOR --name N [--set KEY=VALUE ...] [--secret-given]
     cli.py [context] connect    CONNECTOR --name N [--set KEY=VALUE ...] [--secret-stdin]
     cli.py [context] list | issues [--status S] | show N | check N|--all
@@ -114,6 +116,12 @@ def parse(argv):
     cmd = sub.add_parser("paste")
     cmd.add_argument("connector")
     cmd.add_argument("--base64", action="store_true")
+    cmd = sub.add_parser("draft")
+    cmd.add_argument("connector")
+    cmd.add_argument("--name", required=True)
+    cmd.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
+    cmd.add_argument("--secret-stdin", action="store_true")
+    cmd.add_argument("--secret-stdin-base64", action="store_true")
     for name in ("plan", "connect"):
         cmd = sub.add_parser(name)
         cmd.add_argument("connector")
@@ -186,7 +194,7 @@ SOURCE_COMMANDS = ("show", "check", "reauth", "refresh", "describe", "disconnect
 # The commands the day's log records (vslog). Not the catalog and resolve
 # lookups, nor the terminal form's inputs and field: no database, nothing to
 # debug, and a field's value may be a secret typed into the wrong one.
-LOGGED = ("paste", "plan", "connect", "list", "issues") + SOURCE_COMMANDS
+LOGGED = ("paste", "draft", "plan", "connect", "list", "issues") + SOURCE_COMMANDS
 
 
 def set_keys(words):
@@ -344,7 +352,10 @@ def form_answer(args):
             fields.append({"name": spec["name"], "label": spec.get("label", spec["name"]), "kind": spec["kind"],
                            "required": bool(spec.get("required")), "default": str(spec.get("default", "")),
                            "choices": list(spec.get("choices", [])),
-                           "secret": spec["kind"] in ("secret", "secret-file")})
+                           "secret": spec["kind"] in ("secret", "secret-file"),
+                           # Said under the panel when it is asked; the question's own words; drafted when empty.
+                           "hint": list(spec.get("hint", [])), "prompt": spec.get("prompt", ""),
+                           "draft": connector.get("store", "bucket") if spec.get("draft") else ""})
         return {"connector": connector_id, "name": entry["name"], "status": entry["status"],
                 "gate": entry.get("gate") or "", "inputs": fields}
     raw = read_value(args)
@@ -371,6 +382,12 @@ def form_answer(args):
     spec = next((s for s in connector["inputs"] if s["name"] == args.input), None)
     if spec is None or spec["kind"] in ("secret", "secret-file"):
         raise planner.PlanError("%s is not an input of %s that the form checks" % (args.input, connector_id))
+    if spec["kind"] == "edml" and spec.get("draft"):
+        value, problem = planner.draft_value(raw)
+        if problem:
+            raise planner.PlanError(problem)
+        if value is not None:
+            return {"value": value}
     if raw == "":
         if "default" in spec:
             raw = str(spec["default"])
@@ -382,6 +399,32 @@ def form_answer(args):
     if problem:
         raise planner.PlanError(problem)
     return {"value": value}
+
+
+def draft_answer(args, secret):
+    """The terminal form's draft: the mapping written to <kit home>/sources/<name>/edml
+    from the bucket or container, with the credential on standard input. Only for a
+    name that is not a source yet - the form makes new sources."""
+    defs = planner.Definitions(args.defs)
+    connector_id = defs.resolve(args.connector)
+    connector = defs.connector(connector_id)
+    if not lifecycle.Engine.drafts(connector):
+        raise planner.PlanError("%s takes no mapping to draft" % connector_id)
+    if not sources.NAME.match(args.name):
+        raise planner.PlanError("the source name must be lower case letters, digits and _ (start with a letter, "
+                                "at most 40), e.g. sales")
+    store = sources.Store(args.kit_home)
+    if store.exists(args.name):
+        raise planner.PlanError("a source named %s already exists; its mapping is staged already" % args.name,
+                                code=lifecycle.EXIT["conflict"])
+    values = planner.validate_inputs(connector, pairs(args.set))
+    if planner.draft_prefix(connector, values) is None:
+        raise planner.PlanError("a mapping path is given; there is nothing to draft")
+    if not secret:
+        raise planner.PlanError("the draft reads the %s with the credential: give it on standard input"
+                                % connector.get("store", "bucket"))
+    result = lifecycle.draft_into(connector, values, secret, store.path(args.name, "edml"))
+    return dict(result, connector=connector_id, summary=lifecycle.edml_draft.summary_lines(result))
 
 
 def main(argv=None):
@@ -429,6 +472,10 @@ def main(argv=None):
             result = form_answer(args)
         elif args.command == "paste":
             result = paste_answer(args, emit)
+        elif args.command == "draft":
+            result = draft_answer(args, secret_of(args))
+            for note in result["notes"]:
+                emit("WARN", note)
         elif args.command in ("catalog", "resolve"):
             defs = planner.Definitions(args.defs)
             if args.command == "resolve":

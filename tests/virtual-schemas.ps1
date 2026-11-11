@@ -1517,6 +1517,34 @@ Check "help mcp keeps the component page" $true ((Guide @("help", "mcp")).Contai
 $env:HOME = $savedHome; $env:EXAKIT_HOME = $savedExakitHome; $env:EXAKIT_NO_IP_LOOKUP = $savedLookup
 if ($null -eq $savedExakitHome) { Remove-Item Env:\EXAKIT_HOME -ErrorAction SilentlyContinue }
 if ($null -eq $savedLookup) { Remove-Item Env:\EXAKIT_NO_IP_LOOKUP -ErrorAction SilentlyContinue }
+Write-Host ""
+Write-Host "== S3 and Azure: the mapping drafted from the bucket, through the bridge =="
+# A folder stands in for the bucket (EXAKIT_VS_FAKE_STORE); the credential
+# goes base64 on the engine's stdin, as every credential does.
+$store = Join-Path $work "store"
+New-Item -ItemType Directory -Force -Path (Join-Path $store "data/orders"), (Join-Path $store "data/customers") | Out-Null
+Set-Content -LiteralPath (Join-Path $store "data/orders/o-1.jsonl") -Value '{"order_id": 1, "amount": 9.5, "note": "x"}' -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $store "data/customers/customers.csv") -Value "id,name`n1,Ann" -Encoding ASCII
+$env:EXAKIT_VS_FAKE_STORE = $store
+$doc = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("inputs", "s3")).Lines
+$m = @($doc.inputs | Where-Object { $_.name -eq "mapping" })[0]
+Check "the S3 form: the box label, the question, optional, drafted from the bucket" "EDML mapping|EDML mapping path|False|bucket" ("{0}|{1}|{2}|{3}" -f $m.label, $m.prompt, $m.required, $m.draft)
+Check "...the two lines above the question" "EDML mapping: a .json file or a folder of them on this computer.|Leave empty and the kit drafts it from the bucket after you give the access key." (@($m.hint) -join "|")
+$doc = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("inputs", "azure-blob")).Lines
+$m = @($doc.inputs | Where-Object { $_.name -eq "mapping" })[0]
+Check "the Azure form says the container and the SAS token" "Leave empty and the kit drafts it from the container after you give the SAS token." @($m.hint)[1]
+$awsSecret = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+$r = Invoke-ExakitVsEngine -Arguments @("draft", "s3", "--name", "psdraft", "--set", "bucket=docs-bucket", "--set", "region=ap-south-1", "--set", "access_key_id=AKIAEXAMPLEKEYID0001", "--secret-stdin") -Secret $awsSecret
+Check "draft through the bridge: exit 0" 0 $r.Code
+$res = Get-ExakitVsResultOf $r.Lines
+Check "...one table per folder, JSON typed, CSV left to the adapter" "CUSTOMERS:|ORDERS:3" ((@($res.tables) | ForEach-Object { "{0}:{1}" -f $_.table, $_.columns }) -join "|")
+Check "...the summary the form shows" $true ((@($res.summary) -join "`n").Contains("inferred by the adapter"))
+Check "...written to the source's own folder" (Join-Path (Join-Path (Join-Path $home2 "sources") "psdraft") "edml") ("" + $res.folder)
+Check "...the secret is in none of it" $false (($r.Lines -join "`n").Contains($awsSecret))
+Set-Content -LiteralPath (Join-Path $store ".deny") -Value "" -Encoding ASCII
+$r = Invoke-ExakitVsEngine -Arguments @("draft", "s3", "--name", "psdraft", "--set", "bucket=docs-bucket", "--set", "region=ap-south-1", "--set", "access_key_id=AKIAEXAMPLEKEYID0001", "--secret-stdin") -Secret $awsSecret
+Check "a key that cannot list: exit 2, said plainly" "2 True" ("{0} {1}" -f $r.Code, (($r.Lines -join "`n").Contains("the key cannot list the bucket (s3:ListBucket)")))
+Remove-Item Env:\EXAKIT_VS_FAKE_STORE
 
 # V1 and R1: the table cell names the new kinds in the same words as the bash twin.
 $shBridge = Get-Content -Raw -LiteralPath (J @("setup", "lib", "virtual-schemas.sh"))

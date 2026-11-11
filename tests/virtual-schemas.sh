@@ -2391,6 +2391,160 @@ check "...and docs_pending's CONNECTION and schema are still there" "true true" 
 run check docs_pending; check "...it still checks ready" "0" "$RC"
 run remove docs_pending
 
+printf '\n== S3 and Azure: an EDML mapping drafted from the bucket (edml_draft.py) ==\n'
+# The signer, the grouping, the JSON inference and the writer, without a
+# network: SigV4 against the two AWS documentation vectors, the rest against
+# fixture files. Then the engine's draft, plan and connect over a folder that
+# stands in for the bucket (EXAKIT_VS_FAKE_STORE, as EXAKIT_VS_FAKE_DB is the
+# database's).
+cat > "$WORK/draft-unit.py" <<'PY'
+import datetime, json, os, sys
+sys.path.insert(0, sys.argv[1])
+import edml_draft as d
+out = []
+def say(name, ok): out.append("%s %s" % ("ok" if ok else "FAIL", name))
+utc = datetime.timezone.utc
+# AWS SigV4 test suite, get-vanilla (service "service", us-east-1).
+h = d.sigv4_headers("GET", "example.amazonaws.com", "/", [], {}, "us-east-1", "service", "AKIDEXAMPLE",
+                    "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY", datetime.datetime(2015, 8, 30, 12, 36, 0, tzinfo=utc))
+say("sigv4 get-vanilla", h["authorization"].endswith("Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"))
+# The S3 SigV4 documentation's GET Object example (Range bytes=0-9).
+h = d.sigv4_headers("GET", "examplebucket.s3.amazonaws.com", "/test.txt", [],
+                    {"range": "bytes=0-9", "x-amz-content-sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+                    "us-east-1", "s3", "AKIAIOSFODNN7EXAMPLE", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                    datetime.datetime(2013, 5, 24, 0, 0, 0, tzinfo=utc))
+say("sigv4 S3 GET Object example", h["authorization"].endswith("Signature=f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41"))
+say("sigv4 signed headers", "SignedHeaders=host;range;x-amz-content-sha256;x-amz-date," in h["authorization"])
+# Grouping: one table per folder and type; markers, empty, _SUCCESS, dot-files skipped.
+objs = [("data/orders/a.jsonl", 9), ("data/orders/b.jsonl", 9), ("data/orders/_SUCCESS", 0), ("data/orders/", 0),
+        ("data/customers/customers.csv", 9), ("data/.hidden/x.json", 9), ("data/events/e-1.json", 9),
+        ("data/events/e-2.json", 9), ("data/mixed/m.csv", 9), ("data/mixed/m.parquet", 9), ("data/empty/z.csv", 0),
+        ("logs/2024/app.ndjson", 9), ("sales/year=2024/month=01/p.parquet", 9), ("sales/year=2024/month=02/q.parquet", 9),
+        ("top.csv", 9), ("1st-run/r.csv", 9)]
+groups, notes = d.group(objs)
+got = sorted((g["table"], g["source"], g["format"]) for g in groups)
+say("grouping", got == sorted([("ORDERS", "data/orders/*.jsonl", "jsonl"), ("CUSTOMERS", "data/customers/*.csv", "csv"),
+                               ("EVENTS", "data/events/*.json", "json"), ("MIXED_CSV", "data/mixed/*.csv", "csv"),
+                               ("MIXED_PARQUET", "data/mixed/*.parquet", "parquet"), ("SALES", "sales/**/*.parquet", "parquet"),
+                               ("TOP", "top.csv", "csv"), ("T_1ST_RUN", "1st-run/*.csv", "csv")]) or got)
+say("ndjson reported", any(".ndjson" in n and ".jsonl" in n for n in notes))
+# Inference over NDJSON: union of keys, types, nested as JSON text.
+ndjson = b'{"id": 1, "price": 2.5, "ok": true, "day": "2024-01-15", "at": "2024-01-15T10:00:00Z", "tags": ["a"], "who": {"n": 1}}\n' \
+         b'{"id": 2, "price": 3, "ok": false, "extra": "x", "day": null, "first name": "Ann"}\n{"id": 3, "pri'
+recs = d.records(ndjson, "jsonl", True)
+say("ndjson records, the cut line dropped", len(recs) == 2)
+kinds = dict(d.infer(recs))
+say("types", kinds == {"id": "int", "price": "float", "ok": "bool", "day": "date", "at": "timestamp", "tags": "json",
+                       "who": "json", "extra": "string", "first name": "string"} or kinds)
+try:
+    d.records(b'[{"a": 1}, {"a": 2}]', "json", False); say("json array refused", False)
+except d.DraftError as e:
+    say("json array refused, with the fix", "JSON Lines" in str(e))
+say("json document", d.records(b'\xef\xbb\xbf{"a": 1}', "json", False) == [{"a": 1}])
+# The writer: EDML 2.1.0, fields only for JSON, lenient conversions, names for odd keys.
+class Fake(object):
+    where = "bucket"
+    files = {"data/orders/a.jsonl": ndjson, "data/customers/c.csv": b"id,name\n1,a\n", "data/p/x.parquet": b"PAR1",
+             "data/arr/one.json": b'[{"a": 1}]'}
+    def objects(self, prefix=""):
+        return sorted((k, len(v)) for k, v in self.files.items() if k.startswith(prefix)), False
+    def head(self, key, size=65536):
+        return self.files[key][:size], len(self.files[key]) > size
+folder = sys.argv[2]
+r = d.draft(Fake(), folder)
+names = sorted(os.listdir(folder))
+say("one file per table", names == ["customers.json", "orders.json", "p.json"] or names)
+o = json.load(open(os.path.join(folder, "orders.json")))
+say("edml header", o["$schema"] == "https://schemas.exasol.com/edml-2.1.0.json" and o["source"] == "data/orders/*.jsonl"
+    and o["destinationTable"] == "ORDERS")
+f = o["mapping"]["fields"]
+say("decimal 36,0", f["id"] == {"toDecimalMapping": {"decimalPrecision": 36, "decimalScale": 0, "overflowBehaviour": "NULL",
+                                                    "notNumericBehaviour": "CONVERT_OR_NULL"}})
+say("double, bool, date, timestamp", list(f["price"]) == ["toDoubleMapping"] and list(f["ok"]) == ["toBoolMapping"]
+    and list(f["day"]) == ["toDateMapping"] and list(f["at"]) == ["toTimestampMapping"])
+say("nested as JSON text", f["who"] == {"toJsonMapping": {"varcharColumnSize": 2000000, "overflowBehaviour": "NULL"}})
+say("varchar 2000", f["extra"]["toVarcharMapping"]["varcharColumnSize"] == 2000)
+say("odd key named", f["first name"]["toVarcharMapping"]["destinationName"] == "FIRST_NAME")
+c = json.load(open(os.path.join(folder, "customers.json")))
+say("csv without fields", "mapping" not in c and c["source"] == "data/customers/*.csv")
+say("parquet without fields", "mapping" not in json.load(open(os.path.join(folder, "p.json"))))
+say("array file reported", any("data/arr/one.json" in n and "JSON Lines" in n for n in r["notes"]))
+lines = d.summary_lines(r)
+say("summary", lines[0].split() == ["Table", "Files", "(glob)", "Format", "Columns"]
+    and any("ORDERS" in l and "JSON Lines" in l and l.rstrip().endswith("9") for l in lines)
+    and any("CSV" in l and "inferred by the adapter" in l for l in lines))
+# Caps: at most 25 tables, the rest named.
+many = [("t%02d/x.csv" % i, 1) for i in range(30)]
+class Many(Fake):
+    def objects(self, prefix=""):
+        return many, False
+r = d.draft(Many(), folder + "-many")
+say("25 tables at most", len(r["tables"]) == 25 and any("5 more folders" in n for n in r["notes"]))
+say("old drafts replaced", sorted(os.listdir(folder + "-many"))[0] == "t00.json")
+print("\n".join(out))
+PY
+UNIT="$(python3 "$WORK/draft-unit.py" "$ROOT/setup/virtual-schemas/engine" "$WORK/draft-unit" 2>&1)"
+printf '%s\n' "$UNIT" | while IFS= read -r line; do
+    case "$line" in "ok "*) pass "draft: ${line#ok }" ;; *) fail "draft: $line" ;; esac
+done
+check "...the unit checks all ran" "22" "$(printf '%s\n' "$UNIT" | grep -c '^ok ')"
+
+# The engine over a stand-in bucket: the same objects the measured test bucket holds.
+STORE="$WORK/store"; mkdir -p "$STORE/data/orders" "$STORE/data/customers" "$STORE/data/events"
+printf '{"order_id": 1, "amount": 9.5, "items": [{"sku": "a"}]}\n{"order_id": 2, "amount": 3}\n' > "$STORE/data/orders/o-1.jsonl"
+printf 'id,name\n1,Ann\n' > "$STORE/data/customers/customers.csv"
+printf '{"event_id": 7, "kind": "click"}\n' > "$STORE/data/events/event-1.json"
+printf '' > "$STORE/data/orders/_SUCCESS"
+dr() { EXAKIT_VS_FAKE_STORE="$STORE" eng "$@"; }
+db '{"sources": {"'"$S3HOST"'": {"secret": "'"$AWSSECRET"'", "region": "ap-south-1"}}}'
+OUT="$(eng inputs s3 2>&1)"
+has "the S3 form: the mapping's label" '"label": "EDML mapping"' "$OUT"
+has "...its question" '"prompt": "EDML mapping path"' "$OUT"
+has "...the line under the panel says it is drafted" 'Leave empty and the kit drafts it from the bucket after you give the access key.' "$OUT"
+has "...and it is optional" '"required": false' "$(printf '%s' "$OUT" | python3 -c 'import json,sys; print(json.dumps([f for f in json.loads(sys.stdin.read().split("RESULT ",1)[1])["inputs"] if f["name"]=="mapping"][0]))')"
+OUT="$(eng inputs azure-blob 2>&1)"
+has "the Azure form says the container and the SAS token" 'Leave empty and the kit drafts it from the container after you give the SAS token.' "$OUT"
+OUT="$(printf 'auto' | eng field s3 mapping 2>&1)"; has "the form takes auto" '"value": ""' "$OUT"
+OUT="$(printf 'auto:data' | eng field s3 mapping 2>&1)"; has "...and auto:<folder>, as a folder" '"value": "auto:data/"' "$OUT"
+OUT="$(printf 'auto:../x' | eng field s3 mapping 2>&1)"; has "...not one that climbs out" 'names a folder inside the bucket' "$OUT"
+run plan s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1
+check "plan without a mapping: exit 0" "0" "$RC"
+has "...says it drafts the mapping from the bucket" 'draft the mapping from the bucket with the credential' "$OUT"
+has "...into the source's own folder" "$HOME_K/sources/drafted/edml" "$OUT"
+run plan s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set mapping=auto:data/
+has "...auto:data/ names the folder it lists" 'draft the mapping from the bucket folder data/' "$OUT"
+OUT="$(printf '%s' "$AWSSECRET" | dr draft s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "the form's draft: exit 0" "0" "$RC"
+has "...its summary table" 'ORDERS     data/orders/*.jsonl' "$OUT"
+has "...CSV inferred by the adapter" 'inferred by the adapter' "$OUT"
+check "...the files written" "customers.json events.json orders.json" "$(ls "$HOME_K/sources/drafted/edml" | tr '\n' ' ' | sed 's/ $//')"
+lacks "...the secret is in none of it" "$AWSSECRET" "$OUT $(cat "$HOME_K"/sources/drafted/edml/*.json)"
+check "...and no source record is made by it" "no" "$([ -f "$HOME_K/sources/drafted/config.json" ] && echo yes || echo no)"
+OUT="$(printf '%s' "$AWSSECRET" | dr connect s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "connect without a mapping: exit 0" "0" "$RC"
+has "...the mapping drafted from the bucket" 'Mapping drafted from the bucket: 3 tables in' "$OUT"
+has "...the summary under it" 'EVENTS     data/events/*.json    JSON        2' "$OUT"
+check "...the drafted tables in the virtual schema" '["CUSTOMERS", "EVENTS", "ORDERS"]' "$(dbq 'd["virtual"]["VS_DRAFTED"]["tables"]')"
+check "...the draft staged" "customers.json events.json orders.json" \
+    "$(ls "$EXA/bucketfs/bfsdefault/default/exakit/vs/mappings/drafted" | tr '\n' ' ' | sed 's/ $//')"
+has "...and recorded as the source's mapping" "$HOME_K/sources/drafted/edml" "$(cat "$HOME_K/sources/drafted/config.json")"
+lacks "...the secret is in none of the output" "$AWSSECRET" "$OUT"
+run remove drafted
+check "remove: exit 0, the draft gone with the source folder" "0 no" "$RC $([ -d "$HOME_K/sources/drafted" ] && echo yes || echo no)"
+: > "$STORE/.deny"
+OUT="$(printf '%s' "$AWSSECRET" | dr connect s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "a key that cannot list the bucket: exit 2" "2" "$RC"
+has "...said plainly, with the right it lacks" 'the mapping could not be drafted: the key cannot list the bucket (s3:ListBucket)' "$OUT"
+has "...and what to give instead" 'give a mapping path instead (--set mapping=<folder>), or the bucket folder the key may list (--set mapping=auto:<folder>/, e.g. auto:data/), or add that right' "$OUT"
+check "...nothing was kept" "no []" "$([ -d "$HOME_K/sources/drafted" ] && echo yes || echo no) $(dbq '[c for c in d["connections"] if "DRAFTED" in c]')"
+OUT="$(printf '%s' "$AWSSECRET" | dr connect s3 --name drafted --set bucket=docs-bucket --set region=ap-south-1 --set access_key_id=$KEYID --set mapping=auto:data/ --secret-stdin 2>&1)"; RC=$?
+check "...auto:data/ drafts from the folder the key may list: exit 0" "0" "$RC"
+run remove drafted
+rm -f "$STORE/.deny"
+run_secret "$AWSSECRET" connect s3 --name given $S3_SET --set access_key_id=$KEYID --secret-stdin
+check "a mapping given: exactly as before, nothing drafted" "0 no" "$RC $(printf '%s' "$OUT" | grep -q 'drafted' && echo yes || echo no)"
+run remove given
+
 printf '\n== Profile B: Azure Blob Storage document files ==\n'
 # Measured against a real storage account (Exasol Personal 2.3.0, adapter
 # 3.1.0): a container SAS with read + list works through the adapter's
@@ -2787,6 +2941,55 @@ PY
         has "...and the second one used" "$(printf '%-34s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
     else
         pass "PowerShell long paste: skipped (no pwsh)"
+    fi
+    # S3 with the mapping left empty: the hint above the question, the draft
+    # after the credential (over the stand-in bucket), its tables and one key,
+    # the panel's row as auto, and the drafted tables connected.
+    db '{"sources": {"'"$S3HOST"'": {"secret": "'"$AWSSECRET"'", "region": "ap-south-1"}}}'
+    Q_MAP="$(when 'EDML mapping path:')"; Q_KEYID="$(when 'Access key ID:')"; Q_SKEY="$(when 'Secret access key * (hidden')"
+    Q_DRAFT="$(when 'n to give a folder instead')"
+    EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
+    TUI_ARGS="s3 --name s3form --set bucket=docs-bucket --set region=ap-south-1" \
+        tui connect-tui-scenario.sh "1 of 1 · Amazon S3" 2 \
+        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r${Q_GO}y\r"
+    check "S3, mapping left empty: one panel, one table" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+    has "...the two lines above the question, then the question" "$(printf '%s\n' \
+        '  EDML mapping: a .json file or a folder of them on this computer.' \
+        '  Leave empty and the kit drafts it from the bucket after you give the access key.')" "$TUI_RAW"
+    has "...the question in its own words" "EDML mapping path:" "$TUI_RAW"
+    has "...the box label" "EDML mapping  " "$TUI_SCREEN"
+    has "...the draft's tables, after the credential" "ORDERS     data/orders/*.jsonl" "$TUI_RAW"
+    has "...the row reads auto" "auto (drafted from the bucket)" "$TUI_SCREEN"
+    has "...and it connects with the drafted tables" "VS_S3FORM · 3 tables" "$TUI_SCREEN"
+    lacks "...the secret never drawn" "$AWSSECRET" "$TUI_RAW"
+    eng remove s3form >/dev/null 2>&1
+    # A key that cannot list: said, and the mapping path asked for instead.
+    : > "$STORE/.deny"
+    EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
+    TUI_ARGS="s3 --name s3deny --set bucket=docs-bucket --set region=ap-south-1" \
+        tui connect-tui-scenario.sh "1 of 1 · Amazon S3" 2 \
+        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$(when 'EDML mapping path *')$MAPS\r$Q_SUM\r${Q_GO}y\r"
+    check "S3, a key that cannot list: one panel, one table" "0" "$TUI_RC"
+    has "...the reason said plainly" "the key cannot list the bucket (s3:ListBucket)" "$(tr -d '\r' < "$WORK/tui.raw")"
+    has "...and the path given instead is used" "VS_S3DENY · 3 tables" "$TUI_SCREEN"
+    eng remove s3deny >/dev/null 2>&1
+    rm -f "$STORE/.deny"
+    if command -v pwsh >/dev/null 2>&1; then
+        EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" TUI_PS_SOURCE=s3 TUI_PS_NAME=s3psform \
+        TUI_PS_SETS="bucket=docs-bucket region=ap-south-1" \
+            tui connect-tui-scenario-ps.sh "1 of 1 · Amazon S3" 2 \
+            "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r${Q_GO}y\r"
+        check "PowerShell: S3, mapping left empty: one panel, one table" "0" "$TUI_RC"
+        TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
+        has "...the two lines above the question" "Leave empty and the kit drafts it from the bucket after you give the access key." "$TUI_RAW"
+        has "...the draft's tables" "ORDERS     data/orders/*.jsonl" "$TUI_RAW"
+        has "...the row reads auto" "auto (drafted from the bucket)" "$TUI_SCREEN"
+        has "...and it connects" "VS_S3PSFORM · 3 tables" "$TUI_SCREEN"
+        lacks "...the secret never drawn" "$AWSSECRET" "$TUI_RAW"
+        eng remove s3psform >/dev/null 2>&1
+    else
+        pass "PowerShell S3 draft: skipped (no pwsh)"
     fi
 fi
 # The twins carry the same flow.
