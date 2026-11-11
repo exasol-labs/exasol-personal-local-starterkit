@@ -177,6 +177,8 @@ if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_acti
     :
 elif command -v exakit_persona_flow >/dev/null 2>&1; then
     exakit_persona_flow "$KIT_ROOT"
+    # The skills were placed before the question; a persona's own skill is placed now.
+    command -v exakit_install_persona_skills >/dev/null 2>&1 && { exakit_install_persona_skills || true; }
 fi
 
 # --- step 7: the exakit helper, last, after the persona's data ---------------

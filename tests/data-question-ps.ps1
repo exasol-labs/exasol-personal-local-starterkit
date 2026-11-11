@@ -277,7 +277,7 @@ try {
     Lacks "...and it is not an error" "THREW" $out
     Has "an unknown id among them still refuses" "THREW REJECT: Unknown marketplace add-on" (Market "json-tables,not-a-tool")
     $offer = (Get-Content -Raw (Join-Path $repo "setup/lib/exakit-common.ps1"))
-    Has "a persona's all is the whole marketplace, not a filter" 'if ($only -eq "all") {' $offer
+    Lacks "a persona's offer lists the whole marketplace, never only its own" '$env:EXAKIT_MARKETPLACE_ONLY = ' $offer
 
     Write-Host "after the table: your own file, then the external source:"
     # Picked in any order, the file's question comes first and the connect
@@ -364,7 +364,7 @@ try {
     $out = Ext "menu" 0
     Check "data-load: a failed file, then the wizard, then its error (exit 1)" "local|exakit connect~THREW FAIL: the file failed" (($out -split '~')[0..1] -join '~')
     $out = Ext "offer" 0
-    Check "the installer: a failed file, then the wizard, then the step fails with its reason, not said twice" "local|exakit connect~THREW the file failed" (($out -split '~')[0..1] -join '~')
+    Check "the installer: a failed file, then the wizard, not thrown (a warning, not an install failure)" "local|exakit connect~" (($out -split '~')[0..1] -join '~')
     $script:FileMode = "ok"
     Check "a refusal reaches the command's top level as exit 2" "True" "$(try { Stop-ExakitLocalFileRefused 'x' 6>$null } catch { Test-ExakitRefusal $_ })"
     Has "...which exakit.ps1 answers with exit 2" 'if (Test-ExakitRefusal $_) { exit 2 }' (Get-Content -Raw (Join-Path $repo "setup/exakit.ps1"))

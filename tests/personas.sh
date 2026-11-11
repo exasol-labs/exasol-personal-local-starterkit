@@ -114,8 +114,8 @@ check "the persona's row ticked, the file and external rows after the datasets, 
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\namazon_sales|Amazon sales (Amazon.in fashion orders, Apr-Jun 2022, ~129k lines)\n'; }
         EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=amazon_sales; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
-check "a persona picked: only its datasets under Sample datasets, then upload, external and Skip" \
-    "1,2~Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip;" "$out"
+check "a persona picked: every sample listed, only its own ticked, then upload, external and Skip" \
+    "3~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; _exakit_prompt_tty() { :; }
         exakit_data_load_select Skip >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
 check "without a terminal the pending samples are the answer" "tpch" "$out"

@@ -1696,7 +1696,28 @@ function Confirm-ExakitJsonTablesReady {
     # boot if that is on. It quiets its own detail into the logfile. The shell
     # calls the singular _exakit_marketplace_install_one; this side has only the
     # plural, and one id is the same work.
+    # A minute, once: the bar says so instead of sitting still on the file's name. Twin of
+    # the phase in _exakit_json_tables_ensure (a no-op when no bar is running).
+    Set-ExakitProgressPhase "installing the JSON engine (first JSON file only, about a minute)"
+    # The download writes how far it is ("downloading the JSON engine, 6 of 15 MB")
+    # to this file and the bar shows it, so a slow line is not a hang. Twin of
+    # EXAKIT_PROGRESS_PHASE_FILE in _exakit_json_tables_ensure.
+    $phaseFile = $null
+    if ($null -ne $script:UiSpinFlag) {
+        try {
+            $phaseFile = [IO.Path]::GetTempFileName()
+            $script:UiSpinFlag.PhaseFile = $phaseFile
+            $env:EXAKIT_PROGRESS_PHASE_FILE = $phaseFile
+        } catch { $phaseFile = $null }
+    }
     try { Invoke-ExakitMarketplaceApply -Ids @("json-tables") | Out-Null } catch { }
+    finally {
+        if ($null -ne $phaseFile) {
+            Remove-Item Env:EXAKIT_PROGRESS_PHASE_FILE -ErrorAction SilentlyContinue
+            if ($null -ne $script:UiSpinFlag) { $script:UiSpinFlag.PhaseFile = $null }
+            Remove-Item -Force -ErrorAction SilentlyContinue $phaseFile
+        }
+    }
     if (-not (Test-ExakitJsonTablesReady)) {
         $script:JsonTablesBlocked = "The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
         Warn2 "The JSON engine could not be installed, so this file was not loaded."
@@ -3923,13 +3944,9 @@ function New-ExakitDataTable {
     $script:ExakitTableGroupFirst = 0
     $script:ExakitTableGroupLast = 0
     $pending = @(Get-ExakitPendingDatasets)
-    # A PERSONA LISTS ITS OWN. Picked for this machine, the personas' datasets
-    # are the samples on offer; the rest stays one `exakit data-load` away. No
-    # persona: every sample. Twin of the same block in exakit_data_table_build.
-    if ($env:EXAKIT_PERSONA_ACTIVE -and $env:EXAKIT_DATASETS_PRESELECT -and $env:EXAKIT_DATASETS_PRESELECT -ne "none") {
-        $mine = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
-        $pending = @($pending | Where-Object { $mine -ccontains $_.Id })
-    }
+    # EVERY SAMPLE IS LISTED, a persona or not: a persona's datasets are the
+    # ones ticked (EXAKIT_DATASETS_PRESELECT, below), the rest can be ticked too.
+    # Twin of the same comment in exakit_data_table_build.
     if ($pending.Count -gt 0) {
         # The parent row "Sample datasets" is itself a checkbox: pre-selected with
         # every dataset; unchecking it clears them all, after which they can be

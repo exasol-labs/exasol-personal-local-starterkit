@@ -5242,7 +5242,14 @@ function Get-ExakitSkillRoots {
         if ($roots.Count -gt 0) { return $roots }
     }
     $agentHome = Get-ExakitAgentHome
-    return @((Join-Path $agentHome ".claude\skills"), (Join-Path $agentHome ".agents\skills"))
+    # Claude Code reads .claude\skills; Codex, Cursor, Copilot, Gemini CLI and
+    # OpenCode read .agents\skills; Continue only .continue\skills, placed when
+    # Continue is on this machine. Twin of EXAKIT_SKILL_ROOTS in common.sh.
+    $roots = @((Join-Path $agentHome ".claude\skills"), (Join-Path $agentHome ".agents\skills"))
+    if (Test-Path -LiteralPath (Join-Path $agentHome ".continue") -PathType Container) {
+        $roots += (Join-Path $agentHome ".continue\skills")
+    }
+    return $roots
 }
 
 function Get-ExakitSkillsDir {
@@ -5317,8 +5324,57 @@ function Get-ExakitSkillsForAddon {
 # Test-ExakitSkillWanted <skill-md> - does this skill belong on the machine now?
 # A core skill always does; an add-on's skill only once its add-on is installed.
 # Twin of _exakit_skill_wanted.
+# Get-ExakitSkillPersona <skill-md> - the persona a skill belongs to ("persona:
+# data-scientist"), or empty. Twin of exakit_skill_persona.
+function Get-ExakitSkillPersona {
+    param([string]$Path)
+    return (Get-ExakitSkillField -Path $Path -Field "persona")
+}
+
+# Test-ExakitSkillPersonaOpen <skill-md> - true when the skill needs no persona,
+# or this kit has the one it names. Twin of _exakit_skill_persona_open.
+function Test-ExakitSkillPersonaOpen {
+    param([string]$Path)
+    $want = Get-ExakitSkillPersona -Path $Path
+    if (-not $want) { return $true }
+    $have = "," + (Get-ExakitManifestValue "persona.id") + ","
+    return ($have -like "*,$want,*")
+}
+
+# Get-ExakitSkillGatingPersona <name> - the persona that gates this skill and is
+# not on the kit; empty otherwise. Twin of _exakit_skill_gating_persona.
+function Get-ExakitSkillGatingPersona {
+    param([string]$Id)
+    $dir = Get-ExakitSkillsDir
+    if (-not $dir) { return "" }
+    $md = Join-Path (Join-Path $dir $Id) "SKILL.md"
+    if (-not (Test-Path $md)) { return "" }
+    if (Test-ExakitSkillPersonaOpen -Path $md) { return "" }
+    return (Get-ExakitSkillPersona -Path $md)
+}
+
+# Install-ExakitPersonaSkills - place the skills of the personas this kit now has;
+# the installer places skills before the persona question. Twin of
+# exakit_install_persona_skills.
+function Install-ExakitPersonaSkills {
+    $dir = Get-ExakitSkillsDir
+    if (-not $dir) { return }
+    $placed = 0
+    foreach ($d in (Get-ChildItem -Path $dir -Directory -ErrorAction SilentlyContinue)) {
+        $md = Join-Path $d.FullName "SKILL.md"
+        if (-not (Test-Path $md)) { continue }
+        if (-not (Get-ExakitSkillPersona -Path $md)) { continue }
+        if (-not (Test-ExakitSkillWanted -Path $md)) { continue }
+        Copy-ExakitSkill -Source $d.FullName -Name $d.Name
+        Write-ExakitLog "OK" "Installed skill: $($d.Name) (with its persona)"
+        $placed++
+    }
+    if ($placed -gt 0) { Set-ExakitSkillsRecord }
+}
+
 function Test-ExakitSkillWanted {
     param([string]$Path)
+    if (-not (Test-ExakitSkillPersonaOpen -Path $Path)) { return $false }
     $owner = Get-ExakitSkillAddon -Path $Path
     if (-not $owner) { return $true }
     return (Test-ExakitMarketplaceAddonInstalled $owner)
@@ -5479,10 +5535,12 @@ function Get-ExakitKitSkillNames {
 # so a healthy machine reads "13 installed, 13 in this kit" and not a row of
 # zeros. Twin of exakit_skills_summary_line (common.sh).
 function Get-ExakitSkillsSummaryLine {
-    param([int]$Installed, [int]$WithAddons, [int]$NotPlaced, [int]$Total)
+    param([int]$Installed, [int]$WithAddons, [int]$NotPlaced, [int]$Total, [int]$WithPersonas = 0)
     $line = "$Installed installed"
     if ($WithAddons -eq 1) { $line = "$line, 1 arrives with its add-on" }
     elseif ($WithAddons -gt 1) { $line = "$line, $WithAddons arrive with their add-ons" }
+    if ($WithPersonas -eq 1) { $line = "$line, 1 arrives with its persona" }
+    elseif ($WithPersonas -gt 1) { $line = "$line, $WithPersonas arrive with their personas" }
     if ($NotPlaced -gt 0) { $line = "$line, $NotPlaced not placed" }
     return "$line, $Total in this kit"
 }
@@ -5513,6 +5571,7 @@ function Show-ExakitSkills {
     $pending = 0
     $placed = 0
     $gated = 0
+    $personaGated = 0
     foreach ($row in $rows) {
         $state = Get-ExakitSkillState -Id $row.Id
         $owner = Get-ExakitSkillGatingAddon -Id $row.Id
@@ -5522,6 +5581,16 @@ function Show-ExakitSkills {
                 name = $row.Id; state = "needs-addon"; addon = $owner
                 remedy = "exakit marketplace $owner"; summary = $row.Summary
                 panel = "with $owner"
+            }
+            continue
+        }
+        $persona = Get-ExakitSkillGatingPersona -Id $row.Id
+        if ($state -ne "installed" -and $persona) {
+            $personaGated++
+            $entries += [pscustomobject]@{
+                name = $row.Id; state = "needs-persona"; persona = $persona
+                remedy = "exakit persona add $persona"; summary = $row.Summary
+                panel = "with $persona"
             }
             continue
         }
@@ -5552,7 +5621,7 @@ function Show-ExakitSkills {
             # each counted something different and said so nowhere. Twin of
             # the counts object in exakit_skills_list --json.
             counts = [ordered]@{
-                installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count
+                installed = $placed; needs_addon = $gated; needs_persona = $personaGated; missing = $skjMissing; total = $rows.Count
             }
             # The rows counted by the very token each row's state carries (audit AGT-16).
             by_state = $(
@@ -5577,7 +5646,7 @@ function Show-ExakitSkills {
     Write-ExakitPanelLine ""
     # What the rows add up to, every number labelled: the table alone left a
     # reader counting rows against the installer's sentence.
-    Write-ExakitPanelLine (Get-ExakitSkillsSummaryLine -Installed $placed -WithAddons $gated -NotPlaced $pending -Total $rows.Count)
+    Write-ExakitPanelLine (Get-ExakitSkillsSummaryLine -Installed $placed -WithAddons $gated -NotPlaced $pending -Total $rows.Count -WithPersonas $personaGated)
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -6855,6 +6924,10 @@ function Show-ExakitMarketplaceMenu {
     $defaults = @(1)
     $innerGroups = @()
     $allTicked = $true
+    # A persona's add-ons (EXAKIT_MARKETPLACE_PRESELECT) start ticked and every
+    # other one is listed unticked; no persona, or "all": every add-on ticked.
+    $pre = @(("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "") -split ',' | Where-Object { $_ })
+    if ($pre -ccontains "all") { $pre = @() }
     $kidCount = 0
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
@@ -6867,7 +6940,8 @@ function Show-ExakitMarketplaceMenu {
         $parentRow = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $selectable[$i].Id) `
             -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
-        $defaults += $parentRow
+        $pick = ($pre.Count -eq 0) -or ($pre -ccontains ("" + $selectable[$i].Id).ToLower())
+        if ($pick) { $defaults += $parentRow } else { $allTicked = $false }
         $kids = @($selectable[$i].Children | Where-Object { $_ })
         if ($kids.Count -eq 0) { continue }
         for ($k = 0; $k -lt $kids.Count; $k++) {
@@ -6875,7 +6949,7 @@ function Show-ExakitMarketplaceMenu {
             $at = Add-ExakitTableRow -Kind "$kind-$kk" -Label ("" + $kids[$k].Label) `
                 -Col2 ("" + $kids[$k].Version) -Col3 ("" + $kids[$k].Description) -Table $script:ExakitAddonTable
             [void]$addonIds.Add($selectable[$i].Id + ":" + $kids[$k].Key)
-            if ($kids[$k].Ticked) { $defaults += $at } else { $allTicked = $false }
+            if ($kids[$k].Ticked -and $pick) { $defaults += $at } else { $allTicked = $false }
         }
         $kidCount += $kids.Count
         # Innermost first: the add-on row settles before Select All re-reads it.
@@ -6907,6 +6981,8 @@ function Show-ExakitMarketplaceMenu {
     # child row its add-on starts unticked (a choice recorded earlier) leaves
     # Select All unticked too, which is what "all" means.
     if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
+    # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
+    if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
     $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
         -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
         -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
@@ -7491,13 +7567,9 @@ function Request-ExakitMarketplaceOffer {
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         Write-ExakitHeading "Add-ons for your personas"
-        $only = ("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "")
-        if ($only -eq "all") {
-            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-            Show-ExakitMarketplaceMenu
-            return
-        }
-        $env:EXAKIT_MARKETPLACE_ONLY = $only
+        # Every add-on is listed; the personas' own are the ones ticked
+        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
+        Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
         # Each row says what the add-on does for the persona, in the persona's own
         # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
         if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {

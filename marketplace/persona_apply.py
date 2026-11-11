@@ -94,6 +94,18 @@ def _requested_addons(root: Path, value: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def _persona_skills(root: Path, ids: str) -> list[str]:
+    """The kit's skills that declare one of these personas in their frontmatter ("persona: <id>")."""
+    wanted = {part for part in (ids or "").split(",") if part}
+    found = []
+    for skill in sorted((root / "skills").glob("*/SKILL.md")):
+        head = skill.read_text(encoding="utf-8", errors="replace").split("\n---", 1)[0]
+        for line in head.splitlines():
+            if line.startswith("persona:") and line.split(":", 1)[1].strip().strip('"\'') in wanted:
+                found.append(skill.parent.name)
+    return found
+
+
 def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = False) -> int:
     ctx.manifest.read()
     old = str(ctx.manifest.get("persona.id") or "")
@@ -150,8 +162,9 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
         child_env.pop("EXAKIT_LOAD_SAMPLE", None)
         if live:
             child_env.pop("EXAKIT_DATASETS", None)
-            child_env.update({"EXAKIT_PERSONA_ACTIVE": "1", "EXAKIT_DATASETS_PRESELECT": ",".join(pending),
-                              "UI_TABLE_AUTO": "1"})
+            # Every sample is listed and asked; the persona's are the ones ticked.
+            child_env.pop("UI_TABLE_AUTO", None)
+            child_env.update({"EXAKIT_PERSONA_ACTIVE": "1", "EXAKIT_DATASETS_PRESELECT": ",".join(pending)})
         else:
             child_env["EXAKIT_DATASETS"] = ",".join(pending)
         if not _child(prefix, "data-load", [], child_env):
@@ -190,16 +203,23 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
     elif pending_addons:
         child_env = dict(environment)
         if live:
+            # Every add-on is listed and asked; the persona's are the ones ticked.
             child_env.pop("EXAKIT_MARKETPLACE_ADDONS", None)
-            child_env["EXAKIT_MARKETPLACE_ONLY"] = ",".join(pending_addons)
-            child_env["UI_TABLE_AUTO"] = "1"
+            child_env.pop("EXAKIT_MARKETPLACE_ONLY", None)
+            child_env.pop("UI_TABLE_AUTO", None)
+            child_env["EXAKIT_MARKETPLACE_PRESELECT"] = ",".join(pending_addons)
         else:
             child_env["EXAKIT_MARKETPLACE_ADDONS"] = ",".join(pending_addons)
         if not _child(prefix, "marketplace", [], child_env):
             failures.append(("Add-ons", "exakit marketplace " + " ".join(pending_addons)))
 
     ready = set(installed)
-    if not any(part == "Add-ons" for part, _ in failures):
+    if live and pending_addons:
+        # The reader chose: what is installed now is what was picked.
+        after = _query(prefix, "marketplace", ["--list", "--json"], environment)
+        rows = after.get("addons", []) if after is not None and isinstance(after.get("addons"), list) else []
+        ready.update(row.get("id") for row in rows if isinstance(row, dict) and row.get("installed"))
+    elif not any(part == "Add-ons" for part, _ in failures):
         ready.update(pending_addons)
     if "notebook" in installed:
         # The notebook was already there: the new persona's notebooks join it (a fresh install copies its own).
@@ -209,6 +229,11 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
             notebook.sync_notebooks(ctx)
         except (AddonFailure, OSError) as error:
             failures.append((f"Notebooks ({error})", "exakit notebook setup"))
+    if _persona_skills(ctx.root, new_ids):
+        # A skill that belongs to the new persona ("persona:" in its SKILL.md) is placed now: the
+        # skills step of the install ran before the kit had this persona.
+        if not _child(prefix, "skills-install", [], environment):
+            failures.append(("AI skills", "exakit skills-install"))
     failures.extend(start_services(ctx, persona_service.selected_services(ctx.root, new_ids),
                                    lambda command, args: _child(prefix, command, args, environment), ready))
     if failures:

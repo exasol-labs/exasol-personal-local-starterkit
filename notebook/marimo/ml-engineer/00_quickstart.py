@@ -203,16 +203,29 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **A connected source (optional):** set `SOURCE = "SCHEMA.TABLE"` for a virtual-schema table. `None` skips it.
+    **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
+
+    1. Not connected yet? Fill in `CONNECTOR`, `SOURCE_NAME` and `SOURCE_URL` (the source's connection string). The password is asked in a hidden box. On a Mac, use `192.168.64.1` for a database on this computer.
+    2. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
     """)
     return
 
 
 @app.cell
-def _(connection, nb):
+def _(nb):
     # Cell tags: load
-    SOURCE = None   # e.g. "VS_SALES.ORDERS"
-    source_data = nb.load_source(connection, SOURCE)
+    CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
+    SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
+    SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
+    connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL) if CONNECTOR else None
+    return (connected,)
+
+
+@app.cell
+def _(connected, connection, nb):
+    # Cell tags: load
+    SOURCE = None   # e.g. "VS_SALES.ORDERS" (None after a connect above: the new source's tables)
+    source_data = nb.load_source(connection, SOURCE or connected)
     return (source_data,)
 
 
@@ -230,6 +243,24 @@ def _(nb, own_data, sample_data, source_data):
     # Cell tags: load
     chosen_data = nb.first(source_data, own_data, sample_data)
     return (chosen_data,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: load
+    mo.md(r"""
+    ### All your data in one map
+
+    Every table by origin: external source, your data, sample data. Each shows its rows, its column map and the roles in it. *Links* lists columns that join tables, across origins too. A `possible` link only shares a name: check it before a join.
+    """)
+    return
+
+
+@app.cell
+def _(connection, nb):
+    # Cell tags: load
+    nb.data_map(connection)
+    return
 
 
 @app.cell(hide_code=True)
@@ -282,6 +313,25 @@ def _(nb, role_review):
     dataset = role_review.dataset()
     nb.show_roles(dataset)
     return (dataset,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Check the map again
+
+    The same map, read again after the approval. The table you approved now shows `approved vN, published` and every slot by name. `not published` means the roles are saved but agents cannot read them yet: approve again to publish.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    dataset  # read after the approval above, so this map shows it
+    nb.data_map(connection)
+    return
 
 
 @app.cell(hide_code=True)
