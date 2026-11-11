@@ -430,6 +430,10 @@ _ui_step_stop_spinner() {
     _UI_SPIN_PID=''
     _UI_SPIN_OWNER=''
     printf '\r\033[K\033[?25h'                   # clear spinner line, restore cursor
+    if [ "${_UI_PROGRESS_HELD:-0}" = 1 ]; then
+        _UI_PROGRESS_HELD=0
+        _ui_input_release
+    fi
 }
 
 _ui_step_elapsed() {
@@ -917,6 +921,13 @@ ui_progress_begin() {
         _ui_step_stop_spinner
     fi
     printf '\033[?25l'
+    # Keys typed while the bar animates are neither echoed nor kept: an Enter
+    # moved the cursor down a line and every redraw after it landed there, one
+    # bar under another. Only a hold this bar took is released when it stops.
+    if [ -z "${_UI_STTY_SAVED:-}" ]; then
+        _ui_input_hold
+        [ -n "${_UI_STTY_SAVED:-}" ] && _UI_PROGRESS_HELD=1
+    fi
     ui_progress_animate "$1" "$2" &
     _UI_SPIN_PID=$!
     _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"

@@ -373,6 +373,11 @@ $script:PersonalNoDatabase = $false
 $out = Invoke-Captured { Install-PersonalDeployment }
 Check "no database, softly" $true $script:PersonalNoDatabase
 Check "...the launcher's last lines are shown" $true ($out -like "*last lines from the exasol launcher*Temporary failure in name resolution*")
+if (-not ($out -like "*last lines from the exasol launcher*")) {
+    # What the deploy said instead: on a runner the reason it stopped early is otherwise invisible.
+    Write-Host "      (the deploy said: $(("$out" -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 12) -join ' | '))"
+    Write-Host "      (engine: $($script:PersonalEngine); calls: $($script:calls -join ', '))"
+}
 Check "...the cause is recognised in them" $true ((Get-ExakitFailureReason) -like "*could not deploy the database locally: Podman's machine cannot resolve registry-1.docker.io*")
 Check "...the deployment is recorded as never booted" $true (Test-PersonalFirstBootPending)
 Check "...on Podman" "podman" $script:PersonalEngine

@@ -33,6 +33,8 @@ from .ask import Proposal, ask
 from .checks import check_bucket, check_container, check_mlflow, check_model_compatibility, model_list
 from .dash_mcp import DashTools, dash_tools
 from .data_checks import data_checks, leakage_check
+from .data_map import DataMap, data_map
+from .sources import SourceProblem, clean_path, connect_source
 from .prepare import TypedView, typed_view
 from .schema_map import JoinedView, SchemaMap, describe_schema
 from .kit_commands import KitRun, addon_ready, exakit, kit_check, kit_status, kit_update
@@ -54,7 +56,7 @@ from .workflow import TRACE as TRACE_KIND
 from .workflow import continue_workflow, current_workflow, last_workflow, log_event, log_sql, workflow
 
 # Kept alphabetical (case-insensitive) by construction, so a new export can never break the order test.
-__all__ = sorted(["addon_ready", "exakit", "HandoffBundle", "handoff_bundle", "kit_check", "kit_status", "kit_update", "KitRun", "ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "continue_workflow", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "data_checks", "Dataset", "dataset", "describe_schema", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "JoinedView", "last_workflow", "leakage_check", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "model_setup", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "SchemaMap", "share", "ShareDraft", "show_roles", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "TypedView", "typed_view", "use_mlflow", "use_model", "workflow", "write_handoff"], key=str.lower)
+__all__ = sorted(["addon_ready", "exakit", "HandoffBundle", "handoff_bundle", "kit_check", "kit_status", "kit_update", "KitRun", "ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "clean_path", "connect_source", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "continue_workflow", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "data_checks", "data_map", "DataMap", "Dataset", "dataset", "describe_schema", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "JoinedView", "last_workflow", "leakage_check", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "model_setup", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "SchemaMap", "share", "ShareDraft", "show_roles", "SourceProblem", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "TypedView", "typed_view", "use_mlflow", "use_model", "workflow", "write_handoff"], key=str.lower)
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset
