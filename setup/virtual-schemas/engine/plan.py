@@ -327,6 +327,12 @@ def check_value(spec, raw):
             document.load_mappings(raw)
         except document.DocumentError as error:
             return None, str(error)
+    elif kind == "warehouse" and re.match(r"^https?://", raw, re.I):
+        # Measured: the catalog URL typed here failed deep in the UDF (HTTP 400,
+        # "not a valid name"). A storage location (s3://bucket/) stays: the
+        # Iceberg REST reference catalog and MinIO setups take one.
+        return None, ("warehouse is the catalog's name (e.g. exakit_uc for Databricks, the catalog name for "
+                      "Polaris), not a URL - the URL goes in catalog_url")
     elif kind == "mongodb-uri" and "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
         return None, ("the MongoDB URI carries credentials (user:password@): give the user with --set user=... "
                       "and the password on standard input, so the database keeps it hidden")

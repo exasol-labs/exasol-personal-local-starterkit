@@ -64,7 +64,8 @@ STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreac
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
               "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
               "schema_missing": "failed", "external": "access-denied", "managed": "failed",
-              "privilege": "access-denied", "missing_or_denied": "failed"}
+              "privilege": "access-denied", "missing_or_denied": "failed", "sandbox": "failed",
+              "catalog": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
@@ -84,6 +85,8 @@ REMEDY_FOR = {
     "schema_missing": "the schema the source was connected with is gone or no longer visible to the account; check it at the source, then: exakit source check {name}",
     "external": "Unity Catalog does not let engines outside Databricks read this schema's files: the metastore needs External Data Access switched on and the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside) - or read it through the SQL warehouse: exakit connect databricks; then: exakit source check {name}",
     "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; read it through the SQL warehouse instead: exakit connect databricks",
+    "sandbox": "the database's Java sandbox stopped the driver before it reached the source (it tried a file or a connection the sandbox does not allow) - not the network or the credentials; update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then: exakit source check {name}",
+    "catalog": "the catalog does not know warehouse {warehouse} - give the catalog's name (e.g. exakit_uc for Databricks), then: exakit source check {name}",
     "error": "see the log: exakit logs",
 }
 
@@ -120,12 +123,19 @@ def command_for(kind, name, first=False):
 
 
 
+def catalog_warehouse(message):
+    """The warehouse a catalog-config failure names, quoted, or "it was given"."""
+    m = re.search(r"catalog config for warehouse '([^']*)'", str(message or ""))
+    return "'%s'" % m.group(1) if m else "it was given"
+
+
 def remedy_for(kind, name, connector, message=None):
     """The fix for a failure class, in the words of the connector's store.
     An error_hint given as {"match", "text"} is said only for a message it
     matches; a plain string, for every unclassified failure."""
     text = remedy_text(kind).format(
-        name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"))
+        name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"),
+        warehouse=catalog_warehouse(message))
     if kind == "auth" and connector.get("auth_hint"):
         text += "; %s" % connector["auth_hint"]
     hint = connector.get("error_hint")
@@ -1215,7 +1225,7 @@ class Engine(object):
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
                 elif not reconnect and kind in ("auth", "tls", "unreachable", "nohost", "denied", "region", "nobucket",
                                                 "clock", "external", "managed", "schema_missing", "privilege",
-                                                "missing_or_denied"):
+                                                "missing_or_denied", "sandbox", "catalog"):
                     remedy = {"denied": "the account signs in but may not read this data; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
                               "privilege": "the source took the credentials, but the account lacks a privilege; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
                               "missing_or_denied": "the source answers that the object the message names does not exist for this account; nothing was kept - check that name as the source spells it, or grant the account %s, then connect again" % connector.get("access", "read access"),
@@ -1229,6 +1239,8 @@ class Engine(object):
                               "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again",
                               "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",
                               "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
+                              "catalog": "the catalog does not know warehouse %s; nothing was kept - give the catalog's name (e.g. exakit_uc for Databricks, the catalog name for Polaris), not a URL, then connect again" % catalog_warehouse(error),
+                              "sandbox": "the database's Java sandbox stopped the driver before it reached the source - not the network or the credentials; nothing was kept - update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then connect again",
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
                 if kind in ADDRESS_KINDS:
                     remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
@@ -1242,8 +1254,10 @@ class Engine(object):
                     # check); only the driver's raw text needs it restated.
                     raise Failure(str(error), code, kind, remedy=remedy, command=command,
                                   said="%s; %s" % (error, remedy.split("; ", 1)[-1]))
+                # A catalog-config failure is said in the kit's words alone: the
+                # VM's raw text (in the log and in error) helps nobody here.
                 raise Failure(str(error), code, kind, remedy=remedy, command=command,
-                              said="%s (%s)" % (error, remedy))
+                              said=remedy if kind == "catalog" else "%s (%s)" % (error, remedy))
             pins = self.pins(connector)
             record = {"schema_version": 1, "id": name, "connector": connector_id,
                       "profile": connector["profile"], "inputs": values, "objects": names,
@@ -1656,7 +1670,8 @@ class Engine(object):
                         "credential" % (name, connector["id"], name)))
             if remedy is None:
                 remedy = "%s; %s" % (kept, remedy_text(kind).format(name=name, access=access,
-                                                                      store=connector.get("store", "bucket")))
+                                                                      store=connector.get("store", "bucket"),
+                                                                      warehouse=catalog_warehouse(error)))
             if kind in ADDRESS_KINDS:
                 remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
         return Failure(str(error), code, kind, remedy=remedy, said="%s; %s" % (error, remedy))

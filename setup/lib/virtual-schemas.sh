@@ -937,7 +937,7 @@ _exakit_vs_ask_paste() {
     [ -n "$_eap_forms" ] || return 0
     _exakit_vs_paste_hint "$_eap_forms"
     while :; do
-        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (not shown while you paste, Enter to type the fields): " err < /dev/tty \
+        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (hidden) - paste + Enter, or Enter alone for the fields: " err < /dev/tty \
             || { printf '\n' >&2; return 0; }
         printf '\n' >&2
         _eap_url="$_EVH_LINE"; _EVH_LINE=""
@@ -1260,7 +1260,10 @@ _exakit_vs_tui_frame() {
         [ -n "$_evf_note" ] || continue
         _evf_nm="$UI_DIM$UI_BULLET$UI_RESET"
         case "$_evf_note" in "WARN "*) _evf_nm="$UI_WARN!$UI_RESET" ;; esac
-        _ui_wrap "${_evf_note#* }" $(( _EVT_COLS - 8 ))
+        case "$_evf_note" in
+            "INFO Read: "*) _exakit_vs_read_wrap "${_evf_note#* }" $(( _EVT_COLS - 8 )) ;;
+            *) _ui_wrap "${_evf_note#* }" $(( _EVT_COLS - 8 )) ;;
+        esac
         _evf_k=0
         while [ "$_evf_k" -lt "$_UI_WRAP_N" ]; do
             if [ "$_evf_k" -eq 0 ]; then _EVT_BUF="$_EVT_BUF    $_evf_nm ${_UI_WRAP[0]}"$'\n'
@@ -1288,8 +1291,39 @@ _exakit_vs_tui_draw() {
 
 # _exakit_vs_tui_say <mark> <text> — a line under the panel (a refused answer and
 # why), wrapped to the terminal and counted for the next redraw.
+# _exakit_vs_read_wrap <"Read: <string>"> <width> - a connection string shown
+# back, into _UI_WRAP as _ui_wrap fills it: whole when it fits, else broken only
+# after a separator (& ; ? /), each continuation under the string; a stretch
+# with no separator in reach is cut at the width. _ui_wrap would cut the string
+# mid-word (ConnCatalog=workspa / ce). Twin of Split-ExakitVsReadWrap.
+_exakit_vs_read_wrap() {
+    _UI_WRAP=(); _UI_WRAP_N=0
+    _erw_rest="$1"; _erw_w="$2"; _erw_pad=""
+    [ "$_erw_w" -ge 26 ] || _erw_w=26
+    while [ -n "$_erw_rest" ]; do
+        _erw_room=$(( _erw_w - ${#_erw_pad} ))
+        if [ "${#_erw_rest}" -le "$_erw_room" ]; then
+            _erw_cut=${#_erw_rest}
+        else
+            _erw_cut=$_erw_room
+            while [ "$_erw_cut" -gt 0 ]; do
+                case "${_erw_rest:$(( _erw_cut - 1 )):1}" in '&'|';'|'?'|'/') break ;; esac
+                _erw_cut=$(( _erw_cut - 1 ))
+            done
+            [ "$_erw_cut" -gt 0 ] || _erw_cut=$_erw_room
+        fi
+        _UI_WRAP[$_UI_WRAP_N]="$_erw_pad${_erw_rest:0:$_erw_cut}"
+        _UI_WRAP_N=$(( _UI_WRAP_N + 1 ))
+        _erw_rest="${_erw_rest:$_erw_cut}"
+        _erw_pad="      "
+    done
+}
+
 _exakit_vs_tui_say() {
-    _ui_wrap "$2" $(( _EVT_COLS - 8 ))
+    case "$2" in
+        "Read: "*) _exakit_vs_read_wrap "$2" $(( _EVT_COLS - 8 )) ;;
+        *) _ui_wrap "$2" $(( _EVT_COLS - 8 )) ;;
+    esac
     _evs_k=0
     while [ "$_evs_k" -lt "$_UI_WRAP_N" ]; do
         if [ "$_evs_k" -eq 0 ]; then printf '    %s %s\n' "$1" "${_UI_WRAP[$_evs_k]}"
@@ -1558,8 +1592,8 @@ _exakit_vs_tui_paste() {
     _etp_why=""
     # Read with echo off, as a password is: the string often holds one. What
     # was read is shown back masked, and the fields it filled.
-    _etp_q="Connection string (not shown while you paste, Enter to type the fields)"
-    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(not shown while you paste, Enter to type the fields)$UI_RESET"
+    _etp_q="Connection string (hidden) - paste + Enter, or Enter alone for the fields"
+    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(hidden) - paste + Enter, or Enter alone for the fields$UI_RESET"
     _etp_c="$(_exakit_vs_paste_choice_text)"
     # Where there is room, the question says a field can still be changed.
     _etp_more=" $( [ "${UI_BULLET:-}" = '-' ] && printf '%s' '-' || printf '%s' '·' ) every field can be changed in the summary"
@@ -1960,7 +1994,9 @@ else:
              "dns": "Java in the database has no DNS", "denied": "the account may not read this",
              "region": "the region does not match", "nobucket": "no such bucket or container",
              "clock": "the database clock is wrong", "privilege": "the account lacks a privilege",
-             "missing_or_denied": "no such object, or not granted"}
+             "missing_or_denied": "no such object, or not granted",
+             "sandbox": "the database's Java sandbox refused the driver",
+             "catalog": "the catalog does not know that warehouse"}
     why = short.get(doc.get("kind", ""))
     if not why and rc == "3":
         why = "the name is already taken"
@@ -2069,7 +2105,7 @@ p = json.load(sys.stdin)
 new = [d for d in p["downloads"] if not d["cached"]]
 size = sum(d["bytes"] for d in new)
 mb = "<1 MB" if 0 < size < 5e5 else "%.0f MB" % (size / 1e6)
-cell = " · ".join(["%s %s" % (d["role"], d["version"]) for d in new] + [mb]) if new else "in the cache"
+cell = " · ".join(["%s %s" % (d["role"], d["version"]) for d in new] + [mb]) if new else "none needed"
 print("|".join([cell, str(size), " ".join(p.get("languages") or []), "1" if p.get("exposure") else "",
                 p.get("public_ip") or ""]))
 for w in p["warnings"]:

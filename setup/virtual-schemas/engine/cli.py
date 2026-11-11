@@ -234,7 +234,8 @@ def failure(message, code, kind=None, remedy=None, command=None, source=None):
     if not kind or kind == "error":
         kind = KIND_FOR_CODE.get(code, "error")
     if source and not remedy and kind != "error" and kind in lifecycle.REMEDY_FOR:
-        remedy = lifecycle.remedy_text(kind).format(name=source, access="read access", store="bucket")
+        remedy = lifecycle.remedy_text(kind).format(name=source, access="read access", store="bucket",
+                                                    warehouse=lifecycle.catalog_warehouse(message))
         command = command or lifecycle.command_for(kind, source)
     return {"ok": False, "error": str(message), "kind": kind,
             "remedy": remedy or kind_remedy(kind),

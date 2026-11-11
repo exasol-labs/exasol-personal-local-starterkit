@@ -69,7 +69,7 @@
     },
     {
       "name": "region",
-      "label": "AWS region of the bucket that holds the tables (e.g. us-east-2)",
+      "label": "AWS region (data bucket)",
       "kind": "aws-region",
       "required": true
     },

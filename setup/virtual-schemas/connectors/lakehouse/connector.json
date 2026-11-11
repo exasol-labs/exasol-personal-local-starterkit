@@ -56,7 +56,7 @@
   "inputs": [
     {
       "name": "region",
-      "label": "AWS region of the Glue catalog and its bucket (e.g. eu-central-1)",
+      "label": "AWS region (Glue Catalog)",
       "kind": "aws-region",
       "required": true
     },

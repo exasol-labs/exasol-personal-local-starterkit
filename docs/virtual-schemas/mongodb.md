@@ -17,7 +17,7 @@ of the documents.
 | Field | Required | Example |
 |---|---|---|
 | Name (alias) for this connection | yes | `movies` |
-| MongoDB URI without credentials | yes | `mongodb+srv://cluster0.abcde.mongodb.net/?authSource=admin` |
+| MongoDB URI (without password) | yes | `mongodb+srv://cluster0.abcde.mongodb.net/?authSource=admin` |
 | Database | yes | `sample_mflix` |
 | Collection | yes | `movies` |
 | Reader account | yes | `exakit_reader` |

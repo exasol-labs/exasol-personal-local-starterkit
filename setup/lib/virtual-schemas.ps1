@@ -611,8 +611,13 @@ function Read-ExakitVsSecret {
 # sends an escape sequence (an arrow, Delete) is no character here: the host's
 # secure read takes none. Twin of exakit_read_hidden.
 function Read-ExakitVsHidden {
-    param([string]$Label, [string]$Note = "input hidden")
-    Write-Host ("    {0}?{1} {2} ({3}): " -f $script:UiAsk, $script:UiReset, $Label, $Note) -NoNewline
+    param([string]$Label, [string]$Note = "input hidden", [string]$Question = "")
+    # -Question is the whole question, for one that says more than "(note)".
+    if ($Question) {
+        Write-Host ("    {0}?{1} {2}: " -f $script:UiAsk, $script:UiReset, $Question) -NoNewline
+    } else {
+        Write-Host ("    {0}?{1} {2} ({3}): " -f $script:UiAsk, $script:UiReset, $Label, $Note) -NoNewline
+    }
     $secure = Read-Host -AsSecureString
     # The rest of a multi-line paste answers no later question.
     Clear-ExakitVsPendingKeys
@@ -1344,7 +1349,9 @@ function Show-ExakitVsTuiPanel {
         if (-not $note) { continue }
         $nm = $script:UiDim + $script:UiBullet + $script:UiReset
         if ($note -like "WARN *") { $nm = $script:UiWarn + "!" + $script:UiReset }
-        $parts = @(Split-ExakitWrap -Text ($note.Substring($note.IndexOf(" ") + 1)) -Width ($script:EvtCols - 8))
+        $noteText = $note.Substring($note.IndexOf(" ") + 1)
+        if ($note -like "INFO Read: *") { $parts = @(Split-ExakitVsReadWrap -Text $noteText -Width ($script:EvtCols - 8)) }
+        else { $parts = @(Split-ExakitWrap -Text $noteText -Width ($script:EvtCols - 8)) }
         for ($k = 0; $k -lt $parts.Count; $k++) {
             if ($k -eq 0) { [void]$sb.Append("    " + $nm + " " + $parts[$k] + "`r`n") }
             else { [void]$sb.Append("      " + $parts[$k] + "`r`n") }
@@ -1358,10 +1365,38 @@ function Show-ExakitVsTuiPanel {
 
 # Write-ExakitVsTuiSay - a line under the panel (a refused answer and why, or
 # with -Mark a hint), wrapped and counted. Twin of _exakit_vs_tui_say.
+# Split-ExakitVsReadWrap - a connection string shown back ("Read: <string>"),
+# as Split-ExakitWrap returns lines: whole when it fits, else broken only after
+# a separator (& ; ? /), each continuation under the string; a stretch with no
+# separator in reach is cut at the width. Split-ExakitWrap would cut the
+# string mid-word (ConnCatalog=workspa / ce). Twin of _exakit_vs_read_wrap.
+function Split-ExakitVsReadWrap {
+    param([string]$Text = "", [int]$Width = 44)
+    if ($Width -lt 26) { $Width = 26 }
+    $out = New-Object 'System.Collections.Generic.List[string]'
+    $rest = $Text
+    $pad = ""
+    while ($rest) {
+        $room = $Width - $pad.Length
+        if ($rest.Length -le $room) {
+            $cut = $rest.Length
+        } else {
+            $cut = $room
+            while ($cut -gt 0 -and -not ('&;?/'.Contains([string]$rest[$cut - 1]))) { $cut-- }
+            if ($cut -le 0) { $cut = $room }
+        }
+        [void]$out.Add($pad + $rest.Substring(0, $cut))
+        $rest = $rest.Substring($cut)
+        $pad = "      "
+    }
+    return $out.ToArray()
+}
+
 function Write-ExakitVsTuiSay {
     param([string]$Text, [string]$Mark = "")
     if (-not $Mark) { $Mark = $script:UiErr + $script:UiCross + $script:UiReset }
-    $parts = @(Split-ExakitWrap -Text $Text -Width ($script:EvtCols - 8))
+    if ($Text -like "Read: *") { $parts = @(Split-ExakitVsReadWrap -Text $Text -Width ($script:EvtCols - 8)) }
+    else { $parts = @(Split-ExakitWrap -Text $Text -Width ($script:EvtCols - 8)) }
     for ($k = 0; $k -lt $parts.Count; $k++) {
         if ($k -eq 0) { [Console]::Write("    " + $Mark + " " + $parts[$k] + "`r`n") }
         else { [Console]::Write("      " + $parts[$k] + "`r`n") }
@@ -1523,7 +1558,7 @@ function Read-ExakitVsLinePaste {
     if ($forms.Count -eq 0) { return $answer }
     Write-ExakitVsPasteHint -Forms $forms
     while ($true) {
-        $url = "" + (Read-ExakitVsHidden "Connection string" "not shown while you paste, Enter to type the fields")
+        $url = "" + (Read-ExakitVsHidden -Question "Connection string (hidden) - paste + Enter, or Enter alone for the fields")
         if (-not $url) { return $answer }
         $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Connector, "--base64") -Secret $url
         $url = $null
@@ -1719,8 +1754,8 @@ function Invoke-ExakitVsTuiPaste {
     $why = ""
     # Read with echo off, as a password is: the string often holds one. What was
     # read is shown back masked, and the fields it filled.
-    $plain = "Connection string (not shown while you paste, Enter to type the fields)"
-    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(not shown while you paste, Enter to type the fields)" + $script:UiReset
+    $plain = "Connection string (hidden) - paste + Enter, or Enter alone for the fields"
+    $colour = $script:UiAsk + "Connection string" + $script:UiReset + " " + $script:UiDim + "(hidden) - paste + Enter, or Enter alone for the fields" + $script:UiReset
     $choice = Get-ExakitVsPasteChoiceText
     # Where there is room, the question says a field can still be changed.
     $more = " " + $script:UiMidDot + " every field can be changed in the summary"
@@ -2021,7 +2056,9 @@ function Invoke-ExakitVsTuiRun {
                 "dns" = "Java in the database has no DNS"; "denied" = "the account may not read this"
                 "region" = "the region does not match"; "nobucket" = "no such bucket or container"
                 "clock" = "the database clock is wrong"; "privilege" = "the account lacks a privilege"
-                "missing_or_denied" = "no such object, or not granted" }
+                "missing_or_denied" = "no such object, or not granted"
+                "sandbox" = "the database's Java sandbox refused the driver"
+                "catalog" = "the catalog does not know that warehouse" }
     for ($i = 0; $i -lt $Sources.Count; $i++) {
         $s = $Sources[$i]
         $row = $i + 1
@@ -2172,7 +2209,7 @@ function Invoke-ExakitVsTuiFlow {
             if ($size -gt 0 -and $size -lt 5e5) { $mb = "<1 MB" }
             $parts = @($new | ForEach-Object { "$($_.role) $($_.version)" }) + @($mb)
             $s.Downloads = $parts -join (" {0} " -f $script:UiMidDot)
-        } else { $s.Downloads = "in the cache" }
+        } else { $s.Downloads = "none needed" }
         if ($plan.exposure) { $script:EvtExposed = $true }
         if ($plan.PSObject.Properties["languages"]) { $need += @($plan.languages) }
         if ($plan.PSObject.Properties["public_ip"] -and $plan.public_ip) { $ip = "" + $plan.public_ip }

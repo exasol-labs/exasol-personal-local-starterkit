@@ -16,7 +16,7 @@ on Athena or a warehouse.
 | Field | Required | Example |
 |---|---|---|
 | Name (alias) for this connection | yes | `lake` |
-| AWS region of the Glue catalog and its bucket | yes | `eu-central-1` |
+| AWS region (Glue Catalog) | yes | `eu-central-1` |
 | Glue database (one database is one virtual schema) | yes | `sales_db` |
 | Access key ID | no (if the credential file holds it) | `AKIA...` |
 | Secret access key | yes | (hidden, or a file) |
