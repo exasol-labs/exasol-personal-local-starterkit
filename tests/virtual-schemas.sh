@@ -4563,9 +4563,12 @@ has "...disconnect" "Disconnect for now          (disconnect)" "$ROWS"
 has "...remove" "Remove it                   (remove)" "$ROWS"
 has "...under the card" "VS_JSONOK" "$JOUT"
 lacks "...the card above it has no Manage line" "Manage:" "$JOUT"
-# jsonok now fails its check: the source takes another credential.
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="moved-on"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
-eng check jsonok >/dev/null 2>&1
+# jsonok broken as a refused credential leaves it: the state a failed check
+# records (the simulated database checks a credential only where it is created).
+breakok() { python3 -c 'import json,sys; p=sys.argv[1]; d=json.load(open(p)); d["status"]="auth-failed"
+d["last_check"]={"at": "2026-11-09T10:22:33Z", "outcome": "failed", "kind": "auth", "evidence": "password authentication failed"}
+json.dump(d, open(p, "w"), indent=2)' "$HOME_K/sources/jsonok/state.json"; }
+breakok
 menusrc "2 0" _exakit_vs_source_menu jsonok
 ROWS="$(cat "$WORK/menu.rows")"
 check "a broken source puts its fix first" "✗ password rejected - enter the new password" "$(printf '%s\n' "$ROWS" | sed -n 2p)"
@@ -4576,11 +4579,12 @@ check "under the fix the rows move down one: row 2 is Tables and columns, then t
 menusrc "3 0" _exakit_vs_source_menu jsonok
 check "picking Test it now runs the check, then the card again" "card jsonok|check jsonok|card jsonok|" \
     "$(tr '\n' '|' < "$WORK/json.argv")"
+breakok
 menusrc "1 0 0" _exakit_vs_source_picker
 ROWS="$(cat "$WORK/menu.rows")"
 has "exakit source at a terminal: a box of every source" "-- Sources" "$ROWS"
 check "...a row each: name, connector, status, tables" "1" \
-    "$(printf '%s\n' "$ROWS" | grep -c '^jsonok  *PostgreSQL  *✗ password rejected  *[0-9-]*$')"
+    "$(printf '%s\n' "$ROWS" | grep -m1 -c '^jsonok  *PostgreSQL  *✗ password rejected  *[0-9-]*$')"
 has "...Enter opens it: the card and its menu" "Tables and columns" "$ROWS"
 
 printf '\n== exakit source catalog ==\n'
@@ -4594,7 +4598,6 @@ has "...and where each connector's inputs are" "What each needs: exakit connect 
 check "every alias names one connector" "[]" "$(python3 -c 'import collections, json, sys
 c = collections.Counter(a for e in json.load(open(sys.argv[1]))["connectors"] for a in e["aliases"] + [e["id"]])
 print(sorted(k for k, n in c.items() if n > 1))' "$ROOT/setup/virtual-schemas/catalog.json")"
-python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="rotated"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
 
 run remove jsonok
 run remove jsonjava
