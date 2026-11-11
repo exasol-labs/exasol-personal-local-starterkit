@@ -1,0 +1,46 @@
+---
+title: The kit and its personas
+description: What the starter kit installs, how a persona shapes it, and where each task is documented.
+---
+
+The Exasol Personal Local Starter Kit installs a database on this computer and the tools around it. One command, `exakit`, runs all of it.
+
+## What every install has
+
+| Part | What it is for |
+|---|---|
+| The database | Exasol, running on this computer |
+| `exakit` | The command that starts, checks, loads and updates everything |
+| The AI bridge | Lets your AI clients query the database, read-only |
+| AI skills | Instructions that teach an AI client how to use the kit |
+| Sample data | Datasets to practise on |
+
+## What a persona adds
+
+A **persona** is the kit set up for one kind of work. It decides which datasets are loaded, which add-ons are installed and which notebooks you get. See [What is a persona](/kit/personas/what-is-a-persona).
+
+## Find your task
+
+| I want to | Go to |
+|---|---|
+| See or change which persona this kit is | [Choose and change a persona](/kit/personas/choose-and-change) |
+| Load a file, a folder or a kit dataset | [Load data](/kit/data/load-data) |
+| Say what each column of a table means | [Column maps](/kit/data/column-maps) |
+| Run a query from the terminal | [Run SQL](/kit/data/run-sql) |
+| Install a dashboard server, notebooks or another tool | [Add-ons](/kit/tools/add-ons) |
+| Open JupyterLab or Marimo | [Notebooks](/kit/tools/notebooks) |
+| See what a piece of work did, step by step | [Workflows](/kit/tools/workflows) |
+| Connect an AI client | [AI clients and skills](/kit/tools/ai-clients-and-skills) |
+| Look up a command | [All exakit commands](/kit/reference/commands) |
+| Work through the Data Scientist notebooks | [Data Scientist](/data-scientist) |
+
+## Help on this computer
+
+```bash
+exakit help                # every command
+exakit help data-load      # one command in full
+exakit catalog load        # search the commands
+exakit status              # is the database up?
+```
+
+The same help is built into the kit, so it always matches the version you have.

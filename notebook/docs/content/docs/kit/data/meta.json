@@ -1,0 +1,10 @@
+{
+  "title": "Data",
+  "defaultOpen": true,
+  "pages": [
+    "datasets",
+    "load-data",
+    "column-maps",
+    "run-sql"
+  ]
+}

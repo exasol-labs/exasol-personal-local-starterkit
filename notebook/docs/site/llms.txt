@@ -1,6 +1,24 @@
 # Documentation
 
-- [Starter Kit documentation](/): Documentation for the Exasol Personal Local Starter Kit's notebooks, one section per persona.
+- [Starter Kit documentation](/): Documentation for the Exasol Personal Local Starter Kit, one section for the kit itself and one per persona.
+- All personas: Personas, data, column maps and add-ons: the kit itself
+  - [The kit and its personas](/kit): What the starter kit installs, how a persona shapes it, and where each task is documented.
+  - Personas
+    - [What is a persona](/kit/personas/what-is-a-persona): A persona is the kit set up for one kind of work - which datasets, AI clients, add-ons and notebooks it brings.
+    - [Choose and change a persona](/kit/personas/choose-and-change): Pick a persona at install time, see what this kit is set up as, add another one, or leave one.
+    - [Define your own persona](/kit/personas/define-your-own): A persona is one JSON file - its keys, how to try it safely, and the checks that validate it.
+  - Data
+    - [Datasets](/kit/data/datasets): The sample datasets the kit carries, where each comes from, and which persona loads it.
+    - [Load data](/kit/data/load-data): Load a kit dataset, one file or a whole folder with exakit data-load, and what happens when you run it again.
+    - [Column maps](/kit/data/column-maps): Say what each column of a table means with exakit describe - draft, correct, approve, and see every version.
+    - [Run SQL](/kit/data/run-sql): Run one statement from the terminal with exakit sql, read-only unless you say otherwise.
+  - Tools
+    - [Add-ons](/kit/tools/add-ons): Optional tools the kit can install, start, update and remove - the marketplace.
+    - [Notebooks](/kit/tools/notebooks): Open JupyterLab or Marimo on the kit's own Python, already connected to the database.
+    - [Workflows](/kit/tools/workflows): Read the log of a piece of work from the terminal - every query, approval and dashboard, in order.
+    - [AI clients and skills](/kit/tools/ai-clients-and-skills): Connect your AI clients to the database, check the connection, and see the skills the kit gives them.
+  - Reference
+    - [All exakit commands](/kit/reference/commands): Every command of the kit, 41 in all, with what it takes and what it does.
 - Data Scientist: Four notebooks, nine steps, on your local database
   - [Data Scientist notebooks](/data-scientist): What the Data Scientist persona gives you on your local Exasol database, and where to start.
   - Start here

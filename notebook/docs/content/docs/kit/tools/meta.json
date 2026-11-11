@@ -1,0 +1,10 @@
+{
+  "title": "Tools",
+  "defaultOpen": true,
+  "pages": [
+    "add-ons",
+    "notebooks",
+    "workflows",
+    "ai-clients-and-skills"
+  ]
+}

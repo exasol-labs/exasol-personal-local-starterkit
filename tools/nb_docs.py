@@ -32,6 +32,8 @@ DOCS = ROOT / "notebook" / "docs"
 SECTION = "data-scientist"              # the persona section the reference sits in (its folder under content/docs)
 REFERENCE = DOCS / "content" / "docs" / SECTION / "reference"
 COMMANDS = DOCS / "public" / "commands.json"
+KIT_COMMANDS = DOCS / "content" / "docs" / "kit" / "reference" / "commands.mdx"      # every exakit command, from the kit's help
+KIT_HELP = ROOT / "setup" / "help" / "exakit.json"
 SITE = DOCS / "site"
 STAMP = "BUILD.json"
 
@@ -265,6 +267,33 @@ def _cell(text: str) -> str:
     return _prose(text).replace("|", "\\|")
 
 
+def _kit_commands() -> str:
+    """Every `exakit` command, grouped as the kit's own help groups them, from setup/help/exakit.json: what
+    `exakit help` prints. A command the help adds appears here the next time this runs."""
+    doc = json.loads(KIT_HELP.read_text(encoding="utf-8"))
+    by_name = {entry["command"]: entry for entry in doc.get("commands", [])}
+    out = ["---", 'title: "All exakit commands"',
+           f'description: "Every command of the kit, {len(by_name)} in all, with what it takes and what it does."',
+           "---", "", GENERATED.replace("the docstrings in notebook/package/exakit_nb", "setup/help/exakit.json"), "",
+           "`exakit help <command>` prints a command's full reference on this computer, and `exakit catalog <word>`",
+           "searches them.", ""]
+    listed: set[str] = set()
+    groups = [(group.get("title", ""), group.get("commands", [])) for group in doc.get("groups", [])]
+    rest = [name for name in by_name if name not in {n for _, names in groups for n in names}]
+    for title, names in groups + ([("Other", rest)] if rest else []):
+        rows = [by_name[name] for name in names if name in by_name and name not in listed]
+        if not rows:
+            continue
+        out += [f"## {_prose(title)}", "", "| Command | Takes | What it does |", "|---|---|---|"]
+        for entry in rows:
+            listed.add(entry["command"])
+            takes = " ".join(str(entry.get("options") or "").split())
+            takes_cell = "`" + takes.replace("|", "\\|").replace("`", "'") + "`" if takes else ""
+            out.append(f"| `exakit {entry['command']}` | {takes_cell} | {_cell(str(entry.get('summary') or ''))} |")
+        out.append("")
+    return "\n".join(out).rstrip() + "\n"
+
+
 def build() -> dict[Path, str]:
     """Every generated file, as path -> text."""
     names = exported()
@@ -313,6 +342,7 @@ def build() -> dict[Path, str]:
     ])
     files[REFERENCE / "meta.json"] = json.dumps(
         {"title": "Command reference", "pages": ["index", *(slug for _, slug, _ in pages)]}, indent=2) + "\n"
+    files[KIT_COMMANDS] = _kit_commands()
     files[COMMANDS] = json.dumps(dict(sorted(commands.items(), key=lambda item: (item[0].lower(), item[0]))), indent=2) + "\n"
     return files
 

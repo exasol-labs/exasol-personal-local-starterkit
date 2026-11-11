@@ -2,9 +2,13 @@
 
 
 
-Each persona of the kit has its own notebooks and its own section here. Pick yours below, or in the list at the top of the sidebar.
+The kit puts an Exasol database on this computer and sets it up for the work you do. What it sets up depends on your **persona**. Pick a section below, or in the list at the top of the sidebar.
 
 <Cards>
+  <Card title="All personas" href="/kit">
+    The kit itself: what a persona is, loading data, column maps, add-ons and every command.
+  </Card>
+
   <Card title="Data Scientist" href="/data-scientist">
     Four notebooks and nine steps: load data, agree what each column means, explore, model, ask questions and share.
   </Card>
@@ -212,227 +216,51 @@ nb.workflow_log(nb.current_workflow())     # everything this workflow did
 ```
 
 
-# Add a command (/data-scientist/develop/add-a-command)
+# The kit and its personas (/kit)
 
 
 
-<Steps>
-  <Step>
-    ### Write the helper [#write-the-helper]
+The Exasol Personal Local Starter Kit installs a database on this computer and the tools around it. One command, `exakit`, runs all of it.
 
-    Add a function to a module in `notebook/package/exakit_nb/`, with a docstring. The first sentence becomes its one-line summary here; the rest becomes its reference text. Indented lines in a docstring are shown as code.
+## What every install has [#what-every-install-has]
 
-    Export it: import it in `exakit_nb/__init__.py` and add its name to `__all__`.
-  </Step>
+| Part          | What it is for                                                |
+| ------------- | ------------------------------------------------------------- |
+| The database  | Exasol, running on this computer                              |
+| `exakit`      | The command that starts, checks, loads and updates everything |
+| The AI bridge | Lets your AI clients query the database, read-only            |
+| AI skills     | Instructions that teach an AI client how to use the kit       |
+| Sample data   | Datasets to practise on                                       |
 
-  <Step>
-    ### Put it in a notebook [#put-it-in-a-notebook]
+## What a persona adds [#what-a-persona-adds]
 
-    Add the call to the code section of the notebook it belongs to, guarded by a variable when it is optional:
+A **persona** is the kit set up for one kind of work. It decides which datasets are loaded, which add-ons are installed and which notebooks you get. See [What is a persona](/kit/personas/what-is-a-persona).
 
-    ```python
-    if ADD_ON:
-        nb.addon_ready(ADD_ON)
-    ```
-  </Step>
+## Find your task [#find-your-task]
 
-  <Step>
-    ### Give a card a button for it [#give-a-card-a-button-for-it]
+| I want to                                             | Go to                                                          |
+| ----------------------------------------------------- | -------------------------------------------------------------- |
+| See or change which persona this kit is               | [Choose and change a persona](/kit/personas/choose-and-change) |
+| Load a file, a folder or a kit dataset                | [Load data](/kit/data/load-data)                               |
+| Say what each column of a table means                 | [Column maps](/kit/data/column-maps)                           |
+| Run a query from the terminal                         | [Run SQL](/kit/data/run-sql)                                   |
+| Install a dashboard server, notebooks or another tool | [Add-ons](/kit/tools/add-ons)                                  |
+| Open JupyterLab or Marimo                             | [Notebooks](/kit/tools/notebooks)                              |
+| See what a piece of work did, step by step            | [Workflows](/kit/tools/workflows)                              |
+| Connect an AI client                                  | [AI clients and skills](/kit/tools/ai-clients-and-skills)      |
+| Look up a command                                     | [All exakit commands](/kit/reference/commands)                 |
+| Work through the Data Scientist notebooks             | [Data Scientist](/data-scientist)                              |
 
-    Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`: the code and the notebook it belongs to. Have the screen call `actions.run(...)`.
-  </Step>
-
-  <Step>
-    ### Regenerate [#regenerate]
-
-    ```bash
-    python3 tools/notebooks.py --marimo     # the .ipynb and Marimo notebooks
-    python3 tools/nb_docs.py                # the command reference
-    ```
-
-    The new helper now has an entry in its module's reference page and a row in [All commands](/data-scientist/reference). `nb.docs(nb.your_helper)` opens it once the site is rebuilt.
-  </Step>
-
-  <Step>
-    ### Test [#test]
-
-    ```bash
-    python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs
-    ```
-  </Step>
-</Steps>
-
-<Callout>
-  A whole new module gets its own reference page automatically, titled from its file name. Give it a proper title and a place in the order by adding one line to `PAGES` in `tools/nb_docs.py`.
-</Callout>
-
-
-# These docs (/data-scientist/develop/docs-site)
-
-
-
-## How it works [#how-it-works]
-
-* **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
-* **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
-* **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
-* **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
-
-Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
-
-## Change a page [#change-a-page]
-
-<Steps>
-  <Step>
-    ### Edit [#edit]
-
-    Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
-
-    ```text
-    ---
-    title: Page title
-    description: One sentence that says what the page covers.
-    ---
-    ```
-
-    `Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
-  </Step>
-
-  <Step>
-    ### Preview while you write [#preview-while-you-write]
-
-    ```bash
-    npm install
-    ```
-
-    ```bash
-    npm run dev
-    ```
-
-    Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
-  </Step>
-
-  <Step>
-    ### Build and publish [#build-and-publish]
-
-    ```bash
-    npm run build
-    ```
-
-    ```bash
-    python3 tools/nb_docs.py --publish
-    ```
-
-    The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
-  </Step>
-
-  <Step>
-    ### Check [#check]
-
-    ```bash
-    python3 tools/nb_docs.py --check
-    ```
-
-    It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
-  </Step>
-</Steps>
-
-## Pages you do not edit [#pages-you-do-not-edit]
-
-Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
-
-## Links [#links]
-
-Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/reference/describe#describe`. A test fails on a link that leads nowhere.
-
-
-# How it fits together (/data-scientist/develop/how-it-fits)
-
-
-
-## Three layers [#three-layers]
-
-| Layer           | Where                                                    | What it owns                                                                  |
-| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| The kit         | `setup/`, the `exakit` command                           | The database, connections, loading, connectors, add-ons, the describe service |
-| The helpers     | `notebook/package/exakit_nb/` (`import exakit.nb as nb`) | One Python call for each thing a notebook does                                |
-| The guided view | `notebook/package/exakit_guide/` (`exakit.guide`)        | Cards that call the helpers; UI only                                          |
-
-A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
-
-## The helpers [#the-helpers]
-
-`exakit.nb` exports about 110 names, listed in [All commands](/data-scientist/reference). The rules they follow:
-
-* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
-* **The kit does the work.** Describing a table is the kit's describe service; loading is `exakit data-load`; connecting a source is `exakit connect`. The helpers call these, they do not reimplement them.
-* **SQL is shown.** `nb.sql` records the statement, `nb.show_sql()` prints it, and the workflow logs it.
-* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when called.
-
-## The guided view [#the-guided-view]
-
-```text
-notebook/package/exakit_guide/
-  actions.py     every action: one or more lines of exakit.nb code, and its notebook
-  session.py     the notebook's namespace the actions run in
-  card.py        the widget; a button's code comes from its action
-  screens/       one module per page (home, understand, explore, ask, share): UI only
-  static/        card.js and card.css: the renderer, no facts
-```
-
-`actions.code(id, **values)` is the exact cell text. `actions.run(id, **values)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why **Code** can always show what a card did.
-
-## Rules the tests enforce [#rules-the-tests-enforce]
-
-* An action's call exists in its notebook's code section, and calls something `exakit.nb` exports.
-* No screen names a dataset, connector, add-on or notebook. Those are read from the kit.
-* No action shows a secret: a key is bound at run time, never written into the code.
-* Every exported helper has a page in these docs, and every link in them leads somewhere.
-
-## Notebooks [#notebooks]
-
-Sources are `notebook/notebooks/<persona>/<NN>_<name>.py` in jupytext percent format. The `.ipynb` and the Marimo version are built from them:
+## Help on this computer [#help-on-this-computer]
 
 ```bash
-python3 tools/notebooks.py --marimo            # rebuild
-python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
+exakit help                # every command
+exakit help data-load      # one command in full
+exakit catalog load        # search the commands
+exakit status              # is the database up?
 ```
 
-
-# Where things live (/data-scientist/develop/where-things-live)
-
-
-
-Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` when set).
-
-| Path                                         | What it holds                                                                |
-| -------------------------------------------- | ---------------------------------------------------------------------------- |
-| `notebooks/starter-kit-notebooks/<persona>/` | Your copies of the notebooks                                                 |
-| `notebooks/marimo/<persona>/`                | The Marimo versions                                                          |
-| `descriptors/`                               | Approved column maps, one folder per table, every version kept               |
-| `last-dataset`                               | The dataset approved last, which the notebooks follow                        |
-| `workflows/<id>.jsonl`                       | Workflow logs                                                                |
-| `last-workflow`                              | The workflow started or resumed last                                         |
-| `bundles/<workflow id>/`                     | Hand-off bundles, each also as a zip                                         |
-| `handoffs/`                                  | Training handoffs for the ML Engineer                                        |
-| `exakit.env`                                 | Settings such as the model's id and address                                  |
-| `credentials/`                               | Secrets, readable by you only. Never read or print these from a notebook.    |
-| `kit/`                                       | The kit copy: scripts, datasets, the notebook package and this documentation |
-
-## In the database [#in-the-database]
-
-| Schema            | What it holds                                             |
-| ----------------- | --------------------------------------------------------- |
-| `EXAKIT_SEMANTIC` | Views whose column comments carry the approved roles      |
-| `EXAKIT_PREPARED` | Joined views and typed, cleaned views you chose to create |
-| `VS_<NAME>`       | The tables of an external source named `<NAME>`           |
-
-## What an update touches [#what-an-update-touches]
-
-* A kit notebook you did not edit is refreshed when the kit's version changes.
-* A notebook you edited, or a file of your own, is never overwritten.
-* A notebook you deleted is not copied back.
-* Approved column maps, workflow logs and bundles are yours and are left alone.
+The same help is built into the kit, so it always matches the version you have.
 
 
 # AI and tracing (/data-scientist/concepts/ai-and-tracing)
@@ -860,6 +688,1038 @@ A secret-named value or a connection string with a password is refused before an
 ## Reference [#reference]
 
 [Workflows](/data-scientist/reference/workflow).
+
+
+# Add a command (/data-scientist/develop/add-a-command)
+
+
+
+<Steps>
+  <Step>
+    ### Write the helper [#write-the-helper]
+
+    Add a function to a module in `notebook/package/exakit_nb/`, with a docstring. The first sentence becomes its one-line summary here; the rest becomes its reference text. Indented lines in a docstring are shown as code.
+
+    Export it: import it in `exakit_nb/__init__.py` and add its name to `__all__`.
+  </Step>
+
+  <Step>
+    ### Put it in a notebook [#put-it-in-a-notebook]
+
+    Add the call to the code section of the notebook it belongs to, guarded by a variable when it is optional:
+
+    ```python
+    if ADD_ON:
+        nb.addon_ready(ADD_ON)
+    ```
+  </Step>
+
+  <Step>
+    ### Give a card a button for it [#give-a-card-a-button-for-it]
+
+    Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`: the code and the notebook it belongs to. Have the screen call `actions.run(...)`.
+  </Step>
+
+  <Step>
+    ### Regenerate [#regenerate]
+
+    ```bash
+    python3 tools/notebooks.py --marimo     # the .ipynb and Marimo notebooks
+    python3 tools/nb_docs.py                # the command reference
+    ```
+
+    The new helper now has an entry in its module's reference page and a row in [All commands](/data-scientist/reference). `nb.docs(nb.your_helper)` opens it once the site is rebuilt.
+  </Step>
+
+  <Step>
+    ### Test [#test]
+
+    ```bash
+    python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs
+    ```
+  </Step>
+</Steps>
+
+<Callout>
+  A whole new module gets its own reference page automatically, titled from its file name. Give it a proper title and a place in the order by adding one line to `PAGES` in `tools/nb_docs.py`.
+</Callout>
+
+
+# These docs (/data-scientist/develop/docs-site)
+
+
+
+## How it works [#how-it-works]
+
+* **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
+* **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
+* **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
+* **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
+
+Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
+
+## Change a page [#change-a-page]
+
+<Steps>
+  <Step>
+    ### Edit [#edit]
+
+    Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
+
+    ```text
+    ---
+    title: Page title
+    description: One sentence that says what the page covers.
+    ---
+    ```
+
+    `Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
+  </Step>
+
+  <Step>
+    ### Preview while you write [#preview-while-you-write]
+
+    ```bash
+    npm install
+    ```
+
+    ```bash
+    npm run dev
+    ```
+
+    Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
+  </Step>
+
+  <Step>
+    ### Build and publish [#build-and-publish]
+
+    ```bash
+    npm run build
+    ```
+
+    ```bash
+    python3 tools/nb_docs.py --publish
+    ```
+
+    The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
+  </Step>
+
+  <Step>
+    ### Check [#check]
+
+    ```bash
+    python3 tools/nb_docs.py --check
+    ```
+
+    It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
+  </Step>
+</Steps>
+
+## Pages you do not edit [#pages-you-do-not-edit]
+
+Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
+
+## Links [#links]
+
+Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/reference/describe#describe`. A test fails on a link that leads nowhere.
+
+
+# How it fits together (/data-scientist/develop/how-it-fits)
+
+
+
+## Three layers [#three-layers]
+
+| Layer           | Where                                                    | What it owns                                                                  |
+| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The kit         | `setup/`, the `exakit` command                           | The database, connections, loading, connectors, add-ons, the describe service |
+| The helpers     | `notebook/package/exakit_nb/` (`import exakit.nb as nb`) | One Python call for each thing a notebook does                                |
+| The guided view | `notebook/package/exakit_guide/` (`exakit.guide`)        | Cards that call the helpers; UI only                                          |
+
+A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
+
+## The helpers [#the-helpers]
+
+`exakit.nb` exports about 110 names, listed in [All commands](/data-scientist/reference). The rules they follow:
+
+* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
+* **The kit does the work.** Describing a table is the kit's describe service; loading is `exakit data-load`; connecting a source is `exakit connect`. The helpers call these, they do not reimplement them.
+* **SQL is shown.** `nb.sql` records the statement, `nb.show_sql()` prints it, and the workflow logs it.
+* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when called.
+
+## The guided view [#the-guided-view]
+
+```text
+notebook/package/exakit_guide/
+  actions.py     every action: one or more lines of exakit.nb code, and its notebook
+  session.py     the notebook's namespace the actions run in
+  card.py        the widget; a button's code comes from its action
+  screens/       one module per page (home, understand, explore, ask, share): UI only
+  static/        card.js and card.css: the renderer, no facts
+```
+
+`actions.code(id, **values)` is the exact cell text. `actions.run(id, **values)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why **Code** can always show what a card did.
+
+## Rules the tests enforce [#rules-the-tests-enforce]
+
+* An action's call exists in its notebook's code section, and calls something `exakit.nb` exports.
+* No screen names a dataset, connector, add-on or notebook. Those are read from the kit.
+* No action shows a secret: a key is bound at run time, never written into the code.
+* Every exported helper has a page in these docs, and every link in them leads somewhere.
+
+## Notebooks [#notebooks]
+
+Sources are `notebook/notebooks/<persona>/<NN>_<name>.py` in jupytext percent format. The `.ipynb` and the Marimo version are built from them:
+
+```bash
+python3 tools/notebooks.py --marimo            # rebuild
+python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
+```
+
+
+# Where things live (/data-scientist/develop/where-things-live)
+
+
+
+Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` when set).
+
+| Path                                         | What it holds                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `notebooks/starter-kit-notebooks/<persona>/` | Your copies of the notebooks                                                 |
+| `notebooks/marimo/<persona>/`                | The Marimo versions                                                          |
+| `descriptors/`                               | Approved column maps, one folder per table, every version kept               |
+| `last-dataset`                               | The dataset approved last, which the notebooks follow                        |
+| `workflows/<id>.jsonl`                       | Workflow logs                                                                |
+| `last-workflow`                              | The workflow started or resumed last                                         |
+| `bundles/<workflow id>/`                     | Hand-off bundles, each also as a zip                                         |
+| `handoffs/`                                  | Training handoffs for the ML Engineer                                        |
+| `exakit.env`                                 | Settings such as the model's id and address                                  |
+| `credentials/`                               | Secrets, readable by you only. Never read or print these from a notebook.    |
+| `kit/`                                       | The kit copy: scripts, datasets, the notebook package and this documentation |
+
+## In the database [#in-the-database]
+
+| Schema            | What it holds                                             |
+| ----------------- | --------------------------------------------------------- |
+| `EXAKIT_SEMANTIC` | Views whose column comments carry the approved roles      |
+| `EXAKIT_PREPARED` | Joined views and typed, cleaned views you chose to create |
+| `VS_<NAME>`       | The tables of an external source named `<NAME>`           |
+
+## What an update touches [#what-an-update-touches]
+
+* A kit notebook you did not edit is refreshed when the kit's version changes.
+* A notebook you edited, or a file of your own, is never overwritten.
+* A notebook you deleted is not copied back.
+* Approved column maps, workflow logs and bundles are yours and are left alone.
+
+
+# Review and approve the column map (/data-scientist/guides/approve-column-map)
+
+
+
+This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and Share have nothing to read. For what the roles and slots mean, see [Descriptor and approval](/data-scientist/concepts/descriptor).
+
+<Steps>
+  <Step>
+    ### Open the review [#open-the-review]
+
+    ```python
+    role_review = nb.review_roles(connection, chosen_data)
+    ```
+
+    The kit profiles the table and proposes a role for every column.
+  </Step>
+
+  <Step>
+    ### Check the uncertain columns first [#check-the-uncertain-columns-first]
+
+    **Check these first** lists the columns the kit was least sure about, each with the evidence that chose its role. Start there.
+  </Step>
+
+  <Step>
+    ### Correct roles and choose the target [#correct-roles-and-choose-the-target]
+
+    Change a role where it is wrong. Choose the **target**: the outcome you want to predict. The kit never chooses it. Leave a slot empty when no column fits.
+  </Step>
+
+  <Step>
+    ### Approve [#approve]
+
+    Press **Approve column map**, or in code:
+
+    ```python
+    role_review.approve({"ZIP_CODE": "identifier"}, {"target": "CANCELLED"})
+    ```
+
+    The first argument is the roles you change, the second the slots. With nothing to change, the saved approval stands.
+  </Step>
+
+  <Step>
+    ### Read it back [#read-it-back]
+
+    ```python
+    dataset = role_review.dataset()
+    nb.show_roles(dataset)
+    ```
+  </Step>
+</Steps>
+
+## After approving [#after-approving]
+
+```python
+leaking = nb.leakage_check(connection, dataset)       # columns that give the outcome away
+versions = nb.column_map_versions(dataset.id)         # every saved version
+nb.data_map(connection)                               # all your data in one map
+```
+
+<Callout>
+  Approval checks the data again. A warning about a column that gives the target away is not an error: the column stays in the map and is left out of the model.
+</Callout>
+
+## Change your mind later [#change-your-mind-later]
+
+Open the quickstart, change the roles and approve again. That writes a new version. The other notebooks follow the newest approval when you run their first cell again.
+
+
+# Ask your data (/data-scientist/guides/ask)
+
+
+
+This is step 7, in `02_ask_your_data`.
+
+<Steps>
+  <Step>
+    ### Ask [#ask]
+
+    ```python
+    QUESTION = "How many rows are in each category?"
+    dataset = nb.dataset(connection, nb.chosen_dataset(None))
+    nb.example_questions(dataset)      # questions this column map can answer
+    ```
+  </Step>
+
+  <Step>
+    ### Get a proposal [#get-a-proposal]
+
+    Three ways to draft the SQL:
+
+    ```python
+    proposal = nb.draft_question(connection, dataset, QUESTION)     # the kit's rules: no model, nothing leaves this computer
+    proposal = nb.ask(dataset, QUESTION)                            # your model drafts it from the column map
+    proposal = nb.ask(dataset, QUESTION, proposed_sql="SELECT ...") # your own SQL
+    ```
+
+    With a model, only the approved column map and the question are sent. No rows.
+  </Step>
+
+  <Step>
+    ### Read it, and edit if needed [#read-it-and-edit-if-needed]
+
+    A proposed query can be wrong: a wrong column, a missing filter. Read it.
+
+    ```python
+    proposal.edit("SELECT ...")        # replaces the SQL and removes any approval
+    ```
+  </Step>
+
+  <Step>
+    ### Approve and run [#approve-and-run]
+
+    ```python
+    proposal.approve()
+    answer = proposal.run()
+    ```
+
+    Only the exact approved text runs, through the kit's read-only service as the read-only user. Check the figures against the SQL.
+  </Step>
+</Steps>
+
+<Callout type="warn">
+  Nothing runs before `approve()`. In the notebook, set `APPROVE_SQL = True` and run the cell again.
+</Callout>
+
+See [AI and tracing](/data-scientist/concepts/ai-and-tracing) and [Set up a model](/data-scientist/guides/set-up-a-model).
+
+
+# Explore and model (/data-scientist/guides/explore-and-model)
+
+
+
+`01_explore` reads the dataset you approved. Its first cell holds the choices:
+
+```python
+DATASET = None          # None: the dataset approved last in the quickstart
+USE_AI_THEMES = False   # True: your model sorts the texts into themes
+USE_JOINED = False      # True: create and use the joined view
+USE_PREPARED = False    # True: create and use the typed, cleaned view
+```
+
+## Prepare [#prepare]
+
+```python
+workflow_id = nb.continue_workflow("explore")
+connection = nb.connect()
+dataset = nb.review_roles(connection, nb.chosen_dataset(DATASET)).dataset(draft_ok=True)
+
+findings = nb.data_checks(connection, dataset)
+schema_map = nb.describe_schema(connection, dataset)
+typed_view_proposal = nb.typed_view(connection, dataset)
+```
+
+Read the findings and the two proposals. Nothing is created until you set `USE_JOINED` or `USE_PREPARED`. See [Prepared views](/data-scientist/concepts/prepared-views).
+
+## Explore [#explore]
+
+Each query shows its SQL before its result, and a plain-language note under it.
+
+```python
+rows = nb.sql(connection, f"""
+SELECT {dataset.col("category")} AS GROUP_, COUNT(*) AS N
+FROM {dataset.fact_table}
+GROUP BY 1 ORDER BY N DESC""")
+nb.show_sql()
+```
+
+`nb.note_groups` and `nb.note_trend` write the notes under the group and over-time results.
+
+## Model and validate [#model-and-validate]
+
+```python
+leaking = nb.leakage_check(connection, dataset)
+```
+
+The notebook then reads up to 20,000 rows, trains a small baseline model on the category, the entity and the month, scores it on rows it has not seen, and shows what it leans on. `nb.note_model` says in plain words what the score means.
+
+For more control, the **model lab** lets you choose the task, the model and the split:
+
+```python
+lab = nb.model_lab(connection, dataset)        # task, model and split are arguments
+ideas = nb.feature_ideas(lab)                  # ideas, each with the SQL that would make it
+result = nb.try_feature(lab, ideas[0])         # retrain with one idea added, on the same split
+```
+
+See [Model lab](/data-scientist/reference/lab).
+
+<Callout>
+  A dataset with no target skips the model steps and says so. Choose a target in the column map to run them.
+</Callout>
+
+
+# Load data (/data-scientist/guides/load-data)
+
+
+
+All of this happens in step 1 of `00_quickstart`. On the **Choose your data** card you pick one of three boxes. The code below is what each box runs.
+
+```python
+import exakit.nb as nb
+
+connection = nb.connect()
+nb.check_connection(connection)
+```
+
+<Tabs items="['A kit dataset', 'Your own data', 'An external source']">
+  <Tab value="A kit dataset">
+    ```python
+    nb.sample_datasets()                                   # what the kit has, and which are loaded
+    sample_data = nb.load_sample(connection, "amazon_sales")
+    ```
+
+    A dataset that is not loaded yet is loaded first. Nothing else is needed.
+  </Tab>
+
+  <Tab value="Your own data">
+    A file or a folder:
+
+    ```python
+    own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
+    ```
+
+    CSV, Parquet, JSON and Excel work. Leave the schema empty and it is named after the folder: `~/sales-data` becomes `SALES_DATA`.
+
+    A table that is already in the database:
+
+    ```python
+    own_data = nb.use_table(connection, "MY_DATA.ORDERS")
+    ```
+
+    `nb.data_map(connection)` lists every table the database holds.
+  </Tab>
+
+  <Tab value="An external source">
+    The card walks through it one step at a time: an existing connection or a new one, the kind of source, a connection string or manual details, a name, the password, and optional settings.
+
+    ```python
+    nb.connectors()                                         # every kind of source
+    reading = nb.read_connection_string("postgresql", "postgres://reader@192.168.64.1:5432/shop")
+    reading["missing"]                                      # what the string did not give
+
+    test = nb.test_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
+    connected = nb.connect_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
+    source_data = nb.load_source(connection, "VS_SALES.ORDERS")
+    ```
+
+    A source with several kinds in one, such as a Lakehouse, shows its choices as a tree under it in the **Data source** list. Pick the catalog and where its files are; the steps after it ask only what that combination needs. See [Sources](/data-scientist/concepts/sources).
+
+    * **Test connection** checks the inputs and reaches the source from this computer. It changes nothing.
+    * **Connect and use this data** runs `exakit connect`. The tables then appear as `VS_SALES`.
+    * The password is asked in a hidden box. It is never part of the code.
+  </Tab>
+</Tabs>
+
+## Use what you chose [#use-what-you-chose]
+
+```python
+chosen_data = nb.first(source_data, own_data, sample_data)   # the first one that is set
+```
+
+Next: [approve the column map](/data-scientist/guides/approve-column-map).
+
+<Callout type="warn">
+  A source on this computer is not `localhost` from the database's point of view. On macOS use `192.168.64.1`. For a cloud source, allow this computer's public IP there; the card shows it.
+</Callout>
+
+
+# Run the kit from a notebook (/data-scientist/guides/run-the-kit)
+
+
+
+Step 0 of the quickstart is the kit itself. Every command here is the same `exakit` a terminal runs, with its output streaming into the cell.
+
+## See what is there [#see-what-is-there]
+
+```python
+kit_state = nb.kit_check()      # what is installed and running; changes nothing
+nb.components()                 # the kit's parts, their versions and pending updates
+nb.addons()                     # the marketplace's add-ons and their state
+nb.sample_datasets()            # the kit's datasets, and which are loaded
+nb.loaded_files()               # the files you loaded
+nb.notebooks("data-scientist")  # this persona's notebooks, in order
+```
+
+## Change it [#change-it]
+
+```python
+nb.exakit("start")                                  # start the database
+nb.addon_ready("dash-server")                       # install and start an add-on
+nb.exakit("data-load", "fraud_transactions")        # load a kit dataset, a file or a folder
+nb.exakit("logs", "dash-server")                    # a service's log
+nb.kit_update()                                     # bring the kit and its add-ons up to date
+```
+
+`nb.exakit(...)` returns the run with its exit code, so a cell can act on it.
+
+<Callout>
+  A command run from a cell has no terminal, so a question it would ask takes its default. Give a choice up front instead: `nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`.
+</Callout>
+
+## Reference [#reference]
+
+[Kit commands](/data-scientist/reference/kit-commands), [Kit facts](/data-scientist/reference/kit-facts).
+
+
+# Set up a model (/data-scientist/guides/set-up-a-model)
+
+
+
+A model is optional. It is used to draft SQL in Ask and to sort texts into themes in Explore. Any endpoint that speaks the Chat Completions API works: an external provider or a model on your own machine.
+
+## The quickest way [#the-quickest-way]
+
+```python
+nb.model_setup()
+```
+
+It asks for anything missing, with the keys in a hidden box, says what is set, and prints the lines that set the same thing for every notebook.
+
+## In a cell [#in-a-cell]
+
+```python
+nb.use_model("your-model-id", "https://your-provider/v1/")                     # this kernel only
+nb.use_model("your-model-id", "https://your-provider/v1/", remember=True)      # every notebook of this kit
+nb.use_model(langfuse_base_url="https://cloud.langfuse.com", remember=True)    # tracing
+```
+
+The API key is asked in a hidden box. With `remember=True` it is kept in the kit's credentials, readable by you only.
+
+## Check and forget [#check-and-forget]
+
+```python
+nb.model_settings()                            # what is set, without secrets
+nb.tracing()                                   # is Langfuse tracing on?
+nb.forget_model(model=True, langfuse=True)     # delete what was remembered
+```
+
+## The settings behind it [#the-settings-behind-it]
+
+| Setting                                                           | What it is             |
+| ----------------------------------------------------------------- | ---------------------- |
+| `EXAKIT_MODEL_ID`                                                 | The model's id         |
+| `EXAKIT_PROVIDER_BASE_URL`                                        | The endpoint's address |
+| `EXAKIT_PROVIDER_API_KEY`                                         | The key                |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Turn tracing on        |
+
+The model's id and address can also live in `~/.exasol-starter-kit/exakit.env`. Provider recipes are in `MODEL-PROVIDERS.md`, copied beside the notebooks.
+
+<Callout type="warn">
+  Never type a key into a cell. Use the hidden box, so the key is not saved in the notebook file.
+</Callout>
+
+
+# Share a dashboard and hand off (/data-scientist/guides/share)
+
+
+
+<Steps>
+  <Step>
+    ### Prepare the dashboard [#prepare-the-dashboard]
+
+    ```python
+    dataset = nb.dataset(connection, nb.chosen_dataset(None))
+    dashboard_draft = nb.share(dataset, dashboard_query, "Orders by category", "orders-by-category", measure="count")
+    ```
+
+    The dashboard is built from approved roles and a query you can read.
+  </Step>
+
+  <Step>
+    ### Start Dash Server [#start-dash-server]
+
+    ```python
+    nb.addon_ready("dash-server")
+    ```
+
+    It installs Dash Server when it is missing and starts it when it is stopped. This is what `exakit marketplace dash-server` and `exakit start dash-server` do. You can skip this step: the preview sets the server up by itself, on the card and in `nb.dash_tools()`.
+  </Step>
+
+  <Step>
+    ### Preview [#preview]
+
+    ```python
+    dash_server = nb.dash_tools()
+    preview_path = dashboard_draft.preview(dash_server)
+    print("Preview:", dash_server.url + preview_path)
+    ```
+
+    Open it. Check that the categories and counts match your SQL, and that the filters update both charts and the table.
+  </Step>
+
+  <Step>
+    ### Publish [#publish]
+
+    ```python
+    live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
+    ```
+
+    Set `figures_checked=True` only when the preview matches the query. Keep the live address with your workflow id.
+  </Step>
+
+  <Step>
+    ### Hand off [#hand-off]
+
+    ```python
+    handoff = nb.handoff_bundle(connection, dataset)
+    ```
+
+    One folder and a zip under `~/.exasol-starter-kit/bundles/`. It needs no Dash Server and holds no password. See [Sharing and hand-off](/data-scientist/concepts/sharing-and-handoff).
+  </Step>
+</Steps>
+
+
+# Guided and Code (/data-scientist/start/guided-and-code)
+
+
+
+## The guided view [#the-guided-view]
+
+Each Data Scientist notebook opens with cards that do the page's steps with buttons and forms.
+
+| Notebook           | Its cards open with |
+| ------------------ | ------------------- |
+| `00_quickstart`    | `guide.start()`     |
+| `01_explore`       | `guide.explore()`   |
+| `02_ask_your_data` | `guide.ask()`       |
+| `03_share`         | `guide.share()`     |
+
+## The Docs button [#the-docs-button]
+
+The first card of every notebook has a **Docs** button beside the logo. It opens this documentation in a new tab, on the guide for that notebook: loading data from the quickstart, exploring from `01_explore`, asking from `02_ask_your_data`, sharing from `03_share`.
+
+## The Code switch [#the-code-switch]
+
+Every card has a **Guided / Code** switch at its top right.
+
+* **Code** turns that card, in place, into its code: what it ran this session, in order, and the exact call behind each control. Each block has **Copy as cell**.
+* **Guided** turns it back. Only that card changes. The connection, the chosen data and the approvals stay as they are.
+
+The notebook's own cells sit under **The code behind this page**. In the kit's JupyterLab they are hidden until you choose **Show all the notebook's code cells** at the foot of a card's Code view. In Marimo the cells open with their code visible.
+
+## One call, two ways [#one-call-two-ways]
+
+Every button, form and choice on a card is one `exakit.nb` call, and the same call is a cell in the notebook's code section. Clicking **Approve** and running `role_review.approve(...)` do the same thing.
+
+<Callout>
+  What a card shows is read from the kit when it draws: the datasets, connectors, add-ons and notebooks are not written into the card. A connector added to the kit appears in the form the same day.
+</Callout>
+
+## The Home card [#the-home-card]
+
+The first card of the quickstart is the kit itself. It has two tabs.
+
+* **Your kit:** what is installed and running, the loaded datasets, your approved column maps and your workflows.
+* **Marketplace:** every add-on with **Install**, **Start** and **Update** buttons. They run `nb.addon_ready(id)` and `nb.kit_update(id)`, which is what `exakit marketplace` and `exakit update` do in a terminal.
+
+## One workflow per start [#one-workflow-per-start]
+
+`guide.start()` starts a workflow. Every card action after it is one line in that workflow's log: the card, the action, the code it ran and whether it worked. See [Workflows](/data-scientist/concepts/workflow).
+
+
+# The notebooks and the nine steps (/data-scientist/start/notebooks)
+
+
+
+## Open the notebooks [#open-the-notebooks]
+
+```bash
+exakit notebook            # JupyterLab
+exakit notebook marimo     # Marimo
+```
+
+Both open in your browser on the kit's own Python, with the kernel **Exasol (Starter Kit)**. That kernel knows where the kit's connection is, so no notebook asks for a host, a user or a password.
+
+Your copies are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/data-scientist/`. A notebook you edited is never overwritten by an update.
+
+## The path [#the-path]
+
+Run the notebooks in order. Each one continues the workflow the first one started, so nothing is copied between them.
+
+| Notebook           | Steps                                     | What you have at the end                                                    |
+| ------------------ | ----------------------------------------- | --------------------------------------------------------------------------- |
+| `00_quickstart`    | 0 Check the kit, 1 Access, 2 Understand   | A connection, a loaded dataset and an approved column map                   |
+| `01_explore`       | 3 Prepare, 4 Explore, 5 Model, 6 Validate | Clean data, comparisons by group and over time, a small model and its score |
+| `02_ask_your_data` | 7 Ask with AI                             | An answer from SQL you read and approved                                    |
+| `03_share`         | 8 Share, 9 Hand off                       | A published dashboard and one folder a colleague can repeat the work from   |
+
+## The nine steps [#the-nine-steps]
+
+<Steps>
+  <Step>
+    ### Access [#access]
+
+    Connect, start a workflow and load data: a kit dataset, your own file, or an external source. See [Load data](/data-scientist/guides/load-data).
+  </Step>
+
+  <Step>
+    ### Understand [#understand]
+
+    Approve the column map: which column is the key, the date, the group and the outcome. See [Descriptor and approval](/data-scientist/concepts/descriptor).
+  </Step>
+
+  <Step>
+    ### Prepare [#prepare]
+
+    Check the data is clean, see the tables linked to it, and optionally create a typed, cleaned view. See [Prepared views](/data-scientist/concepts/prepared-views).
+  </Step>
+
+  <Step>
+    ### Explore [#explore]
+
+    Compare groups and look at the data over time. Each query shows its SQL before its result.
+  </Step>
+
+  <Step>
+    ### Model [#model]
+
+    Set aside columns that give the answer away, then train a small baseline model.
+  </Step>
+
+  <Step>
+    ### Validate [#validate]
+
+    Score the model on rows it has not seen and see what it leans on.
+  </Step>
+
+  <Step>
+    ### Ask with AI [#ask-with-ai]
+
+    Ask in plain language, read the proposed SQL, approve it, run it read-only. See [Ask your data](/data-scientist/guides/ask).
+  </Step>
+
+  <Step>
+    ### Share [#share]
+
+    Turn one checked result into a dashboard: a preview first, published after you check the figures. See [Share a dashboard](/data-scientist/guides/share).
+  </Step>
+
+  <Step>
+    ### Hand off [#hand-off]
+
+    Pack the column map, every query, the dashboards and the workflow log into one folder and a zip.
+  </Step>
+</Steps>
+
+Step 0, at the top of the quickstart, checks the kit itself from the notebook. See [Run the kit from a notebook](/data-scientist/guides/run-the-kit).
+
+## Rules every notebook follows [#rules-every-notebook-follows]
+
+* **One assignment picks the data.** `SAMPLE = "..."` in the quickstart, `DATASET = "..."` in the others. `None` means the dataset approved last.
+* **No column name is typed.** Queries are built from the approved roles, so the same notebook runs on any table.
+* **AI is opt-in.** A model never approves roles, and no rows are sent to one.
+* **A step that cannot run says why.** A dataset with no text column skips the text steps and tells you.
+
+
+# Column maps (/kit/data/column-maps)
+
+
+
+A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Descriptor and approval](/data-scientist/concepts/descriptor).
+
+## Draft [#draft]
+
+```bash
+exakit describe AMAZON.ORDER_LINES
+```
+
+The table is profiled with SELECTs only. Nothing is written to the database. Every column gets one of eight roles, with its confidence and the evidence that chose it:
+
+`key`, `time`, `measure`, `category`, `flag`, `text`, `identifier`, `other`.
+
+* The draft is deterministic: the same table gives the same draft.
+* A column whose values look like e-mail addresses, phone numbers, IBANs or postcodes is marked **sensitive**.
+* The **target** is never drafted. Only a person sets it.
+
+## Approve [#approve]
+
+```bash
+exakit describe AMAZON.ORDER_LINES --approve --role target=CANCELLED --owner dana
+```
+
+`--role <slot>=<COLUMN>` corrects a slot: `key`, `time`, `text`, `target`, `category`, `entity`. `<slot>=-` leaves it empty.
+
+Approval:
+
+* checks that every column has a role, that none sits in two slots, and that the table has not changed since it was profiled
+* writes a new version, never rewriting an old one
+* publishes the roles as column comments on a view, `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`, readable by the read-only AI user
+
+Your own table is never commented. If publishing fails, the approval still stands and the message says why.
+
+## See and compare [#see-and-compare]
+
+```bash
+exakit describe amazon_sales --show              # the current version
+exakit describe amazon_sales --show --version 1  # an earlier one
+exakit describe amazon_sales --versions          # every version
+exakit describe orders --comments                # publish the roles again
+```
+
+Add `--json` to any of them for a script.
+
+## A whole schema [#a-whole-schema]
+
+```bash
+exakit describe --schema TPCH
+```
+
+This lists every table with its rows and key, and every many-to-one link between tables with its evidence. A link is a foreign key the database declares, or a column whose every value is in another table's key. A name alone never makes a link.
+
+```bash
+exakit describe --schema TPCH --approve --unlink ORDERS.O_CLERK
+```
+
+`--link TABLE.COLUMN=TABLE.KEY` adds a link and `--unlink TABLE.COLUMN` removes one. The approved links are published as the view `EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS`.
+
+## Where they are kept [#where-they-are-kept]
+
+`~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/`: the draft, every approved version and the current one.
+
+## When the table changes [#when-the-table-changes]
+
+Columns whose name and type did not change keep their approved roles. The rest are flagged, and you approve again.
+
+## With an AI model [#with-an-ai-model]
+
+When a model is set up, one call adds a one-line note per column. It is sent each column's name, type, role, evidence and top values, never a row and never a sensitive column. A note never decides a role.
+
+## From a notebook [#from-a-notebook]
+
+```python
+draft = nb.describe("AMAZON.ORDER_LINES")
+draft.slot(target="CANCELLED")
+dataset = draft.approve()
+```
+
+See [Review and approve the column map](/data-scientist/guides/approve-column-map).
+
+
+# Datasets (/kit/data/datasets)
+
+
+
+The kit carries sample datasets to practise on. `exakit data-load` lists them and loads the ones you pick.
+
+| Dataset              | Loaded by                   | Where it comes from                          |
+| -------------------- | --------------------------- | -------------------------------------------- |
+| `tpch`               | General                     | Bundled with the kit, loads without internet |
+| `energy`             | General                     | Bundled with the kit, loads without internet |
+| `weather`            | General                     | Bundled with the kit, loads without internet |
+| `amazon_sales`       | Data Scientist, ML Engineer | Downloaded when you load it                  |
+| `fraud_transactions` | Data Scientist, ML Engineer | Downloaded when you load it                  |
+
+## Downloaded datasets [#downloaded-datasets]
+
+`amazon_sales` and `fraud_transactions` are archives in the kit's datasets release. An archive is fetched only when you load that dataset. The kit checks the archive's SHA-256 and every file's digest, and refuses a mismatch.
+
+```bash
+exakit data-load amazon_sales
+```
+
+## A dataset with a column map [#a-dataset-with-a-column-map]
+
+`amazon_sales` and `fraud_transactions` each ship with an approved [column map](/kit/data/column-maps), so the notebooks can use them straight away. You can approve your own version at any time.
+
+## Load one again [#load-one-again]
+
+```bash
+exakit data-load --force amazon_sales
+```
+
+<Callout type="warn">
+  `--force` drops that dataset's tables and rebuilds them. Anything you changed in its schema is lost.
+</Callout>
+
+## Add a dataset to the kit [#add-a-dataset-to-the-kit]
+
+A dataset is one folder in `data/datasets/`. Nothing else names it, so a new folder appears in the menu.
+
+
+# Load data (/kit/data/load-data)
+
+
+
+```bash
+exakit data-load
+```
+
+On a terminal this opens a menu: the kit's datasets, your own data, or an external source. Name what you want to skip the menu.
+
+<Tabs items="['A kit dataset', 'One file', 'A folder']">
+  <Tab value="A kit dataset">
+    ```bash
+    exakit data-load amazon_sales
+    ```
+
+    See [Datasets](/kit/data/datasets) for the list.
+  </Tab>
+
+  <Tab value="One file">
+    ```bash
+    exakit data-load ./sales.csv
+    ```
+
+    It asks two things, whatever the file's kind: the file, then `SCHEMA.TABLE`. To answer up front:
+
+    ```bash
+    EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load
+    ```
+
+    CSV, Parquet and JSON are loaded. JSON is split into tables by an engine the kit installs for you on macOS, Linux and WSL.
+  </Tab>
+
+  <Tab value="A folder">
+    ```bash
+    exakit data-load ~/exports
+    ```
+
+    Every CSV, Parquet and JSON file at the folder's top level becomes one table named after the file. The schema is asked once:
+
+    ```bash
+    EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load
+    ```
+
+    Subfolders are not scanned. Files of other kinds are ignored. Duplicates are skipped with the reason.
+  </Tab>
+</Tabs>
+
+## Running it again is safe [#running-it-again-is-safe]
+
+* A file already loaded is skipped, not loaded on top of itself.
+* A file that a stopped run left half-written is loaded again from scratch.
+* A table holding rows this kit did not load is left alone, unless you say otherwise.
+
+```bash
+EXAKIT_ON_EXISTING=replace exakit data-load ~/exports
+```
+
+`EXAKIT_ON_EXISTING` takes `replace` or `append`. On a terminal you are asked.
+
+## What you get at the end [#what-you-get-at-the-end]
+
+Every file is listed with its table and the rows that landed, or the reason it did not load. A file the loader refuses leaves no empty table behind.
+
+## From a notebook [#from-a-notebook]
+
+```python
+nb.exakit("data-load", "fraud_transactions")
+own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
+```
+
+See [Load data in the Data Scientist notebooks](/data-scientist/guides/load-data).
+
+## An external source [#an-external-source]
+
+Data in another database is not copied. It is connected with `exakit connect` and read where it lives. See [Sources](/data-scientist/concepts/sources).
+
+
+# Run SQL (/kit/data/run-sql)
+
+
+
+```bash
+exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
+```
+
+It runs one statement and prints the result.
+
+## Read-only by default [#read-only-by-default]
+
+A statement that would change data is refused unless you add `--write`.
+
+```bash
+exakit sql --write 'CREATE SCHEMA SCRATCH'
+```
+
+## A saved statement [#a-saved-statement]
+
+```bash
+exakit sql --file ./report.sql
+```
+
+Comment lines and a trailing semicolon are dropped first. A statement can also come on standard input.
+
+## Errors come with their fix [#errors-come-with-their-fix]
+
+The three faults everyone hits first are turned into what to do:
+
+| Fault                  | What you are told  |
+| ---------------------- | ------------------ |
+| Connection refused     | Run `exakit start` |
+| `FETCH FIRST` or `TOP` | Use `LIMIT`        |
+| Object not found       | Describe it first  |
+
+The fix is printed first, with the error.
+
+## For a script [#for-a-script]
+
+```bash
+exakit sql --json 'SELECT 1'
+```
+
+One JSON object comes back and nothing else: the rows and their count on success, or the error with a command to run, when there is one.
+
+<Callout>
+  On Windows PowerShell 5.1, a double quote inside an argument is dropped before `exakit` runs. Pass a statement with quoted names through `--file`.
+</Callout>
 
 
 # Ask your data (/data-scientist/reference/ask)
@@ -3154,556 +4014,529 @@ Every line of a workflow's log, in order. A missing log is a FileNotFoundError n
 **Used in:** `data-scientist/00_quickstart`
 
 
-# Review and approve the column map (/data-scientist/guides/approve-column-map)
+# All exakit commands (/kit/reference/commands)
 
 
 
-This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and Share have nothing to read. For what the roles and slots mean, see [Descriptor and approval](/data-scientist/concepts/descriptor).
+{/* Generated by tools/nb_docs.py from setup/help/exakit.json. Edit those, then run the tool. */}
 
-<Steps>
-  <Step>
-    ### Open the review [#open-the-review]
+`exakit help <command>` prints a command's full reference on this computer, and `exakit catalog <word>`
+searches them.
 
-    ```python
-    role_review = nb.review_roles(connection, chosen_data)
-    ```
+## Everyday [#everyday]
 
-    The kit profiles the table and proposes a role for every column.
-  </Step>
+| Command            | Takes                                                                   | What it does                                                                    |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `exakit status`    | `[--json]`                                                              | Is the database up and healthy?                                                 |
+| `exakit info`      | `[--json]`                                                              | Your connection details.                                                        |
+| `exakit start`     | `[<service>]`                                                           | Start the database and every add-on service, or one of them.                    |
+| `exakit stop`      | `[<service>]`                                                           | Stop the add-on services and the database, or one of them.                      |
+| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]` | Run one SQL statement, with the error translated.                               |
+| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                               | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
+| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                         | Every log the kit can show.                                                     |
+| `exakit autostart` |                                                                         | Come back automatically after a restart?                                        |
 
-  <Step>
-    ### Check the uncertain columns first [#check-the-uncertain-columns-first]
+## AI clients (MCP) [#ai-clients-mcp]
 
-    **Check these first** lists the columns the kit was least sure about, each with the evidence that chose its role. Start there.
-  </Step>
+| Command             | Takes                      | What it does                       |
+| ------------------- | -------------------------- | ---------------------------------- |
+| `exakit mcp-setup`  |                            | Connect your AI clients.           |
+| `exakit mcp-doctor` | `[clients] [--json]`       | Test and repair the AI connection. |
+| `exakit mcp-status` | `[clients] [--json \| -j]` | Show managed MCP state per client. |
 
-  <Step>
-    ### Correct roles and choose the target [#correct-roles-and-choose-the-target]
+## External sources (virtual schemas) [#external-sources-virtual-schemas]
 
-    Change a role where it is wrong. Choose the **target**: the outcome you want to predict. The kit never chooses it. Leave a slot empty when no column fits.
-  </Step>
+| Command          | Takes                                                                                                                                                                                                                                                                                | What it does                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `exakit connect` | `[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F \| --password-stdin] [--storage-secret-file F] [--dry-run] [--yes] [--json]`                                                                                                                             | Query an external database from the local one (virtual schema). |
+| `exakit source`  | `list\|issues [--status S]\|catalog\|show <name>\|describe <name> [TABLE] [--ddl] [--schema S]\|check <name>\|--all\|reauth <name> [--password-file F \| --password-stdin] [--storage-secret-file F]\|refresh <name>\|disconnect <name>\|remove <name> [--dry-run] [--yes] [--json]` | List, check and manage connected external sources.              |
 
-  <Step>
-    ### Approve [#approve]
+## Personas and notebooks [#personas-and-notebooks]
 
-    Press **Approve column map**, or in code:
+| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                     | What it does                                                                                                                                         |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                           | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                          |
+| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                          | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                    |
+| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json]` | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), then approve it for the notebooks and AI clients. |
+| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                        | The workflow logs the notebook helpers write: list them, show one.                                                                                   |
 
-    ```python
-    role_review.approve({"ZIP_CODE": "identifier"}, {"target": "CANCELLED"})
-    ```
+## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
 
-    The first argument is the roles you change, the second the slots. With nothing to change, the saved approval stands.
-  </Step>
+| Command            | Takes                                                                                                                                          | What it does                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit mlflow`    | `start\|stop\|disable\|status\|url\|replay [action options]`                                                                                   | Start or stop the local MLflow server, show its address, or replay pending runs.                                                 |
+| `exakit udf-setup` | `[--language python\|rust] [--force] [--yes] [--json]`                                                                                         | Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).        |
+| `exakit udf-use`   | `default [--language python\|rust] [--yes] [--json] \| <container.tar.gz> [--alias NAME] [--language python\|rust] [--yes] [--json] \| --list` | Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.                         |
+| `exakit udf-build` | `<requirements.txt> [--alias <NAME>] [--yes]`                                                                                                  | Build a container with your pinned packages and install it.                                                                      |
+| `exakit udf-file`  | `<file> [<path in the bucket>]`                                                                                                                | Copy a file into BucketFS and print the path a UDF reads it from.                                                                |
+| `exakit rust-udf`  | `new <name> [--coefficients <file>] \| build <name> \| deploy <name> [--schema <SCHEMA>] [--yes] [--json]`                                     | Create, build and deploy a Rust scoring UDF from exported coefficients.                                                          |
+| `exakit model`     | `put\|inspect\|list\|rm\|prune\|template [arguments]`                                                                                          | Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template. |
 
-  <Step>
-    ### Read it back [#read-it-back]
+## Add-ons [#add-ons]
 
-    ```python
-    dataset = role_review.dataset()
-    nb.show_roles(dataset)
-    ```
-  </Step>
-</Steps>
+| Command              | Takes                                | What it does                                                             |
+| -------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| `exakit marketplace` | `[<addon-id>...] \| --list [--json]` | Optional add-ons: dashboards, notebooks, UDFs, dbt, scheduling and more. |
 
-## After approving [#after-approving]
+## Keeping up to date [#keeping-up-to-date]
 
-```python
-leaking = nb.leakage_check(connection, dataset)       # columns that give the outcome away
-versions = nb.column_map_versions(dataset.id)         # every saved version
-nb.data_map(connection)                               # all your data in one map
+| Command          | Takes                            | What it does                          |
+| ---------------- | -------------------------------- | ------------------------------------- |
+| `exakit version` | `[--json \| -j]`                 | What is installed, and what is newer. |
+| `exakit update`  | `[<component>] [--yes] [--json]` | Apply the updates that are waiting.   |
+
+## Repair and removal [#repair-and-removal]
+
+| Command                 | Takes                                                                                                                              | What it does                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `exakit preflight`      |                                                                                                                                    | Check this machine's requirements; install nothing.   |
+| `exakit repair-runtime` | `[--yes] [--json \| -j]`                                                                                                           | Rebuild a database that cannot start.                 |
+| `exakit tls-pin`        | `[--accept [--yes]] [--json \| -j]`                                                                                                | Compare or re-pin the database's TLS certificate.     |
+| `exakit migrate`        | `docker-nano [--container NAME] [--engine docker\|podman] [--dsn HOST:PORT] [--user USER] [--password-file PATH] [--yes] [--json]` | Copy an older kit's container database into this one. |
+| `exakit uninstall`      | `[<addon-id>] [--dry-run] [--yes]`                                                                                                 | Remove what the kit installed.                        |
+
+## Reference [#reference]
+
+| Command            | Takes                                                       | What it does                                  |
+| ------------------ | ----------------------------------------------------------- | --------------------------------------------- |
+| `exakit guide`     |                                                             | Friendly walkthrough of every way to connect. |
+| `exakit skills`    | `[--json \| -j]`                                            | List the AI skills the kit carries.           |
+| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]` | This screen.                                  |
+| `exakit catalog`   | `[search] [--json \| -j]`                                   | Browse or search every command.               |
+| `exakit whats-new` | `[<version>]`                                               | What changed in this kit version.             |
+
+## Other [#other]
+
+| Command                 | Takes                    | What it does                                               |
+| ----------------------- | ------------------------ | ---------------------------------------------------------- |
+| `exakit mcp-remove`     | `<client> [<client>...]` | Remove the kit's MCP entries from named AI clients.        |
+| `exakit skills-install` |                          | Re-place the AI skills the kit copy carries (repair only). |
+| `exakit upgrade-kit2`   |                          | Add the Kit 2 trust assets to this install (internal).     |
+| `exakit rollback-kit2`  |                          | Remove exactly what upgrade-kit2 added (internal).         |
+
+
+# Choose and change a persona (/kit/personas/choose-and-change)
+
+
+
+## At install time [#at-install-time]
+
+Name the persona on the install command:
+
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh
 ```
 
-<Callout>
-  Approval checks the data again. A warning about a column that gives the target away is not an error: the column stays in the map and is left out of the model.
-</Callout>
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist,general sh
+```
 
-## Change your mind later [#change-your-mind-later]
-
-Open the quickstart, change the roles and approve again. That writes a new version. The other notebooks follow the newest approval when you run their first cell again.
-
-
-# Ask your data (/data-scientist/guides/ask)
-
-
-
-This is step 7, in `02_ask_your_data`.
+Without `EXAKIT_PERSONA`, on a terminal, the installer asks three things after the parts everyone needs:
 
 <Steps>
   <Step>
-    ### Ask [#ask]
+    ### What will you use this machine for? [#what-will-you-use-this-machine-for]
 
-    ```python
-    QUESTION = "How many rows are in each category?"
-    dataset = nb.dataset(connection, nb.chosen_dataset(None))
-    nb.example_questions(dataset)      # questions this column map can answer
-    ```
+    Tick as many personas as you like. General is ticked to begin with.
   </Step>
 
   <Step>
-    ### Get a proposal [#get-a-proposal]
+    ### Data to load [#data-to-load]
 
-    Three ways to draft the SQL:
-
-    ```python
-    proposal = nb.draft_question(connection, dataset, QUESTION)     # the kit's rules: no model, nothing leaves this computer
-    proposal = nb.ask(dataset, QUESTION)                            # your model drafts it from the column map
-    proposal = nb.ask(dataset, QUESTION, proposed_sql="SELECT ...") # your own SQL
-    ```
-
-    With a model, only the approved column map and the question are sent. No rows.
+    One table. The datasets of the personas you picked are ticked; the others are listed and can be ticked too. Your own file or folder and Skip are there as well.
   </Step>
 
   <Step>
-    ### Read it, and edit if needed [#read-it-and-edit-if-needed]
+    ### Add-ons for your personas [#add-ons-for-your-personas]
 
-    A proposed query can be wrong: a wrong column, a missing filter. Read it.
-
-    ```python
-    proposal.edit("SELECT ...")        # replaces the SQL and removes any approval
-    ```
-  </Step>
-
-  <Step>
-    ### Approve and run [#approve-and-run]
-
-    ```python
-    proposal.approve()
-    answer = proposal.run()
-    ```
-
-    Only the exact approved text runs, through the kit's read-only service as the read-only user. Check the figures against the SQL.
+    Every add-on, with your personas' own ticked. Tick or untick any, then Enter installs what is ticked.
   </Step>
 </Steps>
+
+Nothing is loaded or installed without that screen. Without a terminal and without `EXAKIT_PERSONA`, the kit installs with the General samples.
+
+## On an installed kit [#on-an-installed-kit]
+
+```bash
+exakit persona list                  # the personas this kit has
+exakit persona show data-scientist   # what one brings, and what to do first
+exakit persona plan                  # what your personas bring, and what of it is still pending
+exakit persona add general           # become that persona too
+exakit persona remove general        # leave it
+```
+
+`plan` takes `--json` for a script.
+
+## Add a persona [#add-a-persona]
+
+```bash
+exakit persona add general
+```
+
+On a kit set up as Data Scientist this makes it both. Three steps run, headed like the installer's: sample data, AI clients, add-ons.
+
+* What is already here is named in one line and not redone.
+* A part that fails does not stop the others. The closing line names each part that did not finish and the command that retries it.
+* At a terminal you can change the ticks before Enter. Without one, the same happens in plain lines.
+
+## Remove a persona [#remove-a-persona]
+
+```bash
+exakit persona remove data-scientist
+```
+
+This removes only the membership from the kit's record. Datasets, notebooks and add-ons stay, because another persona or you may still use them. To remove an add-on, use `exakit uninstall <addon-id>`.
+
+## Override one answer [#override-one-answer]
+
+An answer you give yourself wins for that one variable:
+
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales sh
+```
+
+This loads only the Amazon dataset and keeps the persona's AI clients and add-ons.
+
+| Variable                    | Answers                                        |
+| --------------------------- | ---------------------------------------------- |
+| `EXAKIT_PERSONA`            | Which personas, comma-separated                |
+| `EXAKIT_DATASETS`           | Which datasets to load                         |
+| `EXAKIT_MARKETPLACE_ADDONS` | Which add-ons to install: ids, `all` or `none` |
+| `EXAKIT_MCP_CLIENTS`        | Which AI clients to connect                    |
+
+<Callout>
+  Use names, not menu numbers: `EXAKIT_DATASETS=tpch`, `EXAKIT_MCP_CLIENTS=claude,codex`.
+</Callout>
+
+
+# Define your own persona (/kit/personas/define-your-own)
+
+
+
+A persona is one file, `personas/<id>.json`, in the kit's repository. No installer code names a persona, so adding a file is the whole change.
+
+## Try it first [#try-it-first]
+
+`tools/try_persona.sh` runs a persona in a sandbox that changes nothing. `personas/examples/analyst.json` is a ready-made one to start from.
+
+```bash
+bash tools/try_persona.sh personas/examples/analyst.json
+```
+
+```bash
+bash tools/try_persona.sh personas/examples/analyst.json --ask
+```
+
+The first shows the checks, the question, the answers and the data table. The second then asks the install question live.
+
+## The keys [#the-keys]
+
+| Key                | Value                                                                                                                              |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_version`   | `1`                                                                                                                                |
+| `id`               | The file name without `.json`                                                                                                      |
+| `title`, `summary` | What `exakit persona list` and the install question show                                                                           |
+| `picker`           | `true` to offer it in the install question                                                                                         |
+| `visible`          | `true` to offer new selections. `false` hides it and refuses a new add, while keeping the definition and an existing installation. |
+| `default`          | `true` to tick it to begin with                                                                                                    |
+| `order`            | Where the question lists it, lowest first                                                                                          |
+| `datasets`         | A list of dataset ids, or `"all"` or `"none"`                                                                                      |
+| `mcp_clients`      | `"all"`, `"skip"`, or a list of client ids                                                                                         |
+| `addons`           | A list of add-on ids, or `"all"` or `"none"`                                                                                       |
+| `addon_reasons`    | Optional. One line per add-on, at most 90 characters, saying what it does for this persona                                         |
+| `notebook_tools`   | Optional. Which notebook tools to tick, for example `["jupyterlab", "marimo"]`                                                     |
+| `services`         | Optional. Kit services the persona starts at login, for example `["mlflow"]`                                                       |
+| `udf_language`     | Optional. `python` or `rust`                                                                                                       |
+| `first_prompt`     | Optional. What to do first, shown by `exakit persona show`                                                                         |
+
+## Rules [#rules]
+
+* **No secrets and no machine paths.** A persona names things, it never holds them.
+* **It appears where `order` puts it** when `visible` and `picker` are true.
+* **Its notebooks** go in `notebook/notebooks/<id>/`, listed in `notebook/catalog.json`.
+* **Its documentation** goes in `notebook/docs/content/docs/<id>/`. See [These docs](/data-scientist/develop/docs-site).
+
+## Checks [#checks]
+
+```bash
+bash tests/personas.sh
+```
+
+It validates every persona file against the datasets and add-ons this kit ships. `tests/personas-ps.ps1` checks that the Windows side reads the files the same way.
+
+
+# What is a persona (/kit/personas/what-is-a-persona)
+
+
+
+A **persona** is a named set of answers to the questions the installer asks: which datasets to load, which AI clients to connect and which add-ons to install. Choosing a persona is choosing what this computer is for.
+
+A persona names things. It never holds a secret or a path on your machine.
+
+## The personas in this kit [#the-personas-in-this-kit]
+
+| Persona                               | Datasets                             | Add-ons                   | First notebook                 |
+| ------------------------------------- | ------------------------------------ | ------------------------- | ------------------------------ |
+| **Data Scientist** (`data-scientist`) | `amazon_sales`, `fraud_transactions` | `dash-server`, `notebook` | `data-scientist/00_quickstart` |
+| **General** (`general`)               | `tpch`, `energy`, `weather`          | none                      | none                           |
+| **ML Engineer** (`ml-engineer`)       | `amazon_sales`, `fraud_transactions` | `notebook`, `udf-devkit`  | `ml-engineer/00_quickstart`    |
+
+Every persona connects all the AI clients found on this computer.
 
 <Callout type="warn">
-  Nothing runs before `approve()`. In the notebook, set `APPROVE_SQL = True` and run the cell again.
+  ML Engineer is kept in the kit but **not offered in this release**. It cannot be newly selected. A kit that was set up with it before keeps working.
 </Callout>
 
-See [AI and tracing](/data-scientist/concepts/ai-and-tracing) and [Set up a model](/data-scientist/guides/set-up-a-model).
+## What each one is for [#what-each-one-is-for]
+
+**Data Scientist.** Four notebooks that take a table from loading to a shared dashboard: agree what each column means, prepare, explore, train a small model, ask questions in plain language and hand the work off. It gets the dashboard server first and then the notebooks, because the notebooks' Share step publishes a dashboard there. See [Data Scientist](/data-scientist).
+
+**General.** The kit's own sample data and nothing else: a database to query with SQL or an AI client. Its datasets are bundled with the kit and load without internet.
+
+**ML Engineer.** In-database training and scoring. It also starts a local MLflow server and installs the UDF runtime.
+
+## Personas combine [#personas-combine]
+
+Personas are not exclusive. Choosing two loads the datasets of both and installs the add-ons of both, each once. Choosing all of them gives you everything.
+
+General is ticked to begin with in the install question, and combines with the others like any persona.
+
+## What a persona does not do [#what-a-persona-does-not-do]
+
+* It does not lock anything. Any dataset or add-on can be added later, whatever the persona.
+* It does not remove anything when you leave it. Removing a persona only removes the membership; the data, notebooks and add-ons stay.
+
+Next: [choose and change a persona](/kit/personas/choose-and-change).
 
 
-# Explore and model (/data-scientist/guides/explore-and-model)
+# Add-ons (/kit/tools/add-ons)
 
 
 
-`01_explore` reads the dataset you approved. Its first cell holds the choices:
+Add-ons are optional tools around the database: dashboards, notebooks and more. A persona installs the ones it needs. You can add or remove any of them later.
 
-```python
-DATASET = None          # None: the dataset approved last in the quickstart
-USE_AI_THEMES = False   # True: your model sorts the texts into themes
-USE_JOINED = False      # True: create and use the joined view
-USE_PREPARED = False    # True: create and use the typed, cleaned view
+## See what there is [#see-what-there-is]
+
+```bash
+exakit marketplace --list
 ```
 
-## Prepare [#prepare]
+Every add-on is listed with its state, its version and what it is. Nothing is installed. Add `--json` for a script.
 
-```python
-workflow_id = nb.continue_workflow("explore")
-connection = nb.connect()
-dataset = nb.review_roles(connection, nb.chosen_dataset(DATASET)).dataset(draft_ok=True)
+The name, the link and the description of an add-on come from its own repository, so the list always shows the current ones.
 
-findings = nb.data_checks(connection, dataset)
-schema_map = nb.describe_schema(connection, dataset)
-typed_view_proposal = nb.typed_view(connection, dataset)
+## Install [#install]
+
+```bash
+exakit marketplace                 # choose in a menu: Space selects, Enter installs
+exakit marketplace dash-server     # install exactly this one
 ```
-
-Read the findings and the two proposals. Nothing is created until you set `USE_JOINED` or `USE_PREPARED`. See [Prepared views](/data-scientist/concepts/prepared-views).
-
-## Explore [#explore]
-
-Each query shows its SQL before its result, and a plain-language note under it.
-
-```python
-rows = nb.sql(connection, f"""
-SELECT {dataset.col("category")} AS GROUP_, COUNT(*) AS N
-FROM {dataset.fact_table}
-GROUP BY 1 ORDER BY N DESC""")
-nb.show_sql()
-```
-
-`nb.note_groups` and `nb.note_trend` write the notes under the group and over-time results.
-
-## Model and validate [#model-and-validate]
-
-```python
-leaking = nb.leakage_check(connection, dataset)
-```
-
-The notebook then reads up to 20,000 rows, trains a small baseline model on the category, the entity and the month, scores it on rows it has not seen, and shows what it leans on. `nb.note_model` says in plain words what the score means.
-
-For more control, the **model lab** lets you choose the task, the model and the split:
-
-```python
-lab = nb.model_lab(connection, dataset)        # task, model and split are arguments
-ideas = nb.feature_ideas(lab)                  # ideas, each with the SQL that would make it
-result = nb.try_feature(lab, ideas[0])         # retrain with one idea added, on the same split
-```
-
-See [Model lab](/data-scientist/reference/lab).
 
 <Callout>
-  A dataset with no target skips the model steps and says so. Choose a target in the column map to run them.
+  Without a terminal, a bare `exakit marketplace` installs nothing. Name the add-ons, or answer up front: `EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace`.
+</Callout>
+
+## Start, stop and check [#start-stop-and-check]
+
+Some add-ons are services, such as the dashboard server.
+
+```bash
+exakit start dash-server
+exakit stop dash-server
+exakit status
+exakit logs dash-server
+```
+
+`exakit start` with no name starts the database and every add-on service.
+
+## Update and remove [#update-and-remove]
+
+```bash
+exakit update                  # apply the updates that are waiting
+exakit update notebook         # one component
+exakit uninstall dash-server   # remove one add-on
+```
+
+`exakit uninstall` takes `--dry-run` to preview what would be removed.
+
+## Help for one add-on [#help-for-one-add-on]
+
+```bash
+exakit help dash-server
+```
+
+The full reference of an installed add-on is on this computer.
+
+## From a notebook [#from-a-notebook]
+
+```python
+nb.addons()                      # every add-on and its state
+nb.addon_ready("dash-server")    # install it when missing, start it when stopped
+nb.kit_update()                  # bring the kit and its add-ons up to date
+```
+
+The Home card's **Marketplace** tab does the same with buttons. See [Run the kit from a notebook](/data-scientist/guides/run-the-kit).
+
+<Callout>
+  A tool you installed yourself is recognised and never offered again.
 </Callout>
 
 
-# Load data (/data-scientist/guides/load-data)
+# AI clients and skills (/kit/tools/ai-clients-and-skills)
 
 
 
-All of this happens in step 1 of `00_quickstart`. On the **Choose your data** card you pick one of three boxes. The code below is what each box runs.
+The kit connects AI clients to the database through its AI bridge. A client connected this way reads data as the kit's read-only user.
+
+## Connect [#connect]
+
+```bash
+exakit mcp-setup
+```
+
+It finds the AI clients on this computer and connects the ones you choose. To answer up front:
+
+```bash
+EXAKIT_MCP_CLIENTS=claude,codex exakit mcp-setup
+```
+
+## Check and repair [#check-and-repair]
+
+```bash
+exakit mcp-status      # the state of each client
+exakit mcp-doctor      # test the connection and repair it
+```
+
+Both take `--json` for a script.
+
+## Skills [#skills]
+
+A **skill** is a set of instructions that teaches an AI client how to use the kit: which command loads data, how to read a column map, where dashboards go.
+
+```bash
+exakit skills              # the skills the kit carries
+exakit skills-install      # put them back in place (repair)
+```
+
+Skills update with the kit, so a new skill reaches every installed kit through `exakit update`.
+
+## What a client can and cannot do [#what-a-client-can-and-cannot-do]
+
+* It reads through the read-only user. It cannot change your data.
+* It reads the approved [column maps](/kit/data/column-maps), so it works from the roles you approved.
+* Rows are not sent to a model by the kit's notebooks unless you turn an AI step on. See [AI and tracing](/data-scientist/concepts/ai-and-tracing).
+
+## From a notebook [#from-a-notebook]
+
+```python
+nb.ai_clients()                # the clients the kit can connect, and which are connected
+nb.exakit("mcp-doctor")        # check the connection
+```
+
+
+# Notebooks (/kit/tools/notebooks)
+
+
+
+The notebook add-on brings JupyterLab and Marimo, the kit's notebooks and the helpers they use. Install it with a persona that has notebooks, or with `exakit marketplace notebook`.
+
+## Open [#open]
+
+```bash
+exakit notebook                 # choose a tool on a terminal; JupyterLab otherwise
+exakit notebook jupyterlab
+exakit notebook marimo
+```
+
+It starts on this computer only and opens in your browser, already signed in. The kernel is **Exasol (Starter Kit)**.
+
+Every run first writes the kit's current connection into the notebooks' encrypted store, so a database restart or a port change needs no edit. It also copies any kit notebook you do not have yet. Yours are never overwritten.
+
+## Check, set up, stop [#check-set-up-stop]
+
+```bash
+exakit notebook check           # prove the connection; start nothing
+exakit notebook setup           # settle JupyterLab; start nothing
+exakit notebook stop            # stop the one the kit started
+exakit notebook marimo --no-browser --port 2720
+```
+
+## Where the notebooks are [#where-the-notebooks-are]
+
+| Tool       | Folder                                                             |
+| ---------- | ------------------------------------------------------------------ |
+| JupyterLab | `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/` |
+| Marimo     | `~/.exasol-starter-kit/notebooks/marimo/<persona>/`                |
+
+## What an update does to them [#what-an-update-does-to-them]
+
+* A kit notebook you did not edit is refreshed when the kit's version changes.
+* A notebook you edited is never overwritten.
+* A notebook you deleted is not copied back.
+
+## A notebook of your own [#a-notebook-of-your-own]
+
+Put it in the same persona folder, named with the next step number and a short topic, for example `04_churn_by_region.ipynb`. Start it with:
 
 ```python
 import exakit.nb as nb
 
 connection = nb.connect()
-nb.check_connection(connection)
 ```
 
-<Tabs items="['A kit dataset', 'Your own data', 'An external source']">
-  <Tab value="A kit dataset">
-    ```python
-    nb.sample_datasets()                                   # what the kit has, and which are loaded
-    sample_data = nb.load_sample(connection, "amazon_sales")
-    ```
-
-    A dataset that is not loaded yet is loaded first. Nothing else is needed.
-  </Tab>
-
-  <Tab value="Your own data">
-    A file or a folder:
-
-    ```python
-    own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
-    ```
-
-    CSV, Parquet, JSON and Excel work. Leave the schema empty and it is named after the folder: `~/sales-data` becomes `SALES_DATA`.
-
-    A table that is already in the database:
-
-    ```python
-    own_data = nb.use_table(connection, "MY_DATA.ORDERS")
-    ```
-
-    `nb.data_map(connection)` lists every table the database holds.
-  </Tab>
-
-  <Tab value="An external source">
-    The card walks through it one step at a time: an existing connection or a new one, the kind of source, a connection string or manual details, a name, the password, and optional settings.
-
-    ```python
-    nb.connectors()                                         # every kind of source
-    reading = nb.read_connection_string("postgresql", "postgres://reader@192.168.64.1:5432/shop")
-    reading["missing"]                                      # what the string did not give
-
-    test = nb.test_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
-    connected = nb.connect_source("postgresql", "sales", url="postgres://reader@192.168.64.1:5432/shop")
-    source_data = nb.load_source(connection, "VS_SALES.ORDERS")
-    ```
-
-    A source with several kinds in one, such as a Lakehouse, shows its choices as a tree under it in the **Data source** list. Pick the catalog and where its files are; the steps after it ask only what that combination needs. See [Sources](/data-scientist/concepts/sources).
-
-    * **Test connection** checks the inputs and reaches the source from this computer. It changes nothing.
-    * **Connect and use this data** runs `exakit connect`. The tables then appear as `VS_SALES`.
-    * The password is asked in a hidden box. It is never part of the code.
-  </Tab>
-</Tabs>
-
-## Use what you chose [#use-what-you-chose]
+## The documentation, from a notebook [#the-documentation-from-a-notebook]
 
 ```python
-chosen_data = nb.first(source_data, own_data, sample_data)   # the first one that is set
+nb.docs()
 ```
 
-Next: [approve the column map](/data-scientist/guides/approve-column-map).
+See [Data Scientist](/data-scientist) for the four notebooks and their nine steps.
 
-<Callout type="warn">
-  A source on this computer is not `localhost` from the database's point of view. On macOS use `192.168.64.1`. For a cloud source, allow this computer's public IP there; the card shows it.
-</Callout>
 
+# Workflows (/kit/tools/workflows)
 
-# Run the kit from a notebook (/data-scientist/guides/run-the-kit)
 
 
+A notebook starts a **workflow** and gets an id such as `wf-20261027-3f9a1c`. While it is active, every step the helpers run adds one line to its log. For the idea, see [Workflow](/data-scientist/concepts/workflow).
 
-Step 0 of the quickstart is the kit itself. Every command here is the same `exakit` a terminal runs, with its output streaming into the cell.
-
-## See what is there [#see-what-is-there]
-
-```python
-kit_state = nb.kit_check()      # what is installed and running; changes nothing
-nb.components()                 # the kit's parts, their versions and pending updates
-nb.addons()                     # the marketplace's add-ons and their state
-nb.sample_datasets()            # the kit's datasets, and which are loaded
-nb.loaded_files()               # the files you loaded
-nb.notebooks("data-scientist")  # this persona's notebooks, in order
-```
-
-## Change it [#change-it]
-
-```python
-nb.exakit("start")                                  # start the database
-nb.addon_ready("dash-server")                       # install and start an add-on
-nb.exakit("data-load", "fraud_transactions")        # load a kit dataset, a file or a folder
-nb.exakit("logs", "dash-server")                    # a service's log
-nb.kit_update()                                     # bring the kit and its add-ons up to date
-```
-
-`nb.exakit(...)` returns the run with its exit code, so a cell can act on it.
-
-<Callout>
-  A command run from a cell has no terminal, so a question it would ask takes its default. Give a choice up front instead: `nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`.
-</Callout>
-
-## Reference [#reference]
-
-[Kit commands](/data-scientist/reference/kit-commands), [Kit facts](/data-scientist/reference/kit-facts).
-
-
-# Set up a model (/data-scientist/guides/set-up-a-model)
-
-
-
-A model is optional. It is used to draft SQL in Ask and to sort texts into themes in Explore. Any endpoint that speaks the Chat Completions API works: an external provider or a model on your own machine.
-
-## The quickest way [#the-quickest-way]
-
-```python
-nb.model_setup()
-```
-
-It asks for anything missing, with the keys in a hidden box, says what is set, and prints the lines that set the same thing for every notebook.
-
-## In a cell [#in-a-cell]
-
-```python
-nb.use_model("your-model-id", "https://your-provider/v1/")                     # this kernel only
-nb.use_model("your-model-id", "https://your-provider/v1/", remember=True)      # every notebook of this kit
-nb.use_model(langfuse_base_url="https://cloud.langfuse.com", remember=True)    # tracing
-```
-
-The API key is asked in a hidden box. With `remember=True` it is kept in the kit's credentials, readable by you only.
-
-## Check and forget [#check-and-forget]
-
-```python
-nb.model_settings()                            # what is set, without secrets
-nb.tracing()                                   # is Langfuse tracing on?
-nb.forget_model(model=True, langfuse=True)     # delete what was remembered
-```
-
-## The settings behind it [#the-settings-behind-it]
-
-| Setting                                                           | What it is             |
-| ----------------------------------------------------------------- | ---------------------- |
-| `EXAKIT_MODEL_ID`                                                 | The model's id         |
-| `EXAKIT_PROVIDER_BASE_URL`                                        | The endpoint's address |
-| `EXAKIT_PROVIDER_API_KEY`                                         | The key                |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Turn tracing on        |
-
-The model's id and address can also live in `~/.exasol-starter-kit/exakit.env`. Provider recipes are in `MODEL-PROVIDERS.md`, copied beside the notebooks.
-
-<Callout type="warn">
-  Never type a key into a cell. Use the hidden box, so the key is not saved in the notebook file.
-</Callout>
-
-
-# Share a dashboard and hand off (/data-scientist/guides/share)
-
-
-
-<Steps>
-  <Step>
-    ### Prepare the dashboard [#prepare-the-dashboard]
-
-    ```python
-    dataset = nb.dataset(connection, nb.chosen_dataset(None))
-    dashboard_draft = nb.share(dataset, dashboard_query, "Orders by category", "orders-by-category", measure="count")
-    ```
-
-    The dashboard is built from approved roles and a query you can read.
-  </Step>
-
-  <Step>
-    ### Start Dash Server [#start-dash-server]
-
-    ```python
-    nb.addon_ready("dash-server")
-    ```
-
-    It installs Dash Server when it is missing and starts it when it is stopped. This is what `exakit marketplace dash-server` and `exakit start dash-server` do. You can skip this step: the preview sets the server up by itself, on the card and in `nb.dash_tools()`.
-  </Step>
-
-  <Step>
-    ### Preview [#preview]
-
-    ```python
-    dash_server = nb.dash_tools()
-    preview_path = dashboard_draft.preview(dash_server)
-    print("Preview:", dash_server.url + preview_path)
-    ```
-
-    Open it. Check that the categories and counts match your SQL, and that the filters update both charts and the table.
-  </Step>
-
-  <Step>
-    ### Publish [#publish]
-
-    ```python
-    live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
-    ```
-
-    Set `figures_checked=True` only when the preview matches the query. Keep the live address with your workflow id.
-  </Step>
-
-  <Step>
-    ### Hand off [#hand-off]
-
-    ```python
-    handoff = nb.handoff_bundle(connection, dataset)
-    ```
-
-    One folder and a zip under `~/.exasol-starter-kit/bundles/`. It needs no Dash Server and holds no password. See [Sharing and hand-off](/data-scientist/concepts/sharing-and-handoff).
-  </Step>
-</Steps>
-
-
-# Guided and Code (/data-scientist/start/guided-and-code)
-
-
-
-## The guided view [#the-guided-view]
-
-Each Data Scientist notebook opens with cards that do the page's steps with buttons and forms.
-
-| Notebook           | Its cards open with |
-| ------------------ | ------------------- |
-| `00_quickstart`    | `guide.start()`     |
-| `01_explore`       | `guide.explore()`   |
-| `02_ask_your_data` | `guide.ask()`       |
-| `03_share`         | `guide.share()`     |
-
-## The Docs button [#the-docs-button]
-
-The first card of every notebook has a **Docs** button beside the logo. It opens this documentation in a new tab, on the guide for that notebook: loading data from the quickstart, exploring from `01_explore`, asking from `02_ask_your_data`, sharing from `03_share`.
-
-## The Code switch [#the-code-switch]
-
-Every card has a **Guided / Code** switch at its top right.
-
-* **Code** turns that card, in place, into its code: what it ran this session, in order, and the exact call behind each control. Each block has **Copy as cell**.
-* **Guided** turns it back. Only that card changes. The connection, the chosen data and the approvals stay as they are.
-
-The notebook's own cells sit under **The code behind this page**. In the kit's JupyterLab they are hidden until you choose **Show all the notebook's code cells** at the foot of a card's Code view. In Marimo the cells open with their code visible.
-
-## One call, two ways [#one-call-two-ways]
-
-Every button, form and choice on a card is one `exakit.nb` call, and the same call is a cell in the notebook's code section. Clicking **Approve** and running `role_review.approve(...)` do the same thing.
-
-<Callout>
-  What a card shows is read from the kit when it draws: the datasets, connectors, add-ons and notebooks are not written into the card. A connector added to the kit appears in the form the same day.
-</Callout>
-
-## The Home card [#the-home-card]
-
-The first card of the quickstart is the kit itself. It has two tabs.
-
-* **Your kit:** what is installed and running, the loaded datasets, your approved column maps and your workflows.
-* **Marketplace:** every add-on with **Install**, **Start** and **Update** buttons. They run `nb.addon_ready(id)` and `nb.kit_update(id)`, which is what `exakit marketplace` and `exakit update` do in a terminal.
-
-## One workflow per start [#one-workflow-per-start]
-
-`guide.start()` starts a workflow. Every card action after it is one line in that workflow's log: the card, the action, the code it ran and whether it worked. See [Workflows](/data-scientist/concepts/workflow).
-
-
-# The notebooks and the nine steps (/data-scientist/start/notebooks)
-
-
-
-## Open the notebooks [#open-the-notebooks]
+## List [#list]
 
 ```bash
-exakit notebook            # JupyterLab
-exakit notebook marimo     # Marimo
+exakit workflow list
 ```
 
-Both open in your browser on the kit's own Python, with the kernel **Exasol (Starter Kit)**. That kernel knows where the kit's connection is, so no notebook asks for a host, a user or a password.
+One row per workflow: its id, first and last time, number of lines and name.
 
-Your copies are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/data-scientist/`. A notebook you edited is never overwritten by an update.
+## Show one [#show-one]
 
-## The path [#the-path]
+```bash
+exakit workflow show wf-20261027-3f9a1c
+```
 
-Run the notebooks in order. Each one continues the workflow the first one started, so nothing is copied between them.
+Its lines in order. Each one is a step:
 
-| Notebook           | Steps                                     | What you have at the end                                                    |
-| ------------------ | ----------------------------------------- | --------------------------------------------------------------------------- |
-| `00_quickstart`    | 0 Check the kit, 1 Access, 2 Understand   | A connection, a loaded dataset and an approved column map                   |
-| `01_explore`       | 3 Prepare, 4 Explore, 5 Model, 6 Validate | Clean data, comparisons by group and over time, a small model and its score |
-| `02_ask_your_data` | 7 Ask with AI                             | An answer from SQL you read and approved                                    |
-| `03_share`         | 8 Share, 9 Hand off                       | A published dashboard and one folder a colleague can repeat the work from   |
+| Line                                 | What happened                                  |
+| ------------------------------------ | ---------------------------------------------- |
+| `start`                              | The workflow began, with its name              |
+| `step`                               | A later notebook continued it                  |
+| `sql`                                | A statement ran                                |
+| `describe.draft`, `describe.approve` | A column map was drafted or approved           |
+| `ask.approve`, `ask.answer`          | A question's SQL was approved, and it answered |
+| `model`                              | A model was trained and scored                 |
+| `trace`                              | A model call was traced                        |
+| `dashboard.revision`                 | A dashboard was previewed or published         |
+| `handoff`                            | A hand-off was written                         |
 
-## The nine steps [#the-nine-steps]
+Add `--json` to either command for a script.
 
-<Steps>
-  <Step>
-    ### Access [#access]
+## Where the logs are [#where-the-logs-are]
 
-    Connect, start a workflow and load data: a kit dataset, your own file, or an external source. See [Load data](/data-scientist/guides/load-data).
-  </Step>
+`~/.exasol-starter-kit/workflows/<id>.jsonl`, one JSON object per line, readable by you only.
 
-  <Step>
-    ### Understand [#understand]
+## No secrets [#no-secrets]
 
-    Approve the column map: which column is the key, the date, the group and the outcome. See [Descriptor and approval](/data-scientist/concepts/descriptor).
-  </Step>
+The helpers refuse a password, a token, a secret or an API key, and a connection string with a password in it. The log is safe to share.
 
-  <Step>
-    ### Prepare [#prepare]
-
-    Check the data is clean, see the tables linked to it, and optionally create a typed, cleaned view. See [Prepared views](/data-scientist/concepts/prepared-views).
-  </Step>
-
-  <Step>
-    ### Explore [#explore]
-
-    Compare groups and look at the data over time. Each query shows its SQL before its result.
-  </Step>
-
-  <Step>
-    ### Model [#model]
-
-    Set aside columns that give the answer away, then train a small baseline model.
-  </Step>
-
-  <Step>
-    ### Validate [#validate]
-
-    Score the model on rows it has not seen and see what it leans on.
-  </Step>
-
-  <Step>
-    ### Ask with AI [#ask-with-ai]
-
-    Ask in plain language, read the proposed SQL, approve it, run it read-only. See [Ask your data](/data-scientist/guides/ask).
-  </Step>
-
-  <Step>
-    ### Share [#share]
-
-    Turn one checked result into a dashboard: a preview first, published after you check the figures. See [Share a dashboard](/data-scientist/guides/share).
-  </Step>
-
-  <Step>
-    ### Hand off [#hand-off]
-
-    Pack the column map, every query, the dashboards and the workflow log into one folder and a zip.
-  </Step>
-</Steps>
-
-Step 0, at the top of the quickstart, checks the kit itself from the notebook. See [Run the kit from a notebook](/data-scientist/guides/run-the-kit).
-
-## Rules every notebook follows [#rules-every-notebook-follows]
-
-* **One assignment picks the data.** `SAMPLE = "..."` in the quickstart, `DATASET = "..."` in the others. `None` means the dataset approved last.
-* **No column name is typed.** Queries are built from the approved roles, so the same notebook runs on any table.
-* **AI is opt-in.** A model never approves roles, and no rows are sent to one.
-* **A step that cannot run says why.** A dataset with no text column skips the text steps and tells you.
+<Callout>
+  The workflow log is written by the notebook helpers, so this command needs the notebook add-on: `exakit marketplace notebook`.
+</Callout>

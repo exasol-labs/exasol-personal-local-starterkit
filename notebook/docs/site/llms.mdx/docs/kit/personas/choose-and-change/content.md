@@ -1,0 +1,92 @@
+# Choose and change a persona (/kit/personas/choose-and-change)
+
+
+
+## At install time [#at-install-time]
+
+Name the persona on the install command:
+
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh
+```
+
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist,general sh
+```
+
+Without `EXAKIT_PERSONA`, on a terminal, the installer asks three things after the parts everyone needs:
+
+<Steps>
+  <Step>
+    ### What will you use this machine for? [#what-will-you-use-this-machine-for]
+
+    Tick as many personas as you like. General is ticked to begin with.
+  </Step>
+
+  <Step>
+    ### Data to load [#data-to-load]
+
+    One table. The datasets of the personas you picked are ticked; the others are listed and can be ticked too. Your own file or folder and Skip are there as well.
+  </Step>
+
+  <Step>
+    ### Add-ons for your personas [#add-ons-for-your-personas]
+
+    Every add-on, with your personas' own ticked. Tick or untick any, then Enter installs what is ticked.
+  </Step>
+</Steps>
+
+Nothing is loaded or installed without that screen. Without a terminal and without `EXAKIT_PERSONA`, the kit installs with the General samples.
+
+## On an installed kit [#on-an-installed-kit]
+
+```bash
+exakit persona list                  # the personas this kit has
+exakit persona show data-scientist   # what one brings, and what to do first
+exakit persona plan                  # what your personas bring, and what of it is still pending
+exakit persona add general           # become that persona too
+exakit persona remove general        # leave it
+```
+
+`plan` takes `--json` for a script.
+
+## Add a persona [#add-a-persona]
+
+```bash
+exakit persona add general
+```
+
+On a kit set up as Data Scientist this makes it both. Three steps run, headed like the installer's: sample data, AI clients, add-ons.
+
+* What is already here is named in one line and not redone.
+* A part that fails does not stop the others. The closing line names each part that did not finish and the command that retries it.
+* At a terminal you can change the ticks before Enter. Without one, the same happens in plain lines.
+
+## Remove a persona [#remove-a-persona]
+
+```bash
+exakit persona remove data-scientist
+```
+
+This removes only the membership from the kit's record. Datasets, notebooks and add-ons stay, because another persona or you may still use them. To remove an add-on, use `exakit uninstall <addon-id>`.
+
+## Override one answer [#override-one-answer]
+
+An answer you give yourself wins for that one variable:
+
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales sh
+```
+
+This loads only the Amazon dataset and keeps the persona's AI clients and add-ons.
+
+| Variable                    | Answers                                        |
+| --------------------------- | ---------------------------------------------- |
+| `EXAKIT_PERSONA`            | Which personas, comma-separated                |
+| `EXAKIT_DATASETS`           | Which datasets to load                         |
+| `EXAKIT_MARKETPLACE_ADDONS` | Which add-ons to install: ids, `all` or `none` |
+| `EXAKIT_MCP_CLIENTS`        | Which AI clients to connect                    |
+
+<Callout>
+  Use names, not menu numbers: `EXAKIT_DATASETS=tpch`, `EXAKIT_MCP_CLIENTS=claude,codex`.
+</Callout>
