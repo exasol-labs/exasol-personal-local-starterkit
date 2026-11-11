@@ -248,7 +248,7 @@ def _(mo):
     mo.md(r"""
     **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
 
-    1. Not connected yet? Pick `CONNECTOR`; `connector_forms[CONNECTOR]["inputs"]` lists what `exakit connect` asks for it (the same form as the card). Fill in `SOURCE_NAME` and `SOURCE_INPUTS` by those names, or `{"url": ...}` with its connection string. On a Mac, use `192.168.64.1` for a database on this computer.
+    1. Not connected yet? Pick `CONNECTOR` and paste its connection string into `SOURCE_URL`: the kit reads it as `exakit connect --url` does, and `source_reading["missing"]` says what it did not give. Put those (and any other input you want to change, by the names in `connector_forms[CONNECTOR]["inputs"]`) in `SOURCE_INPUTS`. No connection string? Leave it empty and give every input in `SOURCE_INPUTS`. On a Mac, use `192.168.64.1` for a database on this computer.
     2. Test it: the kit checks the inputs and this computer tries the source's host and port. Nothing is changed and no password is needed.
     3. Connect it: the password is asked in a hidden box and goes to the kit only.
     4. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
@@ -263,7 +263,10 @@ def _(nb):
     connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
     CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
     SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
-    SOURCE_INPUTS = {}  # e.g. {"host": "192.168.64.1", "database": "shop", "user": "reader"}, or {"url": "postgres://reader@192.168.64.1:5432/shop"}
+    SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)
+    source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL) if CONNECTOR and SOURCE_URL else None
+    SOURCE_INPUTS = {}  # what the string did not give (source_reading["missing"]), e.g. {"user": "reader"}; no string: every input
+    SOURCE_INPUTS = {**({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
     return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
 
 

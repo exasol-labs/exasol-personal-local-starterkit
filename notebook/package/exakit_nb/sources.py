@@ -24,7 +24,8 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 
 from ._kit import exakit_command
 
-__all__ = ["SourceProblem", "SourceTest", "clean_path", "clean_text", "connect_source", "test_source"]
+__all__ = ["SourceProblem", "SourceTest", "clean_path", "clean_text", "connect_source", "read_connection_string",
+           "test_source"]
 
 MAC_HOST = "192.168.64.1"           # where the database (in its VM) reaches this Mac
 LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0")
@@ -188,6 +189,46 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     schema = str(answer.get("schema") or _schema_name(name))
     print(f"Connected: {schema}. Set SOURCE = \"{schema}.<TABLE>\"; nb.load_source(connection, \"{schema}\") lists its tables.")
     return schema
+
+
+def read_connection_string(connector: str, text: str) -> dict[str, Any]:
+    """Read a source's connection string the way `exakit connect --url` reads it (the kit's own parser): which of the
+    connector's inputs it gives, and which required ones are still to be given. Returns {connector, values, notes,
+    credential_in_string, missing, url}: ``values`` by input name, ``missing`` the required inputs it does not give
+    (with no default), ``url`` the string without its credential - what to pass on as url=, the password going
+    separately. The password itself is never returned."""
+    import importlib
+    import json as _json
+
+    from .kit_facts import _kit_root, connector_inputs
+
+    form = connector_inputs(connector)
+    root = _kit_root()
+    engine = root / "setup" / "virtual-schemas" / "engine" if root else None
+    if engine is None or not (engine / "paste.py").is_file():
+        raise SourceProblem("The kit's connection-string reader was not found (EXAKIT_NB_KIT).")
+    definition = _json.loads((root / "setup" / "virtual-schemas" / "connectors" / form["id"] / "connector.json")
+                             .read_text(encoding="utf-8"))
+    sys.path.insert(0, str(engine))
+    try:
+        paste = importlib.import_module("paste")
+        planner = importlib.import_module("plan")
+        try:
+            answer = paste.read(definition, clean_text(text), "use")
+        except planner.PlanError as problem:
+            raise SourceProblem(f"The connection string could not be read: {problem}") from None
+    finally:
+        sys.path.remove(str(engine))
+    values = {k: str(v) for k, v in answer["values"].items()}
+    has_secret = bool(answer.get("secret_value"))
+    secret_input = next((i["name"] for i in form["inputs"] if i["kind"] == "secret"), None)
+    missing = [i["name"] for i in form["inputs"]
+               if i["required"] and i["name"] not in values and not i["default"]
+               and not (i["kind"] == "secret" and has_secret)]
+    url, _, _ = _url_parts(clean_text(text))
+    notes = [n for n in answer["notes"] if "shell history" not in n and "--password-file" not in n]
+    return {"connector": form["id"], "values": values, "notes": notes, "credential_in_string": has_secret,
+            "secret_input": secret_input, "missing": missing, "url": url}
 
 
 @dataclass

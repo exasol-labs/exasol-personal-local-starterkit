@@ -170,6 +170,7 @@ class ChooseData(Screen):
         self.sources: list[str] = []
         self.connectors: list[dict] = []
         self.forms: dict[str, dict] = {}       # each connector's inputs, as `exakit connect` asks them (nb.connector_inputs)
+        self.parsed: dict[str, dict] = {}      # a connection string read per connector (nb.read_connection_string)
         self.rows: dict[str, str] = {}
         self.kit_said = ""
         self.done = False
@@ -245,7 +246,9 @@ class ChooseData(Screen):
         ]
         connecting = [{"field": "kind", "equals": "source"}, connect_only]
         blocks = [head, {"t": "choice", "id": "kind", "value": "sample" if samples else "file", "options": options},
-                  {"t": "actions", "items": [{"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
+                  {"t": "actions", "items": [{"id": "read_source", "label": "Read it", "busy": "Reading…", "no_secret": True,
+                                              "show_if": connecting + [{"field": "src_how", "equals": "string"}]},
+                                             {"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
                                              {"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}]}]
         if self.done and SESSION.source is not None:
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
@@ -320,36 +323,109 @@ class ChooseData(Screen):
     def _fid(connector: str, name: str) -> str:
         return f"cx_{connector.replace('-', '_')}__{name}"
 
+    def _sid(self, cid: str) -> str:
+        """The field names of a connector's inputs after its string was read (one set per reading, so a string read
+        again fills them anew)."""
+        return f"{cid}_r{self.parsed.get(cid, {}).get('n', 0)}"
+
+    def _input_field(self, cid: str, spec: dict, only: list) -> dict:
+        label = spec["label"].split(" - ")[0] + (" *" if spec["required"] else "")
+        field = {"id": self._fid(cid, spec["name"]), "label": label, "value": spec["default"], "show_if": only,
+                 "placeholder": spec["default"] or ("path to the file" if spec["file"] else "")}
+        if spec["kind"] == "secret":
+            field.update(type="password", value="", label=label + " (goes to the kit only, never shown, saved or logged here)")
+        elif spec["choices"]:
+            field.update(type="select", options=[{"value": c, "label": c} for c in spec["choices"]])
+        else:
+            field.update(type="text")
+        return field
+
     def _connector_fields(self, connect_only: dict) -> list[dict]:
-        """Every connector's own inputs, as `exakit connect` asks them (its connector.json, via nb.connector_inputs):
-        label, required (*), default, choices, password or key file. Only the chosen connector's are shown."""
-        fields: list[dict] = []
+        """The chosen connector's inputs, as `exakit connect` asks them (its connector.json, via nb.connector_inputs).
+        First its connection string: read the way `exakit connect --url` reads it (nb.read_connection_string), and
+        then only what the string did not give is asked. Without a string ("Fill in each input"), every input on one
+        screen: label, required (*), default, choices, password or key file."""
+        fields: list[dict] = [{"id": "src_how", "type": "select", "label": "How", "value": "string", "show_if": connect_only,
+                               "options": [{"value": "string", "label": "I have a connection string"},
+                                           {"value": "form", "label": "Fill in each input"}]}]
         for cid, form in self.forms.items():
             only = [connect_only, {"field": "connector", "equals": cid}]
-            for spec in form.get("inputs", []):
-                label = spec["label"].split(" - ")[0] + (" *" if spec["required"] else "")
-                field = {"id": self._fid(cid, spec["name"]), "label": label, "value": spec["default"], "show_if": only,
-                         "placeholder": spec["default"] or ("path to the file" if spec["file"] else "")}
-                if spec["kind"] == "secret":
-                    field.update(type="password", value="",
-                                 label=label + " (goes to the kit only, never shown, saved or logged here)")
-                elif spec["choices"]:
-                    field.update(type="select", options=[{"value": c, "label": c} for c in spec["choices"]])
-                else:
-                    field.update(type="text")
-                fields.append(field)
+            by_string = only + [{"field": "src_how", "equals": "string"}]
+            by_form = only + [{"field": "src_how", "equals": "form"}]
             if form.get("forms"):
-                fields.append({"id": self._fid(cid, "url"), "type": "text", "show_if": only, "optional": True,
-                               "label": "Or paste its connection string (fills the inputs it holds)",
+                fields.append({"id": self._fid(cid, "url"), "type": "text", "show_if": by_string,
+                               "label": f"Connection string * ({' or '.join(form['forms'][:2])})",
                                "placeholder": form["forms"][0]})
+                read = self.parsed.get(cid)
+                if read:
+                    found = ", ".join(f"{k} {v}" for k, v in read["values"].items()) or "nothing the kit can use"
+                    fields.append({"id": self._fid(cid, "found"), "type": "note", "show_if": by_string,
+                                   "v": f"Read from it: {found}." + (" Its password too (kept hidden)."
+                                                                      if read["credential_in_string"] else "")})
+                    sid = self._sid(cid)
+                    specs = {i["name"]: i for i in form["inputs"]}
+                    fields += [self._input_field(sid, specs[n], by_string) for n in read["missing"] if n in specs]
+                    rest = [i for i in form["inputs"] if i["name"] not in read["missing"]
+                            and not (i["kind"] == "secret" and read["credential_in_string"])]
+                    if rest:
+                        fields.append({"id": self._fid(cid, "rest"), "type": "note", "show_if": by_string,
+                                       "v": "The other settings, optional: filled in from the string or the kit's "
+                                            "default. Change one only to use another value."})
+                    for spec in rest:
+                        field = self._input_field(sid, {**spec, "required": False}, by_string)
+                        if spec["kind"] != "secret":
+                            field["value"] = read["values"].get(spec["name"], spec["default"])
+                        field["label"] += " (optional)"
+                        fields.append(field)
+                else:
+                    fields.append({"id": self._fid(cid, "hint"), "type": "note", "show_if": by_string,
+                                   "v": "Paste it and press Read it: the kit fills in what it holds, and asks only for "
+                                        "the rest."})
+            else:
+                fields.append({"id": self._fid(cid, "nostring"), "type": "note", "show_if": by_string,
+                               "v": f"{form['name']} takes no connection string: choose Fill in each input."})
+            fields += [self._input_field(cid, spec, by_form) for spec in form.get("inputs", [])]
             notes = ([f"Access the reader needs: {form['access']}."] if form.get("access") else []) + form.get("tips", [])[:1]
             if notes:
                 fields.append({"id": self._fid(cid, "note"), "type": "note", "show_if": only, "v": " ".join(notes)})
         return fields
 
+    def _read_string(self, connector: str, text: str) -> dict:
+        """Read a connection string with the kit's own reader (nb.read_connection_string). Its password is taken out
+        first: the call, the code shown and the workflow log hold the string without it."""
+        from exakit_nb.sources import _url_parts, clean_text
+
+        clean, password, _ = _url_parts(clean_text(text))
+        read = dict(actions.run("data.read_string", connector=connector, text=clean))
+        read["credential_in_string"] = bool(password) or read.get("credential_in_string", False)
+        if password and read.get("secret_input") in read["missing"]:
+            read["missing"] = [n for n in read["missing"] if n != read["secret_input"]]
+        read["text"], read["password"] = text, password
+        read["n"] = self.parsed.get(connector, {}).get("n", 0) + 1
+        self.parsed[connector] = read
+        return read
+
+    def on_read_source(self, v: dict) -> None:
+        """Read it: the connection string, read as `exakit connect --url` reads it; the card then asks only for what
+        it did not give."""
+        connector = str(v.get("connector") or "").strip()
+        if connector not in self.forms:
+            raise ValueError("Choose the kind of source first.")
+        text = str(v.get(self._fid(connector, "url")) or "").strip()
+        if not text:
+            raise ValueError("Paste the connection string first, or choose Fill in each input.")
+        read = self._read_string(connector, text)
+        self.kit_said = SESSION.said or self.kit_said
+        labels = {i["name"]: i["label"].split(" - ")[0] for i in self.forms[connector]["inputs"]}
+        still = [labels.get(n, n) for n in read["missing"]]
+        self.flash = {"kind": "ok", "keep": True,
+                      "v": "Read the connection string. " + (f"Still needed: {', '.join(still)} (filled in above)."
+                                                             if still else "Nothing else is needed: Test connection, then Use this data.")}
+
     def _source_inputs(self, v: dict) -> tuple[str, str, dict, str]:
         """The chosen connector, the source's name, its settings for nb.connect_source / nb.test_source (url=,
-        password_file=, and each input by name) and the typed password, from the card's fields."""
+        password_file=, and each input by name) and the password, from the card's fields: with a connection string,
+        the string (without its password) and only the inputs it did not give; else every input."""
         connector = str(v.get("connector") or "").strip()
         form = self.forms.get(connector)
         if not form:
@@ -357,22 +433,39 @@ class ChooseData(Screen):
         name = str(v.get("src_name") or "").strip().lower()
         if not name:
             raise ValueError("Give the source a name (lower case, e.g. sales): its tables appear as VS_<NAME>.")
-        url = str(v.get(self._fid(connector, "url")) or "").strip()
-        settings: dict = {"url": url} if url else {}
-        password, missing = "", []
-        for spec in form["inputs"]:
-            value = str(v.get(self._fid(connector, spec["name"])) or "").strip()
+        specs = form["inputs"]
+        settings: dict = {}
+        password = ""
+        if (v.get("src_how") or "string") == "string" and form.get("forms"):
+            text = str(v.get(self._fid(connector, "url")) or "").strip()
+            if not text:
+                raise ValueError("Paste the connection string, or choose Fill in each input.")
+            seen = self._sid(connector) if connector in self.parsed else None    # the fields on screen when pressed
+            read = self.parsed.get(connector)
+            if not read or read.get("text") != text:
+                read = self._read_string(connector, text)       # changed since it was read: read it again
+            settings["url"] = read["url"]
+            password = read["password"] or ""
+            prefix, required = seen or self._sid(connector), set(read["missing"])
+            given = {k: v2 for k, v2 in read["values"].items()}
+        else:
+            prefix, required, given = connector, {i["name"] for i in specs if i["required"]}, {}
+        missing = []
+        for spec in specs:
+            raw = v.get(self._fid(prefix, spec["name"]))
+            value = str(raw or "").strip()
             if spec["kind"] == "secret":
-                password = str(v.get(self._fid(connector, spec["name"])) or "")
+                password = str(raw or "") or password
             elif spec["kind"] == "secret-file":
                 if value:
                     settings["password_file"] = value
-            elif value and value != spec["default"]:
+            # Only what differs from what the string gave or the kit's default goes on: the string says the rest.
+            elif value and value != given.get(spec["name"], spec["default"]):
                 settings[spec["name"]] = value
-            if spec["required"] and not value and spec["kind"] != "secret" and not url:
+            if spec["name"] in required and not value and spec["kind"] != "secret":   # the kit asks a password itself
                 missing.append(spec["label"].split(" - ")[0])
         if missing:
-            raise ValueError("Fill in: " + ", ".join(missing) + (" (or paste a connection string)" if form.get("forms") else ""))
+            raise ValueError("Fill in: " + ", ".join(missing))
         return connector, name, settings, password
 
     def on_test_source(self, v: dict) -> None:

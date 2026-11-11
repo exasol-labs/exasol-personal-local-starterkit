@@ -72,6 +72,7 @@ ACTIONS: dict[str, Action] = {
     "data.table": Action("00_quickstart", "own_data = nb.use_table(connection, {table})", "own_data"),
     "data.approved": Action("00_quickstart", "own_data = nb.dataset(connection, {dataset_id})", "own_data"),
     "data.connect_source": Action("00_quickstart", "connected = nb.connect_source({connector}, {name}{settings}{secret})", "connected"),
+    "data.read_string": Action("00_quickstart", "source_reading = nb.read_connection_string({connector}, {text})", "source_reading", False),
     "data.test_source": Action("00_quickstart", "source_test = nb.test_source({connector}, {name}{settings})", "source_test", False),
     "data.connector_forms": Action("00_quickstart", 'connector_forms = {{c["id"]: nb.connector_inputs(c["id"]) for c in connectors}}',
                                    "connector_forms", False),

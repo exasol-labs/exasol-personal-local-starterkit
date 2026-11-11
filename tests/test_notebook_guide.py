@@ -340,7 +340,8 @@ class CardTest(unittest.TestCase):
         card.forms = {"postgresql": nb.connector_inputs("postgresql")}          # the kit's own form for it
         f = card._fid
         with mock.patch.object(understand.actions, "run", return_value="VS_SALES") as run:
-            schema = card._connect({"connector": "postgresql", "src_name": "Sales", f("postgresql", "password"): "s3cret",
+            schema = card._connect({"connector": "postgresql", "src_name": "Sales", "src_how": "form",
+                                    f("postgresql", "password"): "s3cret",
                                     f("postgresql", "host"): "db.example.com", f("postgresql", "database"): "shop",
                                     f("postgresql", "user"): "reader", f("postgresql", "port"): "5432",
                                     f("postgresql", "tls"): "require"})
@@ -362,8 +363,50 @@ class CardTest(unittest.TestCase):
         card.forms = {"postgresql": nb.connector_inputs("postgresql")}
         with mock.patch.object(understand.actions, "run") as run:
             with self.assertRaisesRegex(ValueError, "Fill in: Host name or address, Database, Reader account"):
-                card._connect({"connector": "postgresql", "src_name": "sales"})
+                card._connect({"connector": "postgresql", "src_name": "sales", "src_how": "form"})
+            with self.assertRaisesRegex(ValueError, "Paste the connection string"):
+                card._connect({"connector": "postgresql", "src_name": "sales"})        # a string is asked first
         run.assert_not_called()
+
+    def test_a_connection_string_is_read_first_and_only_the_rest_is_asked(self):
+        """The string is read as `exakit connect --url` reads it; then only what it did not give is required, every
+        other input shown as optional and filled in from it. Its password never reaches the code or the log."""
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        nb = importlib.import_module("exakit_nb")
+        card = understand.ChooseData.__new__(understand.ChooseData)
+        card.sources, card.kit_said, card.parsed, card.flash = [], "", {}, None
+        card.forms = {"postgresql": nb.connector_inputs("postgresql")}
+        calls = []
+
+        def run(action_id, **values):
+            calls.append((action_id, values))
+            if action_id == "data.read_string":
+                return nb.read_connection_string(values["connector"], values["text"])
+            return "VS_SALES"
+
+        with mock.patch.object(understand.actions, "run", side_effect=run):
+            card.on_read_source({"connector": "postgresql",
+                                 card._fid("postgresql", "url"): "postgres://db.example.com:5433/shop"})
+            self.assertEqual(["user", "password"], card.parsed["postgresql"]["missing"])
+            fields = {f["id"]: f for f in card._connector_fields({"field": "src_schema", "equals": "__connect__"})}
+            sid = card._sid("postgresql")
+            self.assertEqual("Reader account *", fields[card._fid(sid, "user")]["label"])              # required
+            self.assertEqual("db.example.com", fields[card._fid(sid, "host")]["value"])               # read, optional
+            self.assertIn("(optional)", fields[card._fid(sid, "host")]["label"])
+            self.assertEqual("public", fields[card._fid(sid, "schema")]["value"])                     # kit default
+            with self.assertRaisesRegex(ValueError, "Fill in: Reader account"):
+                card._connect({"connector": "postgresql", "src_name": "sales",
+                               card._fid("postgresql", "url"): "postgres://db.example.com:5433/shop"})
+            card._connect({"connector": "postgresql", "src_name": "sales",
+                           card._fid("postgresql", "url"): "postgres://reader:s3cret@db.example.com:5433/shop",
+                           card._fid(card._sid("postgresql"), "tls"): "require"})
+        read = [v for a, v in calls if a == "data.read_string"][-1]
+        self.assertEqual("postgres://reader@db.example.com:5433/shop", read["text"])              # no password
+        connect = [v for a, v in calls if a == "data.connect_source"][-1]
+        self.assertEqual({"url": "postgres://reader@db.example.com:5433/shop", "tls": "require"}, connect["settings"])
+        self.assertEqual("s3cret", connect["secret"]["secret"]("Password"))
+        actions = importlib.import_module("exakit_guide.actions")
+        self.assertNotIn("s3cret", actions.code("data.connect_source", **connect))
 
     def test_run_logs_exactly_what_it_ran_and_returns_the_result(self):
         actions = importlib.import_module("exakit_guide.actions")
