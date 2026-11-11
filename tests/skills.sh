@@ -288,7 +288,7 @@ fi
 # they must add up: installed + needs_addon + missing = total. Here the one
 # core skill is half-placed (one root removed above), so it is "missing".
 check "--json carries the four counts, and they add up" \
-    "{'installed': 0, 'needs_addon': 0, 'missing': 1, 'total': 1}" \
+    "{'installed': 0, 'needs_addon': 0, 'needs_persona': 0, 'missing': 1, 'total': 1}" \
     "$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["counts"])' 2>/dev/null)"
 _cnt="$(printf '%s' "$JSON" | python3 -c 'import json,sys
 d=json.load(sys.stdin); c=d["counts"]
@@ -490,6 +490,7 @@ _HOME_SAVED="$HOME"
 HOME="$WORK/fakehome"; export HOME
 mkdir -p "$HOME/.claude/skills/zz-invented-skill" \
          "$HOME/.agents/skills/zz-invented-skill" \
+         "$HOME/.continue/skills/zz-invented-skill" \
          "$HOME/.claude/skills/somebody-elses-skill"
 
 _exakit_remove_installed_skills 0 >/dev/null 2>&1
@@ -497,6 +498,11 @@ if [ -e "$HOME/.claude/skills/zz-invented-skill" ]; then
     check "a kit skill is removed" "gone" "STILL-THERE"
 else
     check "a kit skill is removed" "gone" "gone"
+fi
+if [ -e "$HOME/.continue/skills/zz-invented-skill" ]; then
+    check "a kit skill is removed from Continue's folder" "gone" "STILL-THERE"
+else
+    check "a kit skill is removed from Continue's folder" "gone" "gone"
 fi
 if [ -e "$HOME/.claude/skills/somebody-elses-skill" ]; then
     check "a foreign skill is kept" "kept" "kept"
@@ -813,7 +819,7 @@ lacks "...and does not prescribe skills-install for it" "exakit skills-install" 
 # or the verdict would call a healthy machine "missing" and name a command
 # that cannot change it.
 check "the counts file it under needs_addon, not missing" \
-    "{'installed': 0, 'needs_addon': 1, 'missing': 0, 'total': 1}" \
+    "{'installed': 0, 'needs_addon': 1, 'needs_persona': 0, 'missing': 0, 'total': 1}" \
     "$(printf '%s' "$_gated_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["counts"])' 2>/dev/null)"
 lacks "...and the verdict never reads missing for it" '"status": "missing"' "$_gated_json"
 has "the panel tally says where it comes from" \
@@ -860,7 +866,7 @@ has "...and leaves it out of the pending count" '$skjMissing = $pending' "$_PS_S
 # way - and the installer's placed-of-total sentence beside them.
 has "the twin carries the same four counts" 'counts = [ordered]@{' "$_PS_SHOW"
 has "...from the same three buckets" \
-    'installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count' "$_PS_SHOW"
+    'installed = $placed; needs_addon = $gated; needs_persona = $personaGated; missing = $skjMissing; total = $rows.Count' "$_PS_SHOW"
 has "...and the panel's labelled tally" 'Get-ExakitSkillsSummaryLine -Installed $placed -WithAddons $gated -NotPlaced $pending -Total $rows.Count' "$_PS_SHOW"
 has "the twin's installer says placed-of-total" 'Installed $installed of $($installed + $gated) AI skills ($arrive)' "$_PS_INSTALL"
 # The gated branch must `continue` BEFORE the pending++ line, or the state word

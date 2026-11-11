@@ -478,3 +478,37 @@ class YamlScalarTest(unittest.TestCase):
                 self.assertEqual(_yaml_scalar(text), '"%s"' % text)
         self.assertEqual(_yaml_scalar(0), "0")
         self.assertEqual(_yaml_scalar("PHARMA.TRIALS"), "PHARMA.TRIALS")
+
+
+class DraftTableTest(unittest.TestCase):
+    """The describe table names the schema and table every column came from, and its type even without a profile."""
+
+    DOC = {"dataset": "amazon_sales", "version": 2, "status": "approved", "source": {"object": "AMAZON.ORDER_LINES"},
+           "slots": {"key": "ORDER_LINE_ID"}, "columns": {
+               "ORDER_LINE_ID": {"role": "key", "confidence": "high", "evidence": "128,975 distinct, no nulls"},
+               "SHIP_CITY": {"role": "category", "confidence": "low", "evidence": "7,291 distinct"},
+               "SHIP_POSTAL_CODE": {"role": "identifier", "sensitive": True, "confidence": "high", "evidence": "postcode"}}}
+
+    def test_rows_carry_schema_table_and_type(self):
+        draft = exakit_nb.Draft(self.DOC, types={"ORDER_LINE_ID": "DECIMAL(18,0)", "SHIP_CITY": "VARCHAR(100) UTF8"})
+        rows = draft.rows()
+        self.assertEqual(rows[0]["column"], "SHIP_CITY")                     # low confidence first
+        self.assertTrue(all(r["schema"] == "AMAZON" and r["table"] == "ORDER_LINES" for r in rows))
+        self.assertEqual({r["column"]: r["type"] for r in rows}["ORDER_LINE_ID"], "DECIMAL(18,0)")
+        self.assertEqual(rows[-1]["role"], "identifier (sensitive)")
+        out = io.StringIO()
+        with redirect_stdout(out):
+            draft.show()
+        header = out.getvalue().splitlines()[2].split()
+        self.assertEqual(header[:4], ["schema", "table", "column", "type"])
+        self.assertIn("<th style='text-align:left'>schema</th>", draft._repr_html_())
+
+    def test_column_types_read_the_catalogue(self):
+        import importlib
+        module = importlib.import_module("exakit_nb.describe")
+        conn = mock.Mock()
+        conn.execute.return_value = FakeResult([("SHIP_CITY", "VARCHAR(100) UTF8")])
+        self.assertEqual(module._column_types(conn, '"AMAZON"."ORDER_LINES"'), {"SHIP_CITY": "VARCHAR(100) UTF8"})
+        self.assertIn("COLUMN_SCHEMA = 'AMAZON' AND COLUMN_TABLE = 'ORDER_LINES'", conn.execute.call_args[0][0])
+        conn.execute.side_effect = RuntimeError("no catalogue")
+        self.assertEqual(module._column_types(conn, "AMAZON.ORDER_LINES"), {})

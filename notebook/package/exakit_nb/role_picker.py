@@ -514,7 +514,10 @@ def _open(conn, name: str):
     descriptor beside it, loaded into its default table (a LoadedTable, to be profiled)."""
     from .own_file import descriptor_beside, load_own_file
 
-    given = Path(name).expanduser()
+    from .sources import clean_path
+
+    name = clean_path(name) or name
+    given = Path(name)
     if given.is_file() and given.suffix.lower() in DATA_FILES and descriptor_beside(given) is None:
         table = _default_table(given)
         print(f"{given.name} has no descriptor beside it: loading it into {table} and proposing its roles here. "

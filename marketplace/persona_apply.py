@@ -94,6 +94,18 @@ def _requested_addons(root: Path, value: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def _persona_skills(root: Path, ids: str) -> list[str]:
+    """The kit's skills that declare one of these personas in their frontmatter ("persona: <id>")."""
+    wanted = {part for part in (ids or "").split(",") if part}
+    found = []
+    for skill in sorted((root / "skills").glob("*/SKILL.md")):
+        head = skill.read_text(encoding="utf-8", errors="replace").split("\n---", 1)[0]
+        for line in head.splitlines():
+            if line.startswith("persona:") and line.split(":", 1)[1].strip().strip('"\'') in wanted:
+                found.append(skill.parent.name)
+    return found
+
+
 def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = False) -> int:
     ctx.manifest.read()
     old = str(ctx.manifest.get("persona.id") or "")
@@ -209,6 +221,11 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
             notebook.sync_notebooks(ctx)
         except (AddonFailure, OSError) as error:
             failures.append((f"Notebooks ({error})", "exakit notebook setup"))
+    if _persona_skills(ctx.root, new_ids):
+        # A skill that belongs to the new persona ("persona:" in its SKILL.md) is placed now: the
+        # skills step of the install ran before the kit had this persona.
+        if not _child(prefix, "skills-install", [], environment):
+            failures.append(("AI skills", "exakit skills-install"))
     failures.extend(start_services(ctx, persona_service.selected_services(ctx.root, new_ids),
                                    lambda command, args: _child(prefix, command, args, environment), ready))
     if failures:

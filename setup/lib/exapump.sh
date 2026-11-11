@@ -756,11 +756,21 @@ exapump_run_sql_file() {
     # caller narrating a whole job on one line does not want "Running x" / "x
     # done" for each of its scripts underneath. The failure path is never quiet.
     [ "${EXAKIT_UPLOAD_QUIET:-0}" = 1 ] || info "Running ${2:-$(basename "$1")}"
+    EXAKIT_REASON_SINCE="$(wc -l < "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null | tr -d ' ' || echo 0)"
     if ! run_logged "$(exapump_cli)" sql -p "$EXAKIT_EXAPUMP_PROFILE" < "$1"; then
-        [ -n "${EXAKIT_LOG_FILE:-}" ] && exakit_explain_db_error "$(tail -8 "$EXAKIT_LOG_FILE" 2>/dev/null)"
+        [ -n "${EXAKIT_LOG_FILE:-}" ] && exakit_explain_db_error "$(_exakit_log_since_mark | tail -8)"
         die "The SQL in $(basename "$1") did not run. The database's own message: exakit logs setup. Check the database is up with: exakit status"
     fi
     [ "${EXAKIT_UPLOAD_QUIET:-0}" = 1 ] || ok "${2:-$(basename "$1")} done"
+}
+
+# _exakit_log_since_mark — the log lines written since EXAKIT_REASON_SINCE (the
+# line count a command noted before it ran): what THAT command said. Reading the
+# log's last lines instead took an earlier failure's for this one's - the MCP
+# write probe's "insufficient privileges" became a CSV upload's.
+_exakit_log_since_mark() {
+    [ -n "${EXAKIT_LOG_FILE:-}" ] || return 0
+    tail -n "+$(( ${EXAKIT_REASON_SINCE:-0} + 1 ))" "$EXAKIT_LOG_FILE" 2>/dev/null
 }
 
 # exakit_upload_failure_reason — why the last upload failed, in one short line.
@@ -774,8 +784,21 @@ exapump_run_sql_file() {
 # through trimmed, because a slightly long engine message beats no message.
 exakit_upload_failure_reason() {
     [ -n "${EXAKIT_LOG_FILE:-}" ] || return 1
-    _ufr_line="$(grep -a '^Error: ' "$EXAKIT_LOG_FILE" 2>/dev/null | tail -1)"
-    [ -n "$_ufr_line" ] || return 1
+    # Only what THIS attempt wrote (EXAKIT_REASON_SINCE: the log's line count
+    # before it). The last Error: line of the whole log was any earlier
+    # failure's - the MCP write probe's refusal named a JSON file's reason.
+    # Twin: Get-ExakitUploadFailureReason reads the command's own output.
+    _ufr_since="${EXAKIT_REASON_SINCE:-0}"
+    _ufr_line="$(tail -n "+$((_ufr_since + 1))" "$EXAKIT_LOG_FILE" 2>/dev/null | grep -a '^Error: ' | tail -1)"
+    if [ -z "$_ufr_line" ]; then
+        # No engine error: the kit's own warning for this attempt says why
+        # (a JSON engine that could not be installed never ran at all).
+        _ufr_line="$(tail -n "+$((_ufr_since + 1))" "$EXAKIT_LOG_FILE" 2>/dev/null \
+            | grep -a '^[0-9-]* [0-9:]* WARN  ' | tail -1 | sed 's/^[0-9-]* [0-9:]* WARN  //')"
+        [ -n "$_ufr_line" ] || return 1
+        printf '%s\n' "$_ufr_line" | cut -c1-200
+        return 0
+    fi
     # A JSON value quoted by the engine stays in the log. A table loaded from a
     # JSON file carries nested objects as text, so a cast failure on one put
     # the object itself on screen -- braces and all, then cut at 160 characters
@@ -832,6 +855,8 @@ exakit_upload_failure_reason() {
 
 # exapump_upload <file> <schema.table> — load a CSV/Parquet file, logged.
 exapump_upload() {
+    # The log's line count before this upload: its failure reason is read from there on.
+    EXAKIT_REASON_SINCE="$(wc -l < "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null | tr -d ' ' || echo 0)"
     [ -s "$1" ] || { warn "Data file missing or empty: $1"; return 1; }
     # EXAKIT_UPLOAD_QUIET: `exakit data-load` narrates the whole job with a
     # single "Loading your data" spinner, so per-file chatter is noise there.
@@ -891,7 +916,7 @@ exapump_upload() {
         # The engine's message is in the log; translate the common faults into
         # their remedy before dying, so "Connection refused" arrives WITH
         # "exakit start" instead of leaving the user to map one to the other.
-        [ -n "${EXAKIT_LOG_FILE:-}" ] && exakit_explain_db_error "$(tail -8 "$EXAKIT_LOG_FILE" 2>/dev/null)"
+        [ -n "${EXAKIT_LOG_FILE:-}" ] && exakit_explain_db_error "$(_exakit_log_since_mark | tail -8)"
         # exakit_explain_db_error only knows connection, LIMIT and privilege
         # faults, so a malformed CSV -- the commonest upload failure there is --
         # matched none of them and arrived as "(see log)". The translator that
@@ -1689,7 +1714,14 @@ _exakit_json_tables_ensure() {
         warn "The marketplace installer is not available in this kit build."
         return 1
     }
-    if ! _exakit_marketplace_install_one json-tables >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
+    # The install takes a minute (a download and a Python environment) and runs
+    # once: the folder's bar says so instead of sitting still on the file's name.
+    [ -n "${_blf_state:-}" ] && ui_progress_phase "$_blf_state" \
+        "installing the JSON engine (first JSON file only, about a minute)"
+    # The download writes how far it is ("downloading the JSON engine, 6 of 15
+    # MB") into the bar's label through this file, so a slow line is not a hang.
+    if ! EXAKIT_PROGRESS_PHASE_FILE="${_blf_state:-}" \
+            _exakit_marketplace_install_one json-tables >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
         _EXAKIT_JSON_TABLES_BLOCKED="The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
         warn "The JSON engine could not be installed, so this file was not loaded."
         info "Everything already in the database is untouched. Details: exakit logs"
@@ -2460,6 +2492,8 @@ EXAKIT_BULK_WEIGH_EOF
         # file, which on a forty-file folder was forty extra round trips.
         _blf_pre="$_blf_had"
         case "$_blf_act" in resume|clash) _blf_pre="absent" ;; esac
+        # Where this file's lines start in the log: its reason, if it fails, is read from there on.
+        EXAKIT_REASON_SINCE="$(wc -l < "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null | tr -d ' ' || echo 0)"
         exakit_load_inflight_set "$_blf_target"
         if [ "$_blf_kind" = "json" ]; then
             EXAKIT_LAST_LOAD_TARGET=""

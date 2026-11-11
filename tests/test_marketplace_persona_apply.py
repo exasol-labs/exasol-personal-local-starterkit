@@ -114,7 +114,7 @@ class PersonaApplyTest(unittest.TestCase):
                                      "EXAKIT_MARKETPLACE_ADDONS": "notebook", "EXAKIT_SKIP_MCP": ""}), \
              patch.object(persona_apply, "_child", side_effect=child), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, persona_apply.apply(self.ctx, "data-scientist", ["exakit"], live=True))
-        self.assertEqual(["data-load", "marketplace"], [command for command, _ in calls])
+        self.assertEqual(["data-load", "marketplace", "skills-install"], [command for command, _ in calls])
         self.assertEqual("tpch", calls[0][1]["EXAKIT_DATASETS_PRESELECT"])
         self.assertNotIn("EXAKIT_DATASETS", calls[0][1])
         self.assertEqual("notebook", calls[1][1]["EXAKIT_MARKETPLACE_ONLY"])
@@ -202,9 +202,12 @@ class PersonaApplyTest(unittest.TestCase):
         with patch.dict(os.environ, {"EXAKIT_LOAD_SAMPLE": "0", "EXAKIT_MCP_CLIENTS": "skip",
                                      "EXAKIT_MARKETPLACE_ADDONS": "none"}), \
              patch.object(persona_apply, "_query") as query, \
+             patch.object(persona_apply, "_child", return_value=True) as child, \
              contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, persona_apply.apply(self.ctx, "data-scientist", ["exakit"]))
         query.assert_not_called()
+        # The one child command left: the Data Scientist's own skill, placed now (persona: in its SKILL.md).
+        self.assertEqual(["skills-install"], [call.args[1] for call in child.call_args_list])
 
     def test_explicit_no_addons_does_not_start_mlflow(self) -> None:
         output = io.StringIO()

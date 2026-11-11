@@ -1696,7 +1696,28 @@ function Confirm-ExakitJsonTablesReady {
     # boot if that is on. It quiets its own detail into the logfile. The shell
     # calls the singular _exakit_marketplace_install_one; this side has only the
     # plural, and one id is the same work.
+    # A minute, once: the bar says so instead of sitting still on the file's name. Twin of
+    # the phase in _exakit_json_tables_ensure (a no-op when no bar is running).
+    Set-ExakitProgressPhase "installing the JSON engine (first JSON file only, about a minute)"
+    # The download writes how far it is ("downloading the JSON engine, 6 of 15 MB")
+    # to this file and the bar shows it, so a slow line is not a hang. Twin of
+    # EXAKIT_PROGRESS_PHASE_FILE in _exakit_json_tables_ensure.
+    $phaseFile = $null
+    if ($null -ne $script:UiSpinFlag) {
+        try {
+            $phaseFile = [IO.Path]::GetTempFileName()
+            $script:UiSpinFlag.PhaseFile = $phaseFile
+            $env:EXAKIT_PROGRESS_PHASE_FILE = $phaseFile
+        } catch { $phaseFile = $null }
+    }
     try { Invoke-ExakitMarketplaceApply -Ids @("json-tables") | Out-Null } catch { }
+    finally {
+        if ($null -ne $phaseFile) {
+            Remove-Item Env:EXAKIT_PROGRESS_PHASE_FILE -ErrorAction SilentlyContinue
+            if ($null -ne $script:UiSpinFlag) { $script:UiSpinFlag.PhaseFile = $null }
+            Remove-Item -Force -ErrorAction SilentlyContinue $phaseFile
+        }
+    }
     if (-not (Test-ExakitJsonTablesReady)) {
         $script:JsonTablesBlocked = "The JSON engine could not be installed, so this file was not loaded (details: exakit logs setup)."
         Warn2 "The JSON engine could not be installed, so this file was not loaded."
