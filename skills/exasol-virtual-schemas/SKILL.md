@@ -85,6 +85,8 @@ exakit source check <name> --json                                   # later: a f
   the string (`user:password@`, `password=`, a token, a SAS) is the connector's credential:
   taken out of the string - never stored, logged or shown - and not asked again (the panel
   says `(from the string, hidden)`). `--password-file` or `--password-stdin` given too wins.
+  Not for `lakehouse`: its string fills the catalog and its address only; a credential in
+  it is dropped with a warning, and the secret is still asked hidden or read from a file.
   Given with `--url` or `--set uri=` it is in the shell history, and a warning says so:
   an agent never builds such a string; it passes the credential in a file. A language container or
   restart the source needs is made without a question there: picking it was the permission.
