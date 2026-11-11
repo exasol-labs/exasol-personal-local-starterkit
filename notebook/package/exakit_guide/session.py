@@ -9,6 +9,7 @@ notebook of their own.
 
 from __future__ import annotations
 
+import threading
 import weakref
 from contextlib import contextmanager
 from typing import Any
@@ -148,18 +149,74 @@ class Session:
 SESSION = Session()
 
 
+class _ThreadOut:
+    """sys.stdout / sys.stderr stand-in: a thread inside quiet() writes to its own buffer, every other write goes to
+    the stream it wraps. Installed once and never swapped back and forth, so cards redrawing on a background thread
+    cannot leave the kernel's output captured (IPython's capture_output swaps a process-wide object and is not safe
+    across threads)."""
+
+    def __init__(self, stream, name: str) -> None:
+        self._stream = stream
+        self._name = name
+
+    def write(self, text):
+        buf = getattr(_LOCAL, self._name, None)
+        if buf is not None:
+            buf.append(text)
+            return len(text)
+        return self._stream.write(text)
+
+    def flush(self):
+        if getattr(_LOCAL, self._name, None) is None:
+            return self._stream.flush()
+
+    def __getattr__(self, attr):
+        return getattr(self._stream, attr)
+
+
+_LOCAL = threading.local()
+
+
+def _install() -> None:
+    import sys
+
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if not isinstance(stream, _ThreadOut):
+            setattr(sys, name, _ThreadOut(stream, name))
+    try:
+        from IPython import get_ipython
+
+        pub = getattr(get_ipython(), "display_pub", None)
+    except Exception:
+        pub = None
+    if pub is not None and not getattr(pub, "_exakit_quiet", False):
+        publish = pub.publish
+
+        def quiet_publish(*args, **kwargs):  # a display from a helper inside quiet() is dropped, the rest pass
+            if getattr(_LOCAL, "quiet", 0):
+                return None
+            return publish(*args, **kwargs)
+
+        pub.publish = quiet_publish
+        pub._exakit_quiet = True
+
+
 @contextmanager
 def quiet():
-    """Run kit helpers without their printed lines landing in the notebook.
-    The lines are kept (yielded object .text) so a card can show them on request."""
-    from IPython.utils.capture import capture_output
+    """Run kit helpers without their printed lines or displays landing in the notebook.
+    The lines are kept (yielded object .text) so a card can show them on request. Per thread and nestable."""
 
     class Out:
         text = ""
 
     out = Out()
-    with capture_output(display=True) as cap:
-        try:
-            yield out
-        finally:
-            out.text = (cap.stdout or "").strip()
+    _install()
+    saved = (getattr(_LOCAL, "stdout", None), getattr(_LOCAL, "stderr", None), getattr(_LOCAL, "quiet", 0))
+    lines: list[str] = []
+    _LOCAL.stdout, _LOCAL.stderr, _LOCAL.quiet = lines, [], saved[2] + 1
+    try:
+        yield out
+    finally:
+        _LOCAL.stdout, _LOCAL.stderr, _LOCAL.quiet = saved
+        out.text = "".join(lines).strip()

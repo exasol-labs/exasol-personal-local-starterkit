@@ -334,6 +334,41 @@ class CardTest(unittest.TestCase):
             self.assertEqual(("stack", ["card", "card"]), card.show(screen, screen))
 
 
+class QuietTest(unittest.TestCase):
+    """quiet() must never swap a process-wide object: a card redrawing on a background thread while a cell runs once
+    left IPython's capturing publisher installed, and every later output in that notebook vanished."""
+
+    def test_overlapping_threads_leave_output_alone(self):
+        import io
+        import threading
+        import time
+
+        from exakit_guide.session import quiet
+
+        real = io.StringIO()
+        with mock.patch.object(sys, "stdout", real):
+            def background():
+                time.sleep(0.01)
+                with quiet():
+                    print("hidden in thread")
+                    time.sleep(0.05)
+
+            thread = threading.Thread(target=background)
+            thread.start()
+            with quiet() as out:
+                print("hidden here")
+                time.sleep(0.03)
+            print("shown")
+            thread.join()
+            print("still shown")
+        self.assertEqual(out.text, "hidden here")
+        self.assertEqual(real.getvalue(), "shown\nstill shown\n")
+
+    def test_source_never_uses_capture_output(self):
+        source = (PACKAGE / "exakit_guide" / "session.py").read_text(encoding="utf-8")
+        self.assertNotIn("import capture_output", source)
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

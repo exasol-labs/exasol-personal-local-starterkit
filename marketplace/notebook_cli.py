@@ -365,7 +365,8 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
                 raise AddonFailure("JupyterLab is missing; run exakit notebook setup")
             config = home / "jupyter_server_config.json"
             config.write_text(json.dumps({"ContentsManager": {"hide_globs": ["__pycache__", "*.pyc", "*.pyo",
-                                                                       ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"]}}),
+                                                                       ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"]},
+                                          "LabApp": {"custom_css": _guided_view_css(ctx, venv)}}),
                               encoding="utf-8")
             token_file = notebook._credential(ctx, "notebook_jupyter_token")
             token = token_file.read_text(encoding="utf-8").strip()
@@ -390,6 +391,25 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
         token = notebook._credential(ctx, "notebook_jupyter_token" if front == "jupyterlab" else "notebook_marimo_token").read_text(encoding="utf-8").strip()
         suffix = f"?token={token}" if front == "jupyterlab" else f"?access_token={token}"
         _open_logged_in(ctx, front, url + suffix)
+
+
+def _guided_view_css(ctx: KitContext, venv: Path) -> bool:
+    """Open guided notebooks in their guided view: copy the kit's custom.css into the notebook venv's own
+    jupyter_server static/custom folder, the one place JupyterLab reads it from without moving the user's
+    ~/.jupyter settings. The venv is the kit's; the user's own Jupyter is never touched. False (no custom CSS)
+    when the folder cannot be found, so JupyterLab still starts."""
+    source = ctx.root / "notebook" / "kit" / "custom" / "custom.css"
+    targets = sorted(venv.glob("lib/python*/site-packages/jupyter_server/static")) + \
+        sorted(venv.glob("Lib/site-packages/jupyter_server/static"))
+    if not source.is_file() or not targets:
+        return False
+    try:
+        folder = targets[0] / "custom"
+        folder.mkdir(exist_ok=True)
+        (folder / "custom.css").write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        return False
+    return True
 
 
 def _positron(ctx: KitContext) -> None:

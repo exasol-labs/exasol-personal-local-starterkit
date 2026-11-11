@@ -579,6 +579,30 @@ class NotebookPlanTest(unittest.TestCase):
             self.assertEqual("edit", marimo_args[4])
             self.assertEqual(str(directory / "marimo"), marimo_args[5])
 
+    def test_guided_notebooks_open_in_the_guided_view(self) -> None:
+        """The kit's JupyterLab loads custom.css from its own venv: the code section of a guided notebook stays hidden
+        until Code is chosen. Without that folder JupyterLab still starts, just without the stylesheet."""
+        venv, home, _ = notebook.paths(self.ctx)
+        home.mkdir(parents=True)
+        config = home / "jupyter_server_config.json"
+        static = venv / "lib" / "python3.12" / "site-packages" / "jupyter_server" / "static"
+        for present in (False, True):
+            with self.subTest(static_folder=present):
+                if present:
+                    static.mkdir(parents=True)
+                with patch.object(notebook_cli, "_ensure_frontend"), \
+                     patch.object(notebook_cli, "_find_jupyter", return_value=Path("/tools/jupyter-lab")), \
+                     patch.object(notebook_cli, "_choose_port", side_effect=lambda port, _: port), \
+                     patch.object(notebook_cli, "OnDemandServer") as server_type, \
+                     patch.object(notebook, "_copy"):
+                    server_type.return_value.state.return_value = "stopped"
+                    with redirect_stdout(StringIO()):
+                        notebook_cli._start_frontend(self.ctx, "jupyterlab", 28888, False, False)
+                self.assertIs(present, json.loads(config.read_text(encoding="utf-8"))["LabApp"]["custom_css"])
+                if present:
+                    css = (static / "custom" / "custom.css").read_text(encoding="utf-8")
+                    self.assertIn("body:not(.guide-code) .jp-Cell:has(.guide-code-start) ~ .jp-Cell", css)
+
     @unittest.skipIf(os.name == "nt", "native Windows process test is a separate release gate")
     def test_frontend_launch_keeps_token_out_of_argv_and_stops_owned_server(self) -> None:
         for frontend in ("jupyterlab", "marimo"):
