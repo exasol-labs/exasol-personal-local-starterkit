@@ -436,6 +436,10 @@ function Read-ExakitMenuKey {
             'Spacebar'  { return @{ Name = 'Space' } }
             'UpArrow'   { return @{ Name = 'Up' } }
             'DownArrow' { return @{ Name = 'Down' } }
+            # Left/Right mean something only in a menu with a collapse group
+            # (Get-ExakitTreeArrow); every other menu has no arm for them.
+            'LeftArrow'  { return @{ Name = 'Left' } }
+            'RightArrow' { return @{ Name = 'Right' } }
         }
         $code = [int]$key.KeyChar
         if ($code -eq 13 -or $code -eq 10) { return @{ Name = 'Enter' } }
@@ -470,6 +474,8 @@ function ConvertFrom-ExakitMenuSequence {
     if (-not $Sequence) { return @{ Name = 'Escape' } }
     if ($Sequence -ceq '[A' -or $Sequence -ceq 'OA') { return @{ Name = 'Up' } }
     if ($Sequence -ceq '[B' -or $Sequence -ceq 'OB') { return @{ Name = 'Down' } }
+    if ($Sequence -ceq '[C' -or $Sequence -ceq 'OC') { return @{ Name = 'Right' } }
+    if ($Sequence -ceq '[D' -or $Sequence -ceq 'OD') { return @{ Name = 'Left' } }
     if ($Sequence -cmatch '^\[<(\d+);(\d+);(\d+)([Mm])$') {
         $button = [int]$Matches[1]
         if ($Matches[4] -ceq 'M' -and $button -eq 0) { return @{ Name = 'Click'; Y = [int]$Matches[3] } }
@@ -1875,6 +1881,49 @@ function Update-ExakitTreeGroup {
     if (-not $Selection.Contains($gp)) { [void]$Selection.Add($gp) }
 }
 
+# Get-ExakitTreeArrow - what Left or Right does on row $Row in a menu with
+# "collapse" groups, as the exakit-demo mock does it. Returns "toggle" (Right
+# on a closed collapse parent opens it, as Space would; Left on an open one
+# that is no one's child closes it), "move <r>" (Right on an open parent: its
+# first row shown that can be picked; Left on a row under a collapse parent:
+# that innermost parent), or "" (no children and no parent). A row that is
+# both answers Left as a child. Twin of _ui_checkbox_tree_arrow.
+function Get-ExakitTreeArrow {
+    param([string]$Direction, [int]$Row, $Selection, $Specs, $Pickable)
+    $own = $null; $up = 0; $upW = -1
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s -or -not (Test-ExakitTreeMode $s.Mode "collapse")) { continue }
+        if ([int]$s.Parent -eq $Row) { $own = $s }
+        if ($Row -ge [int]$s.First -and $Row -le [int]$s.Last) {
+            $w = [int]$s.Last - [int]$s.First
+            if ($upW -lt 0 -or $w -lt $upW) { $up = [int]$s.Parent; $upW = $w }
+        }
+    }
+    $open = (@($Selection) -contains $Row)
+    if ($Direction -eq "Right") {
+        if ($null -eq $own) { return "" }
+        if (-not $open) { return "toggle" }
+        $hidden = @(Get-ExakitTreeHidden -Specs $Specs -Selection $Selection)
+        for ($c = [int]$own.First; $c -le [int]$own.Last; $c++) {
+            if ($null -ne $Pickable -and -not (@($Pickable) -contains $c)) { continue }
+            if ($hidden -contains $c) { continue }
+            return ("move " + $c)
+        }
+        return ""
+    }
+    if ($up -gt 0) { return ("move " + $up) }
+    if ($null -ne $own -and $open) { return "toggle" }
+    return ""
+}
+
+# Test-ExakitTreeCollapseOn - whether a "collapse" group is in the specs (the
+# hint then says "to open").
+function Test-ExakitTreeCollapseOn {
+    param($Specs)
+    foreach ($s in @($Specs)) { if ($null -ne $s -and (Test-ExakitTreeMode $s.Mode "collapse")) { return $true } }
+    return $false
+}
+
 # Test-ExakitTreeRadioRepick - Space on the picked radio row: it is picked
 # again and nothing else changes. Called after the toggle took it out; puts it
 # back and answers $true, so the menu applies no spec.
@@ -2090,7 +2139,9 @@ function Invoke-ExakitTableMenu {
         # empty for that whole time.
         $drawnWidth = [int]$Table.Width
         $frame = Get-ExakitTableFrame -Table $Table -Cursor $cur
-        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle · Enter to confirm" + $script:UiReset
+        $openHint = ""
+        if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " · → to open" }
+        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $script:UiReset
         $extra = 0
         if ($note) {
             $hint += "`r`n    " + $script:UiWarn + "!" + $script:UiReset + " " + $note
@@ -2144,6 +2195,18 @@ function Invoke-ExakitTableMenu {
             }
             "Up"        { $cur = [int](& $step $cur (-1)) }
             "Down"      { $cur = [int](& $step $cur 1) }
+            { $_ -eq "Left" -or $_ -eq "Right" } {
+                # Right opens a collapse group or steps into it, Left steps out
+                # or closes it; nothing in any other table.
+                if ($treeOn) {
+                    $act = Get-ExakitTreeArrow -Direction $key.Name -Row $cur -Selection $sel -Specs $groupSpecs -Pickable $pickable
+                    if ($act -eq "toggle") {
+                        if ($sel.Contains($cur)) { [void]$sel.Remove($cur) } else { [void]$sel.Add($cur) }
+                        & $applyGroup $cur
+                        & $applyExclusive $cur
+                    } elseif ($act -like "move *") { $cur = [int]$act.Substring(5) }
+                }
+            }
             "Char"      {
                 switch -Regex ($key.Char) {
                     '^[kK]$' { $cur = [int](& $step $cur (-1)) }

@@ -949,6 +949,52 @@ _ui_checkbox_tree_missing() {
     return 0
 }
 
+# _ui_checkbox_tree_arrow <left|right> <row> <selected_csv> — what ← or → does
+# on <row> in a menu with "collapse" groups, as the exakit-demo mock does it:
+#   "toggle"   → on a closed collapse parent: open it (as Space would);
+#              ← on an open collapse parent that is no one's child: close it;
+#   "move <r>" → → on an open parent: its first row shown that can be picked;
+#              ← on a row under a collapse parent: that (innermost) parent;
+#   nothing    a row with no children and no parent, or nothing to move to.
+# A row that is both (a picked catalog under Lakehouse) answers ← as a child:
+# the cursor goes up a level, it does not unpick the catalog.
+_ui_checkbox_tree_arrow() {
+    _uta_dir="$1"; _uta_row="$2"; _uta_sel="$3"
+    _uta_own=""; _uta_up=""; _uta_upw=0
+    for _uta_s in $_UI_CHECKBOX_SPECS; do
+        _ui_checkbox_spec_split "$_uta_s"
+        _ui_checkbox_has_mode "$_ucs_m" collapse || continue
+        [ "$_ucs_p" = "$_uta_row" ] && _uta_own="$_ucs_f:$_ucs_l"
+        if [ "$_uta_row" -ge "$_ucs_f" ] && [ "$_uta_row" -le "$_ucs_l" ]; then
+            # The innermost: the narrowest range that holds the row.
+            _uta_w=$(( _ucs_l - _ucs_f ))
+            if [ -z "$_uta_up" ] || [ "$_uta_w" -lt "$_uta_upw" ]; then _uta_up="$_ucs_p"; _uta_upw="$_uta_w"; fi
+        fi
+    done
+    _uta_open=0
+    case ",$_uta_sel," in *",$_uta_row,"*) _uta_open=1 ;; esac
+    if [ "$_uta_dir" = right ]; then
+        [ -n "$_uta_own" ] || return 0
+        if [ "$_uta_open" = 0 ]; then printf 'toggle'; return 0; fi
+        _uta_hidden=" $(_ui_checkbox_tree_hidden "$_uta_sel") "
+        for _uta_c in $(_ui_checkbox_group_children "${_uta_own%%:*}" "${_uta_own#*:}"); do
+            case "$_uta_hidden" in *" $_uta_c "*) continue ;; esac
+            printf 'move %s' "$_uta_c"; return 0
+        done
+        return 0
+    fi
+    if [ -n "$_uta_up" ]; then printf 'move %s' "$_uta_up"; return 0; fi
+    [ -n "$_uta_own" ] && [ "$_uta_open" = 1 ] && printf 'toggle'
+    return 0
+}
+
+# _ui_checkbox_tree_collapse_on — whether a "collapse" group is in the specs
+# (the hint then says "→ to open").
+_ui_checkbox_tree_collapse_on() {
+    case " $_UI_CHECKBOX_SPECS" in *:*:*:*collapse*) return 0 ;; esac
+    return 1
+}
+
 # _ui_checkbox_tree_begin <specs> — a menu's tree state: _UI_TREE_ON (1 when a
 # spec uses a tree mode), _UI_TREE_RADIO (" r1 r2 ", the radio rows) and
 # _UI_TREE_HIDDEN, refreshed by _ui_checkbox_tree_refresh <selected_csv>. A menu
@@ -1215,7 +1261,9 @@ ui_checkbox_menu() {
             _cb_i=$((_cb_i + 1))
         done
         _cb_at[$(( _cb_n + 1 ))]="$_cb_drawn"
-        _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space · Enter to confirm" 6 "$_cb_cols")"
+        _cb_open=""
+        [ "$_UI_TREE_ON" = 1 ] && _ui_checkbox_tree_collapse_on && _cb_open=" · → to open"
+        _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space$_cb_open · Enter to confirm" 6 "$_cb_cols")"
         ui_menu_hint "$_cb_hint"
         _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_hint})) "$_cb_cols")))
         # Enter refused for an open "one" group with nothing picked: said once,
@@ -1259,6 +1307,21 @@ ui_checkbox_menu() {
                 case "$UI_KEY_SEQ" in
                     '[A') _cb_step -1 ;;
                     '[B') _cb_step 1 ;;
+                    '[C'|'[D')
+                        # → opens a collapse group or steps into it, ← steps
+                        # out or closes it; nothing in any other menu.
+                        [ "$_UI_TREE_ON" = 1 ] || continue
+                        _cb_dir=right; [ "$UI_KEY_SEQ" = '[D' ] && _cb_dir=left
+                        _cb_act="$(_ui_checkbox_tree_arrow "$_cb_dir" "$_cb_cur" "$_cb_sel")"
+                        case "$_cb_act" in
+                            toggle)
+                                _cb_sel="$(_ui_checkbox_toggle "$_cb_sel" "$_cb_n" "$_cb_cur")"
+                                _cb_sel="$(_ui_checkbox_apply_group "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_GROUP")"
+                                _cb_sel="$(_ui_checkbox_apply_exclusive "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_EXCLUSIVE")"
+                                ;;
+                            "move "*) _cb_cur="${_cb_act#move }" ;;
+                        esac
+                        ;;
                     '[<')
                         [ -n "$UI_CURSOR_ROW" ] || continue
                         _cb_hit="$(_ui_click_row $(( UI_CURSOR_ROW - _cb_drawn )) "$_cb_n" "${_cb_at[@]}")"

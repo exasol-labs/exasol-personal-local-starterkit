@@ -1012,7 +1012,9 @@ function Read-ExakitCheckboxMenu {
             }
         }
         $starts[$Options.Count] = $line
-        Write-ExakitMenuHint "Up/Down to move - $spaceVerb - Enter to confirm"
+        $openHint = ""
+        if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " - Right to open" }
+        Write-ExakitMenuHint "Up/Down to move - $spaceVerb$openHint - Enter to confirm"
         $cbDrawn = $line + 1
         if ($note) {
             if ($script:UiFancy) { Write-Host ("    {0}!{1} {2}" -f $script:UiWarn, $script:UiReset, $note) }
@@ -1048,6 +1050,18 @@ function Read-ExakitCheckboxMenu {
             }
             "Up"        { & $step -1 }
             "Down"      { & $step 1 }
+            { $_ -eq "Left" -or $_ -eq "Right" } {
+                # Right opens a collapse group or steps into it, Left steps out
+                # or closes it; nothing in any other menu.
+                if ($treeOn) {
+                    $act = Get-ExakitTreeArrow -Direction $key.Name -Row $script:cbCur -Selection $sel -Specs $groupSpecs -Pickable $cbPickable
+                    if ($act -eq "toggle") {
+                        if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
+                        & $applyGroup $script:cbCur
+                        & $applyExclusive $script:cbCur
+                    } elseif ($act -like "move *") { $script:cbCur = [int]$act.Substring(5) }
+                }
+            }
         }
         if ($key.Name -ne 'Char') { continue }
         switch -Regex ($key.Char) {
