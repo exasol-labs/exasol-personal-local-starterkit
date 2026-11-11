@@ -163,6 +163,12 @@ class _ThreadOut:
         buf = getattr(_LOCAL, self._name, None)
         if buf is not None:
             buf.append(text)
+            listener = getattr(_LOCAL, "listener", None)
+            if listener is not None:         # a card showing the command's progress as it runs
+                try:
+                    listener(text)
+                except Exception:
+                    pass
             return len(text)
         return self._stream.write(text)
 
@@ -220,3 +226,15 @@ def quiet():
     finally:
         _LOCAL.stdout, _LOCAL.stderr, _LOCAL.quiet = saved
         out.text = "".join(lines).strip()
+
+
+@contextmanager
+def watch_output(listener):
+    """While inside, every line a kit helper prints in this thread (held back by quiet()) is also handed to
+    listener(text): how a card shows a long command's progress while it runs. Per thread; the previous one comes back."""
+    saved = getattr(_LOCAL, "listener", None)
+    _LOCAL.listener = listener
+    try:
+        yield
+    finally:
+        _LOCAL.listener = saved

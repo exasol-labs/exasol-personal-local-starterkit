@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import weakref
 import traceback
 from pathlib import Path
@@ -77,6 +78,54 @@ def _log_action(card: str, event: str, code: list[str], error: str | None) -> No
         _logger().warning("workflow log: %s", traceback.format_exc())
 
 
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+_STEP = (re.compile(r"\bStep (\d+)\s*/\s*(\d+)", re.I), re.compile(r"\[(\d+)\s*/\s*(\d+)\]"))
+_PERCENT = re.compile(r"(\d{1,3})(?:\.\d+)?\s*%")
+
+
+class Progress:
+    """A running kit command's progress, from the lines it prints (the same ones `exakit data-load` shows in a
+    terminal): the last line as what it is doing now, a share done when a line says "Step 2/7", "[1/2]" or "40%",
+    and the last few lines. Sent to the card at most a few times a second."""
+
+    EVERY = 0.25
+
+    def __init__(self, send) -> None:
+        self.send, self.lines, self.partial, self.pct, self.sent, self.last = send, [], "", None, 0.0, None
+
+    def feed(self, text: str) -> None:
+        import time
+
+        for piece in re.split(r"(\r\n|\n|\r)", self.partial + text):
+            if piece in ("\r\n", "\n", "\r"):
+                self._line(self.partial)
+                self.partial = ""
+            else:
+                self.partial = piece
+        update = {"label": self.lines[-1], "pct": self.pct, "lines": self.lines[-6:]} if self.lines else None
+        if update and update != self.last and time.monotonic() - self.sent >= self.EVERY:
+            self.sent, self.last = time.monotonic(), update
+            self.send(update)
+
+    def _line(self, raw: str) -> None:
+        line = _ANSI.sub("", raw).strip()
+        if not line:
+            return
+        for pattern in _STEP:
+            found = pattern.search(line)
+            if found and int(found.group(2)):
+                self.pct = min(100, round(100 * int(found.group(1)) / int(found.group(2))))
+                break
+        else:
+            found = _PERCENT.search(line)
+            if found and int(found.group(1)) <= 100:
+                self.pct = int(found.group(1))
+        if self.lines and line == self.lines[-1]:
+            return
+        self.lines.append(line)
+        del self.lines[:-50]
+
+
 class Card(anywidget.AnyWidget):
     _esm = STATIC / "card.js"
     _css = STATIC / "card.css"
@@ -109,6 +158,12 @@ class Screen:
 
     def build(self) -> list[dict]:
         raise NotImplementedError
+
+    def _send_progress(self, action: str, update: dict) -> None:
+        try:
+            self.widget.send({"type": "progress", "id": action, **update})
+        except Exception:
+            pass
 
     def _code_mark(self) -> int:
         try:
@@ -183,7 +238,11 @@ class Screen:
             handler = getattr(self, f"on_{action}", None)
             if handler is None:
                 raise ValueError("That button isn't wired up yet.")
-            handler(values)
+            from .session import watch_output
+
+            self._live = Progress(lambda update: self._send_progress(action, update))
+            with watch_output(self._live.feed):
+                handler(values)
         except Exception as exc:
             error = _plain(exc)
             _logger().error("action %s failed: %s\n%s", action, exc, traceback.format_exc())

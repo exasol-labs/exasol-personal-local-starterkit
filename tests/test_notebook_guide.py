@@ -518,6 +518,53 @@ class MessagePlaceTest(unittest.TestCase):
         self.assertTrue(all(b.get("keep") for b in screen.widget.blocks if b["t"] == "msg"))
 
 
+class ProgressTest(unittest.TestCase):
+    """A long kit command (exakit data-load) shows its progress under its button while it runs, from the lines it
+    prints, instead of a bare "Working…"."""
+
+    def test_lines_become_a_step_a_share_done_and_the_last_lines(self):
+        sys.modules.setdefault("anywidget", mock.MagicMock())   # only Progress is used here
+        sys.modules.setdefault("traitlets", mock.MagicMock())
+        card = importlib.import_module("exakit_guide.card")
+        sent = []
+        progress = card.Progress(sent.append)
+        progress.EVERY = 0
+        progress.feed("\x1b[1mSTEP  Step 2/7  Exasol launcher\x1b[0m\n")
+        progress.feed("Imported 51000 rows\n[1/2] -- 03_verify_setup.sql ... OK\n")
+        progress.feed("uploading 40%\r")
+        progress.feed("uploading 80%\r")
+        progress.feed("\n")
+        self.assertEqual("STEP  Step 2/7  Exasol launcher", sent[0]["label"])
+        self.assertEqual(29, sent[0]["pct"])                                   # Step 2/7
+        self.assertEqual(50, sent[1]["pct"])                                   # [1/2]
+        self.assertEqual("uploading 80%", sent[-1]["label"])                  # a \r line replaces the one before
+        self.assertEqual(80, sent[-1]["pct"])
+        self.assertLessEqual(len(sent[-1]["lines"]), 6)
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_a_card_action_streams_its_progress_while_it_runs(self):
+        card = importlib.import_module("exakit_guide.card")
+        session = importlib.import_module("exakit_guide.session")
+
+        class Loading(card.Screen):
+            def build(self):
+                return [{"t": "actions", "items": [{"id": "load", "label": "Load it"}]}]
+
+            def on_load(self, _v):
+                with session.quiet():
+                    print("Step 1/2 download")
+                    print("Step 2/2 load")
+
+        screen = Loading()
+        sent = []
+        with mock.patch.object(card.Progress, "EVERY", 0), mock.patch.object(screen.widget, "send", side_effect=sent.append):
+            screen._on_msg(None, {"type": "event", "id": "load", "values": {}}, None)
+        progress = [m for m in sent if m["type"] == "progress"]
+        self.assertEqual([("load", "Step 1/2 download", 50), ("load", "Step 2/2 load", 100)],
+                         [(m["id"], m["label"], m["pct"]) for m in progress])
+        self.assertEqual("done", sent[-1]["type"])
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

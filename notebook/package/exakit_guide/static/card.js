@@ -197,6 +197,7 @@ function render({ model, el }) {
   const send = (id, values = {}, opts = {}) => {
     if (ui.busy) return;
     ui.busy = id;
+    ui.progress = null;
     draw();
     ui.fading.clear(); ui.dismissed.clear();
     if (opts.noSecret) {               // an action that needs no password is never sent one, and keeps it typed
@@ -215,7 +216,20 @@ function render({ model, el }) {
     }
     return h("button", { type: "button", class: `guide-btn ${opts.primary ? "guide-btn-primary" : "guide-btn-quiet"}`, disabled: !!ui.busy,
       onClick: opts.onClick || (() => send(id, opts.values ? opts.values() : {}, { noSecret: !!opts.noSecret })) },
-      busy ? h("span", { class: "guide-spinner" }) : null, busy ? (opts.busyLabel || "Working…") : label);
+      busy ? h("span", { class: "guide-spinner" }) : null,
+      busy ? (opts.busyLabel || "Working…") + (ui.progress && ui.progress.pct != null ? ` ${ui.progress.pct}%` : "") : label);
+  }
+
+  // A running command's progress, under its button: what it is doing now, a bar when it says how far it is, and
+  // its last lines - the same lines `exakit data-load` shows in a terminal.
+  function progressPanel(id) {
+    if (!ui.busy || ui.busy !== id || !ui.progress) return null;
+    const p = ui.progress;
+    return h("div", { class: "guide-progress", role: "status", "aria-live": "polite" },
+      h("div", { class: "guide-progress-label" }, p.label || "Working…"),
+      h("div", { class: `guide-progress-bar${p.pct == null ? " guide-progress-bar-busy" : ""}` },
+        h("span", { style: p.pct == null ? null : `width:${Math.max(2, Math.min(100, p.pct))}%` })),
+      (p.lines || []).length > 1 ? h("pre", { class: "guide-progress-lines" }, p.lines.slice(0, -1).join("\n")) : null);
   }
 
   const B = {
@@ -263,6 +277,7 @@ function render({ model, el }) {
             confirming ? h("div", { class: "guide-confirm" }, h("span", {}, confirming.confirm),
               button("Yes, continue", confirming.id, { primary: true, busyLabel: "Updating…" }), button("Cancel", "cancel")) : null,
             formAction ? form(r, formAction) : null,
+            actions.filter((a) => !a.form).map((a) => progressPanel(a.id)),
             r.output ? kitSaid(r) : null),
           h("div", { class: "guide-row-actions" }, actions.map((a) => a.href
             ? button(a.label, a.id, { href: a.href })
@@ -327,10 +342,11 @@ function render({ model, el }) {
       return h("div", { class: "guide-nextrow" }, h("a", { class: "guide-btn guide-btn-primary", href: labUrl(b.path), onClick: (e) => openInLab(b.path, e) }, b.v, icon("arrow")));
     },
     actions(b) {
-      return h("div", { class: "guide-actions" }, b.items.filter((a) => shown(a.show_if)).map((a) => {
+      const items = b.items.filter((a) => shown(a.show_if));
+      return h("div", {}, h("div", { class: "guide-actions" }, items.map((a) => {
         const label = a.changed_label ? (mapDirty() ? a.changed_label : (a.unchanged_label || a.label)) : a.label;
         return button(label, a.id, { primary: a.primary, busyLabel: a.busy, values: collect, noSecret: !!a.no_secret });
-      }));
+      })), items.map((a) => progressPanel(a.id)));
     },
     choice(b) {
       if (st.choice[b.id] === undefined) st.choice[b.id] = b.value;
@@ -752,7 +768,8 @@ function render({ model, el }) {
           onInput: (e) => { vals[f.id] = e.target.value; }, onKeydown: (e) => { if (e.key === "Enter") submit(); } }))),
       note,
       h("div", { class: "guide-form-actions" }, button(a.submit || "Go", a.id, { primary: true, onClick: submit }),
-        h("button", { type: "button", class: "guide-link", onClick: () => { ui.openForm = null; draw(); } }, "Cancel")));
+        h("button", { type: "button", class: "guide-link", onClick: () => { ui.openForm = null; draw(); } }, "Cancel")),
+      progressPanel(a.id));
   }
 
   // Every call this card's controls make, from the blocks the screen sent: a row's or a button's cmd, a code box.
@@ -806,8 +823,14 @@ function render({ model, el }) {
 
   const onBlocks = () => draw();
   const onMsg = (msg) => {
+    if (msg && msg.type === "progress" && msg.id === ui.busy) {
+      ui.progress = { label: msg.label, pct: msg.pct, lines: msg.lines || [] };
+      draw();
+      return;
+    }
     if (msg && msg.type === "done") {
       ui.busy = null;
+      ui.progress = null;
       if (msg.id && ui.openForm && ui.openForm.endsWith(`:${msg.id}`)) {
         const failed = (model.get("blocks") || []).some((b) => b.t === "msg" && b.kind === "error");
         if (!failed) { delete ui.values[ui.openForm]; ui.openForm = null; }

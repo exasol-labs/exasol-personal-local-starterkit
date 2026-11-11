@@ -439,3 +439,11 @@
 .guide-form-note { color: var(--guide-bad, #b42318); font-size: 0.9em; margin: 4px 0 8px; }
 
 .guide-allcode { margin-top: 10px; }
+
+.guide-progress { margin: 10px 0 4px; padding: 10px 12px; border-radius: 8px; background: var(--guide-surface); }
+.guide-progress-label { font-size: 13px; color: var(--guide-text); margin-bottom: 8px; overflow-wrap: anywhere; }
+.guide-progress-bar { position: relative; height: 6px; border-radius: 3px; background: var(--guide-border, rgba(127,127,127,.25)); overflow: hidden; }
+.guide-progress-bar span { position: absolute; left: 0; top: 0; bottom: 0; background: var(--guide-accent, #1f6feb); border-radius: 3px; transition: width .3s ease; }
+.guide-progress-bar-busy span { width: 30%; animation: guide-progress-slide 1.2s ease-in-out infinite; }
+@keyframes guide-progress-slide { 0% { left: -30%; } 100% { left: 100%; } }
+.guide-progress-lines { margin: 8px 0 0; max-height: 110px; overflow: auto; font-family: var(--guide-mono); font-size: 11.5px; line-height: 1.5; color: var(--guide-muted); white-space: pre-wrap; }
