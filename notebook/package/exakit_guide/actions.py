@@ -198,7 +198,7 @@ def run(action_id: str, session=None, **values: Any) -> Any:
     finally:
         namespace.pop("__secret__", None)
         session.said = getattr(out, "text", "") if "out" in locals() else ""
-    session.log(code(action_id, **values))
+        session.log(code(action_id, **values))      # what ran, worked or not: the card's Code view and the workflow log
     if action.result:
         return namespace.get(action.result)
     if type(value).__name__ == "KitRun" and not value.ok:

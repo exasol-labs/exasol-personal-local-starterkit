@@ -260,7 +260,8 @@ class ChooseData(Screen):
 
         kind = v.get("kind") or "sample"
         SESSION.broken = None
-        actions.run("data.workflow")
+        if not SESSION.get("workflow_id"):      # guide.start() began one; a screen shown on its own begins it here
+            actions.run("data.workflow")
         if kind == "sample":
             dataset_id = str(v.get("sample") or "").strip()
             if not dataset_id:

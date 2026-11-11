@@ -415,13 +415,52 @@ class KitSaidTest(unittest.TestCase):
             self.assertNotIn('"open": True', (GUIDE / "screens" / name).read_text(encoding="utf-8"))
 
 
+class WorkflowTest(unittest.TestCase):
+    """guide.start() starts a workflow; every card action is a line in its log with the exact code it ran."""
+
+    def test_start_begins_a_workflow(self):
+        init = (GUIDE / "__init__.py").read_text(encoding="utf-8")
+        self.assertIn('actions.run("data.workflow")', init.split("def start():", 1)[1])
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_card_actions_are_logged_under_the_workflow(self):
+        from exakit_guide import card
+
+        workflow = importlib.import_module("exakit_nb.workflow")     # exakit_nb.workflow is also a function
+
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"EXAKIT_HOME": home}):
+            os.environ.pop("EXAKIT_WORKFLOW_ID", None)
+            with mock.patch.object(workflow, "recall", return_value=None), mock.patch.object(workflow, "remember"):
+                workflow_id = workflow.workflow("test")
+                with mock.patch.object(workflow, "current_workflow", return_value=workflow_id):
+                    card._log_action("Home", 'run:["kit.data_load", {"what": "x"}]', ['nb.exakit("data-load", "x")'],
+                                     "No such file")
+                    card._log_action("Home", "refresh", ["nb.kit_check()"], None)        # a redraw is not an action
+                events = workflow.read_log(workflow_id)
+        actions = [e for e in events if e["kind"] == "guide_action"]
+        self.assertEqual(1, len(actions))
+        self.assertEqual(("Home", "kit.data_load", 'nb.exakit("data-load", "x")', False, "No such file"),
+                         tuple(actions[0][k] for k in ("card", "action", "code", "ok", "error")))
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")
 
-    def test_guided_hides_the_code_section_and_code_shows_it(self):
-        self.assertIn("body.guide-cards .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }", self.js)
-        self.assertIn("body:not(.guide-code) .guide-code-only { display: none !important; }", self.js)
+    def test_code_turns_this_card_into_its_code_in_place(self):
+        """Code on a card used to reveal every code cell of the notebook below the cards; it now redraws that card,
+        where it is, as its code - and only that card."""
+        self.assertIn("const setMode = (mode) => { ui.mode = mode; rememberMode(mode); draw(); };", self.js)
+        self.assertIn("root.replaceChildren(...(code ? codeView(blocks) : blocks.map(block).filter(Boolean)));", self.js)
+        self.assertNotIn("document.body.classList.toggle(\"guide-code\"", self.js)
+        # The notebook's code cells stay hidden until asked for, by one link in a card's Code view.
+        self.assertIn("body.guide-cards:not(.guide-allcode) .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }",
+                      self.js)
+        self.assertIn("Show all the notebook's code cells", self.js)
+
+    def test_a_card_keeps_the_code_it_ran(self):
+        card = (GUIDE / "card.py").read_text(encoding="utf-8")
+        self.assertIn('blocks = blocks + [{"t": "ran", "v": "\\n".join(self.ran)}]', card)
 
     def test_the_code_can_be_copied_as_a_cell(self):
         self.assertIn('"Copy as cell"', self.js)

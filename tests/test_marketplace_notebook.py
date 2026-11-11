@@ -601,7 +601,7 @@ class NotebookPlanTest(unittest.TestCase):
                 self.assertIs(present, json.loads(config.read_text(encoding="utf-8"))["LabApp"]["custom_css"])
                 if present:
                     css = (static / "custom" / "custom.css").read_text(encoding="utf-8")
-                    self.assertIn("body:not(.guide-code) .jp-Cell:has(.guide-code-start) ~ .jp-Cell", css)
+                    self.assertIn("body:not(.guide-allcode) .jp-Cell:has(.guide-code-start) ~ .jp-Cell", css)
 
     @unittest.skipIf(os.name == "nt", "native Windows process test is a separate release gate")
     def test_frontend_launch_keeps_token_out_of_argv_and_stops_owned_server(self) -> None:

@@ -40,26 +40,32 @@ body.guide-cards .jp-Cell:has(.guide-root) .jp-OutputPrompt,
 body.guide-cards .jp-Cell:has(.guide-root) .jp-OutputArea-prompt { display: none !important; }
 body.guide-cards .jp-Cell:has(.guide-root) .jp-OutputArea-child { padding-left: 0 !important; }
 body.guide-ready .jp-Cell:has(.guide-start-hint) { display: none !important; }
-body:not(.guide-code) .guide-code-only { display: none !important; }
-/* The notebook's own code: everything from the "code behind this page" heading on. Guided hides it; Code shows it
-   under the cards, which then also show the kit calls behind each button. */
-body.guide-cards .jp-Cell:has(.guide-code-start),
-body.guide-cards .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }
+.guide-root:not(.guide-codeview) .guide-code-only { display: none !important; }
+/* The notebook's own code cells: everything from the "code behind this page" heading on. Hidden: a card's Code switch
+   shows that card's code in place. "All the notebook's code cells", at the foot of a card's Code view, shows them. */
+body.guide-cards:not(.guide-allcode) .jp-Cell:has(.guide-code-start),
+body.guide-cards:not(.guide-allcode) .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }
 `;
+const ALLCODE_KEY = "exakit-guide-allcode";
 function installGlobal() {
   if (!document.getElementById("guide-global-css")) {
     document.head.appendChild(h("style", { id: "guide-global-css" }, GLOBAL_CSS));
   }
-  let mode = "guided";
-  try { mode = localStorage.getItem(MODE_KEY) || "guided"; } catch (e) { /* storage blocked */ }
-  setMode(mode, false);
+  document.body.classList.add("guide-cards");
+  let all = false;
+  try { all = localStorage.getItem(ALLCODE_KEY) === "1"; } catch (e) { /* storage blocked */ }
+  setAllCode(all, false);
   document.body.classList.add("guide-ready");
 }
-function getMode() { return document.body.classList.contains("guide-code") ? "code" : "guided"; }
-function setMode(mode, save = true) {
-  document.body.classList.toggle("guide-cards", mode === "guided");
-  document.body.classList.toggle("guide-code", mode === "code");
-  if (save) { try { localStorage.setItem(MODE_KEY, mode); } catch (e) { /* ignore */ } }
+// The view a new card opens in: the one chosen last on any card (each card then switches on its own).
+function defaultMode() {
+  try { return localStorage.getItem(MODE_KEY) === "code" ? "code" : "guided"; } catch (e) { return "guided"; }
+}
+function rememberMode(mode) { try { localStorage.setItem(MODE_KEY, mode); } catch (e) { /* ignore */ } }
+function allCode() { return document.body.classList.contains("guide-allcode"); }
+function setAllCode(on, save = true) {
+  document.body.classList.toggle("guide-allcode", on);
+  if (save) { try { localStorage.setItem(ALLCODE_KEY, on ? "1" : "0"); } catch (e) { /* ignore */ } }
   document.dispatchEvent(new CustomEvent("guide-mode"));
 }
 
@@ -175,7 +181,11 @@ function render({ model, el }) {
   };
   ["keydown", "keypress", "keyup"].forEach((type) => root.addEventListener(type, keepKeys));
   el.appendChild(root);
-  const ui = { busy: null, openForm: null, values: {}, fading: new Set(), dismissed: new Set() };
+  const ui = { busy: null, openForm: null, values: {}, fading: new Set(), dismissed: new Set(), mode: defaultMode() };
+  // This card's own view: Guided draws its controls; Code draws, in this very place, the code behind them. The
+  // session (data, connection, approvals) is the kernel's and does not change with the view.
+  const getMode = () => ui.mode;
+  const setMode = (mode) => { ui.mode = mode; rememberMode(mode); draw(); };
   const st = { choice: {}, fields: {}, roles: null, slots: null, mapKey: null, mapInit: null, secret: new Set() };
   const collect = () => ({ ...st.fields, ...st.choice, roles: { ...(st.roles || {}) }, slots: { ...(st.slots || {}) } });
   const mapDirty = () => !!st.mapInit && JSON.stringify({ r: st.roles, s: st.slots }) !== st.mapInit;
@@ -736,9 +746,46 @@ function render({ model, el }) {
         h("button", { type: "button", class: "guide-link", onClick: () => { ui.openForm = null; draw(); } }, "Cancel")));
   }
 
+  // Every call this card's controls make, from the blocks the screen sent: a row's or a button's cmd, a code box.
+  function controlCode(blocks) {
+    const seen = new Map();
+    const add = (code, label) => {
+      const text = String(code || "").trim();
+      if (text && !seen.has(text)) seen.set(text, label ? `# ${label}\n${text}` : text);
+    };
+    const visit = (o, label) => {
+      if (!o || typeof o !== "object") return;
+      if (Array.isArray(o)) { o.forEach((x) => visit(x, label)); return; }
+      const here = o.label || o.name || o.title || label;
+      if (typeof o.cmd === "string") add(o.cmd, here);
+      if (o.t === "code" && typeof o.v === "string") add(o.v, o.title);
+      Object.entries(o).forEach(([k, v]) => { if (k !== "cmd" && v && typeof v === "object") visit(v, here); });
+    };
+    blocks.filter((b) => b.t !== "ran").forEach((b) => visit(b));
+    return [...seen.values()].join("\n\n");
+  }
+
+  function codeView(blocks) {
+    const keep = blocks.filter((b) => ["home_head", "head", "msg"].includes(b.t)
+      || (b.t === "details" && b.title === "What the kit said"));
+    const ran = blocks.find((b) => b.t === "ran");
+    const calls = controlCode(blocks);
+    return [
+      ...keep.map(block),
+      ran ? B.code({ title: "What this card ran (this session, in order)", v: ran.v }) : h("p", { class: "guide-p guide-muted" },
+        "Nothing has run from this card yet. Each control below is one call; run it here or copy it into a cell."),
+      calls ? B.code({ title: "What each control on this card runs", v: calls }) : null,
+      h("div", { class: "guide-allcode" },
+        h("button", { type: "button", class: "guide-link", onClick: () => setAllCode(!allCode()) },
+          allCode() ? "Hide the notebook's code cells" : "Show all the notebook's code cells, below the cards")),
+    ].filter(Boolean);
+  }
+
   function draw() {
     const blocks = model.get("blocks") || [];
-    root.replaceChildren(...blocks.map(block).filter(Boolean));
+    const code = ui.mode === "code";
+    root.classList.toggle("guide-codeview", code);
+    root.replaceChildren(...(code ? codeView(blocks) : blocks.map(block).filter(Boolean)));
   }
 
   const applyTheme = () => root.classList.toggle("guide-dark", !!detectDark(root));

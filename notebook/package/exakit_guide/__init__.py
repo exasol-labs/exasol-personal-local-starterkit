@@ -36,8 +36,12 @@ def __getattr__(name):
 
 
 def start():
-    """The quickstart's cards in one cell: Home (the kit), then step 1 (your data and its column map)."""
+    """The quickstart's cards in one cell: Home (the kit), then step 1 (your data and its column map). Each run starts
+    a workflow (nb.workflow, a new id); every card action after it is logged under that id (nb.workflow_log)."""
+    from . import actions
     from .card import show
+
+    actions.run("data.workflow")
     from .screens.home import Home
     from .screens.understand import ChooseData, ColumnMap, DataMap
 

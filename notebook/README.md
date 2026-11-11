@@ -66,11 +66,18 @@ ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"
 Each Data Scientist notebook opens with its **guided view**: cards (`exakit.guide`, shipped in the same package as
 `exakit.nb`, drawn with anywidget) that do the page's steps with buttons and forms - `guide.start()` in
 `00_quickstart`, `guide.explore()` in `01_explore`, `guide.ask()` in `02_ask_your_data`, `guide.share()` in
-`03_share`. Below them, under **The code behind this page**, are the notebook's own cells. The **Guided / Code**
-switch at the top right of every card chooses the view; Code also shows, on each card, the exact code its buttons
-ran, with **Copy as cell**. The choice is remembered for the whole JupyterLab. Until a card has run (Shift + Enter
-on the cell under the hint), the cells show as they always did. In Marimo the cards show stacked, and Marimo's app
-view hides the code. A headless run (`--run`) skips the card cells (`skip-ci`).
+`03_share`. Each card has its own **Guided / Code** switch, top right: **Code** turns that card, in place, into its
+code - what it ran this session, in order, and the exact call behind each of its controls, each with **Copy as cell** -
+and **Guided** turns it back. Only that card changes; the session (connection, chosen data, approvals) stays as it
+is, and a new card opens in the view chosen last. The notebook's own cells, under **The code behind this page**, stay
+hidden in the kit's JupyterLab; **Show all the notebook's code cells**, at the foot of a card's Code view, shows them.
+In Marimo the cards show stacked, and Marimo's app view hides the code. A headless run (`--run`) skips the card cells
+(`skip-ci`).
+
+**One workflow per start.** `guide.start()` starts a workflow (`nb.workflow`, a new id), and every card action after
+it is a `guide_action` line in that workflow's log: the card, the action, the exact code it ran and whether it worked
+(`nb.workflow_log(id)`, `exakit workflow show <id>`). The other notebooks continue it (`nb.continue_workflow`). The log
+never holds a secret: a key is passed beside the code, never in it.
 
 **One call, two ways.** Every button, form and choice on a card is one exact `exakit.nb` call, and the same call is a
 cell of the notebook's code section: UI or code, the same result.

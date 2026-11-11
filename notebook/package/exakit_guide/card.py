@@ -55,6 +55,27 @@ def _logger() -> logging.Logger:
     return _log
 
 
+def _log_action(card: str, event: str, code: list[str], error: str | None) -> None:
+    """One line in the workflow's log for each card action: the card, what was clicked, the exact code it ran and how
+    it ended (nb.workflow_log shows them). The code never holds a secret: a key is passed beside it, not in it. Nothing
+    when no workflow is active; a log that fails never fails the card."""
+    if event == "refresh" or not code and error is None:
+        return
+    try:
+        import json
+
+        import importlib
+
+        workflow = importlib.import_module("exakit_nb.workflow")     # the module: exakit_nb.workflow is a function too
+        name = event
+        if event.startswith("run:"):
+            name = json.loads(event[4:])[0]
+        workflow.log_event("guide_action", card=card, action=name, code="\n".join(code), ok=error is None,
+                           **({"error": error} if error else {}))
+    except Exception:
+        _logger().warning("workflow log: %s", traceback.format_exc())
+
+
 class Card(anywidget.AnyWidget):
     _esm = STATIC / "card.js"
     _css = STATIC / "card.css"
@@ -72,6 +93,7 @@ class Screen:
         self.widget = Card(kind=self.kind)
         self.widget.on_msg(self._on_msg)
         self.flash: dict | None = None  # one message shown at the top until the next action
+        self.ran: list[str] = []        # the code this card ran, in order: its Code view
         _SCREENS.add(self)
 
     # Displaying the Screen object in a notebook shows its card.
@@ -87,7 +109,27 @@ class Screen:
     def build(self) -> list[dict]:
         raise NotImplementedError
 
+    def _code_mark(self) -> int:
+        try:
+            from .session import SESSION
+
+            return len(SESSION.code)
+        except Exception:
+            return 0
+
+    def _code_since(self, mark: int) -> list[str]:
+        """What actions.run logged since mark: this card's own code, kept for its Code view."""
+        try:
+            from .session import SESSION
+
+            new = list(SESSION.code[mark:])
+        except Exception:
+            return []
+        self.ran.extend(line for line in dict.fromkeys(new) if line not in self.ran)   # a card's code once each
+        return new
+
     def refresh(self) -> None:
+        mark = self._code_mark()
         try:
             blocks = self.build()
         except Exception as exc:  # never leave a blank card
@@ -109,6 +151,9 @@ class Screen:
             blocks = [{"t": "msg", "kind": "warn",
                        "v": f"Step 1 approved {newer} after this page opened its data. This page still shows "
                             f"{getattr(SESSION.dataset, 'id', 'the earlier data')}. Run this cell again (Shift+Enter) to switch."}] + blocks
+        self._code_since(mark)
+        if self.ran:
+            blocks = blocks + [{"t": "ran", "v": "\n".join(self.ran)}]
         self.widget.blocks = blocks
 
     def _on_msg(self, _widget, content, _buffers) -> None:
@@ -123,12 +168,14 @@ class Screen:
             SESSION.said = ""          # what this action prints, nothing older
         except Exception:
             pass
+        mark, error = self._code_mark(), None
         try:
             handler = getattr(self, f"on_{action}", None)
             if handler is None:
                 raise ValueError("That button isn't wired up yet.")
             handler(values)
         except Exception as exc:
+            error = _plain(exc)
             _logger().error("action %s failed: %s\n%s", action, exc, traceback.format_exc())
             self.flash = {"kind": "error", "v": _plain(exc)}
             try:
@@ -139,6 +186,7 @@ class Screen:
             except Exception:
                 pass
         finally:
+            _log_action(type(self).__name__, action, self._code_since(mark), error)
             self.refresh()
             try:
                 from .session import SESSION

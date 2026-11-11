@@ -1,6 +1,7 @@
 /* Exasol starter kit: notebooks with a guided view open in it.
-   Loaded by the kit's own JupyterLab only (LabApp.custom_css in its server config). The code section, everything
-   from the cell holding .guide-code-start onwards, stays hidden until Code is chosen on a guided card
-   (card.js sets body.guide-code). Notebooks without that marker are not touched. */
-body:not(.guide-code) .jp-Cell:has(.guide-code-start),
-body:not(.guide-code) .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }
+   Loaded by the kit's own JupyterLab only (LabApp.custom_css in its server config). The notebook's code cells,
+   everything from the cell holding .guide-code-start onwards, stay hidden: each card shows its own code in place
+   with its Code switch, and "Show all the notebook's code cells" there sets body.guide-allcode.
+   Notebooks without that marker are not touched. */
+body:not(.guide-allcode) .jp-Cell:has(.guide-code-start),
+body:not(.guide-allcode) .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }

@@ -437,3 +437,5 @@
 .guide-cmd { cursor: copy; }
 
 .guide-form-note { color: var(--guide-bad, #b42318); font-size: 0.9em; margin: 4px 0 8px; }
+
+.guide-allcode { margin-top: 10px; }
