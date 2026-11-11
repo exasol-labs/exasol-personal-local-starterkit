@@ -4535,9 +4535,17 @@ function Invoke-CmdSource {
     $rest = @($Arguments)
     # An option where the action goes (`exakit source --json`) means the
     # default action, list, with that option.
-    if ($rest.Count -gt 0 -and -not ("" + $rest[0]).StartsWith("-")) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
+    # A word that is no action but names a source opens that source; any other
+    # word stays an unknown action, refused below as it always was.
+    $bare = $true
+    $actions = @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")
+    if ($rest.Count -gt 0 -and -not ("" + $rest[0]).StartsWith("-")) {
+        $bare = $false
+        if (($actions -notcontains ("" + $rest[0])) -and (Test-ExakitVsSourceExists ("" + $rest[0]))) { $action = "open" }
+        else { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
+    }
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
-    $table = ""; $ddl = $false; $into = ""; $pwStdin = $false
+    $table = ""; $ddl = $false; $into = ""; $pwStdin = $false; $details = $false
     $script:ExakitVsAssumeYes = $false
     # This command's own public IP only: an earlier command's answer reaches
     # later ones through the processes it started, and could name a network
@@ -4557,6 +4565,7 @@ function Invoke-CmdSource {
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
         elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -eq "--ddl") { $ddl = $true }
+        elseif ($arg -eq "--details") { $details = $true }
         elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
         elseif ($arg -like "--schema=*") { $into = $arg.Substring(9) }
         elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for source $action (exakit help source)." "unknown option '$opt' for source $action" "leave it out; the options are listed by: exakit help source" }
@@ -4573,7 +4582,16 @@ function Invoke-CmdSource {
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
-    if ($action -notin @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")) {
+    # `exakit source <name>`: --json is show's answer, a pipe the card, a person
+    # the card and its menu; `exakit source` alone at a console the picker.
+    # Twin of the same step in cmd_source.
+    $script:ExakitVsSelf = $PSCommandPath
+    if ($action -eq "open") {
+        $action = "show"
+        if (-not $json -and (Test-ExakitVsMenuOk)) { [void](Invoke-ExakitVsSourceMenu -Name $name); exit 0 }
+    }
+    if ($bare -and -not $json -and -not $name -and (Test-ExakitVsMenuOk)) { Invoke-ExakitVsSourcePicker; exit 0 }
+    if ($action -notin $actions) {
         Deny-ExakitVsInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." "unknown source action '$action'" "use one of list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog (exakit help source)"
     }
     if ($action -in @("show", "describe", "reauth", "refresh", "disconnect", "remove") -and -not $name) {
@@ -4651,7 +4669,19 @@ function Invoke-CmdSource {
         foreach ($line in $run.Lines) { Write-Output $line }
         Exit-ExakitVs $run.Code
     }
+    if ($action -eq "show") {
+        # The card: labelled rows, never the record's JSON (that is --json's;
+        # the object names and pins are --details'). Twin of cmd_source.
+        $cardArgs = @("card", $name); if ($details) { $cardArgs += "--details" }
+        $code = Invoke-ExakitVsRun -Arguments $cardArgs
+        if ($code -eq 0 -and $null -ne $script:ExakitVsResult) { Show-ExakitVsCard -Card $script:ExakitVsResult }
+        Exit-ExakitVs $code
+    }
     $code = Invoke-ExakitVsRun -Arguments $argv
+    if ($action -eq "catalog") {
+        if ($code -eq 0 -and $null -ne $script:ExakitVsResult) { Show-ExakitVsCatalogBox -Catalog $script:ExakitVsResult }
+        Exit-ExakitVs $code
+    }
     if ($action -eq "describe") {
         # --ddl prints only the statements, so they can go straight to a file.
         # Twin of the describe renderer in cmd_source.

@@ -1,0 +1,11 @@
+list=0 {"ok":"","sources":[{"connector":"","host":"","last_check":{"at":"","evidence":"","kind":"","outcome":""},"name":"","needs_refresh":"","schema":"","status":"","tls":""}]}
+issues=0 {"issues":[],"ok":""}
+show jsonok=0 {"connector":"","inputs":{"database":"","host":"","port":"","schema":"","tls":"","user":""},"journal":"","last_check":{"at":"","empty_tables":[],"evidence":"","outcome":""},"name":"","needs_refresh":"","objects":{"connection":"","schema":"","script":"","script_schema":""},"ok":"","pins":{"adapter":"","adapter_version":"","driver":"","driver_version":""},"status":"","tables":"","tips":[""]}
+describe jsonok=1 {"command":"","error":"","kind":"","ok":"","remedy":""}
+catalog=0 {"connectors":[{"aliases":[""],"id":"","name":"","profile":"","status":"","summary":"","tier":"","version":""}],"ok":""}
+check jsonok=0 {"evidence":"","name":"","ok":"","status":""}
+refresh jsonok=1 {"command":"","error":"","kind":"","ok":"","remedy":""}
+disconnect jsonok --dry-run=0 {"drop":[""],"keep":[""],"name":"","note":"","ok":""}
+remove jsonok --dry-run=0 {"delete_files":[],"drop":[""],"keep_files":[""],"name":"","note":"","ok":""}
+disconnect jsonok=5 {"command":"","error":"","kind":"","ok":"","public_ip":"","rejected":"","remedy":""}
+remove jsonok=5 {"command":"","error":"","kind":"","ok":"","public_ip":"","rejected":"","remedy":""}

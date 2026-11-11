@@ -1069,6 +1069,206 @@ function Test-ExakitVsSourceLive {
     return ($disconnected.Count -eq 0)
 }
 
+# --- exakit source and exakit source <name>: the card and the menus ---------
+# The engine decides the words (engine/card.py: card, cards), this draws them;
+# --json of every sub-command stays the engine's own answer. Twins of the
+# block of the same name in virtual-schemas.sh. Every glyph comes from the
+# palette (ui.ps1): this file stays ASCII.
+
+# Test-ExakitVsSourceExists - a source the kit connected, disconnected or not:
+# `exakit source <name>` opens it. Twin of _exakit_vs_source_exists.
+function Test-ExakitVsSourceExists {
+    param([string]$Name)
+    if (-not $Name -or $Name -cnotmatch '^[a-z][a-z0-9_]{0,39}$') { return $false }
+    $folder = Join-Path (Join-Path $script:ExakitHome "sources") $Name
+    return (Test-Path -LiteralPath (Join-Path $folder "config.json") -PathType Leaf)
+}
+
+# Test-ExakitVsMenuOk - a person at a console: input and output not
+# redirected, a fancy console (the picker redraws in place), and not --yes.
+# Twin of _exakit_vs_menu_ok.
+function Test-ExakitVsMenuOk {
+    if (-not $script:UiFancy -or $script:ExakitVsAssumeYes) { return $false }
+    if (-not (Test-ExakitMenuConsole)) { return $false }
+    try { if ([Console]::IsOutputRedirected) { return $false } } catch { return $false }
+    return $true
+}
+
+# Get-ExakitVsCard <name> [-Details] - the engine's card for one source; its
+# failure said, $null then.
+function Get-ExakitVsCard {
+    param([string]$Name, [switch]$Details)
+    $argv = @("card", $Name); if ($Details) { $argv += "--details" }
+    $run = Invoke-ExakitVsEngine -Arguments $argv
+    $card = Show-ExakitVsLines -Lines $run.Lines
+    if ($run.Code -ne 0) { return $null }
+    return $card
+}
+
+# Show-ExakitVsCard <card> [-Menu] - the source card: a box of labelled rows
+# (never raw JSON, never a secret), the connector's notes, a first query and,
+# without -Menu (the menu is under it then), how to manage it. A row wider
+# than the console is wrapped inside the box. Twin of _exakit_vs_card.
+function Show-ExakitVsCard {
+    param($Card, [switch]$Menu)
+    if ($null -eq $Card) { return }
+    $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+    if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+    if ($cols -lt 40) { $cols = 80 }
+    $mid = $script:UiMidDot
+    $rows = @($Card.rows)
+    $width = 0
+    foreach ($r in $rows) { if (("" + $r[0]).Length -gt $width) { $width = ("" + $r[0]).Length } }
+    $width += 2
+    Start-ExakitPanel ("{0} {1} {2}" -f $Card.name, $mid, $Card.connector_name)
+    $inner = $cols - 8 - $width
+    foreach ($r in $rows) {
+        $label = "" + $r[0]; $value = "" + $r[1]
+        if ($label -eq "Status") {
+            $glyph = $script:UiOk + $script:UiTick + $script:UiReset
+            if (-not $Card.ready) { $glyph = $script:UiErr + $script:UiCross + $script:UiReset }
+            $value = $glyph + " " + (@($Card.status_parts) -join " $mid ")
+            Write-ExakitPanelLine ($label.PadRight($width) + $value)
+            continue
+        }
+        $parts = @($value)
+        if ($inner -ge 20 -and $value.Length -gt $inner) { $parts = @(Split-ExakitWrap -Text $value -Width $inner) }
+        $first = $true
+        foreach ($p in $parts) {
+            if ($first) { Write-ExakitPanelLine ($label.PadRight($width) + $p); $first = $false }
+            else { Write-ExakitPanelLine ((" " * $width) + $p) }
+        }
+    }
+    Complete-ExakitPanel
+    $notes = @($Card.notes | Where-Object { $_ })
+    if ($notes.Count -gt 0) {
+        Write-Host ("  " + $script:UiBold + "Notes" + $script:UiReset)
+        foreach ($n in $notes) {
+            $first = $true
+            foreach ($l in @(Split-ExakitWrap -Text ("" + $n) -Width ($cols - 9))) {
+                if ($first) { Write-Host ("    " + $script:UiDim + $script:UiBullet + $script:UiReset + " " + $l); $first = $false }
+                else { Write-Host ("      " + $l) }
+            }
+        }
+    }
+    if ($Card.remedy) { Write-Host ("  " + $script:UiBold + "Fix:" + $script:UiReset + "    " + $Card.remedy) }
+    Write-Host ("  " + $script:UiBold + "Try:" + $script:UiReset + "    " + (Format-ExakitVsSqlLine -Query ("" + $Card.example)))
+    if (-not $Menu) { Write-Host ("  " + $script:UiBold + "Manage:" + $script:UiReset + " exakit source " + $Card.name + "   (menu)") }
+}
+
+# Invoke-ExakitVsRepoint <name> <connector> <card> - "Move to a new host": each
+# input that says where the source is, asked again with its value as the
+# default, then the re-point connect, which shows the change and asks for the
+# credential before anything moves. Twin of _exakit_vs_repoint.
+function Invoke-ExakitVsRepoint {
+    param([string]$Name, [string]$Connector, $Card)
+    $argv = @($Connector, "--name", $Name)
+    foreach ($a in @($Card.address)) {
+        $old = "" + $a.value
+        $new = Read-ExakitPrompt ("" + $a.label + " (Enter keeps it)") $old
+        if ($new -and $new -ne $old) { $argv += @("--set", ("" + $a.input + "=" + $new)) }
+    }
+    Invoke-ExakitVsMenuChild "connect" $argv
+}
+
+# Invoke-ExakitVsMenuChild <command> <arguments> - one action of the menu, run
+# as `exakit <command> ...` in a child: the sub-commands end with exit, and
+# the menu goes on after it. Twin of the ( cmd_source ... ) subshells.
+function Invoke-ExakitVsMenuChild {
+    param([string]$Command, [string[]]$Arguments = @())
+    # exakit.ps1, which Invoke-CmdSource names before it opens a menu.
+    $self = "" + $script:ExakitVsSelf
+    if (-not $self) { $self = Join-Path (Split-Path -Parent $PSScriptRoot) "exakit.ps1" }
+    $shell = (Get-Process -Id $PID).Path
+    & $shell -NoProfile -ExecutionPolicy Bypass -File $self $Command @Arguments
+}
+
+# Invoke-ExakitVsSourceMenu <name> - exakit source <name> at a console: the
+# card, then what to do with it; a source that is not ready has its fix first.
+# After each action the card again, as the source is now; q quits. $true when
+# the source is gone (removed). Twin of _exakit_vs_source_menu.
+function Invoke-ExakitVsSourceMenu {
+    param([string]$Name)
+    while ($true) {
+        $card = Get-ExakitVsCard -Name $Name
+        if ($null -eq $card) { return $false }
+        Write-Host ""
+        Show-ExakitVsCard -Card $card -Menu
+        $rows = @(); $acts = @()
+        if ($card.fix) { $rows += ($script:UiCross + " " + $card.fix.label); $acts += ("" + $card.fix.action) }
+        $rows += @("Tables and columns          (describe)", "Test it now                 (check)",
+                   "Pick up new tables          (refresh)", "New password or token       (reauth)",
+                   "Move to a new host          (re-point)", "Disconnect for now          (disconnect)",
+                   "Remove it                   (remove)")
+        $acts += @("describe", "check", "refresh", "reauth", "repoint", "disconnect", "remove")
+        Write-Host ""
+        Write-Host ("  " + $script:UiBold + "What do you want to do?" + $script:UiReset)
+        $pick = Read-ExakitPickMenu -Rows $rows -Enter "Enter to choose"
+        if ($pick -le 0) { return $false }
+        $act = $acts[$pick - 1]
+        Write-Host ""
+        if ($act -eq "repoint") { Invoke-ExakitVsRepoint -Name $Name -Connector ("" + $card.connector) -Card $card }
+        elseif ($act -eq "reconnect") { Invoke-ExakitVsMenuChild "connect" @(("" + $card.connector), "--name", $Name) }
+        else { Invoke-ExakitVsMenuChild "source" @($act, $Name) }
+        if (-not (Test-ExakitVsSourceExists $Name)) { return $true }
+    }
+}
+
+# Invoke-ExakitVsSourcePicker - exakit source at a console: every source in a
+# box (name, connector, status, tables); Enter opens one, q quits. Back from a
+# source, the box again, as the sources are now. Twin of _exakit_vs_source_picker.
+function Invoke-ExakitVsSourcePicker {
+    $at = 1
+    while ($true) {
+        $run = Invoke-ExakitVsEngine -Arguments @("cards")
+        $r = Show-ExakitVsLines -Lines $run.Lines
+        if ($null -eq $r) { return }
+        $all = @($r.sources)
+        if ($all.Count -eq 0) { Info "No sources yet. Connect one: exakit connect"; return }
+        $cells = @()
+        foreach ($s in $all) {
+            $state = $script:UiTick; if (-not $s.ready) { $state = $script:UiCross }
+            $tables = "-"; if ($null -ne $s.tables) { $tables = "" + $s.tables }
+            $c = @(("" + $s.name), ("" + $s.connector_name), ($state + " " + $s.reason), $tables)
+            for ($i = 0; $i -lt 4; $i++) { if ($c[$i].Length -gt 34) { $c[$i] = $c[$i].Substring(0, 33) + $script:UiEllipsis } }
+            $cells += , $c
+        }
+        $head = @("NAME", "CONNECTOR", "STATUS", "TABLES")
+        $w = @(0, 0, 0, 0)
+        for ($i = 0; $i -lt 4; $i++) { $w[$i] = $head[$i].Length; foreach ($c in $cells) { if ($c[$i].Length -gt $w[$i]) { $w[$i] = $c[$i].Length } } }
+        $line = { param($c) ($c[0].PadRight($w[0]) + "  " + $c[1].PadRight($w[1]) + "  " + $c[2].PadRight($w[2]) + "  " + $c[3].PadLeft($w[3])) }
+        $rows = @(); foreach ($c in $cells) { $rows += (& $line $c) }
+        Write-Host ""
+        $pick = Read-ExakitPickMenu -Rows $rows -Title "Sources" -Head (& $line $head) -Start $at -Enter "Enter to open"
+        if ($pick -le 0) { return }
+        $at = $pick
+        if (Invoke-ExakitVsSourceMenu -Name ("" + $all[$pick - 1].name)) { $at = 1 }
+    }
+}
+
+# Show-ExakitVsCatalogBox <catalog> - exakit source catalog for a person: id,
+# name and the first aliases in a box (--json has every alias, the tier and the
+# status), then where each connector's inputs are said. Twin of
+# _exakit_vs_catalog_box.
+function Show-ExakitVsCatalogBox {
+    param($Catalog)
+    $cells = @()
+    foreach ($c in @($Catalog.connectors)) {
+        $a = @($c.aliases | Where-Object { $_ })
+        $shown = (@($a | Select-Object -First 3) -join ", ")
+        if ($a.Count -gt 3) { $shown += (", +" + ($a.Count - 3)) }
+        $cells += , @(("" + $c.id), ("" + $c.name), $shown)
+    }
+    $head = @("ID", "NAME", "ALIASES")
+    $w = @(0, 0)
+    for ($i = 0; $i -lt 2; $i++) { $w[$i] = $head[$i].Length; foreach ($c in $cells) { if ($c[$i].Length -gt $w[$i]) { $w[$i] = $c[$i].Length } } }
+    Start-ExakitPanel "Connectors"
+    Write-ExakitPanelLine ($script:UiDim + ($head[0].PadRight($w[0]) + "  " + $head[1].PadRight($w[1]) + "  " + $head[2]) + $script:UiReset)
+    foreach ($c in $cells) { Write-ExakitPanelLine (($c[0].PadRight($w[0]) + "  " + $c[1].PadRight($w[1]) + "  " + $c[2]).TrimEnd()) }
+    Complete-ExakitPanel
+    Write-Host "  What each needs: exakit connect <id> --help"
+}
+
 # Format-ExakitVsWord - the text as one PowerShell word: as it is when it needs
 # no quoting, else in single quotes with each ' doubled. For a command the
 # --json answer names. Twin of _exakit_vs_word, which quotes for a POSIX shell.
