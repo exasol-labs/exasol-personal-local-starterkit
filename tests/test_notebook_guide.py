@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import time
 import re
 import importlib.util
 import json
@@ -392,6 +393,56 @@ class CardTest(unittest.TestCase):
         self.assertEqual(["done", "next", "todo", "todo"], states(exploring))
         self.assertEqual(["done", "done", "next", "todo"], states(exploring + [{"kind": wf.MODEL}]))
         self.assertEqual(["done", "done", "next", "todo"], states(exploring + [{"kind": wf.STEP, "name": "n2"}]))
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_the_home_cards_steps_follow_the_workflow_live(self):
+        """What is done and what is next is read again when a card below approves a column map or trains a model, and
+        when the workflow's log changes on disk (another notebook, its own kernel): no cell is run again."""
+        home = importlib.import_module("exakit_guide.screens.home")
+        wf = importlib.import_module("exakit_nb.workflow")
+        with tempfile.TemporaryDirectory() as folder:
+            log = Path(folder) / "wf-1.jsonl"
+            log.write_text("{}\n", encoding="utf-8")
+            card = home.Home.__new__(home.Home)
+            card.loading = False
+            card.data = {"last_workflow": {"id": "wf-1"}, "events": [{"kind": wf.START, "name": "n0"}],
+                         "notebooks": [{"id": f"n{i}", "title": "T", "summary": "S.", "file": "f"} for i in range(2)]}
+            reads = []
+
+            def read(action_id, **values):
+                reads.append((action_id, values))
+                return [{"kind": wf.START, "name": "n0"}, {"kind": wf.DESCRIBE_APPROVE}]
+
+            with mock.patch.object(home, "_read", side_effect=read), mock.patch.object(card, "refresh") as redrawn, \
+                    mock.patch.object(wf, "log_path", return_value=log), \
+                    mock.patch.object(home.SESSION, "latest_approved", return_value="d"):
+                before = card._log_stamp()
+                self.assertEqual("wf-1", before[0])
+                card._follow()
+                self.assertEqual([("kit.workflow_log", {"workflow_id": "wf-1"})], reads)      # the kit's own call
+                self.assertEqual(2, len(card.data["events"]))
+                redrawn.assert_called_once()
+                self.assertEqual(["done", "next"], [s["state"] for s in home._journey(card.data["notebooks"], card.data["events"])])
+
+                with mock.patch.object(card, "_follow") as followed:                          # a card below approved
+                    card.on_session("dataset")
+                    card.on_session("source")                                                 # nothing the steps show
+                    for thread in __import__("threading").enumerate():
+                        if thread is not __import__("threading").current_thread() and thread.daemon:
+                            thread.join(timeout=2)
+                    followed.assert_called_once()
+
+                with mock.patch.object(card, "_follow") as followed:                          # another notebook wrote
+                    card._watch(every=0.05)
+                    time.sleep(0.2)
+                    followed.assert_not_called()                                              # nothing changed yet
+                    log.write_text("{}\n{}\n", encoding="utf-8")
+                    time.sleep(0.4)
+                    followed.assert_called_once()
+                self.assertNotEqual(before, card._log_stamp())
+        self.assertEqual("Steps 1 and 2 of the journey, plus a step 0: check, update or extend the kit…",
+                         home._short("Steps 1 and 2 of the journey, plus a step 0: check, update or extend the kit from the notebook", 80))
+        self.assertEqual("A short line.", home._short("A short line."))
 
     def test_continuing_a_workflow_and_training_a_model_leave_their_line(self):
         wf = importlib.import_module("exakit_nb.workflow")

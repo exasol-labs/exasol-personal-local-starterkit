@@ -49,6 +49,14 @@ def _read(action_id: str, **values):
         return {"_error": str(exc).splitlines()[0] if str(exc) else type(exc).__name__}
 
 
+def _short(text: str, limit: int = 140) -> str:
+    """A line that fits its row: cut at a word, never inside one, and marked as cut."""
+    text = " ".join(str(text).split())
+    if len(text) <= limit:
+        return text
+    return text[:limit].rsplit(" ", 1)[0].rstrip(" ,;:(-") + "…"
+
+
 def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
     """The persona's notebooks in order, each marked done / next / todo from the workflow log's event kinds."""
     wf = importlib.import_module("exakit_nb.workflow")   # the module (exakit_nb.workflow is also a function)
@@ -72,7 +80,7 @@ def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
         if i == 2 and asked_no_answer:
             state = "attention"
         next_set = next_set or state in ("next", "attention")
-        out.append({"n": i + 1, "title": nb_row["title"], "text": nb_row["summary"].split(". ")[0][:140],
+        out.append({"n": i + 1, "title": nb_row["title"], "text": _short(nb_row["summary"].split(". ")[0]),
                     "path": nb_row["file"], "state": state,
                     "note": "Questions were approved but none returned an answer." if state == "attention" else ""})
     return out
@@ -91,6 +99,67 @@ class Home(Screen):
         self.confirm: str | None = None
         self.refresh()
         threading.Thread(target=self._load, daemon=True).start()
+        SESSION.listen(self)        # a card below approves a column map or trains a model: the steps here follow
+        self._watch()               # and so does another notebook working on the same workflow
+
+    # -- the steps, kept live ---------------------------------------------------------------
+    def _log_stamp(self):
+        """What the journey was read from, as it is now: the workflow's log file (its size and time). Only looked
+        at, never read here: a change means the steps are read again, through the kit's own call."""
+        last = (self.data or {}).get("last_workflow") or {}
+        if not last.get("id"):
+            return None
+        wf = importlib.import_module("exakit_nb.workflow")
+        try:
+            found = wf.log_path(str(last["id"])).stat()
+        except OSError:
+            return None
+        return last["id"], found.st_size, found.st_mtime_ns
+
+    def _follow(self) -> None:
+        """Read the workflow's events again and redraw: what is done and what is next, as it stands."""
+        d = self.data
+        last = (d or {}).get("last_workflow") or {}
+        if not d or not last.get("id"):
+            return
+        events = _read("kit.workflow_log", workflow_id=last["id"])
+        if isinstance(events, list):
+            d["events"] = events
+        d["working_on"] = SESSION.latest_approved()
+        self.refresh()
+
+    def on_session(self, what: str) -> None:
+        if what in ("dataset", "model"):       # approved here, or trained here: the log has a new line
+            threading.Thread(target=self._follow, daemon=True).start()
+
+    def _watch(self, every: float = 3.0) -> None:
+        """Follow the workflow's log while this card is shown, so a step done in another notebook (its own kernel)
+        shows here without running the cell again. Stops by itself when the card is gone."""
+        import time
+        import weakref
+
+        ref = weakref.ref(self)
+
+        def loop() -> None:
+            seen = False
+            while True:
+                time.sleep(every)
+                card = ref()
+                if card is None:
+                    return
+                try:
+                    if not card.loading:
+                        stamp = card._log_stamp()
+                        if seen is False:
+                            seen = stamp
+                        elif stamp != seen:
+                            seen = stamp
+                            card._follow()
+                except Exception:
+                    pass                        # a look that fails is tried again on the next round
+                del card
+
+        threading.Thread(target=loop, name="exakit-home-watch", daemon=True).start()
 
     # -- the kit, read live ----------------------------------------------------------------
     def _load(self) -> None:
