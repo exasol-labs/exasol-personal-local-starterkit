@@ -1567,6 +1567,10 @@ Check "...the CA file where it applies" $true ($l.Contains("its password; CA fil
 Check "...not the command page" $false ($l.Contains("Connects PostgreSQL, MySQL"))
 Check "help connect keeps the whole command page" $true ((Guide @("help", "connect")).Contains("Connects PostgreSQL, MySQL"))
 Check "help mcp keeps the component page" $true ((Guide @("help", "mcp")).Contains("MCP server"))
+$sh = Guide @("source", "--help")
+Check "source --help: the approved layout, grouped" $true ($sh.Contains("  Check and fix") -and $sh.Contains("show <name>"))
+Check "...Windows words: Get-Content in place of cat" $true ($sh.Contains("Get-Content L:\sales.pw | exakit source reauth sales --password-stdin") -and -not $sh.Contains("cat ~/sales.pw"))
+Check "...Windows paths in the other examples" $true ($sh.Contains("--password-file L:\sales.pw") -and -not $sh.Contains("~/sales.pw"))
 $env:HOME = $savedHome; $env:EXAKIT_HOME = $savedExakitHome; $env:EXAKIT_NO_IP_LOOKUP = $savedLookup
 if ($null -eq $savedExakitHome) { Remove-Item Env:\EXAKIT_HOME -ErrorAction SilentlyContinue }
 if ($null -eq $savedLookup) { Remove-Item Env:\EXAKIT_NO_IP_LOOKUP -ErrorAction SilentlyContinue }
