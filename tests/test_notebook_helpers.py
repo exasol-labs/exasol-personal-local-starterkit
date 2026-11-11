@@ -1639,6 +1639,18 @@ class DataMapTest(unittest.TestCase):
                          "Your data + External source")
         self.assertTrue(all(l["kind"].startswith("possible") for l in links.values()))
 
+    def test_a_shared_dimension_links_sources_whatever_the_case_of_its_name(self):
+        module = importlib.import_module("exakit_nb.data_map")
+        columns = [{"origin": "sample", "table": "AMAZON.ORDER_LINES", "column": "CATEGORY", "kind": "text", "role": None},
+                   {"origin": "source", "table": "VS_CATALOG.inventory_weekly", "column": "category", "kind": "text", "role": None},
+                   {"origin": "sample", "table": "AMAZON.ORDER_LINES", "column": "SHIP_STATE", "kind": "text", "role": None},
+                   {"origin": "source", "table": "VS_LOGISTICS.STATE_LOGISTICS", "column": "SHIP_STATE", "kind": "text", "role": None},
+                   {"origin": "sample", "table": "AMAZON.ORDER_LINES", "column": "AMOUNT", "kind": "number", "role": None},
+                   {"origin": "local", "table": "X.Y", "column": "AMOUNT", "kind": "number", "role": None}]
+        links = module._shared_keys(columns, {}, set())
+        found = {(l["from_column"].upper(), l["kind"]) for l in links}
+        self.assertEqual(found, {("CATEGORY", "shared dimension"), ("SHIP_STATE", "shared dimension")})
+
     def test_an_approved_map_and_its_relations_win(self):
         semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS", "VS_SALES__ORDERS", "VS_SALES__RELATIONS"],
                           VIEW_COMMENT=["grain=x; source=VS_SALES.ORDERS; descriptor=v2"] * 2 + ["r"],
@@ -1647,10 +1659,26 @@ class DataMapTest(unittest.TestCase):
         relations = _Frame(FROM_TABLE=["VS_SALES.ORDERS"], FROM_COLUMN=["EMPLOYEE_ID"], TO_TABLE=["STARTER_KIT.EMPLOYEES"],
                            TO_COLUMN=["EMPLOYEE_ID"], KIND=["found"])
         found = self.build(semantic, relations)
-        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2")
+        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2, published")
         self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"})
         kinds = [l["kind"] for l in found.link_rows if "EMPLOYEE_ID" == l["from_column"]]
         self.assertEqual(kinds, ["found"])                         # the declared one, not repeated as possible
+
+    def test_a_newer_approval_than_the_view_shows_its_own_roles_and_every_slot(self):
+        module = importlib.import_module("exakit_nb.data_map")
+        semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS"], VIEW_COMMENT=["source=VS_SALES.ORDERS; descriptor=v1"],
+                          COLUMN_NAME=["ORDER_ID"], COLUMN_COMMENT=["role=key; descriptor=v1"])
+        stored = ("approved", {"ORDER_ID": "key", "EMPLOYEE_ID": "category"},
+                  {"key": "ORDER_ID", "category": "EMPLOYEE_ID", "entity": "EMPLOYEE_ID"}, 2)
+        none = (None, {}, {}, 0)
+        with mock.patch.object(module, "_store_map", side_effect=lambda t: stored if t == "VS_SALES.ORDERS" else none):
+            found = self.build(semantic)
+        row = found.table("VS_SALES.ORDERS")
+        self.assertEqual(row["map"], "approved v2, not published (the view still says v1)")
+        self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "category"})
+        self.assertEqual(row["named_roles"], [("key", "ORDER_ID"), ("category", "EMPLOYEE_ID"), ("entity", "EMPLOYEE_ID")])
+        html = found._repr_html_()
+        self.assertIn("ORDER_ID</b></span> · <span", html)         # separated even where <style> is stripped
 
 if __name__ == "__main__":
     unittest.main()

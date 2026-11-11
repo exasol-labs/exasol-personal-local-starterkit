@@ -32,6 +32,10 @@ KIT_SCHEMAS = ("SYS", "EXA_STATISTICS", "PREPROC")      # the kit's and the data
 ORIGINS = {"sample": "Sample data", "local": "Your data", "source": "External source"}
 ORDER = ("source", "local", "sample")
 KEYISH = re.compile(r"(^ID$|_ID$|_KEY$|_CODE$|_NO$|_NUMBER$|^SKU$|^ASIN$|^EMAIL$)")
+# Shared dimensions: the same state, category, region or period in two sources is how they are compared, even
+# with no key between them (aggregate each to that level, then compare). Matched on the upper-cased name.
+DIMENSION = re.compile(r"(STATE|REGION|COUNTRY|CITY|CATEGORY|SEGMENT|CHANNEL|PRODUCT|BRAND|STORE|CUSTOMER|"
+                       r"DATE|DAY|WEEK|MONTH|YEAR|PERIOD)")
 SLOT_ROLES = ("key", "time", "measure", "category", "flag", "text", "identifier", "other")
 _NUMERIC = ("DECIMAL", "DOUBLE", "INTEGER", "BIGINT", "SMALLINT", "NUMERIC", "FLOAT", "REAL")
 _COLOURS = {"source": "#7c3aed", "local": "#0f766e", "sample": "#b45309"}
@@ -90,16 +94,22 @@ def _sample_maps() -> tuple[set[str], dict[str, tuple[dict[str, str], dict[str, 
     return schemas, maps
 
 
-def _store_map(table: str) -> tuple[str | None, dict[str, str], dict[str, Any]]:
-    """(approved | draft | None, roles, slots) from the kit's descriptor store for SCHEMA.TABLE."""
+def _store_map(table: str) -> tuple[str | None, dict[str, str], dict[str, Any], int]:
+    """(approved | draft | None, roles, slots, version) from the kit's descriptor store for SCHEMA.TABLE; the
+    approved map (current.yaml) wins over a draft. Version 0 when the file names none."""
+    from .descriptor_rules import load_yaml
     from .descriptor_store import kit_home
 
     folder = kit_home() / "descriptors" / table
     for state, name in (("approved", "current.yaml"), ("draft", "draft.yaml")):
         if (folder / name).is_file():
             _, roles, slots = _read_map(folder / name)
-            return state, roles, slots
-    return None, {}, {}
+            try:
+                version = int((load_yaml((folder / name).read_text(encoding="utf-8")) or {}).get("version") or 0)
+            except Exception:
+                version = 0
+            return state, roles, slots, version
+    return None, {}, {}, 0
 
 
 def _kind(type_name: str) -> str:
@@ -208,26 +218,36 @@ _NEXT = ('Next: set the table to work on, e.g. SOURCE = "VS_SALES.ORDERS" or MY_
 def _roles_html(row: dict[str, Any]) -> str:
     if not row["role_counts"]:
         return f"<span class='exk-dim'>{escape(row['summary'])}</span>"
-    named = "".join(f"<span class='exk-role'>{escape(role)} <b>{escape(column)}</b></span>"
-                    for role, column in row["named_roles"])
-    counted = "".join(f"<span class='exk-role'>{n} {escape(role)}</span>" for role, n in row["role_counts"].items()
-                      if role not in ("key", "time"))
-    return named + counted
+    # Inline styles and a separator: a front end that strips <style> still shows "key X · time Y", not "key Xtime Y".
+    box = ("display:inline-block;margin:1px 2px;padding:0 5px;border:1px solid rgba(127,127,127,.4);"
+           "border-radius:4px;font-size:11px")
+    named = [f"<span class='exk-role' style='{box}'>{escape(role)} <b>{escape(column)}</b></span>"
+             for role, column in row["named_roles"]]
+    counted = [f"<span class='exk-role exk-dim' style='{box}'>{n} {escape(role)}</span>"
+               for role, n in row["role_counts"].items()]
+    return " · ".join(named) + ("<br>" if named and counted else "") + " · ".join(counted)
 
 
 def _summary(roles: dict[str, str], slots: dict[str, Any] | None = None
              ) -> tuple[str, list[tuple[str, str]], dict[str, int]]:
-    """A table's roles in one line: the key, time and target columns by name, then a count per other role."""
-    named = [(role, column) for column, role in roles.items() if role in ("key", "time")]
-    target = (slots or {}).get("target")
-    if target:
-        named.append(("target", str(target)))
+    """A table's roles in one line: every filled slot by name (key, time, target, category, entity, text; the key
+    and time columns from the roles when no slot names them), then a count per role."""
+    slots = slots or {}
+    named: list[tuple[str, str]] = []
+    for slot in ("key", "time", "target", "category", "entity", "text"):
+        chosen = slots.get(slot)
+        if isinstance(chosen, (list, tuple)):
+            chosen = ", ".join(str(c) for c in chosen)
+        if not chosen and slot in ("key", "time"):
+            chosen = next((column for column, role in roles.items() if role == slot), None)
+        if chosen:
+            named.append((slot, str(chosen)))
     counts: dict[str, int] = {}
     for role in roles.values():
         counts[role] = counts.get(role, 0) + 1
     counts = {r: counts[r] for r in SLOT_ROLES if r in counts}
     text = ", ".join([f"{role} {column}" for role, column in named] +
-                     [f"{n} {role}" for role, n in counts.items() if role not in ("key", "time")])
+                     [f"{n} {role}" for role, n in counts.items()])
     return text, named, counts
 
 
@@ -253,7 +273,7 @@ WHERE V.VIEW_SCHEMA = '{SEMANTIC}'"""))
 
     def kept(schema: str) -> bool:
         upper = schema.upper()
-        return include_kit or not (upper.startswith("EXAKIT") or upper in KIT_SCHEMAS)
+        return include_kit or not (upper.startswith(("EXAKIT", "PREPROC")) or upper in KIT_SCHEMAS)
 
     # roles per SCHEMA.TABLE from the approved column maps, and the relation views
     roles: dict[str, dict[str, str]] = {}
@@ -288,13 +308,22 @@ WHERE V.VIEW_SCHEMA = '{SEMANTIC}'"""))
         origin = "source" if virtual else ("sample" if schema.upper() in samples else "local")
         origin_of[table.upper()] = origin
         mapped, slots = roles.get(table.upper(), {}), {}
-        state, stored, stored_slots = _store_map(table)
-        if mapped:
-            shown_map = f"approved {versions.get(table.upper(), '')}".strip()
+        state, stored, stored_slots, stored_version = _store_map(table)
+        published = versions.get(table.upper(), "")
+        newer = bool(published) and state == "approved" and stored_version > int(published[1:])
+        if mapped and not newer:
+            shown_map = f"approved {published}, published" if published else "approved, published"
             slots = stored_slots
         elif stored:
+            # the store is the truth: an approval whose publish failed (or never ran) still shows its own roles
             mapped, slots = stored, stored_slots
-            shown_map = "approved, not published" if state == "approved" else "draft"
+            label = f"approved v{stored_version}" if stored_version else "approved"
+            if state != "approved":
+                shown_map = "draft"
+            elif published:
+                shown_map = f"{label}, not published (the view still says {published})"
+            else:
+                shown_map = f"{label}, not published"
         elif table.upper() in shipped:
             mapped, slots = shipped[table.upper()]
             shown_map = "shipped"
@@ -339,12 +368,13 @@ def _link(key: tuple[str, str, str, str], kind: str, origin_of: dict[str, str]) 
 
 def _shared_keys(columns: list[dict[str, Any]], origin_of: dict[str, str],
                  seen: set[tuple[str, str, str, str]]) -> list[dict[str, str]]:
-    """A key-like column name (or a column whose approved role is key or identifier) in two tables of different
-    schemas, of the same kind (number with number, text with text): a possible link. Pairs across origins first."""
+    """A key-like or dimension-like column name (state, category, week ...), compared without case, or a column
+    whose approved role is key, identifier, category or time, in two tables of different schemas and of the same
+    kind (number with number, text with text): a possible link or a shared dimension. Pairs across origins first."""
     groups: dict[str, list[dict[str, Any]]] = {}
     for col in columns:
         name = col["column"].upper()
-        if KEYISH.search(name) or col["role"] in ("key", "identifier"):
+        if KEYISH.search(name) or DIMENSION.search(name) or col["role"] in ("key", "identifier", "category", "time"):
             groups.setdefault(name, []).append(col)
     found = []
     for name, cols in groups.items():
@@ -356,6 +386,7 @@ def _shared_keys(columns: list[dict[str, Any]], origin_of: dict[str, str],
                 if key in seen or (key[2], key[3], key[0], key[1]) in seen:
                     continue
                 seen.add(key)
-                found.append(_link(key, "possible (same name)", origin_of))
+                kind = "shared dimension" if DIMENSION.search(name) and not KEYISH.search(name) else "possible (same name)"
+                found.append(_link(key, kind, origin_of))
     found.sort(key=lambda link: ("+" not in link["origins"], link["from_table"], link["from_column"]))
     return found[:50]

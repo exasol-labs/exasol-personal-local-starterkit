@@ -118,3 +118,12 @@ role_review = nb.review_roles(connection, chosen_data)
 # %% tags=["review"]
 dataset = role_review.dataset()
 nb.show_roles(dataset)
+
+# %% [markdown] tags=["review"]
+# ### Check the map again
+#
+# The same map, read again after the approval. The table you approved now shows `approved vN, published` and every slot by name. `not published` means the roles are saved but agents cannot read them yet: approve again to publish.
+
+# %% tags=["review"]
+dataset  # read after the approval above, so this map shows it
+nb.data_map(connection)

@@ -7,8 +7,9 @@
 
 describe() on a table whose approved descriptor still matches it returns that one (force=True profiles again);
 otherwise the table is profiled once, in SQL, and every column gets one of eight roles with the evidence that chose
-it; the slots name the columns the notebooks use. show() lists column, type, role, confidence, evidence and note,
-low confidence first, the slots above. approve() checks every column has a role and none sits in two slots, checks
+it; the slots name the columns the notebooks use. show() lists each column with the schema and table it came from,
+its type, role, confidence, evidence and note, low confidence first, the slots above (rows() gives the same as dicts;
+a notebook renders it as a table). approve() checks every column has a role and none sits in two slots, checks
 the table has not changed since it was profiled, writes the next version into the kit's store and publishes the
 roles as column comments on a view in EXAKIT_SEMANTIC (a publish that fails leaves the approval standing, and says
 why). The active workflow's log gets one line.
@@ -90,12 +91,13 @@ def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str 
             conn = connect()
         try:
             found = service.describe(conn, table, dataset=id or slug, force=force)
+            types = None if found.get("profile") else _column_types(conn, str(found["doc"]["source"]["object"]))
         finally:
             if own:
                 conn.close()
         if found["status"] == "draft":                       # step 7: a model's one line per column, when one is set up
             service.with_notes(found["doc"], service.model_notes(found["doc"], found["profile"]))
-        return Draft(found["doc"], found.get("profile"), changed=found.get("changed") or [])
+        return Draft(found["doc"], found.get("profile"), changed=found.get("changed") or [], types=types)
     command = exakit_command()
     if command is None:
         raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python and exakit's launcher is "
@@ -108,13 +110,33 @@ def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str 
     return Draft(found["doc"], None, changed=found.get("changed") or [])
 
 
+def _split(table: str) -> tuple[str, str]:
+    """(schema, table) of ``SCHEMA.TABLE``, quotes removed; ("", table) without a schema."""
+    schema, _, name = str(table).rpartition(".")
+    return schema.strip('"'), name.strip('"')
+
+
+def _column_types(conn, table: str) -> dict[str, str]:
+    """{column: SQL type} of ``SCHEMA.TABLE`` from the catalogue; {} when it cannot be read."""
+    schema, name = _split(table)
+    quote = lambda v: "'" + v.replace("'", "''") + "'"
+    try:
+        rows = conn.execute("SELECT COLUMN_NAME, COLUMN_TYPE FROM SYS.EXA_ALL_COLUMNS "
+                            f"WHERE COLUMN_SCHEMA = {quote(schema)} AND COLUMN_TABLE = {quote(name)}").fetchall()
+        return {str(row[0]): str(row[1]) for row in rows}
+    except Exception:                                   # the types only fill the table; never stop describe for them
+        return {}
+
+
 class Draft:
     """A descriptor proposed for a table (status draft), or the approved one describe() returned."""
 
-    def __init__(self, doc: dict[str, Any], profile: dict[str, Any] | None = None, *, changed: list[str] | None = None):
+    def __init__(self, doc: dict[str, Any], profile: dict[str, Any] | None = None, *, changed: list[str] | None = None,
+                 types: dict[str, str] | None = None):
         self.doc = doc
         self.profile = profile
         self.changed = list(changed or [])
+        self.types = dict(types or {})
 
     # --- what it says ------------------------------------------------------------------------------------------------
 
@@ -239,7 +261,7 @@ class Draft:
         return self
 
     def copy(self) -> "Draft":
-        return Draft(copy.deepcopy(self.doc), self.profile, changed=self.changed)
+        return Draft(copy.deepcopy(self.doc), self.profile, changed=self.changed, types=self.types)
 
     # --- keeping and approving ---------------------------------------------------------------------------------------
 
@@ -300,27 +322,50 @@ class Draft:
 
     # --- showing -----------------------------------------------------------------------------------------------------
 
-    def _lines(self) -> list[str]:
+    HEAD = ("schema", "table", "column", "type", "role", "confidence", "evidence", "note")
+
+    def rows(self) -> list[dict[str, str]]:
+        """One dict per column, low confidence first: the schema and table it came from, its name, type, role,
+        confidence, evidence and note."""
         numbers = {c["column"]: c for c in (self.profile or {}).get("columns", [])}
-        out = [f"{self.table} - {self.status} descriptor '{self.id}' v{self.version}"
-               + (f" (grain: {self.doc['grain']})" if self.doc.get("grain") else "")]
-        why = self.doc.get("slot_evidence") or {}
-        out.append("slots: " + "; ".join(f"{s}={self.slots.get(s) or '-'}" + (f" ({why[s]})" if s in why else "") for s in SLOTS))
-        rows = []
+        schema, table = _split(self.table)
+        out = []
         for name, entry in sorted(self.doc["columns"].items(), key=lambda item: item[1].get("confidence") != "low"):
-            role = entry["role"] + (" (sensitive)" if entry.get("sensitive") else "")
-            changed = " [changed]" if name in self.changed else ""
-            rows.append((name + changed, str(numbers.get(name, {}).get("type", "")), role, entry.get("confidence", ""),
-                         entry.get("evidence", ""), entry.get("note", "")))
-        head = ("column", "type", "role", "confidence", "evidence", "note")
-        widths = [max(len(r[i]) for r in rows + [head]) for i in range(len(head))]
-        out.append("  ".join(h.ljust(w) for h, w in zip(head, widths)).rstrip())
+            kind = numbers.get(name, {}).get("type") or entry.get("type") or self.types.get(name, "")
+            out.append({"schema": schema, "table": table,
+                        "column": name + (" [changed]" if name in self.changed else ""), "type": str(kind or ""),
+                        "role": entry["role"] + (" (sensitive)" if entry.get("sensitive") else ""),
+                        "confidence": str(entry.get("confidence", "")), "evidence": str(entry.get("evidence", "")),
+                        "note": str(entry.get("note", ""))})
+        return out
+
+    def _title(self) -> list[str]:
+        why = self.doc.get("slot_evidence") or {}
+        return [f"{self.table} - {self.status} descriptor '{self.id}' v{self.version}"
+                + (f" (grain: {self.doc['grain']})" if self.doc.get("grain") else ""),
+                "slots: " + "; ".join(f"{s}={self.slots.get(s) or '-'}" + (f" ({why[s]})" if s in why else "") for s in SLOTS)]
+
+    def _lines(self) -> list[str]:
+        out = self._title()
+        rows = [tuple(r[h] for h in self.HEAD) for r in self.rows()]
+        widths = [max(len(r[i]) for r in rows + [self.HEAD]) for i in range(len(self.HEAD))]
+        out.append("  ".join(h.ljust(w) for h, w in zip(self.HEAD, widths)).rstrip())
         out.append("  ".join("-" * w for w in widths))
         out += ["  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in rows]
         return out
 
+    def _repr_html_(self) -> str:
+        from html import escape
+        title, slots = self._title()
+        head = "".join(f"<th style='text-align:left'>{h}</th>" for h in self.HEAD)
+        body = "".join("<tr>" + "".join(f"<td style='text-align:left'>{escape(r[h])}</td>" for h in self.HEAD) + "</tr>"
+                       for r in self.rows())
+        return (f"<p><b>{escape(title)}</b><br><small>{escape(slots)}</small></p>"
+                f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>")
+
     def show(self) -> None:
-        """Print column, type, role, confidence, evidence and note, low confidence first, the slots above."""
+        """Print each column with its schema and table, type, role, confidence, evidence and note, low confidence
+        first, the slots above."""
         print("\n".join(self._lines()))
 
     def __repr__(self) -> str:

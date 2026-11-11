@@ -317,6 +317,25 @@ def _(nb, role_review):
 
 @app.cell(hide_code=True)
 def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Check the map again
+
+    The same map, read again after the approval. The table you approved now shows `approved vN, published` and every slot by name. `not published` means the roles are saved but agents cannot read them yet: approve again to publish.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    dataset  # read after the approval above, so this map shows it
+    nb.data_map(connection)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
     mo.md(r"""
     ## Check the label
 
