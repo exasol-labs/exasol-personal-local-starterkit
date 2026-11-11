@@ -33,6 +33,8 @@ lacks() { case "$3" in *"$2"*) fail "$1 (present: $2)" ;; *) pass "$1" ;; esac; 
 . "$ROOT/setup/lib/ui.sh"
 # shellcheck disable=SC1091
 . "$ROOT/setup/lib/common.sh"
+# shellcheck disable=SC1091
+. "$ROOT/setup/lib/virtual-schemas.sh"
 
 printf '\n== the tree rules, key by key ==\n'
 # The connect menu's shape in small: 1 PG, 2 Lake, 3 REST (4 vended, 5 s3,
@@ -142,6 +144,31 @@ Glue (files automatic: S3)|jjj |PICKED=lakehouse CATALOG=glue FILES=s3 RC=0
 No catalog + S3 (the first valid option, pre-selected)|jjjj |PICKED=lakehouse CATALOG=none FILES=s3 RC=0
 No catalog + Azure|jjjj jj |PICKED=lakehouse CATALOG=none FILES=azure RC=0
 PATHS
+
+pick "${LAKE}jj jjj \\r"
+check "the pick reaches the form as presets (exakit_vs_preset)" \
+    "PRESET=lakehouse catalog=unity;lakehouse files=azure" "$(printf '%s\n' "$PICK_OUT" | grep '^PRESET=')"
+pick "${LAKE}jjj \\r"
+check "...Glue's implied files too" \
+    "PRESET=lakehouse catalog=glue;lakehouse files=s3" "$(printf '%s\n' "$PICK_OUT" | grep '^PRESET=')"
+pick 'jjjjjjjj \\r'
+check "...and nothing for a source without a subtree" "PRESET=" "$(printf '%s\n' "$PICK_OUT" | grep '^PRESET=')"
+
+printf '\n== the subtree is the lakehouse connector'"'"'s own settings ==\n'
+TREE="$(_exakit_vs_lakehouse_tree)"
+check "built from connectors/lakehouse/connector.json, not the fallback" "$(python3 -c '
+import json, sys
+st = json.load(open(sys.argv[1]))["settings"]
+print(" ".join(c["value"] for c in st["catalog"]["choices"]), "|", " ".join(f["value"] for f in st["files"]["choices"]))' \
+    "$ROOT/setup/virtual-schemas/connectors/lakehouse/connector.json")" \
+    "$(printf '%s' "$TREE" | python3 -c 'import json, sys; t = json.load(sys.stdin); print(" ".join(c["id"] for c in t["catalogs"]), "|", " ".join(f["id"] for f in t["files"]))')"
+check "...a catalog with one valid store (Glue) gets it as automatic" "s3" \
+    "$(printf '%s' "$TREE" | python3 -c 'import json, sys; print(next(c.get("auto", "") for c in json.load(sys.stdin)["catalogs"] if c["id"] == "glue"))')"
+check "...a store the engine marks disabled is never picked" "False" \
+    "$(printf '%s' "$TREE" | python3 -c 'import json, sys; print(next(f["supported"] for f in json.load(sys.stdin)["files"] if f["id"] == "gcs"))')"
+check "...the same tree as the built-in fallback for an older kit copy" \
+    "$(exakit_vs_defs() { return 1; }; _exakit_vs_lakehouse_tree | python3 -c 'import json, sys; t = json.load(sys.stdin); print([(c["id"], c["label"], c["files"], c.get("auto")) for c in t["catalogs"]], [(f["id"], f["label"], f.get("supported", True)) for f in t["files"]])')" \
+    "$(printf '%s' "$TREE" | python3 -c 'import json, sys; t = json.load(sys.stdin); print([(c["id"], c["label"], c["files"], c.get("auto")) for c in t["catalogs"]], [(f["id"], f["label"], f.get("supported", True)) for f in t["files"]])')"
 
 pick "$LAKE\\r"
 SCREEN="$(printf '%s\n' "$PICK_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"

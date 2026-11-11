@@ -108,6 +108,25 @@ Check "unticking Lakehouse drops its catalog and files with it" "PICKED=databric
 Check "Lakehouse goes with other sources" "PICKED=postgresql lakehouse CATALOG=glue FILES=s3" (Run-Pick (" jjjjjjjjj jjj E"))
 Check "Enter on Skip picks nothing" "PICKED= CATALOG= FILES=" (Run-Pick "kE")
 
+Write-Host "== the pick reaches the form as presets (Add-ExakitVsPreset) =="
+function Run-Preset([string]$Keys) {
+    [void](Run-Pick $Keys)
+    $script:ExakitVsPreset = @()
+    Add-ExakitVsLakehouseHandoff
+    return ((@($script:ExakitVsPreset) | ForEach-Object { $_[0] + " " + $_[1] }) -join ';')
+}
+Check "Unity + Azure" "lakehouse catalog=unity;lakehouse files=azure" (Run-Preset ($lake + "jj jjj E"))
+Check "...Glue's implied files too" "lakehouse catalog=glue;lakehouse files=s3" (Run-Preset ($lake + "jjj E"))
+Check "...and nothing for a source without a subtree" "" (Run-Preset "jjjjjjjj E")
+
+Write-Host "== the subtree is the lakehouse connector's own settings =="
+$st = (Get-Content -Raw -LiteralPath (Join-Path $repo "setup/virtual-schemas/connectors/lakehouse/connector.json") | ConvertFrom-Json).settings
+$tree = Get-ExakitVsLakehouseTree
+Check "built from connectors/lakehouse/connector.json" ((@($st.catalog.choices) | ForEach-Object { $_.value }) -join ' ') ((@($tree.catalogs) | ForEach-Object { $_.id }) -join ' ')
+Check "...a catalog with one valid store (Glue) gets it as automatic" "s3" ((@($tree.catalogs) | Where-Object { $_.id -eq "glue" }).auto)
+Check "...a store the engine marks disabled is never picked" "False" ((@($tree.files) | Where-Object { $_.id -eq "gcs" }).supported)
+
+[void](Run-Pick "kE")
 $rows = @($script:LastTable.Rows.ToArray())
 $top = @($rows | Where-Object { $_.Kind -eq "tee" -or $_.Kind -eq "corner" })
 Check "the menu has 11 sources" "11" $top.Count

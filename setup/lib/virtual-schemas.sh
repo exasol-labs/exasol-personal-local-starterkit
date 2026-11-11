@@ -1204,14 +1204,29 @@ _exakit_vs_clock_check() {
 # interface between the picker and the rest of connect. ⇄ twins:
 # Get-ExakitVsLakehouseTree, Get-ExakitVsLakehouseHandoff.
 
-# _exakit_vs_lakehouse_tree — the subtree as JSON: "catalogs" in menu order,
-# each with the "files" it can use (none for Glue, whose files are "auto"),
-# "files" with every store's label ("supported": false is shown, never
-# picked), and "folds": the connector ids the one row replaces, left out of
-# the menu. The spec's names (catalog iceberg-rest|unity|glue|none, files
-# vended|s3|azure). A catalog entry that carries "catalogs" and "files" of its
-# own (the connector's definitions, from the engine) is used instead.
+# _exakit_vs_lakehouse_tree — the subtree as JSON, read from the lakehouse
+# connector's own "settings" (connectors/lakehouse/connector.json): "catalogs"
+# in menu order, each with the "files" it can choose from (none when only one
+# is valid - Glue - whose files are then "auto"), "files" with every store's
+# label ("supported": false is shown, never picked), and "folds": the
+# connector ids the one row replaces, left out of the menu. A kit copy older
+# than those settings gets the same tree from the spec's names below.
 _exakit_vs_lakehouse_tree() {
+    _evlt_def="$(exakit_vs_defs 2>/dev/null)/connectors/lakehouse/connector.json"
+    run_python_any - "$_evlt_def" <<'PY' 2>/dev/null && return 0
+import json, sys
+st = json.load(open(sys.argv[1]))["settings"]
+valid = st["files"]["valid"]
+cats = []
+for c in st["catalog"]["choices"]:
+    ok = list(valid.get(c["value"]) or [])
+    entry = {"id": c["value"], "label": c["label"], "files": ok if len(ok) > 1 else []}
+    if len(ok) == 1:
+        entry["auto"] = ok[0]
+    cats.append(entry)
+files = [{"id": f["value"], "label": f["label"], "supported": not f.get("disabled")} for f in st["files"]["choices"]]
+print(json.dumps({"catalogs": cats, "files": files, "folds": ["iceberg-rest", "unity"]}))
+PY
     cat <<'JSON'
 {"catalogs": [
   {"id": "iceberg-rest", "label": "Iceberg REST catalog", "files": ["vended", "s3", "azure"]},
@@ -1227,13 +1242,16 @@ _exakit_vs_lakehouse_tree() {
 JSON
 }
 
-# _exakit_vs_lakehouse_handoff — what the Lakehouse pick hands the form, as
-# KEY=VALUE lines (the form's --set answers): the catalog and the files picked
-# in the menu (EXAKIT_VS_LAKEHOUSE_CATALOG, EXAKIT_VS_LAKEHOUSE_FILES). Nothing
-# when the menu did not pick them (the command named the connector).
+# _exakit_vs_lakehouse_handoff — the Lakehouse pick, handed to the form as
+# presets (exakit_vs_preset): the catalog and the files picked in the menu
+# (EXAKIT_VS_LAKEHOUSE_CATALOG, EXAKIT_VS_LAKEHOUSE_FILES), Glue's implied
+# files included. Nothing when the menu did not pick them (the command named
+# the connector). Called after the pick, before the forms open.
 _exakit_vs_lakehouse_handoff() {
     [ -n "${EXAKIT_VS_LAKEHOUSE_CATALOG:-}" ] || return 0
-    printf 'catalog=%s\nfiles=%s\n' "$EXAKIT_VS_LAKEHOUSE_CATALOG" "$EXAKIT_VS_LAKEHOUSE_FILES"
+    exakit_vs_preset lakehouse catalog "$EXAKIT_VS_LAKEHOUSE_CATALOG"
+    [ -n "${EXAKIT_VS_LAKEHOUSE_FILES:-}" ] && exakit_vs_preset lakehouse files "$EXAKIT_VS_LAKEHOUSE_FILES"
+    return 0
 }
 
 # _exakit_vs_pick <work-dir> — the connector menu, under the line that names
@@ -1268,8 +1286,8 @@ for n, e in enumerate(entries):
     at = row(top, e["name"], gate, e["id"])
     if e["id"] != "lakehouse" or gate:
         continue
-    cats = e.get("catalogs") or tree["catalogs"]
-    files = e.get("files") or tree["files"]
+    cats = tree["catalogs"]
+    files = tree["files"]
     for i, c in enumerate(cats):
         mid = top + "-" + ("corner" if i == len(cats) - 1 else "tee")
         # A catalog with no files choice (Glue) names its own: cat:<id>:<files>.
@@ -2473,6 +2491,7 @@ _exakit_vs_tui() {
             [ "$_evt_rc" -eq 5 ] && info "Nothing was chosen; nothing was changed."
             rm -rf "$_EVT_DIR"; return "$_evt_rc"
         fi
+        _exakit_vs_lakehouse_handoff
     fi
     # shellcheck disable=SC2086 — connector ids, one word each
     set -- $EXAKIT_VS_PICKED
@@ -2487,12 +2506,7 @@ _exakit_vs_tui() {
     _evt_pos=0
     for _evt_id in "$@"; do
         _evt_pos=$(( _evt_pos + 1 ))
-        _evt_given="$_evt_sets"
-        # Lakehouse picked in the menu: its catalog and files are answers too.
-        if [ "$_evt_id" = lakehouse ] && [ -n "${EXAKIT_VS_LAKEHOUSE_CATALOG:-}" ]; then
-            _evt_given="$(printf '%s\n%s' "$_evt_sets" "$(_exakit_vs_lakehouse_handoff)" | grep -v '^$')"
-        fi
-        _exakit_vs_tui_form "$_evt_id" "$_evt_pos" "$_evt_total" "$_evt_name" "$_evt_given" "$_evt_pwfile"
+        _exakit_vs_tui_form "$_evt_id" "$_evt_pos" "$_evt_total" "$_evt_name" "$_evt_sets" "$_evt_pwfile"
         case "$?" in
             2) rm -rf "$_EVT_DIR"; return 2 ;;
             5) printf '\n'; info "Left out: $_evt_id" ;;

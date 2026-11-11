@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Driven by tests/lib/tty-replay.py under a real pty from tests/lakehouse-picker.sh:
 # the `exakit connect` source menu alone (_exakit_vs_pick), shipping code with
-# the catalog stubbed, so the replay can assert the Lakehouse subtree a person
+# the catalog stubbed (the Lakehouse subtree is the connector's own
+# settings), so the replay can assert the Lakehouse subtree a person
 # is left looking at and what the menu hands on. The last line is the answer:
 #   PICKED=<ids> CATALOG=<catalog> FILES=<files> RC=<rc>
 set -u
@@ -32,6 +33,10 @@ _exakit_vs_clock_check() { :; }
 
 _exakit_vs_pick "$W"
 rc=$?
+# What the forms are handed (exakit_vs_preset), as connect does after the pick.
+_EXAKIT_VS_PRESET=""
+_exakit_vs_lakehouse_handoff
+printf 'PRESET=%s\n' "$(printf '%s' "$_EXAKIT_VS_PRESET" | paste -sd';' -)"
 printf 'PICKED=%s CATALOG=%s FILES=%s RC=%s\n' "${EXAKIT_VS_PICKED:-}" "${EXAKIT_VS_LAKEHOUSE_CATALOG:-}" \
     "${EXAKIT_VS_LAKEHOUSE_FILES:-}" "$rc"
 rm -rf "$W"
