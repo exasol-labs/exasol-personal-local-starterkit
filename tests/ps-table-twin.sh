@@ -418,13 +418,22 @@ has "...and a changed one still erases" 'Write("`r$($script:UiEsc)[${prev}A$($sc
 has "the menu compares both halves too" '$sameGeom = ($drawn -eq ([int]$Table.Lines + 1 + $extra) -and $drawnWidth -eq [int]$Table.Width)' "$UI_PS1"
 has "...overwriting in place"           'Write("`r$($script:UiEsc)[${drawn}A" + $frame' "$UI_PS1"
 has "...and erasing only on a change"   'Write("`r$($script:UiEsc)[${drawn}A$($script:UiEsc)[0J" + $frame' "$UI_PS1"
-# Exactly TWO erasing writes in the whole file, one per write site: a third would
-# be an unconditional clear creeping back in.
-_erase_n="$(grep -F '::Write(' "$UI_PS1" | grep -cF '[0J')"
+# Exactly TWO erasing writes at the table's write sites (they spell the escape
+# $script:UiEsc), one per site: a third would be an unconditional clear creeping
+# back in. Read-ExakitPickMenu (the source picker, twin of ui_pick_menu) is a
+# scrolling list with its own escape variable $e: it erases on each redraw and
+# once to drop its hint, as ui.sh does - two writes of its own, counted apart.
+_erase_n="$(grep -F '::Write(' "$UI_PS1" | grep -F '$($script:UiEsc)[0J' | grep -c .)"
 if [ "$_erase_n" = "2" ]; then
     pass "ui.ps1 erases in exactly the two changed-geometry branches"
 else
-    fail "ui.ps1 has $_erase_n clear-to-end writes, expected 2 (one per write site)"
+    fail "ui.ps1 has $_erase_n table clear-to-end writes, expected 2 (one per write site)"
+fi
+_erase_pick="$(grep -F '::Write(' "$UI_PS1" | grep -F '$($e)[0J' | grep -c .)"
+if [ "$_erase_pick" = "2" ]; then
+    pass "the pick menu erases only on a redraw and to drop its hint (as ui_pick_menu)"
+else
+    fail "ui.ps1 has $_erase_pick pick-menu clear-to-end writes, expected 2"
 fi
 
 printf '\n== the PowerShell stays 5.1-compatible ==\n'
