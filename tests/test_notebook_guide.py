@@ -11,6 +11,7 @@ from __future__ import annotations
 import ast
 import importlib
 import inspect
+import re
 import importlib.util
 import json
 import os
@@ -950,15 +951,28 @@ class LoadIntoSchemaTest(unittest.TestCase):
         load.assert_called_once()
 
 
-class MarimoHiddenCodeTest(unittest.TestCase):
-    def test_guided_notebooks_open_in_marimo_with_their_code_hidden(self):
-        """In Marimo every cell of a guided notebook hides its code by default: the cards and the text show, the code
-        behind the page is one click away. tools/notebooks.py sets it after `marimo convert`."""
+class MarimoShownCodeTest(unittest.TestCase):
+    def test_guided_notebooks_open_in_marimo_with_their_code_shown(self):
+        """In Marimo a guided notebook shows its code: the code cells open with their code visible, the guided cell
+        included, as `marimo convert` writes them; only the text cells keep their code folded (their text shows).
+        tools/notebooks.py no longer hides anything after the conversion."""
         folder = ROOT / "notebook" / "marimo" / "data-scientist"
-        for path in sorted(folder.glob("*.py")):
+        paths = sorted(folder.glob("*.py"))
+        self.assertTrue(paths)
+        for path in paths:
             text = path.read_text(encoding="utf-8")
             self.assertIn(build_tool.CODE_START_MARKER, text, path.name)
-            self.assertNotRegex(text, r"(?m)^@app\.cell$", f"{path.name}: a cell shows its code")
+            cells = re.findall(r"(?ms)^(@app\.cell(?:\([^)]*\))?)\n(.*?)(?=^@app\.cell|^if __name__)", text)
+            self.assertTrue(cells, path.name)
+            shown = [body for decorator, body in cells if decorator == "@app.cell"]
+            folded = [body for decorator, body in cells if "hide_code=True" in decorator]
+            self.assertEqual(len(cells), len(shown) + len(folded), f"{path.name}: a cell with another setting")
+            for body in folded:
+                self.assertIn("mo.md(", body, f"{path.name}: a code cell is folded")        # only text is folded
+            for body in shown:
+                self.assertNotIn("mo.md(", body, f"{path.name}: a text cell shows its source")
+            self.assertTrue(any("guide." in body for body in shown), f"{path.name}: the guided cell shows its code")
+        self.assertFalse(hasattr(build_tool, "hide_code_behind_page"))
 
 
 class HomeAddonsTest(unittest.TestCase):
