@@ -10,6 +10,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 from pathlib import Path
 
 import kit_telemetry
@@ -36,6 +37,17 @@ def connection_env(doc: dict, env: dict, host: str, port: int) -> None:
             env.setdefault(name, str(value))
 
 
+def dsn_with_password(dsn: str, password: str) -> str:
+    """The engine reads its password from EXA_DSN alone once that is set (EXA_PASSWORD only counts without a DSN), so
+    a pinned connection carries it inside: exasol://user:password@host... A DSN that already names one is kept. It
+    lives only in the engine's environment, as EXA_PASSWORD did, and is never printed."""
+    scheme, sep, rest = dsn.partition("://")
+    userinfo, at, address = rest.partition("@")
+    if not sep or not at or ":" in userinfo or not password:
+        return dsn
+    return f"{scheme}://{userinfo}:{urllib.parse.quote(password, safe='')}@{address}"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("home", type=Path)
@@ -59,6 +71,8 @@ def main() -> int:
         except OSError:
             print("exasol-scheduler credential is unavailable; run exakit update exasol-scheduler", file=sys.stderr)
             return 1
+    if env.get("EXA_DSN"):
+        env["EXA_DSN"] = dsn_with_password(env["EXA_DSN"], env["EXA_PASSWORD"])
     args.home.mkdir(parents=True, exist_ok=True)
     give_up = args.home / "gave-up"
     give_up.unlink(missing_ok=True)
