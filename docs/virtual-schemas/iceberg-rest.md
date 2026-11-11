@@ -23,12 +23,12 @@ connector.
 |---|---|---|
 | Name (alias) for this connection | yes | `ice` |
 | Catalog URL | yes | `https://dbc-1234abcd-5678.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest` |
-| Warehouse the catalog knows it by | yes | `main` (Databricks: the catalog name) |
+| Warehouse (catalog name) | yes | `main` (Databricks: the catalog name) |
 | Namespace (one namespace is one virtual schema) | yes | `sales` |
-| S3-compatible storage endpoint, with an access key | no (Enter for AWS S3) | `https://minio.example.com:9000` |
+| Storage endpoint (MinIO etc.) | no (Enter for AWS S3) | `https://minio.example.com:9000` |
 | Storage region | no (Enter to let the catalog say) | `us-east-1` |
 | Storage access key ID | no (Enter to use a catalog token) | `AKIA...` |
-| Storage secret key, or the catalog token | yes | (hidden) |
+| Catalog token or storage secret | yes | (hidden) |
 
 Two ways to sign in:
 

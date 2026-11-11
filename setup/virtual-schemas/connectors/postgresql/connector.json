@@ -91,7 +91,7 @@
   "url": "jdbc:postgresql://{host}:{port}/{database}?{tls}",
   "tls": {
     "verify": "sslmode=verify-full&sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory",
-    "require": "sslmode=require",
+    "require": "sslmode=require&sslfactory=org.postgresql.ssl.NonValidatingFactory",
     "disable": "sslmode=disable"
   },
   "tls_ca": "sslmode=verify-full&sslfactory=org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg={ca_pem}",
@@ -113,6 +113,6 @@
   ],
   "notes": [
     "The adapter JAR already contains pgJDBC 42.7.14; the driver pin is the same version so the two copies never disagree.",
-    "verify checks the server certificate AND its host name against the JVM's public CAs. A server with a private CA (AWS RDS, Azure, a company CA) is verified against it with --set ca=<PEM file or bundle>: the one certificate that signs the server travels in the URL (SingleCertValidatingFactory), because the loader's Java sandbox denies file reads. require only encrypts."
+    "verify checks the server certificate AND its host name against the CA given with --set ca=<PEM file or bundle>, a public CA's root too (the loader's own CA store is empty on Exasol Personal 2.4): the one certificate that signs the server travels in the URL (SingleCertValidatingFactory), because the loader's Java sandbox denies file reads. require only encrypts, with NonValidatingFactory named: the default LibPQFactory reads ~/.postgresql/ for a client key, which the loader's Java sandbox refuses, and pgjdbc reports that as \"Your security policy has prevented the connection from being attempted\" (measured on Exasol Personal 2.4)."
   ]
 }

@@ -18,7 +18,7 @@ table files directly instead, with no warehouse, see [Unity Catalog](unity.md).
 | Name (alias) for this connection | yes | `lake` |
 | Workspace host name | yes | `dbc-1234abcd-5678.cloud.databricks.com` |
 | SQL warehouse HTTP path | yes | `/sql/1.0/warehouses/abc123def456ghi7` |
-| Unity Catalog catalog | yes | `main` |
+| Catalog (Unity Catalog) | yes | `main` |
 | Schema | yes | `sales` |
 | Personal access token | yes | (hidden) |
 

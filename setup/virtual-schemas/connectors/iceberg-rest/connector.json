@@ -63,7 +63,7 @@
     },
     {
       "name": "warehouse",
-      "label": "Warehouse the catalog knows it by (e.g. s3://warehouse/ or a catalog name)",
+      "label": "Warehouse (catalog name)",
       "kind": "warehouse",
       "required": true
     },
@@ -75,7 +75,7 @@
     },
     {
       "name": "endpoint",
-      "label": "S3-compatible storage endpoint, with an access key (Enter for AWS S3)",
+      "label": "Storage endpoint (MinIO etc.)",
       "kind": "endpoint-url"
     },
     {
@@ -90,7 +90,7 @@
     },
     {
       "name": "secret",
-      "label": "Storage secret key, or the catalog token",
+      "label": "Catalog token or storage secret",
       "kind": "secret",
       "required": true
     }
