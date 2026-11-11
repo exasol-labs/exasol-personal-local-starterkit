@@ -9,6 +9,7 @@ import platform
 import re
 import shlex
 import shutil
+import time
 import subprocess
 import sys
 import tarfile
@@ -146,6 +147,70 @@ def _api_assets(repo: str, tag: str) -> dict[str, dict]:
             if isinstance(asset, dict) and isinstance(asset.get("name"), str)}
 
 
+PUBLIC_REPO = "exasol-labs/exasol-personal-local-starterkit"
+
+
+def _api_asset_url(repo: str, tag: str, name: str, headers: dict[str, str]) -> str:
+    """The API URL of one release asset, found with the token: a private repository's only download route."""
+    request = urllib.request.Request(f"https://api.github.com/repos/{repo}/releases/tags/{tag}",
+                                     headers={**headers, "Accept": "application/vnd.github+json"})
+    with open_url(request, timeout=20) as response:
+        doc = json.load(response)
+    url = next((a.get("url", "") for a in doc.get("assets", []) if isinstance(a, dict) and a.get("name") == name), "")
+    if not url.startswith(f"https://api.github.com/repos/{repo}/releases/assets/"):
+        raise AddonFailure(f"JSON Tables release {tag} in {repo} has no asset {name}")
+    return url
+
+
+PHASE_FILE = "EXAKIT_PROGRESS_PHASE_FILE"     # the running progress bar's label: data-load's bar, both shells
+_CHUNK = 1 << 16
+
+
+def _what(key: str) -> str:
+    return "the JSON Tables package" if key == "wheel" else "the JSON engine"
+
+
+def _show_phase(text: str) -> None:
+    """Put ``text`` on the bar that is running, if one is. The shell's bar reads its label from the file named by
+    EXAKIT_PROGRESS_PHASE_FILE: bash keeps a state record there (``a|b|c|d|label``, only the label changes), the
+    PowerShell bar a plain line. No file: nothing (the install's own lines say what it does)."""
+    path = os.environ.get(PHASE_FILE)
+    if not path:
+        return
+    try:
+        current = Path(path).read_text(encoding="utf-8").strip()
+        parts = current.split("|")
+        line = "|".join(parts[:4] + [text]) if len(parts) >= 5 else text
+        Path(path).write_text(line + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _copy_with_progress(response, output, what: str) -> None:
+    """Copy a download, saying how far it is - "downloading the JSON engine, 6 of 15 MB" - at most twice a
+    second, so a slow line reads as progress rather than a hang. Without a known size it counts what arrived."""
+    try:
+        total = int(response.headers.get("Content-Length") or 0)
+    except (TypeError, ValueError, AttributeError):
+        total = 0
+    done, shown = 0, 0.0
+    while True:
+        block = response.read(_CHUNK)
+        if not block:
+            break
+        output.write(block)
+        done += len(block)
+        now = time.monotonic()
+        if now - shown >= 0.5:
+            shown = now
+            mb = done / 1e6
+            _show_phase(f"downloading {what}, {mb:.0f} of {total / 1e6:.0f} MB" if total
+                        else f"downloading {what}, {mb:.0f} MB")
+    if total and total >= 1e6:
+        _show_phase(f"downloading {what}, {total / 1e6:.0f} of {total / 1e6:.0f} MB")
+
+
+
 def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict,
            api_assets: dict[str, dict] | None, destination: Path) -> None:
     digest = pins.get("sha256", {}).get(key)
@@ -161,15 +226,35 @@ def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict
         )
     if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise AddonFailure(f"Invalid checksum for JSON Tables asset {name}")
-    url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
-    try:
-        with urllib.request.urlopen(url, timeout=30) as response, destination.open("wb") as output:
-            if not response.url.startswith("https://"):
-                raise AddonFailure(f"JSON Tables asset {name} redirected away from HTTPS")
-            shutil.copyfileobj(response, output)
-    except OSError as error:
-        destination.unlink(missing_ok=True)
-        raise AddonFailure(f"Could not download JSON Tables asset {name}: {error}") from error
+    # Where the asset may come from, in order. The kit's own repository first; a PRIVATE one answers its
+    # releases/download link with 404 even to a token, so with GITHUB_TOKEN (or GH_TOKEN) the asset is fetched
+    # through the API, as the datasets are (_exakit_dataset_fetch_token). Then the public kit repository's copy of
+    # the same release - only with a pinned checksum, which makes any copy as good as the original.
+    attempts: list[tuple[str, dict[str, str]]] = [(f"https://github.com/{repo}/releases/download/{tag}/{name}", {})]
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        attempts.append((f"api:{repo}:{tag}", {"Authorization": f"Bearer {token}"}))
+    if digest and repo != PUBLIC_REPO:
+        attempts.append((f"https://github.com/{PUBLIC_REPO}/releases/download/{tag}/{name}", {}))
+    last: Exception | None = None
+    for url, headers in attempts:
+        try:
+            if url.startswith("api:"):
+                url = _api_asset_url(repo, tag, name, headers)
+                headers = {**headers, "Accept": "application/octet-stream"}
+            with open_url(urllib.request.Request(url, headers=headers), timeout=30) as response, \
+                    destination.open("wb") as output:
+                if not response.url.startswith("https://"):
+                    raise AddonFailure(f"JSON Tables asset {name} redirected away from HTTPS")
+                _copy_with_progress(response, output, _what(key))
+            last = None
+            break
+        except (OSError, AddonFailure) as error:
+            destination.unlink(missing_ok=True)
+            last = error
+    if last is not None:
+        hint = "" if token else " (a private kit repository needs GITHUB_TOKEN)"
+        raise AddonFailure(f"Could not download JSON Tables asset {name}: {last}{hint}") from last
     if digest:
         with destination.open("rb") as stream:
             actual = hashlib.file_digest(stream, "sha256").hexdigest()

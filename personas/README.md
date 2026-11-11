@@ -43,20 +43,21 @@ everyone needs (the database, exapump, the AI bridge):
 
 1. *What will you use this machine for?* - Data Scientist and General, as
    many as you like; General is ticked to begin with.
-2. *Data to load* - one table: **Sample datasets** is the parent row with the
-   datasets under it (a For column names the persona each is for, and the
-   picked personas' datasets are ticked), then your own file or folder, an
+2. *Data to load* - one table: **Sample datasets** is the parent row with
+   every sample dataset under it (the picked personas' datasets are ticked,
+   the others are listed unticked and can be ticked too), then your own file or folder, an
    external source (`exakit connect`; during the install it is shown and
    cannot be picked yet) and Skip. Enter starts the load in the
    same table. With General, the kit's own samples are ticked: TPC-H, energy,
    weather.
-3. *Add-ons for your personas* - only their add-ons, ticked; Enter installs
-   them, Skip backs out. The notebook add-on's tools (JupyterLab and
+3. *Add-ons for your personas* - every add-on, the personas' own ticked and
+   the rest unticked; tick or untick any, Enter installs what is ticked, Skip
+   backs out. The notebook add-on's tools (JupyterLab and
    Marimo) are child rows under its row in the same table, each saying what
    will become of it, ticked as `notebook_tools` says (both otherwise);
    untick one there. Then the connection panel and "Your starter kit is
-   ready to use" close the install. The rest of the marketplace is one command
-   away: `exakit marketplace`. (General brings no add-ons, so with General alone
+   ready to use" close the install. Add or remove add-ons later with
+   `exakit marketplace`. (General brings no add-ons, so with General alone
    the marketplace offer comes after the panel.)
 
 Nothing is loaded or installed without that screen. Without a terminal and
@@ -70,10 +71,11 @@ shows what a persona brings and what of it is still pending - after an
 
 `exakit persona add general` on a kit set up as Data Scientist makes it both:
 the record becomes `data-scientist,general`, and what the two bring that is
-not here yet comes in - nothing is asked. Three steps, headed like the
-installer's (*Step 1/3 Sample data*, *2/3 AI clients*, *3/3 Add-ons*), each
-showing the installer's own table with its defaults ticked and filling it in as
-it works; what is already here is named in one line instead (*Already loaded:
+not here yet comes in. Three steps, headed like the
+installer's (*Step 1/3 Sample data*, *2/3 AI clients*, *3/3 Add-ons*). At a
+terminal the data and add-on steps ask with the installer's own tables: every
+sample and every add-on listed, the persona's ones not here yet ticked, any of
+them changeable before Enter; what is already here is named in one line instead (*Already loaded:
 Amazon sales*). Without a terminal the same happens in plain lines.
 A part that fails does not stop the others; the closing line says *Persona
 added: Data Scientist + General*, or names each part that did not finish and

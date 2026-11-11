@@ -377,7 +377,7 @@ def _schema_and_table(table: str | None, folder: Path | None = None) -> tuple[st
     """``table`` as (SCHEMA, TABLE or ""): SCHEMA alone or SCHEMA.TABLE, plain SQL names. Empty means the folder's
     name (``folder``: the folder loaded, or the one the file is in), else MY_DATA."""
     default = (_sql_name(folder.resolve().name) if folder is not None else "") or DEFAULT_SCHEMA
-    named = (table or "").strip().upper() or default
+    named = str(table or "").strip().strip("\"'").upper() or default
     schema, _, wanted = named.partition(".")
     if not re.fullmatch(r"[A-Z][A-Z0-9_]*", schema) or (wanted and not re.fullmatch(r"[A-Z][A-Z0-9_]*", wanted)):
         raise ValueError(f"'{table}' is not a schema name (letters, digits and _, starting with a letter), "
@@ -438,7 +438,10 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *
     descriptor mapping or file (YAML or JSON; its fact_table names the table when ``table`` is None). ``conn``
     defaults to a new exakit.nb.connect(). With ``missing_ok``, a path that is not there says so in one line and
     returns None."""
-    if not str(path or "").strip():
+    from .sources import clean_path
+
+    path = clean_path(path)
+    if not path:
         if missing_ok:
             print("No file or folder named: nothing of your own loaded.")
             return None
@@ -453,7 +456,7 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *
             print(f"Nothing at {file}: set it to your CSV, Parquet or JSON file, or a folder of them - skipped.")
             return None
         raise ValueError(f"{file} is not a file or a folder.")
-    table = (table or "").strip() or None
+    table = str(table or "").strip().strip("\"'") or None
     if descriptor is None and (table is None or "." not in table):
         # A schema, or nothing: the folder's name. The table is named after the file, as `exakit data-load` does.
         schema, _ = _schema_and_table(table, file.parent)

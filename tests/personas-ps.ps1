@@ -70,8 +70,8 @@ try {
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "a persona picked: only its datasets under Sample datasets, then upload, external and Skip" `
-        "Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip~1,2" `
+    Check "a persona picked: every sample listed, only its own ticked, then upload, external and Skip" `
+        "Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip~3" `
         "$((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ';')~$($script:ExakitTableDefaults -join ',')"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,amazon_sales"
@@ -182,9 +182,9 @@ try {
     $env:UI_TABLE_AUTO = "1"
     $auto = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults -ExclusiveIndex $script:ExakitTableRowSkip)
     Remove-Item Env:UI_TABLE_AUTO -ErrorAction SilentlyContinue
-    Check "the defaults are the answer, and it counts as confirmed" "1,2|True" "$($auto -join ',')|$($script:ExakitTableConfirmed)"
+    Check "the defaults are the answer, and it counts as confirmed" "3|True" "$($auto -join ',')|$($script:ExakitTableConfirmed)"
     $plain = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults -ExclusiveIndex $script:ExakitTableRowSkip)
-    Check "...without it and without a console: the same defaults, not confirmed" "1,2|False" "$($plain -join ',')|$($script:ExakitTableConfirmed)"
+    Check "...without it and without a console: the same defaults, not confirmed" "3|False" "$($plain -join ',')|$($script:ExakitTableConfirmed)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_PERSONA_ACTIVE")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 
     Write-Host "the data table's Description column is read from each dataset.conf, not stubbed (audit QAT-06):"

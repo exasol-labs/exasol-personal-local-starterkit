@@ -300,8 +300,8 @@ function Invoke-ExakitPersonaData {
     # restores before the sample load can claim its tables.
     if (Get-Command Invoke-LegacyCrossingAfter -ErrorAction SilentlyContinue) { Invoke-LegacyCrossingAfter }
     [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
-        -Label "sample data" `
-        -Warning "Sample data load did not finish cleanly." `
+        -Label "some of the data" `
+        -Warning "Some of the data did not finish loading." `
         -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
 }
 
@@ -310,7 +310,7 @@ function Invoke-ExakitPersonaData {
 # exakit_persona_marketplace_note.
 function Write-ExakitPersonaMarketplaceNote {
     if (-not $env:EXAKIT_PERSONA_ACTIVE -or -not $env:EXAKIT_MARKETPLACE_PRESELECT) { return }
-    Info "Add more useful add-ons, like dashboards, notebooks, dbt, the scheduler or JSON tables: `"exakit marketplace`" (terminal or PowerShell)"
+    Info "Add or remove add-ons any time: `"exakit marketplace`" (terminal or PowerShell)"
 }
 
 # Show-ExakitPersonaPlan - what these personas bring and what of it is still
