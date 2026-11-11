@@ -2,7 +2,7 @@
 
 One Unity Catalog schema, queried through a Databricks SQL warehouse with a
 personal access token (PAT). The warehouse runs the queries. To read the
-table files directly instead, with no warehouse, see [Unity Catalog](unity.md).
+table files directly instead, with no warehouse, see [Lakehouse (Iceberg / Delta)](lakehouse.md).
 
 > **Easiest: let your AI agent do it.** The skill `exasol-vs-databricks` knows this connector.
 >
