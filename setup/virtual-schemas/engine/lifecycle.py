@@ -142,10 +142,44 @@ def catalog_warehouse(message):
     return "'%s'" % m.group(1) if m else "it was given"
 
 
+def no_region_bucket(message):
+    """For an S3 request made with no region (sql.NOREGION), the bucket it
+    was for, quoted - or "" when the message is not one."""
+    text = str(message or "")
+    if not re.search(sql.NOREGION, text, re.I):
+        return ""
+    m = re.search(r"s3\.\.amazonaws\.com/([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/", text, re.I) \
+        or re.search(r"//([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])\.s3\.\.amazonaws\.com", text, re.I) \
+        or re.search(r"s3://([a-z0-9][a-z0-9.-]{1,61}[a-z0-9])/", text, re.I)
+    return "'%s'" % m.group(1) if m else "the bucket"
+
+
+def find_region(bucket):
+    """Where the bucket's region is found, for a fix that asks for it."""
+    named = bucket.strip("'") if bucket.startswith("'") else "<bucket>"
+    return ("the bucket is in the s3:// URL of the table's storage (for Unity Catalog: the external location, "
+            "Catalog > External data > External locations); its region is under S3 > the bucket > Properties "
+            "in the AWS console, or: aws s3api get-bucket-location --bucket %s (null means us-east-1)" % named)
+
+
+def no_region_remedy(message, name, first, connector_id="lakehouse"):
+    """The fix for vended S3 credentials used with no region given."""
+    bucket = no_region_bucket(message)
+    said = "the catalog vended S3 credentials but no region was given, so %s could not be reached" % bucket
+    if first:
+        return "%s; nothing was kept - connect again with --set region=<the bucket's region>: %s" \
+            % (said, find_region(bucket))
+    return ("%s: exakit source disconnect %s --yes, then exakit connect %s --name %s "
+            "--set region=<the bucket's region> with the credential again; %s"
+            % (said, name, connector_id, name, find_region(bucket)))
+
+
 def remedy_for(kind, name, connector, message=None):
     """The fix for a failure class, in the words of the connector's store.
     An error_hint given as {"match", "text"} is said only for a message it
     matches; a plain string, for every unclassified failure."""
+    if kind == "region" and no_region_bucket(message):
+        return no_region_remedy(message, name, first=False, connector_id=connector.get("id", "lakehouse"))
     text = remedy_text(kind).format(
         name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"),
         warehouse=catalog_warehouse(message))
@@ -1319,6 +1353,8 @@ class Engine(object):
                               "catalog": "the catalog does not know warehouse %s; nothing was kept - give the catalog's name (e.g. exakit_uc for Databricks, the catalog name for Polaris), not a URL, then connect again" % catalog_warehouse(error),
                               "sandbox": "the database's Java sandbox stopped the driver before it reached the source - not the network or the credentials; nothing was kept - update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then connect again",
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
+                if kind == "region" and no_region_bucket(error) and not reconnect:
+                    remedy = no_region_remedy(error, name, first=True)
                 if kind in ADDRESS_KINDS:
                     remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
                 command = command_for(kind, name, first=True)

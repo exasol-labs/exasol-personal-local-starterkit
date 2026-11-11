@@ -2221,6 +2221,22 @@ has "...named as External Data Access, not a grant guess" "switch External Data 
 has "...with the other route" "exakit connect databricks" "$OUT"
 run_secret "$UC_TOKEN" connect lakehouse --name ucmanaged --set catalog=unity --set workspace_url=https://dbc-managed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
 check "a catalog-managed table: exit 1" "1" "$RC"; has "...named as not readable yet" "catalog-managed table, which this adapter version cannot read yet" "$OUT"
+UC_NOREGION="--set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales"
+run_secret "$UC_TOKEN" connect lakehouse --name ucnoreg $UC_NOREGION --secret-stdin
+check "vended S3 credentials and no region: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCNOREG" in d["connections"]' | tr A-Z a-z)"
+has "...said as no region given, with the bucket" "the catalog vended S3 credentials but no region was given, so 'uc-bucket-1' could not be reached" "$OUT"
+has "...the fix names --set region" "nothing was kept - connect again with --set region=<the bucket's region>" "$OUT"
+has "...and where to find it" "Catalog > External data > External locations" "$OUT"
+has "...with the bucket in the command" "aws s3api get-bucket-location --bucket uc-bucket-1" "$OUT"
+check "...--json: kind region, the same remedy" "region|1" \
+    "$(printf '%s' "$UC_TOKEN" | eng --json connect lakehouse --name ucnoreg $UC_NOREGION --secret-stdin 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print("%s|%s" % (d["kind"], int("--set region=<the bucket" in d["remedy"])))')"
+check "the classifier: an empty-region S3 URL is region, a regional one is not" "region error" \
+    "$(cd "$ROOT/setup/virtual-schemas/engine" && python3 -c 'import sql; print(sql.classify("Generic S3 error: Error performing GET https://s3..amazonaws.com/b/k after 10 retries"), sql.classify("Generic S3 error: Error performing GET https://s3.us-west-2.amazonaws.com/b/k after 10 retries"))')"
+check "...and a saved source is told to re-point with the region" "1 1" \
+    "$(cd "$ROOT/setup/virtual-schemas/engine" && python3 -c '
+import lifecycle
+t = lifecycle.remedy_for("region", "lake1", {"id": "lakehouse"}, "GET https://b-2.s3..amazonaws.com/k failed")
+print(int("exakit source disconnect lake1 --yes, then exakit connect lakehouse --name lake1 --set region=" in t), int("--bucket b-2 " in t))')"
 run_pair "$IR_TOKEN" "$MINIO_SECRET" connect lakehouse --name minio2 $MINIO_SET --set region=eu-west-1 --secret-pair-base64
 check "a bucket in another region: exit 1" "1" "$RC"; has "...named as the region" "connect again with --set region=<the bucket's region>" "$OUT"
 check "...and the shared scripts are still there after every refusal" "1 1" \
