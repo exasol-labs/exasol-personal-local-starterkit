@@ -184,11 +184,30 @@ def run(action_id: str, session=None, **values: Any) -> Any:
     secret = values.get("secret")
     if secret:
         namespace["__secret__"] = dict(secret)
+    value = None
     try:
         with quiet() as out:
-            exec(compile(text, f"<exakit.guide:{action_id}>", "exec"), namespace)
+            try:  # one expression (nb.exakit(...)): its value says how it ended, as it would in a cell
+                compiled, single = compile(text, f"<exakit.guide:{action_id}>", "eval"), True
+            except SyntaxError:
+                compiled, single = compile(text, f"<exakit.guide:{action_id}>", "exec"), False
+            if single:
+                value = eval(compiled, namespace)
+            else:
+                exec(compiled, namespace)
     finally:
         namespace.pop("__secret__", None)
         session.said = getattr(out, "text", "") if "out" in locals() else ""
     session.log(code(action_id, **values))
-    return namespace.get(action.result) if action.result else None
+    if action.result:
+        return namespace.get(action.result)
+    if type(value).__name__ == "KitRun" and not value.ok:
+        # A kit command that failed (nb.exakit's KitRun): the card says so, with the command's own last words.
+        lines = [line.strip() for line in str(getattr(value, "output", "") or "").splitlines() if line.strip()]
+        reason = [line for line in lines if not line.startswith("|")]        # "| Log: ..." follows the reason
+        said = (reason or lines or [f"{value} did not finish"])[-1]
+        for mark in ("[x]", "✗", "Error:", "error:"):
+            if said.startswith(mark):
+                said = said[len(mark):].strip()
+        raise RuntimeError(said + (f" ({lines[-1].lstrip('| ').strip()})" if lines and lines[-1].startswith("|") else ""))
+    return value

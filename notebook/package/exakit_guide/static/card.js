@@ -706,12 +706,21 @@ function render({ model, el }) {
     ui.values[key] = ui.values[key] || {};
     const vals = ui.values[key];
     (a.form || []).forEach((f) => { if (vals[f.id] === undefined) vals[f.id] = f.value ?? ""; });
-    const submit = () => send(a.id, { ...vals });
+    // A blank field is never sent: the button would spin on a command given nothing to do.
+    const blank = () => (a.form || []).filter((f) => !f.optional && !String(vals[f.id] ?? "").trim());
+    const submit = () => {
+      const missing = blank();
+      ui.formNote = missing.length ? { key, text: `Fill in: ${missing.map((f) => f.label).join(", ")}` } : null;
+      if (missing.length) { draw(); return; }
+      send(a.id, { ...vals });
+    };
+    const note = ui.formNote && ui.formNote.key === key ? h("div", { class: "guide-form-note" }, ui.formNote.text) : null;
     return h("div", { class: "guide-form" },
       a.form.map((f) => h("label", { class: "guide-field" }, h("span", {}, f.label),
         h("input", { class: "guide-input", type: f.type === "password" ? "password" : "text", value: vals[f.id], placeholder: f.placeholder || "",
           autocomplete: "off", spellcheck: "false",
           onInput: (e) => { vals[f.id] = e.target.value; }, onKeydown: (e) => { if (e.key === "Enter") submit(); } }))),
+      note,
       h("div", { class: "guide-form-actions" }, button(a.submit || "Go", a.id, { primary: true, onClick: submit }),
         h("button", { type: "button", class: "guide-link", onClick: () => { ui.openForm = null; draw(); } }, "Cancel")));
   }

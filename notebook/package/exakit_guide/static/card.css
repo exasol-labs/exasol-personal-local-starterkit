@@ -435,3 +435,5 @@
 .guide-codebox-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .guide-copy { padding: 2px 8px; font-size: 11px; }
 .guide-cmd { cursor: copy; }
+
+.guide-form-note { color: var(--guide-bad, #b42318); font-size: 0.9em; margin: 4px 0 8px; }

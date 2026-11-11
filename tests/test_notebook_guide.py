@@ -369,6 +369,41 @@ class QuietTest(unittest.TestCase):
         self.assertNotIn("import capture_output", source)
 
 
+class BlankFormTest(unittest.TestCase):
+    """Load it with the field left blank once ran `exakit data-load "<file, folder or dataset>"` behind a spinning
+    button, and a failed kit command still said Done."""
+
+    def test_the_card_never_sends_a_blank_field(self):
+        js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")
+        self.assertIn("const missing = blank();", js)
+        self.assertIn("if (missing.length) { draw(); return; }", js)
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_a_blank_placeholder_is_refused_before_anything_runs(self):
+        from exakit_guide import actions
+        from exakit_guide.screens import home
+
+        screen = home.Home.__new__(home.Home)
+        screen.confirm = None
+        with mock.patch.object(actions, "run") as run:
+            with self.assertRaisesRegex(ValueError, "file or folder path"):
+                screen._run("kit.data_load", {"what": "<file, folder or dataset>"}, {"what": "  "})
+        run.assert_not_called()
+
+    def test_a_failed_kit_command_is_an_error_not_done(self):
+        from exakit_guide import actions
+        from exakit_nb.kit_commands import KitRun
+
+        failed = KitRun(["data-load", "x"], 1, "  [x] No such file, folder or dataset: x\n    | Log: /logs/install.log\n")
+        session = mock.Mock(said="")
+        session.namespace.return_value = {"nb": mock.Mock(exakit=mock.Mock(return_value=failed))}
+        with self.assertRaisesRegex(RuntimeError, r"^No such file, folder or dataset: x \(Log: /logs/install.log\)$"):
+            actions.run("kit.data_load", session, what="x")
+        ok = KitRun(["data-load", "x"], 0, "loaded\n")
+        session.namespace.return_value = {"nb": mock.Mock(exakit=mock.Mock(return_value=ok))}
+        self.assertIs(ok, actions.run("kit.data_load", session, what="x"))
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

@@ -183,7 +183,8 @@ class Home(Screen):
                                     "form": [{"id": "model_id", "type": "text", "label": "Model", "value": model.get("model_id") or EXAMPLE_MODEL},
                                              {"id": "base_url", "type": "text", "label": "Provider address",
                                               "value": model.get("provider_base_url") or EXAMPLE_URL},
-                                             {"id": "key", "type": "password", "label": "API key (saved for every notebook, readable only by you, never shown)"}],
+                                             {"id": "key", "type": "password", "optional": True,
+                                              "label": "API key (saved for every notebook, readable only by you, never shown)"}],
                                     "submit": "Use this model"}]})
 
         tracing = d.get("tracing") is True
@@ -286,6 +287,10 @@ class Home(Screen):
             return
         self.confirm = None
         values = {**values, **{k: v for k, v in form.items() if k in values and str(v).strip()}}
+        empty = [k for k, v in values.items() if str(v).startswith("<") and str(v).endswith(">")]
+        if empty:   # a form left blank: its placeholder is not something to run
+            raise ValueError("Type a file or folder path, or a kit dataset's name, first."
+                             if empty == ["what"] else f"Fill in {', '.join(empty)} first.")
         secret = None
         if action_id == "model.use":
             key = str(form.get("key") or "")
