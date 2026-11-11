@@ -1,0 +1,80 @@
+---
+title: Sources
+description: The three ways data comes in, and how an external source appears as a schema in your local database.
+---
+
+Data reaches the notebooks in three ways. All three end the same way: a table or view the kit can describe, and a column map you approve.
+
+## A kit dataset
+
+Practice data that ships with the kit, such as `amazon_sales` and `fraud_transactions`. `nb.sample_datasets()` lists them and says which are loaded.
+
+## Your own data
+
+A CSV, Parquet, JSON or Excel file, a folder of them, or a table already in the database. Files are loaded with the kit's own loader, the one `exakit data-load` runs.
+
+## An external source
+
+A database or lake elsewhere: PostgreSQL, MySQL, Snowflake and others. The kit connects it as a **virtual schema**: its tables appear in your local Exasol as `VS_<NAME>` and are read from the source when you query them. Nothing is copied.
+
+```python
+nb.connectors()                      # every kind of source the kit can connect
+nb.connector_inputs("postgresql")    # what that connector asks, required ones marked
+nb.connected_sources(connection)     # the sources connected now
+```
+
+## A source with several kinds in one
+
+A **Lakehouse** is one connector for several things: an Iceberg REST catalog, Unity Catalog, AWS Glue, or Parquet files in a plain folder, with the files on S3 or Azure. Two **settings** pick the combination, and each combination asks for different details.
+
+In the **Data source** list it appears as a tree, the same one the terminal's connect menu shows:
+
+```text
+Lakehouse (Iceberg / Delta)
+   Iceberg REST catalog
+        Let the catalog give access
+        Amazon S3 / S3-compatible
+        Azure ADLS Gen2
+   Unity Catalog
+        ...
+   AWS Glue
+        Amazon S3 / S3-compatible
+   No catalog - Parquet files in a folder
+        Amazon S3 / S3-compatible
+        Azure ADLS Gen2
+```
+
+- Pick a **leaf** and both settings are chosen.
+- A setting the tree does not hold, such as the catalog login (token or OAuth), is asked in one more step.
+- Pick **Lakehouse** itself and the settings are asked one by one.
+
+In code the settings are plain inputs:
+
+```python
+form = nb.connector_inputs("lakehouse")
+form["tree"]                                                        # the picks, as the tree shows them
+form = nb.connector_inputs("lakehouse", catalog="unity", files="s3")
+form["inputs"]                                                      # what that combination asks
+nb.connect_source("lakehouse", "lake", catalog="unity", files="s3", workspace_url="https://...", namespace="main.sales")
+```
+
+Some combinations have **two secrets**: the catalog login and the storage keys. The login is asked like any password. The storage secret travels in a file only you can read, removed as soon as the kit has read it.
+
+## One source engine
+
+The connectors, their inputs and the connection-string reader come from the kit's source engine, the one `exakit connect` runs. Nothing about a connector is defined in the notebooks, so a connector added to the kit appears in the form with no notebook change.
+
+## Passwords
+
+- A password is asked in a hidden box and handed to `exakit connect` on standard input.
+- It is never written into a cell, the code view or the workflow log.
+- A password inside a connection string is used and never shown.
+- A second secret (a Lakehouse's storage keys) goes to the kit in a private file, never on a command line.
+
+## Live sources and AI
+
+A table from an external source is read from there as you query it. Before sampled rows from a live source go to a model, the notebook names the source and asks. Only a yes sends them.
+
+## Reference
+
+[External sources](/data-scientist/reference/sources), [Your own file or table](/data-scientist/reference/own-file), [Data map](/data-scientist/reference/data-map).

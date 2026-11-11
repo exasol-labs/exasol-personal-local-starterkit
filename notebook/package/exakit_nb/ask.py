@@ -143,6 +143,9 @@ def readable(sql: str) -> str:
 
 @dataclass
 class Proposal:
+    """A question with the SQL proposed for it. Nothing runs until ``approve()`` accepts that exact text; ``edit()`` replaces
+    the SQL and removes the approval; ``run()`` runs the approved text through the kit's read-only service."""
+
     dataset: Any
     question: str
     sql: str

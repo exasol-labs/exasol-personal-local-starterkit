@@ -1,0 +1,42 @@
+---
+title: Sharing and hand-off
+description: A dashboard that goes up as a preview first, and one folder that lets a colleague repeat the work.
+---
+
+## A dashboard, preview first
+
+Step 8 turns one checked result into a dashboard others open in a browser. Dashboards run on **Dash Server**, a kit add-on the notebook installs and starts for you.
+
+1. `nb.share(...)` prepares a dashboard from approved roles and SQL you can read.
+2. It goes up as a **preview**. You open it and check that the figures match the query.
+3. Only then is it **published**: `dashboard_draft.confirm(dash_server, figures_checked=True)`.
+
+A preview that was not checked is never promoted. In automated runs the check is never set, so nothing is published without a person.
+
+## The hand-off bundle
+
+Step 9 packs the work into one folder and a zip.
+
+```python
+handoff = nb.handoff_bundle(connection, dataset)
+```
+
+It is written to `~/.exasol-starter-kit/bundles/<workflow id>/` and holds:
+
+| File | What it is |
+|---|---|
+| `descriptor.yaml` | The approved column map |
+| `schema-map.json` | The schema map, when there is one |
+| `queries.sql` | Every query the workflow ran, with its digest and row count |
+| `workflow.jsonl` | The workflow log as it is |
+| `README.md` | What the data is, which column map version the numbers rest on, what was approved and published, and how to repeat it |
+
+Nothing in it is a password.
+
+## The training handoff
+
+The ML Engineer's handoff is a different thing: one JSON file with the feature view, the target and a reproducible split, written by `nb.write_handoff(connection, dataset)` to `~/.exasol-starter-kit/handoffs/`. A stale one is refused, and `nb.handoff_is_stale` names what changed.
+
+## Reference
+
+[Share a dashboard](/data-scientist/reference/share), [Dash Server tools](/data-scientist/reference/dash-mcp), [Hand-off bundle](/data-scientist/reference/handoff-bundle), [Training handoff](/data-scientist/reference/handoff).

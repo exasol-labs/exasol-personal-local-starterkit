@@ -1,0 +1,43 @@
+# AI and tracing (/data-scientist/concepts/ai-and-tracing)
+
+
+
+AI is opt-in. Every notebook runs without a model, and the AI steps are off until you turn them on.
+
+## Where a model is used [#where-a-model-is-used]
+
+| Step           | What the model does                       | What is sent                                        |
+| -------------- | ----------------------------------------- | --------------------------------------------------- |
+| Ask your data  | Drafts SQL for your question              | The approved column map and your question. No rows. |
+| Themes in text | Sorts texts into themes                   | A sample of texts, on each side of the target       |
+| Column notes   | Writes one line per column on a new draft | The profile of the table                            |
+
+## What a model may never do [#what-a-model-may-never-do]
+
+* **Approve roles.** Only a person approves a column map.
+* **Run SQL.** A drafted query does nothing until you approve that exact text. Editing it removes the approval.
+* **Write to the database.** Approved questions run through the kit's read-only service, as the read-only user.
+
+## The model is yours [#the-model-is-yours]
+
+The kit calls the endpoint you give it: an external provider or a model on your own machine. See [Set up a model](/data-scientist/guides/set-up-a-model).
+
+## Tracing with Langfuse [#tracing-with-langfuse]
+
+With Langfuse set up, each model call is one trace in your Langfuse: what was sent, the answer, tokens, cost and time.
+
+```python
+nb.tracing()            # is tracing on?
+nb.model_settings()     # what is set, without secrets
+```
+
+## Keys [#keys]
+
+* Keys are asked in a hidden box.
+* They are saved only when you ask: `nb.use_model(..., remember=True)` keeps them in the kit's credentials, readable by you only.
+* `nb.forget_model()` deletes what was remembered.
+* A key is never written into a cell, the code view or the workflow log.
+
+## Reference [#reference]
+
+[Ask your data](/data-scientist/reference/ask), [Draft SQL without a model](/data-scientist/reference/question-rules), [Themes in text](/data-scientist/reference/themes), [Model, Langfuse and MLflow settings](/data-scientist/reference/setup-env).

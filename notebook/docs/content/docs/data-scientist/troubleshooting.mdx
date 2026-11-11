@@ -1,0 +1,69 @@
+---
+title: Troubleshooting
+description: What a message means and what to do about it.
+---
+
+## After an update, nothing changed
+
+Restart the kernel. A running kernel keeps the helpers it loaded before the update. In JupyterLab: **Kernel**, then **Restart Kernel**.
+
+## "Step 1 approved ... after this page opened its data"
+
+You approved a different dataset in the quickstart while this notebook was open. Run this notebook's first cell again and it switches to the newly approved dataset.
+
+## A step says the column map is not approved
+
+The message is a `DescriptorNotApproved` error. Explore, Ask and Share do not read a draft. Open `00_quickstart` and approve the map. See [Review and approve the column map](/data-scientist/guides/approve-column-map).
+
+## "... was not connected"
+
+An external source could not be connected. The lines after it give the reason and a fix. The usual causes:
+
+| Reason | What to do |
+|---|---|
+| The source refuses the connection or times out | Allow this computer's address at the source: a firewall rule, a security group or the server's own access list |
+| Password or user refused | Check the user and enter the password again in the hidden box |
+| A certificate cannot be verified | Give the source's CA certificate in the optional settings |
+| The schema is not found | Check the schema's name and case |
+
+Use **Test connection** first. It checks the inputs and reaches the source without changing anything.
+
+## The database does not answer
+
+```python
+nb.kit_check()          # is the database running?
+nb.exakit("start")      # start it, for example after a restart of this computer
+```
+
+## An add-on is missing or stopped
+
+```python
+nb.addon_ready("dash-server")
+```
+
+It installs the add-on when it is missing and starts it when it is stopped.
+
+## A model step is skipped
+
+No model is set, or the dataset has no column for that step. `nb.model_settings()` shows what is set. See [Set up a model](/data-scientist/guides/set-up-a-model).
+
+## A text step is skipped
+
+The dataset has no text column. `amazon_sales` and `fraud_transactions` have none, so the text model and the themes step skip on them and say so.
+
+## The documentation does not open
+
+`nb.docs()` reads the site from the kit copy. If it says the site is not there:
+
+```python
+nb.exakit("update", "notebook")
+```
+
+In a notebook that runs on another machine than your browser, the frame cannot reach the site. Use `nb.docs(browser=True)` on the machine that runs the kit.
+
+## Find what a cell ran
+
+```python
+nb.show_sql()                              # the SQL the last query ran
+nb.workflow_log(nb.current_workflow())     # everything this workflow did
+```

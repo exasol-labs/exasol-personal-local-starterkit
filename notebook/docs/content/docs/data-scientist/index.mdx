@@ -1,0 +1,36 @@
+---
+title: Data Scientist notebooks
+description: What the Data Scientist persona gives you on your local Exasol database, and where to start.
+---
+
+The Data Scientist persona gives you four notebooks that run on the Exasol database on this computer. They are one path with nine steps: get the data in, agree what each column means, prepare, explore, train and check a small model, ask questions in plain language, share a dashboard and hand the work off.
+
+Every notebook opens with a **guided card** that does the page's steps with buttons and forms. Each card has a **Code** switch that shows the exact `exakit.nb` call behind every button, so anything you click you can also run in a cell.
+
+<Cards>
+
+<Card title="Start here" href="/data-scientist/start/notebooks">The four notebooks, the nine steps, and how to open them.</Card>
+<Card title="Concepts" href="/data-scientist/concepts/descriptor">The column map, approval, workflows, sources and hand-off.</Card>
+<Card title="How-to guides" href="/data-scientist/guides/load-data">Load data, approve the map, explore, ask, share.</Card>
+<Card title="Command reference" href="/data-scientist/reference">Every `nb.*` helper with its signature.</Card>
+<Card title="For developers" href="/data-scientist/develop/how-it-fits">How the cards, the helpers and the kit fit together.</Card>
+<Card title="FAQ" href="/data-scientist/faq">Short answers to common questions.</Card>
+
+</Cards>
+
+## These docs, from a notebook
+
+```python
+import exakit.nb as nb
+
+nb.docs()                  # this site, under the cell
+nb.docs("descriptor")      # search it
+nb.docs(nb.describe)       # one command's page
+nb.docs(browser=True)      # in a browser tab instead
+```
+
+The site is a folder of files that ships with the kit. `nb.docs()` serves it from this computer only, so reading and searching work without internet.
+
+## What you need
+
+Nothing beyond the kit. The persona installs the notebooks and their Python. An AI model is optional: every step except the AI ones runs without it.

@@ -206,6 +206,12 @@ start from an empty notebook or write connection code by hand.
   (JupyterLab) and `~/.exasol-starter-kit/notebooks/marimo/<persona>/` (Marimo).
   The persona's `notebooks[]` in `persona show <id> --json` gives each path,
   relative to those folders (`data-scientist/00_quickstart.ipynb`).
+- **Their documentation** opens from any cell: `nb.docs()` (this persona's
+  section), `nb.docs("descriptor")` (search), `nb.docs(nb.describe)` (one
+  command's page). It covers every `exakit.nb` helper, the column map and who
+  approves it, workflows, sources and hand-off, and is served from this
+  computer by the kit, with no internet. The pages' sources are in the kit copy,
+  `notebook/docs/content/docs/` (`llms.txt` at the site's root lists them).
 - **Use first, in this order:** the persona's notebook for the task (see §5).
   Changing what it analyses is usually one assignment in its first cell
   (`DATASET = ...`, or a data file with a descriptor beside it).

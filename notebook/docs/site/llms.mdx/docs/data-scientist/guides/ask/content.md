@@ -1,0 +1,58 @@
+# Ask your data (/data-scientist/guides/ask)
+
+
+
+This is step 7, in `02_ask_your_data`.
+
+<Steps>
+  <Step>
+    ### Ask [#ask]
+
+    ```python
+    QUESTION = "How many rows are in each category?"
+    dataset = nb.dataset(connection, nb.chosen_dataset(None))
+    nb.example_questions(dataset)      # questions this column map can answer
+    ```
+  </Step>
+
+  <Step>
+    ### Get a proposal [#get-a-proposal]
+
+    Three ways to draft the SQL:
+
+    ```python
+    proposal = nb.draft_question(connection, dataset, QUESTION)     # the kit's rules: no model, nothing leaves this computer
+    proposal = nb.ask(dataset, QUESTION)                            # your model drafts it from the column map
+    proposal = nb.ask(dataset, QUESTION, proposed_sql="SELECT ...") # your own SQL
+    ```
+
+    With a model, only the approved column map and the question are sent. No rows.
+  </Step>
+
+  <Step>
+    ### Read it, and edit if needed [#read-it-and-edit-if-needed]
+
+    A proposed query can be wrong: a wrong column, a missing filter. Read it.
+
+    ```python
+    proposal.edit("SELECT ...")        # replaces the SQL and removes any approval
+    ```
+  </Step>
+
+  <Step>
+    ### Approve and run [#approve-and-run]
+
+    ```python
+    proposal.approve()
+    answer = proposal.run()
+    ```
+
+    Only the exact approved text runs, through the kit's read-only service as the read-only user. Check the figures against the SQL.
+  </Step>
+</Steps>
+
+<Callout type="warn">
+  Nothing runs before `approve()`. In the notebook, set `APPROVE_SQL = True` and run the cell again.
+</Callout>
+
+See [AI and tracing](/data-scientist/concepts/ai-and-tracing) and [Set up a model](/data-scientist/guides/set-up-a-model).

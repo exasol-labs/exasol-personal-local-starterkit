@@ -1,0 +1,61 @@
+# Documentation
+
+- [Starter Kit documentation](/): Documentation for the Exasol Personal Local Starter Kit's notebooks, one section per persona.
+- Data Scientist: Four notebooks, nine steps, on your local database
+  - [Data Scientist notebooks](/data-scientist): What the Data Scientist persona gives you on your local Exasol database, and where to start.
+  - Start here
+    - [The notebooks and the nine steps](/data-scientist/start/notebooks): What each of the four Data Scientist notebooks does, in order, and how to open them.
+    - [Guided and Code](/data-scientist/start/guided-and-code): The cards each notebook opens with, the Code switch, and how a button and a cell are the same call.
+  - Concepts
+    - [Dataset](/data-scientist/concepts/dataset): A table plus its approved column map, which is what every notebook step reads.
+    - [Descriptor and approval](/data-scientist/concepts/descriptor): The column map - the role of every column, who approves it, what approval checks, and where the approved version is kept.
+    - [Workflow](/data-scientist/concepts/workflow): One id on everything a piece of work does, and the log it leaves.
+    - [Sources](/data-scientist/concepts/sources): The three ways data comes in, and how an external source appears as a schema in your local database.
+    - [Prepared views](/data-scientist/concepts/prepared-views): Data checks, linked tables and the typed, cleaned view - how the data is prepared without ever changing your table.
+    - [AI and tracing](/data-scientist/concepts/ai-and-tracing): Where a model is used, what is sent to it, what it may never do, and how its calls are traced.
+    - [Sharing and hand-off](/data-scientist/concepts/sharing-and-handoff): A dashboard that goes up as a preview first, and one folder that lets a colleague repeat the work.
+  - How-to guides
+    - [Load data](/data-scientist/guides/load-data): Three ways to get data in front of the notebooks - a kit dataset, your own file or table, or an external source.
+    - [Review and approve the column map](/data-scientist/guides/approve-column-map): Check the roles the kit proposed, correct them, choose the target and approve.
+    - [Explore and model](/data-scientist/guides/explore-and-model): Steps 3 to 6 in 01_explore - prepare the data, compare groups, train a baseline model and check it.
+    - [Ask your data](/data-scientist/guides/ask): Ask in plain language, read the proposed SQL, approve it and run it read-only.
+    - [Share a dashboard and hand off](/data-scientist/guides/share): Steps 8 and 9 in 03_share - a dashboard that is previewed, checked and published, then one folder to hand the work on.
+    - [Set up a model](/data-scientist/guides/set-up-a-model): Point the notebooks at your AI model and, optionally, at Langfuse for tracing.
+    - [Run the kit from a notebook](/data-scientist/guides/run-the-kit): Check, update and extend the kit without leaving the notebook.
+  - Command reference
+    - [All commands](/data-scientist/reference): Every public helper of exakit.nb, 111 in all, with the page that documents it.
+    - [Connect, SQL and tracing](/data-scientist/reference/core): Helpers for the Exasol Personal Local Starter Kit's notebooks: exakit.nb (this module; exakit_nb is the same module under its older name).
+    - [Quickstart steps](/data-scientist/reference/quickstart): The steps both quickstarts share (notebook/notebooks/00_shared): is the database there, what does it hold, and one loader per way data comes in - a sample dataset the kit ships, your own file, an external source connected as a virtual schema.
+    - [Your own file or table](/data-scientist/reference/own-file): Your own CSV, Parquet or JSON file as a dataset: loaded into a table over the kit's connection, described by a few role assignments, and checked by the same rules as a kit dataset - so the notebooks run on it unchanged.
+    - [External sources](/data-scientist/reference/sources): External sources from a notebook cell: connect one, and read what a cell was given.
+    - [Describe a table](/data-scientist/reference/describe): Describe a table from a notebook (DS-2, DS-5): the role-per-column descriptor of setup/lib/descriptor.
+    - [Review and approve roles](/data-scientist/reference/role-picker): Review the profiler's proposed roles in a notebook and approve a versioned descriptor (DS-5, design 2.2).
+    - [Datasets](/data-scientist/reference/dataset): A dataset the notebooks run on: its descriptor read, validated by the kit's own rules, held against the database, and the roles turned into SQL names, so one notebook runs unchanged on any dataset whose descriptor is valid.
+    - [Approved column maps](/data-scientist/reference/descriptor-store): Where a user's approved descriptors live.
+    - [Data map](/data-scientist/reference/data-map): One semantic map of everything the database holds, wherever it came from.
+    - [Data checks](/data-scientist/reference/data-checks): Prepare and Validate: what the data itself says is wrong with it, and any column that gives the label away.
+    - [Schema map and joined view](/data-scientist/reference/schema-map): Several tables: the schema around a dataset, and one wide view along its links.
+    - [Typed view](/data-scientist/reference/prepare): Prepare, the part that changes something: a typed, cleaned view of a table, proposed from the data and created only when the user says so.
+    - [Model lab](/data-scientist/reference/lab): The model lab: nb.model_lab - the Data Scientist chooses the task, the model and the split.
+    - [Plain-language notes](/data-scientist/reference/readout): Plain-language notes under a notebook's results, for a reader who is not a data scientist.
+    - [Themes in text (AI)](/data-scientist/reference/themes): What the texts on each side of the label are about, read by your model and traced to your Langfuse.
+    - [Ask your data](/data-scientist/reference/ask): Ask a question, inspect the proposed SQL, approve that exact text, then run through the Exasol MCP server.
+    - [Draft SQL without a model](/data-scientist/reference/question-rules): Draft Exasol SQL from a plain-language question, without an AI model: nb.draft_question.
+    - [Share a dashboard](/data-scientist/reference/share): Prepare a governed Dash Server dashboard and promote only a reviewed preview.
+    - [Dash Server tools](/data-scientist/reference/dash-mcp): Call the kit-managed Dash Server through its MCP control plane.
+    - [Hand-off bundle](/data-scientist/reference/handoff-bundle): Hand off: everything a colleague needs to repeat a piece of work, in one folder (and one zip).
+    - [Workflows](/data-scientist/reference/workflow): One workflow id on everything (X-1): workflow() starts or resumes one, and every helper that does something appends a line to its log while it is active - a statement, a trace, an MLflow run, a descriptor draft or approval, a handoff, a dashboard revision, a model put.
+    - [Model, Langfuse and MLflow settings](/data-scientist/reference/setup-env): The optional settings, set from a notebook cell: your model and Langfuse (use_model), the MLflow server (use_mlflow).
+    - [Documentation](/data-scientist/reference/docs): The notebooks' documentation, opened from a cell: nb.docs().
+    - [Kit commands](/data-scientist/reference/kit-commands): The kit's own commands, run from a notebook cell with their output shown as it comes - so nobody has to leave the notebook for a terminal to check the kit, update it, install an add-on or load a dataset.
+    - [Kit facts](/data-scientist/reference/kit-facts): What the kit has, read live: datasets, connectors, add-ons, AI clients, components, notebooks and personas.
+    - [Training handoff](/data-scientist/reference/handoff): The handoff from the Data Scientist to the ML Engineer (DS-3 -> ML-3, design 4): one JSON file that holds everything 01_train needs to train without opening the descriptor - which descriptor version and digest it came from, a digest of the data, the feature view built from the roles (as CREATE OR REPLACE VIEW SQL), the label and its positive class, the training SELECT with a reproducible time split, and the input and output schemas.
+    - [In-database training](/data-scientist/reference/ml-train): Prepare the ML Engineer's in-database training from an approved, fresh handoff (ML-3, design 7).
+    - [ML Engineer checks](/data-scientist/reference/checks): The three things the ML Engineer's notebooks depend on, one check each (ml-engineer/00_quickstart): the database's Python container answers a smoke UDF with the packages training needs, the MLflow server is reachable, and the bucket directory is where the kit expects it.
+  - For developers
+    - [How it fits together](/data-scientist/develop/how-it-fits): The helpers, the guided cards and the kit - which part owns what, and the rules that keep them honest.
+    - [Add a command](/data-scientist/develop/add-a-command): Add an exakit.nb helper, wire it to a card, and get its documentation for free.
+    - [Where things live](/data-scientist/develop/where-things-live): The files and folders the notebooks read and write on this computer.
+    - [These docs](/data-scientist/develop/docs-site): How this documentation is written, built and shipped, and how to change a page.
+  - [FAQ](/data-scientist/faq): Short answers to the questions that come up most.
+  - [Troubleshooting](/data-scientist/troubleshooting): What a message means and what to do about it.

@@ -1,0 +1,15 @@
+{
+  "title": "Data Scientist",
+  "description": "Four notebooks, nine steps, on your local database",
+  "root": true,
+  "pages": [
+    "index",
+    "start",
+    "concepts",
+    "guides",
+    "reference",
+    "develop",
+    "faq",
+    "troubleshooting"
+  ]
+}

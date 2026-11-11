@@ -12,6 +12,7 @@ with `exakit notebook` or `exakit notebook marimo`; `exakit update notebook` ref
 | `examples/` | The official 50-notebook Exasol examples library (see [examples/README.md](examples/README.md)) |
 | `package/exakit_nb/` | The helpers every notebook imports: `import exakit.nb as nb; conn = nb.connect()` |
 | `kit/` | The scripts both installers run (store, kernel, copying the notebooks) |
+| `docs/` | The notebooks' documentation site: MDX pages in `docs/content/docs/<persona>/`, the built site in `docs/site/` (served by `nb.docs()`); see `tools/nb_docs.py` |
 
 | Persona | Notebooks |
 |---|---|

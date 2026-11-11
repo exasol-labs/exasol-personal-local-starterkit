@@ -1079,6 +1079,10 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
+      # The notebooks' documentation: the generated reference is current, every link leads somewhere, the shipped
+      # site was built from these sources, and nb.docs() serves it from this computer only.
+      - run: python3 tests/test_notebook_docs.py
+        if: matrix.shard == 4
       - run: python3 tests/test_model_provider.py
         if: matrix.shard == 4
       # The same helpers with the real Langfuse SDK 5 installed (the add-on pins

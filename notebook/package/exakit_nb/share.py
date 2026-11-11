@@ -38,6 +38,9 @@ def _app_source(title: str, metadata: dict[str, str]) -> str:
 
 @dataclass
 class ShareDraft:
+    """A dashboard prepared from an approved dataset and one query. ``preview()`` puts it on Dash Server as a preview;
+    ``confirm(..., figures_checked=True)`` publishes it, and only after a person checked the preview's figures."""
+
     dataset: Any
     sql: str
     title: str

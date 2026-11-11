@@ -1,0 +1,201 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/vitepress.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/*
+ * Exasol brand on the vitepress base: the X-mark's green (#5FC33B) as the
+ * primary, darkened on light ground so links and the active-item rail keep
+ * their contrast, bright on dark ground where it can afford to glow.
+ */
+:root {
+  --color-fd-primary: oklch(0.55 0.16 138);
+}
+.dark {
+  --color-fd-primary: oklch(0.78 0.2 138);
+  /* A near-black ground, a shade off pure black. */
+  --color-fd-background: #0a0a0b;
+}
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/*
+ * Sidebar: one ground with the page — the vitepress preset gives it a tinted
+ * panel of its own, which reads as a dirty second surface next to our
+ * backgrounds. A hairline keeps the boundary legible without a color change.
+ */
+#nd-sidebar {
+  background-color: var(--color-fd-background);
+  border-color: var(--color-fd-border);
+}
+.dark #nd-sidebar {
+  background-color: var(--color-fd-background);
+}
+
+/* Group headers: real headers — big, bold, full-color, chevron at the far
+ * edge. Each section is a dropdown (a collapsible folder), so the header is
+ * the control and should look like one. */
+#nd-sidebar button[aria-expanded] {
+  font-size: 0.9rem;
+  font-weight: 650;
+  color: var(--color-fd-foreground);
+  margin-top: 0.875rem;
+}
+#nd-sidebar button[aria-expanded] > svg:last-child {
+  margin-inline-start: auto;
+  color: var(--color-fd-muted-foreground);
+}
+#nd-sidebar button[aria-expanded]:hover {
+  color: var(--color-fd-primary);
+}
+
+/* Items: rounded rows. The active page gets a quiet neutral box and a green
+ * rail — the brand marks the position, the surface stays calm. */
+#nd-sidebar a[data-active] {
+  border-radius: 0.5rem;
+}
+#nd-sidebar a[data-active='true'] {
+  background-color: var(--color-fd-accent);
+  color: var(--color-fd-accent-foreground);
+  font-weight: 500;
+}
+#nd-sidebar a[data-active='true']::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 3px;
+  border-radius: 3px;
+  background: var(--color-fd-primary);
+}
+
+/*
+ * One small curve everywhere, as on the kit's notebook cards: boxes, buttons,
+ * tabs, code blocks, the search dialog and the theme switch all share it.
+ */
+*,
+*::before,
+*::after {
+  border-radius: 4px !important;
+}
+
+/* Never a logo or an icon: a radius on an <svg> clips its corners, which
+ * rounded the E and the l of the Exasol wordmark. Drawings stay as drawn. */
+svg,
+svg *,
+img {
+  border-radius: 0 !important;
+}
+
+/*
+ * The sidebar's width is the reader's: dragged at its right edge
+ * (components/sidebar-tools.tsx), kept in --exakit-sidebar-width.
+ */
+@media (min-width: 768px) {
+  #nd-notebook-layout {
+    --fd-sidebar-width: var(--exakit-sidebar-width, 268px) !important;
+  }
+}
+body[data-sidebar-resizing] {
+  cursor: col-resize;
+  user-select: none;
+}
+body[data-sidebar-resizing] #nd-notebook-layout {
+  transition: none !important;
+}
+
+/* The drag handle: the sidebar's right border, 7px wide to grab, a green line
+ * while hovered, focused or dragged. */
+.sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -3px;
+  width: 7px;
+  z-index: 5;
+  cursor: col-resize;
+  touch-action: none;
+  border-radius: 0 !important;
+}
+.sidebar-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: var(--color-fd-border);
+  border-radius: 0 !important;
+}
+.sidebar-resizer:hover::after,
+.sidebar-resizer:focus-visible::after,
+body[data-sidebar-resizing] .sidebar-resizer::after {
+  left: 2px;
+  width: 3px;
+  background: var(--color-fd-primary);
+}
+.sidebar-resizer:focus-visible {
+  outline: none;
+}
+
+/* The close button sits on the separator line itself, a little below its top. */
+.sidebar-close {
+  position: absolute;
+  top: 0.75rem;
+  right: -0.875rem;
+  z-index: 6;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: 1px solid var(--color-fd-border);
+  background: var(--color-fd-background);
+  color: var(--color-fd-muted-foreground);
+}
+.sidebar-close:hover {
+  color: var(--color-fd-primary);
+  border-color: var(--color-fd-primary);
+}
+/* Closed, the sidebar is parked off the left edge: its close button and drag
+ * line would poke back into the page as an empty box, so they go with it. */
+.sidebar-close[data-collapsed='true'],
+#nd-sidebar:has(.sidebar-close[data-collapsed='true']) .sidebar-resizer {
+  display: none;
+}
+
+/*
+ * The top bar's own toggle is only the way back: hidden while the sidebar is
+ * open (its close button is on the separator), shown at the left edge, at
+ * the close button's height, once it is closed.
+ * (The header blurs its backdrop, so it is the containing block of this fixed
+ * button; the offsets are measured from its corner.)
+ */
+@media (min-width: 768px) {
+  #nd-subnav button[aria-label='Collapse Sidebar'] {
+    position: fixed;
+    top: calc(3.5rem + 0.75rem);   /* the height the close button had, under the 3.5rem top bar */
+    left: 0.25rem;
+    z-index: 40;
+    width: 1.75rem;
+    height: 1.75rem;
+    margin: 0;
+    border: 1px solid var(--color-fd-border);
+    background: var(--color-fd-background);
+    color: var(--color-fd-muted-foreground);
+  }
+  #nd-subnav button[aria-label='Collapse Sidebar'][data-collapsed='false'] {
+    display: none;
+  }
+  #nd-subnav button[aria-label='Collapse Sidebar']:hover {
+    color: var(--color-fd-primary);
+    border-color: var(--color-fd-primary);
+  }
+}

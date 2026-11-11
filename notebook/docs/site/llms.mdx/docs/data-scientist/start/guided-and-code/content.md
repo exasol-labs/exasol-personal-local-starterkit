@@ -1,0 +1,42 @@
+# Guided and Code (/data-scientist/start/guided-and-code)
+
+
+
+## The guided view [#the-guided-view]
+
+Each Data Scientist notebook opens with cards that do the page's steps with buttons and forms.
+
+| Notebook           | Its cards open with |
+| ------------------ | ------------------- |
+| `00_quickstart`    | `guide.start()`     |
+| `01_explore`       | `guide.explore()`   |
+| `02_ask_your_data` | `guide.ask()`       |
+| `03_share`         | `guide.share()`     |
+
+## The Code switch [#the-code-switch]
+
+Every card has a **Guided / Code** switch at its top right.
+
+* **Code** turns that card, in place, into its code: what it ran this session, in order, and the exact call behind each control. Each block has **Copy as cell**.
+* **Guided** turns it back. Only that card changes. The connection, the chosen data and the approvals stay as they are.
+
+The notebook's own cells sit under **The code behind this page**. In the kit's JupyterLab they are hidden until you choose **Show all the notebook's code cells** at the foot of a card's Code view. In Marimo the cells open with their code visible.
+
+## One call, two ways [#one-call-two-ways]
+
+Every button, form and choice on a card is one `exakit.nb` call, and the same call is a cell in the notebook's code section. Clicking **Approve** and running `role_review.approve(...)` do the same thing.
+
+<Callout>
+  What a card shows is read from the kit when it draws: the datasets, connectors, add-ons and notebooks are not written into the card. A connector added to the kit appears in the form the same day.
+</Callout>
+
+## The Home card [#the-home-card]
+
+The first card of the quickstart is the kit itself. It has two tabs.
+
+* **Your kit:** what is installed and running, the loaded datasets, your approved column maps and your workflows.
+* **Marketplace:** every add-on with **Install**, **Start** and **Update** buttons. They run `nb.addon_ready(id)` and `nb.kit_update(id)`, which is what `exakit marketplace` and `exakit update` do in a terminal.
+
+## One workflow per start [#one-workflow-per-start]
+
+`guide.start()` starts a workflow. Every card action after it is one line in that workflow's log: the card, the action, the code it ran and whether it worked. See [Workflows](/data-scientist/concepts/workflow).

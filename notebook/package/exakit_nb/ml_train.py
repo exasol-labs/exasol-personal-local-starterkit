@@ -50,6 +50,9 @@ COEFFICIENT_KEYS = ("features", "coef", "intercept", "classes")
 
 @dataclass(frozen=True)
 class TrainingPlan:
+    """What in-database training will run, prepared from an approved, fresh handoff: the feature view and its columns, the
+    script that creates the training UDF, the training SQL and its parameters."""
+
     view: str
     features: tuple[str, ...]
     create_script: str
