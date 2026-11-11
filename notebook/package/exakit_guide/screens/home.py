@@ -294,7 +294,7 @@ class Home(Screen):
         self.confirm = None
         values = {**values, **{k: v for k, v in form.items() if k in values and str(v).strip()}}
         if action_id == "kit.data_load" and str(values.get("what") or "").strip():
-            # A pasted path as a terminal would read it (~, quotes, file://): exakit gets no shell to expand it.
+            # A pasted path as a terminal would read it (~, quotes, file://): the kit command runs with no shell to expand it.
             # A kit dataset's name (amazon_sales) is not a path and is left as typed.
             from exakit_nb import clean_path
 

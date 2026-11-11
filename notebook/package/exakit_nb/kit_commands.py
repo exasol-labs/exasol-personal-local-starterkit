@@ -18,8 +18,11 @@ import json
 import os
 import signal
 import subprocess
+import tempfile
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from ._kit import exakit_command
 
@@ -79,9 +82,13 @@ def exakit(*args: str, env: dict[str, str] | None = None, show: bool = True, tim
         raise RuntimeError(NOT_FOUND)
     words = [str(a) for a in args]
     detach = {} if os.name == "nt" else {"start_new_session": True}      # no terminal: a question takes its default
+    environment = _environment(env)
+    follow = _ProgressFollower(environment, show) if "EXAKIT_PROGRESS_LOG" not in (env or {}) else None
     process = subprocess.Popen([*found, *words], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1,
-                               env=_environment(env), **detach)
+                               env=environment, **detach)
+    if follow:
+        follow.start(process)
     collected: list[str] = []
     timed_out = False
     try:
@@ -106,10 +113,114 @@ def exakit(*args: str, env: dict[str, str] | None = None, show: bool = True, tim
         _stop(process)
         process.wait()
         raise
+    finally:
+        if follow:
+            follow.stop()           # the last update shown, the file removed
     run = KitRun(words, process.returncode, "".join(collected), timed_out)
     if show:
         print(str(run) if run.ok or timed_out else f"{run} - read the lines above for what to change", flush=True)
     return run
+
+
+_WATCH = threading.local()
+
+
+@contextmanager
+def watch_progress(listener: Callable[[int | None, str], None]):
+    """While inside, every live progress update of an ``exakit`` command run in this thread - the share done and what
+    it is doing, the same the terminal's bar and table show (EXAKIT_PROGRESS_LOG) - goes to listener(pct, phase)
+    instead of the cell's own progress line. A guided card shows it under its running button."""
+    saved = getattr(_WATCH, "listener", None)
+    _WATCH.listener = listener
+    try:
+        yield
+    finally:
+        _WATCH.listener = saved
+
+
+class _ProgressFollower:
+    """Asks the command for its live progress (EXAKIT_PROGRESS_LOG, a private temp file) and follows it while the
+    command runs: to the listener of watch_progress, else - in a notebook, with show - one line in the cell that
+    updates in place."""
+
+    EVERY = 0.3
+
+    def __init__(self, environment: dict[str, str], show: bool) -> None:
+        self.listener = getattr(_WATCH, "listener", None)
+        self.show, self.handle, self.thread, self.done = show, None, None, threading.Event()
+        self.path = ""
+        if self.listener is None and not (show and _in_kernel()):
+            return                      # nobody to show it to: the command runs exactly as before
+        try:
+            fd, self.path = tempfile.mkstemp(prefix="exakit-progress-", suffix=".log")
+            os.close(fd)
+            environment["EXAKIT_PROGRESS_LOG"] = self.path
+        except OSError:
+            self.path = ""
+
+    def start(self, process: subprocess.Popen) -> None:
+        if not self.path:
+            return
+        self.thread = threading.Thread(target=self._follow, name="exakit-progress", daemon=True)
+        self.thread.start()
+
+    def _follow(self) -> None:
+        offset, last = 0, None
+        while True:
+            stopping = self.done.wait(self.EVERY)
+            try:
+                with open(self.path, encoding="utf-8", errors="replace") as handle:
+                    handle.seek(offset)
+                    chunk = handle.read()
+                    offset = handle.tell()
+            except OSError:
+                chunk = ""
+            for line in chunk.splitlines():
+                pct_text, _, phase = line.partition("|")
+                pct = int(pct_text) if pct_text.strip().isdigit() else None
+                if (pct, phase) != last:
+                    last = (pct, phase)
+                    self._report(pct, phase.strip())
+            if stopping:
+                return
+
+    def _report(self, pct: int | None, phase: str) -> None:
+        if self.listener is not None:
+            try:
+                self.listener(pct, phase)
+            except Exception:
+                pass
+            return
+        bar = "" if pct is None else "[" + "#" * (pct // 5) + "." * (20 - pct // 5) + f"] {pct:3d}%  "
+        try:
+            from IPython.display import display
+
+            text = {"text/plain": f"{bar}{phase}"}
+            if self.handle is None:
+                self.handle = display(text, raw=True, display_id=True)
+            else:
+                self.handle.update(text, raw=True)
+        except Exception:
+            pass
+
+    def stop(self) -> None:
+        self.done.set()
+        if self.thread is not None:
+            self.thread.join(timeout=2)
+        if self.path:
+            try:
+                os.unlink(self.path)
+            except OSError:
+                pass
+
+
+def _in_kernel() -> bool:
+    try:
+        from IPython import get_ipython
+
+        return get_ipython() is not None and hasattr(get_ipython(), "kernel")
+    except Exception:
+        return False
 
 
 def _stop(process: subprocess.Popen) -> None:

@@ -541,6 +541,33 @@ class ProgressTest(unittest.TestCase):
         self.assertEqual(80, sent[-1]["pct"])
         self.assertLessEqual(len(sent[-1]["lines"]), 6)
 
+    @unittest.skipIf(os.name == "nt", "the stand-in kit is a shell script")
+    def test_the_kits_own_live_progress_reaches_the_listener(self):
+        """exakit data-load with no terminal printed one line per finished file; its live progress (the bar the
+        terminal draws) now comes through EXAKIT_PROGRESS_LOG, which nb.exakit asks for and follows."""
+        kit_commands = importlib.import_module("exakit_nb.kit_commands")
+        with tempfile.TemporaryDirectory() as folder:
+            script = Path(folder) / "exakit"
+            script.write_text("#!/bin/sh\n"
+                              "printf '0|reading 3 files\\n' >> \"$EXAKIT_PROGRESS_LOG\"; sleep 0.5\n"
+                              "printf '40|loading orders.csv\\n' >> \"$EXAKIT_PROGRESS_LOG\"; sleep 0.5\n"
+                              "echo '[ok] orders.csv -> ORDERS  51000 rows'\n"
+                              "printf '100|3 files loaded\\n' >> \"$EXAKIT_PROGRESS_LOG\"; sleep 0.5\n", encoding="utf-8")
+            script.chmod(0o755)
+            seen = []
+            with mock.patch.object(kit_commands, "exakit_command", return_value=[str(script)]), \
+                 mock.patch.object(kit_commands._ProgressFollower, "EVERY", 0.05):
+                with kit_commands.watch_progress(lambda pct, phase: seen.append((pct, phase))):
+                    run = kit_commands.exakit("data-load", "x", show=False)
+            self.assertTrue(run.ok)
+            self.assertEqual([(0, "reading 3 files"), (40, "loading orders.csv"), (100, "3 files loaded")], seen)
+            self.assertEqual([], list(Path(tempfile.gettempdir()).glob(f"exakit-progress-*{os.getpid()}*")))
+            # Nobody watching and no notebook: the command runs exactly as before, no progress file asked for.
+            with mock.patch.object(kit_commands, "exakit_command", return_value=[str(script)]), \
+                 mock.patch.object(kit_commands.subprocess, "Popen", wraps=kit_commands.subprocess.Popen) as popen:
+                kit_commands.exakit("data-load", "x", show=False)
+            self.assertNotIn("EXAKIT_PROGRESS_LOG", popen.call_args.kwargs["env"])
+
     @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
     def test_a_card_action_streams_its_progress_while_it_runs(self):
         card = importlib.import_module("exakit_guide.card")

@@ -618,8 +618,24 @@ function Start-ExakitProgress {
 
 # Set-ExakitProgress - the job has reached a new stage. The segment's clock
 # starts now, which is what the creep measures against.
+# Write-ExakitProgressLog <pct> <phase> - when EXAKIT_PROGRESS_LOG names a file,
+# every progress update is also one line in it, "pct|phase": how a program
+# without a terminal (a notebook card, nb.exakit) shows the same live progress
+# the bar and the table draw here. Off unless asked for; a write that fails is
+# ignored. Twin of _ui_progress_log in ui.sh.
+function Write-ExakitProgressLog {
+    param([string]$Pct, [string]$Phase)
+    $log = $env:EXAKIT_PROGRESS_LOG
+    if ([string]::IsNullOrEmpty($log)) { return }
+    try {
+        $line = "{0}|{1}`n" -f $Pct, ($Phase -replace '[\r\n|]', ' ')
+        [System.IO.File]::AppendAllText($log, $line, (New-Object System.Text.UTF8Encoding $false))
+    } catch { }
+}
+
 function Set-ExakitProgress {
     param([int]$Pct, [int]$Ceiling, [int]$Secs, [string]$Phase)
+    Write-ExakitProgressLog -Pct "$Pct" -Phase $Phase
     if ($null -eq $script:UiSpinFlag) { return }
     try {
         $script:UiSpinFlag.Pct = $Pct
@@ -636,6 +652,9 @@ function Set-ExakitProgress {
 # one). Twin of ui_progress_phase in ui.sh.
 function Set-ExakitProgressPhase {
     param([string]$Phase)
+    $pct = ""
+    if ($null -ne $script:UiSpinFlag) { try { $pct = "$($script:UiSpinFlag.Pct)" } catch { } }
+    Write-ExakitProgressLog -Pct $pct -Phase $Phase
     if ($null -eq $script:UiSpinFlag) { return }
     try { $script:UiSpinFlag.Label = $Phase } catch { }
 }
@@ -1466,6 +1485,8 @@ function Set-ExakitTableRow {
         [string]$Phase = "", [string]$Final = "",
         [hashtable]$Table = $null
     )
+    if ($State -eq "running") { Write-ExakitProgressLog -Pct "$Pct" -Phase $Phase }
+    elseif ($State -eq "done") { Write-ExakitProgressLog -Pct "100" -Phase $Final }
     if ($null -eq $Table) { $Table = $script:UiTable }
     if ($null -eq $Table) { return }
     if ($Row -lt 1 -or $Row -gt $Table.Rows.Count) { return }

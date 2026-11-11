@@ -92,6 +92,16 @@ class Progress:
 
     def __init__(self, send) -> None:
         self.send, self.lines, self.partial, self.pct, self.sent, self.last = send, [], "", None, 0.0, None
+        self.phase = ""                 # what the kit says it is doing (EXAKIT_PROGRESS_LOG), over its printed lines
+
+    def kit(self, pct, phase: str) -> None:
+        """The kit's own live progress (nb.exakit, watch_progress): the share done and the phase, as its terminal
+        bar shows them."""
+        if pct is not None:
+            self.pct = max(0, min(100, int(pct)))
+        if phase:
+            self.phase = phase
+        self._send(force=True)
 
     def feed(self, text: str) -> None:
         import time
@@ -102,8 +112,14 @@ class Progress:
                 self.partial = ""
             else:
                 self.partial = piece
-        update = {"label": self.lines[-1], "pct": self.pct, "lines": self.lines[-6:]} if self.lines else None
-        if update and update != self.last and time.monotonic() - self.sent >= self.EVERY:
+        self._send()
+
+    def _send(self, force: bool = False) -> None:
+        import time
+
+        label = self.phase or (self.lines[-1] if self.lines else "")
+        update = {"label": label, "pct": self.pct, "lines": self.lines[-6:]} if label else None
+        if update and update != self.last and (force or time.monotonic() - self.sent >= self.EVERY):
             self.sent, self.last = time.monotonic(), update
             self.send(update)
 
@@ -240,8 +256,10 @@ class Screen:
                 raise ValueError("That button isn't wired up yet.")
             from .session import watch_output
 
+            from exakit_nb.kit_commands import watch_progress
+
             self._live = Progress(lambda update: self._send_progress(action, update))
-            with watch_output(self._live.feed):
+            with watch_output(self._live.feed), watch_progress(self._live.kit):
                 handler(values)
         except Exception as exc:
             error = _plain(exc)

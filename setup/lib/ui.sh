@@ -897,6 +897,17 @@ ui_progress_animate() {
 ui_progress_state() {
     printf '%s|%s|%s|%s|%s\n' "$2" "$3" "$4" \
         "$(date +%s 2>/dev/null || echo 0)" "$5" > "$1"
+    _ui_progress_log "$2" "$5"
+}
+
+# _ui_progress_log <pct> <phase> - when EXAKIT_PROGRESS_LOG names a file, every
+# progress update is also one line in it, "pct|phase": how a program without a
+# terminal (a notebook card, nb.exakit) shows the same live progress the bar and
+# the table draw here. Off unless asked for; a write that fails is ignored.
+# Twin of Write-ExakitProgressLog in ui.ps1.
+_ui_progress_log() {
+    [ -n "${EXAKIT_PROGRESS_LOG:-}" ] || return 0
+    printf '%s|%s\n' "$1" "$(printf '%s' "$2" | tr '\n|' '  ')" >> "$EXAKIT_PROGRESS_LOG" 2>/dev/null || true
 }
 
 # ui_progress_begin <file> <t0> — start painting, in the UI layer's single
@@ -952,6 +963,7 @@ ui_progress_phase() {
     case "$_upp_state" in
         *"|"*"|"*"|"*"|"*)
             printf '%s|%s\n' "$(printf '%s' "$_upp_state" | cut -d'|' -f1-4)" "$2" > "$1"
+            _ui_progress_log "${_upp_state%%|*}" "$2"
             ;;
     esac
 }
@@ -1747,6 +1759,10 @@ ui_table_set() {
     _uts_phase="${7:-}"; _uts_final="${8:-}"
     _uts_t0=""
     [ "$_uts_state" = "running" ] && _uts_t0="$(date +%s 2>/dev/null || echo 0)"
+    case "$_uts_state" in
+        running) _ui_progress_log "$_uts_pct" "$_uts_phase" ;;
+        done) _ui_progress_log 100 "$_uts_final" ;;
+    esac
     _uts_tmp="$_uts_f.new"
     _uts_i=0
     while IFS='|' read -r _u1 _u2 _u3 _u4 _u5 _u6 _u7 _u8 _u9 _u10 _u11 _u12; do
