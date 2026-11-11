@@ -4291,7 +4291,8 @@ function Invoke-CmdInfoJson {
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
-    $pwStdin = $false; $setUri = ""; $pastedSecret = ""
+    $pwStdin = $false; $setUri = ""; $pastedSecret = ""; $storageFile = ""
+    $script:ExakitVsStorageFile = ""
     $script:ExakitVsAssumeYes = $false
     # This command's own public IP only: an earlier command's answer reaches
     # later ones through the processes it started, and could name a network
@@ -4313,7 +4314,7 @@ function Invoke-CmdConnect {
             # A connector's credential input by name: refused before anything
             # runs, the value never repeated (engine: plan.py).
             $key = $pair.Split("=")[0]
-            if ($key -in @("password", "passwd", "pwd", "secret", "token", "key_file")) {
+            if ($key -in @("password", "passwd", "pwd", "secret", "token", "key_file", "storage_secret")) {
                 Deny-ExakitVsInput "--set $key=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." "--set $key gives a credential as an argument, where other users can read it in the process list" "give it with --password-file <file> or pipe it in with --password-stdin"
             }
             # A URI with user[:password]@ is a connection string: read as
@@ -4323,6 +4324,13 @@ function Invoke-CmdConnect {
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
+        # The second secret of a lakehouse combination with two: a file only
+        # (stdin carries the first), never a value on the line.
+        elseif ($arg -eq "--storage-secret-file") {
+            $i++; $storageFile = "" + $Arguments[$i]
+            if (-not $storageFile) { Deny-ExakitVsInput "--storage-secret-file takes the path of a file holding only the storage secret." "--storage-secret-file was given without a file" "give the path of a file holding only the storage secret after --storage-secret-file" }
+        }
+        elseif ($arg -like "--storage-secret*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -in @("--dry-run", "-n")) { $dry = $true }
         elseif ($arg -in @("--yes", "-y")) { $script:ExakitVsAssumeYes = $true }
         elseif ($arg -in @("--json", "-j")) { $json = $true }
@@ -4340,6 +4348,7 @@ function Invoke-CmdConnect {
     # A credential from the command line's own options wins over one in a
     # connection string (Invoke-ExakitVsPaste -Given).
     $pwGiven = ($pwStdin -or [bool]$pwFile)
+    $script:ExakitVsStorageFile = $storageFile
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
@@ -4429,16 +4438,23 @@ function Invoke-CmdConnect {
     }
     # A connected source's inputs are its record's: only what was given changes.
     if ($interactive -and -not $live) {
-        $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
-        foreach ($spec in @($definition.inputs)) {
-            if ($spec.kind -in @("secret", "secret-file") -or $given -contains $spec.name) { continue }
+        # The questions are the engine's (inputs), asked again after each
+        # answer: a connector with settings (lakehouse) asks its catalog, then
+        # files, then that combination's inputs only. Twin of _exakit_vs_ask_inputs.
+        $asked = @()
+        while ($true) {
+            $doc = Get-ExakitVsInputs -Connector $connector -Sets $sets
+            if ($null -eq $doc) { break }
+            $spec = @($doc.inputs) | Where-Object { $_.kind -notin @("secret", "secret-file", "source-name") -and $given -notcontains $_.name -and $asked -notcontains $_.name } | Select-Object -First 1
+            if ($null -eq $spec) { break }
+            $asked += $spec.name
             $label = "" + $spec.label
             $short = $label
             foreach ($cut in @(" - ", " (", "; ")) { $short = $short.Split(@($cut), [StringSplitOptions]::None)[0] }
             # The words of the question when it has them, and the lines said above it.
             if ($spec.prompt) { $label = "" + $spec.prompt }
             foreach ($line in @($spec.hint)) { if ($line) { Write-Host ("  " + $script:UiDim + $line + $script:UiReset) } }
-            if ($spec.choices) { $label = "$label ($((@($spec.choices)) -join '/'))" }
+            if (@($spec.choices).Count -gt 0) { $label = "$label ($((@($spec.choices)) -join '/'))" }
             $default = ""
             if ($null -ne $spec.default) { $default = "" + $spec.default }
             $value = Read-ExakitVsLineAnswer -Question $label -Default $default -Required ([bool]$spec.required) -Marks $ask -Label $short
@@ -4502,6 +4518,13 @@ function Invoke-CmdConnect {
     } elseif ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
     $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
+    # The combination's own secrets (engine inputs): a lakehouse source can
+    # have two, the second on --storage-secret-file or asked hidden.
+    $labels = Get-ExakitVsSecretLabels -Connector $connector -Sets $sets
+    if ($labels.Credential) { $secretSpec = [pscustomobject]@{ label = $labels.Credential; kind = "secret" } }
+    if (-not $labels.Storage -and $storageFile) {
+        Deny-ExakitVsInput "--storage-secret-file is for a lakehouse source with a catalog login and storage keys; this one has one secret." "--storage-secret-file was given, but this source has one secret" "leave --storage-secret-file out and give the credential with --password-file or --password-stdin"
+    }
     # A re-point takes the credential as a connect does: the database never
     # returns a stored one, and moving a CONNECTION clears it.
     $secret = ""
@@ -4512,7 +4535,14 @@ function Invoke-CmdConnect {
         elseif (-not $pwFile -and $pastedSecret) { $secret = $pastedSecret }
         else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }
         if (-not $secret) { Deny-ExakitVsInput "No $what was given (use --password-file or --password-stdin)." "no $what was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
-        $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
+        $storage = ""
+        if ($labels.Storage) {
+            $swhat = $labels.Storage.ToLower()
+            $storage = Read-ExakitVsStorageSecret -Label "$($labels.Storage) (storage)" -File $storageFile
+            if (-not $storage) { Deny-ExakitVsInput "This source also needs the storage's $($swhat): give it with --storage-secret-file <file>." "no storage $swhat was given" "give it with --storage-secret-file <file> (a file holding only the $swhat), or answer the hidden prompt at a console" }
+        }
+        $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret -StorageSecret $storage
+        $storage = $null
     } else {
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
     }
@@ -4545,7 +4575,7 @@ function Invoke-CmdSource {
         else { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
     }
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
-    $table = ""; $ddl = $false; $into = ""; $pwStdin = $false; $details = $false
+    $table = ""; $ddl = $false; $into = ""; $pwStdin = $false; $details = $false; $storageFile = ""
     $script:ExakitVsAssumeYes = $false
     # This command's own public IP only: an earlier command's answer reaches
     # later ones through the processes it started, and could name a network
@@ -4563,7 +4593,12 @@ function Invoke-CmdSource {
         elseif ($arg -eq "--status") { $i++; $status = "" + $rest[$i] }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $rest[$i] }
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
-        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
+        elseif ($arg -eq "--storage-secret-file") {
+            $i++; $storageFile = "" + $rest[$i]
+            if (-not $storageFile) { Deny-ExakitVsInput "--storage-secret-file takes the path of a file holding only the storage secret." "--storage-secret-file was given without a file" "give the path of a file holding only the storage secret after --storage-secret-file" }
+            if ($action -ne "reauth") { Deny-ExakitVsInput "--storage-secret-file is for exakit source reauth (and exakit connect)." "--storage-secret-file was given to source $action, which takes no credential" "leave --storage-secret-file out" }
+        }
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*" -or $arg -like "--storage-secret*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -eq "--ddl") { $ddl = $true }
         elseif ($arg -eq "--details") { $details = $true }
         elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
@@ -4642,24 +4677,34 @@ function Invoke-CmdSource {
                 if ($json) { foreach ($line in $shown.Lines) { Write-Output $line } } else { [void](Show-ExakitVsLines -Lines $shown.Lines) }
                 Exit-ExakitVs $shown.Code
             }
-            $shownConnector = ""
+            $shownConnector = ""; $shownDoc = $null
             if ($json) {
-                try { $shownConnector = "" + ((@($shown.Lines) -join "`n") | ConvertFrom-Json).connector } catch { }
+                try { $shownDoc = (@($shown.Lines) -join "`n") | ConvertFrom-Json } catch { }
             } else {
-                foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownConnector = "" + ("$line".Substring(7) | ConvertFrom-Json).connector } }
+                foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownDoc = "$line".Substring(7) | ConvertFrom-Json } }
             }
+            if ($null -ne $shownDoc) { $shownConnector = "" + $shownDoc.connector }
+            # A lakehouse source with two secrets: reauth writes its JSON whole, so both.
+            $storageLabel = ""
+            if ($null -ne $shownDoc -and $shownDoc.PSObject.Properties["storage_secret"] -and $shownDoc.storage_secret) { $storageLabel = "" + $shownDoc.storage_secret }
+            if (-not $storageLabel -and $storageFile) { Deny-ExakitVsInput "$name has one secret; --storage-secret-file is for a lakehouse source with a catalog login and storage keys." "--storage-secret-file was given, but $name has one secret" "leave --storage-secret-file out" }
             if ($pwStdin) { $secret = Read-ExakitVsStdinSecret }
             else { $secret = Read-ExakitVsSecret -Label "New credential for $name" -PasswordFile $pwFile -Kind (Get-ExakitVsSecretKind -Connector $shownConnector) }
             if (-not $secret) { Deny-ExakitVsInput "No credential was given." "no credential was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
+            $storage = ""
+            if ($storageLabel) {
+                $storage = Read-ExakitVsStorageSecret -Label "New $storageLabel (storage) for $name" -File $storageFile
+                if (-not $storage) { Deny-ExakitVsInput "$name has two secrets, and reauth writes both: give the storage secret too with --storage-secret-file <file>." "reauth of $name needs the storage secret as well" "give both: --password-file <file> (or --password-stdin) and --storage-secret-file <file>" }
+            }
             if ($json) {
                 # Twin of cmd_source: the engine's one object, as it answers.
-                $run = Invoke-ExakitVsEngine -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
-                $secret = $null
+                $run = Invoke-ExakitVsEngine -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret -StorageSecret $storage
+                $secret = $null; $storage = $null
                 foreach ($line in $run.Lines) { Write-Output $line }
                 Exit-ExakitVs $run.Code
             }
-            $code = Invoke-ExakitVsRun -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
-            $secret = $null
+            $code = Invoke-ExakitVsRun -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret -StorageSecret $storage
+            $secret = $null; $storage = $null
             if ($code -eq 0) { Ok "$name is ready again with the new credential" }
             Exit-ExakitVs $code
         }

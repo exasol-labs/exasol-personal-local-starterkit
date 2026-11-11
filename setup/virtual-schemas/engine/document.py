@@ -105,12 +105,14 @@ def _first(doc, *keys):
     return ""
 
 
-def credential(kind, values, secret, now=None):
-    """(the CONNECTION's JSON, every string to redact, notes) for a document source."""
+def credential(kind, values, secret, now=None, storage=None):
+    """(the CONNECTION's JSON, every string to redact, notes) for a document
+    source. storage: the second secret of a lakehouse combination that has two
+    (the S3 secret key or Azure key/SAS beside a catalog login)."""
     if kind == "azure-blob":
         return _azure(values, secret.strip(), now or datetime.datetime.now(datetime.timezone.utc))
-    if kind in ("lakehouse-rest", "lakehouse-unity"):
-        return _catalog(kind, values, secret.strip())
+    if kind == "lakehouse":
+        return lakehouse(values, secret, storage)
     if kind not in ("s3", "lakehouse-glue"):
         raise DocumentError("unknown credential kind %s" % kind)
     key_id, secret_key, token, hidden = _aws_keys(values, secret)
@@ -131,40 +133,125 @@ def credential(kind, values, secret, now=None):
     return text, [h for h in hidden + [text] if h], notes
 
 
-def _catalog(kind, values, secret):
-    """lakehouse-engine-rs over an Iceberg REST catalog (lakehouse-rest) or
-    Unity Catalog (lakehouse-unity), next to the Glue body above. Either the
-    storage's own keys (the catalog only names the files) or a catalog token,
-    with which the catalog vends short-lived storage credentials per table.
-    Unity's vended credentials carry no region, so its body always names one."""
-    keyed = kind == "lakehouse-rest" and values.get("access_key_id")
-    what = "secret key" if keyed else "token"
+def _plain(secret, what):
+    """A secret as one word: refused when missing, with white space in it, or
+    JSON (the kit writes the connection's JSON itself)."""
+    secret = (secret or "").strip()
     if not secret or re.search(r"\s", secret):
         raise DocumentError("the %s is missing or has white space in it" % what)
     if secret.startswith("{"):
         raise DocumentError("give the %s itself, not JSON: the kit writes the connection's JSON" % what)
-    notes = []
-    if kind == "lakehouse-unity":
-        body = {"token": secret, "use_vended_credentials": True, "region": values["region"]}
-        notes.append("a Databricks personal access token stops working on the expiry date it was made with; "
-                     "then give a new one with: exakit source reauth <name>")
-    elif keyed:
-        if not values.get("region"):
-            raise DocumentError("region is required with an access key: the region of the bucket (an S3-compatible "
-                                "store such as MinIO usually answers to us-east-1)")
-        body = {"warehouse": values["warehouse"], "access_key": values["access_key_id"], "secret_key": secret,
-                "region": values["region"]}
-        if values.get("endpoint"):
-            body.update(endpoint=values["endpoint"], path_style=True)
+    return secret
+
+
+def is_sas(secret):
+    """Is an Azure credential a SAS token (else it is the account key)? A SAS
+    is a query string - a leading ? dropped - holding sig= and at least one of
+    sv=, se= or sp=, in any order: `az` writes se=... first, the portal sv=...
+    first. An account key is base64, which never holds both a = pair and an &
+    in that shape."""
+    text = (secret or "").strip().lstrip("?")
+    if "=" not in text or not re.match(r"^[A-Za-z]+=", text):
+        return False
+    fields = parse_qs(text, keep_blank_values=True)
+    return bool(fields.get("sig")) and any(k in fields for k in ("sv", "se", "sp"))
+
+
+def lakehouse(values, secret, storage=None):
+    """The CONNECTION's JSON for lakehouse-engine-rs, any of the nine
+    combinations (connectors/lakehouse; the settings are among values):
+
+        catalog iceberg-rest  warehouse
+        login token           token
+        login oauth           client_id, client_secret (+ oauth2_server_uri = token_endpoint, scope)
+        files vended          use_vended_credentials: true (+ region)
+        files s3              access_key, secret_key, region (+ endpoint, path_style: true)
+        files azure           account_name + account_key | sas_token
+        catalog glue          access_key, secret_key, region (+ warehouse = the catalog ID)
+
+    secret is the one --password-file carries: the catalog's login (a token
+    or an OAuth client secret), for glue the AWS secret key, for none the
+    storage secret. storage is the second one, when a catalog login and
+    storage keys are both needed."""
+    catalog, files, login = values.get("catalog"), values.get("files"), values.get("login")
+    body, hidden, notes = {}, [], []
+    if catalog == "glue":
+        key_id, secret_key, token, hidden = _aws_keys(values, secret or "")
+        body = {"access_key": key_id, "secret_key": secret_key, "region": values["region"]}
+        if token:
+            body["session_token"] = token
+            notes.append("temporary credentials expire (usually within hours); when they do, give new ones with: "
+                         "exakit source reauth <name> --password-file <file>")
+        if values.get("catalog_id"):
+            body["warehouse"] = values["catalog_id"]
+        text = json.dumps(body)
+        return text, [h for h in hidden + [text] if h], notes
+    if catalog in ("iceberg-rest", "unity"):
+        if catalog == "iceberg-rest":
+            body["warehouse"] = values["warehouse"]
+        if login == "oauth":
+            client_secret = _plain(secret, "client secret")
+            body["client_id"] = values["client_id"]
+            body["client_secret"] = client_secret
+            # token_endpoint is the engine's oauth2_server_uri.
+            for key, field in (("token_endpoint", "oauth2_server_uri"), ("scope", "scope")):
+                if values.get(key):
+                    body[field] = values[key]
+            hidden.append(client_secret)
+        else:
+            token = _plain(secret, "Databricks token" if catalog == "unity" else "catalog token")
+            body["token"] = token
+            hidden.append(token)
+            if catalog == "unity":
+                notes.append("a Databricks personal access token stops working on the expiry date it was made with; "
+                             "then give a new one with: exakit source reauth <name>")
+        store = storage
+    elif catalog == "none":
+        store = secret
     else:
-        if values.get("endpoint"):
-            raise DocumentError("a storage endpoint goes with an access key (--set access_key_id=...); with a "
-                                "catalog token the catalog names its storage")
-        body = {"warehouse": values["warehouse"], "token": secret, "use_vended_credentials": True}
+        raise DocumentError("unknown lakehouse catalog %s" % catalog)
+    if files == "vended":
+        body["use_vended_credentials"] = True
         if values.get("region"):
             body["region"] = values["region"]
+    elif files == "s3":
+        if catalog == "none" and ((store or "").strip().startswith("{") or not values.get("access_key_id")):
+            # The JSON `aws iam create-access-key` or `aws sts` prints, as for Glue.
+            key_id, secret_key, token, more = _aws_keys(values, store)
+            hidden += more
+            body.update(access_key=key_id, secret_key=secret_key, region=values["region"])
+            if token:
+                body["session_token"] = token
+        else:
+            secret_key = _plain(store, "secret access key")
+            hidden.append(secret_key)
+            body.update(access_key=values["access_key_id"], secret_key=secret_key, region=values["region"])
+        if values.get("endpoint"):
+            body.update(endpoint=values["endpoint"], path_style=True)
+    elif files == "azure":
+        key = _plain(store, "account key or SAS")
+        hidden.append(key)
+        account = values.get("account_name")
+        if catalog == "none":
+            m = re.match(r"^abfss://[^@/]+@([a-z0-9]{3,24})\.dfs\.core\.windows\.net", values.get("path", ""))
+            account = m.group(1) if m else account
+        body["account_name"] = account
+        if is_sas(key):
+            sas = key.lstrip("?")
+            body["sas_token"] = sas
+            sig = parse_qs(sas).get("sig", [""])[0]
+            hidden += [sas, sig, quote(sig, safe="")]
+            expiry = parse_qs(sas).get("se", [""])[0]
+            if expiry:
+                notes.append("this SAS expires at %s; then give a new one with: exakit source reauth <name>" % expiry)
+        else:
+            body["account_key"] = key
+            notes.append("an account key opens every container of %s, for writing too; a SAS limited to the "
+                         "container with read and list permissions and an expiry is the narrower credential" % account)
+    else:
+        raise DocumentError("unknown lakehouse files %s" % files)
     text = json.dumps(body)
-    return text, [secret, text], notes
+    return text, [h for h in hidden + [text] if h], notes
 
 
 def _aws_keys(values, secret):

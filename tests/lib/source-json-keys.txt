@@ -1,6 +1,6 @@
-list=0 {"ok":"","sources":[{"connector":"","host":"","last_check":{"at":"","evidence":"","kind":"","outcome":""},"name":"","needs_refresh":"","schema":"","status":"","tls":""}]}
+list=0 {"ok":"","sources":[{"connector":"","connector_name":"","host":"","last_check":{"at":"","evidence":"","kind":"","outcome":""},"name":"","needs_refresh":"","schema":"","status":"","tls":""}]}
 issues=0 {"issues":[],"ok":""}
-show jsonok=0 {"connector":"","inputs":{"database":"","host":"","port":"","schema":"","tls":"","user":""},"journal":"","last_check":{"at":"","empty_tables":[],"evidence":"","outcome":""},"name":"","needs_refresh":"","objects":{"connection":"","schema":"","script":"","script_schema":""},"ok":"","pins":{"adapter":"","adapter_version":"","driver":"","driver_version":""},"status":"","tables":"","tips":[""]}
+show jsonok=0 {"connector":"","connector_name":"","inputs":{"database":"","host":"","port":"","schema":"","tls":"","user":""},"journal":"","last_check":{"at":"","empty_tables":[],"evidence":"","outcome":""},"name":"","needs_refresh":"","objects":{"connection":"","schema":"","script":"","script_schema":""},"ok":"","pins":{"adapter":"","adapter_version":"","driver":"","driver_version":""},"status":"","storage_secret":"","tables":"","tips":[""]}
 describe jsonok=1 {"command":"","error":"","kind":"","ok":"","remedy":""}
 catalog=0 {"connectors":[{"aliases":[""],"id":"","name":"","profile":"","status":"","summary":"","tier":"","version":""}],"ok":""}
 check jsonok=0 {"evidence":"","name":"","ok":"","status":""}

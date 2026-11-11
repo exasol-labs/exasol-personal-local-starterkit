@@ -369,6 +369,10 @@ class Engine(object):
         # Every profile stages into the same bucket folder (profile.json).
         self.runtime = artifacts.Runtime(args.deployment_dir or "", self.profile["bucket"])
         self._db = None
+        # The second secret of a lakehouse combination with two (a catalog
+        # login and storage keys): set by cli.py from --secret-pair-base64,
+        # never from an argument. None when the command carried one secret.
+        self.storage_secret = None
 
     # --- the database --------------------------------------------------------------
     def clock(self):
@@ -395,7 +399,7 @@ class Engine(object):
         as "PermissionDenied ... status: 403" (measured, a database 42 min
         behind after the laptop slept), which reads like a missing grant.
         With the clock that far off, the clock is the cause to name."""
-        if kind not in ("error", "denied", "auth") or connector.get("auth") not in ("aws-keys", "azure-sas-or-key"):
+        if kind not in ("error", "denied", "auth") or connector.get("auth") not in ("aws-keys", "azure-sas-or-key", "lakehouse"):
             return kind
         self.clock()
         return "clock" if abs(getattr(self, "_skew", 0)) >= SIGNED_LIMIT else kind
@@ -782,7 +786,7 @@ class Engine(object):
         """Fetch, verify and stage the adapter and driver; record this source as their consumer."""
         if not self.runtime.available():
             raise Failure("the deployment's runtime directory is missing (%s)" % self.runtime.exa, EXIT["failed"])
-        # Connectors of one family (lakehouse: Glue, Iceberg REST, Unity) run
+        # Connectors of one family (lakehouse: every catalog and store) run
         # the same pinned engine, staged once under the family's folder, so
         # the shared adapter script always points at a file all of them keep.
         cid = connector.get("family") or connector["id"]
@@ -910,6 +914,8 @@ class Engine(object):
         user with the credential JSON as the secret. Every secret here is the
         run log's from now on (vslog), whatever writes it next."""
         self.log.secret(secret)
+        if self.storage_secret:
+            self.log.secret(self.storage_secret)
         if connector.get("secret_as_file"):
             # The key goes to a file in BucketFS, never into the CONNECTION:
             # no user, no password, and the URL names only the file's path.
@@ -923,7 +929,8 @@ class Engine(object):
             return None, None, text, hidden, []
         if connector.get("credential"):
             try:
-                text, hidden, notes = document.credential(connector["credential"], values, secret)
+                text, hidden, notes = document.credential(connector["credential"], values, secret,
+                                                          storage=self.storage_secret)
             except document.DocumentError as error:
                 failure = Failure(str(error), EXIT["input"])
                 failure.complete = True  # the credential's own problem, named; nothing ran
@@ -935,6 +942,17 @@ class Engine(object):
         # A connector with one fixed account name (Databricks: "token") takes
         # no user input.
         return None, connector.get("user", values.get("user")), secret, [], []
+
+    def require_storage_secret(self, connector, what):
+        """A combination with two secrets (planner.storage_secret_input) needs
+        the second one too: refused, kind input, before anything changes."""
+        spec = planner.storage_secret_input(connector)
+        if spec and not self.storage_secret:
+            label = spec.get("label", "storage secret").lower()
+            message = "%s needs the storage's %s as well as the catalog's credential" % (what, label)
+            remedy = ("give it with --storage-secret-file <file> (a file holding only the %s), or answer the hidden "
+                      "prompt at a terminal; it is never taken as an argument" % label)
+            raise Failure(message, EXIT["input"], "input", remedy=remedy, said="%s: %s" % (message, remedy))
 
     def adapter_sql(self, names, jars, profile=None):
         script = (profile or self.profile)["adapter_script"]
@@ -993,7 +1011,7 @@ class Engine(object):
     def import_script_users(self, connector_id, besides):
         """Other sources that share this connector's scripts: of the same
         connector, or of any connector on the same shared adapter script
-        (lakehouse, iceberg-rest and unity all run LAKEHOUSE_ADAPTER and its
+        (every lakehouse source runs LAKEHOUSE_ADAPTER and its
         companions), so the last Glue source out does not drop what a REST
         or Unity source still calls."""
         shared = self._shared_adapter(connector_id)
@@ -1133,6 +1151,9 @@ class Engine(object):
             # credential is the whole command - the one disconnect names.
             given = dict(current.get("inputs") or {}, **given)
         values = planner.validate_inputs(connector, given)
+        # One combination of a connector with settings (lakehouse): its flat
+        # definition from here on - its inputs, address and properties.
+        connector = self.defs.connector(connector_id, values)
         names = planner.objects(name, connector)
         description = planner.describe(self.defs, connector_id, name, values, self.runtime, self.cache, self.store)
         description["action"] = "reconnect" if self.store.exists(name) else "connect"
@@ -1158,6 +1179,7 @@ class Engine(object):
             raise Failure("%s needs %s on standard input (it is never taken as an argument)"
                           % (connector_id, spec["label"].lower()), EXIT["input"], "input",
                           remedy="pipe it on standard input or give it with --password-file <file>")
+        self.require_storage_secret(connector, "connect")
         created = {"files": [], "connection": False, "script": False, "schema": False}
         drafted = None
         journal = {"operation": "reconnect" if reconnect else "connect", "connector": connector_id,
@@ -1412,8 +1434,11 @@ class Engine(object):
         port = values.get("port")
         if port and place == values.get("host"):
             place = "%s:%s" % (place, port)
-        scope = [str(values[k]) for k in ("database", "service", "catalog", "schema", "namespace", "dataset",
-                                          "collection") if values.get(k)]
+        # A lakehouse source's "catalog" is its setting (unity, glue), not a name it reads.
+        keys = ("database", "service", "schema", "namespace", "dataset", "collection") if \
+            connector.get("settings_chosen") else ("database", "service", "catalog", "schema", "namespace", "dataset",
+                                                   "collection")
+        scope = [str(values[k]) for k in keys if values.get(k)]
         return "%s (%s)" % (place, "/".join(scope)) if scope else place
 
     def interrupted_repoint(self, name):
@@ -1426,10 +1451,15 @@ class Engine(object):
             # follows is planned from the source as it really is.
             self.settle(name)
         config = self.store.config(name)
+        old = dict(config.get("inputs") or {})
         connector = self.defs.connector(connector_id)
+        if connector.get("settings"):
+            # The combination after the re-point: the recorded settings with
+            # any given over them, checked as a connect checks them.
+            merged = dict(old, **given)
+            connector = self.defs.connector(connector_id, dict(merged, **planner.choose_settings(connector, merged)))
         entry = self.defs.entry(connector_id)
         names = config["objects"]
-        old = dict(config.get("inputs") or {})
         values = self.repoint_values(connector, old, given)
         changes = []
         for spec in connector["inputs"]:
@@ -1466,6 +1496,8 @@ class Engine(object):
         props = self.changed_properties(connector, names, old, values, extra)
         if preview:
             return self.repoint_plan(connector_id, connector, entry, name, names, values, changes, props)
+        if secret:
+            self.require_storage_secret(connector, "re-pointing %s" % name)
         if not secret:
             spec = planner.secret_input(connector) or {"label": "credential"}
             what = spec.get("label", "credential").lower()
@@ -1650,7 +1682,7 @@ class Engine(object):
             if not journal or journal.get("operation") != "repoint":
                 return
             config = self.store.config(name)
-            connector = self.defs.connector(config["connector"])
+            connector = self.defs.connector(config["connector"], config.get("inputs") or {})
             names = config["objects"]
             if journal.get("committed"):
                 self.emit("INFO", "An earlier re-point of %s was interrupted after it was verified; finishing it" % name)
@@ -1891,7 +1923,7 @@ class Engine(object):
             if self.store.status(name).get("needs_refresh"):
                 result["needs_refresh"] = True
             return result
-        connector = self.defs.connector(config["connector"])
+        connector = self.defs.connector(config["connector"], config.get("inputs") or {})
         names = config["objects"]
         try:
             self.warn_clock()
@@ -1940,8 +1972,11 @@ class Engine(object):
         if not secret:
             raise Failure("reauth needs the new credential on standard input", EXIT["input"], "input",
                           remedy="pipe it on standard input or give it with --password-file <file>")
-        connector = self.defs.connector(config["connector"])
+        connector = self.defs.connector(config["connector"], config.get("inputs") or {})
         inputs = dict(config["inputs"])
+        # Both secrets of a combination with two: the CONNECTION's JSON is
+        # written whole, and the database never returns the one kept.
+        self.require_storage_secret(connector, "reauth of %s" % name)
         if connector.get("secret_as_file"):
             return self.reauth_key(name, config, connector, secret)
         if connector.get("credential") and secret.lstrip().startswith("{"):
@@ -2088,7 +2123,7 @@ class Engine(object):
         try:
             self.db().execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(schema))
         except sql.DbError as error:
-            connector = self.defs.connector(config["connector"])
+            connector = self.defs.connector(config["connector"], config.get("inputs") or {})
             raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"],
                           self.language_kind(error.kind, connector, error))
         count = len(self.tables(schema))
@@ -2358,7 +2393,7 @@ class Engine(object):
         registry = self.store.registry().get("artifacts", {})
         mine = [path for path, entry in registry.items() if name in entry.get("consumers", [])]
         reclaim = [path for path in mine if registry[path].get("owned") and registry[path].get("consumers") == [name]]
-        connector = self.defs.connector(config["connector"])
+        connector = self.defs.connector(config["connector"], config.get("inputs") or {})
         shared = [spec["name"] for spec in self.companions(connector, self.defs.profile(connector["profile"]))]
         last = bool(shared) and not self.import_script_users(config["connector"], name)
         own_adapter = not connector.get("shared_adapter") or last
@@ -2453,11 +2488,13 @@ class Engine(object):
             config = self.store.config(name)
             status = self.store.status(name)
             try:
-                connector = self.defs.connector(config["connector"])
+                connector = self.defs.connector(config["connector"], config.get("inputs") or {})
             except (OSError, ValueError, planner.PlanError):
                 connector = None
             values = config.get("inputs") or {}
-            rows.append({"name": name, "connector": config["connector"], "schema": config["objects"]["schema"],
+            rows.append({"name": name, "connector": config["connector"],
+                         "connector_name": (connector or {}).get("label") or config["connector"],
+                         "schema": config["objects"]["schema"],
                          "status": status.get("status", "unknown"), "last_check": status.get("last_check"),
                          "needs_refresh": bool(status.get("needs_refresh")),
                          "host": source_where(connector, values), "tls": tls_level(connector, values)})
@@ -2467,14 +2504,23 @@ class Engine(object):
         config = self.store.config(name)
         status = self.store.status(name)
         try:
-            connector = self.defs.connector(config["connector"])
+            connector = self.defs.connector(config["connector"], config.get("inputs") or {})
         except (OSError, ValueError):
             connector = {}
-        return {"name": name, "connector": config["connector"], "inputs": config["inputs"],
+        label = connector.get("label") if connector else None
+        if not label:
+            try:
+                label = self.defs.entry(config["connector"])["name"]
+            except (planner.PlanError, KeyError):
+                label = config["connector"]
+        return {"name": name, "connector": config["connector"], "connector_name": label, "inputs": config["inputs"],
                 "objects": config["objects"], "status": status.get("status", "unknown"),
                 "pins": status.get("pins"), "needs_refresh": True if status.get("needs_refresh") else None,
                 "tables": status.get("tables"), "last_check": status.get("last_check"),
-                "journal": self.store.journal(name), "tips": tips(connector, name, config["objects"]["schema"])}
+                "journal": self.store.journal(name), "tips": tips(connector, name, config["objects"]["schema"]),
+                # The label of a second secret (a lakehouse combination with a
+                # catalog login and storage keys): reauth needs both; else null.
+                "storage_secret": (planner.storage_secret_input(connector or {}) or {}).get("label")}
 
     def issues(self, status_filter=None):
         rows = []
@@ -2490,7 +2536,7 @@ class Engine(object):
                 continue
             check = row.get("last_check") or {}
             try:
-                connector = self.defs.connector(row["connector"])
+                connector = self.defs.connector(row["connector"], self.store.config(row["name"]).get("inputs") or {})
             except (OSError, ValueError):
                 connector = {}
             rows.append(dict(row, remedy=remedy_for(check.get("kind") or "error", row["name"], connector,

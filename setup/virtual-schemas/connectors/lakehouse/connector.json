@@ -1,8 +1,9 @@
 {
   "id": "lakehouse",
-  "name": "Lakehouse (Iceberg on AWS Glue)",
+  "name": "Lakehouse (Iceberg / Delta)",
   "profile": "rust-native",
   "upstream": "exasol-labs/lakehouse-engine-rs",
+  "family": "lakehouse",
   "adapter": {
     "version": "0.57.3",
     "license": "MIT",
@@ -30,7 +31,7 @@
   "driver": null,
   "etl": null,
   "shared_adapter": "LAKEHOUSE_ADAPTER",
-  "shared_by": "lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)",
+  "shared_by": "lakehouse source",
   "companions": [
     {
       "name": "LAKEHOUSE_SCAN",
@@ -53,53 +54,576 @@
     }
   ],
   "version_script": "LAKEHOUSE_VERSION",
+  "_settings_comment": [
+    "One connector, three settings. catalog and files pick the combination; login",
+    "applies to the catalogs that sign in (Iceberg REST, Unity). files.valid lists",
+    "the files values each catalog takes, files.default the one an omitted files",
+    "takes (none: by the folder path's scheme, see plan.py). An input's `when`",
+    "names the setting values it is asked for (every key must match; a key left",
+    "out matches any value). variants are the catalog's own connector fields,",
+    "laid over this document once the combination is known (plan.specialize)."
+  ],
+  "settings": {
+    "catalog": {
+      "label": "Catalog",
+      "choices": [
+        {
+          "value": "iceberg-rest",
+          "label": "Iceberg REST catalog"
+        },
+        {
+          "value": "unity",
+          "label": "Unity Catalog"
+        },
+        {
+          "value": "glue",
+          "label": "AWS Glue"
+        },
+        {
+          "value": "none",
+          "label": "No catalog - Parquet files in a folder"
+        }
+      ],
+      "infer": {
+        "catalog_url": "iceberg-rest",
+        "warehouse": "iceberg-rest",
+        "workspace_url": "unity",
+        "database": "glue",
+        "catalog_id": "glue",
+        "path": "none"
+      }
+    },
+    "files": {
+      "label": "Files",
+      "choices": [
+        {
+          "value": "vended",
+          "label": "Let the catalog give access"
+        },
+        {
+          "value": "s3",
+          "label": "Amazon S3 / S3-compatible"
+        },
+        {
+          "value": "azure",
+          "label": "Azure ADLS Gen2"
+        },
+        {
+          "value": "gcs",
+          "label": "Google Cloud Storage - not supported yet",
+          "disabled": true
+        }
+      ],
+      "valid": {
+        "iceberg-rest": [
+          "vended",
+          "s3",
+          "azure"
+        ],
+        "unity": [
+          "vended",
+          "s3",
+          "azure"
+        ],
+        "glue": [
+          "s3"
+        ],
+        "none": [
+          "s3",
+          "azure"
+        ]
+      },
+      "default": {
+        "iceberg-rest": "vended",
+        "unity": "vended",
+        "glue": "s3",
+        "none": "s3"
+      }
+    },
+    "login": {
+      "label": "Catalog login",
+      "choices": [
+        {
+          "value": "token",
+          "label": "Token"
+        },
+        {
+          "value": "oauth",
+          "label": "OAuth client (ID + secret)"
+        }
+      ],
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity"
+        ]
+      },
+      "default": "token"
+    }
+  },
   "inputs": [
     {
+      "name": "catalog_url",
+      "label": "Catalog URL",
+      "kind": "catalog-url",
+      "required": true,
+      "prompt": "Catalog URL (https://host[:port][/path]; http only for this computer or a private network)",
+      "when": {
+        "catalog": [
+          "iceberg-rest"
+        ]
+      }
+    },
+    {
+      "name": "warehouse",
+      "label": "Warehouse (catalog name)",
+      "kind": "warehouse",
+      "required": true,
+      "when": {
+        "catalog": [
+          "iceberg-rest"
+        ]
+      }
+    },
+    {
+      "name": "namespace",
+      "label": "Namespace",
+      "kind": "iceberg-namespace",
+      "required": true,
+      "prompt": "Namespace (one namespace is one virtual schema)",
+      "when": {
+        "catalog": [
+          "iceberg-rest"
+        ]
+      }
+    },
+    {
+      "name": "workspace_url",
+      "label": "Workspace URL",
+      "kind": "https-url",
+      "required": true,
+      "prompt": "Workspace URL (https://..., e.g. https://dbc-1234.cloud.databricks.com)",
+      "when": {
+        "catalog": [
+          "unity"
+        ]
+      }
+    },
+    {
+      "name": "namespace",
+      "label": "Catalog.schema",
+      "kind": "unity-namespace",
+      "required": true,
+      "prompt": "Catalog.schema (e.g. main.sales; one schema is one virtual schema)",
+      "when": {
+        "catalog": [
+          "unity"
+        ]
+      }
+    },
+    {
       "name": "region",
-      "label": "AWS region (Glue Catalog)",
+      "label": "AWS region",
       "kind": "aws-region",
-      "required": true
+      "required": true,
+      "when": {
+        "catalog": [
+          "glue"
+        ]
+      }
     },
     {
       "name": "database",
-      "label": "Glue database (one database is one virtual schema)",
+      "label": "Glue database",
       "kind": "glue-database",
-      "required": true
+      "required": true,
+      "prompt": "Glue database (one database is one virtual schema)",
+      "when": {
+        "catalog": [
+          "glue"
+        ]
+      }
     },
     {
       "name": "access_key_id",
-      "label": "Access key ID (Enter if the credential file holds it)",
-      "kind": "aws-key-id"
+      "label": "Access key ID",
+      "kind": "aws-key-id",
+      "when": {
+        "catalog": [
+          "glue"
+        ]
+      },
+      "prompt": "Access key ID (Enter if the credential file - the JSON aws iam create-access-key prints - holds it)"
     },
     {
       "name": "secret",
       "label": "Secret access key",
       "kind": "secret",
-      "required": true
+      "required": true,
+      "role": "aws",
+      "when": {
+        "catalog": [
+          "glue"
+        ]
+      }
+    },
+    {
+      "name": "catalog_id",
+      "label": "Glue catalog ID",
+      "kind": "aws-account-id",
+      "prompt": "Glue catalog ID (optional: the 12-digit account that owns the catalog, when it is not yours)",
+      "when": {
+        "catalog": [
+          "glue"
+        ]
+      }
+    },
+    {
+      "name": "path",
+      "label": "Folder path",
+      "kind": "storage-path",
+      "required": true,
+      "prompt": "Folder path (s3://bucket/prefix/)",
+      "when": {
+        "catalog": [
+          "none"
+        ],
+        "files": [
+          "s3"
+        ]
+      }
+    },
+    {
+      "name": "path",
+      "label": "Folder path",
+      "kind": "storage-path",
+      "required": true,
+      "prompt": "Folder path (abfss://container@account.dfs.core.windows.net/prefix/)",
+      "when": {
+        "catalog": [
+          "none"
+        ],
+        "files": [
+          "azure"
+        ]
+      }
+    },
+    {
+      "name": "secret",
+      "label": "Catalog token",
+      "kind": "secret",
+      "required": true,
+      "role": "token",
+      "when": {
+        "catalog": [
+          "iceberg-rest"
+        ],
+        "login": [
+          "token"
+        ]
+      }
+    },
+    {
+      "name": "secret",
+      "label": "Databricks token",
+      "kind": "secret",
+      "required": true,
+      "role": "token",
+      "when": {
+        "catalog": [
+          "unity"
+        ],
+        "login": [
+          "token"
+        ]
+      }
+    },
+    {
+      "name": "client_id",
+      "label": "Client ID",
+      "kind": "oauth-client-id",
+      "required": true,
+      "when": {
+        "login": [
+          "oauth"
+        ]
+      }
+    },
+    {
+      "name": "secret",
+      "label": "Client secret",
+      "kind": "secret",
+      "required": true,
+      "role": "client_secret",
+      "when": {
+        "login": [
+          "oauth"
+        ]
+      }
+    },
+    {
+      "name": "token_endpoint",
+      "label": "Token endpoint",
+      "kind": "catalog-url",
+      "prompt": "Token endpoint (optional: Enter for the catalog's own)",
+      "when": {
+        "login": [
+          "oauth"
+        ]
+      }
+    },
+    {
+      "name": "scope",
+      "label": "Scope",
+      "kind": "oauth-scope",
+      "prompt": "Scope (optional, e.g. PRINCIPAL_ROLE:ALL)",
+      "when": {
+        "login": [
+          "oauth"
+        ]
+      }
+    },
+    {
+      "name": "region",
+      "label": "AWS region",
+      "kind": "aws-region",
+      "prompt": "AWS region (optional; only if the files are on S3)",
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity"
+        ],
+        "files": [
+          "vended"
+        ]
+      }
+    },
+    {
+      "name": "region",
+      "label": "AWS region",
+      "kind": "storage-region",
+      "required": true,
+      "prompt": "AWS region (the bucket's; an S3-compatible store such as MinIO usually answers to us-east-1)",
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity",
+          "none"
+        ],
+        "files": [
+          "s3"
+        ]
+      }
+    },
+    {
+      "name": "access_key_id",
+      "label": "Access key ID",
+      "kind": "access-key",
+      "required": true,
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity"
+        ],
+        "files": [
+          "s3"
+        ]
+      }
+    },
+    {
+      "name": "access_key_id",
+      "label": "Access key ID",
+      "kind": "access-key",
+      "when": {
+        "catalog": [
+          "none"
+        ],
+        "files": [
+          "s3"
+        ]
+      },
+      "prompt": "Access key ID (Enter if the credential file - the JSON aws iam create-access-key prints - holds it)"
+    },
+    {
+      "name": "storage_secret",
+      "label": "Secret access key",
+      "kind": "secret",
+      "required": true,
+      "role": "storage",
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity"
+        ],
+        "files": [
+          "s3"
+        ]
+      }
+    },
+    {
+      "name": "secret",
+      "label": "Secret access key",
+      "kind": "secret",
+      "required": true,
+      "role": "storage",
+      "when": {
+        "catalog": [
+          "none"
+        ],
+        "files": [
+          "s3"
+        ]
+      }
+    },
+    {
+      "name": "endpoint",
+      "label": "Endpoint",
+      "kind": "endpoint-url",
+      "prompt": "Endpoint (S3-compatible store, optional: e.g. https://minio.example.com:9000)",
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity",
+          "none"
+        ],
+        "files": [
+          "s3"
+        ]
+      }
+    },
+    {
+      "name": "account_name",
+      "label": "Azure storage account",
+      "kind": "azure-account",
+      "required": true,
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity"
+        ],
+        "files": [
+          "azure"
+        ]
+      }
+    },
+    {
+      "name": "storage_secret",
+      "label": "Account key or SAS",
+      "kind": "secret",
+      "required": true,
+      "role": "storage",
+      "when": {
+        "catalog": [
+          "iceberg-rest",
+          "unity"
+        ],
+        "files": [
+          "azure"
+        ]
+      }
+    },
+    {
+      "name": "secret",
+      "label": "Account key or SAS",
+      "kind": "secret",
+      "required": true,
+      "role": "storage",
+      "when": {
+        "catalog": [
+          "none"
+        ],
+        "files": [
+          "azure"
+        ]
+      }
     }
   ],
-  "paste": {
-    "style": "glue",
-    "forms": ["https://glue.<region>.amazonaws.com", "arn:aws:glue:<region>:<account>:database/<name>"]
+  "variants": {
+    "iceberg-rest": {
+      "host_from": "catalog_url",
+      "url": "{catalog_url}",
+      "vs_properties": {
+        "NAMESPACE": "{namespace}"
+      },
+      "paste": {
+        "style": "catalog",
+        "input": "catalog_url",
+        "forms": [
+          "https://<catalog-host>[:port][/path]"
+        ]
+      }
+    },
+    "unity": {
+      "host_from": "workspace_url",
+      "url": "{workspace_url}",
+      "vs_properties": {
+        "CATALOG_KIND": "UNITY_CATALOG",
+        "NAMESPACE": "{namespace}"
+      },
+      "paste": {
+        "style": "catalog",
+        "input": "workspace_url",
+        "forms": [
+          "https://<workspace-host>"
+        ]
+      }
+    },
+    "glue": {
+      "host": "glue.{region}.amazonaws.com",
+      "url": "https://glue.{region}.amazonaws.com",
+      "vs_properties": {
+        "CATALOG_KIND": "GLUE",
+        "NAMESPACE": "{database}"
+      },
+      "paste": {
+        "style": "glue",
+        "forms": [
+          "https://glue.<region>.amazonaws.com",
+          "arn:aws:glue:<region>:<account>:database/<name>"
+        ]
+      }
+    },
+    "none": {
+      "url": "{path}",
+      "vs_properties": {
+        "CATALOG_KIND": "DIRECT_STORAGE"
+      },
+      "paste": {
+        "style": "lakehouse",
+        "forms": [
+          "s3://<bucket>/<prefix>/",
+          "abfss://<container>@<account>.dfs.core.windows.net/<prefix>/"
+        ]
+      }
+    }
   },
-  "auth": "aws-keys",
-  "host": "glue.{region}.amazonaws.com",
-  "url": "https://glue.{region}.amazonaws.com",
-  "credential": "lakehouse-glue",
+  "paste": {
+    "style": "lakehouse",
+    "forms": [
+      "https://<catalog-host>[:port][/path] (Iceberg REST)",
+      "https://<workspace-host> (Unity Catalog)",
+      "arn:aws:glue:<region>:<account>:database/<name>",
+      "s3://<bucket>/<prefix>/",
+      "abfss://<container>@<account>.dfs.core.windows.net/<prefix>/"
+    ]
+  },
+  "auth": "lakehouse",
+  "credential": "lakehouse",
   "connection_property": "CATALOG_CONNECTION",
-  "access": "glue:GetDatabase, GetTables, GetTable and GetPartitions on the database and its tables, s3:ListBucket on the table locations and s3:GetObject on their objects",
-  "vs_properties": {
-    "CATALOG_KIND": "GLUE",
-    "NAMESPACE": "{database}"
+  "access": "read on the catalog's namespace (list and load its tables) and read on the table files: s3:ListBucket and s3:GetObject, or Storage Blob Data Reader on the container; for Glue also glue:GetDatabase, GetTables, GetTable and GetPartitions; for Unity Catalog USE CATALOG, USE SCHEMA, SELECT and EXTERNAL USE SCHEMA",
+  "auth_hint": "the catalog login is a token (or an OAuth client's ID and secret) the catalog accepts; the storage secret, when the files are not vended, is the S3 secret key or the Azure account key or SAS",
+  "vs_when_http": {
+    "ALLOW_HTTP": "true"
   },
   "tips": [
-    "Names arrive in upper case (ORDERS, ORDER_ID): no quotes needed."
+    "Names arrive in upper case (ORDERS, ORDER_ID): no quotes needed.",
+    "One namespace (Glue: database; Unity: catalog.schema; no catalog: folder) is one virtual schema: connect again with another --name for the next one."
   ],
   "notes": [
-    "Reads the Iceberg tables of one AWS Glue database (and its plain Hive Parquet tables) where they lie in S3: exasol-labs' lakehouse-engine-rs runs Apache DataFusion inside the Rust language container (the same 0.33.0 container MongoDB uses). Iceberg deletes are applied (positional and deletion vectors); equality deletes, ORC and Avro are refused by name.",
-    "The release is a .tar.gz pinned per CPU; the .so inside it is pinned too, and staged only when both match.",
-    "The adapter calls its companion scripts by fixed names in its own schema (LAKEHOUSE_SCAN, LAKEHOUSE_DISTRIBUTE_FILES; LAKEHOUSE_VERSION reports the build), so every lakehouse source shares them, like MongoDB's.",
-    "Measured live (v0.57.3, Glue in ap-south-1, Athena-written Iceberg v2 tables with a DELETE and an UPDATE): counts, sums, a partition filter and a join equal Athena's answers; the same tables through Glue's Iceberg REST endpoint read identically. The pushdown and the schema's properties carry the CONNECTION's name, never a key.",
-    "Credentials are an IAM access key pair (or the JSON `aws iam create-access-key` prints) in the CONNECTION's password, as JSON; the engine signs Glue and S3 requests with it. A database the key may not read - or one that does not exist, under a scoped policy - is refused as AccessDenied."
+    "exasol-labs' lakehouse-engine-rs runs Apache DataFusion inside the Rust language container (the same 0.33.0 container MongoDB uses). One pinned build, one LAKEHOUSE_ADAPTER and its companion scripts in EXAKIT_VS serve every lakehouse source, whatever its catalog.",
+    "The CONNECTION goes TO the catalog's address (Iceberg REST: the catalog URL; Unity: the workspace URL; Glue: https://glue.<region>.amazonaws.com; no catalog: the folder path) with an empty user; its password is JSON the kit writes from the catalog login and the files' access. CATALOG_KIND is UNITY_CATALOG, GLUE or DIRECT_STORAGE (absent for Iceberg REST).",
+    "Two secrets at most: the catalog's (a token or an OAuth client secret; for Glue the AWS secret key; with no catalog the storage secret) on --password-file or --password-stdin, and the storage secret (S3 secret key, Azure account key or SAS) on --storage-secret-file, or asked hidden. Neither is ever taken as an argument.",
+    "The release is a .tar.gz pinned per CPU; the .so inside it is pinned too, and staged only when both match. Iceberg deletes are applied (positional and deletion vectors); equality deletes, ORC and Avro are refused by name.",
+    "https by default. Plain http is accepted only when typed, and only towards this computer or a private network; the virtual schema then carries ALLOW_HTTP. localhost is refused: inside the database it is the database itself."
   ]
 }
