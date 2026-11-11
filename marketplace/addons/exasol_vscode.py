@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -86,10 +87,36 @@ def _code_args(cli: Path, *args: str) -> list[str]:
     return [*prefix, *args]
 
 
+# Where VS Code and its forks keep extensions, under the user's home (the same names on Windows, under %USERPROFILE%).
+EXTENSION_DIRS = (".vscode/extensions", ".vscode-insiders/extensions", ".vscode-oss/extensions",
+                  ".cursor/extensions", ".windsurf/extensions")
+_FOLDER = re.compile(re.escape(EXTENSION_ID) + r"-(\d+\.\d+\.\d+)(?:-[\w-]+)?$", re.I)
+
+
+def folder_version(ctx: KitContext) -> str | None:
+    """The extension's version from an editor's extensions folder - found without the editor's command-line tool,
+    which is often not on PATH. A folder the editor marked as removed (its .obsolete list) does not count."""
+    roots = [Path(os.environ["EXAKIT_EXASOL_VSCODE_EXTDIR"])] if os.environ.get("EXAKIT_EXASOL_VSCODE_EXTDIR") else []
+    roots += [Path.home() / relative for relative in EXTENSION_DIRS]
+    found: list[tuple[tuple[int, ...], str]] = []
+    for root in roots:
+        if not root.is_dir():
+            continue
+        try:
+            removed = set(json.loads((root / ".obsolete").read_text(encoding="utf-8")))
+        except (OSError, ValueError, TypeError):
+            removed = set()
+        for entry in root.iterdir():
+            match = _FOLDER.match(entry.name)
+            if match and entry.is_dir() and entry.name not in removed:
+                found.append((tuple(int(x) for x in match.group(1).split(".")), match.group(1)))
+    return max(found)[1] if found else None
+
+
 def live_version(ctx: KitContext) -> str | None:
     cli = code_cli(ctx)
     if not cli:
-        return None
+        return folder_version(ctx)
     try:
         result = subprocess.run(_code_args(cli, "--list-extensions", "--show-versions"),
                                 stdin=subprocess.DEVNULL, capture_output=True, text=True,
@@ -97,12 +124,13 @@ def live_version(ctx: KitContext) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
-        return None
+        return folder_version(ctx)
     for line in result.stdout.splitlines():
         name, _, version = line.strip().partition("@")
         if name.lower() == EXTENSION_ID and version:
             return version
-    return None
+    # One editor's tool answered, but the extension may be in another editor (a fork) of this machine.
+    return folder_version(ctx)
 
 
 def installed_version(ctx: KitContext) -> str | None:
@@ -110,11 +138,15 @@ def installed_version(ctx: KitContext) -> str | None:
 
 
 def system_present(ctx: KitContext) -> bool:
+    """Installed by the user, not the kit: the kit lists it as managed outside the kit and never offers to install,
+    update or remove it."""
     return not ctx.manifest.get(f"{RECEIPT}.version") and bool(live_version(ctx))
 
 
 def applicable(ctx: KitContext) -> bool:
-    return code_cli(ctx) is not None
+    """An editor the kit can install into - or the extension already in one (then listed as managed outside the
+    kit, never as "not available": the user has it)."""
+    return code_cli(ctx) is not None or folder_version(ctx) is not None
 
 
 def _release_digest(version: str, asset_name: str) -> str | None:

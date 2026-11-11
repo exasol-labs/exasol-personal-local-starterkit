@@ -293,6 +293,27 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertEqual([str(cli), "--extensions-dir", str(extension_dir),
                           "--list-extensions", "--show-versions"], invoke.call_args.args[0])
 
+    def test_vscode_extension_found_in_an_editor_folder_without_its_cli_is_managed_outside(self) -> None:
+        """No editor command on PATH (common on a Mac), but the extension in ~/.vscode/extensions: the user has it, so
+        it is listed as managed outside the kit - never offered for install, never "not available"."""
+        user_home = Path(self.temp.name) / "user"
+        folder = user_home / ".cursor" / "extensions"
+        (folder / "exasol.exasol-vscode-1.7.0").mkdir(parents=True)
+        (folder / "exasol.exasol-vscode-1.8.2-darwin-arm64").mkdir()
+        with patch.object(exasol_vscode, "code_cli", return_value=None), \
+             patch.object(exasol_vscode.Path, "home", return_value=user_home), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXAKIT_EXASOL_VSCODE_EXTDIR", None)
+            self.assertEqual("1.8.2", exasol_vscode.live_version(self.ctx))
+            self.assertTrue(exasol_vscode.system_present(self.ctx))
+            self.assertTrue(exasol_vscode.applicable(self.ctx))
+            # An editor that removed it lists the folder in .obsolete until it cleans up: not installed.
+            (folder / ".obsolete").write_text(json.dumps({"exasol.exasol-vscode-1.7.0": True,
+                                                         "exasol.exasol-vscode-1.8.2-darwin-arm64": True}), encoding="utf-8")
+            self.assertIsNone(exasol_vscode.live_version(self.ctx))
+            self.assertFalse(exasol_vscode.system_present(self.ctx))
+            self.assertFalse(exasol_vscode.applicable(self.ctx))
+
     def test_vscode_wsl_stages_extension_on_windows_drive(self) -> None:
         source = self.home / "extension.vsix"
         source.write_bytes(b"extension")
