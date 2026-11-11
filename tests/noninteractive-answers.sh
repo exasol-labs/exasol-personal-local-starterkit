@@ -156,7 +156,9 @@ offer() { # offer — LOAD/FILE/CONNECT in order~rc~what was said~NOTE=the failu
         # file loader answers (3: refused, 1: failed). The failure note is kept.
         exakit_load_dataset() { printf 'LOAD %s\n' "$2" >> "$WORK/offer.log"; [ "$2" != "${OFFER_FAIL:-}" ]; }
         exakit_load_sample_data() { printf 'LOAD tpch(sample)\n' >> "$WORK/offer.log"; }
-        exakit_load_local_file() { printf 'FILE %s\n' "$EXAKIT_DATA_FILE" >> "$WORK/offer.log"; echo "FILE-RAN"; return "${OFFER_FILE_RC:-0}"; }
+        exakit_load_local_file() { printf 'FILE %s\n' "$EXAKIT_DATA_FILE" >> "$WORK/offer.log"; echo "FILE-RAN"
+            [ -n "${OFFER_FILE_NAMES:-}" ] && [ -n "${EXAKIT_LOCAL_FILE_NAMES:-}" ] && printf '%s\n' $OFFER_FILE_NAMES > "$EXAKIT_LOCAL_FILE_NAMES"
+            return "${OFFER_FILE_RC:-0}"; }
         exakit_vs_connect_wizard() { printf 'CONNECT\n' >> "$WORK/offer.log"; }
         exakit_bundled_datasets() { printf 'tpch|TPC-H\nenergy|Energy\namazon_sales|Amazon\n'; }
         exakit_note_failure() { printf '%s' "$*" > "$WORK/offer.note"; }
@@ -200,11 +202,50 @@ check "...the refusal is a warning" "yes" "$(printf '%s' "$out" | grep -q 'The l
 out="$(EXAKIT_DATASETS=nope EXAKIT_DATA_FILE="$WORK/mine.csv" offer)"
 check "no dataset matched: said before the file loads" "yes" \
     "$(printf '%s' "$out" | cut -d'~' -f3 | grep -q 'matched no bundled dataset.*FILE-RAN' && echo yes || echo no)"
-# A dataset and the file both fail: the step is failed once, naming both.
+# A dataset and the file both fail: the step fails for the dataset only. The
+# reader's own file is the file, not the install.
 out="$(EXAKIT_DATASETS=tpch EXAKIT_DATA_FILE="$WORK/mine.csv" OFFER_FAIL=tpch OFFER_FILE_RC=1 offer)"
 check "a dataset and the file both fail: the step fails" "rc=1" "$(printf '%s' "$out" | cut -d'~' -f2)"
-check "...and the note names both reasons" "yes" \
-    "$(printf '%s' "$out" | sed -n 's/.*~NOTE=//p' | grep -q "loading dataset 'tpch' did not finish.*loading the local file did not finish" && echo yes || echo no)"
+check "...and the note names the dataset" "yes" \
+    "$(printf '%s' "$out" | sed -n 's/.*~NOTE=//p' | grep -q "loading dataset 'tpch' did not finish" && echo yes || echo no)"
+check "...but not the file" "no" \
+    "$(printf '%s' "$out" | sed -n 's/.*~NOTE=//p' | grep -q "local file" && echo yes || echo no)"
+# Only the file fails (2 of 3 files in a folder loaded, a Parquet with a Struct
+# column did not): no failed step, no failure note, the file named in a warning.
+out="$(EXAKIT_DATASETS=tpch EXAKIT_DATA_FILE="$WORK/mine.csv" OFFER_FILE_RC=1 OFFER_FILE_NAMES="nested.parquet" offer)"
+check "only the file fails: the datasets load, the step does not fail" "LOAD tpch;FILE $WORK/mine.csv;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+check "...and no failure note is written" "" "$(printf '%s' "$out" | sed -n 's/.*~NOTE=//p')"
+check "...the warning names the file" "yes" \
+    "$(printf '%s' "$out" | grep -q 'Your file nested.parquet did not load (reason above). Retry any time with: exakit data-load' && echo yes || echo no)"
+out="$(EXAKIT_LOAD_SAMPLE=0 EXAKIT_DATA_FILE="$WORK/mine.csv" OFFER_FILE_RC=1 OFFER_FILE_NAMES="a.parquet b.csv" offer)"
+check "...several files are named together" "yes" \
+    "$(printf '%s' "$out" | grep -q 'Your files a.parquet, b.csv did not load (reason above)' && echo yes || echo no)"
+# ...and so the install carries on to the marketplace offer: the persona's data
+# section records no soft failure, and the offer is shown, not the info line.
+_mkt="$( (
+    exakit_load_dataset() { :; }
+    exakit_load_local_file() { return 1; }
+    exakit_bundled_datasets() { printf 'tpch|TPC-H\n'; }
+    exakit_soft_failed() { return 1; }
+    exakit_record_soft_failure() { EXAKIT_SOFT_FAILED="${EXAKIT_SOFT_FAILED:+$EXAKIT_SOFT_FAILED }$1"; }
+    _exakit_prompt_tty() { :; }
+    unset EXAKIT_SOFT_FAILED EXAKIT_MARKETPLACE_PRESELECT
+    . "$ROOT/setup/lib/persona.sh"
+    EXAKIT_HOME="$WORK/home" EXAKIT_DATASETS=tpch EXAKIT_DATA_FILE="$WORK/mine.csv" \
+        exakit_persona_data "$ROOT" </dev/null >"$WORK/persona.out" 2>&1
+    _exakit_marketplace_load_modules() { :; }
+    exakit_marketplace_has_pending() { return 0; }
+    _exakit_marketplace_warm_about() { :; }
+    _exakit_prompt_tty() { printf '/dev/tty'; }
+    ui_spin_begin() { :; }; ui_spin_end() { :; }; ui_rule() { :; }
+    heading() { printf 'HEADING %s\n' "$1"; }
+    ui_checkbox_menu() { printf 'OFFERED\n'; }
+    exakit_marketplace_menu() { :; }
+    printf 'soft=[%s] ' "${EXAKIT_SOFT_FAILED:-}"
+    grep -q 'Sample data did not finish loading' "$WORK/persona.out" && printf 'warned ' || printf 'quiet '
+    exakit_marketplace_offer 2>/dev/null | grep -c 'HEADING Supercharge Exasol with add-ons from marketplace'
+) )"
+check "only the file fails: no soft failure, no warning, the marketplace is offered" "soft=[] quiet 1" "$_mkt"
 # No answer variables and no terminal: the table's defaults stand, and the
 # external row is never one of them.
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
