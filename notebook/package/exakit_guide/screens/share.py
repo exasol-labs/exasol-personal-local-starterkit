@@ -93,9 +93,8 @@ class Dashboard(Screen):
         try:
             self.dash = actions.run("share.server")     # installs and starts it the kit's way when needed
         except Exception as exc:
-            self.dash = {"state": "not running", "url": ""}
-            self.flash = {"kind": "warn", "v": f"The dashboard server isn't answering ({str(exc).splitlines()[0][:100]}). "
-                                               "Start it from the Home screen, then run this cell again."}
+            # Nothing for the user to do: making a preview installs and starts it (see _server_ready).
+            self.dash = {"state": "not running", "url": "", "why": str(exc).splitlines()[0][:160]}
         try:
             self.ds = _dataset()
             cols = dict(getattr(self.ds.descriptor, "columns", {}) or {})
@@ -138,7 +137,8 @@ class Dashboard(Screen):
             return [head, {"t": "msg", "kind": "error", "v": self.error}]
         ds = self.ds
         blocks = [head, {"t": "summary_row", "v": f"{ds.id} · {ds.fact_table} · column map v{ds.version}",
-                         "sub": f"Dashboards: {(self.dash or {}).get('state', 'unknown')} at {(self.dash or {}).get('url', '')}"}]
+                         "sub": (f"Dashboards: running at {self.dash['url']}" if self._server_up()
+                                 else "Dashboards: the dashboard server is set up for you when you make the preview")}]
         group_opts = [{"value": g, "label": g} for g in self.groups]
         options = [{"value": "compare", "title": "A comparison", "text": "Counts per group, with the outcome's rate when there is one.",
                     "disabled": not self.groups, "disabled_reason": "No column was marked Group to compare in step 1.",
@@ -150,7 +150,9 @@ class Dashboard(Screen):
         blocks += [{"t": "choice", "id": "what", "value": "compare" if self.groups else "answer", "options": options},
                    {"t": "fields", "items": [{"id": "title", "type": "text", "label": "Title (optional)", "placeholder": "Named after the data if empty"}]},
                    {"t": "actions", "items": [{"id": "preview", "label": "Make a preview" if not self.preview_url else "Make a new preview",
-                                               "primary": not self.preview_url, "busy": "Building and checking the preview…"}]}]
+                                               "primary": not self.preview_url,
+                                               "busy": "Building and checking the preview…" if self._server_up()
+                                                       else "Setting up the dashboard server, then building the preview…"}]}]
         if self.draft is not None and self.preview_url:
             blocks += [{"t": "linkcard", "title": "Preview ready and healthy", "text": f"“{self.draft.title}” · not visible to anyone else yet.",
                         "href": self.dash["url"] + self.preview_url, "label": "Open the preview"},
@@ -163,21 +165,56 @@ class Dashboard(Screen):
                            "href": self.dash["url"] + self.live_url, "label": "Open the dashboard", "kind": "ok"})
         return blocks
 
+    # -- the dashboard server -----------------------------------------------------------------
+    def _server_up(self) -> bool:
+        return bool(self.dash and self.dash.get("state") == "running" and self.dash.get("url"))
+
+    def _server_ready(self, again: bool = False) -> None:
+        """The dashboard server, installed and running: made so here when it is not, with the kit's own
+        nb.addon_ready("dash-server") (`exakit marketplace dash-server`, `exakit start dash-server`). Nothing is
+        asked: sharing needs it, and it is the kit's own add-on. ``again`` checks it even when it was up before."""
+        if self._server_up() and not again:
+            return
+        SESSION.release()   # `exakit status` can stall while this process holds a database connection (kit issue)
+        self.dash = actions.run("share.server")
+        if not self._server_up():
+            raise RuntimeError("The dashboard server was installed but is not running "
+                               f"(state: {(self.dash or {}).get('state') or 'unknown'}). On Home: Start, next to Dash Server.")
+
     # -- actions ---------------------------------------------------------------------------
     def on_preview(self, v: dict) -> None:
         sql, title, measure = self._sql_for(v)
+        self._server_ready()
         SESSION.release()   # the preview reads `exakit status`, which waits while a connection is held
         title = str(v.get("title") or "").strip() or title
         self.draft = actions.run("share.draft", sql=sql, title=title, name=_slug(f"{self.ds.id}-{title}"), measure=measure)
-        self.preview_url = actions.run("share.preview")
+        try:
+            self.preview_url = actions.run("share.preview")
+        except Exception:
+            if self._gone():
+                # It was removed or stopped since this card opened: set it up again and build the preview once more.
+                self._server_ready(again=True)
+                self.preview_url = actions.run("share.preview")
+            else:
+                raise
         self.live_url = None
         self.flash = {"kind": "ok", "v": "The preview is built and passed its health check. Open it and check the figures."}
+
+    def _gone(self) -> bool:
+        """True when the dashboard server is not there any more (not installed, or stopped): the kit's own state."""
+        SESSION.release()
+        try:
+            state = actions.run("kit.check")
+        except Exception:
+            return True
+        return (state.get("services") or {}).get("dash-server") != "running"
 
     def on_publish(self, v: dict) -> None:
         if self.draft is None:
             raise ValueError("Make a preview first.")
         if not (v.get("checked") and v.get("ok_to_share")):
             raise ValueError("Tick both boxes before you publish.")
+        self._server_ready()
         SESSION.release()
         self.live_url = actions.run("share.publish")
         self.flash = {"kind": "ok", "v": "Published. The dashboard is live and passed its health check."}

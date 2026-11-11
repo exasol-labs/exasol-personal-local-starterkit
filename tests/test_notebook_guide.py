@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import inspect
 import importlib.util
 import json
 import os
@@ -597,6 +598,63 @@ class CardTest(unittest.TestCase):
 
         with mock.patch.object(share.actions, "run", side_effect=run):
             self.assertEqual(["How many? · 3 rows"], [a["label"] for a in share._answers("d")])
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_a_preview_sets_up_the_dashboard_server_itself_when_it_is_not_there(self):
+        """Sharing needs Dash Server. When it is not installed or not running, making the preview (or publishing)
+        installs and starts it with the kit's own nb.addon_ready - nothing is asked and nothing is left to the user -
+        and one that went away after the card opened is set up again, once."""
+        share = importlib.import_module("exakit_guide.screens.share")
+        ran: list[str] = []
+        state = {"up": False, "preview_fails": 0}
+
+        def run(action_id, **values):
+            ran.append(action_id)
+            if action_id == "share.server":
+                state["up"] = True
+                return {"addon": "x", "installed": True, "state": "running", "url": "http://dash"}
+            if action_id == "kit.check":
+                return {"services": {}}
+            if action_id == "share.draft":
+                return mock.Mock(title="T", sql="SELECT 1")
+            if action_id == "share.preview":
+                if state["preview_fails"]:
+                    state["preview_fails"] -= 1
+                    raise RuntimeError("the dashboard server does not answer")
+                return "/preview"
+            return "/live"
+
+        def card(dash):
+            made = share.Dashboard.__new__(share.Dashboard)
+            made.ds, made.dash, made.draft, made.preview_url, made.live_url = mock.Mock(id="d"), dash, None, None, None
+            made._sql_for = lambda v: ("SELECT 1", "T", "count")
+            return made
+
+        with mock.patch.object(share.actions, "run", side_effect=run), mock.patch.object(share.SESSION, "release"):
+            missing = card({"state": "not running", "url": "", "why": "not installed"})
+            self.assertFalse(missing._server_up())
+            missing.on_preview({})
+            self.assertEqual(["share.server", "share.draft", "share.preview"], ran)      # set up first, then the preview
+            self.assertEqual("/preview", missing.preview_url)
+            self.assertEqual("http://dash", missing.dash["url"])
+
+            del ran[:]
+            there = card({"state": "running", "url": "http://dash"})
+            there.on_preview({})
+            self.assertEqual(["share.draft", "share.preview"], ran)                       # already there: not touched
+
+            del ran[:]
+            state["preview_fails"] = 1                                                    # removed after the card opened
+            there.on_preview({})
+            self.assertEqual(["share.draft", "share.preview", "kit.check", "share.server", "share.preview"], ran)
+
+            del ran[:]
+            stopped = card({"state": "stopped", "url": "http://dash"})
+            stopped.draft = mock.Mock()
+            stopped.on_publish({"checked": True, "ok_to_share": True})
+            self.assertEqual(["share.server", "share.publish"], ran)
+        for line in (share.Dashboard.build, share.Dashboard.__init__):
+            self.assertNotIn("Start it from the Home screen", inspect.getsource(line))
 
     def test_run_logs_exactly_what_it_ran_and_returns_the_result(self):
         actions = importlib.import_module("exakit_guide.actions")
