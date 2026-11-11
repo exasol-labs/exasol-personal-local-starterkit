@@ -327,6 +327,12 @@ def check_value(spec, raw):
             document.load_mappings(raw)
         except document.DocumentError as error:
             return None, str(error)
+    elif kind == "warehouse" and re.match(r"^https?://", raw, re.I):
+        # Measured: the catalog URL typed here failed deep in the UDF (HTTP 400,
+        # "not a valid name"). A storage location (s3://bucket/) stays: the
+        # Iceberg REST reference catalog and MinIO setups take one.
+        return None, ("warehouse is the catalog's name (e.g. exakit_uc for Databricks, the catalog name for "
+                      "Polaris), not a URL - the URL goes in catalog_url")
     elif kind == "mongodb-uri" and "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
         return None, ("the MongoDB URI carries credentials (user:password@): give the user with --set user=... "
                       "and the password on standard input, so the database keeps it hidden")
@@ -518,6 +524,14 @@ def tls_warning(connector, values):
         return "TLS encrypts the connection but does NOT check the server's identity"
     if mode == "disable":
         return "TLS is off: credentials and rows cross the network unencrypted"
+    if mode == "verify" and not values.get("ca") and any(s["kind"] == "ca-file" for s in connector["inputs"]):
+        # Measured on Exasol Personal 2.4: the JDBC loader has an empty Java
+        # trust store, so verify without a CA fails later on "trustAnchors"
+        # (MySQL: "Could not load trustJKS keystore from null").
+        return ("tls=verify needs a CA file here: the database's JDBC loader has no CA store of its own, so "
+                "without one the connect fails on trustAnchors - give the CA as PEM with --set ca=<file>, for a "
+                "public CA too (its root, e.g. ISRG Root X1%s)"
+                % ("; SQL Server: the root plus its intermediates" if connector["id"] == "sqlserver" else ""))
     return None
 
 

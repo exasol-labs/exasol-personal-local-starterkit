@@ -49,7 +49,7 @@
     },
     {
       "name": "catalog",
-      "label": "Unity Catalog catalog",
+      "label": "Catalog (Unity Catalog)",
       "kind": "databricks-name",
       "required": true
     },

@@ -19,7 +19,7 @@ compute. To query through a SQL warehouse instead, see [Databricks](databricks.m
 | Name (alias) for this connection | yes | `uc_sales` |
 | Workspace URL | yes | `https://dbc-1234abcd-5678.cloud.databricks.com` |
 | Schema as catalog.schema | yes | `main.sales` |
-| AWS region of the bucket that holds the tables | yes | `us-east-2` |
+| AWS region (data bucket) | yes | `us-east-2` |
 | Personal access token | yes | (hidden) |
 
 ## Where to find each value

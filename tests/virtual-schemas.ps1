@@ -572,7 +572,7 @@ function Row([string]$Label, [string]$Value) { return ($Label.PadRight(34) + "  
 # Enter on the required name is refused; on the optional schema it takes the
 # default, on the optional CA it leaves it empty; 3 asks the port again.
 Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
-Check "the first question is the connection string, read hidden" "HIDDEN Connection string (not shown while you paste, Enter to type the fields)" $script:formAsked[0]
+Check "the first question is the connection string, read hidden" "HIDDEN Connection string (hidden) - paste + Enter, or Enter alone for the fields" $script:formAsked[0]
 Check "...its hint says what to paste" $true $script:formOut.Contains("Paste the source's connection string, for example:")
 Check "...then one form per line, indented under the text" $true $script:formOut.Contains("        jdbc:postgresql://host:5432/db`n        postgres://user@host:5432/db`n        host[:port][/database]")
 Check "...the string is shown back, its password masked by the engine" $true $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales")
@@ -713,8 +713,8 @@ function Read-ExakitPrompt { param([string]$Question, [string]$Default = "")
 function Read-ExakitVsSecret { param([string]$Label, [string]$PasswordFile = "", [string]$Kind = "secret")
     Add-Content -LiteralPath $record -Value "HIDDEN $Label"
     return $env:FORM_SECRET }
-function Read-ExakitVsHidden { param([string]$Label, [string]$Note = "input hidden")
-    Add-Content -LiteralPath $record -Value "HIDDEN $Label ($Note)"
+function Read-ExakitVsHidden { param([string]$Label, [string]$Note = "input hidden", [string]$Question = "")
+    if ($Question) { Add-Content -LiteralPath $record -Value "HIDDEN $Question" } else { Add-Content -LiteralPath $record -Value "HIDDEN $Label ($Note)" }
     if ($script:queue.Count -eq 0) { return "" }
     $a = $script:queue[0]; $script:queue.RemoveAt(0)
     return $a }
@@ -741,7 +741,7 @@ function Invoke-LineChild([string[]]$Answers, [string[]]$CliArgs) {
 }
 Invoke-LineChild @("garbage string", ("jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=" + $pastePw), "", "psline", "", "", "", "y") @("pg")
 Check "line by line: exit 0" 0 $script:lineCode
-Check "...the connection string is asked first, hidden" "HIDDEN Connection string (not shown while you paste, Enter to type the fields)" $script:formAsked[0]
+Check "...the connection string is asked first, hidden" "HIDDEN Connection string (hidden) - paste + Enter, or Enter alone for the fields" $script:formAsked[0]
 Check "...under the hint" $true $script:formOut.Contains("INFO Paste the source's connection string, for example:")
 Check "...shown back masked" $true $script:formOut.Contains("INFO Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****")
 Check "...then one key decides, Enter used it" 1 @($script:formAsked | Where-Object { $_ -eq "KEY enter" }).Count
@@ -1479,6 +1479,53 @@ Check "...a form wider than the console wraps at the same indent" "        jdbc:
 $script:shown.Clear()
 $script:BinDir = $previousBin
 Remove-Item Env:\FAKE_START_RC
+
+
+# --- connect --help: the connector guides (docs\virtual-schemas) ----------------
+# The shipped command, with nothing installed: the same guide as the bash CLI,
+# ASCII only, and the Windows paste note from the guide's own words.
+$guideHome = Join-Path $work "guide-home"; New-Item -ItemType Directory -Force -Path $guideHome | Out-Null
+$savedHome = $env:HOME; $savedExakitHome = $env:EXAKIT_HOME; $savedLookup = $env:EXAKIT_NO_IP_LOOKUP
+$env:HOME = $guideHome; $env:EXAKIT_HOME = Join-Path $guideHome ".exasol-starter-kit"; $env:EXAKIT_NO_IP_LOOKUP = "1"
+function Guide {
+    param([string[]]$Words)
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $out = @(& $pwsh -NoProfile -File (J @("setup", "exakit.ps1")) @Words 2>&1)
+    } finally { $ErrorActionPreference = $previous }
+    return (($out | ForEach-Object { "$_" }) -join "`n")
+}
+$g = Guide @("connect", "postgresql", "--help"); $gCode = $LASTEXITCODE
+Check "connect postgresql --help: exit 0" 0 $gCode
+Check "...names the agent skill" $true ($g.Contains("exasol-vs-postgresql"))
+Check "...has the CA line" $true ($g.Contains("  The CA certificate (for"))
+Check "...gives one connection string to paste" $true ($g.Contains("postgres://exakit_reader@"))
+Check "...says on Windows to paste at the prompt, never --url with &" $true ($g.Contains("Windows: paste the connection string at the prompt; do not use --url with a") -and $g.Contains("contains &."))
+Check "...the connect command" $true ($g.Contains("Connect: exakit connect postgresql"))
+Check "...ASCII only" $true (-not ($g -match '[^\x00-\x7F]'))
+Check "help pg is the same guide (an alias)" $g (Guide @("help", "pg"))
+Check "help connect postgresql is the same guide" $g (Guide @("help", "connect", "postgresql"))
+$l = Guide @("connect", "--help")
+$ids = @((Get-Content -Raw -LiteralPath (J @("setup", "virtual-schemas", "catalog.json")) | ConvertFrom-Json).connectors | ForEach-Object { $_.id })
+$listed = @($ids | Where-Object { $l -match ("(?m)^  " + [regex]::Escape($_) + " ") }).Count
+Check "connect --help lists every connector" $ids.Count $listed
+Check "...the CA file where it applies" $true ($l.Contains("its password; CA file"))
+Check "...not the command page" $false ($l.Contains("Connects PostgreSQL, MySQL"))
+Check "help connect keeps the whole command page" $true ((Guide @("help", "connect")).Contains("Connects PostgreSQL, MySQL"))
+Check "help mcp keeps the component page" $true ((Guide @("help", "mcp")).Contains("MCP server"))
+$env:HOME = $savedHome; $env:EXAKIT_HOME = $savedExakitHome; $env:EXAKIT_NO_IP_LOOKUP = $savedLookup
+if ($null -eq $savedExakitHome) { Remove-Item Env:\EXAKIT_HOME -ErrorAction SilentlyContinue }
+if ($null -eq $savedLookup) { Remove-Item Env:\EXAKIT_NO_IP_LOOKUP -ErrorAction SilentlyContinue }
+
+# V1 and R1: the table cell names the new kinds in the same words as the bash twin.
+$shBridge = Get-Content -Raw -LiteralPath (J @("setup", "lib", "virtual-schemas.sh"))
+foreach ($pair in @(@("catalog", "the catalog does not know that warehouse"), @("sandbox", "the database's Java sandbox refused the driver"))) {
+    Check ("the table names kind " + $pair[0] + " as the bash twin does") $true ($bridgeText.Contains(('"{0}" = "{1}"' -f $pair[0], $pair[1])) -and $shBridge.Contains(('"{0}": "{1}"' -f $pair[0], $pair[1])))
+}
+# W21: the Read: line breaks a connection string only at a separator. Twin of the bash check.
+Check "Read: wraps only after & ; ? /, each continuation under the string" "Read: jdbc:databricks://|      dbc-1234abcd-5678.cloud.databricks.com:443/|      default;transportMode=http;ssl=1;AuthMech=3;|      httpPath=/sql/1.0/warehouses/abc;|      ConnCatalog=workspace;ConnSchema=sales;|      user=EXAKIT_READER" ((Split-ExakitVsReadWrap -Text "Read: jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc;ConnCatalog=workspace;ConnSchema=sales;user=EXAKIT_READER" -Width 52) -join "|")
+Check "...a string that fits stays on one line" "Read: postgres://reader@h:5432/db" ((Split-ExakitVsReadWrap -Text "Read: postgres://reader@h:5432/db" -Width 52) -join "|")
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }

@@ -1218,6 +1218,35 @@ run_secret "$SECRET" connect pg --name rds $RDS_SET --secret-stdin
 check "connect to a private-CA source without ca: exit 1, nothing kept" "1 {}" "$RC $(dbq 'd["connections"]')"
 has "...and the fix is named" "give it with --set ca=<file>, then connect again" "$OUT"
 
+db '{"sources": {"rds.example.com": {"tables": ["RENTAL"], "fail": "echo", "message": "ETL-5: Your security policy has prevented the connection from being attempted. You probably need to grant the connect java.net.SocketPermission to the database server host and port"}}}'
+run_secret "$SECRET" connect pg --name rds $RDS_SET --set tls=require --secret-stdin
+check "R1: the Java sandbox refusing the driver: exit 1, nothing kept" "1 {}" "$RC $(dbq 'd["connections"]')"
+has "...the FAIL line says nothing was kept" "nothing was kept" "$OUT"
+has "...and that it is not the network or the credentials" "not the network or the credentials" "$OUT"
+
+E9="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan, sql
+c = json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/iceberg-rest/connector.json"))
+spec = [i for i in c["inputs"] if i["name"] == "warehouse"][0]
+for w in ("https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest", "exakit_uc", "my.catalog", "s3://wh/"):
+    print("%s|%s" % (w, plan.check_value(spec, w)[1]))
+text = "VM error: F-UDF-CL-RUST-9001: UDF error: failed to read the catalog config for warehouse 'https://x/api': catalog request failed with HTTP 400"
+k = sql.classify(text)
+print("%s %s" % (k, lifecycle.STATUS_FOR[k]))
+print(lifecycle.remedy_for(k, "src", c, text))
+PYE
+)"
+has "V1: a URL as the Iceberg REST warehouse is refused at plan time" "warehouse is the catalog's name (e.g. exakit_uc for Databricks" "$(printf '%s\n' "$E9" | sed -n 1p)"
+check "...a plain name passes" "exakit_uc|None" "$(printf '%s\n' "$E9" | sed -n 2p)"
+check "...a name with a period passes (some catalogs allow one)" "my.catalog|None" "$(printf '%s\n' "$E9" | sed -n 3p)"
+check "...a storage location stays allowed (the REST reference catalog, MinIO)" "s3://wh/|None" "$(printf '%s\n' "$E9" | sed -n 4p)"
+check "...a catalog-config failure is its own kind, catalog" "catalog failed" "$(printf '%s\n' "$E9" | sed -n 5p)"
+has "...whose remedy names the warehouse and asks for the catalog's name" "the catalog does not know warehouse 'https://x/api' - give the catalog's name" "$(printf '%s\n' "$E9" | sed -n 6p)"
+run plan iceberg-rest --name rest1 --set catalog_url=https://rest.example.com --set warehouse=https://rest.example.com/api --set namespace=sales
+check "...plan with a URL warehouse: exit 2" "2" "$RC"
+
 printf '\n== a database clock left behind by a sleeping laptop ==\n'
 # Measured on Exasol Personal (macOS): the VM's clock does not catch up after
 # the Mac sleeps (32 min to 2 h 26 min behind), and an RDS certificate issued
@@ -1361,6 +1390,43 @@ has "...for Snowflake (no ca, no tls choice): says it cannot connect here, offer
 lacks "...and does not offer tls=require, which Snowflake does not have" "tls=require" "$(printf '%s\n' "$E6" | sed -n 2p)"
 has "...MySQL keeps the ca advice" "give the CA as PEM with --set ca=<file>" "$(printf '%s\n' "$E6" | sed -n 3p)"
 check "...and the error is filed as TLS, so the remedy is shown (measured: Snowflake fell to 'see the log')" "tls" "$(printf '%s\n' "$E6" | sed -n 4p)"
+E8="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan, sql
+c = json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/postgresql/connector.json"))
+v = plan.validate_inputs(c, {"host": "pg.example.com", "database": "d", "user": "u", "tls": "require"})
+print(plan.jdbc_url(c, v))
+text = "ETL-5: Your security policy has prevented the connection from being attempted. You probably need to grant the connect java.net.SocketPermission to the database server host and port"
+k = sql.classify(text)
+print("%s %s" % (k, lifecycle.STATUS_FOR[k]))
+print(lifecycle.remedy_for(k, "src", c))
+PYE
+)"
+check "R1: PostgreSQL tls=require names NonValidatingFactory (the default LibPQFactory reads ~/.postgresql, which the loader's sandbox refuses)" \
+    "jdbc:postgresql://pg.example.com:5432/d?sslmode=require&sslfactory=org.postgresql.ssl.NonValidatingFactory" "$(printf '%s\n' "$E8" | sed -n 1p)"
+check "...pgjdbc's 'security policy has prevented the connection' is its own kind, sandbox" "sandbox failed" "$(printf '%s\n' "$E8" | sed -n 2p)"
+has "...with a plain remedy: not the network or the credentials" "not the network or the credentials" "$(printf '%s\n' "$E8" | sed -n 3p)"
+E7="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan, sql
+load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
+text = "Cannot create PoolableConnectionFactory (Could not load trustJKS keystore from null)"
+print(sql.classify(text))
+print(lifecycle.tls_remedy(text, load("mysql")))
+for c in ("postgresql", "mysql", "sqlserver", "oracle"):
+    w = plan.tls_warning(load(c), {"tls": "verify", "host": "h"})
+    print("%s|%s|%s" % (c, w, plan.tls_warning(load(c), {"tls": "verify", "ca": "x.pem"})))
+PYE
+)"
+check "C4: MySQL's 'Could not load trustJKS keystore from null' is filed as TLS" "tls" "$(printf '%s\n' "$E7" | sed -n 1p)"
+has "...with the same CA remedy as trustAnchors" "give the CA as PEM with --set ca=<file>" "$(printf '%s\n' "$E7" | sed -n 2p)"
+for c in postgresql mysql sqlserver oracle; do
+    has "C1: $c plan warns that tls=verify needs a CA file, a public CA too" "tls=verify needs a CA file here" "$(printf '%s\n' "$E7" | grep "^$c|")"
+    has "...and not once a CA is given" "|None" "$(printf '%s\n' "$E7" | grep "^$c|")"
+    lacks "C1: $c's CA prompt no longer says it is only for a private CA" "only for a private CA" "$(cat "$ROOT/setup/virtual-schemas/connectors/$c/connector.json")"
+done
 
 printf '\n== Snowflake: the loader trusts the container'"'"'s CA store ==\n'
 # Measured on Exasol Personal 2.3.0 against a real account: the JDBC loader's
@@ -2020,6 +2086,18 @@ check "...the CONNECTION: TO the catalog URL, no user" '["https://rest.example.c
     "$(dbq '[d["connections"]["EXAKIT_SRC_REST1"]["url"], d["connections"]["EXAKIT_SRC_REST1"]["user"]]')"
 check "...its password: warehouse, token, vended credentials" '[["token", "use_vended_credentials", "warehouse"], true, "s3://wh/"]' \
     "$(dbq '(lambda c: [sorted(c), c["use_vended_credentials"], c["warehouse"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_REST1"]["secret"]))')"
+python3 - "$STATE" <<'PYCC'
+import json, sys
+d = json.load(open(sys.argv[1])); d["sources"]["rest.example.com"]["fail"] = "catalog-config"; json.dump(d, open(sys.argv[1], "w"))
+PYCC
+run_secret "$IR_TOKEN" connect iceberg-rest --name restcc $IR_SET --secret-stdin
+check "V1: a warehouse the catalog does not know: exit 1, nothing kept" "1 no" "$RC $(dbq '"yes" if "EXAKIT_SRC_RESTCC" in d["connections"] else "no"')"
+has "...the FAIL line says it in the kit's words" "the catalog does not know warehouse 's3://wh/'; nothing was kept" "$OUT"
+lacks "...not the raw VM error" "F-UDF-CL-RUST-9001" "$(printf '%s\n' "$OUT" | grep '^FAIL')"
+python3 - "$STATE" <<'PYCC'
+import json, sys
+d = json.load(open(sys.argv[1])); d["sources"]["rest.example.com"].pop("fail", None); json.dump(d, open(sys.argv[1], "w"))
+PYCC
 LHVS="$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_REST1\"")][-1]')"
 has "...the virtual schema: the connection and the namespace" "WITH CATALOG_CONNECTION = 'EXAKIT_SRC_REST1' NAMESPACE = 'sales'" "$LHVS"
 lacks "...no ALLOW_HTTP over https" "ALLOW_HTTP" "$LHVS"
@@ -2533,7 +2611,7 @@ pasted() { printf '\\x0e%s\\x0f' "$1"; }
 # macOS): a hidden prompt in canonical mode never saw its Enter.
 LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
-Q_PASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
+Q_PASTE="$(when 'Connection string (hidden) - paste + Enter, or Enter alone for the fields:')"
 # The question after a string was read and shown back masked: Enter uses it.
 Q_USE="$(when 'Esc/n to type the fields instead')"
 Q_NAME="$(when 'Name (alias) for this connection *:')"
@@ -2624,7 +2702,7 @@ PY
     TTY_REPLAY_RAW="$WORK/tui.raw" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_FAKE_JAVA_INSTALL=1 \
         TUI_ARGS="pg --name linejava --set host=pg.example.com --set database=sales --set user=reader" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
     has "line by line, Java missing: one line says what the kit does and why" "Preparing the database" "$TUI_RAW"
     lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
@@ -3188,7 +3266,7 @@ if command -v python3 >/dev/null 2>&1; then
     has "...one legend line in the box says what the star means" "│     * required " "$TUI_RAW"
     lacks "...and the words are gone" "(required)" "$TUI_RAW"
     lacks "...both of them" "(optional)" "$TUI_RAW"
-    has "the first question is the connection string, read hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
+    has "the first question is the connection string, read hidden" "Connection string (hidden) - paste + Enter, or Enter alone for the fields:" "$TUI_RAW"
     has "...its hint says what to paste" "    • Paste the source's connection string, for example:" "$TUI_RAW"
     has "...then each form the connector reads on its own line, indented under the text" "$(printf '        %s\n' 'jdbc:postgresql://host:5432/db' 'postgres://user@host:5432/db' 'host[:port][/database]')" "$TUI_RAW"
     lacks "...no list run together any more" "as it shows it:" "$TUI_RAW"
@@ -3262,11 +3340,11 @@ if command -v python3 >/dev/null 2>&1; then
     # The line-by-line questions (a terminal without the drawn form), on a pty
     # that is the scenario's /dev/tty, as a real terminal is.
     Q_LNAME="$(when 'Name (alias) for this connection (lower case, e.g. sales) *')"
-    Q_LPASTE="$(when 'Connection string (not shown while you paste, Enter to type the fields):')"
+    Q_LPASTE="$(when 'Connection string (hidden) - paste + Enter, or Enter alone for the fields:')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
-    has "line by line: the connection string is asked first, hidden" "Connection string (not shown while you paste, Enter to type the fields):" "$TUI_RAW"
+    has "line by line: the connection string is asked first, hidden" "Connection string (hidden) - paste + Enter, or Enter alone for the fields:" "$TUI_RAW"
     has "...under the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db' '        postgres://user@host:5432/db' '        host[:port][/database]')" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
     has "...shown back masked: the password, and what followed it unencoded" "    • Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****&****" "$TUI_RAW"
@@ -3320,7 +3398,7 @@ if command -v python3 >/dev/null 2>&1; then
     # Line by line too: e asks again, n types the fields; the hidden password
     # prompt (a canonical read) drops an arrow pressed in it.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
+        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the first string shown back" "    • Read: postgres://reader@first.example.com/one" "$TUI_RAW"
     has "...e asked again" "    • Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
@@ -3333,7 +3411,7 @@ if command -v python3 >/dev/null 2>&1; then
     # connection string.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg --name linedry --set host=pg.example.com --dry-run" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r"
+        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "--dry-run on a terminal: the questions as before" "? Database " "$TUI_RAW"
     has "...and the plan" "Plan for linedry" "$TUI_RAW"
@@ -3347,7 +3425,7 @@ if command -v python3 >/dev/null 2>&1; then
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_STDIN=piped \
         TUI_ARGS="pg --name linepipe --set host=pg.example.com --set database=sales --set user=reader" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "stdin a pipe, /dev/tty a terminal: the questions as before" "Schema [public]" "$TUI_RAW"
     lacks "...no star" "Port *" "$TUI_RAW"
@@ -3362,7 +3440,7 @@ if command -v python3 >/dev/null 2>&1; then
 " \
         TUI_ARGS="pg --name linestdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     lacks "--password-stdin, /dev/tty a terminal: no hidden prompt" "(input hidden)" "$TUI_RAW"
     has "...the questions from the terminal as before" "Schema [public]" "$TUI_RAW"
@@ -5001,6 +5079,74 @@ setk 'd["connections"]["EXAKIT_PREVIOUS_EXAKIT_SRC_MOVED"] = dict(d["connections
 setjournal '{"operation": "repoint", "connector": "postgresql", "swapped": true}'
 run disconnect moved </dev/null
 check "disconnect after an interrupted re-point: neither CONNECTION kept, no journal" "0 null false no" "$RC $(conn url) $(aside) $(journal)"
+
+printf '\n== connect --help: the connector guides (docs/virtual-schemas) ==\n'
+# The shipped command, from this checkout, with nothing installed: the guide
+# needs no database and no kit Python.
+GH="$WORK/guide-home"; mkdir -p "$GH"
+guide() { HOME="$GH" EXAKIT_HOME="$GH/.exasol-starter-kit" COLUMNS=80 bash "$ROOT/setup/exakit" "$@" 2>&1; }
+G="$(guide connect postgresql --help)"; RC=$?
+check "connect postgresql --help: exit 0" "0" "$RC"
+has "...names the agent skill" "exasol-vs-postgresql" "$G"
+has "...says what is still needed on this computer" "You still need, on your computer:" "$G"
+has "...lists where to find each value, required ones starred" "* Host and port" "$G"
+has "...has the CA line, from the guide's own words" "  The CA certificate (for" "$G"
+has "...and the CA wording: verify needs one, a public CA too" "even for a public CA" "$G"
+has "...gives one connection string to paste" "postgres://exakit_reader@" "$G"
+has "...the connect command" "Connect: exakit connect postgresql" "$G"
+has "...and where the full guide is" "docs/virtual-schemas/postgresql.md" "$G"
+has "...the connect options stay, as a short block" "Every option: exakit help connect" "$G"
+lacks "...Markdown syntax stripped" '**' "$G"
+lacks "...no code ticks" '`' "$G"
+check "...fits about one screen (at most 32 lines)" "yes" "$([ "$(printf '%s\n' "$G" | wc -l)" -le 32 ] && echo yes || echo no)"
+check "...no line wider than the terminal except the paste example" "" \
+    "$(printf '%s\n' "$G" | grep -v '^  postgres://' | awk 'length($0) > 80 && !/Full guide:/')"
+lacks "...offline: no public IP is asked for (EXAKIT_NO_IP_LOOKUP=1)" "see you as" "$G"
+has "...the network line then names what to allow, from the README" "Network: A source on the internet must allow" "$G"
+G2="$(EXAKIT_NO_IP_LOOKUP=0 EXAKIT_PUBLIC_IP_URL="$IPURL" guide connect postgresql --help)"
+has "...with the lookup on, the network line names this computer's public IP" "Network: cloud sources see you as 203.0.113.7" "$G2"
+check "help pg is the same guide (an alias)" "$G" "$(guide help pg)"
+check "help connect postgresql is the same guide" "$G" "$(guide help connect postgresql)"
+check "connect pg -h is the same guide" "$G" "$(guide connect pg -h)"
+L="$(guide connect --help)"; RC=$?
+check "connect --help: exit 0" "0" "$RC"
+for c in $(python3 -c 'import json,sys; print(" ".join(e["id"] for e in json.load(open(sys.argv[1]))["connectors"]))' "$ROOT/setup/virtual-schemas/catalog.json"); do
+    has "connect --help lists $c" "
+  $c " "
+$L"
+    GC="$(guide connect "$c" --help)"; RC=$?
+    check "connect $c --help: exit 0 and the connect line" "0 yes" "$RC $(printf '%s\n' "$GC" | grep -qx "Connect: exakit connect $c" && echo yes || echo no)"
+done
+has "...the CA file where it applies" "its password; CA file" "$L"
+has "...and how to get one connector's guide" "exakit connect <connector> --help" "$L"
+lacks "...not the command page" "Connects PostgreSQL, MySQL" "$L"
+has "help connect keeps the whole command page" "Connects PostgreSQL, MySQL" "$(guide help connect)"
+has "connect --help --json keeps the help document" '"command": "connect"' "$(guide connect --help --json)"
+has "help mcp keeps the add-on/component page" "MCP server" "$(guide help mcp)"
+has "help status keeps the command page" "exakit status" "$(guide help status)"
+G3="$(guide connect nosuch --help)"; RC=$?
+check "connect nosuch --help: exit 2, the list after it" "2 yes" "$RC $(printf '%s\n' "$G3" | grep -q '^  postgresql ' && echo yes || echo no)"
+check "connector ids and aliases are no help id and no command (exakit help <word> is unambiguous)" "set()" \
+    "$(python3 - "$ROOT" <<'PYC'
+import glob, json, os, sys
+root = sys.argv[1]
+keys = set()
+for e in json.load(open(os.path.join(root, "setup/virtual-schemas/catalog.json")))["connectors"]:
+    keys |= {e["id"]} | set(e.get("aliases", []))
+taken = set()
+for path in glob.glob(os.path.join(root, "setup/help/*.json")):
+    taken.add(os.path.basename(path)[:-5])
+    taken |= {c["command"].split()[0] for c in json.load(open(path)).get("commands", [])}
+print(keys & taken)
+PYC
+)"
+
+printf '\n== the Read: line breaks a connection string only at a separator ==\n'
+RW="$( . "$ROOT/setup/lib/virtual-schemas.sh" 2>/dev/null
+       _exakit_vs_read_wrap "Read: jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc;ConnCatalog=workspace;ConnSchema=sales;user=EXAKIT_READER" 52; i=0; while [ "$i" -lt "$_UI_WRAP_N" ]; do printf '%s|' "${_UI_WRAP[$i]}"; i=$((i + 1)); done )"
+check "W21: never mid-word (ConnCatalog=workspa / ce), each continuation under the string" "Read: jdbc:databricks://|      dbc-1234abcd-5678.cloud.databricks.com:443/|      default;transportMode=http;ssl=1;AuthMech=3;|      httpPath=/sql/1.0/warehouses/abc;|      ConnCatalog=workspace;ConnSchema=sales;|      user=EXAKIT_READER|" "$RW"
+RW="$( . "$ROOT/setup/lib/virtual-schemas.sh" 2>/dev/null; _exakit_vs_read_wrap "Read: postgres://reader@h:5432/db" 52; printf '%s|' "$_UI_WRAP_N" "${_UI_WRAP[0]}" )"
+check "...a string that fits stays on one line" "1|Read: postgres://reader@h:5432/db|" "$RW"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -2626,9 +2626,22 @@ usage() {
         "")       exakit_help_render overview ;;
         *)        if exakit_help_is_id "$_u_topic"; then
                       exakit_help_render component "$_u_topic"
-                  else
-                      exakit_help_render command "$_u_topic"
-                  fi ;;
+                      return $?
+                  fi
+                  # `exakit help <connector>` (or `help connect <connector>`)
+                  # is `exakit connect <connector> --help`. Connector ids and
+                  # aliases are no help id or command (tests/virtual-schemas.sh).
+                  case "$_u_topic" in
+                      "connect "*) _u_vs="${_u_topic#connect }" ;;
+                      connect|*" "*) _u_vs="" ;;
+                      *) _u_vs="$_u_topic" ;;
+                  esac
+                  if [ -n "$_u_vs" ] && command -v exakit_vs_guide >/dev/null 2>&1; then
+                      exakit_vs_guide --exact "$_u_vs"
+                      _u_rc=$?
+                      [ "$_u_rc" -eq 10 ] || return "$_u_rc"
+                  fi
+                  exakit_help_render command "$_u_topic" ;;
     esac
 }
 
@@ -3152,6 +3165,17 @@ if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$_help_skip" -eq 0 ]; then
                            fi ;;
                     esac
                 done
+                # `exakit connect [<connector>] --help`: the connector guide
+                # (exakit_vs_guide); --json keeps the help document, and
+                # `exakit help connect` the command's whole page.
+                case "$_help_topic" in
+                    connect|"connect "*)
+                        if [ -z "$_help_json" ] && command -v exakit_vs_guide >/dev/null 2>&1; then
+                            _help_word="${_help_topic#connect}"
+                            exakit_vs_guide "${_help_word# }"
+                            exit $?
+                        fi ;;
+                esac
                 usage "$_help_topic" ${_help_json:+"$_help_json"}
                 exit $?
                 ;;

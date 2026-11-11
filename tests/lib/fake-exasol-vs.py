@@ -350,6 +350,12 @@ def _catalog_source(doc, con, props, at_read=False):
             raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
                             "SignatureDoesNotMatch: The request signature we calculated does not match the "
                             "signature you provided. Check your key and signing method.")
+    if not unity and src.get("fail") == "catalog-config":
+        # Measured: the catalog URL given as the warehouse, against Databricks.
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: failed to read the catalog config for warehouse "
+                        "'%s': catalog request failed with HTTP 400: {\"error_code\":\"INVALID_PARAMETER_VALUE\","
+                        "\"message\":\"name \\\"%s\\\" is not a valid name. Valid names cannot contain spaces, periods, "
+                        "forward slashes\"}" % (cred.get("warehouse"), cred.get("warehouse")))
     if not unity and src.get("warehouse") and cred.get("warehouse") != src["warehouse"]:
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
                         "NoSuchWarehouseException: Warehouse %s does not exist (HTTP 404)" % cred.get("warehouse"))

@@ -11934,10 +11934,17 @@ _exakit_offer_fail() {
 
 # _exakit_offer_local_file — the installer's local-file load (the file row, or
 # EXAKIT_DATA_FILE), once nothing on screen animates any more. What it has to
-# say goes into the caller's _data_notes, a failure into its _data_failed.
+# say goes into the caller's _data_notes. Nothing here books the data step as
+# failed: whatever happens to the reader's own file - refused, declined, or a
+# load that did not finish - it is the file, not the install. Booking it used
+# to say "sample data is not installed" over datasets that had loaded, and the
+# soft failure it recorded skipped the marketplace offer.
 _exakit_offer_local_file() {
     command -v exakit_data_file_announce >/dev/null 2>&1 && exakit_data_file_announce
-    ( exakit_load_local_file )
+    # The loader runs in a subshell, so the names of the files that did not
+    # load come back through a file (EXAKIT_LOCAL_FILE_NAMES).
+    _lf_names="$(mktemp "${TMPDIR:-/tmp}/exakit-localfile.XXXXXX" 2>/dev/null)" || _lf_names=""
+    ( EXAKIT_LOCAL_FILE_NAMES="$_lf_names"; exakit_load_local_file )
     _local_status=$?
     if [ "$_local_status" -eq 2 ]; then
         _data_notes="${_data_notes}info|Local file load skipped.
@@ -11955,10 +11962,23 @@ _exakit_offer_local_file() {
         _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
 "
     elif [ "$_local_status" -ne 0 ]; then
-        _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
+        # The reason is on screen already, against the file. Said, not booked.
+        _lf_count=0; _lf_list=""
+        if [ -n "$_lf_names" ] && [ -s "$_lf_names" ]; then
+            _lf_count="$(grep -c . "$_lf_names" 2>/dev/null || echo 0)"
+            _lf_list="$(grep . "$_lf_names" 2>/dev/null | awk 'NR > 1 { printf ", " } { printf "%s", $0 }')"
+        fi
+        if [ "$_lf_count" -gt 1 ]; then
+            _lf_say="Your files $_lf_list did not load (reason above)."
+        elif [ "$_lf_count" -eq 1 ]; then
+            _lf_say="Your file $_lf_list did not load (reason above)."
+        else
+            _lf_say="Your local file did not load (reason above)."
+        fi
+        _data_notes="${_data_notes}warn|$_lf_say Retry any time with: exakit data-load
 "
-        _exakit_offer_fail "loading the local file did not finish (see the log)"
     fi
+    [ -n "$_lf_names" ] && rm -f "$_lf_names"
     return 0
 }
 
@@ -12754,7 +12774,7 @@ kit_helper_step() {
                               "$EXAKIT_HOME/kit/mcp" "$EXAKIT_HOME/kit/sql" \
                               "$EXAKIT_HOME/kit/skills" "$EXAKIT_HOME/kit/marketplace" \
                               "$EXAKIT_HOME/kit/setup/core" "$EXAKIT_HOME/kit/setup/preprocessor" \
-                              "$EXAKIT_HOME/kit/setup/virtual-schemas"; do
+                              "$EXAKIT_HOME/kit/setup/virtual-schemas" "$EXAKIT_HOME/kit/docs/virtual-schemas"; do
                 rm -rf "$_kss_stale"
             done
             cp -R "$_script_dir/lib" "$EXAKIT_HOME/kit/setup/" \
@@ -12787,6 +12807,11 @@ kit_helper_step() {
             # "no skills/ directory in this kit build" on a working install.
             [ -d "$_kit_root/skills" ] && cp -R "$_kit_root/skills" "$EXAKIT_HOME/kit/"
             [ -d "$_kit_root/marketplace" ] && cp -R "$_kit_root/marketplace" "$EXAKIT_HOME/kit/"
+            # docs/virtual-schemas/ is what `exakit connect <connector> --help`
+            # draws its guide from (engine/guide.py), and the full guide it names.
+            if [ -d "$_kit_root/docs/virtual-schemas" ]; then
+                mkdir -p "$EXAKIT_HOME/kit/docs" && cp -R "$_kit_root/docs/virtual-schemas" "$EXAKIT_HOME/kit/docs/"
+            fi
             # setup/help/ is the WHOLE help corpus -- one JSON per topic, and
             # `exakit help <topic>` resolves through exakit_repo_root, which
             # PREFERS this staged copy once kit/mcp exists. Omitting it did not

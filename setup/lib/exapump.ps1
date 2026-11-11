@@ -1865,6 +1865,8 @@ function Stop-ExakitLocalFileRefused {
 }
 
 function Import-ExakitLocalFile {
+    # The files of this load that did not load, for the installer's note.
+    $script:ExakitLocalFileNames = @()
     $defaultPath = if ($env:EXAKIT_DATA_FILE) { $env:EXAKIT_DATA_FILE } else { "" }
     while ($true) {
         $rawPath = Read-ExakitPrompt "Local CSV / Parquet / JSON file - or a folder of them (type back to return)" $defaultPath
@@ -1924,6 +1926,9 @@ function Import-ExakitLocalFile {
             Stop-ExakitLocalFileRefused "File not found or empty: $path"
         }
     }
+    # The installer names the file if it does not load (read only on failure).
+    # Twin of EXAKIT_LOCAL_FILE_NAMES in exakit_load_local_file.
+    $script:ExakitLocalFileNames = @([System.IO.Path]::GetFileName($path))
     $kind = Get-ExakitDataFileKind $path
     # A JSON file this machine can never load is refused HERE, before the user
     # picks a table for a load that cannot happen. What is NOT settled here is
@@ -2748,6 +2753,7 @@ function Import-ExakitLocalFolder {
                 if ($script:ExakitUploadReason) { $why = $script:ExakitUploadReason }
                 $gone = Remove-ExakitPhantomTable -Target $target -RowsBefore $before
                 $failed++
+                $script:ExakitLocalFileNames = @($script:ExakitLocalFileNames) + @(Split-Path $file -Leaf)
                 $outcomes += [pscustomobject]@{ Status = "fail"; File = $file; Table = $d.Table
                     Detail = "not loaded$gone"; Why = $why }
             }
@@ -4276,15 +4282,36 @@ function Invoke-ExakitSampleDataLoad {
 # Invoke-ExakitOfferLocalFile - the installer's local-file load (the file row,
 # or EXAKIT_DATA_FILE), once the table has stopped animating. A file the loader
 # refused is bad input, not a failed step: a warning, not booked, and the
-# install carries on. A failed load throws; the caller decides when. Twin of
+# install carries on. A failed load is a warning too, naming the file(s), and
+# never throws. Whatever happens to the reader's own file - refused, declined,
+# or a load that did not finish - it is the file, not the install: said, never
+# booked. Booking it said "sample data is not installed" over datasets that had
+# loaded, and the soft failure skipped the marketplace offer. Twin of
 # _exakit_offer_local_file.
 function Invoke-ExakitOfferLocalFile {
     Write-ExakitDataFileAnnounce
+    $noteBefore = Test-Path -LiteralPath $script:FailureNotePath
     try {
         $result = Import-ExakitLocalFile
+        $failed = ($result -eq "failed")
     } catch {
-        if (-not (Test-ExakitRefusal $_)) { throw }
-        Warn2 "The local file was refused (see above). Load another any time with: exakit data-load"
+        if (Test-ExakitRefusal $_) {
+            Warn2 "The local file was refused (see above). Load another any time with: exakit data-load"
+            return
+        }
+        Write-ExakitLog "WARN" "The local file did not load: $_"
+        $failed = $true
+        # Fail() kept its reason for a step to quote, and wrote it to disk as
+        # last_failure; neither belongs to the install now.
+        [void](Get-ExakitFailureReason)
+        if (-not $noteBefore) { Remove-Item -LiteralPath $script:FailureNotePath -Force -ErrorAction SilentlyContinue }
+    }
+    if ($failed) {
+        $names = @($script:ExakitLocalFileNames | Where-Object { $_ })
+        if ($names.Count -gt 1) { $say = "Your files $($names -join ', ') did not load (reason above)." }
+        elseif ($names.Count -eq 1) { $say = "Your file $($names[0]) did not load (reason above)." }
+        else { $say = "Your local file did not load (reason above)." }
+        Warn2 "$say Retry any time with: exakit data-load"
         return
     }
     if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }

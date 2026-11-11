@@ -69,7 +69,7 @@
     },
     {
       "name": "ca",
-      "label": "CA certificate file (PEM) - only for a private CA such as AWS RDS or Azure; Enter to skip",
+      "label": "CA certificate file (PEM) - needed with TLS verify, a public CA too: its root (e.g. ISRG Root X1)",
       "kind": "ca-file"
     }
   ],
@@ -105,6 +105,6 @@
   "notes": [
     "MySQL has no schemas below a database: the dialect takes CATALOG_NAME only.",
     "Connector/J is downloaded from Maven Central on this machine and never redistributed (GPL with the FOSS exception).",
-    "A server with a private CA (AWS RDS, Azure, a company CA) is verified against it with --set ca=<PEM file or bundle>: Connector/J reads trust only from a file or URL, so the kit writes the bundle as a JKS truststore for this source and gives its path relative to where both the adapter and the loader start."
+    "verify needs --set ca=<PEM file or bundle>, a public CA's root too (the loader's own CA store is empty on Exasol Personal 2.4): Connector/J reads trust only from a file or URL, so the kit writes the bundle as a JKS truststore for this source and gives its path relative to where both the adapter and the loader start."
   ]
 }
