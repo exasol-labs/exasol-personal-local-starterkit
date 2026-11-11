@@ -153,8 +153,18 @@ SAS). Neither ever goes on the command line.
 
 There is only one stdin, so the second secret comes from a file, or from a
 hidden prompt at a terminal. Each file holds the secret alone, not JSON, and
-should be readable by you only. A credential inside a pasted connection string
-is used and not asked again.
+should be readable by you only.
+
+A pasted connection string (`--url`, or the first question of the form) fills
+the catalog and its address, never a secret: an `https://` catalog gives
+`catalog=iceberg-rest` and `catalog_url` (a Databricks workspace gives
+`catalog=unity` and `workspace_url`), a Glue endpoint or ARN gives
+`catalog=glue`, `region` and the `database`, and an `s3://` or `abfss://`
+folder gives `catalog=none` and `path`. A credential inside the string - a
+`user:token@`, a `?token=` or any other query string, a presigned or SAS
+signature - is taken out and not used, and a warning says so. The secret is
+still asked at a hidden prompt, or comes from `--password-file` (or
+`--password-stdin`), and the storage secret from `--storage-secret-file`.
 
 Write a secret to a file without it showing on screen or in the history:
 
