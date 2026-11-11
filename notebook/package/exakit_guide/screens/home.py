@@ -293,6 +293,14 @@ class Home(Screen):
             return
         self.confirm = None
         values = {**values, **{k: v for k, v in form.items() if k in values and str(v).strip()}}
+        if action_id == "kit.data_load" and str(values.get("what") or "").strip():
+            # A pasted path as a terminal would read it (~, quotes, file://): exakit gets no shell to expand it.
+            # A kit dataset's name (amazon_sales) is not a path and is left as typed.
+            from exakit_nb import clean_path
+
+            what = str(values["what"]).strip()
+            if what[:1] in "~/.'\"" or "/" in what or "\\" in what or what.startswith("file:"):
+                values = {**values, "what": clean_path(what)}
         schema = str(form.get("schema") or "").strip().upper()
         if action_id == "kit.data_load" and schema:
             # exakit data-load's own schema setting (EXAKIT_SCHEMA): what the terminal asks, given here.

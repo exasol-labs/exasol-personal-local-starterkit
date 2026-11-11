@@ -578,10 +578,17 @@ class LoadIntoSchemaTest(unittest.TestCase):
              mock.patch.object(home.SESSION, "changed") as changed:
             screen._run("kit.data_load", {"what": "<file, folder or dataset>"}, {"what": "~/data/retail", "schema": "retail"})
         self.assertEqual(("kit.data_load_into",), run.call_args.args)
-        self.assertEqual({"what": "~/data/retail", "schema": "RETAIL"}, {k: run.call_args.kwargs[k] for k in ("what", "schema")})
+        # ~ is expanded here: exakit gets no shell (it read "~/..." as a folder named ~).
+        self.assertEqual({"what": str(Path.home() / "data" / "retail"), "schema": "RETAIL"},
+                         {k: run.call_args.kwargs[k] for k in ("what", "schema")})
         self.assertEqual('nb.exakit("data-load", "~/data/retail", env={"EXAKIT_SCHEMA": "RETAIL"})',
                          actions.code("kit.data_load_into", what="~/data/retail", schema="RETAIL"))
         changed.assert_called_once_with("data", screen)
+        with mock.patch.object(home.actions, "run") as run, mock.patch.object(screen, "_rows", return_value=[]), \
+             mock.patch.object(screen, "_other_rows", return_value=[]), mock.patch.object(screen, "_reload"), \
+             mock.patch.object(home.SESSION, "changed"):
+            screen._run("kit.data_load", {"what": "<file, folder or dataset>"}, {"what": "amazon_sales"})
+        self.assertEqual("amazon_sales", run.call_args.kwargs["what"])          # a kit dataset's name stays as typed
         with self.assertRaisesRegex(ValueError, "letters, digits and _"):
             screen._run("kit.data_load", {"what": "x"}, {"what": "x", "schema": "bad name"})
 
