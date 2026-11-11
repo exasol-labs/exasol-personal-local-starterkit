@@ -642,6 +642,34 @@ class MarimoHiddenCodeTest(unittest.TestCase):
             self.assertNotRegex(text, r"(?m)^@app\.cell$", f"{path.name}: a cell shows its code")
 
 
+class HomeAddonsTest(unittest.TestCase):
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_every_add_on_is_listed_and_one_not_installed_can_be_installed(self):
+        home = importlib.import_module("exakit_guide.screens.home")
+        screen = home.Home.__new__(home.Home)
+        screen.data = {"kit": {"services": {"dash-server": "running", "exasol-scheduler": "stopped"},
+                               "urls": {"dash-server": "http://127.0.0.1:5100"}},
+                       "plan": {"addons": {"installed": ["dash-server"], "pending": ["notebook"]}},
+                       "addons": [{"id": "dash-server", "status": "installed", "installed": True},
+                                  {"id": "dbt-exasol", "status": "available", "installed": False},
+                                  {"id": "exasol-scheduler", "status": "installed", "installed": True},
+                                  {"id": "exasol-vscode", "status": "managed outside the kit", "installed": False},
+                                  {"id": "notebook", "status": "available", "installed": False},
+                                  {"id": "udf-devkit", "name": "script-languages-release", "status": "available",
+                                   "installed": False}]}
+        rows = {r["id"]: r for r in screen._rows() if r["id"].startswith("addon_")}
+        self.assertEqual(["addon_dash-server", "addon_notebook", "addon_dbt-exasol", "addon_exasol-scheduler",
+                          "addon_exasol-vscode", "addon_udf-devkit"], list(rows))           # the persona's first
+        label = lambda r: [a["label"] for a in r["actions"]]
+        self.assertEqual(["Open"], label(rows["addon_dash-server"]))
+        self.assertEqual(["Install"], label(rows["addon_dbt-exasol"]))
+        self.assertEqual("Not installed (for your persona)", rows["addon_notebook"]["text"])
+        self.assertEqual(["Start"], label(rows["addon_exasol-scheduler"]))
+        self.assertEqual([], label(rows["addon_exasol-vscode"]))                          # the user's own: never touched
+        self.assertEqual("script-languages-release", rows["addon_udf-devkit"]["name"])
+        self.assertEqual('nb.addon_ready("dbt-exasol")', rows["addon_dbt-exasol"]["actions"][0]["cmd"])
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")
@@ -656,6 +684,13 @@ class ToggleTest(unittest.TestCase):
         self.assertIn("body.guide-cards:not(.guide-allcode) .jp-Cell:has(.guide-code-start) ~ .jp-Cell { display: none !important; }",
                       self.js)
         self.assertIn("Show all the notebook's code cells", self.js)
+
+    def test_every_card_opens_guided(self):
+        """One Code click used to be remembered, so every later card (and every run) opened as code."""
+        body = self.js.split("function defaultMode()", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn('return "guided";', body)
+        self.assertNotIn("getItem(MODE_KEY)", body)
+        self.assertNotIn("localStorage.setItem(MODE_KEY", self.js)
 
     def test_a_card_keeps_the_code_it_ran(self):
         card = (GUIDE / "card.py").read_text(encoding="utf-8")

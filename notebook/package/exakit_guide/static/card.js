@@ -57,11 +57,13 @@ function installGlobal() {
   setAllCode(all, false);
   document.body.classList.add("guide-ready");
 }
-// The view a new card opens in: the one chosen last on any card (each card then switches on its own).
+// Every card opens Guided. Code is that one card's choice while it is on screen, never carried to the next card or
+// the next run (it used to be remembered, and one Code click turned every later card into code).
 function defaultMode() {
-  try { return localStorage.getItem(MODE_KEY) === "code" ? "code" : "guided"; } catch (e) { return "guided"; }
+  try { localStorage.removeItem(MODE_KEY); } catch (e) { /* storage blocked */ }   // an older kit's remembered "code"
+  return "guided";
 }
-function rememberMode(mode) { try { localStorage.setItem(MODE_KEY, mode); } catch (e) { /* ignore */ } }
+function rememberMode(_mode) { /* the view is per card and per run: nothing to keep */ }
 function allCode() { return document.body.classList.contains("guide-allcode"); }
 function setAllCode(on, save = true) {
   document.body.classList.toggle("guide-allcode", on);

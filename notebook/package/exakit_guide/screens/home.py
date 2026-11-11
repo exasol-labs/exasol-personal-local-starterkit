@@ -161,18 +161,31 @@ class Home(Screen):
                      "cmd": actions.code("kit.ai_clients"),
                      "actions": [self._act("kit.mcp_doctor", "Check")]})
 
-        for addon_id in (plan.get("addons") or {}).get("installed", []) + (plan.get("addons") or {}).get("pending", []):
-            a = addons.get(addon_id, {"id": addon_id})
+        # Every add-on the marketplace has (nb.addons(), `exakit marketplace --list`), the persona's first: one not
+        # installed is installed from here (nb.addon_ready, as `exakit marketplace <id>` does), one stopped is started.
+        persona = (plan.get("addons") or {}).get("installed", []) + (plan.get("addons") or {}).get("pending", [])
+        order = [i for i in persona if i in addons] + [i for i in addons if i not in persona]
+        for addon_id in order:
+            a = addons[addon_id]
+            status = str(a.get("status") or "")
             state = (kit.get("services") or {}).get(addon_id)
             installed = bool(a.get("installed"))
-            rows.append({"id": f"addon_{addon_id}", "name": a.get("name") or addon_id,
-                         "dot": "ok" if installed and state in (None, "running") else ("bad" if installed else "off"),
-                         "text": ("Running" if state == "running" else "Installed" if installed else "Not added"),
+            url = (kit.get("urls") or {}).get(addon_id)
+            mine = " (for your persona)" if addon_id in persona and not installed else ""
+            if installed:
+                dot, text = ("ok" if state in (None, "running") else "bad"), ("Running" if state == "running" else
+                                                                             "Installed" if state is None else "Stopped")
+                buttons = [] if state in (None, "running") else [self._act("kit.addon", "Start", addon=addon_id)]
+            elif status == "available":
+                dot, text, buttons = "off", "Not installed" + mine, [self._act("kit.addon", "Install", addon=addon_id)]
+            elif status == "managed outside the kit":
+                dot, text, buttons = "ok", "Yours: installed outside the kit, never changed by it", []
+            else:
+                dot, text, buttons = "off", (status[:1].upper() + status[1:]) if status else "Not available here", []
+            rows.append({"id": f"addon_{addon_id}", "name": a.get("name") or addon_id, "dot": dot, "text": text,
                          "sub": a.get("about") or "", "cmd": actions.code("kit.addon", addon=addon_id),
-                         "actions": [] if installed and state in (None, "running") else
-                                    [self._act("kit.addon", "Start" if installed else "Add", addon=addon_id)]
-                                    + ([{"id": f"open_{addon_id}", "label": "Open", "href": (kit.get("urls") or {}).get(addon_id)}]
-                                       if (kit.get("urls") or {}).get(addon_id) and state == "running" else [])})
+                         "actions": buttons + ([{"id": f"open_{addon_id}", "label": "Open", "href": url}]
+                                               if url and state == "running" else [])})
 
         model = d.get("model") if isinstance(d.get("model"), dict) else {}
         from exakit_nb.setup_env import EXAMPLE_LANGFUSE, EXAMPLE_MODEL, EXAMPLE_URL
@@ -209,7 +222,7 @@ class Home(Screen):
         """The kit's other services and pending updates: shown folded."""
         d = self.data or {}
         kit = d.get("kit") if isinstance(d.get("kit"), dict) else {}
-        plan_addons = set(((d.get("plan") or {}).get("addons") or {}).get("installed", [])) if isinstance(d.get("plan"), dict) else set()
+        plan_addons = {a.get("id") for a in d.get("addons") or [] if isinstance(a, dict)}   # shown above, with their add-on
         rows = []
         for svc, state in (kit.get("services") or {}).items():
             if svc in plan_addons:
