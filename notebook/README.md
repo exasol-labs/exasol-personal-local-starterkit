@@ -72,7 +72,7 @@ code - what it ran this session, in order, and the exact call behind each of its
 and **Guided** turns it back. Only that card changes; the session (connection, chosen data, approvals) stays as it
 is, and a new card opens in the view chosen last. The notebook's own cells, under **The code behind this page**, stay
 hidden in the kit's JupyterLab; **Show all the notebook's code cells**, at the foot of a card's Code view, shows them.
-In Marimo the cards show stacked and every cell opens with its code hidden (its code button shows it); Marimo's app view hides the code too. A headless run (`--run`) skips the card cells
+In Marimo the cards show stacked and the cells open with their code visible, the guided cell included, as Marimo converts them; only the text cells keep their code folded. Marimo's app view hides the code. A headless run (`--run`) skips the card cells
 (`skip-ci`).
 
 **The marketplace, from the notebook.** The Home card has two tabs, *Your kit* and *Marketplace* (`guide.marketplace()` opens it there): every add-on and every part of the kit with its version, and Install, Start and Update buttons that run `nb.addon_ready(<id>)` and `nb.kit_update(<id>)` - what `exakit marketplace` and `exakit update` do in a terminal.

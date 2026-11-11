@@ -15,8 +15,8 @@
     Not by default. The database and the notebooks run on this computer. With a model set up, Ask sends the column map and your question, never rows. The themes step sends a sample of texts, and asks first when the data is a live external source.
   </Accordion>
 
-  <Accordion title="What is a descriptor?">
-    The column map: the role of every column in a table. See [Descriptor and approval](/data-scientist/concepts/descriptor).
+  <Accordion title="What is a column map?">
+    The column map gives every column in a table its role. Its technical name in the code is the descriptor. See [Column map and approval](/data-scientist/concepts/descriptor).
   </Accordion>
 
   <Accordion title="Who is the approver?">

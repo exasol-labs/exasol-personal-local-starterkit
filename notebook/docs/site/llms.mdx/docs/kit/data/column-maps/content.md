@@ -2,7 +2,7 @@
 
 
 
-A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Descriptor and approval](/data-scientist/concepts/descriptor).
+A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Column map and approval](/data-scientist/concepts/descriptor).
 
 ## Draft [#draft]
 
@@ -34,6 +34,10 @@ Approval:
 
 Your own table is never commented. If publishing fails, the approval still stands and the message says why.
 
+## What you get at the end [#what-you-get-at-the-end]
+
+A new version of the column map, kept under `~/.exasol-starter-kit/descriptors/`, and the roles published on the view `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`. The notebooks and AI clients read the approved version from then on.
+
 ## See and compare [#see-and-compare]
 
 ```bash
@@ -51,7 +55,7 @@ Add `--json` to any of them for a script.
 exakit describe --schema TPCH
 ```
 
-This lists every table with its rows and key, and every many-to-one link between tables with its evidence. A link is a foreign key the database declares, or a column whose every value is in another table's key. A name alone never makes a link.
+This lists every table with its rows and key, and every many-to-one link between tables with its evidence. A link is a foreign key the database declares, or a column whose values are in another table's key (at most 0.1% of them may be missing). A name alone never makes a link.
 
 ```bash
 exakit describe --schema TPCH --approve --unlink ORDERS.O_CLERK

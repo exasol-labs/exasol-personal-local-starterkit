@@ -6,11 +6,11 @@ AI is opt-in. Every notebook runs without a model, and the AI steps are off unti
 
 ## Where a model is used [#where-a-model-is-used]
 
-| Step           | What the model does                       | What is sent                                        |
-| -------------- | ----------------------------------------- | --------------------------------------------------- |
-| Ask your data  | Drafts SQL for your question              | The approved column map and your question. No rows. |
-| Themes in text | Sorts texts into themes                   | A sample of texts, on each side of the target       |
-| Column notes   | Writes one line per column on a new draft | The profile of the table                            |
+| Step           | What the model does                       | What is sent                                                                                    |
+| -------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Ask your data  | Drafts SQL for your question              | The approved column map and your question. No rows.                                             |
+| Themes in text | Sorts texts into themes                   | A sample of texts, on each side of the target                                                   |
+| Column notes   | Writes one line per column on a new draft | Each column's name, type, role, evidence and top values. Never a row, never a sensitive column. |
 
 ## What a model may never do [#what-a-model-may-never-do]
 
@@ -24,7 +24,7 @@ The kit calls the endpoint you give it: an external provider or a model on your 
 
 ## Tracing with Langfuse [#tracing-with-langfuse]
 
-With Langfuse set up, each model call is one trace in your Langfuse: what was sent, the answer, tokens, cost and time.
+With Langfuse set up, each model call is one trace in your Langfuse, with its input, its output and its token usage.
 
 ```python
 nb.tracing()            # is tracing on?

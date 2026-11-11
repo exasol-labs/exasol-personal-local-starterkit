@@ -7,6 +7,7 @@
     ### Prepare the dashboard [#prepare-the-dashboard]
 
     ```python
+    dashboard_query = "SELECT ..."   # the query the dashboard shows: one you have read and checked
     dataset = nb.dataset(connection, nb.chosen_dataset(None))
     dashboard_draft = nb.share(dataset, dashboard_query, "Orders by category", "orders-by-category", measure="count")
     ```

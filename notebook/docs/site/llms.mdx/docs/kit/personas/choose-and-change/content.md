@@ -36,7 +36,7 @@ Without `EXAKIT_PERSONA`, on a terminal, the installer asks three things after t
   </Step>
 </Steps>
 
-Nothing is loaded or installed without that screen. Without a terminal and without `EXAKIT_PERSONA`, the kit installs with the General samples.
+Nothing is loaded or installed without that screen. Without a terminal and without `EXAKIT_PERSONA`, the kit installs on its own with the General samples: TPC-H, energy and weather.
 
 ## On an installed kit [#on-an-installed-kit]
 
@@ -50,7 +50,7 @@ exakit persona remove general        # leave it
 
 `plan` takes `--json` for a script.
 
-## Add a persona [#add-a-persona]
+## Add another persona to this kit [#add-another-persona-to-this-kit]
 
 ```bash
 exakit persona add general

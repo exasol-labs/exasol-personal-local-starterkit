@@ -21,7 +21,8 @@ Every run first writes the kit's current connection into the notebooks' encrypte
 ```bash
 exakit notebook check           # prove the connection; start nothing
 exakit notebook setup           # settle JupyterLab; start nothing
-exakit notebook stop            # stop the one the kit started
+exakit notebook stop            # stop both notebook servers
+exakit notebook stop marimo     # stop only Marimo
 exakit notebook marimo --no-browser --port 2720
 ```
 

@@ -33,7 +33,7 @@ exakit workflow show wf-20261027-3f9a1c
 
 ## No secrets in the log
 
-A secret-named value or a connection string with a password is refused before anything is written. SQL that mentions a password or an API key is logged with its text replaced and its digest kept.
+A secret-named value or a connection string with a password is refused before anything is written. SQL that looks credential-bearing, such as a statement with a PASSWORD or API_KEY column, is logged with its text replaced and its digest kept, and a warning is shown.
 
 <Callout>
 

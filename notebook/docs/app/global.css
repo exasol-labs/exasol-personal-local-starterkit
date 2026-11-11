@@ -199,3 +199,18 @@ body[data-sidebar-resizing] .sidebar-resizer::after {
     border-color: var(--color-fd-primary);
   }
 }
+
+/* A table's first column names the thing (a command, a role, a file): it reads as one piece, so it never breaks
+ * inside a name such as `exakit data-load`. */
+#nd-page table td:first-child code {
+  white-space: nowrap;
+}
+
+/* On a phone the words beside the logo keep to two lines at most. */
+@media (max-width: 767px) {
+  #nd-subnav [data-header-body] span.uppercase {
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    line-height: 1.25;
+  }
+}

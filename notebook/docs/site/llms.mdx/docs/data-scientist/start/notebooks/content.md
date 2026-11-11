@@ -15,7 +15,7 @@ Your copies are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/data-s
 
 ## The path [#the-path]
 
-Run the notebooks in order. Each one continues the workflow the first one started, so nothing is copied between them.
+Run the notebooks in order. Each one continues the workflow the first one started, so you paste no id and copy nothing between them.
 
 | Notebook           | Steps                                     | What you have at the end                                                    |
 | ------------------ | ----------------------------------------- | --------------------------------------------------------------------------- |
@@ -36,7 +36,7 @@ Run the notebooks in order. Each one continues the workflow the first one starte
   <Step>
     ### Understand [#understand]
 
-    Approve the column map: which column is the key, the date, the group and the outcome. See [Descriptor and approval](/data-scientist/concepts/descriptor).
+    Approve the column map: which column is the key, the time, the text, the target (the outcome to predict), the category and the entity. See [Column map and approval](/data-scientist/concepts/descriptor).
   </Step>
 
   <Step>
@@ -88,5 +88,5 @@ Step 0, at the top of the quickstart, checks the kit itself from the notebook. S
 
 * **One assignment picks the data.** `SAMPLE = "..."` in the quickstart, `DATASET = "..."` in the others. `None` means the dataset approved last.
 * **No column name is typed.** Queries are built from the approved roles, so the same notebook runs on any table.
-* **AI is opt-in.** A model never approves roles, and no rows are sent to one.
+* **AI is opt-in.** The AI steps stay off until you turn them on, and a model never approves roles.
 * **A step that cannot run says why.** A dataset with no text column skips the text steps and tells you.

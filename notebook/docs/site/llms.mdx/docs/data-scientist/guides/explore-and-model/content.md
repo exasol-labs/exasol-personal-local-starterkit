@@ -60,3 +60,7 @@ See [Model lab](/data-scientist/reference/lab).
 <Callout>
   A dataset with no target skips the model steps and says so. Choose a target in the column map to run them.
 </Callout>
+
+## What you get at the end [#what-you-get-at-the-end]
+
+The data checks, the schema map and the typed view proposal, the group and over-time results with their SQL, a small model with its score, and a note on what the score means.

@@ -2,7 +2,7 @@
 
 
 
-A model is optional. It is used to draft SQL in Ask and to sort texts into themes in Explore. Any endpoint that speaks the Chat Completions API works: an external provider or a model on your own machine.
+A model is optional. It is used to draft SQL in Ask and to sort texts into themes in Explore. The kit calls an endpoint that speaks the Chat Completions API: an external provider or a model on your own machine.
 
 ## The quickest way [#the-quickest-way]
 
@@ -32,14 +32,19 @@ nb.forget_model(model=True, langfuse=True)     # delete what was remembered
 
 ## The settings behind it [#the-settings-behind-it]
 
-| Setting                                                           | What it is             |
-| ----------------------------------------------------------------- | ---------------------- |
-| `EXAKIT_MODEL_ID`                                                 | The model's id         |
-| `EXAKIT_PROVIDER_BASE_URL`                                        | The endpoint's address |
-| `EXAKIT_PROVIDER_API_KEY`                                         | The key                |
-| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Turn tracing on        |
+| Setting                                                           | What it is                                                                    |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `EXAKIT_MODEL_ID`                                                 | The model's id                                                                |
+| `EXAKIT_PROVIDER_BASE_URL`                                        | The endpoint's address                                                        |
+| `EXAKIT_PROVIDER_API_KEY`                                         | The key                                                                       |
+| `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` | Turn tracing on                                                               |
+| `EXAKIT_PROVIDER_HEADERS`, `EXAKIT_MODEL_TEMPERATURE`             | Optional. Sent only when set. Claude Opus 4.7 and later refuse a temperature. |
 
 The model's id and address can also live in `~/.exasol-starter-kit/exakit.env`. Provider recipes are in `MODEL-PROVIDERS.md`, copied beside the notebooks.
+
+## What you get at the end [#what-you-get-at-the-end]
+
+`nb.model_settings()` shows what is set. The AI steps still wait for you to turn them on: `DRAFT_WITH_MODEL = True` in Ask, or `USE_AI_THEMES = True` in Explore.
 
 <Callout type="warn">
   Never type a key into a cell. Use the hidden box, so the key is not saved in the notebook file.

@@ -12,7 +12,7 @@ exakit marketplace --list
 
 Every add-on is listed with its state, its version and what it is. Nothing is installed. Add `--json` for a script.
 
-The name, the link and the description of an add-on come from its own repository, so the list always shows the current ones.
+The name, the link and the About text of an add-on come from its own repository on GitHub, as last looked up. When a lookup fails, the kit's own copy is shown.
 
 ## Install [#install]
 
@@ -36,7 +36,9 @@ exakit status
 exakit logs dash-server
 ```
 
-`exakit start` with no name starts the database and every add-on service.
+`exakit start` with no name starts the database and every enabled add-on service.
+
+After an install, `exakit status` shows whether a service add-on is running, and `exakit help <add-on>` prints its full reference.
 
 ## Update and remove [#update-and-remove]
 

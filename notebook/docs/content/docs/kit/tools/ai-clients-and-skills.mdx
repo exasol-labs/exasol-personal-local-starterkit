@@ -11,11 +11,13 @@ The kit connects AI clients to the database through its AI bridge. A client conn
 exakit mcp-setup
 ```
 
-It finds the AI clients on this computer and connects the ones you choose. To answer up front:
+It configures the `exasol` MCP server in every supported AI client. Existing configs are backed up first. To name the clients yourself, set `EXAKIT_MCP_CLIENTS` before the command:
 
 ```bash
 EXAKIT_MCP_CLIENTS=claude,codex exakit mcp-setup
 ```
+
+Restart each client afterwards and look for a server named `exasol`.
 
 ## Check and repair
 

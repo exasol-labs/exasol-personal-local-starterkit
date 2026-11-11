@@ -47,7 +47,7 @@ This is step 7, in `02_ask_your_data`.
     answer = proposal.run()
     ```
 
-    Only the exact approved text runs, through the kit's read-only service as the read-only user. Check the figures against the SQL.
+    Only the exact approved text runs, through the kit's read-only service as the read-only user. `answer` holds its result. Check the figures against the SQL.
   </Step>
 </Steps>
 

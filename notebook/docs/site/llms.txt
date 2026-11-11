@@ -26,7 +26,7 @@
     - [Guided and Code](/data-scientist/start/guided-and-code): The cards each notebook opens with, the Code switch, and how a button and a cell are the same call.
   - Concepts
     - [Dataset](/data-scientist/concepts/dataset): A table plus its approved column map, which is what every notebook step reads.
-    - [Descriptor and approval](/data-scientist/concepts/descriptor): The column map - the role of every column, who approves it, what approval checks, and where the approved version is kept.
+    - [Column map and approval](/data-scientist/concepts/descriptor): The column map - the role of every column, who approves it, what approval checks, and where the approved version is kept.
     - [Workflow](/data-scientist/concepts/workflow): One id on everything a piece of work does, and the log it leaves.
     - [Sources](/data-scientist/concepts/sources): The three ways data comes in, and how an external source appears as a schema in your local database.
     - [Prepared views](/data-scientist/concepts/prepared-views): Data checks, linked tables and the typed, cleaned view - how the data is prepared without ever changing your table.

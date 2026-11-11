@@ -2,7 +2,7 @@
 
 
 
-This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and Share have nothing to read. For what the roles and slots mean, see [Descriptor and approval](/data-scientist/concepts/descriptor).
+This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and Share have nothing to read. For what the roles and slots mean, see [Column map and approval](/data-scientist/concepts/descriptor).
 
 <Steps>
   <Step>
@@ -48,6 +48,10 @@ This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and S
     ```
   </Step>
 </Steps>
+
+## What you get at the end [#what-you-get-at-the-end]
+
+An approved column map. It is saved as a new version, and its roles are published on a view in `EXAKIT_SEMANTIC`. Explore, Ask and Share read only an approved map.
 
 ## After approving [#after-approving]
 

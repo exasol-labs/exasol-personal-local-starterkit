@@ -36,7 +36,7 @@ nb.check_connection(connection)
     own_data = nb.use_table(connection, "MY_DATA.ORDERS")
     ```
 
-    `nb.data_map(connection)` lists every table the database holds.
+    `nb.data_map(connection)` lists the tables in the database. The kit's own schemas are left out unless you pass `include_kit=True`.
   </Tab>
 
   <Tab value="An external source">
@@ -65,6 +65,10 @@ nb.check_connection(connection)
 ```python
 chosen_data = nb.first(source_data, own_data, sample_data)   # the first one that is set
 ```
+
+## What you get at the end [#what-you-get-at-the-end]
+
+`chosen_data` is the table you picked, ready for the column map step.
 
 Next: [approve the column map](/data-scientist/guides/approve-column-map).
 

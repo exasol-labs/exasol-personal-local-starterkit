@@ -1,8 +1,8 @@
-# Descriptor and approval (/data-scientist/concepts/descriptor)
+# Column map and approval (/data-scientist/concepts/descriptor)
 
 
 
-The **descriptor**, called the **column map** in the notebooks, says what each column of a table is for. Every later query is built from it, so no notebook types your column names.
+A **column map** says what each column of a table is for. Its technical name is the **descriptor**, which is the word you see in code and in some file names. Every later query is built from the column map, so no notebook types your column names.
 
 ## Roles: what a column is [#roles-what-a-column-is]
 
@@ -45,7 +45,7 @@ For the kit's datasets:
 
 ## Draft and approved [#draft-and-approved]
 
-A descriptor starts as a **draft**: the kit's proposal. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away; the kit warns about it and the model leaves it out.
+A column map starts as a **draft**: the kit's proposal. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away; the kit warns about it and the model leaves it out.
 
 Nothing downstream uses a draft. Explore, Ask and Share open only an **approved** dataset. A step given a draft raises `DescriptorNotApproved`, and the message says how to approve it.
 

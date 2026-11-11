@@ -20,17 +20,18 @@ exakit workflow show wf-20261027-3f9a1c
 
 Its lines in order. Each one is a step:
 
-| Line                                 | What happened                                  |
-| ------------------------------------ | ---------------------------------------------- |
-| `start`                              | The workflow began, with its name              |
-| `step`                               | A later notebook continued it                  |
-| `sql`                                | A statement ran                                |
-| `describe.draft`, `describe.approve` | A column map was drafted or approved           |
-| `ask.approve`, `ask.answer`          | A question's SQL was approved, and it answered |
-| `model`                              | A model was trained and scored                 |
-| `trace`                              | A model call was traced                        |
-| `dashboard.revision`                 | A dashboard was previewed or published         |
-| `handoff`                            | A hand-off was written                         |
+| Line                                 | What happened                                                                       |
+| ------------------------------------ | ----------------------------------------------------------------------------------- |
+| `start`                              | The workflow began, with its name                                                   |
+| `step`                               | A later notebook continued it                                                       |
+| `sql`                                | A statement ran                                                                     |
+| `describe.draft`, `describe.approve` | A column map was drafted or approved                                                |
+| `ask.approve`, `ask.answer`          | A question's SQL was approved, and it answered                                      |
+| `model`                              | A model was trained and scored                                                      |
+| `trace`                              | A model call was traced                                                             |
+| `dashboard.revision`                 | A dashboard was previewed or published                                              |
+| `handoff`                            | A hand-off was written                                                              |
+| `guide_action`                       | A button or form on a notebook card ran, with the code it ran and whether it worked |
 
 Add `--json` to either command for a script.
 
@@ -40,7 +41,7 @@ Add `--json` to either command for a script.
 
 ## No secrets [#no-secrets]
 
-The helpers refuse a password, a token, a secret or an API key, and a connection string with a password in it. The log is safe to share.
+The helpers refuse a password, a token, a secret or an API key, and a connection string with a password in it. The log never holds a credential.
 
 <Callout>
   The workflow log is written by the notebook helpers, so this command needs the notebook add-on: `exakit marketplace notebook`.

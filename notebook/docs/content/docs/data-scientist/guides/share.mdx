@@ -10,6 +10,7 @@ description: Steps 8 and 9 in 03_share - a dashboard that is previewed, checked 
 ### Prepare the dashboard
 
 ```python
+dashboard_query = "SELECT ..."   # the query the dashboard shows: one you have read and checked
 dataset = nb.dataset(connection, nb.chosen_dataset(None))
 dashboard_draft = nb.share(dataset, dashboard_query, "Orders by category", "orders-by-category", measure="count")
 ```

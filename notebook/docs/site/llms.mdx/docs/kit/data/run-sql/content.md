@@ -8,13 +8,17 @@ exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
 
 It runs one statement and prints the result.
 
-## Read-only by default [#read-only-by-default]
+## Reads only unless you say otherwise [#reads-only-unless-you-say-otherwise]
 
 A statement that would change data is refused unless you add `--write`.
 
 ```bash
 exakit sql --write 'CREATE SCHEMA SCRATCH'
 ```
+
+<Callout type="warn">
+  `exakit sql` connects as the kit's admin user, and that user is not sandboxed. The read-only boundary is the MCP user that AI clients use, not this command.
+</Callout>
 
 ## A saved statement [#a-saved-statement]
 

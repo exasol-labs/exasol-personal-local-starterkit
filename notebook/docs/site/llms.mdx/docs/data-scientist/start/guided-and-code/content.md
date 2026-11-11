@@ -24,14 +24,14 @@ Every card has a **Guided / Code** switch at its top right.
 * **Code** turns that card, in place, into its code: what it ran this session, in order, and the exact call behind each control. Each block has **Copy as cell**.
 * **Guided** turns it back. Only that card changes. The connection, the chosen data and the approvals stay as they are.
 
-The notebook's own cells sit under **The code behind this page**. In the kit's JupyterLab they are hidden until you choose **Show all the notebook's code cells** at the foot of a card's Code view. In Marimo the cells open with their code visible.
+The notebook's own cells sit under **The code behind this page**. In the kit's JupyterLab they are hidden until you choose **Show all the notebook's code cells** at the foot of a card's Code view. In Marimo the cards show stacked, and the cells open with their code visible.
 
 ## One call, two ways [#one-call-two-ways]
 
 Every button, form and choice on a card is one `exakit.nb` call, and the same call is a cell in the notebook's code section. Clicking **Approve** and running `role_review.approve(...)` do the same thing.
 
 <Callout>
-  What a card shows is read from the kit when it draws: the datasets, connectors, add-ons and notebooks are not written into the card. A connector added to the kit appears in the form the same day.
+  What a card shows is read from the kit when it draws: the datasets, connectors, add-ons and notebooks are not written into the card. A connector added to the kit appears in the form with no notebook change.
 </Callout>
 
 ## The Home card [#the-home-card]

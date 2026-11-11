@@ -28,7 +28,7 @@ On a terminal this opens a menu: the kit's datasets, your own data, or an extern
     EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load
     ```
 
-    CSV, Parquet and JSON are loaded. JSON is split into tables by an engine the kit installs for you on macOS, Linux and WSL.
+    CSV, Parquet and JSON are loaded. JSON is split into tables by an engine the kit installs for you on macOS, Linux and WSL. A `;`-separated CSV is loaded with its delimiter. A tabular `.txt` or `.tsv` file is listed with the rename to `.csv` that the loader needs.
   </Tab>
 
   <Tab value="A folder">
@@ -36,13 +36,13 @@ On a terminal this opens a menu: the kit's datasets, your own data, or an extern
     exakit data-load ~/exports
     ```
 
-    Every CSV, Parquet and JSON file at the folder's top level becomes one table named after the file. The schema is asked once:
+    Every CSV, Parquet and JSON (.json, .geojson) file at the folder's top level becomes one table named after the file. The schema is asked once:
 
     ```bash
     EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load
     ```
 
-    Subfolders are not scanned. Files of other kinds are ignored. Duplicates are skipped with the reason.
+    Subfolders are not scanned. Files of other kinds are ignored. Duplicates are skipped with the reason. On Windows, a folder's JSON files are listed as skipped.
   </Tab>
 </Tabs>
 
@@ -56,7 +56,7 @@ On a terminal this opens a menu: the kit's datasets, your own data, or an extern
 EXAKIT_ON_EXISTING=replace exakit data-load ~/exports
 ```
 
-`EXAKIT_ON_EXISTING` takes `replace` or `append`. On a terminal you are asked.
+`EXAKIT_ON_EXISTING` takes `skip` (the default), `replace` or `append`. Without a terminal the answer is `skip`. On a terminal you are asked.
 
 ## What you get at the end [#what-you-get-at-the-end]
 

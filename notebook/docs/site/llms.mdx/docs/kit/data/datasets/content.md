@@ -24,6 +24,8 @@ exakit data-load amazon_sales
 
 `amazon_sales` and `fraud_transactions` each ship with an approved [column map](/kit/data/column-maps), so the notebooks can use them straight away. You can approve your own version at any time.
 
+The ML Engineer persona is not offered in this release, so for now only Data Scientist and General load these datasets.
+
 ## Load one again [#load-one-again]
 
 ```bash
