@@ -2,7 +2,8 @@
 # rules (Update-ExakitTreeGroup and the Get-ExakitTree* helpers in ui.ps1) on
 # the same presses as the shell rules, printed in the same lines:
 #   <row> <selection> [<hidden>] <missing>
-# TREE_SPECS, TREE_PICKABLE and TREE_PRESSES come from the caller.
+# then one line per Left/Right case: arrow <dir>:<row>:<selection> -> <what>.
+# TREE_SPECS, TREE_PICKABLE, TREE_PRESSES and TREE_ARROWS come from the caller.
 param([string]$Root)
 $ErrorActionPreference = "Stop"
 . (Join-Path $Root "setup/lib/ui.ps1")
@@ -24,4 +25,14 @@ foreach ($k in (("" + $env:TREE_PRESSES) -split ' ')) {
     $m = ""
     if ($miss -gt 0) { $m = "" + $miss }
     [Console]::Write(("{0} {1} [{2}] {3}" -f $row, $shown, $hidden, $m) + "`n")
+}
+foreach ($a in (("" + $env:TREE_ARROWS) -split ' ')) {
+    if (-not $a) { continue }
+    $parts = $a.Split(":")
+    $dir = "Right"
+    if ($parts[0] -eq "left") { $dir = "Left" }
+    $at = @()
+    if ($parts[2] -ne "-") { $at = @($parts[2].Split(",") | ForEach-Object { [int]$_ }) }
+    $act = Get-ExakitTreeArrow -Direction $dir -Row ([int]$parts[1]) -Selection $at -Specs $specs -Pickable $pickable
+    [Console]::Write(("arrow {0} -> {1}" -f $a, $act) + "`n")
 }

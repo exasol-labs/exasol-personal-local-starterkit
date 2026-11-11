@@ -13,6 +13,9 @@ export HOME="$W/home"; mkdir -p "$HOME"
 EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
 . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
 EXAKIT_CHECKBOX_GROUP="3:4:6:collapse+one+first 7:8:8:collapse 2:3:9:collapse+one"
+# TREE_NOGROUP=1: the same rows with no group at all - a menu as every other
+# kit menu is, for what ←/→ and the hint do there.
+[ "${TREE_NOGROUP:-}" = 1 ] && EXAKIT_CHECKBOX_GROUP=""
 EXAKIT_CHECKBOX_EXCLUSIVE=10
 ui_checkbox_menu "Pick" "" "Alpha" "Lake" "Cat A" "a1" "a2" "!a3 - not yet" "Cat B" "!note: automatic" "Cat C" "Skip"
 printf 'SEL=%s\n' "$EXAKIT_CHECKBOX_SELECTION"

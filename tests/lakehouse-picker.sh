@@ -57,9 +57,18 @@ tree_trace() {
         printf '%s %s [%s] %s\n' "$_tt_k" "${_tt_sorted:--}" "$_tt_hidden" \
             "$(_ui_checkbox_tree_missing "$_tt_sel")"
     done
+    # ← and → (_ui_checkbox_tree_arrow): <dir>:<row>:<selection> -> what it does.
+    _UI_CHECKBOX_SPECS="$TREE_SPECS"
+    for _tt_a in $TREE_ARROWS; do
+        _tt_d="${_tt_a%%:*}"; _tt_r="${_tt_a#*:}"; _tt_s="${_tt_r#*:}"; _tt_r="${_tt_r%%:*}"
+        [ "$_tt_s" = - ] && _tt_s=""
+        printf 'arrow %s -> %s\n' "$_tt_a" "$(_ui_checkbox_tree_arrow "$_tt_d" "$_tt_r" "$_tt_s")"
+    done
     _UI_CHECKBOX_SELECTABLE=""
 }
+TREE_ARROWS="right:2:- right:2:2 right:3:2 right:3:2,3,4 right:8:2,8 left:4:2,3,4 left:3:2,3,4 left:2:2,3,4 left:2:- left:1:1 right:1:- right:14:-"
 TRACE="$(tree_trace)"
+arrow() { printf '%s\n' "$TRACE" | sed -n "s/^arrow $1 -> //p"; }
 line() { printf '%s\n' "$TRACE" | sed -n "${1}p"; }
 check "opening Lakehouse picks no catalog, shows the catalogs, and Enter would be refused" \
     "2 2 [4 5 6 7 9 11 12 13] 2" "$(line 1)"
@@ -73,6 +82,17 @@ check "...and its own options can be picked" "12 2,10,12 [4 5 6 7 9] " "$(line 7
 check "Glue has no files choice: picked alone, its note shown" "8 2,8 [4 5 6 7 11 12 13] " "$(line 8)"
 check "another source is independent of the tree" "1 1,2,8 [4 5 6 7 11 12 13] " "$(line 9)"
 check "unticking Lakehouse hides and clears its whole subtree" "2 1 [3 4 5 6 7 8 9 10 11 12 13] " "$(line 10)"
+check "→ on a closed collapse parent opens it" "toggle" "$(arrow right:2:-)"
+check "→ on an open parent moves to its first child" "move 3" "$(arrow right:2:2)"
+check "→ on a closed catalog picks it (opens its files)" "toggle" "$(arrow right:3:2)"
+check "→ on an open catalog moves to its first files option" "move 4" "$(arrow right:3:2,3,4)"
+check "→ on Glue (only a note under it) goes nowhere" "" "$(arrow right:8:2,8)"
+check "← on a files option moves to its catalog" "move 3" "$(arrow left:4:2,3,4)"
+check "← on a catalog moves to Lakehouse (up a level, the catalog stays picked)" "move 2" "$(arrow left:3:2,3,4)"
+check "← on open Lakehouse closes it" "toggle" "$(arrow left:2:2,3,4)"
+check "← on closed Lakehouse does nothing" "" "$(arrow left:2:-)"
+check "←/→ on a row with no children and no parent do nothing" "|" "$(arrow left:1:1)|$(arrow right:1:-)"
+check "...Skip included" "" "$(arrow right:14:-)"
 _UI_CHECKBOX_SPECS="$TREE_SPECS"
 _UI_CHECKBOX_SELECTABLE="$TREE_PICKABLE"
 check "the radio rows are the catalogs and the files, never a disabled row" \
@@ -88,9 +108,9 @@ _ui_checkbox_tree_end
 
 printf '\n== the PowerShell twins answer the same ==\n'
 if command -v pwsh >/dev/null 2>&1; then
-    PS_TRACE="$(TREE_SPECS="$TREE_SPECS" TREE_PICKABLE="$TREE_PICKABLE" TREE_PRESSES="$TREE_PRESSES" \
+    PS_TRACE="$(TREE_SPECS="$TREE_SPECS" TREE_PICKABLE="$TREE_PICKABLE" TREE_PRESSES="$TREE_PRESSES" TREE_ARROWS="$TREE_ARROWS" \
         pwsh -NoProfile -NonInteractive -File "$ROOT/tests/lib/tree-trace.ps1" "$ROOT" 2>&1)"
-    check "Update-ExakitTreeGroup and friends: the same trace, press by press" "$TRACE" "$PS_TRACE"
+    check "Update-ExakitTreeGroup, Get-ExakitTreeArrow and friends: the same trace, key by key" "$TRACE" "$PS_TRACE"
     PS_OUT="$(pwsh -NoProfile -NonInteractive -File "$ROOT/tests/lakehouse-picker-ps.ps1" 2>&1)"; PS_RC=$?
     printf '%s\n' "$PS_OUT" | grep -E '^  (ok|FAIL) |^passed' | sed 's/^/    /'
     check "the PowerShell menus (tests/lakehouse-picker-ps.ps1) pass" "0" "$PS_RC"
@@ -119,9 +139,18 @@ check "Enter with an open group and nothing picked is refused; the cursor skips 
 has "...and says what to pick" "Pick one of the options under Lake." "$(cat "${TMPDIR:-/tmp}/tree-checkbox.raw")"
 has "...the picked catalog's note is drawn" "note: automatic" "$OUT"
 
+OUT="$(cb 'j\x1b[C\x1b[C\x1b[C\r')"
+check "→ opens Lake, steps to Cat A, picks it (first option pre-picked)" "SEL=2,3,4" "$(printf '%s\n' "$OUT" | grep '^SEL=')"
+has "...and the hint says → opens" "Space to toggle · → to open · Enter to confirm" "$(cat "${TMPDIR:-/tmp}/tree-checkbox.raw")"
+OUT="$(cb 'j\x1b[C\x1b[C\x1b[C\x1b[D\x1b[D\x1b[Dk \r')"
+check "← from Cat A up to Lake, ← closes it, ← again does nothing" "SEL=1" "$(printf '%s\n' "$OUT" | grep '^SEL=')"
+OUT="$(TREE_NOGROUP=1 cb '\x1b[C\x1b[D\x1b[C \r')"
+check "a menu without tree specs: ←/→ do nothing" "SEL=1" "$(printf '%s\n' "$OUT" | grep '^SEL=')"
+lacks "...and its hint says nothing about →" "to open" "$(cat "${TMPDIR:-/tmp}/tree-checkbox.raw")"
+
 printf '\n== exakit connect: the source menu ==\n'
 pick() { # pick <keys> - the replay's report in PICK_OUT, its answer line in PICK
-    PICK_OUT="$(TTY_REPLAY_COLS=100 python3 "$ROOT/tests/lib/tty-replay.py" \
+    PICK_OUT="$(TTY_REPLAY_RAW="${TMPDIR:-/tmp}/pick.raw" TTY_REPLAY_COLS=100 python3 "$ROOT/tests/lib/tty-replay.py" \
         "$ROOT/tests/lib/lakehouse-picker-scenario.sh" "$ROOT" "Connect external sources" "$1" 2>&1)"
     PICK_RC=$?
     PICK="$(printf '%s\n' "$PICK_OUT" | grep '^PICKED=' | tail -1)"
@@ -144,6 +173,20 @@ Glue (files automatic: S3)|jjj |PICKED=lakehouse CATALOG=glue FILES=s3 RC=0
 No catalog + S3 (the first valid option, pre-selected)|jjjj |PICKED=lakehouse CATALOG=none FILES=s3 RC=0
 No catalog + Azure|jjjj jj |PICKED=lakehouse CATALOG=none FILES=azure RC=0
 PATHS
+
+R='\x1b[C'; L='\x1b[D'; D9='jjjjjjjjj'
+pick "$D9$R$R$R${R}j \\r"
+check "→ opens Lakehouse, → to Iceberg REST, → picks it, → to its files; then S3" \
+    "PICKED=lakehouse CATALOG=iceberg-rest FILES=s3 RC=0" "$PICK"
+has "...the hint says → opens" "Space to toggle · → to open · Enter to confirm" "$(cat "${TMPDIR:-/tmp}/pick.raw")"
+pick "$D9$R$R$R$L$L${L}j \\r"
+check "← to Lakehouse, ← closes it (catalog and files gone), ← on it again does nothing" \
+    "PICKED=mongodb CATALOG= FILES= RC=0" "$PICK"
+pick "$D9$R${R}jjj$R$R$L\\r"
+check "→ picks No catalog, → into its files, ← back to it: its first option stays" \
+    "PICKED=lakehouse CATALOG=none FILES=s3 RC=0" "$PICK"
+pick "$R$L$R \\r"
+check "←/→ on a source with no subtree do nothing" "PICKED=postgresql CATALOG= FILES= RC=0" "$PICK"
 
 pick "${LAKE}jj jjj \\r"
 check "the pick reaches the form as presets (exakit_vs_preset)" \

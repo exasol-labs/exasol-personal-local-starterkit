@@ -2140,7 +2140,9 @@ ui_table_menu() {
         # then spend a fifth of a second assembling — is what flickered: the
         # region was genuinely empty for that whole time.
         ui_table_frame "$_utm_f" "$_utm_cur"
-        _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle · Enter to confirm${UI_RESET:-}"
+        _utm_open=""
+        [ "$_UI_TREE_ON" = 1 ] && _ui_checkbox_tree_collapse_on && _utm_open=" · → to open"
+        _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle$_utm_open · Enter to confirm${UI_RESET:-}"
         # Enter refused for an open "one" group with nothing picked: said under
         # the hint until the next key.
         _utm_extra=0
@@ -2188,6 +2190,21 @@ ui_table_menu() {
                 case "$UI_KEY_SEQ" in
                     '[A') _utm_move -1 ;;
                     '[B') _utm_move 1 ;;
+                    '[C'|'[D')
+                        # → opens a collapse group or steps into it, ← steps
+                        # out or closes it; nothing in any other table.
+                        [ "$_UI_TREE_ON" = 1 ] || continue
+                        _utm_dir=right; [ "$UI_KEY_SEQ" = '[D' ] && _utm_dir=left
+                        _utm_act="$(_ui_checkbox_tree_arrow "$_utm_dir" "$_utm_cur" "$_utm_sel")"
+                        case "$_utm_act" in
+                            toggle)
+                                _utm_sel="$(_ui_checkbox_toggle "$_utm_sel" "$_utm_n" "$_utm_cur")"
+                                _utm_sel="$(_ui_checkbox_apply_group "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_GROUP")"
+                                _utm_sel="$(_ui_checkbox_apply_exclusive "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_EXCLUSIVE")"
+                                ;;
+                            "move "*) _utm_cur="${_utm_act#move }" ;;
+                        esac
+                        ;;
                     '[<')
                         [ -n "$UI_CURSOR_ROW" ] || continue
                         _utm_hit="$(_ui_click_row $(( UI_CURSOR_ROW - _utm_drawn )) "$_utm_n" "${_UI_TABLE_AT[@]}")"

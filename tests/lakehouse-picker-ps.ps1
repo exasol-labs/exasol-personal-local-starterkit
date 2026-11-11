@@ -29,12 +29,15 @@ function Read-ExakitMenuKey {
 }
 function Enable-ExakitMenuMouse { }
 function Disable-ExakitMenuMouse { }
-# Keys as one string, the replay's letters: j k Space (" ") Enter ("E").
+# Keys as one string, the replay's letters: j k Space (" ") Enter ("E"),
+# Right (">") and Left ("<").
 function Press([string]$Keys) {
     $script:Keys.Clear()
     foreach ($c in $Keys.ToCharArray()) {
         if ($c -eq ' ') { $script:Keys.Enqueue(@{ Name = 'Space' }) }
         elseif ($c -eq 'E') { $script:Keys.Enqueue(@{ Name = 'Enter' }) }
+        elseif ($c -eq '>') { $script:Keys.Enqueue(@{ Name = 'Right' }) }
+        elseif ($c -eq '<') { $script:Keys.Enqueue(@{ Name = 'Left' }) }
         else { $script:Keys.Enqueue(@{ Name = 'Char'; Char = [string]$c }) }
     }
 }
@@ -54,6 +57,11 @@ Check "the first option is pre-picked, and Space on it keeps it" "2,3,4" (Run-Ch
 Check "Enter with an open group and nothing picked is refused; the cursor skips the hidden rows" "2,7" (Run-Checkbox "j Ejj E")
 Check "picking another option moves the radio" "2,3,5" (Run-Checkbox "j j jj E")
 Check "unticking the parent clears its subtree" "1" (Run-Checkbox " j  E")
+Check "Right opens Lake, steps to Cat A, picks it" "2,3,4" (Run-Checkbox "j>>>E")
+Check "Left from Cat A up to Lake, Left closes it, Left again does nothing" "1" (Run-Checkbox "j>>><<<k E")
+Press "><> E"
+Check "a menu without tree specs: Left/Right do nothing" "1" `
+    ((@(Read-ExakitCheckboxMenu -Title "t" -Options @("x", "y") 6> $null)) -join ',')
 Press " E"
 Check "the any/all modes are what they were: ticking an all-parent ticks every child" "1,2,3" `
     ((@(Read-ExakitCheckboxMenu -Title "t" -Options @("All", "x", "y") -GroupParent 1 -GroupFirst 2 -GroupLast 3 -GroupMode all 6> $null)) -join ',')
@@ -106,6 +114,10 @@ Check "the cursor steps over the Google Cloud Storage row to the next catalog" "
 Check "picking another catalog closes the old branch" "PICKED=lakehouse CATALOG=none FILES=s3" (Run-Pick ($lake + "j jjjjjj E"))
 Check "unticking Lakehouse drops its catalog and files with it" "PICKED=databricks CATALOG= FILES=" (Run-Pick ($lake + "j k k E"))
 Check "Lakehouse goes with other sources" "PICKED=postgresql lakehouse CATALOG=glue FILES=s3" (Run-Pick (" jjjjjjjjj jjj E"))
+Check "Right opens Lakehouse, to Iceberg REST, picks it, into its files; then S3" "PICKED=lakehouse CATALOG=iceberg-rest FILES=s3" (Run-Pick "jjjjjjjjj>>>>j E")
+Check "Left to Lakehouse, Left closes it, Left again does nothing" "PICKED=mongodb CATALOG= FILES=" (Run-Pick "jjjjjjjjj>>><<<j E")
+Check "Right picks No catalog, into its files, Left back: its first option stays" "PICKED=lakehouse CATALOG=none FILES=s3" (Run-Pick "jjjjjjjjj>>jjj>><E")
+Check "Left/Right on a source with no subtree do nothing" "PICKED=postgresql CATALOG= FILES=" (Run-Pick "><> E")
 Check "Enter on Skip picks nothing" "PICKED= CATALOG= FILES=" (Run-Pick "kE")
 
 Write-Host "== the pick reaches the form as presets (Add-ExakitVsPreset) =="
@@ -142,6 +154,15 @@ $script:OldCatalog = $true
 $script:OldCatalog = $false
 $top = @(@($script:LastTable.Rows.ToArray()) | Where-Object { $_.Kind -eq "tee" -or $_.Kind -eq "corner" })
 Check "...also while the catalog still lists iceberg-rest and unity: the one Lakehouse row folds them" "11" $top.Count
+
+Write-Host "== the keys: Left and Right reach the menus =="
+Check "VT input: ESC [ C is Right" "Right" (ConvertFrom-ExakitMenuSequence "[C").Name
+Check "VT input: ESC [ D is Left" "Left" (ConvertFrom-ExakitMenuSequence "[D").Name
+Check "...and the SS3 forms" "Right Left" ((ConvertFrom-ExakitMenuSequence "OC").Name + " " + (ConvertFrom-ExakitMenuSequence "OD").Name)
+Check "the table menu without a collapse group: Left/Right leave the cursor and the ticks alone" "4" `
+    (& { Press ">< E"; $tt = New-ExakitTable -Title "T" -Col1 "Dataset"; [void](Add-ExakitTableRow -Table $tt -Kind group -Label "All")
+         foreach ($l in "a", "b") { [void](Add-ExakitTableRow -Table $tt -Kind tee -Label $l) }; [void](Add-ExakitTableRow -Table $tt -Kind corner -Label "c")
+         (@(& $script:RealTableMenu -Table $tt -StartRow 4 6> $null)) -join ',' })
 
 Write-Host "== the frame: hidden rows, radio rows, three levels =="
 $t = $script:LastTable
