@@ -9,8 +9,9 @@ the shell puts them before the command line's own --set pairs, so those win.
 The connector's "paste" block in connector.json says which strings it reads:
 
     schemes    the prefixes before "://" it accepts (jdbc:postgresql, postgres)
-    style      url (the default), oracle, mongodb, s3, azure, glue or catalog (input: the one input
-               the whole address fills)
+    style      url (the default), oracle, mongodb, s3, azure, glue, catalog (input: the one input
+               the whole address fills) or lakehouse (any of the lakehouse catalogs' addresses;
+               the catalog setting is read from it too)
     bare       true: a plain host[:port][/path] is read as well
     host       the input the host fills (default host); host_suffix, when set,
                must end the host and is cut off it (Snowflake's account)
@@ -552,8 +553,60 @@ def style_catalog(reading, text):
     reading.put(reading.block["input"], "%s://%s%s" % (match.group(1).lower(), authority, match.group(3).rstrip("/")))
 
 
+def lakehouse_catalog(text):
+    """The lakehouse catalog a pasted address belongs to, or None: a Glue
+    endpoint or ARN is glue, an s3:// or abfss:// folder none, a Databricks
+    workspace unity - unless its path is Databricks' Iceberg REST endpoint
+    (/api/2.1/unity-catalog/iceberg-rest), which is iceberg-rest, as is any
+    other https catalog."""
+    low = text.lower()
+    if low.startswith("arn:aws:glue:") or re.match(r"^(https://)?glue(-fips)?\.[a-z0-9-]+\.amazonaws\.com", low):
+        return "glue"
+    if low.startswith(("s3://", "s3a://", "abfss://")):
+        return "none"
+    match = re.match(r"^https?://([^/?#@]*@)?([^/?#:]+)[^?#]*", low)
+    if not match:
+        return None
+    if "iceberg" in match.group(0)[len(match.group(1) or "") + 8:]:
+        return "iceberg-rest"
+    if match.group(2).endswith((".databricks.com", ".azuredatabricks.net", ".gcp.databricks.com")):
+        return "unity"
+    return "iceberg-rest"
+
+
+def style_lakehouse(reading, text):
+    """The lakehouse connector: the catalog the address belongs to (a
+    setting, put with the inputs) and that catalog's own reading of it."""
+    catalog = lakehouse_catalog(text)
+    if catalog is None:
+        reading.not_a_form()
+    reading.put("catalog", catalog)
+    if catalog == "glue":
+        style_glue(reading, text)
+    elif catalog == "none":
+        if re.search(r"[?#]", text):
+            reading.secret = True
+        reading.put("path", re.split(r"[?#]", text, 1)[0])
+    else:
+        input_name = "workspace_url" if catalog == "unity" else "catalog_url"
+        style_catalog(Retarget(reading, input_name), text)
+
+
+class Retarget(object):
+    """A Reading whose block names another input (style_catalog's "input")."""
+    def __init__(self, reading, name):
+        self.__dict__["_reading"] = reading
+        self.__dict__["block"] = dict(reading.block, input=name)
+
+    def __getattr__(self, key):
+        return getattr(self._reading, key)
+
+    def __setattr__(self, key, value):
+        setattr(self._reading, key, value)
+
+
 STYLES = {"url": style_url, "oracle": style_oracle, "mongodb": style_mongodb, "s3": style_s3,
-          "azure": style_azure, "glue": style_glue, "catalog": style_catalog}
+          "azure": style_azure, "glue": style_glue, "catalog": style_catalog, "lakehouse": style_lakehouse}
 
 
 # --- the string shown back, its credentials masked ------------------------------
@@ -715,8 +768,15 @@ def mask_catalog(mask):
         mask.segments(tail + 1, end, "&", every=True)
 
 
+def mask_lakehouse(mask):
+    if re.match(r"^https?://", mask.text, re.I):
+        mask_catalog(mask)
+    else:
+        mask_url(mask)
+
+
 MASKS = {"url": mask_url, "mongodb": mask_url, "s3": mask_url, "glue": mask_url, "oracle": mask_oracle,
-         "azure": mask_azure, "catalog": mask_catalog}
+         "azure": mask_azure, "catalog": mask_catalog, "lakehouse": mask_lakehouse}
 
 
 def masked(reading, text):
@@ -748,6 +808,19 @@ def read(connector, text, credential=None, only=None):
                                 "give it on one line, as the source shows it")
     if only and only not in [s["name"] for s in connector["inputs"]]:
         raise planner.PlanError("%s is not an input of %s" % (only, connector["id"]))
+    if connector.get("settings"):
+        # One connector of several catalogs (lakehouse): its settings are
+        # inputs a string can fill too, and each input name is read once.
+        specs, seen = [], set()
+        for key, spec in connector["settings"].items():
+            specs.append({"name": key, "kind": "choice",
+                          "choices": [c["value"] for c in spec["choices"] if not c.get("disabled")]})
+            seen.add(key)
+        for spec in connector["inputs"]:
+            if spec["name"] not in seen:
+                seen.add(spec["name"])
+                specs.append({k: v for k, v in spec.items() if k != "when"})
+        connector = dict(connector, inputs=specs)
     reading = Reading(connector, block)
     STYLES[block.get("style", "url")](reading, text)
     answer = reading.result(masked(reading, text), credential)

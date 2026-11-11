@@ -223,7 +223,7 @@ function Invoke-ExakitVsConnectWizard {
 # environment for the run. cli.py puts its own folder on sys.path. Twin of
 # exakit_vs_engine and _exakit_vs_python.
 function Invoke-ExakitVsEngine {
-    param([string[]]$Arguments = @(), [string]$Secret = "")
+    param([string[]]$Arguments = @(), [string]$Secret = "", [string]$StorageSecret = "")
     # Asked for JSON, the bridge's own failures come in the engine's shape too.
     $asJson = @($Arguments) -contains "--json"
     $defs = Get-ExakitVsDefs
@@ -244,7 +244,11 @@ function Invoke-ExakitVsEngine {
         $value = "" + (Get-ExakitManifestValue $pair[1])
         if ($value) { $argv += @($pair[0], $value) }
     }
-    if ($Secret) {
+    # Two secrets (a lakehouse catalog login and storage keys): one pipe,
+    # base64 "." base64 (--secret-pair-base64), as the bash bridge sends them.
+    if ($Secret -and $StorageSecret) {
+        $argv += @($Arguments | ForEach-Object { if ($_ -eq "--secret-stdin") { "--secret-pair-base64" } else { $_ } })
+    } elseif ($Secret) {
         $argv += @($Arguments | ForEach-Object { if ($_ -eq "--secret-stdin") { "--secret-stdin-base64" } else { $_ } })
     } else {
         $argv += $Arguments
@@ -276,6 +280,7 @@ function Invoke-ExakitVsEngine {
         if ($Secret) {
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Secret))
+            if ($StorageSecret) { $encoded = $encoded + "." + [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($StorageSecret)) }
             $lines = @($encoded | & $python @argv 2> $errFile)
             $encoded = $null
         } else {
@@ -610,6 +615,61 @@ function Read-ExakitVsSecret {
 # in its note, "(input hidden)" unless the caller says another. A key that
 # sends an escape sequence (an arrow, Delete) is no character here: the host's
 # secure read takes none. Twin of exakit_read_hidden.
+# Read-ExakitVsStorageSecret <label> <file> - the second secret of a lakehouse
+# combination with two (a catalog login and storage keys): from
+# --storage-secret-file, else asked hidden at a console; "" when neither can
+# give it (--json, no console), which the caller refuses. Never from stdin:
+# that carries the first one. Twin of _exakit_vs_read_storage.
+function Read-ExakitVsStorageSecret {
+    param([string]$Label, [string]$File = "")
+    if ($File) { return (Read-ExakitVsSecretFile -Path $File) }
+    if ($script:ExakitVsJson) { return "" }
+    if (-not (Test-ExakitInteractive)) { return "" }
+    return (Read-ExakitVsSecret -Label $Label)
+}
+
+# Get-ExakitVsSecretLabels <connector> <sets> - @{ Credential; Storage }: the
+# labels of the secrets of the combination the --set pairs so far choose
+# (engine inputs); Storage "" with one secret. Twin of _exakit_vs_secret_labels.
+function Get-ExakitVsSecretLabels {
+    param([string]$Connector, [string[]]$Sets = @())
+    $out = @{ Credential = ""; Storage = "" }
+    $run = Invoke-ExakitVsEngine -Arguments (@("inputs", $Connector) + @($Sets))
+    if ($run.Code -ne 0) { return $out }
+    $line = @($run.Lines) | Where-Object { "$_" -like "RESULT *" } | Select-Object -First 1
+    if (-not $line) { return $out }
+    $doc = "$line".Substring(7) | ConvertFrom-Json
+    foreach ($f in @($doc.inputs)) {
+        $isStorage = ($f.PSObject.Properties["storage"] -and $f.storage)
+        if ($isStorage -and -not $out.Storage) { $out.Storage = "" + $f.label }
+        elseif (-not $isStorage -and $f.kind -in @("secret", "secret-file") -and -not $out.Credential) { $out.Credential = "" + $f.label }
+    }
+    return $out
+}
+
+# Get-ExakitVsInputs <connector> <sets> - the engine's inputs for the --set
+# pairs so far: a connector with settings (lakehouse) answers its catalog,
+# then files, then that combination's own. $null when the engine refused.
+function Get-ExakitVsInputs {
+    param([string]$Connector, [string[]]$Sets = @())
+    $run = Invoke-ExakitVsEngine -Arguments (@("inputs", $Connector) + @($Sets))
+    if ($run.Code -ne 0) { return $null }
+    $line = @($run.Lines) | Where-Object { "$_" -like "RESULT *" } | Select-Object -First 1
+    if (-not $line) { return $null }
+    return ("$line".Substring(7) | ConvertFrom-Json)
+}
+
+# Add-ExakitVsPreset <connector> <setting> <value> - the picker's interface to
+# the form: a setting chosen before the form opens (the lakehouse tree's
+# catalog and files), answered and not asked. Invoke-ExakitVsTuiForm takes the
+# presets of its connector as if given with --set. Call it before the forms
+# open (after the pick). Twin of exakit_vs_preset.
+function Add-ExakitVsPreset {
+    param([string]$Connector, [string]$Key, [string]$Value)
+    if ($null -eq $script:ExakitVsPreset) { $script:ExakitVsPreset = @() }
+    $script:ExakitVsPreset += ,@($Connector, "$Key=$Value")
+}
+
 function Read-ExakitVsHidden {
     param([string]$Label, [string]$Note = "input hidden", [string]$Question = "")
     # -Question is the whole question, for one that says more than "(note)".
@@ -936,13 +996,13 @@ function Repair-ExakitVsForRetry {
 # last run's lines are kept in $script:ExakitVsLastLines for the caller to
 # print, and what the bridge says while it repairs goes to stderr.
 function Invoke-ExakitVsRun {
-    param([string[]]$Arguments, [string]$Secret = "")
+    param([string[]]$Arguments, [string]$Secret = "", [string]$StorageSecret = "")
     $script:ExakitVsResult = $null
     $script:ExakitVsLastLines = @()
     # Once: a caller that built its arguments with --json already has it.
     if ($script:ExakitVsJson -and (@($Arguments) -notcontains "--json")) { $Arguments = @("--json") + @($Arguments) }
     for ($try = 1; $try -le 2; $try++) {
-        $run = Invoke-ExakitVsEngine -Arguments $Arguments -Secret $Secret
+        $run = Invoke-ExakitVsEngine -Arguments $Arguments -Secret $Secret -StorageSecret $StorageSecret
         if ($script:ExakitVsJson) { $script:ExakitVsLastLines = @($run.Lines) }
         elseif ($try -eq 1 -and @(21, 23) -contains $run.Code -and (Test-ExakitVsPrepareSaid)) {
             # A language container installed now, without a question, is a
@@ -1433,44 +1493,175 @@ function Show-ExakitVsClockCheck {
     } else { Info "Database clock: in sync with this computer." }
 }
 
+# --- Lakehouse (Iceberg / Delta): the picker's subtree ---------------------
+# One connector, "lakehouse", answers for every catalog and file store; the
+# menu opens it into a subtree: the catalog (one of four), then where the files
+# are (one of what that catalog can use). These two functions are the whole
+# interface between the picker and the rest of connect. Twins of
+# _exakit_vs_lakehouse_tree and _exakit_vs_lakehouse_handoff.
+
+# Get-ExakitVsLakehouseTree - the subtree, read from the lakehouse connector's
+# own "settings" (connectors/lakehouse/connector.json): "catalogs" in menu
+# order, each with the "files" it can choose from (none when only one is valid
+# - Glue - whose files are then "auto"), "files" with every store's label
+# ("supported": false is shown, never picked), and "folds": the connector ids
+# the one row replaces, left out of the menu. A kit copy older than those
+# settings gets the same tree from the spec's names below.
+function Get-ExakitVsLakehouseTree {
+    try {
+        $defs = Get-ExakitVsDefs
+        if ($defs) {
+            $st = (Get-Content -Raw -LiteralPath (Join-ExakitCorePath $defs "connectors" "lakehouse" "connector.json") | ConvertFrom-Json).settings
+            if ($null -ne $st) {
+                $cats = @()
+                foreach ($c in @($st.catalog.choices)) {
+                    $ok = @($st.files.valid.("" + $c.value))
+                    $entry = [pscustomobject]@{ id = "" + $c.value; label = "" + $c.label; files = @() }
+                    if ($ok.Count -gt 1) { $entry.files = $ok }
+                    elseif ($ok.Count -eq 1) { $entry | Add-Member -NotePropertyName auto -NotePropertyValue ("" + $ok[0]) }
+                    $cats += $entry
+                }
+                $files = @()
+                foreach ($f in @($st.files.choices)) {
+                    $dis = ($null -ne $f.PSObject.Properties["disabled"] -and $f.disabled)
+                    $files += [pscustomobject]@{ id = "" + $f.value; label = "" + $f.label; supported = (-not $dis) }
+                }
+                return [pscustomobject]@{ catalogs = $cats; files = $files; folds = @("iceberg-rest", "unity") }
+            }
+        }
+    } catch { }
+    $json = @'
+{"catalogs": [
+  {"id": "iceberg-rest", "label": "Iceberg REST catalog", "files": ["vended", "s3", "azure"]},
+  {"id": "unity", "label": "Unity Catalog", "files": ["vended", "s3", "azure"]},
+  {"id": "glue", "label": "AWS Glue", "files": [], "auto": "s3"},
+  {"id": "none", "label": "No catalog - Parquet files in a folder", "files": ["s3", "azure"]}],
+ "files": [
+  {"id": "vended", "label": "Let the catalog give access"},
+  {"id": "s3", "label": "Amazon S3 / S3-compatible"},
+  {"id": "azure", "label": "Azure ADLS Gen2"},
+  {"id": "gcs", "label": "Google Cloud Storage - not supported yet", "supported": false}],
+ "folds": ["iceberg-rest", "unity"]}
+'@
+    return ($json | ConvertFrom-Json)
+}
+
+# Add-ExakitVsLakehouseHandoff - the Lakehouse pick, handed to the form as
+# presets (Add-ExakitVsPreset): the catalog and the files picked in the menu
+# ($script:ExakitVsLakehouseCatalog, $script:ExakitVsLakehouseFiles), Glue's
+# implied files included. Nothing when the menu did not pick them (the command
+# named the connector). Called after the pick, before the forms open.
+function Add-ExakitVsLakehouseHandoff {
+    if (-not $script:ExakitVsLakehouseCatalog) { return }
+    Add-ExakitVsPreset -Connector lakehouse -Key catalog -Value $script:ExakitVsLakehouseCatalog
+    if ($script:ExakitVsLakehouseFiles) { Add-ExakitVsPreset -Connector lakehouse -Key files -Value $script:ExakitVsLakehouseFiles }
+}
+
+# Test-ExakitVsUnsupported - a files entry shown but never picked.
+function Test-ExakitVsUnsupported {
+    param($Entry)
+    return ($null -ne $Entry.PSObject.Properties["supported"] -and $Entry.supported -eq $false)
+}
+
 # Invoke-ExakitVsPick - the connector menu, under the line that names this
 # computer's public IP (Get-ExakitVsCatalog). Returns the chosen connector ids;
-# none when nothing was chosen. Twin of _exakit_vs_pick.
+# none when nothing was chosen. For Lakehouse, the catalog and files picked
+# land in $script:ExakitVsLakehouseCatalog and $script:ExakitVsLakehouseFiles.
+# Twin of _exakit_vs_pick.
 function Invoke-ExakitVsPick {
+    $script:ExakitVsLakehouseCatalog = ""; $script:ExakitVsLakehouseFiles = ""
     $catalog = Get-ExakitVsCatalog
     if ($null -eq $catalog) { Write-Host ("  {0} The connector catalog could not be read. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red; return @() }
+    $tree = Get-ExakitVsLakehouseTree
+    $folds = @($tree.folds)
     # Each source by its name and nothing more, in the catalog's order: the
-    # adapter version and tier are `exakit source catalog`'s. Twin of _exakit_vs_pick.
-    $entries = @($catalog.connectors)
+    # adapter version and tier are `exakit source catalog`'s. Lakehouse's
+    # subtree follows its row; $keys holds what each row picks (an id,
+    # cat:<catalog>[:<files>], file:<catalog>:<files>, or "" for a row nobody
+    # picks). Twin of _exakit_vs_pick.
+    $entries = @(@($catalog.connectors) | Where-Object { $folds -notcontains ("" + $_.id) })
     $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source"
     # The Source column alone: nothing runs in this menu's rows, so it has no
     # Status column either.
     $t.StatMin = 0
-    $ids = @()
+    $keys = @()
+    # Innermost first: each catalog's files ("collapse+one+first": shown once
+    # the catalog is picked, the first pre-selected), then the catalogs under
+    # Lakehouse ("collapse+one").
+    $groups = @()
     for ($i = 0; $i -lt $entries.Count; $i++) {
         $e = $entries[$i]
-        $tree = "tee"
-        if ($i -eq $entries.Count - 1) { $tree = "corner" }
+        $top = "tee"
+        if ($i -eq $entries.Count - 1) { $top = "corner" }
         $label = "" + $e.name
-        if ("" + $e.status -eq "gated") {
+        $gated = ("" + $e.status -eq "gated")
+        if ($gated) {
             # Its reason read on from its name: there is no Status column to say it in.
-            $row = Add-ExakitTableRow -Kind $tree -Label ($label + " - not available yet") -Table $t
+            $row = Add-ExakitTableRow -Kind $top -Label ($label + " - not available yet") -Table $t
             Disable-ExakitTableRow -Row $row -Table $t
         } else {
-            [void](Add-ExakitTableRow -Kind $tree -Label $label -Table $t)
+            $row = Add-ExakitTableRow -Kind $top -Label $label -Table $t
         }
-        $ids += ("" + $e.id)
+        $keys += ("" + $e.id)
+        if (("" + $e.id) -ne "lakehouse" -or $gated) { continue }
+        $cats = @($tree.catalogs); $files = @($tree.files)
+        for ($c = 0; $c -lt $cats.Count; $c++) {
+            $cat = $cats[$c]
+            $mid = $top + "-tee"
+            if ($c -eq $cats.Count - 1) { $mid = $top + "-corner" }
+            $allowed = @($cat.files)
+            $auto = ""
+            if ($null -ne $cat.PSObject.Properties["auto"]) { $auto = "" + $cat.auto }
+            $key = "cat:" + $cat.id
+            if ($allowed.Count -eq 0) { $key += ":" + $auto }
+            $ca = Add-ExakitTableRow -Kind $mid -Label ("" + $cat.label) -Table $t
+            $keys += $key
+            if ($allowed.Count -eq 0) {
+                # Glue: its files are found from the catalog - a note, not a choice.
+                $autoLabel = $auto
+                foreach ($f in $files) { if (("" + $f.id) -eq $auto) { $autoLabel = ("" + $f.label).Split(@(" / "), [StringSplitOptions]::None)[0] } }
+                $nr = Add-ExakitTableRow -Kind ($mid + "-corner") -Label ("files: " + $autoLabel + " (automatic)") -Table $t
+                Disable-ExakitTableRow -Row $nr -Table $t
+                $keys += ""
+                $groups += ("{0}:{1}:{2}:collapse" -f $ca, ($ca + 1), ($ca + 1))
+                continue
+            }
+            $shown = @($files | Where-Object { ($allowed -contains ("" + $_.id)) -or (Test-ExakitVsUnsupported $_) })
+            for ($j = 0; $j -lt $shown.Count; $j++) {
+                $f = $shown[$j]
+                $leaf = $mid + "-tee"
+                if ($j -eq $shown.Count - 1) { $leaf = $mid + "-corner" }
+                $fr = Add-ExakitTableRow -Kind $leaf -Label ("" + $f.label) -Table $t
+                if (Test-ExakitVsUnsupported $f) { Disable-ExakitTableRow -Row $fr -Table $t; $keys += "" }
+                else { $keys += ("file:" + $cat.id + ":" + $f.id) }
+            }
+            $groups += ("{0}:{1}:{2}:collapse+one+first" -f $ca, ($ca + 1), ($ca + $shown.Count))
+        }
+        $groups += ("{0}:{1}:{2}:collapse+one" -f $row, ($row + 1), $keys.Count)
     }
     $skip = Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $t
     Show-ExakitVsClockCheck
     Write-Host ""
     Info "Tick one or more sources; the details for each are asked next."
     Write-Host ""
-    $sel = @(Invoke-ExakitTableMenu -Table $t -ExclusiveIndex $skip -StartRow 1)
+    $sel = @(Invoke-ExakitTableMenu -Table $t -ExclusiveIndex $skip -StartRow 1 -Groups $groups)
     if (-not $script:ExakitTableConfirmed) { return @() }
     if ($sel -contains $skip) { return @() }
     $picked = @()
-    foreach ($r in $sel) { if ($r -ge 1 -and $r -le $ids.Count) { $picked += $ids[$r - 1] } }
+    foreach ($r in $sel) {
+        if ($r -lt 1 -or $r -gt $keys.Count) { continue }
+        $k = "" + $keys[$r - 1]
+        if (-not $k) { continue }
+        if ($k.StartsWith("cat:")) {
+            $c = $k.Substring(4)
+            $at = $c.IndexOf(":")
+            if ($at -ge 0) { $script:ExakitVsLakehouseFiles = $c.Substring($at + 1); $c = $c.Substring(0, $at) }
+            $script:ExakitVsLakehouseCatalog = $c
+        } elseif ($k.StartsWith("file:")) {
+            $f = $k.Substring(5)
+            $script:ExakitVsLakehouseFiles = $f.Substring($f.IndexOf(":") + 1)
+        } else { $picked += $k }
+    }
     return $picked
 }
 
@@ -1767,7 +1958,7 @@ function Invoke-ExakitVsPaste {
 function Set-ExakitVsTuiSecretFrom {
     param([hashtable]$Form, [string]$Value)
     foreach ($f in $Form.Fields) {
-        if ($f.Kind -eq "secret") { $f.Val = $Value; $f.Done = $true; $f.From = $true; return }
+        if ($f.Kind -eq "secret" -and $f.Name -ne "storage_secret") { $f.Val = $Value; $f.Done = $true; $f.From = $true; return }
     }
 }
 
@@ -1865,7 +2056,8 @@ function Read-ExakitVsTuiField {
     elseif ($f.Kind -eq "secret") {
         $def = ""
         # Given already - typed, or read from --password-file: Enter keeps it.
-        if ($old -or ($f.Done -and $Form.PwFile)) { $keep = $true; $notes += "(hidden, Enter keeps the one given)" } else { $notes += "(hidden)" }
+        $given = $Form.PwFile; if ($f.Name -eq "storage_secret") { $given = $script:ExakitVsStorageFile }
+        if ($old -or ($f.Done -and $given)) { $keep = $true; $notes += "(hidden, Enter keeps the one given)" } else { $notes += "(hidden)" }
     }
     elseif ($f.Kind -eq "secret-file") { $notes += "(the path to the file)" }
     # An optional answer that differs from its default can be taken back.
@@ -1906,7 +2098,13 @@ function Read-ExakitVsTuiField {
         }
         # The engine's own rule for this input, in the words a scripted connect
         # would get; the value travels base64 on its stdin, never in argv.
-        $check = Invoke-ExakitVsEngine -Arguments @("field", $Form.Connector, $f.Name, "--base64") -Secret $v
+        # A connector with settings checks the answer in its combination:
+        # the settings answered so far go with it.
+        $fieldArgs = @("field", $Form.Connector, $f.Name, "--base64")
+        foreach ($o in $Form.Fields) {
+            if ($o.Name -in @("catalog", "files", "login") -and $o.Val -and $o.Name -ne $f.Name) { $fieldArgs += @("--set", "$($o.Name)=$($o.Val)") }
+        }
+        $check = Invoke-ExakitVsEngine -Arguments $fieldArgs -Secret $v
         if ($check.Code -eq 0) {
             $res = Get-ExakitVsResultOf $check.Lines
             if ($null -ne $res) { $v = "" + $res.value }
@@ -2188,10 +2386,44 @@ function Find-ExakitVsTuiNamed {
 # Invoke-ExakitVsTuiForm - one source's panel. Returns its answers as a
 # hashtable, "left-out" when the reader gave up on it, or "broken" when the
 # connector's definition could not be read. Twin of _exakit_vs_tui_form.
+# Read-ExakitVsTuiSettings <connector> <sets> - a connector with settings
+# (lakehouse): every setting the picker did not preset (Add-ExakitVsPreset)
+# and the command line did not give, asked one line each before the panel -
+# catalog, then files (only those that catalog takes), then login. Returns the
+# sets with them added, or $null at end of input or when the engine refuses.
+# Twin of _exakit_vs_tui_settings.
+function Read-ExakitVsTuiSettings {
+    param([string]$Connector, [string[]]$Sets = @())
+    while ($true) {
+        $doc = Get-ExakitVsInputs -Connector $Connector -Sets $Sets
+        if ($null -eq $doc) { return $null }
+        $keys = @(); for ($g = 0; $g + 1 -lt $Sets.Count; $g += 2) { $keys += ($Sets[$g + 1] -split "=", 2)[0] }
+        $open = @($doc.inputs) | Where-Object { $_.PSObject.Properties["setting"] -and $_.setting -and $keys -notcontains $_.name } | Select-Object -First 1
+        if ($null -eq $open) { return ,$Sets }
+        $words = @(); $labels = @($open.choice_labels)
+        for ($c = 0; $c -lt @($open.choices).Count; $c++) { $words += ("{0}: {1}" -f @($open.choices)[$c], $labels[$c]) }
+        Write-Host ("  " + $script:UiDim + ($words -join "; ") + $script:UiReset)
+        $default = ""; if ($open.PSObject.Properties["default"] -and $open.default) { $default = "" + $open.default }
+        $value = Read-ExakitPrompt ("{0} ({1})" -f $open.label, (@($open.choices) -join ", ")) $default
+        if ($null -eq $value) { return $null }
+        if (@($open.choices) -contains $value) { $Sets = @($Sets) + @("--set", "$($open.name)=$value") }
+        else { Write-Host ("  {0} {1} must be one of: {2}" -f $script:UiCross, $open.label, (@($open.choices) -join ", ")) -ForegroundColor Red }
+    }
+}
+
 function Invoke-ExakitVsTuiForm {
     param([string]$Connector, [int]$Pos, [int]$Total, [string]$GivenName = "", [string[]]$GivenSets = @(),
           [string]$PasswordFile = "", [string[]]$Taken = @(), [string]$GivenSecret = "")
-    $run = Invoke-ExakitVsEngine -Arguments @("inputs", $Connector)
+    # The picker's presets for this connector first, the command line's --set over them.
+    $preset = @()
+    foreach ($p in @($script:ExakitVsPreset)) { if ($null -ne $p -and $p[0] -eq $Connector) { $preset += @("--set", $p[1]) } }
+    $GivenSets = @($preset) + @($GivenSets)
+    $defPath = Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $Connector "connector.json"
+    if ((Test-Path -LiteralPath $defPath) -and ((Get-Content -Raw -LiteralPath $defPath) -match '"settings"')) {
+        $GivenSets = Read-ExakitVsTuiSettings -Connector $Connector -Sets $GivenSets
+        if ($null -eq $GivenSets) { return "left-out" }
+    }
+    $run = Invoke-ExakitVsEngine -Arguments (@("inputs", $Connector) + @($GivenSets))
     $doc = Get-ExakitVsResultOf $run.Lines
     if ($run.Code -ne 0 -or $null -eq $doc) {
         [void](Show-ExakitVsLines -Lines $run.Lines)
@@ -2222,7 +2454,10 @@ function Invoke-ExakitVsTuiForm {
         if ($spec.PSObject.Properties["draft"] -and $spec.draft) { $f.Draft = "" + $spec.draft }
         if ($f.Kind -eq "source-name" -and $GivenName) { $f.Val = $GivenName; $f.Done = $true }
         if ($given.ContainsKey($f.Name)) { $f.Val = $given[$f.Name]; $f.Done = $true }
-        if ($PasswordFile) {
+        if ($f.Name -eq "storage_secret") {
+            # The second secret: --storage-secret-file answers it, never --password-file.
+            if ($script:ExakitVsStorageFile -and $Total -eq 1) { $f.Done = $true }
+        } elseif ($PasswordFile) {
             if ($f.Kind -eq "secret") { $f.Done = $true }
             if ($f.Kind -eq "secret-file") { $f.Val = $PasswordFile; $f.Done = $true }
         }
@@ -2296,9 +2531,14 @@ function Invoke-ExakitVsTuiForm {
     # The per-source public IP line is the Tip's: left out.
     $planInfo = @(@($planned.Lines) | Where-Object { $_ -like "INFO *" -and $_ -notlike "INFO This computer's public IP is *" } | ForEach-Object { $_.Substring(5) })
     $src = @{ Id = $Connector; Label = "" + $doc.name; Base = $base; Plan = (Get-ExakitVsResultOf $planned.Lines)
-              PlanInfo = $planInfo; Name = ""; Secret = ""; SecretFile = ""; Where = ""; Downloads = "" }
+              PlanInfo = $planInfo; Name = ""; Secret = ""; SecretFile = ""; Where = ""; Downloads = ""
+              Storage = ""; StorageFile = "" }
     foreach ($f in $fields) {
         if ($f.Kind -eq "source-name") { $src.Name = $f.Val }
+        elseif ($f.Kind -eq "secret" -and $f.Name -eq "storage_secret") {
+            $src.Storage = $f.Val
+            if (-not $f.Val -and $Total -eq 1) { $src.StorageFile = "" + $script:ExakitVsStorageFile }
+        }
         elseif ($f.Kind -eq "secret") { $src.Secret = $f.Val }
         elseif ($f.Kind -eq "secret-file") { $src.SecretFile = $f.Val }
         elseif ($f.Name -in @("host", "bucket", "account", "project", "uri", "region") -and -not $src.Where) { $src.Where = "" + $f.Val }
@@ -2444,6 +2684,12 @@ function Invoke-ExakitVsTuiRun {
             $secret = Get-ExakitVsSecretFileText -Path $s.SecretFile
             if ($null -eq $secret) { $secret = ""; $unread = "" + $s.SecretFile }
         }
+        # The second secret of a lakehouse combination with two: typed, or its file.
+        $storage = "" + $s.Storage
+        if (-not $storage -and $s.StorageFile) {
+            $storage = Get-ExakitVsSecretFileText -Path $s.StorageFile
+            if ($null -eq $storage) { $storage = ""; $unread = "" + $s.StorageFile }
+        }
         $engineArgs = @("--json", "connect") + $s.Base
         if ($secret) { $engineArgs += "--secret-stdin" }
         $restart = $false
@@ -2454,7 +2700,7 @@ function Invoke-ExakitVsTuiRun {
                 break
             }
             Set-ExakitTableRow -Row $row -State running -Pct 5 -Ceiling 90 -Secs 30 -Phase "connecting" -Table $Table
-            $run = Invoke-ExakitVsEngine -Arguments $engineArgs -Secret $secret
+            $run = Invoke-ExakitVsEngine -Arguments $engineArgs -Secret $secret -StorageSecret $storage
             if ($run.Code -eq 20 -and $try -eq 1) {
                 Set-ExakitTableRow -Row $row -State running -Pct 30 -Ceiling 60 -Secs 20 -Phase "repairing DNS" -Table $Table
                 $repaired = $false
@@ -2466,7 +2712,7 @@ function Invoke-ExakitVsTuiRun {
             }
             break
         }
-        $secret = $null
+        $secret = $null; $storage = $null
         $doc = $null
         try { $doc = (@($run.Lines) -join "`n") | ConvertFrom-Json } catch { }
         $s.Lines = $run.Lines
@@ -2540,6 +2786,7 @@ function Invoke-ExakitVsTuiFlow {
     $script:EvtIn = $w - 4
     $script:EvtOnScreen = 0
     # 1. which sources
+    $script:ExakitVsLakehouseCatalog = ""; $script:ExakitVsLakehouseFiles = ""
     if ($Source) {
         $resolved = Invoke-ExakitVsEngine -Arguments @("resolve", $Source)
         if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); return $resolved.Code }
@@ -2547,6 +2794,7 @@ function Invoke-ExakitVsTuiFlow {
     } else {
         $picked = @(Invoke-ExakitVsPick)
         if ($picked.Count -eq 0) { Info "Nothing was chosen; nothing was changed."; return 5 }
+        Add-ExakitVsLakehouseHandoff
     }
     # 2. the details, one panel each; --name, --set and --password-file belong
     # to the one source the command named
@@ -2654,6 +2902,6 @@ function Invoke-ExakitVsTuiFlow {
         Info "Manage with: exakit source show <name> (every action: exakit help source)"
     }
     # Nothing secret outlives the command in this session.
-    foreach ($s in $sources) { $s.Secret = $null }
+    foreach ($s in $sources) { $s.Secret = $null; $s.Storage = $null }
     return $code
 }

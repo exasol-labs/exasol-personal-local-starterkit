@@ -149,6 +149,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/table-menu-ps.ps1
+      - name: the Lakehouse subtree in the connect menu, driven with keys
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/lakehouse-picker-ps.ps1
       - name: MCP admin SQL reaches exapump without a byte order mark under 5.1
         if: matrix.shard == 2
         shell: powershell

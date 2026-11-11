@@ -817,6 +817,12 @@ function Read-ExakitCheckboxMenu {
     # inner group has to settle its own parent before the outer group re-reads
     # that parent as one of its children. Twin of the whitespace-separated
     # EXAKIT_CHECKBOX_GROUP in common.sh.
+    # The TREE modes (a "+"-joined mode of collapse, one, first - see the
+    # *-ExakitTree* functions in ui.ps1): "collapse" hides the children until
+    # the parent is ticked and clears them when it is unticked; "one" makes the
+    # direct children radio rows, "( )" / "(*)"; "first" picks the first one
+    # when the parent opens. Enter is refused while an open "one" group has
+    # nothing picked. Nested like the other specs, innermost first.
     Info $Title
     $sel = New-Object 'System.Collections.Generic.List[int]'
     foreach ($d in $Defaults) {
@@ -848,11 +854,30 @@ function Read-ExakitCheckboxMenu {
     if ($GroupParent -ge 1) {
         $groupSpecs += @{ Parent = $GroupParent; First = $GroupFirst; Last = $GroupLast; Mode = $GroupMode }
     }
+    # The rows that can be ticked at all, for the tree modes.
+    $cbPickable = @()
+    for ($c = 1; $c -le $Options.Count; $c++) {
+        if ($Options[$c - 1].StartsWith("#") -or $Options[$c - 1].StartsWith("!")) { continue }
+        $cbPickable += $c
+    }
+    $treeOn = $false
+    $treeRadio = @()
+    $script:cbHidden = @()
+    if (Get-Command Test-ExakitTreeSpecs -ErrorAction SilentlyContinue) { $treeOn = Test-ExakitTreeSpecs -Specs $groupSpecs }
+    if ($treeOn) {
+        $treeRadio = @(Get-ExakitTreeRadio -Specs $groupSpecs -Pickable $cbPickable)
+        $script:cbHidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+    }
     $applyGroup = {
         param($toggled)
+        if ($treeOn -and (Test-ExakitTreeRadioRepick -Selection $sel -Toggled $toggled -Radio $treeRadio)) { return }
         foreach ($spec in $groupSpecs) {
             $gp = [int]$spec.Parent; $gf = [int]$spec.First; $gl = [int]$spec.Last; $gmode = [string]$spec.Mode
             if ($gp -lt 1 -or $gf -lt 1 -or $gl -lt $gf) { continue }
+            if ($treeOn -and ((Test-ExakitTreeMode $gmode "collapse") -or (Test-ExakitTreeMode $gmode "one"))) {
+                Update-ExakitTreeGroup -Selection $sel -Toggled $toggled -Spec $spec -Specs $groupSpecs -Pickable $cbPickable
+                continue
+            }
             $children = @()
             for ($c = $gf; $c -le $gl; $c++) {
                 if ($c -lt 1 -or $c -gt $Options.Count) { continue }
@@ -929,6 +954,7 @@ function Read-ExakitCheckboxMenu {
             $script:cbCur += $dir
             if ($script:cbCur -lt 1) { $script:cbCur = $Options.Count }
             if ($script:cbCur -gt $Options.Count) { $script:cbCur = 1 }
+            if ($script:cbHidden -contains $script:cbCur) { continue }
             if (-not (& $isHeader $script:cbCur) -and -not (& $isDisabled $script:cbCur)) { return }
         }
     }
@@ -937,16 +963,33 @@ function Read-ExakitCheckboxMenu {
     $firstDraw = $true
     # A click ticks or unticks the row under it, like Space; Enter still confirms.
     # Every option is one line, then the hint: entry i starts on line i-1.
+    # A row a closed group hides takes no line, so the entries are counted as
+    # drawn: $starts[i-1] is the line entry i starts on, $cbDrawn the lines the
+    # last frame took (options, hint, and a refused Enter's note).
     $starts = @(0..$Options.Count)
+    $cbDrawn = $Options.Count + 1
+    $note = ""
+    if ($script:UiFancy) { $dot = $script:UiBullet } else { $dot = "*" }
+    if (-not $dot) { $dot = "*" }
     if (Get-Command Enable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Enable-ExakitMenuMouse }
     try {
     while ($true) {
+        if ($treeOn) {
+            # Every key may open or close a group: the rows shown follow.
+            $script:cbHidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+            # The cursor's row closed under it: back up to the nearest row shown.
+            if ($script:cbHidden -contains $script:cbCur) { & $step -1 }
+        }
         if (-not $firstDraw -and $script:UiFancy) {
             # redraw the block in place: options + hint line
-            Write-Host ("{0}[{1}A{0}[0J" -f $script:UiEsc, ($Options.Count + 1)) -NoNewline
+            Write-Host ("{0}[{1}A{0}[0J" -f $script:UiEsc, $cbDrawn) -NoNewline
         }
         $firstDraw = $false
+        $line = 0
         for ($i = 1; $i -le $Options.Count; $i++) {
+            $starts[$i - 1] = $line
+            if ($script:cbHidden -contains $i) { continue }
+            $line++
             if (& $isHeader $i) {
                 Write-Host ("    {0}" -f $Options[$i - 1].Substring(1)) -ForegroundColor Cyan
                 continue
@@ -957,17 +1000,31 @@ function Read-ExakitCheckboxMenu {
                 continue
             }
             $ptr = if ($i -eq $script:cbCur) { ">" } else { " " }
-            if ($sel.Contains($i)) {
+            if ($treeRadio -contains $i) {
+                # A radio row (a "one" group): "(*)" picked, "( )" not.
+                if ($sel.Contains($i)) { Write-Host ("    {0} ({1}) {2}" -f $ptr, $dot, $Options[$i - 1]) }
+                else { Write-Host ("    {0} ( ) {1}" -f $ptr, $Options[$i - 1]) }
+            } elseif ($sel.Contains($i)) {
                 if ($script:UiFancy) { Write-Host ("    {0} {1}[{2}]{3} {4}" -f $ptr, $script:UiOk, $script:UiTick, $script:UiReset, $Options[$i - 1]) }
                 else { Write-Host ("    {0} [x] {1}" -f $ptr, $Options[$i - 1]) }
             } else {
                 Write-Host ("    {0} [ ] {1}" -f $ptr, $Options[$i - 1])
             }
         }
-        Write-ExakitMenuHint "Up/Down to move - $spaceVerb - Enter to confirm"
+        $starts[$Options.Count] = $line
+        $openHint = ""
+        if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " - Right to open" }
+        Write-ExakitMenuHint "Up/Down to move - $spaceVerb$openHint - Enter to confirm"
+        $cbDrawn = $line + 1
+        if ($note) {
+            if ($script:UiFancy) { Write-Host ("    {0}!{1} {2}" -f $script:UiWarn, $script:UiReset, $note) }
+            else { Write-Host ("    ! {0}" -f $note) }
+            $cbDrawn++
+            $note = ""
+        }
         $key = Read-ExakitMenuKey
         if ($key.Name -eq 'Click') {
-            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn ($Options.Count + 1) -Starts $starts
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn $cbDrawn -Starts $starts
             if ($hit -ge 1 -and -not (& $isHeader $hit) -and -not (& $isDisabled $hit)) {
                 $script:cbCur = $hit
                 $key = @{ Name = 'Space' }
@@ -981,7 +1038,10 @@ function Read-ExakitCheckboxMenu {
                 # instead. Twin of ui_checkbox_menu; same rule as
                 # Invoke-ExakitTableMenu.
                 if ($ExclusiveIndex -ge 1 -and $script:cbCur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
-                if ($sel.Count -gt 0) { return @($sel | Sort-Object) }
+                $miss = 0
+                if ($treeOn) { $miss = Get-ExakitTreeMissing -Specs $groupSpecs -Selection $sel -Pickable $cbPickable }
+                if ($miss -gt 0) { $note = "Pick one of the options under " + $Options[$miss - 1] + "." }
+                elseif ($sel.Count -gt 0) { return @($sel | Sort-Object) }
             }
             "Space"     {
                 if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
@@ -990,6 +1050,18 @@ function Read-ExakitCheckboxMenu {
             }
             "Up"        { & $step -1 }
             "Down"      { & $step 1 }
+            { $_ -eq "Left" -or $_ -eq "Right" } {
+                # Right opens a collapse group or steps into it, Left steps out
+                # or closes it; nothing in any other menu.
+                if ($treeOn) {
+                    $act = Get-ExakitTreeArrow -Direction $key.Name -Row $script:cbCur -Selection $sel -Specs $groupSpecs -Pickable $cbPickable
+                    if ($act -eq "toggle") {
+                        if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
+                        & $applyGroup $script:cbCur
+                        & $applyExclusive $script:cbCur
+                    } elseif ($act -like "move *") { $script:cbCur = [int]$act.Substring(5) }
+                }
+            }
         }
         if ($key.Name -ne 'Char') { continue }
         switch -Regex ($key.Char) {
@@ -1000,6 +1072,9 @@ function Read-ExakitCheckboxMenu {
                 # rows, never the exclusive option.
                 $sel.Clear()
                 for ($i = 1; $i -le $Options.Count; $i++) {
+                    # Never a row a closed group hides, nor a radio row: one of
+                    # N is a choice, not "all".
+                    if ($script:cbHidden -contains $i -or $treeRadio -contains $i) { continue }
                     if ($i -ne $ExclusiveIndex -and -not (& $isHeader $i) -and -not (& $isDisabled $i)) { [void]$sel.Add($i) }
                 }
             }
@@ -6863,6 +6938,10 @@ function Show-ExakitMarketplaceMenu {
     $defaults = @(1)
     $innerGroups = @()
     $allTicked = $true
+    # A persona's add-ons (EXAKIT_MARKETPLACE_PRESELECT) start ticked and every
+    # other one is listed unticked; no persona, or "all": every add-on ticked.
+    $pre = @(("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "") -split ',' | Where-Object { $_ })
+    if ($pre -ccontains "all") { $pre = @() }
     $kidCount = 0
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
@@ -6875,7 +6954,8 @@ function Show-ExakitMarketplaceMenu {
         $parentRow = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $selectable[$i].Id) `
             -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
-        $defaults += $parentRow
+        $pick = ($pre.Count -eq 0) -or ($pre -ccontains ("" + $selectable[$i].Id).ToLower())
+        if ($pick) { $defaults += $parentRow } else { $allTicked = $false }
         $kids = @($selectable[$i].Children | Where-Object { $_ })
         if ($kids.Count -eq 0) { continue }
         for ($k = 0; $k -lt $kids.Count; $k++) {
@@ -6883,7 +6963,7 @@ function Show-ExakitMarketplaceMenu {
             $at = Add-ExakitTableRow -Kind "$kind-$kk" -Label ("" + $kids[$k].Label) `
                 -Col2 ("" + $kids[$k].Version) -Col3 ("" + $kids[$k].Description) -Table $script:ExakitAddonTable
             [void]$addonIds.Add($selectable[$i].Id + ":" + $kids[$k].Key)
-            if ($kids[$k].Ticked) { $defaults += $at } else { $allTicked = $false }
+            if ($kids[$k].Ticked -and $pick) { $defaults += $at } else { $allTicked = $false }
         }
         $kidCount += $kids.Count
         # Innermost first: the add-on row settles before Select All re-reads it.
@@ -6915,6 +6995,8 @@ function Show-ExakitMarketplaceMenu {
     # child row its add-on starts unticked (a choice recorded earlier) leaves
     # Select All unticked too, which is what "all" means.
     if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
+    # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
+    if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
     $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
         -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
         -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
@@ -7499,13 +7581,9 @@ function Request-ExakitMarketplaceOffer {
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         Write-ExakitHeading "Add-ons for your personas"
-        $only = ("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "")
-        if ($only -eq "all") {
-            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-            Show-ExakitMarketplaceMenu
-            return
-        }
-        $env:EXAKIT_MARKETPLACE_ONLY = $only
+        # Every add-on is listed; the personas' own are the ones ticked
+        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
+        Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
         # Each row says what the add-on does for the persona, in the persona's own
         # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
         if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {

@@ -126,35 +126,13 @@
     },
     {
       "id": "lakehouse",
-      "name": "Lakehouse (Iceberg on AWS Glue)", "summary": "Iceberg tables in an AWS Glue catalog",
+      "name": "Lakehouse (Iceberg / Delta)", "summary": "Iceberg or Delta tables through Iceberg REST, Unity Catalog or AWS Glue, or Parquet files in a folder, on S3 or Azure",
       "aliases": [
         "glue",
         "aws-glue",
+        "iceberg",
+        "delta",
         "lakehouse-iceberg"
-      ],
-      "profile": "rust-native",
-      "tier": "GA",
-      "status": "candidate"
-    },
-    {
-      "id": "iceberg-rest",
-      "name": "Iceberg REST catalog", "summary": "Iceberg tables behind an Iceberg REST catalog (Polaris, Lakekeeper, Nessie, Gravitino)",
-      "aliases": [
-        "rest",
-        "rest-catalog",
-        "iceberg-rest-catalog"
-      ],
-      "profile": "rust-native",
-      "tier": "GA",
-      "status": "candidate"
-    },
-    {
-      "id": "unity",
-      "name": "Unity Catalog (lakehouse engine)", "summary": "a Unity Catalog schema's tables, read in place from storage",
-      "aliases": [
-        "unity-catalog",
-        "uc",
-        "oss-unity-catalog"
       ],
       "profile": "rust-native",
       "tier": "GA",

@@ -162,8 +162,9 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
         child_env.pop("EXAKIT_LOAD_SAMPLE", None)
         if live:
             child_env.pop("EXAKIT_DATASETS", None)
-            child_env.update({"EXAKIT_PERSONA_ACTIVE": "1", "EXAKIT_DATASETS_PRESELECT": ",".join(pending),
-                              "UI_TABLE_AUTO": "1"})
+            # Every sample is listed and asked; the persona's are the ones ticked.
+            child_env.pop("UI_TABLE_AUTO", None)
+            child_env.update({"EXAKIT_PERSONA_ACTIVE": "1", "EXAKIT_DATASETS_PRESELECT": ",".join(pending)})
         else:
             child_env["EXAKIT_DATASETS"] = ",".join(pending)
         if not _child(prefix, "data-load", [], child_env):
@@ -202,16 +203,23 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
     elif pending_addons:
         child_env = dict(environment)
         if live:
+            # Every add-on is listed and asked; the persona's are the ones ticked.
             child_env.pop("EXAKIT_MARKETPLACE_ADDONS", None)
-            child_env["EXAKIT_MARKETPLACE_ONLY"] = ",".join(pending_addons)
-            child_env["UI_TABLE_AUTO"] = "1"
+            child_env.pop("EXAKIT_MARKETPLACE_ONLY", None)
+            child_env.pop("UI_TABLE_AUTO", None)
+            child_env["EXAKIT_MARKETPLACE_PRESELECT"] = ",".join(pending_addons)
         else:
             child_env["EXAKIT_MARKETPLACE_ADDONS"] = ",".join(pending_addons)
         if not _child(prefix, "marketplace", [], child_env):
             failures.append(("Add-ons", "exakit marketplace " + " ".join(pending_addons)))
 
     ready = set(installed)
-    if not any(part == "Add-ons" for part, _ in failures):
+    if live and pending_addons:
+        # The reader chose: what is installed now is what was picked.
+        after = _query(prefix, "marketplace", ["--list", "--json"], environment)
+        rows = after.get("addons", []) if after is not None and isinstance(after.get("addons"), list) else []
+        ready.update(row.get("id") for row in rows if isinstance(row, dict) and row.get("installed"))
+    elif not any(part == "Add-ons" for part, _ in failures):
         ready.update(pending_addons)
     if "notebook" in installed:
         # The notebook was already there: the new persona's notebooks join it (a fresh install copies its own).

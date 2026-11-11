@@ -46,6 +46,33 @@ def now():
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+def migrated(doc):
+    """A source recorded before the lakehouse connectors became one, as the
+    one connector records it now; None when it needs nothing.
+
+    iceberg-rest and unity were connectors of their own, and lakehouse was
+    Glue alone. Each is lakehouse now, its catalog and files among its inputs
+    (the settings, first): iceberg-rest with an access key read the files with
+    the storage's keys (files s3), without one the catalog vended them; Unity
+    always vended them; Glue reads S3. The objects in the database stay as
+    they are: the same CONNECTION, schema and shared LAKEHOUSE_ADAPTER."""
+    if not isinstance(doc, dict):
+        return None
+    connector, inputs = doc.get("connector"), dict(doc.get("inputs") or {})
+    if connector == "iceberg-rest":
+        settings = {"catalog": "iceberg-rest", "files": "s3" if inputs.get("access_key_id") else "vended",
+                    "login": "token"}
+    elif connector == "unity":
+        settings = {"catalog": "unity", "files": "vended", "login": "token"}
+    elif connector == "lakehouse" and "catalog" not in inputs:
+        settings = {"catalog": "glue", "files": "s3"}
+    else:
+        return None
+    out = dict(doc, connector="lakehouse", migrated_from=connector)
+    out["inputs"] = dict(settings, **{k: v for k, v in inputs.items() if k not in settings})
+    return out
+
+
 class Store(object):
     def __init__(self, kit_home):
         self.root = os.path.join(kit_home, "sources")
@@ -108,6 +135,16 @@ class Store(object):
         doc = self._read(self.path(name, "config.json"))
         if doc is None:
             raise SourceError("no source named %s (see: exakit source list)" % name, 4)
+        new = migrated(doc)
+        if new is not None:
+            # Migrated in place the first time it is read (atomically; two
+            # readers write the same record), so every command after this one
+            # - list, show, check, refresh, reauth, remove - reads it as is.
+            try:
+                self.save_config(name, new)
+            except OSError:
+                pass        # read-only: used migrated anyway, written next time
+            doc = new
         return doc
 
     def status(self, name):

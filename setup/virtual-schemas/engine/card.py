@@ -116,14 +116,17 @@ def plural(n, word):
     return "%d %s%s" % (n, word, "" if n == 1 else "s")
 
 
-def connector_of(engine, connector_id):
+def connector_of(engine, connector_id, values=None):
     try:
-        return engine.defs.connector(connector_id)
-    except (OSError, ValueError, lifecycle.planner.PlanError):
+        return engine.defs.connector(connector_id, values)
+    except (OSError, ValueError, KeyError, lifecycle.planner.PlanError):
         return {}
 
 
-def connector_name(engine, connector_id):
+def connector_name(engine, connector_id, connector=None):
+    """The catalog's name, or a combination's own ("Lakehouse · Unity Catalog · Azure ADLS Gen2")."""
+    if connector and connector.get("label"):
+        return connector["label"]
     try:
         return engine.defs.entry(connector_id)["name"]
     except (KeyError, OSError, ValueError, lifecycle.planner.PlanError):
@@ -137,8 +140,8 @@ def tilde(path):
 
 def card(engine, name, details=False):
     shown = engine.show(name)
-    connector = connector_of(engine, shown["connector"])
     values = shown.get("inputs") or {}
+    connector = connector_of(engine, shown["connector"], values)
     check = shown.get("last_check") or {}
     ready, reason, fix = state_of(shown["status"], check, shown.get("needs_refresh"), connector)
     status = [reason]
@@ -164,6 +167,9 @@ def card(engine, name, details=False):
         if value in (None, ""):
             continue
         value = str(value)
+        if spec.get("setting") and value in spec.get("choices", []):
+            # A lakehouse setting by its label: "Unity Catalog", not unity.
+            value = spec["choice_labels"][spec["choices"].index(value)]
         if spec["kind"] in ("ca-file", "edml"):
             value = tilde(value)
         rows.append([short_label(spec), value])
@@ -188,7 +194,8 @@ def card(engine, name, details=False):
         remedy = lifecycle.remedy_for(check.get("kind") or "error", name, connector, check.get("evidence"))
         if shown["status"] == "ready":  # needs_refresh
             remedy = "it moved to a new adapter and its metadata is not refreshed yet: exakit source refresh %s" % name
-    return {"name": name, "connector": shown["connector"], "connector_name": connector_name(engine, shown["connector"]),
+    return {"name": name, "connector": shown["connector"],
+            "connector_name": connector_name(engine, shown["connector"], connector),
             "status": shown["status"], "ready": ready, "reason": reason, "status_parts": status, "fix": fix, "remedy": remedy,
             "rows": rows, "address": address, "notes": shown.get("tips") or [],
             "example": "SELECT * FROM %s.<table> LIMIT 10" % schema}
@@ -197,10 +204,10 @@ def card(engine, name, details=False):
 def cards(engine):
     out = []
     for row in engine.listing():
-        connector = connector_of(engine, row["connector"])
+        connector = connector_of(engine, row["connector"], engine.store.config(row["name"]).get("inputs") or {})
         ready, reason, fix = state_of(row["status"], row.get("last_check"), row.get("needs_refresh"), connector)
         out.append({"name": row["name"], "connector": row["connector"],
-                    "connector_name": connector_name(engine, row["connector"]),
+                    "connector_name": connector_name(engine, row["connector"], connector),
                     "ready": ready, "reason": reason, "fix": fix,
                     "tables": engine.store.status(row["name"]).get("tables")})
     return {"sources": out}
