@@ -9,7 +9,7 @@ from __future__ import annotations
 def _ask(line: str, cell: str | None = None):
     from IPython.display import display
 
-    from .ask import Ask
+    from .screens.ask import Ask
 
     question = (cell if cell and cell.strip() else line or "").strip()
     if not question:

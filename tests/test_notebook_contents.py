@@ -415,7 +415,7 @@ class GuardTest(unittest.TestCase):
 
     def test_the_package_ships_both_names(self):
         text = (ROOT / "notebook" / "package" / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('packages = ["exakit_nb", "exakit", "exakit.nb", "exakit_guide", "exakit.guide"]', text)
+        self.assertIn('packages = ["exakit_nb", "exakit", "exakit.nb", "exakit_guide", "exakit_guide.screens", "exakit.guide"]', text)
 
     def test_no_build_output_is_tracked(self):
         done = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True, check=False)

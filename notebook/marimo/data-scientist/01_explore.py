@@ -528,6 +528,43 @@ def _(FEATURE_LABELS, LABEL_COLUMN, feature_columns, model):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### The model lab (optional)
+
+    What the **Build a model** card runs: one task - predict yes or no, predict a number, find natural groups or find unusual rows - with every model of that task trained on the same split ("all"), or one model you name. Columns that give the answer away and personal data are left out. Then feature ideas, each tried on the same split before it is kept.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: skip-ci
+    LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
+    lab_data = nb.lab_data(connection, dataset)   # read once; lab_data.left_out says what was left out and why
+    kept_features = {}
+    lab = nb.model_lab(connection, dataset, LAB_TASK, model="all", target_number=None, data=lab_data, features=kept_features)
+    print(lab.note or lab)
+    lab.board if LAB_TASK in ("predict_yes_no", "predict_number") else lab.result
+    return LAB_TASK, kept_features, lab
+
+
+@app.cell
+def _(LAB_TASK, connection, kept_features, lab, nb):
+    # Cell tags: skip-ci
+    ideas = nb.feature_ideas(lab, ai=False, conn=connection)   # ai=True: your AI model adds more (names and roles only)
+    for index, idea in enumerate(ideas[:3] if LAB_TASK in ("predict_yes_no", "predict_number") else []):
+        tried = nb.try_feature(lab, ideas[index])
+        print(f"{idea.title}: {tried['text']}")
+        if tried["verdict"] == "helps":
+            kept_features[ideas[index].id] = tried["series"]
+        else:
+            kept_features.pop(ideas[index].id, None)
+    kept_features   # run the model lab cell again to train with them
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Optional · Themes in the texts where the target is 1 (AI)
 
     Needs a text column. The practice datasets have none, so this step skips.

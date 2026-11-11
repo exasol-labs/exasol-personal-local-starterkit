@@ -68,7 +68,7 @@ def _(mo):
 
     Shows what is installed and running: the database, each add-on and the loaded datasets. It changes nothing.
 
-    The next cell lists other kit commands. Each runs here, with its log in the cell.
+    The next cells read the rest of the kit live, change it from here (each with its log in the cell), and set up your AI model and Langfuse tracing. They are the calls the Home card's rows and buttons make.
     """)
     return
 
@@ -82,13 +82,61 @@ def _():
 
 
 @app.cell
-def _():
-    # Things you would otherwise do in a terminal - take the # off one line and run the cell; its log shows here.
-    # nb.exakit("update")                            # bring the kit and its add-ons up to date
-    # nb.exakit("marketplace", "dash-server")        # add an add-on (Share, step 8, needs this one)
-    # nb.exakit("data-load", "fraud_transactions")   # load another of the kit's datasets
-    # nb.exakit("logs")                              # every log the kit keeps
-    # nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})   # connect an AI client to the database
+def _(nb):
+    # What the kit has, read live: the same calls the Home card shows.
+    components = nb.components()            # the kit's parts, their versions and pending updates
+    addons = nb.addons()                    # the marketplace's add-ons and their state
+    ai_clients = nb.ai_clients()            # the AI clients the kit can connect, and which are connected
+    sample_datasets = nb.sample_datasets()  # the kit's sample datasets, and which are loaded
+    notebooks = nb.notebooks("data-scientist")   # this persona's notebooks, in order
+    persona_plan = nb.persona_plan()        # what this kit's personas bring that is still missing
+    approved = nb.approved_datasets()       # the column maps approved so far
+    workflows = nb.list_workflows()         # every workflow log; the last one's events:
+    workflow_events = nb.workflow_log(workflows[-1]["id"]) if workflows else []
+    model, tracing = nb.model_settings(), nb.tracing()
+    [(c["id"], c["installed"], c["status"]) for c in components]
+    return
+
+
+@app.cell
+def _(nb):
+    # Change the kit from here: set what you want, run the cell; each runs as `exakit` would, its log in the cell.
+    START_DATABASE = False   # start the database after a restart of this computer
+    ADD_ON = ""              # an add-on to install and start, e.g. one of [a["id"] for a in addons]
+    LOAD = ""                # a kit dataset (sample_datasets), a file or a folder, loaded with exakit data-load
+    SERVICE = ""             # a service to start (kit_state["services"]), then its log
+    CHECK_AI = False         # check the AI clients' connection to the database (mcp-doctor)
+    UPDATE_KIT = False       # bring the kit and its add-ons up to date
+    if START_DATABASE:
+        nb.exakit("start")
+    if ADD_ON:
+        nb.addon_ready(ADD_ON)
+    if LOAD:
+        nb.exakit("data-load", LOAD)
+    if SERVICE:
+        nb.exakit("start", SERVICE)
+        nb.exakit("logs", SERVICE)
+    if CHECK_AI:
+        nb.exakit("mcp-doctor")
+    if UPDATE_KIT:
+        nb.kit_update()
+    return
+
+
+@app.cell
+def _(nb):
+    # Your AI model and Langfuse tracing, remembered for every notebook of this kit (readable by you only). The keys are
+    # asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered.
+    MODEL_ID = ""            # e.g. "claude-opus-5-5"
+    PROVIDER_BASE_URL = ""   # e.g. "https://api.anthropic.com/v1/"
+    LANGFUSE_BASE_URL = ""   # e.g. "https://cloud.langfuse.com"
+    FORGET = False
+    if MODEL_ID or PROVIDER_BASE_URL:
+        nb.use_model(MODEL_ID, PROVIDER_BASE_URL, remember=True)
+    if LANGFUSE_BASE_URL:
+        nb.use_model(langfuse_base_url=LANGFUSE_BASE_URL, remember=True)
+    if FORGET:
+        nb.forget_model(model=True, langfuse=True)
     return
 
 
@@ -184,9 +232,11 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data"
+    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
     MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
-    own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
+    MY_TABLE = ""    # or a table already in the database, e.g. "MY_DATA.ORDERS" (nb.data_map lists them)
+    own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
+                else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
     return (own_data,)
 
 
@@ -205,6 +255,7 @@ def _(mo):
 @app.cell
 def _(nb):
     # Cell tags: load
+    connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
     CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
     SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
     SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
@@ -309,11 +360,31 @@ def _(chosen_data, connection, nb):
 
 
 @app.cell
+def _(role_review):
+    # Cell tags: review
+    # Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
+    # slots, {"target": "COLUMN"}. Empty: the picker above (or an approval already saved) stands.
+    ROLE_CHANGES = {}
+    SLOT_CHANGES = {}
+    if ROLE_CHANGES or SLOT_CHANGES:
+        role_review.approve(ROLE_CHANGES or None, SLOT_CHANGES or None)
+    return
+
+
+@app.cell
 def _(nb, role_review):
     # Cell tags: review
     dataset = role_review.dataset()
     nb.show_roles(dataset)
     return (dataset,)
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
+    versions = nb.column_map_versions(dataset.id)              # every saved version; approving one's roles again restores it
+    return
 
 
 @app.cell(hide_code=True)

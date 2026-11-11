@@ -15,33 +15,54 @@ from typing import Any
 
 
 class Session:
+    """The notebook's state as its cells would hold it: a namespace with `nb`, `connection`, `chosen_data`,
+    `role_review`, `dataset`, `lab`, `proposal` ... - the very names the code section uses. Every card action runs its
+    code in this namespace (actions.run), so what a card did is what those cells would have done."""
+
     def __init__(self) -> None:
-        self.conn = None
-        self.workflow_id: str | None = None
-        self.source: Any = None          # Dataset or LoadedTable the user picked
+        self._ns: dict[str, Any] | None = None
         self.source_label: str = ""
         self.source_rows: int | None = None
-        self.review: Any = None          # RoleReview
-        self.dataset: Any = None         # approved Dataset (what later steps read)
         self.broken: dict | None = None  # a saved column map the kit refuses to open, and why
-        self.code: list[str] = []        # exakit.nb calls that ran, in order
+        self.code: list[str] = []        # the code every action ran, in order (Code mode, Copy as cell)
+        self.said: str = ""              # what the last action printed
         self._listeners: list[weakref.ref] = []
         self.followed: str | None = None   # the "approved last" dataset this kernel last loaded
         self._watching = False
 
+    # -- the notebook's namespace ----------------------------------------------------------
+    def namespace(self) -> dict[str, Any]:
+        if self._ns is None:
+            import exakit.nb as nb
+
+            self._ns = {"nb": nb}
+            self.log("import exakit.nb as nb")
+        return self._ns
+
+    def get(self, name: str) -> Any:
+        return self.namespace().get(name)
+
+    def set(self, name: str, value: Any) -> None:
+        self.namespace()[name] = value
+
+    # The cards' own words for what the cells call chosen_data, role_review and dataset.
+    source = property(lambda self: self.get("chosen_data"), lambda self, v: self.set("chosen_data", v))
+    review = property(lambda self: self.get("role_review"), lambda self, v: self.set("role_review", v))
+    dataset = property(lambda self: self.get("dataset"), lambda self, v: self.set("dataset", v))
+
     # -- connection -------------------------------------------------------------------
     def connection(self):
-        import exakit.nb as nb
+        """The notebook's `connection`, opened the way its first cell opens it (nb.connect) when there is none."""
+        if self.get("connection") is None:
+            from . import actions
 
-        if self.conn is None:
-            self.conn = nb.connect()
-            self.log("import exakit.nb as nb", "connection = nb.connect()")
-        return self.conn
+            actions.run("data.connect", self)
+        return self.get("connection")
 
     def release(self) -> None:
-        """Give the database connection back while nothing is running.
-        Exasol Personal has a small number of connections; an idle notebook shouldn't hold one."""
-        conn, self.conn = self.conn, None
+        """Give the database connection back while nothing is running (Exasol Personal has a small number of
+        connections; an idle notebook should not hold one). The next action opens it again."""
+        conn = self.namespace().pop("connection", None)
         if conn is not None:
             try:
                 conn.close()
@@ -50,7 +71,7 @@ class Session:
 
     def log(self, *lines: str) -> None:
         for line in lines:
-            if line in self.code and line.startswith(("import ", "connection =", "first_rows =")):
+            if line in self.code and line.startswith(("import ", "connection =")):
                 continue
             if self.code and self.code[-1] == line:
                 continue
@@ -59,23 +80,23 @@ class Session:
     # -- the dataset approved last (step 1 writes it; every step follows it) -------------------
     @staticmethod
     def latest_approved() -> str | None:
-        import os
-        from pathlib import Path
+        """The dataset approved last (the kit's own record, which nb.chosen_dataset() reads too)."""
+        from exakit_nb.dataset import _last_file
 
-        home = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit").expanduser()
         try:
-            return (home / "last-dataset").read_text(encoding="utf-8").strip() or None
+            return _last_file().read_text(encoding="utf-8").strip() or None
         except OSError:
             return None
 
-    def open_latest(self) -> None:
-        """Load the dataset approved last, unless this kernel already follows it.
-        Each step runs in its own kernel; without this a step keeps the dataset it first opened."""
-        import exakit.nb as nb
+    def open_latest(self, action: str = "explore.open") -> None:
+        """Open the dataset approved last with the step's own opening cells (explore.open, ask.open, share.open),
+        unless this kernel already follows it. Each step runs in its own kernel; without this a step would keep the
+        dataset it first opened."""
+        from . import actions
 
         latest = self.latest_approved()
         if self.dataset is None or (latest and latest != self.followed):
-            self.dataset = nb.dataset(self.connection(), nb.chosen_dataset(None))
+            actions.run(action, self, dataset_id=None)
             self.followed = latest
         self._watch()
 
@@ -142,11 +163,3 @@ def quiet():
             yield out
         finally:
             out.text = (cap.stdout or "").strip()
-
-
-try:   # the AI model chosen on Home, in this step's kernel too (each step is its own kernel)
-    from . import aikey as _aikey
-
-    _aikey.load()
-except Exception:
-    pass

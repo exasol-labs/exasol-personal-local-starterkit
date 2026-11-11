@@ -317,6 +317,30 @@ if model is not None:
     print(f"Make {LABEL_COLUMN} = 1 less likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[:CLUES_PER_SIDE]]))
 
 # %% [markdown]
+# ### The model lab (optional)
+#
+# What the **Build a model** card runs: one task - predict yes or no, predict a number, find natural groups or find unusual rows - with every model of that task trained on the same split ("all"), or one model you name. Columns that give the answer away and personal data are left out. Then feature ideas, each tried on the same split before it is kept.
+
+# %% tags=["skip-ci"]
+LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
+lab_data = nb.lab_data(connection, dataset)   # read once; lab_data.left_out says what was left out and why
+kept_features = {}
+lab = nb.model_lab(connection, dataset, LAB_TASK, model="all", target_number=None, data=lab_data, features=kept_features)
+print(lab.note or lab)
+lab.board if LAB_TASK in ("predict_yes_no", "predict_number") else lab.result
+
+# %% tags=["skip-ci"]
+ideas = nb.feature_ideas(lab, ai=False, conn=connection)   # ai=True: your AI model adds more (names and roles only)
+for index, idea in enumerate(ideas[:3] if LAB_TASK in ("predict_yes_no", "predict_number") else []):
+    tried = nb.try_feature(lab, ideas[index])
+    print(f"{idea.title}: {tried['text']}")
+    if tried["verdict"] == "helps":
+        kept_features[ideas[index].id] = tried["series"]
+    else:
+        kept_features.pop(ideas[index].id, None)
+kept_features   # run the model lab cell again to train with them
+
+# %% [markdown]
 # ## Optional · Themes in the texts where the target is 1 (AI)
 #
 # Needs a text column. The practice datasets have none, so this step skips.

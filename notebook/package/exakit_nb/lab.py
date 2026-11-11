@@ -1,4 +1,9 @@
-"""The model lab behind step 2: the Data Scientist chooses the task, the model and the split.
+"""The model lab: ``nb.model_lab`` - the Data Scientist chooses the task, the model and the split.
+
+    lab = nb.model_lab(connection, dataset, "predict_yes_no")            # every model of the task, same split
+    lab = nb.model_lab(connection, dataset, "find_groups", clusters=4)   # or one task's settings by name
+    lab.board, lab.pick, lab.importance, lab.note                        # what came out
+    ideas = nb.feature_ideas(lab); nb.try_feature(lab, ideas[0])        # a feature idea, tried on the same split
 
 Tasks
   predict_yes_no   classification (supervised): the approved 0/1 target
@@ -150,7 +155,7 @@ class Data:
 
 def load(conn, ds, leaks: list[str]) -> Data:
     """Read the approved data once (newest first, at most ROW_LIMIT rows) with every usable column."""
-    import exakit.nb as nb
+    from . import sql
 
     target = _bare(ds.col("label")) if ds.has("label") else None
     date = _bare(ds.col("date")) if ds.has("date") else None
@@ -181,8 +186,8 @@ def load(conn, ds, leaks: list[str]) -> Data:
     pick = [f'"{c}"' for c in dict.fromkeys(numeric + categorical + groups + ([target] if target else []) + ([date] if date else []))]
     order = f'"{date}" DESC' if date else "1"
     where = f'\nWHERE "{target}" IS NOT NULL' if target else ""
-    sql = f"SELECT {', '.join(pick)}\nFROM {ds.fact_table}{where}\nORDER BY {order}\nLIMIT {ROW_LIMIT}"
-    frame = nb.sql(conn, sql)
+    query = f"SELECT {', '.join(pick)}\nFROM {ds.fact_table}{where}\nORDER BY {order}\nLIMIT {ROW_LIMIT}"
+    frame = sql(conn, query)
     if target:
         frame[target] = pd.to_numeric(frame[target], errors="coerce").astype(int)
     for c in numeric:
@@ -194,7 +199,7 @@ def load(conn, ds, leaks: list[str]) -> Data:
         frame[date] = pd.to_datetime(frame[date], errors="coerce")
         frame["__month"] = frame[date].dt.month.astype("Int64").astype(str)
         categorical.append("__month")
-    return Data(frame, target, date, numeric, categorical, groups, left_out, sql)
+    return Data(frame, target, date, numeric, categorical, groups, left_out, query)
 
 
 # ----------------------------------------------------------------------------- one task's inputs
@@ -549,3 +554,186 @@ def try_idea(d: Data, task: str, target_number: str | None, settings: dict, mode
     else:
         verdict, text = "same", f"No real change ({d_cv:+.3f}). Not worth the extra column."
     return {"verdict": verdict, "text": text, "series": series}
+
+
+# ----------------------------------------------------------------------------- the entry points notebooks call
+SETTINGS = ("train_pct", "split_method", "split_group", "folds", "effort", "max_depth", "C", "neighbours",
+            "learning_rate", "clusters", "contamination")
+SUPERVISED = ("predict_yes_no", "predict_number")
+
+
+@dataclass
+class Lab:
+    """One model-lab run: the task, its settings, the data it read and what came out (board and pick for a
+    prediction, groups or unusual rows otherwise). ``features`` are the feature ideas it was trained with."""
+
+    task: str
+    model: str
+    settings: dict
+    data: Data
+    run: Run
+    result: dict
+    target_number: str | None = None
+    features: dict[str, pd.Series] = field(default_factory=dict)
+    note: str = ""
+    dataset: object = None
+
+    @property
+    def board(self) -> list[dict]:
+        return self.result.get("board", [])
+
+    @property
+    def pick(self) -> dict:
+        return self.result.get("pick", {})
+
+    @property
+    def importance(self) -> list[dict]:
+        return self.result.get("importance", [])
+
+    def __repr__(self) -> str:
+        if self.task in SUPERVISED:
+            return f"Lab({self.task}: {self.pick.get('model')} {self.run.metric_label} {self.pick.get('held')})"
+        return f"Lab({self.task}: {self.result.get('model')})"
+
+
+def lab_data(conn, ds, leaks: list[str] | None = None) -> Data:
+    """The approved data the lab trains on, read once (newest first, at most ROW_LIMIT rows): every usable column,
+    with the ones that give the answer away (nb.leakage_check, unless ``leaks`` is given) and personal data left out
+    (``.left_out`` says why). Pass it to model_lab(data=...) to train several times without reading it again."""
+    from .data_checks import leakage_check
+
+    return load(conn, ds, leakage_check(conn, ds, show=False) if leaks is None else leaks)
+
+
+def model_lab(conn, ds, task: str = "predict_yes_no", *, model: str = "all", target_number: str | None = None,
+              leaks: list[str] | None = None, features: dict[str, pd.Series] | None = None, data: Data | None = None,
+              **settings) -> Lab:
+    """Train ``task`` on the approved dataset: ``predict_yes_no`` (its target), ``predict_number`` (``target_number``),
+    ``find_groups`` or ``find_unusual``. ``model`` is one model's key or "all" (each of the task, same rows, the
+    simpler one picked within 0.01). ``settings`` by name: train_pct, split_method (time, random, group),
+    split_group, folds, effort, max_depth, C, neighbours, learning_rate, clusters, contamination. Columns that give
+    the answer away (nb.leakage_check, unless ``leaks`` is given) and personal data are left out."""
+    from .data_checks import leakage_check
+    from .readout import note_model
+
+    if task not in TASKS:
+        raise ValueError(f"'{task}' is not a task; the tasks are {', '.join(TASKS)}.")
+    unknown = set(settings) - set(SETTINGS)
+    if unknown:
+        raise ValueError(f"Unknown setting {', '.join(sorted(unknown))}; the settings are {', '.join(SETTINGS)}.")
+    if leaks is None:
+        leaks = leakage_check(conn, ds, show=False)
+    data = data or load(conn, ds, leaks)
+    features = dict(features or {})
+    run = prepare(data, task, target_number if task == "predict_number" else None, features)
+    note = ""
+    if task in SUPERVISED:
+        result = supervised(data, run, settings, model)
+        result["importance"] = importance(result, run.metric)
+        if task == "predict_yes_no" and run.metric == "roc_auc":
+            note = note_model(result["pick"]["held"], ds, len(run.X), run.rate).replace(
+                "It was checked on a quarter of them it had not seen.",
+                f"It was checked on {result['test_rows']:,} of them it had not seen.")
+    elif task == "find_groups":
+        result = find_groups(data, run, settings, model if model != "all" else "kmeans")
+    else:
+        result = find_unusual(data, run, settings, model if model != "all" else "isolation_forest")
+    return Lab(task, model, dict(settings), data, run, result, target_number, features, note, ds)
+
+
+# The kinds of input the model may suggest - each one the lab can build and test (and write as SQL).
+AI_KINDS = {"ratio_to_group": ["measure", "group column"], "combine": ["group column", "group column"],
+            "days_since": ["date column"], "as_number": ["column"], "is_missing": ["column"]}
+AI_TRACE = "feature-ideas"
+
+
+def _ai_idea(kind: str, cols: list[str], title: str, why: str, n: int) -> Idea | None:
+    q = lambda c: '"' + c.replace('"', '""') + '"'
+    if kind == "ratio_to_group" and len(cols) == 2:
+        a, b = cols
+        return Idea(f"ai{n}", title, why, f"{q(a)} / AVG({q(a)}) OVER (PARTITION BY {q(b)})",
+                    lambda fr, a=a, b=b: fr[a] / fr.groupby(b)[a].transform("mean"), "ai")
+    if kind == "combine" and len(cols) == 2:
+        a, b = cols
+        return Idea(f"ai{n}", title, why, f"{q(a)} || ' \u00b7 ' || {q(b)}",
+                    lambda fr, a=a, b=b: fr[a].astype(str) + " \u00b7 " + fr[b].astype(str), "ai")
+    if kind == "days_since" and len(cols) == 1:
+        a = cols[0]
+        return Idea(f"ai{n}", title, why, f"DAYS_BETWEEN(CURRENT_DATE, {q(a)})",
+                    lambda fr, a=a: (fr[a].max() - fr[a]).dt.days.astype(float), "ai")
+    if kind == "as_number" and len(cols) == 1:
+        a = cols[0]
+        return Idea(f"ai{n}", title, why, f"CAST({q(a)} AS DOUBLE)",
+                    lambda fr, a=a: pd.to_numeric(fr[a], errors="coerce").astype(float), "ai")
+    if kind == "is_missing" and len(cols) == 1:
+        a = cols[0]
+        return Idea(f"ai{n}", title, why, f"CASE WHEN {q(a)} IS NULL THEN 1 ELSE 0 END",
+                    lambda fr, a=a: fr[a].isna().astype(float), "ai")
+    return None
+
+
+def feature_ideas(lab: Lab, *, ai: bool = False, conn=None) -> list[Idea]:
+    """Feature ideas for this lab's data, each with the SQL that would make it: try one with try_feature. With
+    ``ai``, your AI model (nb.use_model) adds up to four more, of kinds the lab can build and test; it is sent the
+    column names, their roles and the scores - never a row or a value - and the call is traced when Langfuse is on
+    (``conn`` tags the trace with the database session)."""
+    found = ideas(lab.data, lab.run)
+    if not ai:
+        return found
+    import json
+    import re
+
+    from . import model_client, trace
+
+    endpoint = model_client()
+    if endpoint is None:
+        raise ValueError("No AI model is set up: nb.use_model(MODEL_ID, PROVIDER_BASE_URL) first.")
+    client, model = endpoint
+    ds = lab.dataset
+    columns = {c: e.get("role") for c, e in (getattr(getattr(ds, "descriptor", None), "columns", {}) or {}).items()
+               if not e.get("sensitive")}
+    prompt = {"target": lab.run.target, "columns": columns,
+              "scores": [{r["model"]: round(r["cv"], 3)} for r in lab.board if "cv" in r], "allowed_kinds": AI_KINDS,
+              "rules": "Suggest up to 4 new model inputs as JSON: {\"ideas\": [{\"kind\", \"columns\", \"title\", \"why\"}]}. "
+                       "Use only the allowed kinds and existing column names. Never use the target or a column filled "
+                       "in after the outcome."}
+    with trace(conn, AI_TRACE, dataset=ds) if conn is not None else _no_trace():
+        try:
+            answer = client.chat.completions.create(model=model, messages=[
+                {"role": "system", "content": "Return only one JSON object. No Markdown."},
+                {"role": "user", "content": json.dumps(prompt)}])
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+    raw = answer.choices[0].message.content or ""
+    match = re.search(r"\{.*\}", raw, re.S)
+    suggested = json.loads(match.group(0)).get("ideas", []) if match else []
+    frame = lab.data.frame
+    for item in suggested[:4]:
+        cols = [str(v) for v in item.get("columns", [])]
+        if any(c not in frame.columns for c in cols) or lab.run.target in cols:
+            continue
+        idea = _ai_idea(str(item.get("kind")), cols, str(item.get("title") or item.get("kind"))[:80],
+                        str(item.get("why") or "")[:240], len(found))
+        if idea is not None:
+            found.append(idea)
+    return found
+
+
+class _no_trace:
+    def __enter__(self):
+        return None
+
+    def __exit__(self, *_exc):
+        return False
+
+
+def try_feature(lab: Lab, idea: Idea) -> dict:
+    """Retrain the lab's picked model with ``idea`` added, on the same split: {verdict, text, series}. Keep it by
+    passing features={idea.id: result["series"]} to the next model_lab."""
+    if lab.task not in SUPERVISED:
+        raise ValueError("Feature ideas are tried on a prediction (predict_yes_no or predict_number).")
+    return try_idea(lab.data, lab.task, lab.target_number, lab.settings, lab.pick.get("key"), lab.result, idea,
+                    lab.features)

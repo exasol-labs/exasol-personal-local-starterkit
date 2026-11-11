@@ -63,22 +63,59 @@ ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"
 
 ## Guided and Code: the cards and the cells behind them
 
-Each Data Scientist notebook opens with its **guided view**: interactive cards (`exakit.guide`, shipped in the same
-package as `exakit.nb` and drawn with anywidget) that do the page's steps with buttons and forms -
-`guide.start()` in `00_quickstart` (Home: the kit's state, the AI model and Langfuse tracing; then choose the data - a
-kit dataset, your own file, or an external source connected from the card with the kit's `exakit connect` - approve
-the column map, and the map of all your data), `guide.explore()` in `01_explore`, `guide.ask()` in `02_ask_your_data`
-and `guide.share()` in `03_share`. Below the cards, under **The code behind this page**, are the notebook's own
-cells, unchanged.
+Each Data Scientist notebook opens with its **guided view**: cards (`exakit.guide`, shipped in the same package as
+`exakit.nb`, drawn with anywidget) that do the page's steps with buttons and forms - `guide.start()` in
+`00_quickstart`, `guide.explore()` in `01_explore`, `guide.ask()` in `02_ask_your_data`, `guide.share()` in
+`03_share`. Below them, under **The code behind this page**, are the notebook's own cells. The **Guided / Code**
+switch at the top right of every card chooses the view; Code also shows, on each card, the exact code its buttons
+ran, with **Copy as cell**. The choice is remembered for the whole JupyterLab. Until a card has run (Shift + Enter
+on the cell under the hint), the cells show as they always did. In Marimo the cards show stacked, and Marimo's app
+view hides the code. A headless run (`--run`) skips the card cells (`skip-ci`).
 
-The **Guided / Code** switch at the top right of every card chooses the view: Guided hides everything from that
-heading down; Code shows it, and the kit call behind each card's buttons too. The choice is remembered for the whole
-JupyterLab, every notebook. Until a card has run (Shift + Enter on the cell under the hint), the cells show as they
-always did. Every card calls the kit's own helpers and commands, and none opens a connection of its own: questions
-run through the read-only MCP service, a source's password goes to `exakit connect` on standard input, and the AI
-model and Langfuse keys are saved for every step's kernel in `~/.exasol-starter-kit/credentials` (0600), never in a
-notebook. In Marimo the cards show stacked, and Marimo's own app view hides the code. A headless run (`--run`) skips
-the card cells (`skip-ci`).
+**One call, two ways.** Every button, form and choice on a card is one exact `exakit.nb` call, and the same call is a
+cell of the notebook's code section: UI or code, the same result.
+
+- **Live, never typed in.** What a card shows comes from the kit at run time: `nb.kit_check()`, `nb.components()`,
+  `nb.addons()`, `nb.ai_clients()`, `nb.sample_datasets()`, `nb.connectors()`, `nb.notebooks(persona)`,
+  `nb.persona_plan()`, `nb.approved_datasets()`, `nb.list_workflows()` / `nb.workflow_log(id)`, `nb.data_map(connection)`
+  and the approved column map. No add-on, client, connector, dataset or notebook name is written into the guided
+  view (a test checks this).
+- **No side doors.** A card opens no connection of its own: everything goes through the kit's helpers. Approved
+  questions run only through the read-only MCP service. A source's password goes to `exakit connect` on standard
+  input. The AI model's and Langfuse's keys are saved only on request
+  (`nb.use_model(..., remember=True)`, 0600 in the kit's credentials; `nb.forget_model()` deletes them).
+- **The kit's helpers, not the card's.** The cards use these `exakit.nb` helpers, and so can any cell:
+  - the model lab: `nb.lab_data`, `nb.model_lab`, `nb.feature_ideas`, `nb.try_feature`;
+  - the no-model question drafter: `nb.draft_question`, `nb.example_questions`;
+  - Excel and non-UTF-8 CSV files: `nb.load_own_file`;
+  - a table already in the database: `nb.use_table`;
+  - the column map's version history: `nb.column_map_versions`.
+
+### How the guided view is built (and how to change it)
+
+```
+notebook/package/exakit_guide/
+  actions.py     every action: one or more lines of exakit.nb code with {placeholders}, and its notebook
+  session.py     the notebook's namespace (nb, connection, dataset, role_review, lab ...) the actions run in
+  card.py        the widget; renders blocks; a button's code comes from its action
+  screens/       one module per page (home, understand, explore, ask, share): UI only
+  static/        card.js / card.css: the renderer, no facts
+```
+
+`actions.code(id, **values)` is the exact cell text, and `actions.run(id, **values)` runs that very text in the
+notebook's namespace and logs it (a secret is bound only at run time, never written into the code). Screens change
+nothing except through `actions.run`.
+
+To add something a card can do:
+
+1. Add an `exakit.nb` helper when the kit has none, exported in `__all__`.
+2. Add one entry to `actions.ACTIONS`: the code and the notebook it belongs to.
+3. Put the same call in that notebook's code section, guarded by a variable when it is optional
+   (`if ADD_ON: nb.addon_ready(ADD_ON)`).
+4. Have the screen call `actions.run(...)`.
+
+`tests/test_notebook_guide.py` fails when an action's call is missing from its notebook, calls something `exakit.nb`
+lacks, shows a secret, or when a screen bypasses the actions or names a kit part.
 
 ## Rules every notebook follows
 

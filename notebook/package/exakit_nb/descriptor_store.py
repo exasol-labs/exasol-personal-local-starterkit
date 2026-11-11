@@ -84,3 +84,57 @@ def table_descriptor(id: str) -> Path | None:
         if re.search(rf'^dataset:\s*"?{re.escape(id)}"?\s*$', head, re.M):
             found.append(path)
     return max(found, key=lambda p: p.stat().st_mtime) if found else None
+
+
+# -- the role-per-column store (descriptors/<SCHEMA.TABLE>/vN.yaml, current.yaml naming its dataset) -------------------
+def _yaml(path: Path) -> dict:
+    from .descriptor_rules import load_yaml
+
+    try:
+        doc = load_yaml(path.read_text(encoding="utf-8"))
+        return doc if isinstance(doc, dict) else {}
+    except Exception:
+        return {}
+
+
+def _table_folders() -> list[tuple[Path, dict]]:
+    root = kit_home() / "descriptors"
+    out = []
+    if root.is_dir():
+        for folder in sorted(root.iterdir()):
+            if folder.is_dir() and (folder / "current.yaml").is_file():
+                out.append((folder, _yaml(folder / "current.yaml")))
+    return out
+
+
+def approved_datasets() -> list[dict]:
+    """Every dataset with an approved column map, newest approval first: {id, table, version, approved_at}."""
+    out = []
+    for folder, doc in _table_folders():
+        dataset_id = str(doc.get("dataset") or "")
+        if not dataset_id or str(doc.get("status") or "approved") != "approved":
+            continue
+        out.append({"id": dataset_id, "table": str((doc.get("source") or {}).get("object") or folder.name),
+                    "version": doc.get("version"), "approved_at": str(doc.get("approved_at") or "")})
+    return sorted(out, key=lambda x: x["approved_at"], reverse=True)
+
+
+def column_map_versions(id: str) -> list[dict]:
+    """Every saved version of a dataset's column map, oldest first: {version, approved_at, roles, slots, evidence} -
+    what approving one of them again (RoleReview.approve) would restore."""
+    for folder, doc in _table_folders():
+        if str(doc.get("dataset")) != id:
+            continue
+        out = []
+        for path in folder.glob("v*.yaml"):
+            found = _VERSION_FILE.match(path.name)
+            if not found:
+                continue
+            version = _yaml(path)
+            columns = version.get("columns") or {}
+            out.append({"version": int(found.group(1)), "approved_at": version.get("approved_at"),
+                        "roles": {c: (e or {}).get("role") for c, e in columns.items()},
+                        "slots": dict(version.get("slots") or {}),
+                        "evidence": {c: str((e or {}).get("evidence") or "") for c, e in columns.items()}})
+        return sorted(out, key=lambda v: v["version"])
+    return []

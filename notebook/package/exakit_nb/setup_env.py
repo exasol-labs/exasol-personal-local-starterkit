@@ -3,7 +3,9 @@
 They are the environment variables `exakit notebook` already reads (EXAKIT_MODEL_ID, EXAKIT_PROVIDER_BASE_URL,
 EXAKIT_PROVIDER_API_KEY, LANGFUSE_*, MLFLOW_TRACKING_URI), so a cell is one more way to give them, not another kind of
 setting. The plain values come from the cell. The keys are asked for in a hidden prompt and kept in this kernel's
-environment only: never in the notebook, its outputs or on disk, and gone when the kernel stops. A key already set (by
+environment only: never in the notebook or its outputs, and gone when the kernel stops - unless ``remember=True``,
+which saves them beside the kit's credentials (readable by this user only, 0600) so every notebook's kernel has them
+(``import exakit.nb`` loads them; ``forget_model()`` deletes them). A key already set (by
 the shell that started JupyterLab, or an earlier run of the cell) is not asked again - unless the address it was for
 changed. Empty values change nothing, so a cell left as shipped is a no-op and a headless run never waits on a prompt.
 """
@@ -55,7 +57,7 @@ def _secret(name: str, prompt: str, ask: Ask, notes: list[str]) -> None:
 
 
 def use_model(model_id: str = "", provider_base_url: str = "", langfuse_base_url: str = "", *,
-              ask: Ask | None = None) -> dict:
+              ask: Ask | None = None, remember: bool = False) -> dict:
     """Your model and Langfuse tracing for this kernel. ``model_id`` and ``provider_base_url`` (a Chat Completions base
     URL) set the model and ask for its API key (Enter for none: a local server); ``langfuse_base_url`` turns tracing on
     and asks for its two keys. Prints what is in use, never a key; returns that summary."""
@@ -81,10 +83,73 @@ def use_model(model_id: str = "", provider_base_url: str = "", langfuse_base_url
         else:
             _secret(LANGFUSE_PUBLIC_KEY, "Langfuse public key: ", ask, notes)
             _secret(LANGFUSE_SECRET_KEY, "Langfuse secret key (hidden): ", ask, notes)
+    if remember and not notes:
+        _remember(model=bool((model_id or "").strip() or (provider_base_url or "").strip()),
+                  langfuse=bool((langfuse_base_url or "").strip()))
+        notes_saved = "Saved for every notebook of this kit (readable by you only); forget_model() deletes it."
+    else:
+        notes_saved = ""
     summary = _model_summary(notes)
-    for line in summary["lines"] + notes:
+    for line in summary["lines"] + notes + ([notes_saved] if notes_saved else []):
         print(line)
     return summary
+
+
+# -- remembered for every notebook (opt-in: use_model(..., remember=True)) --------------------------------------------
+_REMEMBERED = {  # file in the kit's credentials folder -> the variable it holds
+    "notebook_model_id": model_config.MODEL_ID, "notebook_model_base_url": model_config.BASE_URL,
+    "notebook_model_api_key": model_config.API_KEY, "notebook_langfuse_base_url": LANGFUSE_BASE_URL,
+    "notebook_langfuse_public_key": LANGFUSE_PUBLIC_KEY, "notebook_langfuse_secret_key": LANGFUSE_SECRET_KEY,
+}
+_MODEL_FILES = ("notebook_model_id", "notebook_model_base_url", "notebook_model_api_key")
+_LANGFUSE_FILES = ("notebook_langfuse_base_url", "notebook_langfuse_public_key", "notebook_langfuse_secret_key")
+
+
+def _credentials() -> Path:
+    from .descriptor_store import kit_home
+
+    return kit_home() / "credentials"
+
+
+def _write_private(path: Path, text: str) -> None:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(text)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+
+
+def _remember(*, model: bool, langfuse: bool) -> None:
+    for name in (_MODEL_FILES if model else ()) + (_LANGFUSE_FILES if langfuse else ()):
+        value = os.environ.get(_REMEMBERED[name], "")
+        if value:
+            _write_private(_credentials() / name, value)
+        else:
+            (_credentials() / name).unlink(missing_ok=True)
+
+
+def forget_model(model: bool = True, langfuse: bool = True) -> None:
+    """Delete what use_model(..., remember=True) saved (the model, Langfuse, or both) and clear it from this kernel."""
+    for name in (_MODEL_FILES if model else ()) + (_LANGFUSE_FILES if langfuse else ()):
+        (_credentials() / name).unlink(missing_ok=True)
+        os.environ.pop(_REMEMBERED[name], None)
+    print("Forgotten: " + " and ".join(x for x, on in (("the AI model", model), ("Langfuse", langfuse)) if on) + ".")
+
+
+def load_remembered() -> list[str]:
+    """Put the remembered settings into this kernel where it has none of its own; the variables it set."""
+    done = []
+    for name, variable in _REMEMBERED.items():
+        path = _credentials() / name
+        if os.environ.get(variable) or not path.is_file():
+            continue
+        value = path.read_text(encoding="utf-8").strip()
+        if value:
+            os.environ[variable] = value
+            done.append(variable)
+    return done
 
 
 def _model_summary(notes: list[str]) -> dict:

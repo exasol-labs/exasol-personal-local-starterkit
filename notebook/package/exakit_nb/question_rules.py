@@ -1,10 +1,12 @@
-"""Draft Exasol SQL from a plain-language question, without an AI model.
+"""Draft Exasol SQL from a plain-language question, without an AI model: ``nb.draft_question``.
 
-Ported from the offline demo's drafter and rewritten for Exasol and the
-kit's approved column map. It matches common question shapes (rate, count,
-total, average per group; top N; trend over time; filters by year and by a
-group's value) to SQL templates. The result goes to nb.ask(proposed_sql=...),
-so approval, logging and running follow the kit's own path.
+    proposal = nb.draft_question(connection, dataset, "Which category has the highest cancellation rate?")
+    proposal.approve(); answer = proposal.run()        # the kit's own path, as for a model's draft (nb.ask)
+
+It matches common question shapes (rate, count, total, average per group; top N; trend over time; filters by year
+and by a group's value) to SQL templates over the approved column map, checks the SQL is read-only, and hands it to
+nb.ask(proposed_sql=...), so approval, logging and running are the kit's. ``example_questions(dataset)`` suggests
+questions this dataset's roles can answer. Nothing leaves the computer: no model is called.
 """
 
 from __future__ import annotations
@@ -257,7 +259,7 @@ class RuleDrafter:
             raise FriendlyError(
                 "I couldn't turn that into a query yet. Try asking for a rate, a count, a total, "
                 "a trend over time or a top 5, and name a column such as "
-                + (", ".join(self._group_cols()[:2]) or "one from step 2")
+                + (", ".join(self._group_cols()[:2]) or "one from your column map")
                 + "."
             )
 
@@ -276,7 +278,7 @@ class RuleDrafter:
         if trend_grain:
             dates = self._cols("date")
             if not dates:
-                raise FriendlyError("There is no date column, so I can't show a trend. Mark one as Date in step 2.")
+                raise FriendlyError("There is no date column, so I can't show a trend. Mark one as Date in step 1.")
             d = dates[0]
             period = f"DATE_TRUNC('{trend_grain}', {qident(d)})"
             date_where = f"{qident(d)} IS NOT NULL"
@@ -296,7 +298,7 @@ class RuleDrafter:
         if group_col is None:
             group_col = ctx.default_group if ctx.default_group in self._group_cols() else (self._group_cols() or [None])[0]
             if group_col is None:
-                raise FriendlyError("There is no column to group by. Mark one as Group to compare in step 2.")
+                raise FriendlyError("There is no column to group by. Mark one as Group to compare in step 1.")
             assumptions.append(f"You didn't name a group, so I used {group_col}.")
 
         if second is not None:
@@ -370,3 +372,78 @@ class RuleDrafter:
         if metric == "avg":
             return f"ROUND(AVG({qident(measure)}), 2)", _label(f"avg_{measure}"), "avg"
         return "COUNT(*)", _label(ctx.row_noun), "count"
+
+
+# The column map's roles in the drafter's words (descriptor roles: exakit_nb.describe.COLUMN_ROLES).
+ROLE_WORDS = {"key": "id", "time": "date", "measure": "measure", "category": "category", "flag": "flag",
+              "text": "text", "identifier": "code", "other": "ignore"}
+VALUE_LIMIT = 60                       # a group column with more distinct values is not offered as a filter
+
+
+def _bare(col: str | None) -> str | None:
+    return col.strip('"').split(".")[-1].strip('"') if col else None
+
+
+def _target_words(ds) -> str:
+    target = _bare(ds.col("label")) if ds.has("label") else ""
+    return re.sub(r"^(is|has)_", "", target.lower()).replace("_", " ") if target else "yes"
+
+
+def context_for(conn, ds) -> DraftContext:
+    """What the drafter knows: the dataset's roles (sensitive columns left out), its target, and the values of its
+    group columns (up to VALUE_LIMIT each, read from the table)."""
+    from .readout import noun
+
+    cols = dict(getattr(ds.descriptor, "columns", {}) or {})
+    target = _bare(ds.col("label")) if ds.has("label") else None
+    roles = {c: ("ignore" if e.get("sensitive") else ROLE_WORDS.get(e.get("role"), "ignore")) for c, e in cols.items()}
+    values: dict[str, list[str]] = {}
+    for column, role in roles.items():
+        if role in ("category", "flag") and column != target:
+            rows = conn.execute(f'SELECT DISTINCT CAST({qident(column)} AS VARCHAR(2000)) FROM {ds.fact_table} '
+                                f'WHERE {qident(column)} IS NOT NULL LIMIT {VALUE_LIMIT + 1}').fetchall()
+            if len(rows) <= VALUE_LIMIT:
+                values[column] = [r[0] for r in rows]
+    group = _bare(ds.group_by()[1]) if ds.group_by() else None
+    return DraftContext(table=ds.fact_table, columns=roles, types={}, target=target,
+                        target_expr=f"CAST({qident(target)} AS DOUBLE)" if target else None,
+                        target_words=_target_words(ds), row_noun=noun(ds),
+                        default_group=group if roles.get(group) in ("category", "flag") else None, values=values)
+
+
+def draft_question(conn, ds, question: str):
+    """A Proposal for ``question`` drafted by rules from the column map (no AI model): read-only SQL, with the
+    drafter's assumptions, not approved yet. Approve and run it as any proposal."""
+    from .ask import ask
+
+    drafted = RuleDrafter(context_for(conn, ds)).draft(question)
+    proposal = ask(ds, question, proposed_sql=ensure_read_only(drafted["sql"]))
+    proposal.assumptions = list(drafted.get("assumptions") or [])
+    if drafted.get("summary"):
+        proposal.doubts = [*proposal.doubts, drafted["summary"]]
+    return proposal
+
+
+def example_questions(ds) -> list[str]:
+    """Up to three questions this dataset's approved roles can answer, in its own column names."""
+    cols = dict(getattr(ds.descriptor, "columns", {}) or {})
+    target = _bare(ds.col("label")) if ds.has("label") else None
+    group = _bare(ds.group_by()[1]) if ds.group_by() else None
+    measures = [c for c, e in cols.items() if e.get("role") == "measure"]
+    others = [c for c, e in cols.items() if e.get("role") == "category" and c not in (group, target) and not e.get("sensitive")]
+    words = _target_words(ds)
+    nice = lambda c: c.replace("_", " ").lower()
+
+    def plural(c: str) -> str:
+        w = nice(c)
+        return w[:-1] + "ies" if w.endswith("y") and not w.endswith(("ay", "ey", "oy")) else (w if w.endswith("s") else w + "s")
+    out = []
+    if target and group:
+        out.append(f"Which {nice(group)} has the highest {words} rate?")
+    if target and ds.has("date"):
+        out.append(f"How has the {words} rate changed by month?")
+    if measures and (others or group):
+        out.append(f"Top 5 {plural(others[0] if others else group)} by total {nice(measures[0])}")
+    if not out and group:
+        out.append(f"How many rows are there per {nice(group)}?")
+    return out[:3]

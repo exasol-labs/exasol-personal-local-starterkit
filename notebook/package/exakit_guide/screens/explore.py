@@ -5,21 +5,21 @@ comparison and tested feature ideas:
   Working on        -> nb.continue_workflow, nb.chosen_dataset, nb.dataset
   Is it clean?      -> nb.data_checks, nb.describe_schema / joined_view, nb.typed_view (created on approval)
   Compare and trend -> the kit's group and over-time SQL, nb.note_groups, nb.note_trend
-  Predict           -> nb.leakage_check, then modeling.compare (4 models, same split), nb.note_model
-  Feature ideas     -> modeling.ideas, each tried on held-out rows before it's kept
+  Predict           -> nb.lab_data (leaks left out), nb.model_lab (every model of the task, same split)
+  Feature ideas     -> nb.feature_ideas, each tried with nb.try_feature on held-out rows before it's kept
 """
 
 from __future__ import annotations
 
-import json
-import re
 import threading
 
-from . import modeling as M
-from . import store
-from .card import Screen
-from .kitinfo import DATASET_TITLES
-from .session import SESSION, quiet
+from exakit_nb import lab as M
+from exakit_nb.readout import SMALL
+
+from .. import actions
+from ..actions import Var
+from ..card import Screen
+from ..session import SESSION
 
 KICKER = "Step 2 of 4 · Explore and predict"
 CHECK_TITLES = {
@@ -33,22 +33,22 @@ def _bare(col):
 
 
 def _ds_label(ds) -> str:
-    title = DATASET_TITLES.get(ds.id, ds.id)
-    return f"{title} · {ds.fact_table} · column map v{ds.version}"
+    return f"{ds.id} · {ds.fact_table} · column map v{ds.version}"
 
 
 def _approved_choices() -> list[dict]:
-    out = []
-    folders = store._store_folders()
-    names = {f.name.upper() for f, _ in folders}
-    for _folder, doc in folders:
-        ds_id = str(doc.get("dataset") or "")
-        obj = (doc.get("source") or {}).get("object") or ""
-        if f"EXAKIT_PREPARED.{obj.replace('.', '__')}__PLAIN".upper() in names:
-            continue    # the kit can't read this raw table's map back; its plain-name version is listed instead
-        if ds_id and doc.get("status") == "approved":
-            out.append({"value": ds_id, "label": f"{DATASET_TITLES.get(ds_id, ds_id)} · {obj}"})
-    return out
+    """Every dataset with an approved column map (nb.approved_datasets), to switch to."""
+    return [{"value": a["id"], "label": f"{a['id']} · {a['table']}"} for a in actions.run("kit.approved")]
+
+
+def _next_notebook() -> dict | None:
+    """The notebook after this one in the persona's path (nb.notebooks)."""
+    from pathlib import Path
+
+    rows = actions.run("kit.notebooks", persona=Path.cwd().name) or []
+    files = [r["file"].rsplit("/", 1)[-1] for r in rows]
+    here = next((i for i, f in enumerate(files) if f.startswith("01_")), 1)
+    return rows[here + 1] if here + 1 < len(rows) else None
 
 
 def _state():
@@ -72,25 +72,25 @@ class WorkingOn(Screen):
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self) -> None:
-        import exakit.nb as nb
-
         try:
-            with quiet() as out:
-                SESSION.workflow_id = nb.continue_workflow("explore")
-                conn = SESSION.connection()
-                SESSION.open_latest()
-            self.kit_said = out.text
-            SESSION.log("import exakit.nb as nb", "connection = nb.connect()", 'workflow_id = nb.continue_workflow("explore")',
-                        "dataset = nb.dataset(connection, nb.chosen_dataset(None))")
-            self.choices = _approved_choices()
+            SESSION.open_latest("explore.open")
+            self.kit_said = SESSION.said
+            self._count()
         except Exception as exc:
             self.flash = {"kind": "error", "v": f"Couldn't open the data you approved last: {str(exc).splitlines()[0]} "
                                                 "Pick another below, or approve one in step 1."}
-            self.choices = _approved_choices()
+        self.choices = _approved_choices()
         self.loading = False
         self.refresh()
         SESSION.changed("dataset", self)
         SESSION.release()
+
+    def _count(self) -> None:
+        ds = SESSION.dataset
+        self.rows = None
+        if ds is not None:
+            frame = actions.run("explore.count", sql=f"SELECT COUNT(*) AS N FROM {ds.fact_table}")
+            self.rows = int(frame["N"][0])
 
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Working on",
@@ -100,12 +100,7 @@ class WorkingOn(Screen):
         ds = SESSION.dataset
         blocks = [head]
         if ds is not None:
-            rows = ""
-            try:
-                n = SESSION.connection().execute(f"SELECT COUNT(*) FROM {ds.fact_table}").fetchone()[0]
-                rows = f" · {int(n):,} rows"
-            except Exception:
-                pass
+            rows = f" · {self.rows:,} rows" if getattr(self, "rows", None) is not None else ""
             blocks.append({"t": "summary_row", "v": _ds_label(ds) + rows,
                            "sub": "Predicting " + (_bare(ds.col("label")) if ds.has("label") else "nothing (explore only)")})
         if self.choices:
@@ -113,16 +108,13 @@ class WorkingOn(Screen):
             blocks.append({"t": "inline_form", "fields": [{"id": "pick", "type": "select", "label": "Switch to",
                            "value": current, "options": self.choices}], "action": {"id": "switch", "label": "Use this"}})
         if SESSION.code:
-            blocks.append({"t": "code", "code_only": True, "title": "The kit calls behind this step", "v": "\n".join(SESSION.code)})
+            blocks.append({"t": "code", "code_only": True, "title": "The code behind this step", "v": "\n".join(SESSION.code)})
         return blocks
 
     def on_switch(self, v: dict) -> None:
-        import exakit.nb as nb
-
         ds_id = str(v.get("pick") or "")
-        with quiet():
-            SESSION.dataset = nb.dataset(SESSION.connection(), ds_id)
-        SESSION.log(f'dataset = nb.dataset(connection, "{ds_id}")')
+        actions.run("explore.open", dataset_id=ds_id)
+        self._count()
         _state().clear()
         self.flash = {"kind": "ok", "v": f"Now working on {ds_id}."}
         SESSION.changed("dataset", self)
@@ -150,18 +142,14 @@ class Prepare(Screen):
         self.refresh()
 
     def _check(self) -> None:
-        import exakit.nb as nb
-
-        ds, conn = SESSION.dataset, SESSION.connection()
-        with quiet() as out:
-            self.findings = nb.data_checks(conn, ds, show=False)
-            try:
-                self.joined = nb.describe_schema(conn, ds).joined_view(ds)
-            except Exception:
-                self.joined = None
-            self.typed = nb.typed_view(conn, ds)
-        self.kit_said = out.text
-        SESSION.log("findings = nb.data_checks(connection, dataset)", "typed = nb.typed_view(connection, dataset)")
+        self.findings = actions.run("explore.checks")
+        said = SESSION.said
+        try:
+            self.joined = actions.run("explore.schema")
+        except Exception:
+            self.joined = None
+        self.typed = actions.run("explore.typed")
+        self.kit_said = "\n".join(x for x in (said, SESSION.said) if x)
 
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Is the data clean?",
@@ -203,10 +191,8 @@ class Prepare(Screen):
         return blocks
 
     def on_clean(self, _v: dict) -> None:
-        with quiet() as out:
-            SESSION.dataset = self.typed.create(SESSION.connection())
-        self.kit_said = out.text
-        SESSION.log("dataset = typed.create(connection)")
+        actions.run("explore.clean")
+        self.kit_said = SESSION.said
         _state().clear()
         self.flash = {"kind": "ok", "v": "Created the cleaned copy. Everything below now uses it."}
         created = self.typed
@@ -215,10 +201,8 @@ class Prepare(Screen):
         SESSION.changed("dataset", self)
 
     def on_join(self, _v: dict) -> None:
-        with quiet() as out:
-            SESSION.dataset = self.joined.create(SESSION.connection())
-        self.kit_said = out.text
-        SESSION.log("dataset = joined.create(connection)")
+        actions.run("explore.join")
+        self.kit_said = SESSION.said
         _state().clear()
         self.flash = {"kind": "ok", "v": "Created the joined view. Everything below now uses it."}
         self._check()
@@ -261,21 +245,21 @@ class Compare(Screen):
         self.result = None
         if not self.group:
             return
-        ds, conn = SESSION.dataset, SESSION.connection()
+        ds = SESSION.dataset
         g = f'"{self.group}"'
         group_h, count_h = nb.name(self.group), nb.count_name(ds)
         has_label = ds.has("label")
         pct_h = nb.name(ds.col("label"), "PCT") if has_label else None
         rate = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
         sql = f"SELECT {g} AS {group_h},\n       COUNT(*) AS {count_h}{rate}\nFROM {ds.fact_table}\nGROUP BY {g}\nORDER BY {count_h} DESC\nLIMIT 15"
-        with quiet():
-            frame = nb.sql(conn, sql)
-            overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}") if pct_h else None
-            note = nb.note_groups(frame, ds, group_h, count_h, pct_h, overall=(overall["N"][0], overall["PCT"][0]) if pct_h else None)
-        SESSION.log(f"groups = nb.sql(connection, '''{sql}''')")
+        frame = actions.run("explore.groups", sql=sql)
+        overall = (actions.run("explore.overall", sql=f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}")
+                   if pct_h else None)
+        note = actions.run("explore.groups_note", group=group_h, count=count_h, pct=pct_h,
+                           overall=Var('(overall["N"][0], overall["PCT"][0])') if pct_h else None)
         if pct_h:
             items = [{"label": "(no value)" if r[group_h] is None else str(r[group_h]), "value": float(r[pct_h] or 0) / 100, "rows": int(r[count_h])}
-                     for _, r in frame.iterrows() if int(r[count_h]) >= 30]
+                     for _, r in frame.iterrows() if int(r[count_h]) >= SMALL]
             items.sort(key=lambda i: -i["value"])
             title = f"{_bare(ds.col('label'))} rate by {self.group}"
         else:
@@ -288,23 +272,21 @@ class Compare(Screen):
         import exakit.nb as nb
 
         self.trend = None
-        ds, conn = SESSION.dataset, SESSION.connection()
+        ds = SESSION.dataset
         if not ds.has("date"):
             self.trend = {"skip": "No date was chosen in step 1, so there is no trend to show."}
             return
         d = ds.col("date")
         count_h = nb.count_name(ds)
         pct_h = nb.name(ds.col("label"), "PCT") if ds.has("label") else None
-        with quiet():
-            span = nb.sql(conn, f"SELECT DAYS_BETWEEN(MAX({d}), MIN({d})) AS DAYS FROM {ds.fact_table}")
-            days = int(span["DAYS"][0] or 0)
-            period = "DAY" if days <= 62 else "MONTH" if days <= 3 * 366 else "YEAR"
-            rate = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
-            sql = (f"SELECT CAST(DATE_TRUNC('{period}', {d}) AS DATE) AS {period}_START,\n       COUNT(*) AS {count_h}{rate}\n"
-                   f"FROM {ds.fact_table}\nWHERE {d} IS NOT NULL\nGROUP BY 1\nORDER BY 1")
-            frame = nb.sql(conn, sql)
-            note = nb.note_trend(frame, ds, f"{period}_START", count_h, pct_h)
-        SESSION.log(f"over_time = nb.sql(connection, '''{sql}''')")
+        span = actions.run("explore.span", sql=f"SELECT DAYS_BETWEEN(MAX({d}), MIN({d})) AS DAYS FROM {ds.fact_table}")
+        days = int(span["DAYS"][0] or 0)
+        period = "DAY" if days <= 62 else "MONTH" if days <= 3 * 366 else "YEAR"
+        rate = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
+        sql = (f"SELECT CAST(DATE_TRUNC('{period}', {d}) AS DATE) AS {period}_START,\n       COUNT(*) AS {count_h}{rate}\n"
+               f"FROM {ds.fact_table}\nWHERE {d} IS NOT NULL\nGROUP BY 1\nORDER BY 1")
+        frame = actions.run("explore.trend", sql=sql)
+        note = actions.run("explore.trend_note", period=f"{period}_START", count=count_h, pct=pct_h)
         fmt = {"DAY": "%d %b", "MONTH": "%b %Y", "YEAR": "%Y"}[period]
         col = pct_h or count_h
         import pandas as pd
@@ -313,7 +295,7 @@ class Compare(Screen):
         pts = [{"period": when.iloc[i].strftime(fmt) if pd.notna(when.iloc[i]) else str(r[f"{period}_START"]),
                 "value": (float(r[col] or 0) / 100) if pct_h else int(r[col]), "rows": int(r[count_h])}
                for i, (_, r) in enumerate(frame.iterrows())
-               if not pct_h or int(r[count_h]) >= 30]   # the kit's rule: a % from under 30 rows isn't trustworthy
+               if not pct_h or int(r[count_h]) >= SMALL]   # the kit's rule: a % from under SMALL rows isn't trustworthy
         title = (f"{_bare(ds.col('label'))} rate by {period.lower()}" if pct_h else f"{count_h.replace('_', ' ').capitalize()} by {period.lower()}")
         self.trend = {"title": title, "points": pts, "pct": bool(pct_h), "note": note, "sql": sql}
 
@@ -330,7 +312,7 @@ class Compare(Screen):
         r = self.result
         if r:
             blocks += [{"t": "bars", "title": r["title"], "items": r["items"], "pct": r["pct"], "overall": r["overall"],
-                        "note": "Dashed line: overall rate. Highlighted bars are above it. Groups under 30 rows are left out." if r["pct"] else ""},
+                        "note": f"Dashed line: overall rate. Highlighted bars are above it. Groups under {SMALL} rows are left out." if r["pct"] else ""},
                        {"t": "note", "v": r["note"]}, {"t": "code", "code_only": True, "title": "The query", "v": r["sql"]}]
         elif not self.groups:
             blocks.append({"t": "p", "muted": True, "v": "No column was marked Group to compare in step 1."})
@@ -339,7 +321,7 @@ class Compare(Screen):
             blocks.append({"t": "p", "muted": True, "v": t["skip"]})
         elif t:
             blocks += [{"t": "line", "title": t["title"], "points": t["points"], "pct": t["pct"],
-                        "note": "Periods with fewer than 30 rows are left out." if t["pct"] else ""},
+                        "note": f"Periods with fewer than {SMALL} rows are left out." if t["pct"] else ""},
                        {"t": "note", "v": t["note"]}, {"t": "code", "code_only": True, "title": "The query", "v": t["sql"]}]
         return blocks
 
@@ -369,16 +351,10 @@ class Predict(Screen):
         self.refresh()
 
     def _load(self) -> None:
-        import exakit.nb as nb
-
-        ds, conn = SESSION.dataset, SESSION.connection()
         self.result, self.result_task = None, None
         _state().pop("result", None)
-        with quiet():
-            self.leaks = nb.leakage_check(conn, ds, show=False)
-            self.data = M.load(conn, ds, self.leaks)
+        self.data = actions.run("explore.lab_data")
         _state()["data"] = self.data
-        SESSION.log("leaking = nb.leakage_check(connection, dataset)", f"rows = nb.sql(connection, '''{self.data.sql}''')")
 
     # -- view --------------------------------------------------------------------------------
     def _model_options(self, task: str) -> list[dict]:
@@ -519,36 +495,19 @@ class Predict(Screen):
 
     # -- run ---------------------------------------------------------------------------------
     def on_run(self, v: dict) -> None:
-        import exakit.nb as nb
-
         task = v.get("task") or "predict_yes_no"
-        d = self.data
-        kept = _state().get("kept", {}) if task in ("predict_yes_no", "predict_number") else {}
         target_number = v.get("target_number") if task == "predict_number" else None
-        settings = {k: v.get(k) for k in ("train_pct", "split_method", "split_group", "folds", "effort", "max_depth", "C",
-                                          "neighbours", "learning_rate", "clusters", "contamination")}
-        run = M.prepare(d, task, target_number, {k: x["series"] for k, x in kept.items()})
+        settings = {k: v.get(k) for k in M.SETTINGS if v.get(k) not in (None, "")}
         model = v.get(f"model_{task}") or "all"
-        if task in ("predict_yes_no", "predict_number"):
-            res = M.supervised(d, run, settings, model)
-            res["importance"] = M.importance(res, run.metric)
-            res["ideas_used"] = [x["title"] for x in kept.values()]
-            if task == "predict_yes_no" and run.metric == "roc_auc":
-                with quiet():
-                    note = nb.note_model(res["pick"]["held"], SESSION.dataset, len(run.X), run.rate)
-                    # the kit's sentence assumes its fixed 75/25 split; say what this run actually did
-                    res["note"] = note.replace("It was checked on a quarter of them it had not seen.",
-                                               f"It was checked on {res['test_rows']:,} of them it had not seen.")
-        elif task == "find_groups":
-            res = M.find_groups(d, run, settings, model)
-        else:
-            res = M.find_unusual(d, run, settings, model)
-        res["_run"] = run
+        lab = actions.run("explore.lab", task=task, model=model, target_number=target_number, settings=settings)
+        res = dict(lab.result)
+        res["_run"], res["note"] = lab.run, lab.note
+        kept = SESSION.get("kept_features") or {}
+        ideas = SESSION.get("ideas") or []
+        res["ideas_used"] = [i.title for i in ideas if i.id in kept] if task in M.SUPERVISED else []
         self.result, self.result_task = res, task
-        _state().update({"result": res if task in ("predict_yes_no", "predict_number") else None, "task": task,
-                         "target_number": target_number, "settings": settings, "run": run})
-        SESSION.log(f"# model lab: task={task}, model={model}, settings={settings}  (exakit_guide.modeling)")
-        if task in ("predict_yes_no", "predict_number"):
+        _state().update({"result": res if task in M.SUPERVISED else None, "task": task})
+        if task in M.SUPERVISED:
             self.flash = {"kind": "ok", "v": f"Done. {res['pick']['model']} is " + ("your pick." if model != "all" else "the pick.")
                                              + " The feature ideas below are tested against it."}
         else:
@@ -571,12 +530,10 @@ class Ideas(Screen):
     def on_session(self, what: str) -> None:
         if what == "dataset":
             self.items, self.tried, self.for_task = [], {}, None
-            _state().pop("kept", None)
         if what == "model":
             st = _state()
             if st.get("result") is not None and st.get("task") != self.for_task:
-                self.items, self.tried, self.for_task = M.ideas(st["data"], st["run"]), {}, st.get("task")
-                st.pop("kept", None)
+                self.items, self.tried, self.for_task = list(actions.run("explore.ideas", ai=False)), {}, st.get("task")
         self.refresh()
 
     def _ai_ready(self) -> bool:
@@ -590,7 +547,8 @@ class Ideas(Screen):
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Feature ideas",
                 "sub": "New inputs the model could use. Each is tried on rows the model never saw, and only kept if it helps."}
-        nxt = {"t": "next", "v": "Next: ask in plain words", "path": "starter-kit-notebooks/data-scientist/02_ask_your_data.ipynb"}
+        after = _next_notebook()
+        nxt = {"t": "next", "v": f"Next: {after['title']}", "path": after["file"]} if after else {"t": "p", "v": ""}
         st = _state()
         if st.get("task") in ("find_groups", "find_unusual"):
             return [head, {"t": "empty", "v": "Feature ideas are tested against a prediction score, so they apply to Predict yes or no "
@@ -598,7 +556,7 @@ class Ideas(Screen):
         res = st.get("result")
         if res is None:
             return [head, {"t": "empty", "v": "Run a prediction above first. The ideas are tested against the picked model."}, nxt]
-        kept = st.get("kept", {})
+        kept = SESSION.get("kept_features") or {}
         items = []
         for idea in self.items:
             t = self.tried.get(idea.id)
@@ -609,11 +567,11 @@ class Ideas(Screen):
         if not items:
             blocks.append({"t": "p", "muted": True, "v": "No ideas fit this data's columns."})
         if kept:
-            blocks.append({"t": "actions", "items": [{"id": "rerun", "label": f"Run again with {len(kept)} kept idea{'s' if len(kept) > 1 else ''}",
-                                                      "primary": True, "busy": "Training…"}]})
+            blocks.append({"t": "p", "muted": True, "v": f"{len(kept)} kept idea{'s' if len(kept) > 1 else ''}: Run in Build a model above trains with "
+                                                          + ("them." if len(kept) > 1 else "it.")})
         if self._ai_ready():
             blocks += [{"t": "actions", "items": [{"id": "ai", "label": "Ask AI for more ideas", "busy": "Asking…"}]},
-                       {"t": "p", "muted": True, "v": "Sends column names, their roles, the kit's evidence and the scores. Never rows."}]
+                       {"t": "p", "muted": True, "v": "Sends column names, their roles and the scores. Never rows or values."}]
         else:
             blocks.append({"t": "p", "muted": True, "v": "These ideas come from rules. Set up an AI model on the Home screen to also get ideas from AI (it sees column names and scores, never rows)."})
         return blocks + [nxt]
@@ -625,75 +583,30 @@ class Ideas(Screen):
             return lambda _v, i=name.split(":", 1)[1]: self._keep(i)
         raise AttributeError(name)
 
+    def _index(self, idea_id: str) -> int:
+        ideas = SESSION.get("ideas") or []
+        return next(i for i, idea in enumerate(ideas) if idea.id == idea_id)
+
     def _try(self, idea_id: str) -> None:
-        st = _state()
-        idea = next(i for i in self.items if i.id == idea_id)
-        self.tried[idea_id] = M.try_idea(st["data"], st["task"], st.get("target_number"), st["settings"], st["result"]["pick"]["key"],
-                                         st["result"], idea, {k: v["series"] for k, v in st.get("kept", {}).items()})
+        self.tried[idea_id] = actions.run("explore.try", index=self._index(idea_id))
 
     def _keep(self, idea_id: str) -> None:
-        kept = _state().setdefault("kept", {})
-        if idea_id in kept:
-            kept.pop(idea_id)
+        index = self._index(idea_id)
+        if idea_id in (SESSION.get("kept_features") or {}):
+            actions.run("explore.drop", index=index)
             return
-        idea = next(i for i in self.items if i.id == idea_id)
-        t = self.tried.get(idea_id)
-        if t and t["verdict"] == "suspicious":
+        tried = self.tried.get(idea_id)
+        if tried and tried["verdict"] == "suspicious":
             raise ValueError("This idea makes the score almost perfect, which usually means it gives the answer away. It can't be kept.")
-        kept[idea_id] = {"title": idea.title, "series": t["series"] if t else idea.build(_state()["data"].frame), "sql": idea.sql}
-
-    def on_rerun(self, _v: dict) -> None:
-        raise ValueError("Click Run in the Build a model card above: it uses your kept ideas.")
+        if not tried:
+            self._try(idea_id)
+        actions.run("explore.keep", index=index)
 
     def on_ai(self, _v: dict) -> None:
-        """Ask the user's model for ideas, limited to kinds the rules can build and test."""
-        from exakit_nb import model_client
-
-        st = _state()
-        d, ds, run = st["data"], SESSION.dataset, st["run"]
-        endpoint = model_client()
-        if endpoint is None:
-            raise ValueError("No AI model is set up. Use Set up on the Home screen.")
-        client, model = endpoint
-        cols = {c: {"role": e.get("role"), "evidence": e.get("evidence")} for c, e in (ds.descriptor.columns or {}).items()
-                if not e.get("sensitive")}
-        prompt = {"target": run.target, "columns": cols, "scores": [{r["model"]: round(r["cv"], 3)} for r in st["result"]["board"]],
-                  "allowed_kinds": {"ratio_to_group": ["measure", "group column"], "combine": ["group column", "group column"],
-                                    "days_since": ["date column"], "as_number": ["column"], "is_missing": ["column"]},
-                  "rules": "Suggest up to 4 new model inputs as JSON: {\"ideas\": [{\"kind\", \"columns\", \"title\", \"why\"}]}. "
-                           "Use only the allowed kinds and existing column names. Never use the target or a column filled in after the outcome."}
-        try:
-            answer = client.chat.completions.create(model=model, messages=[
-                {"role": "system", "content": "Return only one JSON object. No Markdown."},
-                {"role": "user", "content": json.dumps(prompt)}])
-        finally:
-            try:
-                client.close()
-            except Exception:
-                pass
-        raw = answer.choices[0].message.content or ""
-        m = re.search(r"\{.*\}", raw, re.S)
-        found = json.loads(m.group(0)).get("ideas", []) if m else []
-        f, added = d.frame, 0
-        for x in found[:4]:
-            kind, c = x.get("kind"), [str(v) for v in x.get("columns", [])]
-            if any(col not in f.columns for col in c) or run.target in c:
-                continue
-            build, sql = None, ""
-            if kind == "ratio_to_group" and len(c) == 2:
-                build, sql = (lambda fr, a=c[0], b=c[1]: fr[a] / fr.groupby(b)[a].transform("mean")), f'"{c[0]}" / AVG("{c[0]}") OVER (PARTITION BY "{c[1]}")'
-            elif kind == "combine" and len(c) == 2:
-                build, sql = (lambda fr, a=c[0], b=c[1]: fr[a].astype(str) + " · " + fr[b].astype(str)), f'"{c[0]}" || \' · \' || "{c[1]}"'
-            elif kind == "days_since" and len(c) == 1:
-                build, sql = (lambda fr, a=c[0]: (fr[a].max() - fr[a]).dt.days.astype(float)), f'DAYS_BETWEEN(CURRENT_DATE, "{c[0]}")'
-            elif kind == "as_number" and len(c) == 1:
-                build, sql = (lambda fr, a=c[0]: __import__("pandas").to_numeric(fr[a], errors="coerce").astype(float)), f'CAST("{c[0]}" AS DOUBLE)'
-            elif kind == "is_missing" and len(c) == 1:
-                build, sql = (lambda fr, a=c[0]: fr[a].isna().astype(float)), f'CASE WHEN "{c[0]}" IS NULL THEN 1 ELSE 0 END'
-            if build is None:
-                continue
-            self.items.append(M.Idea(f"ai{len(self.items)}", str(x.get("title") or kind)[:80], str(x.get("why") or "")[:240], sql, build, "ai"))
-            added += 1
+        """Ask your AI model for more ideas (nb.feature_ideas(lab, ai=True)): column names, roles and scores only."""
+        before = len(self.items)
+        self.items = list(actions.run("explore.ideas", ai=True))
+        added = len(self.items) - before
         self.flash = {"kind": "ok" if added else "warn",
                       "v": f"{added} idea{'s' if added != 1 else ''} from AI added below. Try each one before keeping it." if added
                       else "The AI didn't suggest anything usable for this data."}
@@ -701,6 +614,6 @@ class Ideas(Screen):
 
 def explore():
     """Step 2 in the guided view: check and clean, compare, then predict and test feature ideas."""
-    from .card import show
+    from ..card import show
 
     return show(WorkingOn(), Prepare(), Compare(), Predict(), Ideas())

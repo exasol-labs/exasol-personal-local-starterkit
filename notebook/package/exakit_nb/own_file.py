@@ -456,11 +456,19 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *
             print(f"Nothing at {file}: set it to your CSV, Parquet or JSON file, or a folder of them - skipped.")
             return None
         raise ValueError(f"{file} is not a file or a folder.")
+    # An Excel sheet or a CSV in another encoding is made loadable first (spreadsheet.loadable): a CSV or a UTF-8
+    # copy beside it, the original untouched, each change said in one line. The table keeps the original's name.
+    from .spreadsheet import loadable
+
+    original = file
+    file, notes = loadable(file)
+    for note in notes:
+        print(note)
     table = str(table or "").strip().strip("\"'") or None
     if descriptor is None and (table is None or "." not in table):
         # A schema, or nothing: the folder's name. The table is named after the file, as `exakit data-load` does.
-        schema, _ = _schema_and_table(table, file.parent)
-        table = f"{schema}.{_sql_name(file.stem) or 'MY_TABLE'}"
+        schema, _ = _schema_and_table(table, original.parent)
+        table = f"{schema}.{_sql_name(original.stem) or 'MY_TABLE'}"
     named = rules.qualified_table(table) if table is not None else None
     if table is not None and named is None:
         raise ValueError(f"'{table}' is not SCHEMA.TABLE (plain SQL names).")
@@ -493,3 +501,43 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *
     if isinstance(descriptor, dict) and not {"roles", "descriptor"} & set(descriptor) and descriptor_beside(file) is None:
         _keep_roles(file, doc)
     return ds
+
+
+def _plain(name: str) -> str:
+    """A file column's plain SQL name, the loader's rule: non-word characters to _, upper case, a letter first."""
+    plain = re.sub(r"\W", "_", str(name).strip()).upper() or "COLUMN"
+    return plain if re.match(r"[A-Z]", plain) else f"C_{plain}"
+
+
+def use_table(conn, table: str) -> LoadedTable:
+    """A table already in the database, to describe next (review_roles): ``SCHEMA.TABLE``. A table whose columns kept
+    their file's names ("Won", "Opportunity ID") cannot be read by unquoted queries, so it gets a view with plain
+    names over it in the prepared schema, said in one line; the table itself is never changed."""
+    from .prepare import SCHEMA as PREPARED
+
+    schema, _, name = str(table).strip().partition(".")
+    schema, name = schema.strip('"'), name.strip('"')
+    if not schema or not name:
+        raise ValueError(f"'{table}' is not SCHEMA.TABLE.")
+    literal = lambda v: "'" + v.replace("'", "''") + "'"
+    columns = [r[0] for r in conn.execute(
+        "SELECT COLUMN_NAME FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = " + literal(schema)
+        + " AND COLUMN_TABLE = " + literal(name) + " ORDER BY COLUMN_ORDINAL_POSITION").fetchall()]
+    if not columns:
+        raise ValueError(f"{schema}.{name} is not a table in the database (or it has no columns).")
+    use = f"{schema}.{name}"
+    if not all(re.fullmatch(r"[A-Z][A-Z0-9_]*", c) for c in columns):
+        plain, seen = [], set()
+        for column in columns:
+            new = _plain(column)
+            while new in seen:
+                new += "_2"
+            seen.add(new)
+            plain.append(new)
+        use = f"{PREPARED}.{schema}__{name}__PLAIN"
+        select = ",\n       ".join(f'"{c.replace(chr(34), chr(34) * 2)}" AS {n}' for c, n in zip(columns, plain))
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {PREPARED}")
+        conn.execute(f'CREATE OR REPLACE VIEW {use} AS\nSELECT {select}\nFROM {schema}."{name}"')
+        print(f"{schema}.{name} has column names with spaces or small letters, which the kit's queries cannot read: "
+              f"a view with plain names, {use}, is used instead. The table is unchanged.")
+    return LoadedTable(re.sub(r"[^a-z0-9]+", "_", use.lower()).strip("_"), use, Path("."))

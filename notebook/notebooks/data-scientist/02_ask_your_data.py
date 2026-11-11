@@ -88,8 +88,19 @@ GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)      
 starter_sql = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
 if GROUP_ROLE != "category":
     print(f"{dataset.id} has no category; the starter SQL counts rows per {GROUP_ROLE} ({GROUP_COLUMN}).")
-proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
+DRAFT_WITH_RULES = False   # no AI model needed: the kit's rules draft QUESTION from the column map (nothing leaves this computer)
+if DRAFT_WITH_RULES:
+    proposal = nb.draft_question(connection, dataset, QUESTION)
+else:
+    proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
+EDITED_SQL = ""            # your own SQL for this question: it replaces the proposal's, not approved yet
+if EDITED_SQL:
+    proposal.edit(EDITED_SQL)
 proposal
+
+# %%
+examples = nb.example_questions(dataset)   # questions this column map can answer: try one as QUESTION
+examples
 
 # %% [markdown]
 # ### Approve and run

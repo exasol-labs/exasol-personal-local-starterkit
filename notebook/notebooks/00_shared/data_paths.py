@@ -47,9 +47,11 @@ sample_data = nb.load_sample(connection, SAMPLE)
 # Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded.
 
 # %% tags=["load"]
-MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data"
+MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
 MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
-own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
+MY_TABLE = ""    # or a table already in the database, e.g. "MY_DATA.ORDERS" (nb.data_map lists them)
+own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
+            else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
 
 # %% [markdown] tags=["load"]
 # **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
@@ -58,6 +60,7 @@ own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True
 # 2. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
 
 # %% tags=["load"]
+connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
 CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
 SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
 SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
@@ -116,8 +119,20 @@ nb.data_map(connection)
 role_review = nb.review_roles(connection, chosen_data)
 
 # %% tags=["review"]
+# Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
+# slots, {"target": "COLUMN"}. Empty: the picker above (or an approval already saved) stands.
+ROLE_CHANGES = {}
+SLOT_CHANGES = {}
+if ROLE_CHANGES or SLOT_CHANGES:
+    role_review.approve(ROLE_CHANGES or None, SLOT_CHANGES or None)
+
+# %% tags=["review"]
 dataset = role_review.dataset()
 nb.show_roles(dataset)
+
+# %% tags=["review"]
+leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
+versions = nb.column_map_versions(dataset.id)              # every saved version; approving one's roles again restores it
 
 # %% [markdown] tags=["review"]
 # ### Check the map again

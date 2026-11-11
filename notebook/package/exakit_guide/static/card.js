@@ -63,6 +63,14 @@ function setMode(mode, save = true) {
   document.dispatchEvent(new CustomEvent("guide-mode"));
 }
 
+// Copy the exact code to the clipboard, to paste into a notebook cell; the control says it worked.
+function copyCode(text, el) {
+  const done = () => { if (!el) return; const was = el.textContent; el.textContent = "Copied"; setTimeout(() => { el.textContent = was; }, 1500); };
+  try {
+    navigator.clipboard.writeText(text).then(done, () => {});
+  } catch (e) { /* no clipboard here: the code stays visible to select */ }
+}
+
 function detectDark(host) {
   const attr = document.body.getAttribute("data-jp-theme-light");
   if (attr === "true" || attr === "false") return attr === "false";
@@ -233,7 +241,7 @@ function render({ model, el }) {
           h("div", { class: "guide-row-main" },
             h("div", { class: "guide-row-line" }, h("span", { class: "guide-row-name" }, r.name), h("span", { class: "guide-row-text" }, r.text)),
             r.sub ? h("div", { class: "guide-row-sub" }, r.sub) : null,
-            r.cmd ? h("code", { class: "guide-code-only guide-cmd" }, r.cmd) : null,
+            r.cmd ? h("code", { class: "guide-code-only guide-cmd", title: "Click to copy as a cell", onClick: (e) => copyCode(r.cmd, e.currentTarget) }, r.cmd) : null,
             confirming ? h("div", { class: "guide-confirm" }, h("span", {}, confirming.confirm),
               button("Yes, continue", confirming.id, { primary: true, busyLabel: "Updating…" }), button("Cancel", "cancel")) : null,
             formAction ? form(r, formAction) : null,
@@ -284,8 +292,11 @@ function render({ model, el }) {
     note(b) { return h("div", { class: "guide-note" }, b.v); },
     pre(b) { return h("pre", { class: "guide-pre" }, b.v); },
     code(b) {
+      // The exact notebook code of what the card ran: copy it into a cell and it does the same.
       return h("div", { class: b.code_only ? "guide-code-only guide-codebox" : "guide-codebox" },
-        b.title ? h("div", { class: "guide-codebox-title" }, b.title) : null, h("pre", {}, b.v));
+        h("div", { class: "guide-codebox-title" }, b.title || "Code",
+          h("button", { type: "button", class: "guide-btn guide-btn-quiet guide-copy", onClick: (e) => copyCode(b.v, e.currentTarget) }, "Copy as cell")),
+        h("pre", {}, b.v));
     },
     details(b) {
       const d = h("details", { class: "guide-details", open: !!ui.values["open:" + b.title] },

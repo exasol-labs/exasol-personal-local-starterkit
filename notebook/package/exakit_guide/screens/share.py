@@ -12,13 +12,15 @@ says the figures were checked.
 from __future__ import annotations
 
 import importlib
+
 import re
 import subprocess
 import sys
+from pathlib import Path
 
-from .card import Screen
-from .kitinfo import DATASET_TITLES
-from .session import SESSION, quiet
+from .. import actions
+from ..card import Screen
+from ..session import SESSION
 
 KICKER = "Step 4 of 4 · Share and hand off"
 
@@ -33,71 +35,32 @@ def _slug(text: str, limit: int = 60) -> str:
     return s[:limit].strip("-")
 
 
-def _dash_url() -> str:
-    """dash-server's address from the kit's own `exakit status --json`, remembered for when the status check is slow;
-    empty when neither knows it (the card then starts it the kit's way)."""
-    from .card import LOG_DIR
-
-    cache = LOG_DIR / "dash_url"
-    try:
-        from exakit_nb.kit_commands import kit_json
-
-        url = ((kit_json("status") or {}).get("urls") or {}).get("dash-server")
-        if url:
-            LOG_DIR.mkdir(parents=True, exist_ok=True)
-            cache.write_text(url, encoding="utf-8")
-            return url.rstrip("/")
-    except Exception:
-        pass
-    try:
-        return cache.read_text(encoding="utf-8").strip().rstrip("/")
-    except OSError:
-        return ""
-
-
-def _alive(url: str) -> bool:
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(url + "/", timeout=3) as r:
-            return r.status < 500
-    except Exception:
-        return False
-
-
-def _nice_name(ds_id: str) -> str:
-    """amazon_sales -> 'Amazon sales'; my_data_customer_churn_prepared -> 'Customer churn'."""
-    if ds_id in DATASET_TITLES:
-        return DATASET_TITLES[ds_id]
-    name = re.sub(r"_prepared$|_joined$", "", ds_id)
-    name = re.sub(r"^(my_data|starter_kit)_", "", name)
-    words = name.replace("_", " ").strip()
-    return words[:1].upper() + words[1:] if words else ds_id
+def _title(ds) -> str:
+    """The dataset's name as the kit gives it (a sample's label in dataset.conf), else its id in words."""
+    label = next((d["label"] for d in actions.run("kit.datasets") if d["id"] == ds.id), None)
+    if label:
+        return label.split(" (")[0]
+    words = ds.id.replace("_", " ").strip()
+    return words[:1].upper() + words[1:]
 
 
 def _dataset():
-    import exakit.nb as nb
-
-    with quiet():
-        SESSION.workflow_id = nb.continue_workflow("share")
-        SESSION.open_latest()
-        SESSION.dataset.require_approved("share")
-    SESSION.log('workflow_id = nb.continue_workflow("share")', "dataset = nb.dataset(connection, nb.chosen_dataset(None))")
+    SESSION.open_latest("share.open")
+    SESSION.dataset.require_approved("share")
     return SESSION.dataset
 
 
 def _answers(ds_id: str) -> list[dict]:
-    """Questions answered in this workflow (step 3), newest first: their approved SQL can become a dashboard."""
-    wf = importlib.import_module("exakit_nb.workflow")
-    wid = wf.current_workflow() or wf.last_workflow()
-    try:
-        events = wf.read_log(wid) if wid else []
-    except Exception:
-        events = []
-    approved = {e.get("sql_digest"): e for e in events if e.get("kind") == "ask.approve" and e.get("dataset") == ds_id}
+    """Questions answered in the last workflow (step 3), newest first, from its log (nb.workflow_log): their approved
+    SQL can become a dashboard."""
+    wf = importlib.import_module("exakit_nb.workflow")   # the module (exakit_nb.workflow is also a function)
+
+    last = actions.run("kit.last_workflow")
+    events = actions.run("kit.workflow_log", workflow_id=last) if last else []
+    approved = {e.get("sql_digest"): e for e in events if e.get("kind") == wf.ASK_APPROVE and e.get("dataset") == ds_id}
     seen, asked, out = set(), set(), []
     for e in reversed(events):
-        if e.get("kind") == "ask.answer" and e.get("sql_digest") in approved and e["sql_digest"] not in seen:
+        if e.get("kind") == wf.ASK_ANSWER and e.get("sql_digest") in approved and e["sql_digest"] not in seen:
             seen.add(e["sql_digest"])
             a = approved[e["sql_digest"]]
             if a.get("question") in asked:      # the same question asked again: keep the newest run
@@ -106,6 +69,11 @@ def _answers(ds_id: str) -> list[dict]:
             out.append({"value": e["sql_digest"], "label": f"{a.get('question')} · {e.get('row_count', '?')} rows",
                         "question": a.get("question"), "sql": a.get("sql")})
     return out
+
+
+def _first_notebook() -> dict | None:
+    rows = actions.run("kit.notebooks", persona=Path.cwd().name) or []
+    return rows[0] if rows else None
 
 
 # =====================================================================================================
@@ -120,21 +88,13 @@ class Dashboard(Screen):
         self.preview_url = None
         self.live_url = None
         self.dash = None
-        import exakit.nb as nb
-
         SESSION.release()   # `exakit status` can stall while this process holds a database connection (kit issue)
-        url = _dash_url()
-        if _alive(url):
-            self.dash = {"state": "running", "url": url}
-        else:
-            try:
-                with quiet():
-                    self.dash = nb.addon_ready("dash-server", start=True, show=False)   # starts it the kit's way
-                SESSION.log('nb.addon_ready("dash-server")')
-            except Exception as exc:
-                self.dash = {"state": "not running", "url": url}
-                self.flash = {"kind": "warn", "v": f"The dashboard server isn't answering ({str(exc).splitlines()[0][:100]}). "
-                                                   "Start it from the Home screen, then run this cell again."}
+        try:
+            self.dash = actions.run("share.server")     # installs and starts it the kit's way when needed
+        except Exception as exc:
+            self.dash = {"state": "not running", "url": ""}
+            self.flash = {"kind": "warn", "v": f"The dashboard server isn't answering ({str(exc).splitlines()[0][:100]}). "
+                                               "Start it from the Home screen, then run this cell again."}
         try:
             self.ds = _dataset()
             cols = dict(getattr(self.ds.descriptor, "columns", {}) or {})
@@ -147,15 +107,6 @@ class Dashboard(Screen):
             self.error = str(exc).splitlines()[0]
         self.refresh()
         SESSION.release()
-
-    def _tools(self):
-        """The kit's dash-server tool adapter, pointed at the address found when the card opened.
-        (nb.dash_tools() looks it up again through `exakit status` with a 15-second limit, which a busy kit can miss.)"""
-        from exakit_nb.dash_mcp import DashTools
-        import exakit.nb as nb
-
-        url = (self.dash or {}).get("url")
-        return DashTools(url) if url else nb.dash_tools()
 
     # -- what goes on the dashboard ------------------------------------------------------------
     def _sql_for(self, v: dict) -> tuple[str, str, str]:
@@ -175,7 +126,7 @@ class Dashboard(Screen):
         if ds.has("label"):
             rate = f", ROUND(100 * AVG({ds.col('label')}), 1) AS {nb.name(ds.col('label'), 'PCT')}"
         sql = f"SELECT {g} AS {nb.name(group)}, COUNT(*) AS {count_h}{rate} FROM {ds.fact_table} GROUP BY 1 ORDER BY {count_h} DESC"
-        title = f"{_nice_name(ds.id)} by {group.lower().replace('_', ' ')}"
+        title = f"{_title(ds)} by {group.lower().replace('_', ' ')}"
         return sql, title, "count"
 
     # -- view ------------------------------------------------------------------------------
@@ -213,19 +164,12 @@ class Dashboard(Screen):
 
     # -- actions ---------------------------------------------------------------------------
     def on_preview(self, v: dict) -> None:
-        import exakit.nb as nb
-
         sql, title, measure = self._sql_for(v)
         SESSION.release()   # the preview reads `exakit status`, which waits while a connection is held
         title = str(v.get("title") or "").strip() or title
-        name = _slug(f"guided-{title}")
-        with quiet():
-            nb.continue_workflow("share")
-            self.draft = nb.share(self.ds, sql, title, name, measure=measure)
-            self.preview_url = self.draft.preview(self._tools())
+        self.draft = actions.run("share.draft", sql=sql, title=title, name=_slug(f"{self.ds.id}-{title}"), measure=measure)
+        self.preview_url = actions.run("share.preview")
         self.live_url = None
-        SESSION.log(f"draft = nb.share(dataset, '''{sql}''', {title!r}, {name!r}, measure={measure!r})",
-                    "preview_path = draft.preview(nb.dash_tools())")
         self.flash = {"kind": "ok", "v": "The preview is built and passed its health check. Open it and check the figures."}
 
     def on_publish(self, v: dict) -> None:
@@ -234,9 +178,7 @@ class Dashboard(Screen):
         if not (v.get("checked") and v.get("ok_to_share")):
             raise ValueError("Tick both boxes before you publish.")
         SESSION.release()
-        with quiet():
-            self.live_url = self.draft.confirm(self._tools(), figures_checked=True)
-        SESSION.log("live_path = draft.confirm(nb.dash_tools(), figures_checked=True)")
+        self.live_url = actions.run("share.publish")
         self.flash = {"kind": "ok", "v": "Published. The dashboard is live and passed its health check."}
 
 
@@ -265,17 +207,15 @@ class Handoff(Screen):
                            "button": {"id": "reveal", "label": "Show in Finder" if sys.platform == "darwin" else "Show the folder"}})
             blocks.append({"t": "details", "title": f"What's inside ({len(b.files)} files)", "blocks": [
                 {"t": "list", "items": list(b.files)}] + ([{"t": "p", "muted": True, "v": " ".join(b.summary)}] if b.summary else [])})
-        blocks.append({"t": "next", "v": "Back to Start here", "path": "starter-kit-notebooks/data-scientist/00_quickstart.ipynb"})
+        first = _first_notebook()
+        if first:
+            blocks.append({"t": "next", "v": f"Back to {first['title'].split(':')[0]}", "path": first["file"]})
         return blocks
 
     def on_bundle(self, _v: dict) -> None:
-        import exakit.nb as nb
-
-        ds = SESSION.dataset or _dataset()
-        with quiet():
-            nb.continue_workflow("share")
-            self.bundle = nb.handoff_bundle(SESSION.connection(), ds)
-        SESSION.log("handoff = nb.handoff_bundle(connection, dataset)")
+        if SESSION.dataset is None:
+            _dataset()
+        self.bundle = actions.run("share.handoff")
         self.flash = {"kind": "ok", "v": f"Packed {len(self.bundle.files)} files."}
 
     def on_reveal(self, _v: dict) -> None:
@@ -290,6 +230,6 @@ class Handoff(Screen):
 
 def share():
     """Step 4 in the guided view: preview and publish a dashboard, then create the hand-off bundle."""
-    from .card import show
+    from ..card import show
 
     return show(Dashboard(), Handoff())

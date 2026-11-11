@@ -1,7 +1,8 @@
-"""Excel (.xlsx) to CSV, with Python's standard library only.
+"""Files the kit's loader cannot take as they are, made loadable: Excel (.xlsx) to CSV, and a CSV saved in another
+encoding to a UTF-8 copy. Python's standard library only.
 
-The kit's loader takes CSV, Parquet and JSON. The guided view accepts an Excel file
-by turning one sheet into a CSV beside it, then loading that CSV the kit's way.
+load_own_file calls loadable() first, so a cell and the guided view load an Excel file or a cp1252 CSV the same
+way: one sheet becomes a CSV beside the file, a non-UTF-8 CSV gets a UTF-8 copy, and the original stays untouched.
 Streaming XML, so large sheets don't need much memory. Excel stores dates as
 day numbers (44834.32 = 2022-09-30 07:45); columns named like a date or time
 whose values are all day numbers are written as real dates.
@@ -116,3 +117,64 @@ def to_csv(path: str | Path, sheet: str | None = None, out: str | Path | None = 
         w.writerow(header)
         w.writerows(body)
     return {"csv": str(target), "sheet": name, "rows": len(body), "columns": len(header), "dates": dates, "other_sheets": others}
+
+
+EXCEL = (".xlsx", ".xlsm")
+TEXT = (".csv", ".txt", ".tsv")
+
+
+def free_name(target: Path, tag: str) -> Path:
+    """target itself if it does not exist yet, else target with a tag: never overwrite someone's file."""
+    if not target.exists():
+        return target
+    for i in range(1, 100):
+        alt = target.with_name(f"{target.stem}{tag}{'' if i == 1 else f'-{i}'}{target.suffix}")
+        if not alt.exists():
+            return alt
+    raise ValueError(f"Too many converted copies next to {target.name}. Remove some and try again.")
+
+
+def utf8_copy(path: str | Path) -> tuple[Path | None, str]:
+    """The kit reads strict UTF-8. A text file saved in another encoding gets a UTF-8 copy beside it (LF line ends);
+    (None, "") when it is UTF-8 already."""
+    path = Path(path).expanduser()
+    raw = path.read_bytes()
+    try:
+        raw.decode("utf-8")
+        return None, ""
+    except UnicodeDecodeError:
+        pass
+    text = raw.decode("cp1252", errors="strict") if _decodes(raw, "cp1252") else raw.decode("latin-1")
+    out = free_name(path.with_name(path.stem + ".utf8" + path.suffix), "")
+    out.write_text(text.replace("\r\n", "\n"), encoding="utf-8")
+    return out, f"{path.name} was not saved as UTF-8 (the kit needs that), so a UTF-8 copy, {out.name}, was loaded instead."
+
+
+def _decodes(raw: bytes, encoding: str) -> bool:
+    try:
+        raw.decode(encoding)
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def loadable(path: str | Path, sheet: str | None = None) -> tuple[Path, list[str]]:
+    """The file to load for ``path``, and a note per change made: an Excel sheet becomes a CSV beside it, a non-UTF-8
+    CSV a UTF-8 copy. Any other file comes back as it is, with no note."""
+    path = Path(path).expanduser()
+    notes: list[str] = []
+    if path.suffix.lower() in EXCEL:
+        made = to_csv(path, sheet, out=free_name(path.with_suffix(".csv"), ".from-excel"))
+        notes.append(f"The Excel sheet \u201c{made['sheet']}\u201d became {Path(made['csv']).name} "
+                     f"({made['rows']:,} rows, {made['columns']} columns), and that was loaded.")
+        if made["dates"]:
+            notes.append(f"Excel day numbers in {', '.join(made['dates'])} became real dates.")
+        if made["other_sheets"]:
+            notes.append(f"Other sheets were not loaded: {', '.join(made['other_sheets'])}.")
+        path = Path(made["csv"])
+    if path.suffix.lower() in TEXT:
+        fixed, why = utf8_copy(path)
+        if fixed:
+            path = fixed
+            notes.append(why)
+    return path, notes

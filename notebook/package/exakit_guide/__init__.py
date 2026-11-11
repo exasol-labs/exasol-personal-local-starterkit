@@ -18,8 +18,9 @@ from .magic import register as _register_magic
 __version__ = "0.1.0"
 __all__ = ["start", "home", "understand", "explore", "ask", "share", "Home", "ChooseData", "ColumnMap"]
 
-_LAZY = {"home": ".home", "Home": ".home", "understand": ".understand", "ChooseData": ".understand",
-         "ColumnMap": ".understand", "explore": ".explore", "ask": ".ask", "share": ".share"}
+_LAZY = {"home": ".screens.home", "Home": ".screens.home", "understand": ".screens.understand",
+         "ChooseData": ".screens.understand", "ColumnMap": ".screens.understand", "explore": ".screens.explore",
+         "ask": ".screens.ask", "share": ".screens.share"}
 
 
 def __getattr__(name):
@@ -37,8 +38,8 @@ def __getattr__(name):
 def start():
     """The quickstart's cards in one cell: Home (the kit), then step 1 (your data and its column map)."""
     from .card import show
-    from .home import Home
-    from .understand import ChooseData, ColumnMap, DataMap
+    from .screens.home import Home
+    from .screens.understand import ChooseData, ColumnMap, DataMap
 
     return show(Home(), ChooseData(), ColumnMap(), DataMap())
 

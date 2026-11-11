@@ -2,104 +2,41 @@
 
 Two ways in, one engine (the kit's 02_ask_your_data.ipynb):
   guide.ask()            an Ask card: type a question, check the plan, approve, see the answer
-  %%ask <question>    any notebook cell can be just a sentence
+  %%ask <question>       any notebook cell can be just a sentence
 
-Drafting: the user's AI model when one is set up (nb.ask drafts with it; it
-sees the approved column map, never rows), otherwise the built-in drafter
-(drafter.py), handed to nb.ask as proposed_sql. Either way the kit's Proposal
-holds it: nothing runs before approve(), and every step is logged.
-
-Running: the kit's Proposal.run(), which goes through the read-only MCP
-service. When that service isn't running (as on some installs), the approved
-SQL runs as the same read-only database user directly, and is logged the
-same way. It never runs as the admin user.
+Drafting: the user's AI model when one is set up (nb.ask; it sees the approved column map, never rows), otherwise
+the kit's rules (nb.draft_question, no model). Either way it is the kit's Proposal: nothing runs before approve(),
+and run() goes through the read-only MCP service only. Every step is one cell of the notebook (actions: ask.*).
 """
 
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
-from .card import Screen
-from .drafter import DraftContext, RuleDrafter, ensure_read_only
-from .session import SESSION, quiet
-
-ROLE_MAP = {"key": "id", "time": "date", "measure": "measure", "category": "category", "flag": "flag",
-            "text": "text", "identifier": "code", "other": "ignore"}
-
-
-def _bare(col):
-    return col.strip('"').split(".")[-1].strip('"') if col else None
+from .. import actions
+from ..card import Screen
+from ..session import SESSION
 
 
 def _dataset():
-    import exakit.nb as nb
-
     if SESSION.dataset is None or SESSION.latest_approved() != SESSION.followed:
-        with quiet():
-            nb.continue_workflow("questions")
-            SESSION.open_latest()
-        SESSION.log('nb.continue_workflow("questions")', "dataset = nb.dataset(connection, nb.chosen_dataset(None))")
-    with quiet():
+        SESSION.open_latest("ask.open")
+    else:
         SESSION.dataset.require_approved("ask")
     return SESSION.dataset
 
 
 def _model_ready() -> bool:
-    try:
-        from exakit_nb import model_settings
-
-        return bool((model_settings() or {}).get("configured"))
-    except Exception:
-        return False
+    model = actions.run("kit.model") or {}
+    return bool(model.get("configured"))
 
 
-def _target_words(ds) -> str:
-    t = _bare(ds.col("label")) if ds.has("label") else ""
-    return re.sub(r"^(is|has)_", "", t.lower()).replace("_", " ") if t else "yes"
-
-
-def _context(ds) -> DraftContext:
-    import exakit.nb as nb
-
-    cols = dict(getattr(ds.descriptor, "columns", {}) or {})
-    target = _bare(ds.col("label")) if ds.has("label") else None
-    roles = {c: ("ignore" if e.get("sensitive") else ROLE_MAP.get(e.get("role"), "ignore")) for c, e in cols.items()}
-    conn = SESSION.connection()
-    values = {}
-    for c, r in roles.items():
-        if r in ("category", "flag") and c != target:
-            rows = conn.execute(f'SELECT DISTINCT CAST("{c}" AS VARCHAR(2000)) FROM {ds.fact_table} WHERE "{c}" IS NOT NULL LIMIT 61').fetchall()
-            if len(rows) <= 60:
-                values[c] = [r[0] for r in rows]
-    group = _bare(ds.group_by()[1])
-    return DraftContext(table=ds.fact_table, columns=roles, types={}, target=target,
-                        target_expr=f'CAST("{target}" AS DOUBLE)' if target else None,
-                        target_words=_target_words(ds), row_noun=nb.noun(ds),
-                        default_group=group if roles.get(group) in ("category", "flag") else None, values=values)
-
-
-def examples(ds) -> list[str]:
-    cols = dict(getattr(ds.descriptor, "columns", {}) or {})
-    target = _bare(ds.col("label")) if ds.has("label") else None
-    group = _bare(ds.group_by()[1]) if ds.group_by() else None
-    measures = [c for c, e in cols.items() if e.get("role") == "measure"]
-    others = [c for c, e in cols.items() if e.get("role") == "category" and c not in (group, target) and not e.get("sensitive")]
-    w = _target_words(ds)
-    out = []
-    nice = lambda c: c.replace("_", " ").lower()
-
-    def plural(c: str) -> str:
-        w = nice(c)
-        return w[:-1] + "ies" if w.endswith("y") and not w.endswith(("ay", "ey", "oy")) else (w if w.endswith("s") else w + "s")
-    if target and group:
-        out.append(f"Which {nice(group)} has the highest {w} rate?")
-    if target and ds.has("date"):
-        out.append(f"How has the {w} rate changed by month?")
-    if measures and (others or group):
-        out.append(f"Top 5 {plural(others[0] if others else group)} by total {nice(measures[0])}")
-    if not out and group:
-        out.append(f"How many rows are there per {nice(group)}?")
-    return out[:3]
+def _next_notebook() -> dict | None:
+    rows = actions.run("kit.notebooks", persona=Path.cwd().name) or []
+    files = [r["file"].rsplit("/", 1)[-1] for r in rows]
+    here = next((i for i, f in enumerate(files) if f.startswith("02_")), 2)
+    return rows[here + 1] if here + 1 < len(rows) else None
 
 
 def _explain(frame) -> tuple[str, dict | None]:
@@ -185,7 +122,7 @@ class Ask(Screen):
         self.error = None
         try:
             self.ds = _dataset()
-            self.examples = examples(self.ds)
+            self.examples = list(actions.run("ask.examples") or [])
         except Exception as exc:
             self.ds, self.examples = None, []
             self.error = str(exc).splitlines()[0]
@@ -199,30 +136,21 @@ class Ask(Screen):
 
     # -- drafting --------------------------------------------------------------------------
     def _draft(self, question: str, use_model: bool | None = None) -> None:
-        import exakit.nb as nb
-
         self.question, self.answer, self.my_notes = question.strip(), None, []
         if not self.question:
             raise ValueError("Type a question first.")
         use_model = _model_ready() if use_model is None else use_model
         if use_model:
             try:
-                with quiet():
-                    self.proposal = nb.ask(self.ds, self.question)
+                self.proposal = actions.run("ask.model", question=self.question)
                 self.drafted_by = "your AI model (it saw the column map, never rows)"
-                SESSION.log(f"proposal = nb.ask(dataset, {self.question!r})")
                 return
             except Exception as exc:
                 self.flash = {"kind": "warn", "v": f"Your AI model couldn't draft this ({str(exc).splitlines()[0][:120]}). "
-                                                   "The built-in drafter tried instead."}
-        d = RuleDrafter(_context(self.ds)).draft(self.question)
-        sql = ensure_read_only(d["sql"])
-        with quiet():
-            self.proposal = nb.ask(self.ds, self.question, proposed_sql=sql)
-        self.proposal.assumptions = list(d.get("assumptions") or [])
-        self.my_notes = [d.get("summary", "")]
-        self.drafted_by = "the built-in drafter (no AI model, nothing leaves this computer)"
-        SESSION.log(f"proposal = nb.ask(dataset, {self.question!r}, proposed_sql='''{sql}''')")
+                                                   "The kit's rules tried instead."}
+        self.proposal = actions.run("ask.rules", question=self.question)
+        self.my_notes = list(self.proposal.doubts[-1:])
+        self.drafted_by = "the kit's rules (no AI model, nothing leaves this computer)"
 
     # -- view ------------------------------------------------------------------------------
     def build(self) -> list[dict]:
@@ -236,7 +164,7 @@ class Ask(Screen):
             ds = self.ds
             blocks.append({"t": "summary_row", "v": f"{ds.id} · {ds.fact_table} · column map v{ds.version}",
                            "sub": "Drafts with your AI model." if _model_ready() else
-                                  "Drafts with the built-in drafter. Set up an AI model on the Home screen for harder questions."})
+                                  "Drafts with the kit's rules. Set up an AI model on the Home screen for harder questions."})
             blocks.append({"t": "askbox", "value": self.question, "examples": self.examples,
                            "placeholder": f"For example: {self.examples[0]}" if self.examples else "Ask a question about this data"})
         else:
@@ -258,8 +186,9 @@ class Ask(Screen):
         if self.box and self.history:
             blocks.append({"t": "details", "title": f"Asked so far ({len(self.history)})", "blocks": [
                 {"t": "list", "items": [f"{h['question']} · {h['rows']} rows" for h in self.history]}]})
-        if self.box or self.answer is not None:   # %%ask cards: the way forward appears once there's an answer
-            blocks.append({"t": "next", "v": "Next: share and hand off", "path": "starter-kit-notebooks/data-scientist/03_share.ipynb"})
+        after = _next_notebook() if (self.box or self.answer is not None) else None
+        if after:   # %%ask cards: the way forward appears once there's an answer
+            blocks.append({"t": "next", "v": f"Next: {after['title']}", "path": after["file"]})
         return blocks
 
     # -- actions ---------------------------------------------------------------------------
@@ -267,50 +196,23 @@ class Ask(Screen):
         self._draft(str(v.get("question") or ""))
 
     def on_edit(self, v: dict) -> None:
-        sql = ensure_read_only(str(v.get("sql") or ""))
-        self.proposal.edit(sql)
+        actions.run("ask.edit", sql=str(v.get("sql") or ""))     # the kit checks it is one read-only statement
         self.answer, self.my_notes = None, ["Your own SQL. Check it, then approve."]
         self.drafted_by = "you"
-        SESSION.log(f"proposal.edit('''{sql}''')")
 
     def on_run(self, _v: dict) -> None:
         if self.proposal is None:
             raise ValueError("Draft a question first.")
-        p = self.proposal
-        with quiet():
-            p.approve()
-        SESSION.log("proposal.approve()")
-        # Only through the kit's read-only service (the MCP server's read-only user); when it is not running the kit
-        # says so, with its fix (exakit mcp-doctor).
-        with quiet():
-            frame = p.run()
+        # approve() then run(), through the kit's read-only service only (the MCP server's read-only user); when it
+        # is not running the kit says so, with its fix (exakit mcp-doctor).
+        frame = actions.run("ask.run")
         self.ran_as = "through the kit's read-only service"
-        SESSION.log("answer = proposal.run()")
         line, chart = _explain(frame)
         self.answer = (frame, line, chart)
-        self.history.append({"question": p.question, "rows": len(frame)})
+        self.history.append({"question": self.proposal.question, "rows": len(frame)})
         self.flash = {"kind": "ok", "v": "Ran after your approval. Logged in the kit's workflow, so the hand-off bundle includes it."}
 
 
 def ask(question: str | None = None) -> Ask:
     """Step 3 in the guided view: an Ask card. With a question, drafts it right away."""
     return Ask(question, box=True)
-
-
-def _ask_magic(line: str, cell: str | None = None):
-    from IPython.display import display
-
-    question = (cell if cell and cell.strip() else line or "").strip()
-    display(Ask(question, box=False))
-
-
-def register_magic() -> None:
-    """%%ask (and %ask) in this kernel: the cell is just a question."""
-    try:
-        from IPython import get_ipython
-
-        ip = get_ipython()
-        if ip is not None:
-            ip.register_magic_function(_ask_magic, "line_cell", "ask")
-    except Exception:
-        pass

@@ -38,25 +38,28 @@ from .sources import SourceProblem, clean_path, connect_source
 from .prepare import TypedView, typed_view
 from .schema_map import JoinedView, SchemaMap, describe_schema
 from .kit_commands import KitRun, addon_ready, exakit, kit_check, kit_status, kit_update
+from .kit_facts import addons, ai_clients, components, connectors, notebooks, persona_plan, personas, sample_datasets
+from .question_rules import draft_question, example_questions
 from .handoff_bundle import HandoffBundle, handoff_bundle
 from .dataset import Dataset, DescriptorNotApproved, chosen_dataset, dataset
 from .describe import Draft, describe
-from .descriptor_store import current_version, descriptor_store_dir, list_versions
+from .descriptor_store import approved_datasets, column_map_versions, current_version, descriptor_store_dir, list_versions
 from .handoff import handoff_from, handoff_is_stale, read_handoff, write_handoff
-from .own_file import LoadedTable, load_own_file, save_descriptor
+from .own_file import LoadedTable, load_own_file, save_descriptor, use_table
 from .readout import count_name, name, noun, note_groups, note_model, note_trend
 from .quickstart import check_connection, connected_sources, first, list_schemas, load_sample, load_source, show_roles
 from .role_picker import RoleReview, review_roles
-from .setup_env import model_setup, use_mlflow, use_model
+from .setup_env import forget_model, model_setup, use_mlflow, use_model
 from .share import ShareDraft, share
 from .themes import themes
 from .ml_train import TrainingPlan, prepare_training
 from . import model_config
 from .workflow import TRACE as TRACE_KIND
-from .workflow import continue_workflow, current_workflow, last_workflow, log_event, log_sql, workflow
+from .workflow import continue_workflow, current_workflow, last_workflow, list_workflows, log_event, log_sql, workflow
+from .workflow import read_log as workflow_log
 
 # Kept alphabetical (case-insensitive) by construction, so a new export can never break the order test.
-__all__ = sorted(["addon_ready", "exakit", "HandoffBundle", "handoff_bundle", "kit_check", "kit_status", "kit_update", "KitRun", "ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "clean_path", "connect_source", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "continue_workflow", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "data_checks", "data_map", "DataMap", "Dataset", "dataset", "describe_schema", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "JoinedView", "last_workflow", "leakage_check", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "model_setup", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "SchemaMap", "share", "ShareDraft", "show_roles", "SourceProblem", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "TypedView", "typed_view", "use_mlflow", "use_model", "workflow", "write_handoff"], key=str.lower)
+__all__ = sorted(["lab_data", "approved_datasets", "column_map_versions", "list_workflows", "workflow_log", "use_table", "forget_model", "addons", "ai_clients", "components", "connectors", "notebooks", "persona_plan", "personas", "sample_datasets", "Lab", "feature_ideas", "model_lab", "try_feature", "draft_question", "example_questions", "addon_ready", "exakit", "HandoffBundle", "handoff_bundle", "kit_check", "kit_status", "kit_update", "KitRun", "ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "clean_path", "connect_source", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "continue_workflow", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "data_checks", "data_map", "DataMap", "Dataset", "dataset", "describe_schema", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "JoinedView", "last_workflow", "leakage_check", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "model_setup", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "SchemaMap", "share", "ShareDraft", "show_roles", "SourceProblem", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "TypedView", "typed_view", "use_mlflow", "use_model", "workflow", "write_handoff"], key=str.lower)
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset
@@ -290,3 +293,30 @@ def confirm_send(ds: Dataset, rows: int, answer: str | None = None) -> bool:
         return True
     print("Not sent: the text step is skipped.")
     return False
+
+
+_LAZY = {"Lab": "lab", "feature_ideas": "lab", "lab_data": "lab", "model_lab": "lab", "try_feature": "lab"}
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
+
+
+def __getattr__(name: str) -> Any:
+    """The model lab loads on first use: it needs numpy and scikit-learn, which a cell that never trains should not
+    pay for (and a plain Python without them can still import exakit.nb)."""
+    if name in _LAZY:
+        import importlib
+
+        value = getattr(importlib.import_module(f".{_LAZY[name]}", __name__), name)
+        globals()[name] = value
+        return value
+    raise AttributeError(f"module 'exakit_nb' has no attribute '{name}'")
+
+
+try:   # the model and Langfuse a notebook saved with use_model(..., remember=True), in this kernel too
+    from .setup_env import load_remembered as _load_remembered
+
+    _load_remembered()
+except Exception:
+    pass

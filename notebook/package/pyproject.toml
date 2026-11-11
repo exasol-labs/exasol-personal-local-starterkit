@@ -13,7 +13,7 @@ dependencies = ["mcp>=1.20,<2", "anywidget==0.11.0"]
 [tool.setuptools]
 # exakit_nb is the implementation; exakit.nb is the same module under the name the notebooks use.
 # exakit_guide is the guided view (exakit.guide): the cards each notebook opens with, and the Guided / Code switch.
-packages = ["exakit_nb", "exakit", "exakit.nb", "exakit_guide", "exakit.guide"]
+packages = ["exakit_nb", "exakit", "exakit.nb", "exakit_guide", "exakit_guide.screens", "exakit.guide"]
 
 [tool.setuptools.package-data]
 exakit_guide = ["static/*.js", "static/*.css"]

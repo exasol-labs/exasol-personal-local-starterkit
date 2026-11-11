@@ -431,3 +431,7 @@
 .guide-step-here .guide-step-num { background: var(--guide-accent-text); color: var(--guide-accent); border-color: var(--guide-accent-text); }
 .guide-step-home .guide-step-num { font-size: 14px; }
 @media (max-width: 760px) { .guide-journey-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.guide-codebox-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.guide-copy { padding: 2px 8px; font-size: 11px; }
+.guide-cmd { cursor: copy; }

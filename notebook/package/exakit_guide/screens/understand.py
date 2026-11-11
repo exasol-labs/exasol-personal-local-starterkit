@@ -13,10 +13,9 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import store
-from .card import Screen
-from .kitinfo import DATASET_TITLES
-from .session import SESSION, quiet
+from .. import actions
+from ..card import Screen
+from ..session import SESSION
 
 KICKER = "Step 1 of 4 · Understand your data"
 
@@ -47,33 +46,14 @@ SLOT_LABELS = {
     "key": ("What makes a row unique", "Used to spot repeated rows."),
     "text": ("Text to read", "Comments or descriptions, if there are any."),
 }
-# The kit's own rule (descriptor_rules.SLOT_ROLES): these three slots need exactly this role.
-SLOT_REQUIRED = {"key": "key", "time": "time", "text": "text"}
+# The kit's own rule: the slots that need exactly one role (descriptor_rules.SLOT_ROLES).
+from exakit_nb.descriptor_rules import SLOT_ROLES as _KIT_SLOT_ROLES
+
+SLOT_REQUIRED = {slot: roles[0] for slot, roles in _KIT_SLOT_ROLES.items()}
 # category and entity accept any role in the kit; these are the roles that make sense there (a warning, not a block).
 SLOT_SENSIBLE = {"category": ["category", "identifier", "flag"], "entity": ["category", "identifier", "flag", "key"]}
 SLOT_ROLES = {**{k: [v] for k, v in SLOT_REQUIRED.items()}, **SLOT_SENSIBLE}
 PLAIN_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
-
-
-def _kit_samples() -> list[dict]:
-    """The kit's datasets the quickstart can open (they have a descriptor)."""
-    from .kitinfo import _kit_json
-
-    status = _kit_json("status", "--json")
-    loaded = list(status.get("datasets_loaded") or [])
-    ids = []
-    for d in loaded + ["amazon_sales", "fraud_transactions"]:
-        if d in ids:
-            continue
-        try:
-            from exakit_nb.dataset import _locate
-
-            _locate(d)
-            ids.append(d)
-        except Exception:
-            continue
-    return [{"value": d, "label": DATASET_TITLES.get(d, d.replace("_", " ").capitalize()),
-             "hint": "Loaded" if d in loaded else "Downloads the first time"} for d in ids]
 
 
 def _split(evidence: str) -> list[tuple[str, float]]:
@@ -116,65 +96,8 @@ _SLOT_WORDS = {"key": "What makes a row unique", "time": "Date for trends", "tex
                "target": "What to predict", "category": "Main group to compare", "entity": "Who or what a row is about"}
 
 
-def _plain_name(name: str) -> str:
-    """The kit's own rule for file columns (own_file._read): non-word characters -> _, upper case, starts with a letter."""
-    n = re.sub(r"\W", "_", str(name).strip()).upper() or "COLUMN"
-    return n if re.match(r"[A-Z]", n) else f"C_{n}"
 
 
-def _plain_names_view(conn, table: str) -> tuple[str, str | None]:
-    """(table to use, CREATE VIEW sql or None). A table loaded with its file's own column names ("Won",
-    "Opportunity ID") breaks the kit's unquoted queries; a view with plain names over it fixes that."""
-    schema, name = table.split(".", 1)
-    cols = [r[0] for r in conn.execute(
-        f"SELECT COLUMN_NAME FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '{schema}' AND COLUMN_TABLE = '{name}' "
-        f"ORDER BY COLUMN_ORDINAL_POSITION").fetchall()]
-    if not cols or all(re.fullmatch(r"[A-Z][A-Z0-9_]*", c) for c in cols):
-        return table, None
-    plain, seen = [], set()
-    for c in cols:
-        n = _plain_name(c)
-        while n in seen:
-            n += "_2"
-        seen.add(n)
-        plain.append(n)
-    view = f'EXAKIT_PREPARED."{schema}__{name}__PLAIN"'
-    select = ",\n       ".join(f'"{c.replace(chr(34), chr(34) * 2)}" AS {n}' for c, n in zip(cols, plain))
-    sql = f"CREATE OR REPLACE VIEW {view} AS\nSELECT {select}\nFROM {schema}.\"{name}\""
-    conn.execute("CREATE SCHEMA IF NOT EXISTS EXAKIT_PREPARED")
-    conn.execute(sql)
-    return f'EXAKIT_PREPARED.{schema}__{name}__PLAIN', sql
-
-
-def _free_name(target: Path, tag: str) -> Path:
-    """target itself if it doesn't exist yet, else target with a tag (never overwrite someone's file)."""
-    if not target.exists():
-        return target
-    for i in range(1, 100):
-        alt = target.with_name(f"{target.stem}{tag}{'' if i == 1 else f'-{i}'}{target.suffix}")
-        if not alt.exists():
-            return alt
-    raise ValueError(f"Too many converted copies next to {target.name}. Remove some and try again.")
-
-
-def _utf8_copy(path: Path) -> tuple[Path | None, str]:
-    """The kit reads strict UTF-8. A CSV saved in another encoding (or with Windows line ends and a BOM that
-    trip some readers) gets a clean UTF-8 copy beside it; the original stays untouched."""
-    raw = path.read_bytes()
-    try:
-        raw.decode("utf-8")
-        return None, ""
-    except UnicodeDecodeError:
-        pass
-    for enc in ("cp1252", "latin-1"):
-        try:
-            text = raw.decode(enc)
-            break
-        except UnicodeDecodeError:
-            continue
-    out = _free_name(path.with_name(path.stem + ".utf8" + path.suffix), "")
-    out.write_text(text.replace("\r\n", "\n"), encoding="utf-8")
-    return out, f"{path.name} wasn't saved as UTF-8 (the kit needs that), so a UTF-8 copy, {out.name}, was loaded instead."
 
 
 def _plain_kit_error(text: str) -> str:
@@ -233,15 +156,11 @@ def _ago(ts) -> str:
 
 
 # =====================================================================================================
-# The kinds of source `exakit connect` takes (setup/virtual-schemas/catalog.json), as the card offers them.
-CONNECTORS = [{"value": v, "label": l} for v, l in (
-    ("postgresql", "PostgreSQL"), ("mysql", "MySQL"), ("sqlserver", "SQL Server"), ("oracle", "Oracle"),
-    ("snowflake", "Snowflake"), ("bigquery", "Google BigQuery"), ("databricks", "Databricks"),
-    ("s3", "Amazon S3"), ("azure-blob", "Azure Blob Storage"), ("lakehouse", "Lakehouse (Iceberg on AWS Glue)"),
-    ("iceberg-rest", "Iceberg REST catalog"), ("unity", "Unity Catalog"), ("mongodb", "MongoDB"))]
-
-
 class ChooseData(Screen):
+    """Choose the data: a kit dataset, your own (a table already in the database, or a new file or folder), or an
+    external source (one connected, or a new connection). Every option and every step is one cell of the
+    quickstart's code section (actions: data.*)."""
+
     kind = "card"
 
     def __init__(self) -> None:
@@ -249,6 +168,8 @@ class ChooseData(Screen):
         self.samples: list[dict] = []
         self.own: list[dict] = []
         self.sources: list[str] = []
+        self.connectors: list[dict] = []
+        self.rows: dict[str, str] = {}
         self.kit_said = ""
         self.done = False
         self.loading = True
@@ -259,21 +180,27 @@ class ChooseData(Screen):
         threading.Thread(target=self._load_options, daemon=True).start()
 
     def _load_options(self) -> None:
-        """What can be picked: kit datasets, your data already loaded, connected sources (read-only)."""
+        """What can be picked, live: the kit's samples, your tables and approved maps, connected sources, connectors."""
         try:
-            self.samples = _kit_samples()
-        except Exception:
-            self.samples = []
-        try:
-            import exakit.nb as nb
-
-            conn = SESSION.connection()
-            self.own = store.own_datasets(conn)
-            with quiet():
-                frame = nb.connected_sources(conn)
-            self.sources = [str(x) for x in frame["SCHEMA_NAME"]]
-        except Exception:
-            pass
+            self.samples = [s for s in actions.run("kit.datasets") if s.get("described")]
+            self.connectors = actions.run("data.connectors")
+            approved = {a["table"].upper(): a for a in actions.run("kit.approved")}
+            found = actions.run("data.map")
+            self.rows = {r["table"].upper(): r["rows_shown"] for r in found.table_rows}
+            self.own = []
+            for r in found.table_rows:
+                if r["origin"] != "local":
+                    continue
+                a = approved.pop(r["table"].upper(), None)
+                self.own.append({"value": f"ds:{a['id']}" if a else f"tbl:{r['table']}",
+                                 "label": f"{r['table']} · {r['rows_shown']} rows · " + (f"column map v{a['version']}" if a else r["map"])})
+            sample_schemas = {s["schema"].upper() for s in actions.run("kit.datasets")}
+            for table, a in approved.items():     # approved maps over views (a cleaned or plain-name copy)
+                if table.split(".")[0] not in sample_schemas:
+                    self.own.append({"value": f"ds:{a['id']}", "label": f"{a['table']} · column map v{a['version']}"})
+            self.sources = sorted({r["table"].split(".")[0] for r in found.table_rows if r["origin"] == "source"})
+        except Exception as exc:
+            self.flash = {"kind": "warn", "v": f"Part of what is available could not be read: {str(exc).splitlines()[0]}"}
         self.loading = False
         self.refresh()
         SESSION.release()
@@ -283,14 +210,17 @@ class ChooseData(Screen):
                 "sub": "Pick what you want to work on. You can change it at any time."}
         if self.loading:
             return [head, {"t": "empty", "v": "Looking at what's available…"}]
-        default = next((s["value"] for s in self.samples if s["value"] == "amazon_sales"),
-                       self.samples[0]["value"] if self.samples else "")
+        samples = [{"value": s["id"], "label": s["label"], "hint": "Loaded" if s["loaded"] else "Downloads the first time"}
+                   for s in self.samples]
         own_options = [{"value": o["value"], "label": o["label"]} for o in self.own] + [{"value": "__new__", "label": "Load a new file…"}]
         new_only = {"field": "own", "equals": "__new__"}
         connect_only = {"field": "src_schema", "equals": "__connect__"}
+        connectors = [{"value": c["id"], "label": c["name"], "hint": c.get("summary") or ""} for c in self.connectors]
         options = [
             {"value": "sample", "title": "A kit dataset", "text": "Ready-made data that comes with the kit.",
-             "fields": [{"id": "sample", "type": "select", "label": "Dataset", "value": default, "options": self.samples}]},
+             "disabled": not samples, "disabled_reason": "The kit lists no dataset with a column map.",
+             "fields": [{"id": "sample", "type": "select", "label": "Dataset", "value": samples[0]["value"] if samples else "",
+                         "options": samples}]},
             {"value": "file", "title": "Your own data",
              "text": (f"{len(self.own)} already in the database, or load a new file." if self.own
                       else "A CSV, Excel, Parquet or JSON file, or a folder of them."),
@@ -304,9 +234,9 @@ class ChooseData(Screen):
                          "value": self.sources[0] if self.sources else "__connect__",
                          "options": [{"value": x, "label": x} for x in self.sources]
                                     + [{"value": "__connect__", "label": "Connect a new source…"}]},
-                        {"id": "table", "type": "text", "label": "Table (empty: list its tables)", "placeholder": "ORDERS"},
-                        {"id": "connector", "type": "select", "label": "Kind of source", "value": "postgresql",
-                         "options": CONNECTORS, "show_if": connect_only},
+                        {"id": "table", "type": "text", "label": "Table (empty: its one table, or the list of them)", "placeholder": "ORDERS"},
+                        {"id": "connector", "type": "select", "label": "Kind of source",
+                         "value": connectors[0]["value"] if connectors else "", "options": connectors, "show_if": connect_only},
                         {"id": "src_name", "type": "text", "label": "Name for it (becomes VS_<NAME>)", "placeholder": "sales",
                          "show_if": connect_only},
                         {"id": "src_url", "type": "text", "label": "Connection string, without the password",
@@ -314,151 +244,89 @@ class ChooseData(Screen):
                         {"id": "src_password", "type": "password", "label": "Password (sent to the kit only, never shown or saved here)",
                          "show_if": connect_only}]},
         ]
-        blocks = [head, {"t": "choice", "id": "kind", "value": "sample", "options": options},
+        blocks = [head, {"t": "choice", "id": "kind", "value": "sample" if samples else "file", "options": options},
                   {"t": "actions", "items": [{"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}]}]
         if self.done and SESSION.source is not None:
-            rows = f" · {SESSION.source_rows:,} rows" if SESSION.source_rows is not None else ""
+            rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
             blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
         if self.kit_said:
             blocks.append({"t": "details", "title": "What the kit said", "blocks": [{"t": "pre", "v": self.kit_said}]})
         if SESSION.code:
-            blocks.append({"t": "code", "code_only": True, "title": "The kit calls behind this step", "v": "\n".join(SESSION.code)})
+            blocks.append({"t": "code", "code_only": True, "title": "The code behind this step", "v": "\n".join(SESSION.code)})
         return blocks
 
     def on_use(self, v: dict) -> None:
-        import exakit.nb as nb
-        from exakit_nb.own_file import LoadedTable
+        from ..actions import Var
 
         kind = v.get("kind") or "sample"
-        conn = SESSION.connection()
-        note = None
-        with quiet() as out:
-            SESSION.workflow_id = nb.workflow("data-scientist-quickstart")
-            nb.check_connection(conn)
-            if kind == "sample":
-                ds_id = str(v.get("sample") or "").strip()
-                if not ds_id:
-                    raise ValueError("Pick a kit dataset.")
-                SESSION.broken = None
-                try:
-                    source = nb.load_sample(conn, ds_id)
-                except ValueError as exc:
-                    # The saved column map can't be used (for example, what to predict isn't 0/1).
-                    # Open the table itself so the column map can be fixed here.
-                    table = store.current(ds_id).get("table")
-                    if not table:
-                        raise
-                    source = LoadedTable(ds_id, table, Path("."))
-                    SESSION.broken = {"id": ds_id, "reason": str(exc).splitlines()[0]}
-                code, label = f'data = nb.load_sample(connection, "{ds_id}")', DATASET_TITLES.get(ds_id, ds_id)
-            elif kind == "file":
-                own = str(v.get("own") or "__new__")
-                if own.startswith("ds:"):
-                    ds_id = own[3:]
-                    try:
-                        source = nb.dataset(conn, ds_id)
-                        code, label = f'data = nb.dataset(connection, "{ds_id}")', ds_id
-                    except Exception as exc:
-                        # An approved map the kit can't read back, because the table keeps its file's own column
-                        # names ("Won"); fall back to a view with plain names over the same table.
-                        table = (store.current(ds_id) or {}).get("table")
-                        if not table or "." not in table or "not found" not in str(exc):
-                            raise
-                        use, made = _plain_names_view(conn, table)
-                        if not made and use == table:
-                            raise
-                        ds_id = re.sub(r"[^a-z0-9]+", "_", use.lower()).strip("_")
-                        source = LoadedTable(ds_id, use, Path("."))
-                        note = (f"{table} has column names with spaces or small letters, which the kit's queries can't read. "
-                                f"The guided view uses a view with plain names, {use}. Your table is unchanged.")
-                        code, label = f'data = LoadedTable("{ds_id}", "{use}", Path("."))', table
-                elif own.startswith("tbl:"):
-                    table = own[4:]
-                    ds_id = re.sub(r"[^a-z0-9]+", "_", table.lower()).strip("_")
-                    use, made = _plain_names_view(conn, table)
-                    if made:   # its own id, so an earlier attempt on the raw table (other column names) can't mix in
-                        ds_id = re.sub(r"[^a-z0-9]+", "_", use.lower()).strip("_")
-                    if made:
-                        note = (f"{table} has column names with spaces or small letters, which the kit's queries can't read. "
-                                f"The guided view made a view with plain names, {use}, and uses that. Your table is unchanged.")
-                        SESSION.log(f"# view with plain column names over {table}:\n{made}")
-                    source = LoadedTable(ds_id, use, Path("."))
-                    code, label = f'data = LoadedTable("{ds_id}", "{use}", Path("."))   # a table already in the database', table
-                else:
-                    path = str(v.get("path") or "").strip()
-                    if not path:
-                        raise ValueError("Enter the path to a file or folder.")
-                    if not Path(path).expanduser().exists():
-                        raise ValueError(f"Couldn't find {path}. Check the path and try again.")
-                    schema, note = store.safe_schema(conn, v.get("schema"))
-                    load_path = path
-                    if Path(path).suffix.lower() in (".xlsx", ".xlsm"):
-                        # The kit's loader takes CSV, Parquet and JSON: turn the Excel sheet into a CSV beside it first.
-                        from .xlsx import to_csv
-
-                        made = to_csv(path, out=_free_name(Path(path).expanduser().with_suffix(".csv"), ".from-excel"))
-                        load_path = made["csv"]
-                        bits = [f"Turned the Excel sheet “{made['sheet']}” into {Path(made['csv']).name} "
-                                f"({made['rows']:,} rows, {made['columns']} columns) and loaded that."]
-                        if made["dates"]:
-                            bits.append(f"Excel day numbers in {', '.join(made['dates'])} became real dates.")
-                        if made["other_sheets"]:
-                            bits.append(f"Other sheets were not loaded: {', '.join(made['other_sheets'])}.")
-                        note = " ".join(bits + ([note] if note else []))
-                        SESSION.log(f'exakit_guide.xlsx.to_csv("{path}")   # -> {made["csv"]}')
-                    if Path(load_path).suffix.lower() in (".csv", ".txt", ".tsv"):
-                        fixed, why = _utf8_copy(Path(load_path).expanduser())
-                        if fixed:
-                            load_path = str(fixed)
-                            note = " ".join(x for x in (note, why) if x)
-                    source = nb.load_own_file(load_path, schema, conn=conn)
-                    code, label = f'data = nb.load_own_file("{load_path}", "{schema}", conn=connection)', Path(path).expanduser().name
+        SESSION.broken = None
+        actions.run("data.workflow")
+        if kind == "sample":
+            dataset_id = str(v.get("sample") or "").strip()
+            if not dataset_id:
+                raise ValueError("Pick a kit dataset.")
+            variable, label = self._open("data.sample", "sample_data", dataset_id=dataset_id), dataset_id
+            label = next((s["label"] for s in self.samples if s["id"] == dataset_id), dataset_id)
+        elif kind == "file":
+            own = str(v.get("own") or "__new__")
+            if own.startswith("ds:"):
+                variable, label = self._open("data.approved", "own_data", dataset_id=own[3:]), own[3:]
+            elif own.startswith("tbl:"):
+                variable, label = self._open("data.table", "own_data", table=own[4:]), own[4:]
             else:
-                table = str(v.get("table") or "").strip()
-                schema = str(v.get("src_schema") or "").strip()
-                if schema == "__connect__":
-                    schema = self._connect(v)
-                if not table:
-                    # The source alone: its one table, or the kit stops with the list of them - pick one, then
-                    # Use this data again.
-                    table = schema
-                elif "." not in table and schema:
-                    table = f"{schema}.{table}"
-                source = nb.load_source(conn, table)
-                code, label = f'data = nb.load_source(connection, "{table}")', table
-        self.kit_said = out.text
-        if source is None:
+                path = str(v.get("path") or "").strip()
+                if not path:
+                    raise ValueError("Enter the path to a file or folder.")
+                schema = str(v.get("schema") or "").strip() or None
+                variable, label = self._open("data.own_file", "own_data", path=path, schema=schema), Path(path).expanduser().name
+        else:
+            schema = str(v.get("src_schema") or "").strip()
+            if schema == "__connect__":
+                schema = self._connect(v)
+            table = str(v.get("table") or "").strip()
+            source = f"{schema}.{table}" if table and "." not in table else (table or schema)
+            variable, label = self._open("data.source", "source_data", source=source), source
+        actions.run("data.choose", data=Var(variable))
+        if SESSION.source is None:
             raise ValueError("Nothing was loaded. The kit's note is under 'What the kit said'.")
-        SESSION.log("import exakit.nb as nb", "connection = nb.connect()", 'workflow_id = nb.workflow("data-scientist-quickstart")', code)
-        SESSION.source, SESSION.source_label = source, f"{label} ({source.fact_table})"
+        SESSION.source_label = f"{label} ({SESSION.source.fact_table})"
+        SESSION.source_rows = self.rows.get(str(SESSION.source.fact_table).upper())
         SESSION.review, SESSION.dataset = None, None
-        try:
-            SESSION.source_rows = int(conn.execute(f"SELECT COUNT(*) FROM {source.fact_table}").fetchone()[0])
-        except Exception:
-            SESSION.source_rows = None
         self.done = True
-        if note:
-            self.flash = {"kind": "info", "v": note}
         if kind == "file":
-            self.own = store.own_datasets(conn)
+            self._load_options()
         SESSION.changed("source", self)
+
+    def _open(self, action_id: str, variable: str, **values) -> str:
+        """Run one loading cell; a saved column map the kit refuses (what to predict is not 0/1, say) opens the table
+        itself with nb.use_table, so the map can be fixed below. Returns the variable that holds the data."""
+        try:
+            actions.run(action_id, **values)
+        except ValueError as exc:
+            dataset_id = values.get("dataset_id")
+            table = next((a["table"] for a in actions.run("kit.approved") if a["id"] == dataset_id), None)
+            if not table:
+                raise
+            actions.run("data.table", table=table)
+            SESSION.broken = {"id": dataset_id, "reason": str(exc).splitlines()[0]}
+            variable = "own_data"
+        finally:
+            self.kit_said = SESSION.said or self.kit_said
+        return variable
 
     def _connect(self, v: dict) -> str:
         """Connect an external source with the kit's own `exakit connect` (nb.connect_source): the password goes to it
         on standard input, never into a cell, a log or this card. Returns the new schema (VS_<NAME>)."""
-        import exakit.nb as nb
-
         connector = str(v.get("connector") or "").strip()
         name = str(v.get("src_name") or "").strip().lower()
         url = str(v.get("src_url") or "").strip()
         if not (connector and name and url):
             raise ValueError("To connect a source, choose its kind, give it a name and paste its connection string.")
         typed = str(v.get("src_password") or "")
-        with quiet() as out:
-            # The card's box answers the kit's own password question (a source without one: Enter, empty).
-            schema = nb.connect_source(connector, name, url=url, secret=lambda _question: typed, show=False)
-        self.kit_said = getattr(out, "text", "") or self.kit_said
-        SESSION.log(f'nb.connect_source("{connector}", "{name}", url="{url}")   # asks the password in a hidden box')
+        # The card's box answers the kit's own password question (a source without one: Enter, empty).
+        schema = actions.run("data.connect_source", connector=connector, name=name, url=url,
+                             secret={"secret": lambda _question: typed})
+        self.kit_said = SESSION.said or self.kit_said
         if schema and schema not in self.sources:
             self.sources.append(schema)
         return schema
@@ -486,23 +354,19 @@ class ColumnMap(Screen):
         self.refresh()
 
     def _review(self) -> None:
-        import exakit.nb as nb
+        from ..actions import Var
 
         self.first, self.leaks = None, []
-        with quiet() as out:
-            SESSION.review = nb.review_roles(SESSION.connection(), SESSION.source)
-        self.kit_said = out.text
-        SESSION.log("review = nb.review_roles(connection, data)")
+        actions.run("map.review")
+        self.kit_said = SESSION.said
         try:
-            with quiet():
-                draft = SESSION.review.dataset(draft_ok=True)
-                self.leaks = nb.leakage_check(SESSION.connection(), draft, show=False)
+            actions.run("map.draft")
+            self.leaks = list(actions.run("map.leakage", data=Var("draft_dataset")) or [])
         except Exception:
             self.leaks = []
         if SESSION.review.draft.status == "approved":
             try:
-                with quiet():
-                    SESSION.dataset = SESSION.review.dataset()
+                actions.run("map.keep")
             except ValueError as exc:   # the saved map is approved but the kit refuses to read it back
                 SESSION.dataset = None
                 SESSION.broken = {"id": SESSION.review.draft.id, "reason": str(exc).splitlines()[0]}
@@ -521,7 +385,7 @@ class ColumnMap(Screen):
         sugg, slots = self._baseline()
         rows = []
         measured = {}
-        for h in store.versions(draft.id):   # what the kit measured before someone overrode it ("set by you")
+        for h in _versions(draft.id)[0]:   # what the kit measured before someone overrode it ("set by you")
             for c, ev in h["evidence"].items():
                 if ev and ev != "set by you" and c not in measured:
                     measured[c] = ev
@@ -625,8 +489,7 @@ class ColumnMap(Screen):
                 v = (getattr(ds.descriptor, "slots", {}) or {}).get(k)
                 slots[k] = (v[0] if isinstance(v, list) else v) or None
             return sugg, slots
-        hist = store.versions(rv.draft.id)
-        number = store.current(rv.draft.id).get("version")
+        hist, number = _versions(rv.draft.id)
         cur = next((h for h in hist if h["version"] == number), None)
         if cur:
             for c, r in cur["roles"].items():
@@ -640,10 +503,10 @@ class ColumnMap(Screen):
         if not show or SESSION.review is None:
             return []
         ds_id = SESSION.dataset.id if SESSION.dataset is not None else SESSION.review.draft.id
-        hist = store.versions(ds_id)
-        number = SESSION.dataset.version if SESSION.dataset is not None else store.current(ds_id).get("version")
+        hist, number = _versions(ds_id)
+        if SESSION.dataset is not None:
+            number = SESSION.dataset.version
         cur = next((h for h in hist if h["version"] == number), None)
-        first = hist[0] if hist else None
         if cur is None:
             return []
         when = f" (saved {_ago(cur['approved_at'])})" if cur.get("approved_at") else ""
@@ -674,7 +537,9 @@ class ColumnMap(Screen):
                     "note": "Dashed line: overall rate. Highlighted bars are above it." if f["pct"] else ""})
         if f.get("note"):
             out.append({"t": "note", "v": f["note"]})
-        out.append({"t": "next", "v": "Next: explore and predict", "path": "starter-kit-notebooks/data-scientist/01_explore.ipynb"})
+        nxt = _next_notebook()
+        if nxt:
+            out.append({"t": "next", "v": f"Next: {nxt['title']}", "path": nxt["file"]})
         return out
 
     # -- approving ------------------------------------------------------------------------
@@ -718,9 +583,7 @@ class ColumnMap(Screen):
         role_changes = {c: r for c, r in roles.items() if r != base_roles.get(c)}
         slot_changes = {s: c for s, c in slots.items() if c != base_slots.get(s)}
         if rv.draft.status == "approved" and not role_changes and not slot_changes and not SESSION.broken:
-            with quiet():
-                SESSION.dataset = rv.dataset()
-            SESSION.log("dataset = review.dataset()")
+            actions.run("map.keep")
             self.flash = {"kind": "ok", "v": f"Kept the approved choices (version {SESSION.dataset.version})."}
         else:
             self._check({**sugg, **roles}, {**drafted, **slots})
@@ -739,27 +602,16 @@ class ColumnMap(Screen):
         SESSION.changed("dataset", self)
 
     def _save(self, choices: dict | None, slots: dict) -> None:
-        self.kit_said = ""      # this approval's own lines: _publish_note reads them
         try:
-            with quiet() as out:
-                SESSION.review.approve(choices, slots)
-                SESSION.dataset = SESSION.review.dataset()
+            actions.run("map.approve", choices=choices, slots=slots)
         except ValueError as exc:
             raise ValueError(_plain_kit_error(str(exc))) from exc
-        self.kit_said = (self.kit_said + "\n" + out.text).strip()
-        SESSION.log(f"dataset = review.approve({choices!r}, {slots!r})")
-
-    def on_revert(self, _v: dict) -> None:
-        ds_id = SESSION.dataset.id if SESSION.dataset is not None else SESSION.review.draft.id
-        hist = store.versions(ds_id)
-        if not hist:
-            raise ValueError("There is no earlier version to go back to.")
-        self._restore(hist[0])
+        self.kit_said = SESSION.said      # this approval's own lines: _publish_note reads them
 
     def on_restore(self, v: dict) -> None:
         ds_id = SESSION.dataset.id if SESSION.dataset is not None else SESSION.review.draft.id
         want = int(v.get("restore_to") or 0)
-        target = next((h for h in store.versions(ds_id) if h["version"] == want), None)
+        target = next((h for h in _versions(ds_id)[0] if h["version"] == want), None)
         if target is None:
             raise ValueError("Pick a version to restore.")
         self._restore(target)
@@ -788,7 +640,7 @@ class ColumnMap(Screen):
         except Exception as exc:
             import traceback
 
-            from .card import _logger
+            from ..card import _logger
 
             _logger().error("first look failed: %r\n%s", exc, traceback.format_exc())
             lines = [l for l in str(exc).splitlines() if l.strip()]
@@ -798,9 +650,11 @@ class ColumnMap(Screen):
     def _first_result(self) -> None:
         """The quickstart's first result: rows per group, with the outcome's rate when there is one."""
         import exakit.nb as nb
+        from exakit_nb.readout import SMALL
+
+        from ..actions import Var
 
         ds = SESSION.dataset
-        conn = SESSION.connection()
         missing = {m["role"]: m["reason"] for m in ds.missing}
         group_role, group_col = ds.group_by()
         has_label = ds.has("label") and group_role != "label"
@@ -809,16 +663,15 @@ class ColumnMap(Screen):
         rate_sql = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
         sql = (f"SELECT {group_col} AS {group_h},\n       COUNT(*) AS {count_h}{rate_sql}\n"
                f"FROM {ds.fact_table}\nGROUP BY {group_col}\nORDER BY {count_h} DESC\nLIMIT 10")
-        with quiet():
-            frame = nb.sql(conn, sql)
-            overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}") if pct_h else None
-            note = nb.note_groups(frame, ds, group_h, count_h, pct_h,
-                                  overall=(overall["N"][0], overall["PCT"][0]) if pct_h else None)
-        SESSION.log(f"first_rows = nb.sql(connection, '''{sql}''')")
+        frame = actions.run("map.first_result", sql=sql)
+        overall = (actions.run("map.first_overall", sql=f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}")
+                   if pct_h else None)
+        note = actions.run("map.first_note", group=group_h, count=count_h, pct=pct_h,
+                           overall=Var('(first_overall["N"][0], first_overall["PCT"][0])') if pct_h else None)
         label_name = (ds.col("label") or "").strip('"').split(".")[-1] if has_label else ""
         if pct_h:
             items = [{"label": "(no value)" if r[group_h] is None else str(r[group_h]), "value": float(r[pct_h] or 0) / 100, "rows": int(r[count_h])}
-                     for _, r in frame.iterrows() if int(r[count_h]) >= 30]   # the kit's rule: below 30 rows a % isn't trustworthy
+                     for _, r in frame.iterrows() if int(r[count_h]) >= SMALL]   # the kit's rule: below SMALL rows a % isn't trustworthy
             items.sort(key=lambda i: -i["value"])
             title = f"{label_name} rate by {group_h}"
         else:
@@ -852,17 +705,13 @@ class DataMap(Screen):
         threading.Thread(target=self._load, daemon=True).start()
 
     def _load(self) -> None:
-        import exakit.nb as nb
-
         try:
-            with quiet():
-                found = nb.data_map(SESSION.connection())
+            found = actions.run("data.map")
             self.rows = [[r["origin_label"], r["table"], r["rows_shown"], r["columns"], r["map"], r["summary"]]
                          for r in found.table_rows]
             self.links = [[f"{k['from_table']}.{k['from_column']}", f"{k['to_table']}.{k['to_column']}", k["kind"],
                            k["origins"]] for k in found.link_rows]
             self.error = None
-            SESSION.log("nb.data_map(connection)")
         except Exception as exc:
             self.error = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
         self.loading = False
@@ -884,7 +733,7 @@ class DataMap(Screen):
                        {"t": "p", "muted": True, "v": "A possible link or shared dimension only shares a name: check it before a join."},
                        {"t": "table", "columns": ["From", "To", "Kind", "Origins"], "rows": self.links}]
         blocks.append({"t": "actions", "items": [{"id": "reload", "label": "Read it again"}]})
-        blocks.append({"t": "code", "code_only": True, "title": "The kit call behind this card", "v": "nb.data_map(connection)"})
+        blocks.append({"t": "code", "code_only": True, "title": "The code behind this card", "v": actions.code("data.map")})
         return blocks
 
     def on_reload(self, _v: dict) -> None:
@@ -902,7 +751,7 @@ class DataMap(Screen):
 
 def understand():
     """Step 1 in the guided view: choose the data, approve what each column means, and see it on the map of all your data."""
-    from .card import show
+    from ..card import show
 
     return show(ChooseData(), ColumnMap(), DataMap())
 
@@ -919,3 +768,17 @@ def _publish_note(said: str) -> str:
     if missed:
         return f"Not published for AI agents yet ({missed.group(1)}); retry with {missed.group(2).strip()}."
     return ""
+
+
+def _versions(dataset_id: str) -> tuple[list[dict], int | None]:
+    """(every saved version of the dataset's column map, the approved one's number), from the kit's store."""
+    history = actions.run("map.versions", dataset_id=dataset_id) or []
+    number = next((a["version"] for a in actions.run("kit.approved") if a["id"] == dataset_id), None)
+    return history, number
+
+
+def _next_notebook() -> dict | None:
+    """The notebook after this one in the persona's path (nb.notebooks), for the "Next" link."""
+    here = Path.cwd().name
+    rows = actions.run("kit.notebooks", persona=here) or []
+    return rows[1] if len(rows) > 1 else None
