@@ -4065,24 +4065,8 @@ exakit_data_table_build() {
     # into a row of its own.
     _dtb_pend="$_dtb_f.pending"
     exakit_pending_datasets > "$_dtb_pend" 2>/dev/null || : > "$_dtb_pend"
-    # A PERSONA LISTS ITS OWN. Picked for this machine, the personas' datasets
-    # are the samples on offer; the rest of the bundle stays one
-    # `exakit data-load` away. No persona: every sample, as always.
-    if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
-        case "${EXAKIT_DATASETS_PRESELECT:-}" in
-            ''|none) ;;
-            *)
-                _dtb_keep="$_dtb_f.keep"
-                : > "$_dtb_keep"
-                while IFS='|' read -r _dtb_kid _dtb_krest; do
-                    case ",$EXAKIT_DATASETS_PRESELECT," in
-                        *",$_dtb_kid,"*) printf '%s|%s\n' "$_dtb_kid" "$_dtb_krest" >> "$_dtb_keep" ;;
-                    esac
-                done < "$_dtb_pend"
-                mv "$_dtb_keep" "$_dtb_pend"
-                ;;
-        esac
-    fi
+    # EVERY SAMPLE IS LISTED, a persona or not: a persona's datasets are the
+    # ones ticked (EXAKIT_DATASETS_PRESELECT, below), the rest can be ticked too.
     # Each dataset's description= (its dataset.conf), for the second column.
     _dtb_root="$(exakit_repo_root 2>/dev/null || true)"
     # NOT `grep -c ... || printf 0`: grep exits 1 when the count is zero, so the

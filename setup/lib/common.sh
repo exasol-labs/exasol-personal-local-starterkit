@@ -5252,6 +5252,10 @@ _exakit_addon_table_build() {
     _atb_kdefaults=""
     _atb_inner=""
     _atb_allticked=1
+    # A persona's add-ons (EXAKIT_MARKETPLACE_PRESELECT) start ticked and every
+    # other one is listed unticked; no persona, or "all": every add-on ticked.
+    _atb_pre="$(printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+    [ "$_atb_pre" = all ] && _atb_pre=""
     printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
     # Via a newline-separated STRING, one line per row, so a row that is not an
     # add-on is an EMPTY line rather than a gap a space-separated list would
@@ -5299,7 +5303,15 @@ EXAKIT_ATB_META
 "
         _atb_row=$(( _atb_row + 1 ))
         _atb_prow="$_atb_row"
-        _atb_kdefaults="${_atb_kdefaults:+$_atb_kdefaults,}$_atb_row"
+        _atb_pick=1
+        if [ -n "$_atb_pre" ]; then
+            case ",$_atb_pre," in *",$_atb_id,"*) ;; *) _atb_pick=0 ;; esac
+        fi
+        if [ "$_atb_pick" = 1 ]; then
+            _atb_kdefaults="${_atb_kdefaults:+$_atb_kdefaults,}$_atb_row"
+        else
+            _atb_allticked=0
+        fi
         # This add-on's child rows, counted first: the last one is the corner.
         _atb_kn=0
         while IFS='|' read -r _atb_kp _atb_krest; do
@@ -5318,8 +5330,8 @@ EXAKIT_ATB_KCOUNT
             EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS$_atb_id:$_atb_kkey
 "
             _atb_row=$(( _atb_row + 1 ))
-            if [ "${_atb_ktick:-1}" = 1 ]; then
-                _atb_kdefaults="$_atb_kdefaults,$_atb_row"
+            if [ "${_atb_ktick:-1}" = 1 ] && [ "$_atb_pick" = 1 ]; then
+                _atb_kdefaults="${_atb_kdefaults:+$_atb_kdefaults,}$_atb_row"
             else
                 _atb_allticked=0
             fi
@@ -5369,6 +5381,8 @@ EXAKIT_ATB_DISABLED
     # Select All unticked too, which is what "all" means.
     EXAKIT_TABLE_DEFAULTS="$_atb_kdefaults"
     [ "$_atb_allticked" = 1 ] && EXAKIT_TABLE_DEFAULTS="1${EXAKIT_TABLE_DEFAULTS:+,$EXAKIT_TABLE_DEFAULTS}"
+    # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
+    [ -n "$EXAKIT_TABLE_DEFAULTS" ] || EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # Every row here can be checked, and saying so is not optional:
     # _UI_CHECKBOX_SELECTABLE is published by ui_checkbox_menu and never cleared,
     # so the offer's two-row "Explore ?" question leaves "1 2" behind — and the
@@ -6145,15 +6159,15 @@ exakit_marketplace_offer() {
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         heading "Add-ons for your personas"
-        _mo_only="$(printf '%s' "$EXAKIT_MARKETPLACE_PRESELECT" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
-        [ "$_mo_only" = all ] && _mo_only=""
+        # Every add-on is listed; the personas' own are the ones ticked
+        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
         # Each row says what the add-on does for the persona, in the persona's
         # own words, not the add-on repository's About (NEW-10).
         _mo_reasons=""
         if [ -n "${EXAKIT_PERSONA:-}" ] && command -v _exakit_persona_service >/dev/null 2>&1; then
             _mo_reasons="$(_exakit_persona_service addon-reasons "$EXAKIT_PERSONA" 2>/dev/null || true)"
         fi
-        EXAKIT_MARKETPLACE_REASONS="$_mo_reasons" EXAKIT_MARKETPLACE_ONLY="$_mo_only" exakit_marketplace_menu || true
+        EXAKIT_MARKETPLACE_REASONS="$_mo_reasons" EXAKIT_MARKETPLACE_ONLY="" exakit_marketplace_menu || true
         return 0
     fi
 

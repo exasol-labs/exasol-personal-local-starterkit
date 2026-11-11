@@ -117,8 +117,12 @@ class PersonaApplyTest(unittest.TestCase):
         self.assertEqual(["data-load", "marketplace", "skills-install"], [command for command, _ in calls])
         self.assertEqual("tpch", calls[0][1]["EXAKIT_DATASETS_PRESELECT"])
         self.assertNotIn("EXAKIT_DATASETS", calls[0][1])
-        self.assertEqual("notebook", calls[1][1]["EXAKIT_MARKETPLACE_ONLY"])
+        # Every add-on and sample is listed and asked, the persona's ticked: no filter, no auto-confirm.
+        self.assertEqual("notebook", calls[1][1]["EXAKIT_MARKETPLACE_PRESELECT"])
+        self.assertNotIn("EXAKIT_MARKETPLACE_ONLY", calls[1][1])
         self.assertNotIn("EXAKIT_MARKETPLACE_ADDONS", calls[1][1])
+        self.assertNotIn("UI_TABLE_AUTO", calls[0][1])
+        self.assertNotIn("UI_TABLE_AUTO", calls[1][1])
 
     def test_reapply_only_runs_missing_datasets_and_addons(self) -> None:
         calls = []

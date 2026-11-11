@@ -6863,6 +6863,10 @@ function Show-ExakitMarketplaceMenu {
     $defaults = @(1)
     $innerGroups = @()
     $allTicked = $true
+    # A persona's add-ons (EXAKIT_MARKETPLACE_PRESELECT) start ticked and every
+    # other one is listed unticked; no persona, or "all": every add-on ticked.
+    $pre = @(("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "") -split ',' | Where-Object { $_ })
+    if ($pre -ccontains "all") { $pre = @() }
     $kidCount = 0
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
@@ -6875,7 +6879,8 @@ function Show-ExakitMarketplaceMenu {
         $parentRow = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $selectable[$i].Id) `
             -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
-        $defaults += $parentRow
+        $pick = ($pre.Count -eq 0) -or ($pre -ccontains ("" + $selectable[$i].Id).ToLower())
+        if ($pick) { $defaults += $parentRow } else { $allTicked = $false }
         $kids = @($selectable[$i].Children | Where-Object { $_ })
         if ($kids.Count -eq 0) { continue }
         for ($k = 0; $k -lt $kids.Count; $k++) {
@@ -6883,7 +6888,7 @@ function Show-ExakitMarketplaceMenu {
             $at = Add-ExakitTableRow -Kind "$kind-$kk" -Label ("" + $kids[$k].Label) `
                 -Col2 ("" + $kids[$k].Version) -Col3 ("" + $kids[$k].Description) -Table $script:ExakitAddonTable
             [void]$addonIds.Add($selectable[$i].Id + ":" + $kids[$k].Key)
-            if ($kids[$k].Ticked) { $defaults += $at } else { $allTicked = $false }
+            if ($kids[$k].Ticked -and $pick) { $defaults += $at } else { $allTicked = $false }
         }
         $kidCount += $kids.Count
         # Innermost first: the add-on row settles before Select All re-reads it.
@@ -6915,6 +6920,8 @@ function Show-ExakitMarketplaceMenu {
     # child row its add-on starts unticked (a choice recorded earlier) leaves
     # Select All unticked too, which is what "all" means.
     if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
+    # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
+    if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
     $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
         -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
         -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
@@ -7499,13 +7506,9 @@ function Request-ExakitMarketplaceOffer {
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         Write-ExakitHeading "Add-ons for your personas"
-        $only = ("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "")
-        if ($only -eq "all") {
-            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-            Show-ExakitMarketplaceMenu
-            return
-        }
-        $env:EXAKIT_MARKETPLACE_ONLY = $only
+        # Every add-on is listed; the personas' own are the ones ticked
+        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
+        Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
         # Each row says what the add-on does for the persona, in the persona's own
         # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
         if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {

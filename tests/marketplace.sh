@@ -1504,15 +1504,16 @@ offer() { # offer <preselect> — the filter exakit_marketplace_offer hands the 
         _exakit_prompt_tty() { printf '/dev/tty'; }
         ui_rule() { :; }
         heading() { printf 'HEADING %s\n' "$1"; }
-        exakit_marketplace_menu() { printf 'MENU ONLY=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }
+        exakit_marketplace_menu() { printf 'MENU ONLY=[%s] TICKED=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}"; }
         unset EXAKIT_MARKETPLACE_ADDONS EXAKIT_SOFT_FAILED
         EXAKIT_MARKETPLACE_PRESELECT="$1" exakit_marketplace_offer
     )
 }
-check "all: every add-on, no filter"      "HEADING Add-ons for your personas|MENU ONLY=[]" "$(offer all | tr '\n' '|' | sed 's/|$//')"
-check "a list: only those"                "MENU ONLY=[notebook,udf-devkit]" "$(offer notebook,udf-devkit | grep MENU)"
+check "all: every add-on, no filter"      "HEADING Add-ons for your personas|MENU ONLY=[] TICKED=[all]" "$(offer all | tr '\n' '|' | sed 's/|$//')"
+check "a list: every add-on listed, those ticked" "MENU ONLY=[] TICKED=[notebook,udf-devkit]" "$(offer notebook,udf-devkit | grep MENU)"
 _ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
-has "the Windows twin treats all the same way" 'if ($only -eq "all")' "$_ps_offer"
+has "the Windows twin lists every add-on too" 'Remove-Item env:EXAKIT_MARKETPLACE_ONLY' "$_ps_offer"
+lacks "...and never narrows to the persona's" '$env:EXAKIT_MARKETPLACE_ONLY = ' "$_ps_offer"
 
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

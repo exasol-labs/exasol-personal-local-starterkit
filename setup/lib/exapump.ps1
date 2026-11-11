@@ -3944,13 +3944,9 @@ function New-ExakitDataTable {
     $script:ExakitTableGroupFirst = 0
     $script:ExakitTableGroupLast = 0
     $pending = @(Get-ExakitPendingDatasets)
-    # A PERSONA LISTS ITS OWN. Picked for this machine, the personas' datasets
-    # are the samples on offer; the rest stays one `exakit data-load` away. No
-    # persona: every sample. Twin of the same block in exakit_data_table_build.
-    if ($env:EXAKIT_PERSONA_ACTIVE -and $env:EXAKIT_DATASETS_PRESELECT -and $env:EXAKIT_DATASETS_PRESELECT -ne "none") {
-        $mine = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
-        $pending = @($pending | Where-Object { $mine -ccontains $_.Id })
-    }
+    # EVERY SAMPLE IS LISTED, a persona or not: a persona's datasets are the
+    # ones ticked (EXAKIT_DATASETS_PRESELECT, below), the rest can be ticked too.
+    # Twin of the same comment in exakit_data_table_build.
     if ($pending.Count -gt 0) {
         # The parent row "Sample datasets" is itself a checkbox: pre-selected with
         # every dataset; unchecking it clears them all, after which they can be
