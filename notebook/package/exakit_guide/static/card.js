@@ -248,7 +248,7 @@ function render({ model, el }) {
       return h("div", { class: "guide-head" },
         h("div", {},
           b.brand !== undefined ? brand(b.brand) : h("div", { class: "guide-kicker" }, "Exasol starter kit"),
-          h("h2", { class: "guide-title" }, "Your kit"),
+          b.brand !== undefined ? null : h("h2", { class: "guide-title" }, "Your kit"),     // the mark is the heading
           h("div", { class: `guide-summary guide-summary-${b.state}` },
             b.state === "loading" ? h("span", { class: "guide-spinner" }) : icon(b.state === "ok" ? "check" : b.state === "bad" ? "warn" : "info"),
             b.summary)),
