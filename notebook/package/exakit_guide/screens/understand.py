@@ -171,6 +171,7 @@ class ChooseData(Screen):
         self.connectors: list[dict] = []
         self.forms: dict[str, dict] = {}       # each connector's inputs, as `exakit connect` asks them (nb.connector_inputs)
         self.parsed: dict[str, dict] = {}      # a connection string read per connector (nb.read_connection_string)
+        self.tip = ""                          # the engine's tip about this computer's public IP
         self.rows: dict[str, str] = {}
         self.kit_said = ""
         self.done = False
@@ -187,6 +188,10 @@ class ChooseData(Screen):
             self.samples = [s for s in actions.run("kit.datasets") if s.get("described")]
             self.connectors = actions.run("data.connectors")
             self.forms = actions.run("data.connector_forms")
+            try:        # the connect menu's first line: this computer's public IP, to allow at a cloud source
+                self.tip = next((e.split(" ", 1)[1] for e in actions.run("data.source_tips") if "Tip:" in e), "")
+            except Exception:
+                self.tip = ""
             approved = {a["table"].upper(): a for a in actions.run("kit.approved")}
             found = actions.run("data.map")
             self.rows = {r["table"].upper(): r["rows_shown"] for r in found.table_rows}
@@ -218,7 +223,8 @@ class ChooseData(Screen):
         own_options = [{"value": o["value"], "label": o["label"]} for o in self.own] + [{"value": "__new__", "label": "Load a new file…"}]
         new_only = {"field": "own", "equals": "__new__"}
         connect_only = {"field": "src_schema", "equals": "__connect__"}
-        connectors = [{"value": c["id"], "label": c["name"], "hint": c.get("summary") or ""} for c in self.connectors]
+        connectors = [{"value": c["id"], "label": c["name"] + (" (not available yet)" if c.get("gate") else ""),
+                       "hint": c.get("summary") or ""} for c in self.connectors]
         options = [
             {"value": "sample", "title": "A kit dataset", "text": "Ready-made data that comes with the kit.",
              "disabled": not samples, "disabled_reason": "The kit lists no dataset with a column map.",
@@ -240,8 +246,8 @@ class ChooseData(Screen):
                         {"id": "table", "type": "text", "label": "Table (empty: its one table, or the list of them)", "placeholder": "ORDERS"},
                         {"id": "connector", "type": "select", "label": "Kind of source",
                          "value": connectors[0]["value"] if connectors else "", "options": connectors, "show_if": connect_only},
-                        {"id": "src_name", "type": "text", "label": "Name for it * (its tables appear as VS_<NAME>)",
-                         "placeholder": "sales", "show_if": connect_only}]
+                        {"id": "src_name", "type": "text", "placeholder": "sales", "show_if": connect_only,
+                         "label": self._name_label() + " * (lower case; its tables appear as VS_<NAME>)"}]
                        + self._connector_fields(connect_only)},
         ]
         connecting = [{"field": "kind", "equals": "source"}, connect_only]
@@ -338,7 +344,16 @@ class ChooseData(Screen):
             field.update(type="select", options=[{"value": c, "label": c} for c in spec["choices"]])
         else:
             field.update(type="text")
+        if spec.get("hint"):
+            field["label"] += " - " + " ".join(spec["hint"])       # what the connect form says above this question
         return field
+
+    def _name_label(self) -> str:
+        """The connect form's own first question (the engine's source-name input)."""
+        for form in self.forms.values():
+            if form.get("name_input"):
+                return form["name_input"]["label"]
+        return "Name for this connection"
 
     def _connector_fields(self, connect_only: dict) -> list[dict]:
         """The chosen connector's inputs, as `exakit connect` asks them (its connector.json, via nb.connector_inputs).
@@ -348,6 +363,8 @@ class ChooseData(Screen):
         fields: list[dict] = [{"id": "src_how", "type": "select", "label": "How", "value": "string", "show_if": connect_only,
                                "options": [{"value": "string", "label": "I have a connection string"},
                                            {"value": "form", "label": "Fill in each input"}]}]
+        if getattr(self, "tip", ""):
+            fields.append({"id": "src_tip", "type": "note", "show_if": connect_only, "v": self.tip})
         for cid, form in self.forms.items():
             only = [connect_only, {"field": "connector", "equals": cid}]
             by_string = only + [{"field": "src_how", "equals": "string"}]
@@ -358,10 +375,8 @@ class ChooseData(Screen):
                                "placeholder": form["forms"][0]})
                 read = self.parsed.get(cid)
                 if read:
-                    found = ", ".join(f"{k} {v}" for k, v in read["values"].items()) or "nothing the kit can use"
                     fields.append({"id": self._fid(cid, "found"), "type": "note", "show_if": by_string,
-                                   "v": f"Read from it: {found}." + (" Its password too (kept hidden)."
-                                                                      if read["credential_in_string"] else "")})
+                                   "v": f"Read: {read['masked']}. " + " ".join(n.rstrip(".") + "." for n in read["notes"])})
                     sid = self._sid(cid)
                     specs = {i["name"]: i for i in form["inputs"]}
                     fields += [self._input_field(sid, specs[n], by_string) for n in read["missing"] if n in specs]
@@ -391,16 +406,14 @@ class ChooseData(Screen):
         return fields
 
     def _read_string(self, connector: str, text: str) -> dict:
-        """Read a connection string with the kit's own reader (nb.read_connection_string). Its password is taken out
-        first: the call, the code shown and the workflow log hold the string without it."""
-        from exakit_nb.sources import _url_parts, clean_text
+        """Read a connection string with the kit's own engine (nb.read_connection_string, `exakit connect --url`'s
+        reader). The string stays in the notebook's SOURCE_URL variable, as the code section holds it: the code shown
+        and the workflow log name the variable, never the string - it may hold a password."""
+        from ..actions import Var
 
-        clean, password, _ = _url_parts(clean_text(text))
-        read = dict(actions.run("data.read_string", connector=connector, text=clean))
-        read["credential_in_string"] = bool(password) or read.get("credential_in_string", False)
-        if password and read.get("secret_input") in read["missing"]:
-            read["missing"] = [n for n in read["missing"] if n != read["secret_input"]]
-        read["text"], read["password"] = text, password
+        SESSION.set("SOURCE_URL", text)
+        read = dict(actions.run("data.read_string", connector=connector, text=Var("SOURCE_URL")))
+        read["text"] = text
         read["n"] = self.parsed.get(connector, {}).get("n", 0) + 1
         self.parsed[connector] = read
         return read
@@ -430,6 +443,8 @@ class ChooseData(Screen):
         form = self.forms.get(connector)
         if not form:
             raise ValueError("Choose the kind of source first.")
+        if form.get("gate"):
+            raise ValueError(f"{form['name']} is not available yet: {form['gate']}")
         name = str(v.get("src_name") or "").strip().lower()
         if not name:
             raise ValueError("Give the source a name (lower case, e.g. sales): its tables appear as VS_<NAME>.")
@@ -444,8 +459,9 @@ class ChooseData(Screen):
             read = self.parsed.get(connector)
             if not read or read.get("text") != text:
                 read = self._read_string(connector, text)       # changed since it was read: read it again
-            settings["url"] = read["url"]
-            password = read["password"] or ""
+            from ..actions import Var
+
+            settings["url"] = Var("SOURCE_URL")      # nb.connect_source uses a password in it, and never shows it
             prefix, required = seen or self._sid(connector), set(read["missing"])
             given = {k: v2 for k, v2 in read["values"].items()}
         else:

@@ -220,6 +220,7 @@ def _(nb):
     # Cell tags: load
     connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
     connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
+    source_tips = nb.source_engine("catalog", "--public-ip")["events"]   # this computer's public IP, to allow at a cloud source
     CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
     SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
     SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)

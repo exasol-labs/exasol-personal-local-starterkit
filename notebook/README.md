@@ -74,6 +74,8 @@ hidden in the kit's JupyterLab; **Show all the notebook's code cells**, at the f
 In Marimo the cards show stacked and every cell opens with its code hidden (its code button shows it); Marimo's app view hides the code too. A headless run (`--run`) skips the card cells
 (`skip-ci`).
 
+**One source engine.** The connectors, their inputs and the connection-string reader come from the kit's source engine, the one `exakit connect` runs (`nb.source_engine("catalog" | "inputs" | "paste" ...)`): nothing about a connector is defined in the notebook package, so a connector added to the kit appears here with its form.
+
 **An external source, the kit's own form.** *An external source* on the Choose your data card shows, for the chosen connector, exactly what `exakit connect` asks (`nb.connector_inputs(connector)`, read from the kit's connector definitions). **Test connection** is `nb.test_source(...)`: the kit's input check and a reach from this computer, nothing changed. **Use this data** is `nb.connect_source(...)` with those inputs; the password goes to the kit on standard input only.
 
 **One workflow per start.** `guide.start()` starts a workflow (`nb.workflow`, a new id), and every card action after

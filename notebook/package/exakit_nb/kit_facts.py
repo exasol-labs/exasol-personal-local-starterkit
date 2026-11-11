@@ -84,15 +84,14 @@ def sample_datasets(*, loaded: list[str] | None = None) -> list[dict[str, Any]]:
 
 
 def connectors() -> list[dict[str, Any]]:
-    """The kinds of external source `exakit connect` takes: {id, name, summary, aliases, tier}. From the kit's
-    catalog file, else `exakit source catalog --json`."""
-    root = _kit_root()
-    path = root / "setup" / "virtual-schemas" / "catalog.json" if root else None
-    if path and path.is_file():
-        rows = json.loads(path.read_text(encoding="utf-8")).get("connectors", [])
-    else:
-        rows = _json("source", "catalog").get("connectors", [])
-    return [{k: r.get(k) for k in ("id", "name", "summary", "aliases", "tier")} for r in rows]
+    """The kinds of external source `exakit connect` takes, as its own menu lists them (the kit's source engine,
+    ``catalog``): {id, name, summary, aliases, tier, status, version, gate} - ``version`` the adapter the kit pins,
+    ``gate`` why one is not available yet (empty when it is)."""
+    from .sources import source_engine
+
+    rows = source_engine("catalog").get("connectors", [])
+    return [{**{k: r.get(k) for k in ("id", "name", "summary", "aliases", "tier", "status", "version")},
+             "gate": r.get("gate") or ""} for r in rows]
 
 
 def loaded_files() -> list[dict[str, Any]]:
@@ -123,28 +122,28 @@ def loaded_files() -> list[dict[str, Any]]:
 
 
 def connector_inputs(connector: str) -> dict[str, Any]:
-    """What `exakit connect <connector>` asks, from the kit's own definition of it (the file its connect form reads):
-    {id, name, summary, tier, access, tips, forms, inputs}. Each input is {name, label, kind, required, default,
-    choices, secret, file, hint}: ``secret`` is a password or key (never a cell's text), ``file`` a path to a file.
-    ``forms`` are the connection-string shapes it also takes (``url=``). The connector may be named by id or alias."""
+    """What `exakit connect <connector>` asks, from the kit's source engine (``inputs``: what its connect form reads,
+    in the form's order). The connector may be named by id or alias. Returns {id, name, status, gate, name_input,
+    inputs, forms, access, tips}: ``name_input`` is the form's first question (the source's name); each of ``inputs``
+    is {name, label, kind, required, default, choices, secret, file, hint, prompt, draft} - ``secret`` a password or
+    key (never a cell's text), ``file`` a path to a file, ``hint`` the lines the form says above the question.
+    ``forms`` are the connection-string shapes it reads (``url=``), ``access`` and ``tips`` what its source card says."""
+    from .sources import source_engine
+
+    answer = source_engine("inputs", str(connector or "").strip().lower())
+    fields = [{**f, "hint": list(f.get("hint") or []), "prompt": f.get("prompt") or "", "draft": f.get("draft") or "",
+               "file": f["kind"] in ("ca-file", "secret-file")} for f in answer["inputs"]]
     root = _kit_root()
-    if root is None:
-        raise ValueError("The kit copy was not found, so its connectors cannot be read (EXAKIT_NB_KIT).")
-    wanted = str(connector or "").strip().lower()
-    rows = json.loads((root / "setup" / "virtual-schemas" / "catalog.json").read_text(encoding="utf-8")).get("connectors", [])
-    row = next((r for r in rows if wanted == r["id"] or wanted in [a.lower() for a in r.get("aliases") or []]), None)
-    if row is None:
-        raise ValueError(f"No connector {connector!r}: the kit has {', '.join(r['id'] for r in rows)}.")
-    doc = json.loads((root / "setup" / "virtual-schemas" / "connectors" / row["id"] / "connector.json")
+    # The connection-string forms, the access the reader needs and the tips: the connector's own definition, read
+    # where the shell reads them (its paste hint and its source card).
+    doc = json.loads((root / "setup" / "virtual-schemas" / "connectors" / answer["connector"] / "connector.json")
                      .read_text(encoding="utf-8"))
-    inputs = [{"name": spec["name"], "label": spec.get("label", spec["name"]), "kind": spec["kind"],
-               "required": bool(spec.get("required")), "default": "" if spec.get("default") is None else str(spec["default"]),
-               "choices": [str(c) for c in spec.get("choices") or []],
-               "secret": spec["kind"] in ("secret", "secret-file"), "file": spec["kind"] in ("ca-file", "secret-file"),
-               "hint": list(spec.get("hint") or [])} for spec in doc.get("inputs", [])]
-    return {"id": row["id"], "name": row.get("name") or doc.get("name"), "summary": row.get("summary") or "",
-            "tier": row.get("tier") or "", "access": doc.get("access") or "", "tips": list(doc.get("tips") or []),
-            "forms": list((doc.get("paste") or {}).get("forms") or []), "inputs": inputs}
+    return {"id": answer["connector"], "name": answer["name"], "status": answer.get("status") or "",
+            "gate": answer.get("gate") or "",
+            "name_input": next((f for f in fields if f["kind"] == "source-name"), None),
+            "inputs": [f for f in fields if f["kind"] != "source-name"],
+            "forms": list((doc.get("paste") or {}).get("forms") or []),
+            "access": doc.get("access") or "", "tips": list(doc.get("tips") or [])}
 
 
 def addons() -> list[dict[str, Any]]:

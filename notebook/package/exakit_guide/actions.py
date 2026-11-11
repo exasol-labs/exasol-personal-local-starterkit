@@ -17,6 +17,7 @@ checks every action's call is in its notebook's code section).
 
 from __future__ import annotations
 
+import re
 import string
 from dataclasses import dataclass
 from typing import Any
@@ -72,6 +73,8 @@ ACTIONS: dict[str, Action] = {
     "data.table": Action("00_quickstart", "own_data = nb.use_table(connection, {table})", "own_data"),
     "data.approved": Action("00_quickstart", "own_data = nb.dataset(connection, {dataset_id})", "own_data"),
     "data.connect_source": Action("00_quickstart", "connected = nb.connect_source({connector}, {name}{settings}{secret})", "connected"),
+    "data.source_tips": Action("00_quickstart", 'source_tips = nb.source_engine("catalog", "--public-ip")["events"]',
+                               "source_tips", False),
     "data.read_string": Action("00_quickstart", "source_reading = nb.read_connection_string({connector}, {text})", "source_reading", False),
     "data.test_source": Action("00_quickstart", "source_test = nb.test_source({connector}, {name}{settings})", "source_test", False),
     "data.connector_forms": Action("00_quickstart", 'connector_forms = {{c["id"]: nb.connector_inputs(c["id"]) for c in connectors}}',
@@ -185,7 +188,8 @@ def run(action_id: str, session=None, **values: Any) -> Any:
     action = ACTIONS[action_id]
     text = _render(action_id, values, for_run=True)
     namespace = session.namespace()
-    if "connection" in text and action_id != "data.connect":
+    # The notebook's `connection` variable, as a whole word: nb.read_connection_string needs no database.
+    if re.search(r"\bconnection\b", text) and action_id != "data.connect":
         session.connection()
     secret = values.get("secret")
     if secret:

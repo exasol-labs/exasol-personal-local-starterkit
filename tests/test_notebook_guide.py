@@ -146,6 +146,24 @@ class SourceFormTest(unittest.TestCase):
         self.assertEqual("secret-file", next(i["kind"] for i in nb.connector_inputs("bigquery")["inputs"] if i["file"]
                                              and i["secret"]))
 
+    def test_the_form_is_the_kits_own_engine_not_a_copy(self):
+        """Listing, inputs and the connection-string reader are asked of setup/virtual-schemas/engine/cli.py - what
+        `exakit connect` itself runs - so the notebook cannot drift from the terminal."""
+        nb = importlib.import_module("exakit_nb")
+        engine = nb.source_engine("inputs", "postgresql")
+        form = nb.connector_inputs("postgresql")
+        self.assertEqual([f["name"] for f in engine["inputs"] if f["kind"] != "source-name"], [i["name"] for i in form["inputs"]])
+        self.assertEqual("Name (alias) for this connection", form["name_input"]["label"])
+        self.assertEqual([c["id"] for c in nb.source_engine("catalog")["connectors"]], [c["id"] for c in nb.connectors()])
+        self.assertTrue(all(c["version"] for c in nb.connectors()))                       # the adapter the kit pins
+        source = (PACKAGE / "exakit_nb" / "sources.py").read_text(encoding="utf-8")
+        self.assertNotIn('import_module("paste")', source)                                # no second reader
+        reading = nb.read_connection_string("mongodb", "mongodb+srv://u:p4ss@cluster0.x.mongodb.net/shop")
+        self.assertEqual({"uri": "mongodb+srv://cluster0.x.mongodb.net", "database": "shop", "user": "u"}, reading["values"])
+        self.assertNotIn("p4ss", json.dumps(reading))
+        with self.assertRaisesRegex(nb.SourceProblem, "does not read this as a PostgreSQL connection string"):
+            nb.read_connection_string("pg", "http://x")
+
     def test_a_test_checks_the_inputs_then_the_network_and_sends_no_password(self):
         sources = importlib.import_module("exakit_nb.sources")
         with mock.patch.object(sources, "connect_source") as plan, \
@@ -381,7 +399,7 @@ class CardTest(unittest.TestCase):
         def run(action_id, **values):
             calls.append((action_id, values))
             if action_id == "data.read_string":
-                return nb.read_connection_string(values["connector"], values["text"])
+                return nb.read_connection_string(values["connector"], understand.SESSION.get("SOURCE_URL"))
             return "VS_SALES"
 
         with mock.patch.object(understand.actions, "run", side_effect=run):
@@ -400,13 +418,16 @@ class CardTest(unittest.TestCase):
             card._connect({"connector": "postgresql", "src_name": "sales",
                            card._fid("postgresql", "url"): "postgres://reader:s3cret@db.example.com:5433/shop",
                            card._fid(card._sid("postgresql"), "tls"): "require"})
-        read = [v for a, v in calls if a == "data.read_string"][-1]
-        self.assertEqual("postgres://reader@db.example.com:5433/shop", read["text"])              # no password
-        connect = [v for a, v in calls if a == "data.connect_source"][-1]
-        self.assertEqual({"url": "postgres://reader@db.example.com:5433/shop", "tls": "require"}, connect["settings"])
-        self.assertEqual("s3cret", connect["secret"]["secret"]("Password"))
         actions = importlib.import_module("exakit_guide.actions")
-        self.assertNotIn("s3cret", actions.code("data.connect_source", **connect))
+        read = [v for a, v in calls if a == "data.read_string"][-1]
+        # The string is the notebook's SOURCE_URL variable: the code and the log name it, never hold it.
+        self.assertEqual('source_reading = nb.read_connection_string("postgresql", SOURCE_URL)',
+                         actions.code("data.read_string", **read))
+        connect = [v for a, v in calls if a == "data.connect_source"][-1]
+        shown = actions.code("data.connect_source", **connect)
+        self.assertEqual('connected = nb.connect_source("postgresql", "sales", url=SOURCE_URL, tls="require")', shown)
+        self.assertNotIn("s3cret", shown)
+        self.assertEqual("****", card.parsed["postgresql"]["masked"].split(":")[2].split("@")[0])   # the engine's mask
 
     def test_run_logs_exactly_what_it_ran_and_returns_the_result(self):
         actions = importlib.import_module("exakit_guide.actions")
