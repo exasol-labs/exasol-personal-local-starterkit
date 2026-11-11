@@ -83,7 +83,7 @@ appear as `VS_<NAME>`. Then:
 | `endpoint` | `s3` | no | empty for Amazon S3; a non-AWS store's URL (section 4) |
 | `account_name` | `azure` with a catalog | yes | Azure portal > Storage accounts; for `catalog=none` it comes from the `abfss://` path |
 | `secret` | always | yes | the catalog token or client secret; for `glue` the AWS secret key; for `none` the storage secret - `--password-file` or `--password-stdin` only |
-| storage secret | a catalog plus `s3` or `azure` | yes | the S3 secret key, or the Azure account key or SAS - `--storage-secret-file` only |
+| `storage_secret` | a catalog plus `s3` or `azure` | yes | the S3 secret key, or the Azure account key or SAS - `--storage-secret-file` only |
 
 A value starting with `sv=` or `?sv=` is a SAS (`sas_token`); anything else is
 an account key. Each secret file holds the value alone, not JSON.
@@ -259,16 +259,16 @@ Parquet (`none`: Parquet only); ORC and Hudi are not read.
 | `input` (exit 2) naming the valid `files` values | the combination is one of the 7 refused ones (section 2) |
 | a token and an OAuth client both given | pick `login=token` or `login=oauth` |
 | `gs://`, `abfs://` or `wasbs://` refused | GCS is not supported (use `exasol-vs-databricks` for Unity on GCS); Azure needs `abfss://...dfs.core.windows.net/...` |
-| "NotAuthorizedException", "HTTP 401", "Invalid access token" (`auth`) | a new token or client secret, then `exakit source reauth lake --password-file <file>` |
+| "NotAuthorizedException", "HTTP 401", "Invalid access token" (`auth`) | a new token or client secret, then `exakit source reauth lake --password-file <file>` (plus `--storage-secret-file <file2>` for a two-secret combination) |
 | "Unity Catalog does not let engines outside Databricks read this schema's files" (`external`) | External Data Access and EXTERNAL USE SCHEMA (section 5); Default Storage never works: `exakit connect databricks` |
 | "catalog-managed table, which this adapter version cannot read yet" (`managed`) | read it through `exakit connect databricks` |
 | other `PERMISSION_DENIED` (`denied`) | USE CATALOG, USE SCHEMA, SELECT for the token's user |
 | "no such namespace that this credential can see" | check `namespace` and `warehouse` (Databricks endpoint: catalog name, schema name) and grants |
 | "namespace must be catalog.schema" | Unity: give both parts, e.g. `main.sales` |
 | "Glue GetTables failed ... AccessDeniedException" (`denied`) | the key may not list that database, or it does not exist (AWS answers both the same): check the name, else grant the action |
-| "The security token included in the request is invalid" (`auth`) | AWS does not know the key: a new one, then connect again |
+| "The security token included in the request is invalid" (`auth`) | AWS does not know the key: a new one, then `exakit source reauth lake --password-file <file>` |
 | "incorrectly configured region", "x-amz-bucket-region" (`region`) | connect again with `--set region=<the bucket's region>` |
-| "AuthenticationFailed" (Azure) | wrong key, expired SAS, or a SAS without Read and List: a new one, then connect again with `--storage-secret-file` |
+| "AuthenticationFailed" (Azure) | wrong key, expired SAS, or a SAS without Read and List: a new one, then `exakit source reauth lake` with both secret files (`catalog=none`: `--password-file` only) |
 | "... is plain http to <host>, a public host" | use `https`; http only for this computer or a private network |
 | `clock` (RequestTimeTooSkewed, "Signature expired", a 403 with the clock far off) | `exakit stop`, then `exakit start` |
 | a table left out by name | ORC, Avro, Hudi, views and Iceberg tables with equality deletes are not read |
@@ -276,11 +276,14 @@ Parquet (`none`: Parquet only); ORC and Hudi are not read.
 
 ## 10. Keep it working
 
-- A new catalog secret (or, for `glue` and `none`, the only secret):
-  `exakit source reauth lake --password-file <file>`.
-- A new storage secret, or another catalog URL, schema, database, folder or
-  region: the same `exakit connect lakehouse --name lake ...` with the changed
-  `--set` and both secret files (`--dry-run` first). `VS_LAKE` keeps its name.
+- A new secret: `exakit source reauth lake --password-file F [--storage-secret-file F2]`.
+  The CONNECTION holds both secrets and the kit never stores secrets, so a
+  two-secret combination (`iceberg-rest` or `unity` with `s3` or `azure`) needs
+  both files, even when only one changed. One-secret combinations (`vended`,
+  `glue`, `none`) need only `--password-file`.
+- Another catalog URL, schema, database, folder or region: the same
+  `exakit connect lakehouse --name lake ...` with the changed `--set` and the
+  secret files (`--dry-run` first). `VS_LAKE` keeps its name.
 - Tables added at the source: `exakit source refresh lake`.
 - Stop: `exakit source disconnect lake` or `exakit source remove lake`
   (`--dry-run` first, then ask). The last lakehouse source removes the shared

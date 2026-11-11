@@ -101,7 +101,7 @@ schema `VS_SALES_LAKE`.
 | `glue` | AWS region * | `region` | `eu-central-1` |
 | | Glue database * | `database` | `sales_db` |
 | | Access key ID * | `access_key_id` | `AKIA...` |
-| | Secret access key (hidden) * | the secret file | |
+| | Secret access key (hidden) * | `secret` (`--password-file`) | |
 | | Glue catalog ID | `catalog_id` | `123456789012` (optional) |
 | `none` | Folder path * | `path` | `s3://sales-lake/orders/` or `abfss://lake@saleslake.dfs.core.windows.net/orders/` |
 
@@ -109,8 +109,8 @@ schema `VS_SALES_LAKE`.
 
 | `login` | Fields |
 |---|---|
-| `token` (default) | Catalog token (hidden) *. For Unity the label is "Databricks token". |
-| `oauth` | Client ID * (`client_id`), Client secret (hidden) *, Token endpoint (`token_endpoint`, optional), Scope (`scope`, optional) |
+| `token` (default) | Catalog token (hidden) * (`secret`, `--password-file`). For Unity the label is "Databricks token". |
+| `oauth` | Client ID * (`client_id`), Client secret (hidden) * (`secret`, `--password-file`), Token endpoint (`token_endpoint`, optional), Scope (`scope`, optional) |
 
 Pick one. A token and an OAuth client together are refused. Glue signs its
 requests with the AWS key, and `none` has no catalog, so neither asks for a
@@ -123,10 +123,10 @@ login.
 | `vended` | AWS region (only if the files are on S3) | `region` | `us-east-2` |
 | `s3` | AWS region * | `region` | `eu-central-1` |
 | | Access key ID * | `access_key_id` | `AKIA...` |
-| | Secret access key (hidden) * | the secret file | |
+| | Secret access key (hidden) * | `storage_secret` (`--storage-secret-file`; with `catalog=none`, `--password-file`) | |
 | | Endpoint (S3-compatible store) | `endpoint` | empty for Amazon S3 |
 | `azure` | Azure storage account * | `account_name` | `saleslake` |
-| | Account key or SAS (hidden) * | the secret file | |
+| | Account key or SAS (hidden) * | `storage_secret` (`--storage-secret-file`; with `catalog=none`, `--password-file`) | |
 
 - **Region with vended files.** Leave it empty on Azure. On S3, give the
   bucket's region when the catalog does not send one: Unity's vended
@@ -142,7 +142,7 @@ A connection can carry two secrets: the **catalog secret** (a token or an OAuth
 client secret) and the **storage secret** (an S3 secret key or an Azure key or
 SAS). Neither ever goes on the command line.
 
-| Combination | `--password-file F` or `--password-stdin` | `--storage-secret-file F` |
+| Combination | `secret`: `--password-file F` or `--password-stdin` | `storage_secret`: `--storage-secret-file F` |
 |---|---|---|
 | `iceberg-rest` or `unity` + `vended` | the catalog secret | not used |
 | `iceberg-rest` or `unity` + `s3` or `azure` | the catalog secret | the storage secret |
@@ -404,13 +404,19 @@ folder is one source: connect again with another `--name` for the next.
 exakit source show sales_lake          # "Lakehouse · Unity Catalog · Azure ADLS Gen2"
 exakit source check sales_lake
 exakit source refresh sales_lake       # tables added at the source
-exakit source reauth sales_lake --password-file <new catalog secret>
+exakit source reauth sales_lake --password-file ~/.config/exakit/uc.token \
+  --storage-secret-file ~/.config/exakit/azkey.txt
 exakit sql "SELECT EXAKIT_VS.LAKEHOUSE_VERSION()"
 ```
 
-`reauth` replaces the secret that `--password-file` carries. To replace the
-storage secret too, run the same connect again with the same `--name` and both
-files.
+`exakit source reauth <name> --password-file F [--storage-secret-file F2]`
+replaces the credential. The CONNECTION holds every secret of the source and
+the kit never stores secrets, so a reauth gives all of them again:
+
+| Combination | `reauth` needs |
+|---|---|
+| `iceberg-rest` or `unity` + `s3` or `azure` (two secrets) | `--password-file` and `--storage-secret-file`, even if only one changed |
+| `vended`, `glue`, `none` (one secret) | `--password-file` only |
 
 ## Common problems
 
@@ -419,15 +425,15 @@ files.
 | kind `input`: the combination is not valid | The remedy names the `files` values for that catalog. Glue takes S3 only; no catalog takes `s3` or `azure`. |
 | Both a token and an OAuth client given | Pick `login=token` or `login=oauth`, not both. |
 | A `gs://` path, or `abfs://` / `wasbs://`, refused | GCS is not supported; Azure needs `abfss://...dfs.core.windows.net/...`. For Unity tables on GCS use `exakit connect databricks`. |
-| "NotAuthorizedException", "HTTP 401", "Invalid access token" | The catalog refused the token or client: make a new one, then `exakit source reauth <name>`. |
+| "NotAuthorizedException", "HTTP 401", "Invalid access token" | The catalog refused the token or client: make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). |
 | "Unity Catalog does not let engines outside Databricks read this schema's files" | Turn on External Data Access and grant `EXTERNAL USE SCHEMA`. A Default Storage schema never works: use `exakit connect databricks`. |
 | "catalog-managed table, which this adapter version cannot read yet" | Read it with `exakit connect databricks`. |
 | `PERMISSION_DENIED` (Unity) | Grant USE CATALOG, USE SCHEMA and SELECT. |
 | "no such namespace that this credential can see" | Check the namespace and warehouse (Databricks Iceberg endpoint: warehouse = catalog, namespace = schema) and the grants. |
 | "AccessDeniedException ... not authorized to perform: glue:GetTables" | The key may not read that database, or the name is wrong (AWS answers both the same). Check the name, else grant the action. |
-| "The security token included in the request is invalid" | AWS does not know the key: make a new one and connect again. |
+| "The security token included in the request is invalid" | AWS does not know the key: make a new one, then `exakit source reauth <name> --password-file F`. |
 | "x-amz-bucket-region", "incorrectly configured region" | The bucket is in another region: connect again with `--set region=<the bucket's region>`. |
-| "AuthenticationFailed" (Azure) | A wrong key, an expired SAS, or a SAS without Read and List: make a new one and connect again with `--storage-secret-file`. |
+| "AuthenticationFailed" (Azure) | A wrong key, an expired SAS, or a SAS without Read and List: make a new one, then `exakit source reauth <name>` with both secret files (with `catalog=none`, `--password-file` only). |
 | Every bucket answers "NoSuchBucket" on a non-AWS store | Give the store's endpoint with `--set endpoint=`; the kit adds `path_style`. Leave it empty for Amazon S3. |
 | A signed request refused for the clock | The database clock is off by more than 15 minutes (after the laptop slept): `exakit stop`, then `exakit start`. |
 | "... is plain http to <host>, a public host" | Use `https`. `http` works only for this computer or a private network. |

@@ -317,7 +317,9 @@ Nine combinations work; Glue takes S3 only (no files question), `none` takes `s3
 `azure`, and Google Cloud Storage is refused by the adapter. A connection holds up to two
 secrets: `--password-file` / `--password-stdin` carry the catalog secret (for `glue` the
 AWS secret, for `none` the storage secret), and `--storage-secret-file` the storage
-secret when both exist. The fields and the adapter mapping are in `exasol-vs-lakehouse`.
+secret when both exist. `exakit source reauth <name> --password-file F [--storage-secret-file F2]`
+needs both files for a two-secret source (the kit never stores secrets). The fields and
+the adapter mapping are in `exasol-vs-lakehouse`.
 
 First use installs the Rust language container (the one MongoDB uses), at once
 at a terminal and with `--yes` in a script: pinned per CPU, checksum-verified, one restart. Four scripts are shared by every
