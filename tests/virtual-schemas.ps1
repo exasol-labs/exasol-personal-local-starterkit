@@ -100,7 +100,17 @@ $connectLines = @($r.Lines)
 $result = Show-ExakitVsLines -Lines (Invoke-ExakitVsEngine -Arguments @("list")).Lines
 Check "list comes back parsed" "sales" (@($result.sources)[0].name)
 Check "...each row adds where it lives and its TLS level (host, tls)" "pg.example.com verify" ("" + @($result.sources)[0].host + " " + @($result.sources)[0].tls)
-Check "...and keeps every key it had" "connector host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
+Check "...and keeps every key it had" "connector connector_name host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
+# A lakehouse source's two secrets: one pipe, base64 "." base64 (--secret-pair-base64),
+# non-ASCII intact. A pair the engine could not split is exit 2; this one reaches
+# the source lookup (no such source: exit 4).
+$r = Invoke-ExakitVsEngine -Arguments @("reauth", "nosuch", "--secret-stdin") -Secret "t$([char]0x00F6)ken" -StorageSecret "sv=2024&sig=$([char]0x00E9)x"
+Check "two secrets through the bridge: parsed by the engine (exit 4, not 2)" 4 $r.Code
+$bridgeText = Get-Content -Raw -LiteralPath (J @("setup", "lib", "virtual-schemas.ps1"))
+Check "...sent as --secret-pair-base64, never as an argument value" $true ($bridgeText.Contains('"--secret-pair-base64"') -and $bridgeText.Contains('$encoded + "." +'))
+$r = Invoke-ExakitVsEngine -Arguments @("inputs", "lakehouse", "--set", "catalog=unity", "--set", "files=s3")
+$doc = Show-ExakitVsLines -Lines $r.Lines
+Check "inputs for unity+s3: the storage secret flagged, after the token" "secret storage_secret" ((@($doc.inputs | Where-Object { $_.kind -eq "secret" } | ForEach-Object { $_.name })) -join " ")
 $r = Invoke-ExakitVsEngine -Arguments @("paste", "pg", "--base64") -Secret "jdbc:postgresql://h/db?user=r&password=Abc&Xyz9"
 Check "paste through the bridge: a password's unencoded & leaks no name" $false (($r.Lines -join "`n").Contains("Xyz9"))
 Check "...the string comes back masked by the engine, the password and its unencoded tail hidden" "jdbc:postgresql://h/db?user=r&password=****&****" (Get-ExakitVsResultOf $r.Lines).masked
@@ -1518,7 +1528,7 @@ Write-Host ""
 Write-Host "== the hint above the connection-string question: one form per line, every connector =="
 # ui.ps1 is loaded above: Split-ExakitWrap, which wraps a form too wide for the console.
 # The hint above the question asks for the string, then names every form the
-# connector reads on a line of its own, indented under the hint's text: all 13
+# connector reads on a line of its own, indented under the hint's text: all 11
 # connectors. Too narrow for a form, it wraps at the same indent.
 $hintN = 0
 foreach ($dir in @(Get-ChildItem -LiteralPath (J @("setup", "virtual-schemas", "connectors")) -Directory | Sort-Object Name)) {
@@ -1528,7 +1538,7 @@ foreach ($dir in @(Get-ChildItem -LiteralPath (J @("setup", "virtual-schemas", "
     Check ("the hint for " + $dir.Name + ": what to paste, then one form per line, indented under its text") ("INFO Paste the source's connection string, for example:`n" + ($want -join "`n")) ((@($script:shown) + $lines) -join "`n")
     $hintN++
 }
-Check "...every connector has one" 13 $hintN
+Check "...every connector has one" 11 $hintN
 $script:shown.Clear()
 $lines = @(Write-ExakitVsPasteHint -Forms @(Get-ExakitVsPasteForms "postgresql") -Cols 30 6>&1 | ForEach-Object { ("" + $_) -replace ([string][char]27 + "\[[0-9;]*m"), "" })
 Check "...a form wider than the console wraps at the same indent" "        jdbc:postgresql://ho|        st:5432/db|        postgres://user@host|        :5432/db|        host[:port][/databas|        e]" ($lines -join "|")

@@ -17,9 +17,7 @@ Each guide below tells you where to find every value `exakit connect` asks for.
 | `s3` | [Amazon S3 files](s3.md) | bucket, region, an EDML mapping, an IAM access key | No |
 | `azure-blob` | [Azure Blob files](azure-blob.md) | storage account, container, an EDML mapping, a SAS token | No |
 | `databricks` | [Databricks (SQL warehouse)](databricks.md) | workspace host, warehouse HTTP path, catalog, schema, a personal access token | No |
-| `lakehouse` | [Iceberg on AWS Glue](lakehouse.md) | region, Glue database, an IAM access key | No |
-| `iceberg-rest` | [Iceberg REST catalog](iceberg-rest.md) | catalog URL, warehouse, namespace, a catalog token or storage keys | No |
-| `unity` | [Unity Catalog (from storage)](unity.md) | workspace URL, `catalog.schema`, bucket region, a personal access token | No |
+| `lakehouse` | [Lakehouse (Iceberg / Delta)](lakehouse.md) | a catalog (Iceberg REST, Unity Catalog, AWS Glue, or none for a Parquet folder), the files (vended, S3 or Azure ADLS) and their logins | No |
 | `mongodb` | [MongoDB](mongodb.md) | URI, database, collection, a reader account and its password | No |
 
 ## Before you start

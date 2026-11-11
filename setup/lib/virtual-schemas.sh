@@ -297,7 +297,7 @@ _exakit_vs_secret_failed() {
 # empty) stays exported when assigned, and every child would see the value.
 _exakit_vs_quiet() {
     case "$-" in *x*) { set +x; } 2>/dev/null ;; esac
-    unset EXAKIT_VS_STDIN_SECRET _cc_secret _cs_secret _evx_secret _evo_secret _evo_v _EVH_LINE _EVT_ANSWER \
+    unset EXAKIT_VS_STDIN_SECRET _cc_secret _cc_storage _cs_storage _evo_storage _cs_secret _evx_secret _evo_secret _evo_v _EVH_LINE _EVT_ANSWER \
         _eap_url _etf_v _erh_value _EVP_SECRET
     # This command's own answers only. A public IP looked up by an earlier
     # command reaches later ones through the processes it started (a restart's
@@ -370,6 +370,73 @@ _exakit_vs_read_secret() {
         return 0
     fi
     _exakit_vs_secret_text
+}
+
+# _exakit_vs_read_storage <label> <storage-secret-file> — the second secret of
+# a lakehouse combination with two (a catalog login and storage keys): from
+# --storage-secret-file, else asked hidden at a terminal; empty when neither
+# can give it (--json, a pipe), which the caller refuses. Never from stdin:
+# that carries the first one. Called in $( ). ⇄ twin: Read-ExakitVsStorageSecret.
+_exakit_vs_read_storage() {
+    if [ -n "$2" ]; then
+        { [ -r "$2" ] && [ ! -d "$2" ]; } || { error "Cannot read $2"; return 1; }
+        _exakit_vs_secret_text < "$2"
+        return $?
+    fi
+    [ "${EXAKIT_VS_JSON:-0}" = 1 ] && return 0
+    [ -n "$(_exakit_prompt_tty)" ] && [ -r /dev/tty ] || return 0
+    exakit_read_hidden "$1" || { error "The terminal cannot hide input; give it with --storage-secret-file."; return 1; }
+}
+
+# _exakit_vs_b64 — stdin as one line of base64 (macOS and GNU base64 alike).
+_exakit_vs_b64() { base64 | tr -d '\n\r'; }
+
+# _exakit_vs_pair <secret> <storage-secret> — the two secrets as the engine's
+# --secret-pair-base64 reads them on stdin: base64 "." base64. Builtins and
+# pipes only: neither value is ever an argument of a program.
+# ⇄ twin: ConvertTo-ExakitVsSecretPair.
+_exakit_vs_pair() {
+    printf '%s' "$1" | _exakit_vs_b64
+    printf '.'
+    printf '%s' "$2" | _exakit_vs_b64
+}
+
+# _exakit_vs_engine_sets <command> <connector> — the engine's command with the
+# --set pairs gathered so far (EXAKIT_VS_SETS) after the connector.
+_exakit_vs_engine_sets() {
+    _ees_cmd="$1"; _ees_conn="$2"
+    set -- "$_ees_cmd" "$_ees_conn"
+    while IFS= read -r _ees_w; do [ -n "$_ees_w" ] && set -- "$@" "$_ees_w"; done <<EOF
+${EXAKIT_VS_SETS:-}
+EOF
+    exakit_vs_engine "$@" < /dev/null
+}
+
+# _exakit_vs_secret_labels <connector> — "<credential label>|<storage label>"
+# for the combination the --set pairs gathered so far choose (engine inputs);
+# the second empty when it has one secret, both when it has none.
+# ⇄ twin: Get-ExakitVsSecretLabels.
+_exakit_vs_secret_labels() {
+    _exakit_vs_engine_sets inputs "$1" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" | sed -n 's/^RESULT //p' \
+        | run_python_any -c 'import json, sys
+try:
+    doc = json.load(sys.stdin)
+except ValueError:
+    doc = {"inputs": []}
+cred = next((f["label"] for f in doc["inputs"] if f["kind"] in ("secret", "secret-file") and not f.get("storage")), "")
+store = next((f["label"] for f in doc["inputs"] if f.get("storage")), "")
+print("%s|%s" % (cred, store))' 2>/dev/null
+}
+
+# exakit_vs_preset <connector> <setting> <value> — the picker's interface to the
+# form: a setting chosen before the form opens (the lakehouse tree's catalog and
+# files), answered and not asked. Lines "<connector> <key>=<value>" in
+# _EXAKIT_VS_PRESET; _exakit_vs_tui_form takes those of its connector as if
+# given with --set. Set them before _exakit_vs_tui runs (after _exakit_vs_pick).
+# ⇄ twin: Add-ExakitVsPreset.
+exakit_vs_preset() {
+    _EXAKIT_VS_PRESET="${_EXAKIT_VS_PRESET:-}$1 $2=$3
+"
 }
 
 # _exakit_vs_interrupted <saved-trap> — after a reader gave the terminal back
@@ -840,12 +907,18 @@ _exakit_vs_legend() {
 # _exakit_vs_ask_inputs <connector> [marks] — prompt for each input the caller
 # did not set, defaults offered; appends --set KEY=VALUE pairs to
 # EXAKIT_VS_SETS. marks: a required question ends in a red *, and is not left
-# empty (_exakit_vs_prompt).
+# empty (_exakit_vs_prompt). The questions are the engine's (inputs), asked
+# again after each answer: a connector with settings (lakehouse) asks its
+# catalog, then files, then that combination's inputs only.
 _exakit_vs_ask_inputs() {
-    _evi_lines="$(run_python_any - "$(exakit_vs_defs)/connectors/$1/connector.json" <<'PY'
-import json, sys
-for spec in json.load(open(sys.argv[1]))["inputs"]:
-    if spec["kind"] in ("secret", "secret-file"):
+    _evi_asked=" "
+    while :; do
+        _evi_line="$(_exakit_vs_engine_sets inputs "$1" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" | sed -n 's/^RESULT //p' \
+            | run_python_any -c 'import json, sys
+doc = json.load(sys.stdin)
+skip = sys.argv[1].split()
+for spec in doc["inputs"]:
+    if spec["kind"] in ("secret", "secret-file", "source-name") or spec["name"] in skip:
         continue
     choices = "/".join(spec.get("choices", []))
     label = spec.get("label", spec["name"])
@@ -855,22 +928,21 @@ for spec in json.load(open(sys.argv[1]))["inputs"]:
     # The words of the question when it has them, and the lines said above it.
     print("%s|%s|%s|%s|%s|%s|%s" % (spec["name"], spec.get("prompt") or label, spec.get("default", ""), choices,
                                     "1" if spec.get("required") else "", short, "|".join(spec.get("hint", []))))
-PY
-)"
-    while IFS='|' read -r _evi_name _evi_label _evi_default _evi_choices _evi_req _evi_short _evi_hint; do
-        [ -n "$_evi_name" ] || continue
-        case " $EXAKIT_VS_GIVEN " in *" $_evi_name "*) continue ;; esac
-        [ -n "$_evi_hint" ] && printf '%s\n' "$_evi_hint" | tr '|' '\n' | while IFS= read -r _evi_line; do
-            printf '  %s%s%s\n' "${UI_DIM:-}" "$_evi_line" "${UI_RESET:-}" >&2
+    break' "$EXAKIT_VS_GIVEN $_evi_asked" 2>/dev/null)"
+        [ -n "$_evi_line" ] || break
+        IFS='|' read -r _evi_name _evi_label _evi_default _evi_choices _evi_req _evi_short _evi_hint <<EOF
+$_evi_line
+EOF
+        _evi_asked="$_evi_asked$_evi_name "
+        [ -n "$_evi_hint" ] && printf '%s\n' "$_evi_hint" | tr '|' '\n' | while IFS= read -r _evi_hl; do
+            printf '  %s%s%s\n' "${UI_DIM:-}" "$_evi_hl" "${UI_RESET:-}" >&2
         done
         [ -n "$_evi_choices" ] && _evi_label="$_evi_label ($_evi_choices)"
         _evi_value="$(_exakit_vs_prompt "$_evi_label" "$_evi_default" "$_evi_req" "${2:-}" "$_evi_short")"
         [ -n "$_evi_value" ] && EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
 $_evi_name=$_evi_value"
-    done <<EOF
-$_evi_lines
-EOF
+    done
 }
 
 # _exakit_vs_paste_forms <connector> — the connection strings its paste block
@@ -1539,7 +1611,8 @@ _exakit_vs_tui_field() {
         choice) _etf_note="($(printf '%s' "${_EVT_CH[$_etf_i]}" | sed 's/ / · /g'))" ;;
         secret) _etf_def=""
                 # Given already - typed, or read from --password-file: Enter keeps it.
-                if [ -n "$_etf_old" ] || { [ -n "${_EVT_DONE[$_etf_i]}" ] && [ -n "$_evo_pwfile" ]; }; then
+                _etf_file="$_evo_pwfile"; [ "${_EVT_NAME[$_etf_i]}" = storage_secret ] && _etf_file="${_EXAKIT_VS_STORAGE_FILE:-}"
+                if [ -n "$_etf_old" ] || { [ -n "${_EVT_DONE[$_etf_i]}" ] && [ -n "$_etf_file" ]; }; then
                     _etf_keep=1; _etf_note="(hidden, Enter keeps the one given)"
                 else _etf_note="(hidden)"; fi ;;
         secret-file) _etf_note="(the path to the file)" ;;
@@ -1591,8 +1664,18 @@ _exakit_vs_tui_field() {
         fi
         # The engine's own rule for this input, in the words a scripted
         # connect would get; the value travels on its stdin, never in argv.
-        printf '%s' "$_etf_v" | exakit_vs_engine field "$_evo_id" "${_EVT_NAME[$_etf_i]}" \
-            > "$_EVT_DIR/field" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        # A connector with settings checks the answer in its combination:
+        # the settings answered so far go with it.
+        set -- field "$_evo_id" "${_EVT_NAME[$_etf_i]}"
+        _etf_s=0
+        while [ "$_etf_s" -lt "$_EVT_NF" ]; do
+            case "${_EVT_NAME[$_etf_s]}" in catalog|files|login)
+                [ -n "${_EVT_VAL[$_etf_s]}" ] && [ "$_etf_s" != "$_etf_i" ] && \
+                    set -- "$@" --set "${_EVT_NAME[$_etf_s]}=${_EVT_VAL[$_etf_s]}" ;;
+            esac
+            _etf_s=$(( _etf_s + 1 ))
+        done
+        printf '%s' "$_etf_v" | exakit_vs_engine "$@" > "$_EVT_DIR/field" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         if [ $? -eq 0 ]; then
             _etf_v="$(_exakit_vs_result "$_EVT_DIR/field" | run_python_any -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
             if [ "$_etf_k" = source-name ]; then
@@ -1798,7 +1881,7 @@ _exakit_vs_tui_choose() {
 _exakit_vs_tui_secret_from() {
     _ets_f=0
     while [ "$_ets_f" -lt "$_EVT_NF" ]; do
-        if [ "${_EVT_KIND[$_ets_f]}" = secret ]; then
+        if [ "${_EVT_KIND[$_ets_f]}" = secret ] && [ "${_EVT_NAME[$_ets_f]}" != storage_secret ]; then
             _EVT_VAL[$_ets_f]="$1"; _EVT_DONE[$_ets_f]=1; _EVT_FROM[$_ets_f]=1
             return 0
         fi
@@ -1916,9 +1999,56 @@ PY
 # _exakit_vs_tui_form <connector> <pos> <total> <given-name> <given-sets> <password-file>
 # — one source's panel; on success it joins the _EVT_S_* lists. Returns 5 when
 # the reader left it out, 2 when its definition could not be read.
+# _exakit_vs_tui_inputs <sets> — the engine's inputs for the form's connector,
+# the KEY=VALUE lines given so far after it, into $_EVT_DIR/inputs.
+_exakit_vs_tui_inputs() {
+    set -- inputs "$_evo_id"
+    while IFS= read -r _eti_kv; do [ -n "$_eti_kv" ] && set -- "$@" --set "$_eti_kv"; done <<EOF
+$_evo_sets
+EOF
+    exakit_vs_engine "$@" < /dev/null > "$_EVT_DIR/inputs" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+}
+
+# _exakit_vs_tui_settings — a connector with settings (lakehouse): every setting
+# the picker did not preset (exakit_vs_preset) and the command line did not
+# give, asked one line each before the panel - catalog, then files (only the
+# ones that catalog takes), then login - and added to _evo_sets. Returns 1 at
+# end of input or when the engine refuses the settings. ⇄ twin: Read-ExakitVsTuiSettings.
+_exakit_vs_tui_settings() {
+    while :; do
+        _exakit_vs_tui_inputs || return 1
+        _ets_open="$(_exakit_vs_result "$_EVT_DIR/inputs" | run_python_any -c 'import json, sys
+doc = json.load(sys.stdin)
+given = [l.split("=", 1)[0] for l in sys.argv[1].splitlines() if "=" in l]
+for f in doc["inputs"]:
+    if f.get("setting") and f["name"] not in given:
+        print("|".join([f["name"], f["label"], " ".join(f["choices"]), f.get("default") or "",
+                        "; ".join("%s: %s" % c for c in zip(f["choices"], f.get("choice_labels") or f["choices"]))]))
+        break' "$_evo_sets" 2>/dev/null)"
+        [ -n "$_ets_open" ] || return 0
+        IFS='|' read -r _ets_name _ets_label _ets_choices _ets_def _ets_words <<EOF
+$_ets_open
+EOF
+        printf '  %s%s%s\n' "${UI_DIM:-}" "$_ets_words" "${UI_RESET:-}" >&2
+        _ets_v="$(prompt_text "$_ets_label ($(printf '%s' "$_ets_choices" | sed 's/ /, /g'))" "$_ets_def")" || return 1
+        case " $_ets_choices " in
+            *" $_ets_v "*) _evo_sets="$_evo_sets
+$_ets_name=$_ets_v" ;;
+            *) printf '  %s%s%s %s\n' "$UI_ERR" "$UI_CROSS" "$UI_RESET" "$_ets_label must be one of: $_ets_choices" >&2 ;;
+        esac
+    done
+}
+
 _exakit_vs_tui_form() {
     _evo_id="$1"; _evo_pos="$2"; _evo_total="$3"; _evo_pwfile="$6"
-    exakit_vs_engine inputs "$_evo_id" < /dev/null > "$_EVT_DIR/inputs" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || {
+    # The picker's presets for this connector first, the command line's --set over them.
+    _evo_sets="$(printf '%s' "${_EXAKIT_VS_PRESET:-}" | sed -n "s/^$_evo_id //p")
+$5"
+    if [ -f "$(exakit_vs_defs)/connectors/$_evo_id/connector.json" ] && \
+       grep -q '"settings"' "$(exakit_vs_defs)/connectors/$_evo_id/connector.json"; then
+        _exakit_vs_tui_settings || { _exakit_vs_render "$_EVT_DIR/inputs"; return 5; }
+    fi
+    _exakit_vs_tui_inputs || {
         _exakit_vs_render "$_EVT_DIR/inputs"
         # An engine older than this file (a kit copy updated by halves) has no
         # "inputs": say so, and how the line-by-line path still works.
@@ -1953,9 +2083,12 @@ PY
         _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""; _EVT_FROM[$_EVT_NF]=""
         # What the command line already said is an answer, not a question.
         if [ "$_evo_k" = source-name ] && [ -n "$4" ]; then _EVT_VAL[$_EVT_NF]="$4"; _EVT_DONE[$_EVT_NF]=1; fi
-        _evo_given="$(printf '%s\n' "$5" | sed -n "s/^$_evo_n=//p" | tail -1)"
+        _evo_given="$(printf '%s\n' "$_evo_sets" | sed -n "s/^$_evo_n=//p" | tail -1)"
         [ -n "$_evo_given" ] && { _EVT_VAL[$_EVT_NF]="$_evo_given"; _EVT_DONE[$_EVT_NF]=1; }
-        if [ -n "$_evo_pwfile" ]; then
+        if [ "$_evo_n" = storage_secret ]; then
+            # The second secret: --storage-secret-file answers it, never --password-file.
+            [ -n "${_EXAKIT_VS_STORAGE_FILE:-}" ] && [ "$_evo_total" -eq 1 ] && _EVT_DONE[$_EVT_NF]=1
+        elif [ -n "$_evo_pwfile" ]; then
             case "$_evo_k" in
                 secret) _EVT_DONE[$_EVT_NF]=1 ;;
                 secret-file) _EVT_VAL[$_EVT_NF]="$_evo_pwfile"; _EVT_DONE[$_EVT_NF]=1 ;;
@@ -2030,13 +2163,14 @@ PY
         _exakit_vs_tui_walk "$_evo_why" || return 5
     done
     # Kept for the review and the run, one entry per source.
-    _evo_name=""; _evo_secret=""; _evo_sfile=""; _evo_sets=""; _evo_where=""
+    _evo_name=""; _evo_secret=""; _evo_sfile=""; _evo_sets=""; _evo_where=""; _evo_storage=""; _evo_stfile=""
     _evo_f=0
     while [ "$_evo_f" -lt "$_EVT_NF" ]; do
         _evo_v="${_EVT_VAL[$_evo_f]}"
         case "${_EVT_KIND[$_evo_f]}" in
             source-name) _evo_name="$_evo_v" ;;
-            secret) _evo_secret="$_evo_v" ;;
+            secret) if [ "${_EVT_NAME[$_evo_f]}" = storage_secret ]; then _evo_storage="$_evo_v"
+                    else _evo_secret="$_evo_v"; fi ;;
             secret-file) _evo_sfile="$_evo_v" ;;
             *) [ -n "$_evo_v" ] && _evo_sets="$_evo_sets${_EVT_NAME[$_evo_f]}=$_evo_v"$'\n'
                case "${_EVT_NAME[$_evo_f]}" in
@@ -2046,12 +2180,19 @@ PY
         _evo_f=$(( _evo_f + 1 ))
     done
     [ -z "$_evo_secret" ] && [ -z "$_evo_sfile" ] && [ -n "$_evo_pwfile" ] && _evo_sfile="$_evo_pwfile"
+    # A second secret given as a file (--storage-secret-file) is read at the run.
+    if [ -z "$_evo_storage" ] && [ "$_evo_total" -eq 1 ]; then
+        for _evo_n in "${_EVT_NAME[@]}"; do
+            [ "$_evo_n" = storage_secret ] && _evo_stfile="${_EXAKIT_VS_STORAGE_FILE:-}"
+        done
+    fi
     _evo_where="${_evo_where#*://}"; _evo_where="${_evo_where%%/*}"
     # A host name shows its first label (exakit-vs-test-pg): what a reader recognises.
     case "$_evo_where" in *.*[a-zA-Z]*) _evo_where="${_evo_where%%.*}" ;; esac
     _EVT_S_ID[$_EVT_COUNT]="$_evo_id"; _EVT_S_NAME[$_EVT_COUNT]="$_evo_name"
     _EVT_S_LABEL[$_EVT_COUNT]="$_evo_label"; _EVT_S_SETS[$_EVT_COUNT]="$_evo_sets"
     _EVT_S_SECRET[$_EVT_COUNT]="$_evo_secret"; _EVT_S_SFILE[$_EVT_COUNT]="$_evo_sfile"
+    _EVT_S_STORAGE[$_EVT_COUNT]="$_evo_storage"; _EVT_S_STFILE[$_EVT_COUNT]="$_evo_stfile"; _evo_storage=""
     _EVT_S_WHERE[$_EVT_COUNT]="$(_exakit_vs_tui_short "$_evo_where" 18)"
     _EVT_TAKEN="${_EVT_TAKEN:-} $_evo_name"
     _EVT_COUNT=$(( _EVT_COUNT + 1 ))
@@ -2193,7 +2334,15 @@ _exakit_vs_tui_run() {
                 ui_table_detach
                 # --json: the events (OK/INFO/WARN/FAIL) on stderr move the bar,
                 # and the answer on stdout carries the failure's kind.
-                if [ -n "${_EVT_S_SECRET[$_etr_i]}" ]; then
+                if [ -n "${_EVT_S_STORAGE[$_etr_i]:-}${_EVT_S_STFILE[$_etr_i]:-}" ]; then
+                    # Two secrets (a lakehouse catalog login and storage keys), each typed or from its file.
+                    _etr_a="${_EVT_S_SECRET[$_etr_i]}"
+                    [ -n "$_etr_a" ] || _etr_a="$(_exakit_vs_secret_text < "${_EVT_S_SFILE[$_etr_i]}")"
+                    _etr_b="${_EVT_S_STORAGE[$_etr_i]:-}"
+                    [ -n "$_etr_b" ] || _etr_b="$(_exakit_vs_secret_text < "${_EVT_S_STFILE[$_etr_i]}")"
+                    _exakit_vs_pair "$_etr_a" "$_etr_b" | _exakit_vs_tui_engine "$_etr_args" connect --json --secret-pair-base64
+                    _etr_a=""; _etr_b=""
+                elif [ -n "${_EVT_S_SECRET[$_etr_i]}" ]; then
                     printf '%s' "${_EVT_S_SECRET[$_etr_i]}" | _exakit_vs_tui_engine "$_etr_args" connect --json --secret-stdin
                 elif [ -n "${_EVT_S_SFILE[$_etr_i]}" ]; then
                     _exakit_vs_tui_engine "$_etr_args" connect --json --secret-stdin < "${_EVT_S_SFILE[$_etr_i]}"
@@ -2306,7 +2455,7 @@ _exakit_vs_tui() {
     _EVT_IN=$(( _EVT_W - 4 ))
     _EVT_SP=""; _EVT_HR=""; _evt_k=0
     while [ "$_evt_k" -lt 160 ]; do _EVT_SP="$_EVT_SP "; _EVT_HR="$_EVT_HR$UI_HR"; _evt_k=$(( _evt_k + 1 )); done
-    _EVT_S_ID=(); _EVT_S_NAME=(); _EVT_S_LABEL=(); _EVT_S_SETS=(); _EVT_S_SECRET=(); _EVT_S_SFILE=(); _EVT_S_WHERE=(); _EVT_S_DL=(); _EVT_S_SRC=()
+    _EVT_S_ID=(); _EVT_S_NAME=(); _EVT_S_LABEL=(); _EVT_S_SETS=(); _EVT_S_SECRET=(); _EVT_S_SFILE=(); _EVT_S_STORAGE=(); _EVT_S_STFILE=(); _EVT_S_WHERE=(); _EVT_S_DL=(); _EVT_S_SRC=()
     _EVT_COUNT=0; _EVT_TAKEN=""; _EVT_OK=""; _EVT_FAILED=""; _EVT_NEEDS=""; _EVT_RC=0
     _evt_name="$2"; _evt_pwfile="$3"; _evt_named="$1"
 
@@ -2472,7 +2621,7 @@ for w in p["warnings"]:
         info "Manage with: exakit source show <name> (every action: exakit help source)"
     fi
     # Nothing secret outlives the command in this shell.
-    for _evt_i in $_evt_all; do _EVT_S_SECRET[$_evt_i]=""; done
+    for _evt_i in $_evt_all; do _EVT_S_SECRET[$_evt_i]=""; _EVT_S_STORAGE[$_evt_i]=""; done
     rm -rf "$_EVT_DIR"
     [ -z "${_EVT_FAILED:-}" ] || [ "$_EVT_RC" -ne 0 ] || _EVT_RC=1
     return "$_EVT_RC"
@@ -2612,6 +2761,7 @@ exakit_vs_guide() {
 cmd_connect() {
     _exakit_vs_quiet
     _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""; _cc_pwstdin=0; _cc_seturi=""
+    _cc_sfile=""; _EXAKIT_VS_STORAGE_FILE=""
     EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""; _EVP_SECRET=""; _EVP_GIVEN=""
     # Known before anything is refused, so every refusal answers in its shape.
     for _cc_word in "$@"; do case "$_cc_word" in --json|-j) _cc_json=1 ;; esac; done
@@ -2629,7 +2779,7 @@ cmd_connect() {
                        "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" ;; esac
                    # A connector's credential input by name: refused before
                    # anything runs, the value never repeated (engine: plan.py).
-                   case "${2%%=*}" in password|passwd|pwd|secret|token|key_file)
+                   case "${2%%=*}" in password|passwd|pwd|secret|token|key_file|storage_secret)
                        _exakit_vs_refuse 2 "--set ${2%%=*}=... is a credential given as an argument (other users can read the process list). Use --password-file or --password-stdin." \
                            "--set ${2%%=*} gives a credential as an argument, where other users can read it in the process list" \
                            "give it with --password-file <file> or pipe it in with --password-stdin" ;; esac
@@ -2643,6 +2793,12 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}" ;;
                    esac; shift ;;
             --password-file) _cc_pwfile="${2:-}"; shift ;;
             --password-stdin) _cc_pwstdin=1 ;;
+            # The second secret of a lakehouse combination with two: a file
+            # only (stdin carries the first), never a value on the line.
+            --storage-secret-file) _cc_sfile="${2:-}"; shift
+                [ -n "$_cc_sfile" ] || _exakit_vs_refuse 2 "--storage-secret-file takes the path of a file holding only the storage secret." \
+                    "--storage-secret-file was given without a file" "give the path of a file holding only the storage secret after --storage-secret-file" ;;
+            --storage-secret*) _exakit_vs_credential_argument ;;
             --dry-run|-n) _cc_dry=1 ;;
             --yes|-y) EXAKIT_VS_ASSUME_YES=1 ;;
             --json|-j) _cc_json=1 ;;
@@ -2667,6 +2823,7 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}" ;;
     # A credential from the command line's own options wins over one in a
     # connection string (_exakit_vs_paste).
     if [ "$_cc_pwstdin" = 1 ] || [ -n "$_cc_pwfile" ]; then _EVP_GIVEN=1; fi
+    _EXAKIT_VS_STORAGE_FILE="$_cc_sfile"
     _require_install "$_cc_json"
     exakit_init_logging
     _exakit_vs_log_mark
@@ -2822,8 +2979,20 @@ EOF
         info "Nothing was changed."
         exit 5
     fi
-    _cc_label="$(run_python_any -c 'import json,sys; c=json.load(open(sys.argv[1])); print(next((s.get("label","password") for s in c["inputs"] if s["kind"] in ("secret","secret-file")), ""))' \
-        "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
+    # The labels of the combination's secrets (engine inputs): a lakehouse
+    # source can have two, the second on --storage-secret-file or asked hidden.
+    if grep -q '"settings"' "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null; then
+        _cc_labels="$(_exakit_vs_secret_labels "$_cc_resolved")"
+    else
+        _cc_labels="$(run_python_any -c 'import json,sys; c=json.load(open(sys.argv[1])); print(next((s.get("label","password") for s in c["inputs"] if s["kind"] in ("secret","secret-file")), "") + "|")' \
+            "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
+    fi
+    _cc_label="${_cc_labels%%|*}"; _cc_slabel="${_cc_labels#*|}"
+    if [ -z "$_cc_slabel" ] && [ -n "$_cc_sfile" ]; then
+        _exakit_vs_refuse 2 "--storage-secret-file is for a lakehouse source with a catalog login and storage keys; this one has one secret." \
+            "--storage-secret-file was given, but this source has one secret" \
+            "leave --storage-secret-file out and give the credential with --password-file or --password-stdin"
+    fi
     # A re-point takes the credential as a connect does: the database never
     # returns a stored one, and moving a CONNECTION clears it.
     unset _cc_secret; _cc_secret=""
@@ -2847,13 +3016,23 @@ EOF
         [ -n "$_cc_secret" ] || _exakit_vs_refuse 2 "No $_cc_what was given (pipe it on standard input or use --password-file)." \
             "no $_cc_what was given" "pipe it on standard input or give it with --password-file <file>"
     fi
-    if [ -n "$_cc_secret" ]; then
+    unset _cc_storage; _cc_storage=""
+    if [ -n "$_cc_slabel" ]; then
+        _cc_swhat="$(printf '%s' "$_cc_slabel" | tr 'A-Z' 'a-z')"
+        _cc_storage="$(_exakit_vs_read_storage "$_cc_slabel (storage)" "$_cc_sfile")" || _exakit_vs_secret_failed $?
+        [ -n "$_cc_storage" ] || _exakit_vs_refuse 2 "This source also needs the storage's $_cc_swhat: give it with --storage-secret-file <file>." \
+            "no storage $_cc_swhat was given" \
+            "give it with --storage-secret-file <file> (a file holding only the $_cc_swhat), or answer the hidden prompt at a terminal"
+    fi
+    if [ -n "$_cc_storage" ]; then
+        _exakit_vs_run "$(_exakit_vs_pair "$_cc_secret" "$_cc_storage")" connect "$@" --secret-pair-base64
+    elif [ -n "$_cc_secret" ]; then
         _exakit_vs_run "$_cc_secret" connect "$@" --secret-stdin
     else
         _exakit_vs_run "" connect "$@"
     fi
     _cc_rc=$?
-    unset _cc_secret EXAKIT_VS_STDIN_SECRET _EVP_SECRET
+    unset _cc_secret _cc_storage EXAKIT_VS_STDIN_SECRET _EVP_SECRET
     if [ "$_cc_rc" -eq 0 ] && [ "$_cc_json" = 0 ]; then
         _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
@@ -3181,7 +3360,7 @@ cmd_source() {
     esac
     _cs_details=0
     _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
-    _cs_pwstdin=0
+    _cs_pwstdin=0; _cs_sfile=""
     # --json is known before anything is refused: the bridge's own refusals
     # and failures then come in the engine's shape, and nothing is asked.
     for _cs_word in "$@"; do case "$_cs_word" in --json|-j) _cs_json=1 ;; esac; done
@@ -3195,7 +3374,12 @@ cmd_source() {
             --status) _cs_status="${2:-}"; shift ;;
             --password-file) _cs_pwfile="${2:-}"; shift ;;
             --password-stdin) _cs_pwstdin=1 ;;
-            --password*|--passwd*|--secret*|--token*) _exakit_vs_credential_argument ;;
+            --storage-secret-file) _cs_sfile="${2:-}"; shift
+                [ -n "$_cs_sfile" ] || _exakit_vs_refuse 2 "--storage-secret-file takes the path of a file holding only the storage secret." \
+                    "--storage-secret-file was given without a file" "give the path of a file holding only the storage secret after --storage-secret-file"
+                [ "$_cs_action" = reauth ] || _exakit_vs_refuse 2 "--storage-secret-file is for exakit source reauth (and exakit connect)." \
+                    "--storage-secret-file was given to source $_cs_action, which takes no credential" "leave --storage-secret-file out" ;;
+            --password*|--passwd*|--secret*|--token*|--storage-secret*) _exakit_vs_credential_argument ;;
             --ddl) _cs_ddl=1 ;;
             --details) _cs_details=1 ;;
             --schema) _cs_into="${2:-}"; shift ;;
@@ -3301,7 +3485,15 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             else
                 _cs_conn="$(sed -n 's/^RESULT .*"connector": "\([a-z0-9-]*\)".*/\1/p' "$_cs_out" | head -n 1)"
             fi
+            # A lakehouse source with two secrets: reauth writes its JSON whole, so both.
+            _cs_slabel="$(if [ "$_cs_json" = 1 ]; then cat "$_cs_out"; else sed -n 's/^RESULT //p' "$_cs_out"; fi \
+                | run_python_any -c 'import json, sys
+print(json.load(sys.stdin).get("storage_secret") or "")' 2>/dev/null)"
             rm -f "$_cs_out"
+            if [ -z "$_cs_slabel" ] && [ -n "$_cs_sfile" ]; then
+                _exakit_vs_refuse 2 "$_cs_name has one secret; --storage-secret-file is for a lakehouse source with a catalog login and storage keys." \
+                    "--storage-secret-file was given, but $_cs_name has one secret" "leave --storage-secret-file out"
+            fi
             # With --json an unreadable file is the one object; without, the
             # credential reader says "Cannot read" as it always has.
             if [ "$_cs_json" = 1 ] && [ -n "$_cs_pwfile" ] && { [ -d "$_cs_pwfile" ] || [ ! -r "$_cs_pwfile" ]; }; then
@@ -3318,7 +3510,17 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             fi
             [ -n "$_cs_secret" ] || _exakit_vs_refuse 2 "No credential was given." "no credential was given" \
                 "pipe it on standard input or give it with --password-file <file>"
-            set -- "$@" reauth "$_cs_name" --secret-stdin
+            unset _cs_storage; _cs_storage=""
+            if [ -n "$_cs_slabel" ]; then
+                _cs_storage="$(_exakit_vs_read_storage "New $_cs_slabel (storage) for $_cs_name" "$_cs_sfile")" || _exakit_vs_secret_failed $?
+                [ -n "$_cs_storage" ] || _exakit_vs_refuse 2 "$_cs_name has two secrets, and reauth writes both: give the storage secret too with --storage-secret-file <file>." \
+                    "reauth of $_cs_name needs the storage secret as well" \
+                    "give both: --password-file <file> (or --password-stdin) and --storage-secret-file <file>"
+                _cs_secret="$(_exakit_vs_pair "$_cs_secret" "$_cs_storage")"; unset _cs_storage
+                set -- "$@" reauth "$_cs_name" --secret-pair-base64
+            else
+                set -- "$@" reauth "$_cs_name" --secret-stdin
+            fi
             if [ "$_cs_json" = 1 ]; then
                 # The engine's events and any traceback go to the log, as connect's do.
                 printf '%s' "$_cs_secret" | exakit_vs_engine "$@" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"

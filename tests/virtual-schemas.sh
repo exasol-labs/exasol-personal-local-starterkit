@@ -64,12 +64,12 @@ def targz(member, data):
         archive.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 for cid in ("postgresql", "mysql", "sqlserver", "oracle", "snowflake", "bigquery", "s3", "azure-blob", "mongodb",
-            "databricks", "lakehouse", "iceberg-rest", "unity"):
+            "databricks", "lakehouse"):
     path = os.path.join(defs, "connectors", cid, "connector.json")
     doc = json.load(open(path))
     if "arch" in doc["adapter"]:
         for arch, pin in doc["adapter"]["arch"].items():
-            # One family (lakehouse, iceberg-rest, unity) pins one engine: the same bytes.
+            # One family (lakehouse) pins one engine: the same bytes.
             data = ("adapter-%s-%s" % (doc.get("family", cid), arch)).encode()
             if doc["adapter"].get("bundle") == "tar.gz":
                 # A release archive: the pinned member inside it is pinned too.
@@ -106,6 +106,9 @@ eng() {
 }
 run() { OUT="$(eng "$@" 2>&1)"; RC=$?; }
 run_secret() { local s="$1"; shift; OUT="$(printf '%s' "$s" | eng "$@" 2>&1)"; RC=$?; }
+# Two secrets down one pipe, as both shells send them (--secret-pair-base64).
+pair() { printf '%s' "$1" | base64 | tr -d '\n'; printf '.'; printf '%s' "$2" | base64 | tr -d '\n'; }
+run_pair() { local a="$1" b="$2"; shift 2; OUT="$(pair "$a" "$b" | eng "$@" 2>&1)"; RC=$?; }
 # What a reauth trial leaves in the database: nothing, once it is over.
 pending() { dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")] + [v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]'; }
 PG_SET="--set host=pg.example.com --set database=sales --set user=reader"
@@ -145,9 +148,9 @@ run plan postgresql --name sales --set host=localhost --set database=x --set use
 check "a Docker deployment: localhost is still refused, exit 2" "2" "$RC"
 has "...with Docker's address for this computer" "$DOCKER_HOST_WORDS" "$OUT"
 lacks "...not Podman's" "host.containers.internal" "$OUT"
-run plan iceberg-rest --name rest1 --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
 has "...the same for a catalog URL on localhost" "$DOCKER_HOST_WORDS" "$OUT"
-run plan iceberg-rest --name rest1 --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
 has "...and in the plain-http refusal" "accepted only for this computer ($DOCKER_HOST_WORDS) or a private network" "$OUT"
 printf '{"runtime": {"type": "personal", "engine": "podman"}}\n' > "$HOME_K/manifest.json"
 run plan postgresql --name sales --set host=localhost --set database=x --set user=u
@@ -817,6 +820,56 @@ reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes" "$B/env" "$B/dnsrc"; prin
 # The same bridge for a fresh bash started with a given environment (review 5).
 { printf 'ROOT=%q; B=%q\n' "$ROOT" "$B"; declare -f bridge; } > "$WORK/bridge-fn.sh"
 
+# The lakehouse bridge: two secrets, the second from --storage-secret-file, both
+# on the engine's stdin as base64 "." base64 and never in its arguments.
+lhbridge() {
+    ( EXAKIT_HOME="$B/home"; mkdir -p "$EXAKIT_HOME"
+      . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/detect.sh"; . "$ROOT/setup/lib/runtime-personal.sh"
+      . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { :; }
+      pyexasol_venv_python() { command -v python3; }
+      exakit_vs_engine() {
+          printf '%s\n' "$*" >> "$B/argv"
+          [ -t 0 ] || cat >> "$B/stdin"
+          case "$1" in
+              resolve) echo 'RESULT {"connector": "lakehouse"}' ;;
+              inputs) echo 'RESULT {"connector": "lakehouse", "name": "x", "inputs": [{"name": "secret", "label": "Catalog token", "kind": "secret", "secret": true}, {"name": "storage_secret", "label": "Account key or SAS", "kind": "secret", "secret": true, "storage": true}]}' ;;
+              plan) echo 'RESULT {"name": "x", "connector": "lakehouse", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;;
+              show) echo 'RESULT {"name": "lk", "connector": "lakehouse", "storage_secret": "Account key or SAS"}' ;;
+          esac
+          return 0
+      }
+      "$@" ) 2>&1
+}
+rm -f "$B/argv" "$B/stdin"
+printf 'tok-ONE' > "$B/tok"; printf 'sv=2024&sig=TWO' > "$B/sto"
+LKS="--set catalog=iceberg-rest --set files=azure --set catalog_url=https://r.example.com --set warehouse=w --set namespace=s --set account_name=acct1"
+# shellcheck disable=SC2086
+OUT="$(lhbridge cmd_connect lakehouse --name lk $LKS --password-file "$B/tok" --storage-secret-file "$B/sto" --yes </dev/null)"; RC=$?
+check "lakehouse, two secrets from two files: exit 0, connect with --secret-pair-base64" "0 1" \
+    "$RC $(grep -c '^connect lakehouse .*--secret-pair-base64$' "$B/argv")"
+check "...both on stdin, base64 joined by a dot" "tok-ONE|sv=2024&sig=TWO" \
+    "$(python3 -c 'import base64,sys; a,b=open(sys.argv[1]).read().split("."); print(base64.b64decode(a).decode() + "|" + base64.b64decode(b).decode())' "$B/stdin")"
+lacks "...neither in any argument" "tok-ONE" "$(cat "$B/argv")"; lacks "...(the storage one)" "sig=TWO" "$(cat "$B/argv")"
+lacks "...nor on the screen" "sig=TWO" "$OUT"
+rm -f "$B/argv" "$B/stdin"
+# shellcheck disable=SC2086
+OUT="$(lhbridge cmd_connect lakehouse --name lk $LKS --password-file "$B/tok" --yes </dev/null)"; RC=$?
+check "...the storage secret missing and no terminal: exit 2, no connect" "2 0" "$RC $(grep -c '^connect' "$B/argv")"
+has "...said how to give it" "--storage-secret-file <file>" "$OUT"
+OUT="$(lhbridge cmd_connect lakehouse --name lk --storage-secret=abc </dev/null)"; RC=$?
+check "--storage-secret=VALUE is a credential argument: refused, exit 2" "2" "$RC"; lacks "...not echoed" "abc" "$OUT"
+OUT="$(lhbridge cmd_connect lakehouse --name lk --set storage_secret=abc </dev/null)"; RC=$?
+check "--set storage_secret=... is refused before anything runs" "2" "$RC"; lacks "...not echoed" "=abc" "$OUT"
+rm -f "$B/argv" "$B/stdin"
+OUT="$(lhbridge cmd_source reauth lk --password-file "$B/tok" --storage-secret-file "$B/sto" </dev/null)"; RC=$?
+check "source reauth of a two-secret source: both, as a pair" "0 1" "$RC $(grep -c '^reauth lk --secret-pair-base64$' "$B/argv")"
+lacks "...neither in an argument" "sig=TWO" "$(cat "$B/argv")"
+rm -f "$B/argv" "$B/stdin"
+OUT="$(lhbridge cmd_source reauth lk --password-file "$B/tok" </dev/null)"; RC=$?
+check "...with one: exit 2, no reauth" "2 0" "$RC $(grep -c '^reauth' "$B/argv")"
+has "...says both" "--storage-secret-file <file>" "$OUT"
+
 reset_bridge
 OUT="$(bridge cmd_connect pg --name sales --password=hunter2 </dev/null)"; RC=$?
 check "a password argument is refused before anything runs, exit 2" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
@@ -1228,7 +1281,7 @@ E9="$(python3 - "$ROOT" <<'PYE'
 import json, sys
 sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
 import lifecycle, plan, sql
-c = json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/iceberg-rest/connector.json"))
+c = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas").connector("lakehouse", {"catalog": "iceberg-rest", "files": "vended", "login": "token"})
 spec = [i for i in c["inputs"] if i["name"] == "warehouse"][0]
 for w in ("https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest", "exakit_uc", "my.catalog", "s3://wh/"):
     print("%s|%s" % (w, plan.check_value(spec, w)[1]))
@@ -1244,7 +1297,7 @@ check "...a name with a period passes (some catalogs allow one)" "my.catalog|Non
 check "...a storage location stays allowed (the REST reference catalog, MinIO)" "s3://wh/|None" "$(printf '%s\n' "$E9" | sed -n 4p)"
 check "...a catalog-config failure is its own kind, catalog" "catalog failed" "$(printf '%s\n' "$E9" | sed -n 5p)"
 has "...whose remedy names the warehouse and asks for the catalog's name" "the catalog does not know warehouse 'https://x/api' - give the catalog's name" "$(printf '%s\n' "$E9" | sed -n 6p)"
-run plan iceberg-rest --name rest1 --set catalog_url=https://rest.example.com --set warehouse=https://rest.example.com/api --set namespace=sales
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=https://rest.example.com --set warehouse=https://rest.example.com/api --set namespace=sales
 check "...plan with a URL warehouse: exit 2" "2" "$RC"
 
 E10="$(python3 - "$ROOT" "$WORK" <<'PYE'
@@ -1641,7 +1694,7 @@ has "...the virtual schema names the connection the adapter's way" "MONGODB_CONN
 lacks "...the password is not printed" "$SECRET" "$OUT"
 OUT="$(eng --json list 2>/dev/null)"
 check "list --json: every row keeps its keys and adds host and tls, nothing renamed" \
-    "connector host last_check name needs_refresh schema status tls" \
+    "connector connector_name host last_check name needs_refresh schema status tls" \
     "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(" ".join(sorted(set(k for s in json.load(sys.stdin)["sources"] for k in s))))')"
 check "...a MongoDB source: the URI's host, and verify for mongodb+srv://" "cluster0.example.net verify" \
     "$(printf '%s' "$OUT" | python3 -c 'import json, sys; s = [s for s in json.load(sys.stdin)["sources"] if s["name"] == "mg"][0]; print(s["host"], s["tls"])')"
@@ -1994,16 +2047,16 @@ print(" ".join(sorted(k for k, p in a["arch"].items() if all(re.fullmatch(r"[0-9
 PYP
 )"
 
-printf '\n== Lakehouse engine routes: Iceberg REST and Unity Catalog on the same adapter ==\n'
+printf '\n== Lakehouse: Iceberg REST and Unity Catalog, one connector and one adapter ==\n'
 # Not measured live: the catalogs are simulated from the Iceberg REST spec and
 # Databricks' error codes. What is pinned here is the kit's side: one engine,
 # one set of scripts for every route, and a CONNECTION whose JSON the kit writes.
 IR_TOKEN="t0ken-$SECRET"; export IR_TOKEN
 UC_TOKEN="dapi0123456789abcdef-$SECRET"
 MINIO_SECRET="minio-$SECRET-secret"
-IR_SET="--set catalog_url=https://rest.example.com/api/catalog/ --set warehouse=s3://wh/ --set namespace=sales"
-UC_SET="--set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales --set region=us-east-2"
-MINIO_SET="--set catalog_url=http://192.168.64.1:8181 --set warehouse=lake --set namespace=sales --set endpoint=http://192.168.64.1:9000 --set access_key_id=minioadmin"
+IR_SET="--set catalog=iceberg-rest --set catalog_url=https://rest.example.com/api/catalog/ --set warehouse=s3://wh/ --set namespace=sales"
+UC_SET="--set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales --set region=us-east-2"
+MINIO_SET="--set catalog=iceberg-rest --set files=s3 --set catalog_url=http://192.168.64.1:8181 --set warehouse=lake --set namespace=sales --set endpoint=http://192.168.64.1:9000 --set access_key_id=minioadmin"
 lhdb() {
     IR_TOKEN="$IR_TOKEN" UC_TOKEN="$UC_TOKEN" MINIO_SECRET="$MINIO_SECRET" LK_KEY_ID="$LK_KEY_ID" python3 - "$STATE" <<'PYLH'
 import json, os, sys
@@ -2014,7 +2067,7 @@ json.dump({"sources": {
     "glue.ap-south-1.amazonaws.com": {"key_id": e["LK_KEY_ID"], "databases": {"sales_lake": ["customers", "orders"]}},
     "rest.example.com": {"catalog": "rest", "warehouse": "s3://wh/", "token": e["IR_TOKEN"],
                          "namespaces": {"sales": ["orders", "returns"], "ops": ["events"]}},
-    "192.168.64.1": {"catalog": "rest", "warehouse": "lake", "key_id": "minioadmin", "secret_key": e["MINIO_SECRET"],
+    "192.168.64.1": {"catalog": "rest", "warehouse": "lake", "token": e["IR_TOKEN"], "key_id": "minioadmin", "secret_key": e["MINIO_SECRET"],
                      "namespaces": {"sales": ["orders"]}, "region": "us-east-1"},
     "dbc-1234.cloud.databricks.com": uc(),
     "dbc-closed.cloud.databricks.com": uc(fail="external"),
@@ -2023,29 +2076,22 @@ json.dump({"sources": {
 PYLH
 }
 lhdb
-run resolve rest; has "rest resolves to the Iceberg REST route" '"connector": "iceberg-rest"' "$OUT"
-run resolve unity; has "unity resolves to the Unity Catalog route" '"connector": "unity"' "$OUT"
-run resolve lakehouse; has "lakehouse still resolves to Glue" '"connector": "lakehouse"' "$OUT"
+run resolve rest; check "rest is no connector any more (no aliases): exit 2" "2" "$RC"
+run resolve iceberg-rest; check "...nor iceberg-rest" "2" "$RC"
+run resolve unity; check "...nor unity" "2" "$RC"
+run resolve lakehouse; has "lakehouse resolves" '"connector": "lakehouse"' "$OUT"
 run resolve glue; has "...and glue" '"connector": "lakehouse"' "$OUT"
-run resolve iceberg; check "iceberg names two catalogs, so it asks: exit 2" "2" "$RC"; has "...Glue or REST" "choices: lakehouse, iceberg-rest" "$OUT"
-run resolve unity-catalog; has "unity-catalog is the engine's alias only (the SQL warehouse is databricks)" '"connector": "unity"' "$OUT"
-check "the three routes pin one engine: archive, member and companion scripts identical" "same" "$(python3 - "$ROOT" <<'PYS'
-import json, sys
-load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
-docs = [load(c) for c in ("lakehouse", "iceberg-rest", "unity")]
-keys = ("adapter", "shared_adapter", "companions", "version_script", "profile")
-print("same" if all(all(d[k] == docs[0][k] for k in keys) for d in docs) and all(d.get("family", d["id"]) == "lakehouse" for d in docs) else "differ")
-PYS
-)"
+run resolve iceberg; has "...and iceberg, one connector now" '"connector": "lakehouse"' "$OUT"
+check "the old connector folders are gone" "no no" "$([ -d "$ROOT/setup/virtual-schemas/connectors/iceberg-rest" ] && echo yes || echo no) $([ -d "$ROOT/setup/virtual-schemas/connectors/unity" ] && echo yes || echo no)"
 
-run plan iceberg-rest --name rest1 $IR_SET
+run plan lakehouse --name rest1 $IR_SET
 check "plan iceberg-rest: exit 0" "0" "$RC"
 has "...GA, a candidate" '"tier": "GA", "status": "candidate"' "$OUT"
 lacks "...with no Beta caveat any more" "not been run against a live" "$OUT"
 has "...states the MCP exposure" "MCP read-only user can read every table of VS_REST1" "$OUT"
-has "...the scripts shared with every lakehouse engine source" "shared by every lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)" "$OUT"
+has "...the scripts shared with every lakehouse source" "shared by every lakehouse source" "$OUT"
 PLAN_IR="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
-run plan unity --name uc $UC_SET
+run plan lakehouse --name uc $UC_SET
 check "plan unity: exit 0" "0" "$RC"
 has "...GA, a candidate" '"tier": "GA", "status": "candidate"' "$OUT"
 lacks "...with no Beta caveat any more" "not been run against a live" "$OUT"
@@ -2057,7 +2103,7 @@ run plan lakehouse --name glake $LK_SET
 PLAN_LK="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
 check "...all three download the same pinned archive (one cache entry)" "$PLAN_LK $PLAN_LK" "$PLAN_IR $PLAN_UC"
 has "...this machine's engine archive" "lakehouse-engine" "$PLAN_IR"
-run plan iceberg-rest --name minio $MINIO_SET --set region=us-east-1
+run plan lakehouse --name minio $MINIO_SET --set region=us-east-1
 check "plan over http to this computer: exit 0" "0" "$RC"
 has "...warns that it is plain http" "plain http: the catalog token or storage keys and the rows cross the network unencrypted" "$OUT"
 check "URLs are normalized: https for a bare host, http only towards this computer or a private network" \
@@ -2075,35 +2121,35 @@ PYU
 )"
 
 # Refusals before anything is created.
-run plan iceberg-rest --name rest1 --set catalog_url=https://rest.example.com --set namespace=sales
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=https://rest.example.com --set namespace=sales
 check "REST without a warehouse: exit 2" "2" "$RC"; has "...named" "warehouse is required" "$OUT"
-run plan unity --name uc --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=sales --set region=us-east-2
+run plan lakehouse --name uc --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=sales --set region=us-east-2
 check "Unity namespace that is not catalog.schema: exit 2" "2" "$RC"; has "...said how" "namespace must be catalog.schema, e.g. main.sales" "$OUT"
-run plan unity --name uc --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales
-check "Unity without a region: exit 2" "2" "$RC"; has "...named" "region is required" "$OUT"
-run plan iceberg-rest --name rest1 --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
+run plan lakehouse --name uc --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales
+check "Unity with vended files and no region: the region is optional, exit 0" "0" "$RC"
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
 check "plain http to a public host: exit 2" "2" "$RC"; has "...said why" "is plain http to rest.example.com, a public host" "$OUT"
-run plan iceberg-rest --name rest1 --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
 check "a catalog on localhost: exit 2" "2" "$RC"; has "...with the address the database sees this computer at" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
-run plan unity --name uc --set workspace_url=http://10.0.0.5 --set namespace=main.sales --set region=us-east-2
+run plan lakehouse --name uc --set catalog=unity --set workspace_url=http://10.0.0.5 --set namespace=main.sales --set region=us-east-2
 check "a Unity workspace over http, even a private one: exit 2" "2" "$RC"; has "...https only" "workspace_url must use https" "$OUT"
-run plan iceberg-rest --name rest1 --set catalog_url=https://minioadmin:pw@rest.example.com --set warehouse=w --set namespace=sales
+run plan lakehouse --name rest1 --set catalog=iceberg-rest --set catalog_url=https://minioadmin:pw@rest.example.com --set warehouse=w --set namespace=sales
 check "a catalog URL carrying credentials: exit 2" "2" "$RC"; lacks "...not echoed" "minioadmin:pw" "$OUT"
-run plan iceberg-rest --name rest1 $IR_SET --set endpoint=https://minio.example.com:9000/bucket
+run plan lakehouse --name rest1 $IR_SET --set endpoint=https://minio.example.com:9000/bucket
 check "a storage endpoint with a path: exit 2" "2" "$RC"
 NBEFORE="$(dbq 'len(d.get("connections", {}))')"
-run_secret "$MINIO_SECRET" connect iceberg-rest --name minio $MINIO_SET --secret-stdin
+run_pair "$IR_TOKEN" "$MINIO_SECRET" connect lakehouse --name minio $MINIO_SET --secret-pair-base64
 check "storage keys without a region: exit 2, nothing created" "2 $NBEFORE" "$RC $(dbq 'len(d.get("connections", {}))')"
-has "...named" "region is required with an access key" "$OUT"
-run_secret "$IR_TOKEN" connect iceberg-rest --name rest1 $IR_SET --set endpoint=https://minio.example.com --secret-stdin
-check "a storage endpoint with a catalog token: exit 2" "2" "$RC"; has "...said why" "a storage endpoint goes with an access key" "$OUT"
+has "...named" "region is required (AWS region)" "$OUT"
+run_secret "$IR_TOKEN" connect lakehouse --name rest1 $IR_SET --set endpoint=https://minio.example.com --secret-stdin
+check "a storage endpoint with vended files: exit 2" "2" "$RC"; has "...said why" "endpoint is not an input of lakehouse with catalog=iceberg-rest, files=vended" "$OUT"
 lacks "...the token is not echoed" "$IR_TOKEN" "$OUT"
 
 # Connect all three routes: one engine, one set of scripts.
 OUT="$(eng connect lakehouse --name glake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
 check "a Glue source first: exit 0" "0" "$RC"
-run_secret "$IR_TOKEN" connect iceberg-rest --name rest1 $IR_SET --secret-stdin
-check "connect iceberg-rest with a catalog token: exit 0" "0" "$RC"
+run_secret "$IR_TOKEN" connect lakehouse --name rest1 $IR_SET --secret-stdin
+check "connect lakehouse with a catalog token: exit 0" "0" "$RC"
 has "...the catalog's host probed from inside the database" "rest.example.com resolves and answers on port 443" "$OUT"
 has "...the namespace's tables" "Virtual schema VS_REST1: 2 table(s); a bounded read succeeded" "$OUT"
 check "...the CONNECTION: TO the catalog URL, no user" '["https://rest.example.com/api/catalog", ""]' \
@@ -2114,7 +2160,7 @@ python3 - "$STATE" <<'PYCC'
 import json, sys
 d = json.load(open(sys.argv[1])); d["sources"]["rest.example.com"]["fail"] = "catalog-config"; json.dump(d, open(sys.argv[1], "w"))
 PYCC
-run_secret "$IR_TOKEN" connect iceberg-rest --name restcc $IR_SET --secret-stdin
+run_secret "$IR_TOKEN" connect lakehouse --name restcc $IR_SET --secret-stdin
 check "V1: a warehouse the catalog does not know: exit 1, nothing kept" "1 no" "$RC $(dbq '"yes" if "EXAKIT_SRC_RESTCC" in d["connections"] else "no"')"
 has "...the FAIL line says it in the kit's words" "the catalog does not know warehouse 's3://wh/'; nothing was kept" "$OUT"
 lacks "...not the raw VM error" "F-UDF-CL-RUST-9001" "$(printf '%s\n' "$OUT" | grep '^FAIL')"
@@ -2131,17 +2177,17 @@ check "...the token only inside CONNECTION DDL" "0" \
 lacks "...not printed" "$IR_TOKEN" "$OUT"
 check "...not in the kit's records" "0" "$(grep -rlF -- "$IR_TOKEN" "$HOME_K" | wc -l | tr -d ' ')"
 
-run_secret "$MINIO_SECRET" connect iceberg-rest --name minio $MINIO_SET --set region=us-east-1 --secret-stdin
-check "connect iceberg-rest with storage keys over http on this computer: exit 0" "0" "$RC"
+run_pair "$IR_TOKEN" "$MINIO_SECRET" connect lakehouse --name minio $MINIO_SET --set region=us-east-1 --secret-pair-base64
+check "connect lakehouse with storage keys over http on this computer: exit 0" "0" "$RC"
 has "...the catalog port probed" "192.168.64.1 resolves and answers on port 8181" "$OUT"
-check "...its password: warehouse, keys, region, endpoint, path-style" \
-    '[["access_key", "endpoint", "path_style", "region", "secret_key", "warehouse"], "minioadmin", "http://192.168.64.1:9000", true]' \
+check "...its password: warehouse, token, keys, region, endpoint, path-style" \
+    '[["access_key", "endpoint", "path_style", "region", "secret_key", "token", "warehouse"], "minioadmin", "http://192.168.64.1:9000", true]' \
     "$(dbq '(lambda c: [sorted(c), c["access_key"], c["endpoint"], c["path_style"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_MINIO"]["secret"]))')"
 has "...the virtual schema allows http" "NAMESPACE = 'sales' ALLOW_HTTP = 'true'" \
     "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_MINIO\"")][-1]')"
 lacks "...the secret key is not printed" "$MINIO_SECRET" "$OUT"
 
-run_secret "$UC_TOKEN" connect unity --name uc $UC_SET --secret-stdin
+run_secret "$UC_TOKEN" connect lakehouse --name uc $UC_SET --secret-stdin
 check "connect unity: exit 0" "0" "$RC"
 check "...the CONNECTION: TO the workspace, no user" '["https://dbc-1234.cloud.databricks.com", ""]' \
     "$(dbq '[d["connections"]["EXAKIT_SRC_UC"]["url"], d["connections"]["EXAKIT_SRC_UC"]["user"]]')"
@@ -2149,8 +2195,6 @@ check "...its password: token, vended credentials, region" '[["region", "token",
     "$(dbq '(lambda c: [sorted(c), c["region"], c["use_vended_credentials"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_UC"]["secret"]))')"
 has "...the virtual schema names Unity Catalog" "WITH CATALOG_CONNECTION = 'EXAKIT_SRC_UC' CATALOG_KIND = 'UNITY_CATALOG' NAMESPACE = 'main.sales'" \
     "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_UC\"")][-1]')"
-has "...the tips: external data access" "Databricks Default Storage cannot be read from outside" "$OUT"
-has "...and catalog-managed tables" "catalog-managed tables cannot be read by this adapter version" "$OUT"
 lacks "...the token is not printed" "$UC_TOKEN" "$OUT"
 
 check "four sources on three routes: the adapter and its three scripts once each" "1 1 1 1" \
@@ -2160,24 +2204,24 @@ check "...every route's adapter script loads that one file" "1" \
     "$(dbq 'len(set(x.split("%udf_object ")[1] for x in d["statements"] if "RUST ADAPTER SCRIPT" in x and "LAKEHOUSE_ADAPTER" in x))')"
 
 # Failures, classified, nothing kept.
-run_secret "wrong-token" connect iceberg-rest --name restbad $IR_SET --secret-stdin
+run_secret "wrong-token" connect lakehouse --name restbad $IR_SET --secret-stdin
 check "a token the catalog refuses: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_RESTBAD" in d["connections"]' | tr A-Z a-z)"
 has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
-run_secret "wrong-token" connect unity --name ucbad $UC_SET --secret-stdin
+run_secret "wrong-token" connect lakehouse --name ucbad $UC_SET --secret-stdin
 check "a Unity token refused: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCBAD" in d["connections"]' | tr A-Z a-z)"
 has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
-run_secret "$IR_TOKEN" connect iceberg-rest --name restno --set catalog_url=https://rest.example.com/api/catalog --set warehouse=s3://wh/ --set namespace=nope --secret-stdin
+run_secret "$IR_TOKEN" connect lakehouse --name restno --set catalog=iceberg-rest --set catalog_url=https://rest.example.com/api/catalog --set warehouse=s3://wh/ --set namespace=nope --secret-stdin
 check "a namespace the catalog does not have: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_RESTNO" in d["connections"]' | tr A-Z a-z)"
 has "...named as a missing namespace" "the catalog has no such namespace that this credential can see" "$OUT"
-run_secret "$UC_TOKEN" connect unity --name ucno --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.nope --set region=us-east-2 --secret-stdin
+run_secret "$UC_TOKEN" connect lakehouse --name ucno --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.nope --set region=us-east-2 --secret-stdin
 check "a Unity schema that does not exist: exit 1" "1" "$RC"; has "...named as a missing namespace" "no such namespace" "$OUT"
-run_secret "$UC_TOKEN" connect unity --name ucclosed --set workspace_url=https://dbc-closed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
+run_secret "$UC_TOKEN" connect lakehouse --name ucclosed --set catalog=unity --set workspace_url=https://dbc-closed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
 check "a schema closed to outside engines: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCCLOSED" in d["connections"]' | tr A-Z a-z)"
 has "...named as External Data Access, not a grant guess" "switch External Data Access on for the metastore" "$OUT"
 has "...with the other route" "exakit connect databricks" "$OUT"
-run_secret "$UC_TOKEN" connect unity --name ucmanaged --set workspace_url=https://dbc-managed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
+run_secret "$UC_TOKEN" connect lakehouse --name ucmanaged --set catalog=unity --set workspace_url=https://dbc-managed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
 check "a catalog-managed table: exit 1" "1" "$RC"; has "...named as not readable yet" "catalog-managed table, which this adapter version cannot read yet" "$OUT"
-run_secret "$MINIO_SECRET" connect iceberg-rest --name minio2 $MINIO_SET --set region=eu-west-1 --secret-stdin
+run_pair "$IR_TOKEN" "$MINIO_SECRET" connect lakehouse --name minio2 $MINIO_SET --set region=eu-west-1 --secret-pair-base64
 check "a bucket in another region: exit 1" "1" "$RC"; has "...named as the region" "connect again with --set region=<the bucket's region>" "$OUT"
 check "...and the shared scripts are still there after every refusal" "1 1" \
     "$(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_ADAPTER")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")')"
@@ -2185,7 +2229,7 @@ check "...and the shared scripts are still there after every refusal" "1 1" \
 lhdb_token() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["rest.example.com"]["token"]=sys.argv[2]; json.dump(d, open(sys.argv[1],"w"))' "$STATE" "$1"; }
 lhdb_token "n3w-$IR_TOKEN"
 run_secret "n3w-$IR_TOKEN" reauth rest1 --secret-stdin
-check "reauth iceberg-rest with the catalog's new token: exit 0" "0" "$RC"
+check "reauth an Iceberg REST source with the catalog's new token: exit 0" "0" "$RC"
 has "...the new token in the CONNECTION" "n3w-t0ken" "$(dbq '__import__("json").loads(d["connections"]["EXAKIT_SRC_REST1"]["secret"])["token"]')"
 
 # The last Glue source out must not take the scripts a REST or Unity source calls.
@@ -2207,6 +2251,209 @@ LKN="$(dbq 'len(d["statements"])')"
 run remove uc
 check "...and drops the three scripts, the adapter and the engine" "3 1 no" \
     "$(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith("DROP SCRIPT \"EXAKIT_VS\".\"LAKEHOUSE_")])') $(dbq 'len([x for x in d["statements"]['"$LKN"':] if x == "DROP ADAPTER SCRIPT \"EXAKIT_VS\".\"LAKEHOUSE_ADAPTER\""])') $([ -f "$LKSO" ] && echo yes || echo no)"
+
+printf '\n== Lakehouse unified: nine combinations, two secrets, old sources migrated ==\n'
+# One connector, lakehouse, with settings catalog x files (x login): what each
+# combination's CONNECTION holds and its virtual schema says, without a database.
+LH9="$(python3 - "$ROOT" <<'PY9'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import document, lifecycle, plan
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+raw = defs.connector("lakehouse")
+REST = {"catalog_url": "https://rest.example.com/api/catalog", "warehouse": "wh", "namespace": "sales"}
+UC = {"workspace_url": "https://dbc-1.cloud.databricks.com", "namespace": "main.sales"}
+S3 = {"region": "ap-south-1", "access_key_id": "AKIAIOSFODNN7EXAMPLE"}
+KEY = "QUFB" * 21 + "QQ=="
+cases = [
+    ("rest+vended", dict(REST, catalog="iceberg-rest"), "tok", None),
+    ("rest+s3", dict(REST, catalog="iceberg-rest", files="s3", endpoint="https://minio.example.com:9000", **S3), "tok", "s3secret-" + "x" * 30),
+    ("rest+azure", dict(REST, catalog="iceberg-rest", files="azure", account_name="acct1"), "tok", KEY),
+    ("unity+vended", dict(UC, catalog="unity", region="us-east-2"), "dapi1", None),
+    ("unity+s3", dict(UC, catalog="unity", files="s3", **S3), "dapi1", "s3secret-" + "x" * 30),
+    ("unity+azure", dict(UC, catalog="unity", files="azure", account_name="acct1"), "dapi1", "se=2099-01-01&sp=rl&sv=2024-11-04&sr=c&sig=ab%2Bc"),
+    ("glue+s3", {"database": "db1", "catalog_id": "123456789012", **S3}, "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", None),
+    ("none+s3", {"path": "s3://lake-bkt/orders", **S3}, "s3secret-" + "x" * 30, None),
+    ("none+azure", {"path": "abfss://lake@acct1.dfs.core.windows.net/orders/"}, "?sv=2024-11-04&sp=rl&sig=zz", None),
+]
+names = plan.objects("src", raw)
+for label, given, secret, storage in cases:
+    values = plan.validate_inputs(raw, given)
+    flat = defs.connector("lakehouse", values)
+    body, hidden, _ = document.lakehouse(values, secret, storage)
+    props = lifecycle.Engine.vs_properties(flat, names, values)
+    print("%s|%s|%s|%s|%s|%s" % (label, flat["label"], flat["url"].format(**values), json.dumps(json.loads(body), sort_keys=True),
+                                 " ".join("%s=%s" % p for p in props[1:]), "two" if plan.storage_secret_input(flat) else "one"))
+# OAuth
+values = plan.validate_inputs(raw, dict(REST, catalog="iceberg-rest", login="oauth", client_id="reader",
+                                        token_endpoint="https://rest.example.com/api/catalog/v1/oauth/tokens", scope="PRINCIPAL_ROLE:ALL"))
+print("oauth|" + json.dumps(json.loads(document.lakehouse(values, "csecret", None)[0]), sort_keys=True))
+values = plan.validate_inputs(raw, dict(UC, catalog="unity", login="oauth", client_id="sp-1"))
+print("oauth-min|" + json.dumps(json.loads(document.lakehouse(values, "csecret", None)[0]), sort_keys=True))
+# SAS or key, either order of the query string
+for s in ("sv=2024-11-04&ss=b&sp=rl&sig=a", "?sv=2024&sig=a", "se=2099-01-01T00:00Z&sp=rl&sv=2024-11-04&sig=a",
+          "sp=rl&se=2099-01-01&sig=a", KEY, "sv=2024-11-04", "abc=def&sig=x"):
+    print("sas|%s|%s" % (s[:14], document.is_sas(s)))
+# Invalid combinations and settings: kind input (exit 2), the remedy names the valid files values
+for given in ({"catalog": "glue", "files": "azure"}, {"catalog": "none", "files": "vended", "path": "s3://b-1/p/"},
+              {"catalog": "unity", "files": "gcs"}, {"catalog": "glue", "login": "oauth"}, {"catalog": "nope"},
+              {"warehouse": "w"}, {}, {"catalog_url": "https://x.example.com", "database": "d"},
+              {"catalog": "none", "files": "s3", "path": "abfss://lake@acct1.dfs.core.windows.net/p/", "region": "ap-south-1",
+               "access_key_id": "AKIAIOSFODNN7EXAMPLE"},
+              dict(REST, catalog="iceberg-rest", database="db1")):
+    try:
+        plan.validate_inputs(raw, given)
+        print("invalid|accepted")
+    except plan.PlanError as error:
+        print("invalid|%d|%s|%s" % (error.code, error, error.remedy))
+# Defaults
+for given in (dict(REST), dict(UC), {"database": "d", "region": "ap-south-1"},
+              {"path": "abfss://lake@acct1.dfs.core.windows.net/p/"}, {"path": "s3://b-1/p/", "region": "ap-south-1"}):
+    v = plan.validate_inputs(raw, given)
+    print("default|%s|%s|%s" % (v["catalog"], v["files"], v.get("login", "-")))
+PY9
+)"
+lh9() { printf '%s\n' "$LH9" | grep "^$1|" | cut -d'|' -f2-; }
+check "rest+vended: name, TO, JSON, properties, one secret" \
+    'Lakehouse · Iceberg REST catalog · Let the catalog give access|https://rest.example.com/api/catalog|{"token": "tok", "use_vended_credentials": true, "warehouse": "wh"}|NAMESPACE=sales|one' "$(lh9 rest+vended)"
+check "rest+s3: keys, region, endpoint with path-style, two secrets" \
+    'Lakehouse · Iceberg REST catalog · Amazon S3 / S3-compatible|https://rest.example.com/api/catalog|{"access_key": "AKIAIOSFODNN7EXAMPLE", "endpoint": "https://minio.example.com:9000", "path_style": true, "region": "ap-south-1", "secret_key": "s3secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "token": "tok", "warehouse": "wh"}|NAMESPACE=sales|two' "$(lh9 rest+s3)"
+check "rest+azure: the account and its key" \
+    "Lakehouse · Iceberg REST catalog · Azure ADLS Gen2|https://rest.example.com/api/catalog|{\"account_key\": \"$(printf 'QUFB%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21)QQ==\", \"account_name\": \"acct1\", \"token\": \"tok\", \"warehouse\": \"wh\"}|NAMESPACE=sales|two" "$(lh9 rest+azure)"
+check "unity+vended: UNITY_CATALOG, vended, the region when given" \
+    'Lakehouse · Unity Catalog · Let the catalog give access|https://dbc-1.cloud.databricks.com|{"region": "us-east-2", "token": "dapi1", "use_vended_credentials": true}|CATALOG_KIND=UNITY_CATALOG NAMESPACE=main.sales|one' "$(lh9 unity+vended)"
+check "unity+s3: the token and the bucket's keys" \
+    'Lakehouse · Unity Catalog · Amazon S3 / S3-compatible|https://dbc-1.cloud.databricks.com|{"access_key": "AKIAIOSFODNN7EXAMPLE", "region": "ap-south-1", "secret_key": "s3secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", "token": "dapi1"}|CATALOG_KIND=UNITY_CATALOG NAMESPACE=main.sales|two' "$(lh9 unity+s3)"
+check "unity+azure: a SAS that starts with se= is a sas_token" \
+    'Lakehouse · Unity Catalog · Azure ADLS Gen2|https://dbc-1.cloud.databricks.com|{"account_name": "acct1", "sas_token": "se=2099-01-01&sp=rl&sv=2024-11-04&sr=c&sig=ab%2Bc", "token": "dapi1"}|CATALOG_KIND=UNITY_CATALOG NAMESPACE=main.sales|two' "$(lh9 unity+azure)"
+check "glue+s3: GLUE, the Glue endpoint, the catalog ID as warehouse" \
+    'Lakehouse · AWS Glue · Amazon S3 / S3-compatible|https://glue.ap-south-1.amazonaws.com|{"access_key": "AKIAIOSFODNN7EXAMPLE", "region": "ap-south-1", "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "warehouse": "123456789012"}|CATALOG_KIND=GLUE NAMESPACE=db1|one' "$(lh9 glue+s3)"
+check "none+s3: DIRECT_STORAGE TO the folder (a / added), no NAMESPACE" \
+    'Lakehouse · No catalog - Parquet files in a folder · Amazon S3 / S3-compatible|s3://lake-bkt/orders/|{"access_key": "AKIAIOSFODNN7EXAMPLE", "region": "ap-south-1", "secret_key": "s3secret-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}|CATALOG_KIND=DIRECT_STORAGE|one' "$(lh9 none+s3)"
+check "none+azure: the account from the path, the SAS without its ?" \
+    'Lakehouse · No catalog - Parquet files in a folder · Azure ADLS Gen2|abfss://lake@acct1.dfs.core.windows.net/orders/|{"account_name": "acct1", "sas_token": "sv=2024-11-04&sp=rl&sig=zz"}|CATALOG_KIND=DIRECT_STORAGE|one' "$(lh9 none+azure)"
+check "OAuth: client_id, client_secret, oauth2_server_uri (token_endpoint) and scope, never a token" \
+    '{"client_id": "reader", "client_secret": "csecret", "oauth2_server_uri": "https://rest.example.com/api/catalog/v1/oauth/tokens", "scope": "PRINCIPAL_ROLE:ALL", "use_vended_credentials": true, "warehouse": "wh"}' "$(lh9 oauth)"
+check "...the endpoint and scope only when given" '{"client_id": "sp-1", "client_secret": "csecret", "use_vended_credentials": true}' "$(lh9 oauth-min)"
+check "SAS or key: sig with sv/se/sp in any order is a SAS, anything else the key" \
+    "sv=2024-11-04&|True ?sv=2024&sig=a|True se=2099-01-01T|True sp=rl&se=2099-|True QUFBQUFBQUFBQU|False sv=2024-11-04|False abc=def&sig=x|False" \
+    "$(lh9 sas | tr '\n' ' ' | sed 's/ $//')"
+INV="$(lh9 invalid)"
+has "glue+azure is refused, exit 2, the remedy names the one valid files" "2|files=azure (Azure ADLS Gen2) does not go with catalog=glue (AWS Glue)|catalog=glue takes files=s3 (Amazon S3 / S3-compatible) only" "$INV"
+has "none+vended is refused, the remedy lists s3 and azure" "for catalog=none give --set files=<s3|azure>" "$INV"
+has "gcs is refused as not supported yet" "files=gcs: Google Cloud Storage - not supported yet|for catalog=unity give --set files=<vended|s3|azure>" "$INV"
+has "login for glue is refused" "login is for a catalog that signs in (iceberg-rest, unity), not catalog=glue" "$INV"
+has "an unknown catalog is refused with the four" "catalog must be one of iceberg-rest, unity, glue, none, not 'nope'" "$INV"
+has "no catalog given: inferred from warehouse (iceberg-rest), its inputs asked for" "2|catalog_url is required" "$INV"
+has "no catalog and nothing to infer it from: required" "catalog is required (iceberg-rest: Iceberg REST catalog" "$INV"
+has "inputs of two catalogs: refused, not guessed" "the inputs given belong to more than one catalog (glue, iceberg-rest)" "$INV"
+has "an abfss path with files=s3: refused" "path abfss://lake@acct1.dfs.core.windows.net/p/ is on Azure (abfss://), but files=s3" "$INV"
+has "an input of another catalog: named with the combination" "database is not an input of lakehouse with catalog=iceberg-rest, files=vended, login=token" "$INV"
+check "defaults: vended for REST and Unity, s3 for Glue, by the scheme for no catalog; login token" \
+    "iceberg-rest|vended|token unity|vended|token glue|s3|- none|azure|- none|s3|-" "$(lh9 default | tr '\n' ' ' | sed 's/ $//')"
+
+# The second secret: --secret-pair-base64, never an argument, never logged.
+db '{}'
+python3 - "$STATE" <<'PYAZ'
+import json, sys
+json.dump({"sources": {"rest.example.com": {"catalog": "rest", "warehouse": "wh", "token": "t0k-AZ",
+                                            "account_name": "acct1", "account_key": "QUFB" * 21 + "QQ==",
+                                            "namespaces": {"sales": ["orders"]}},
+                       "lake@acct1.dfs.core.windows.net": {"tables": ["orders", "items"], "sas_token": "sv=2024-11-04&sp=rl&sig=Zz9"},
+                       "lake-bkt": {"tables": ["orders"], "key_id": "AKIAIOSFODNN7EXAMPLE", "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}}},
+          open(sys.argv[1], "w"))
+PYAZ
+AZK="$(printf 'QUFB%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21)QQ=="
+RAZ_SET="--set catalog=iceberg-rest --set files=azure --set catalog_url=https://rest.example.com/api --set warehouse=wh --set namespace=sales --set account_name=acct1"
+run_secret "t0k-AZ" connect lakehouse --name raz $RAZ_SET --secret-stdin
+check "two secrets, only the first given: exit 2, nothing created" "2 0" "$RC $(dbq 'len(d.get("connections", {}))')"
+has "...the storage secret named, and how to give it" "give it with --storage-secret-file <file>" "$OUT"
+run_secret "t0k-AZ" --json connect lakehouse --name raz $RAZ_SET --secret-stdin
+has "...kind input with --json" '"kind": "input"' "$OUT"
+run plan lakehouse --name raz $RAZ_SET --set storage_secret=x
+check "storage_secret with --set: refused" "2" "$RC"; has "...as a credential" "storage_secret is a credential and is never taken with --set" "$OUT"
+run_pair "t0k-AZ" "$AZK" connect lakehouse --name raz $RAZ_SET --secret-pair-base64
+check "Iceberg REST + Azure with both secrets: exit 0" "0" "$RC"
+check "...the CONNECTION holds the token and the account key" '["acct1", true, "t0k-AZ"]' \
+    "$(dbq '(lambda c: [c["account_name"], "account_key" in c, c["token"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_RAZ"]["secret"]))')"
+lacks "...the key is not printed" "$AZK" "$OUT"
+check "...nor in the kit's records or log" "0" "$(grep -rlF -- "$AZK" "$HOME_K" | wc -l | tr -d ' ')"
+check "...nor in any statement but the CONNECTION's" "0" \
+    "$(dbq 'len([x for x in d["statements"] if "QUFBQUFB" in x and not x.startswith("CREATE CONNECTION")])')"
+cname() { printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("connector_name") or d.get("name")).replace(chr(183), "|"))'; }
+run show raz
+check "source show names the combination" "Lakehouse | Iceberg REST catalog | Azure ADLS Gen2" "$(cname)"
+has "...and says reauth needs the storage secret too" '"storage_secret": "Account key or SAS"' "$OUT"
+run card raz
+check "the card names the combination" "Lakehouse | Iceberg REST catalog | Azure ADLS Gen2" "$(cname)"
+has "...its settings by their labels" '["Catalog", "Iceberg REST catalog"]' "$OUT"
+run_secret "t0k-AZ" reauth raz --secret-stdin
+check "reauth of a two-secret source with one: exit 2" "2" "$RC"; has "...says both" "reauth of raz needs the storage's account key or sas" "$OUT"
+run_pair "t0k-AZ" "$AZK" reauth raz --secret-pair-base64
+check "...with both: exit 0" "0" "$RC"
+OUT="$(printf 'not-base64!' | eng connect lakehouse --name raz2 $RAZ_SET --secret-pair-base64 2>&1)"; RC=$?
+check "a pair that is not two base64 values: exit 2" "2" "$RC"
+
+run_secret "sv=2024-11-04&sp=rl&sig=Zz9" connect lakehouse --name naz --set path=abfss://lake@acct1.dfs.core.windows.net/retail/ --secret-stdin
+check "no catalog + Azure, the SAS on --password-file's channel: exit 0, files inferred" "0" "$RC"
+has "...DIRECT_STORAGE, no NAMESPACE" "WITH CATALOG_CONNECTION = 'EXAKIT_SRC_NAZ' CATALOG_KIND = 'DIRECT_STORAGE'" \
+    "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_NAZ\"")][-1]')"
+has "...the folder's two tables" "VS_NAZ: 2 table(s)" "$OUT"
+run_secret "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" connect lakehouse --name ns3 --set path=s3://lake-bkt/orders/ --set region=ap-south-1 --set access_key_id=AKIAIOSFODNN7EXAMPLE --secret-stdin
+check "no catalog + S3: exit 0" "0" "$RC"
+run_secret "wrong-key-wrong-key-wrong-key-xx" connect lakehouse --name ns3bad --set path=s3://lake-bkt/orders/ --set region=ap-south-1 --set access_key_id=AKIAIOSFODNN7EXAMPLE --secret-stdin
+check "...a key the store refuses: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_NS3BAD" in d["connections"]' | tr A-Z a-z)"
+run remove raz; run remove naz; run remove ns3
+
+# The form's questions, and what a picker presets: the settings first, then the combination's own.
+run inputs lakehouse
+check "inputs with no catalog: the catalog alone, after the name" "name catalog" \
+    "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["inputs"]))')"
+run inputs lakehouse --set catalog=unity --set files=azure
+check "inputs for unity+azure: the spec's fields in order, the storage secret flagged" \
+    "name catalog files login workspace_url namespace secret account_name storage_secret*" \
+    "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(f["name"] + ("*" if f.get("storage") else "") for f in json.load(sys.stdin)["inputs"]))')"
+check "...named for the combination" "Lakehouse | Unity Catalog | Azure ADLS Gen2" "$(cname)"
+has "...Unity's token label" '"label": "Databricks token"' "$OUT"
+run inputs lakehouse --set catalog=glue
+check "inputs for glue: files s3 only, no login" "name catalog files region database access_key_id secret catalog_id" \
+    "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["inputs"]))')"
+run inputs lakehouse --set catalog=iceberg-rest --set files=s3 --set login=oauth
+check "inputs for REST+s3 with OAuth" "name catalog files login catalog_url warehouse namespace client_id secret token_endpoint scope region access_key_id storage_secret endpoint" \
+    "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(f["name"] for f in json.load(sys.stdin)["inputs"]))')"
+run inputs lakehouse --set catalog=glue --set files=azure
+check "inputs for an invalid combination: exit 2" "2" "$RC"
+OUT="$(printf 'main.sales' | eng field lakehouse namespace --set catalog=unity --set files=vended 2>&1)"; RC=$?
+check "field checks an answer in its combination" "0" "$RC"
+OUT="$(printf 'sales' | eng field lakehouse namespace --set catalog=unity --set files=vended 2>&1)"; RC=$?
+check "...Unity's namespace must be catalog.schema" "2" "$RC"
+
+# Saved sources made by the old connectors: migrated in place the first time they are read.
+for old in iceberg-rest unity lakehouse; do mkdir -p "$HOME_K/sources/old_$(printf '%s' "$old" | tr -d -)"; done
+python3 - "$HOME_K/sources" <<'PYM'
+import json, os, sys
+root = sys.argv[1]
+recs = {"old_icebergrest": ("iceberg-rest", {"catalog_url": "https://rest.example.com/api", "warehouse": "wh", "namespace": "sales",
+                                            "access_key_id": "minioadmin", "region": "us-east-1"}),
+        "old_unity": ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com", "namespace": "main.sales", "region": "us-east-2"}),
+        "old_lakehouse": ("lakehouse", {"region": "ap-south-1", "database": "sales_lake"})}
+for name, (cid, inputs) in recs.items():
+    objs = {"connection": "EXAKIT_SRC_" + name.upper(), "schema": "VS_" + name.upper(), "script_schema": "EXAKIT_VS", "script": "LAKEHOUSE_ADAPTER"}
+    json.dump({"name": name, "connector": cid, "inputs": inputs, "objects": objs}, open(os.path.join(root, name, "config.json"), "w"))
+    json.dump({"status": "ready"}, open(os.path.join(root, name, "state.json"), "w"))
+PYM
+run list
+check "source list after the update: every old source is lakehouse" "lakehouse lakehouse lakehouse" \
+    "$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(" ".join(s["connector"] for s in json.load(sys.stdin)["sources"] if s["name"].startswith("old_")))')"
+check "...each migrated on disk with its catalog and files" "iceberg-rest/s3/token/iceberg-rest unity/vended/token/unity glue/s3/-/lakehouse" \
+    "$(for n in old_icebergrest old_unity old_lakehouse; do python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); i=c["inputs"]; print("%s/%s/%s/%s" % (i["catalog"], i["files"], i.get("login","-"), c["migrated_from"]))' "$HOME_K/sources/$n/config.json"; done | tr '\n' ' ' | sed 's/ $//')"
+run show old_unity
+check "...show names its combination" "Lakehouse | Unity Catalog | Let the catalog give access" "$(cname)"
+check "...its inputs kept" "https://dbc-1.cloud.databricks.com main.sales us-east-2" \
+    "$(python3 -c 'import json,sys; i=json.load(open(sys.argv[1]))["inputs"]; print(i["workspace_url"], i["namespace"], i["region"])' "$HOME_K/sources/old_unity/config.json")"
+run show old_icebergrest
+has "...a keyed REST source now has two secrets" '"storage_secret": "Secret access key"' "$OUT"
+for n in old_icebergrest old_unity old_lakehouse; do rm -rf "$HOME_K/sources/$n"; done
 
 printf '\n== a private CA for Oracle: a wallet inside the connection ==\n'
 # Measured against RDS Oracle 19c over TCPS: ojdbc 23 reads a trust-only PEM
@@ -3237,10 +3484,13 @@ s3|https://my-bucket.s3.eu-central-1.amazonaws.com/docs/a.json|{"bucket": "my-bu
 azure|https://mystorage.blob.core.windows.net/data|{"account": "mystorage", "container": "data"}
 azure|abfss://data@mystorage.dfs.core.windows.net/raw|{"account": "mystorage", "container": "data"}
 bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=my-project;OAuthType=0;DefaultDataset=sales|{"dataset": "sales", "project": "my-project"}
-lakehouse|https://glue.eu-central-1.amazonaws.com|{"region": "eu-central-1"}
-lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|{"database": "sales_lake", "region": "eu-central-1"}
-iceberg-rest|https://catalog.example.com:8181/api/catalog/|{"catalog_url": "https://catalog.example.com:8181/api/catalog"}
-unity|https://dbc-1234abcd-5678.cloud.databricks.com|{"workspace_url": "https://dbc-1234abcd-5678.cloud.databricks.com"}
+lakehouse|https://glue.eu-central-1.amazonaws.com|{"catalog": "glue", "region": "eu-central-1"}
+lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|{"catalog": "glue", "database": "sales_lake", "region": "eu-central-1"}
+lakehouse|https://catalog.example.com:8181/api/catalog/|{"catalog": "iceberg-rest", "catalog_url": "https://catalog.example.com:8181/api/catalog"}
+lakehouse|https://dbc-1234abcd-5678.cloud.databricks.com|{"catalog": "unity", "workspace_url": "https://dbc-1234abcd-5678.cloud.databricks.com"}
+lakehouse|https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest|{"catalog": "iceberg-rest", "catalog_url": "https://dbc-1.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest"}
+lakehouse|s3://sales-lake/orders/|{"catalog": "none", "path": "s3://sales-lake/orders/"}
+lakehouse|abfss://lake@saleslake.dfs.core.windows.net/orders|{"catalog": "none", "path": "abfss://lake@saleslake.dfs.core.windows.net/orders/"}
 EOF
 check "every connector reads a connection string, into its own inputs only" "ok" "$(python3 - "$DEFS" <<'PY2'
 import json, os, sys
@@ -3257,7 +3507,7 @@ PY2
 )"
 
 # The hint above the question asks for the string, then names every form the
-# connector reads on a line of its own, indented under the hint's text: all 13
+# connector reads on a line of its own, indented under the hint's text: all 11
 # connectors, as the line-by-line flow prints it (the panel's twin is asserted
 # on the replays below). Too narrow for a form, it wraps at the same indent.
 hintsh() {
@@ -3279,7 +3529,7 @@ PY2
     check "the hint for $_c: one form per line, indented under its text" "$_want" "$(hintsh 200 "$_c")"
     _hint_n=$(( _hint_n + 1 ))
 done
-check "...every connector has one" "13" "$_hint_n"
+check "...every connector has one" "11" "$_hint_n"
 check "...a form wider than the terminal wraps at the same indent" \
     "$(printf '%s\n' "    - Paste the source's connection string, for example:" '        jdbc:postgresql://ho' '        st:5432/db' '        postgres://user@host' '        :5432/db' '        host[:port][/databas' '        e]')" \
     "$(hintsh 30 postgresql)"
@@ -3294,7 +3544,7 @@ for _case in "pg|postgres://reader:$PW@pg.example.com/sales" "pg|jdbc:postgresql
              "s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$PW" \
              "azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$PW" \
              "azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$PW;EndpointSuffix=core.windows.net" \
-             "iceberg-rest|https://ak:$PW@catalog.example.com/api" "unity|https://dbc-1.cloud.databricks.com/?token=$PW"; do
+             "lakehouse|https://ak:$PW@catalog.example.com/api" "lakehouse|https://dbc-1.cloud.databricks.com/?token=$PW"; do
     pst "${_case%%|*}" "${_case#*|}"
     check "a credential in the string is not used (${_case%%|*}), exit 0" "0" "$RC"
     lacks "...and is in none of the output" "$PW" "$OUT"
@@ -3334,9 +3584,9 @@ mongodb|mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?authMechanismProp
 s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$MPW|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=****&X-Amz-Signature=****
 azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$MPW/ab+c==;EndpointSuffix=core.windows.net|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=****;EndpointSuffix=core.windows.net
 azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$MPW%2Bx%3D|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=****
-iceberg-rest|https://ak:$MPW@catalog.example.com/api|https://ak:****@catalog.example.com/api
-iceberg-rest|https://$MPW@catalog.example.com/api?warehouse=w|https://****@catalog.example.com/api?warehouse=****
-unity|https://dbc-1.cloud.databricks.com/?token=$MPW|https://dbc-1.cloud.databricks.com/?token=****
+lakehouse|https://ak:$MPW@catalog.example.com/api|https://ak:****@catalog.example.com/api
+lakehouse|https://$MPW@catalog.example.com/api?warehouse=w|https://****@catalog.example.com/api?warehouse=****
+lakehouse|https://dbc-1.cloud.databricks.com/?token=$MPW|https://dbc-1.cloud.databricks.com/?token=****
 pg|postgresql://reader@exakit-vs-test-pg.c54yea04y0f8.ap-south-1.rds.amazonaws.com:5432/pagila?currentSchema=public&sslmode=verify-full|postgresql://reader@exakit-vs-test-pg.c54yea04y0f8.ap-south-1.rds.amazonaws.com:5432/pagila?currentSchema=public&sslmode=verify-full
 azure|abfss://data@mystorage.dfs.core.windows.net/raw|abfss://data@mystorage.dfs.core.windows.net/raw
 lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|arn:aws:glue:eu-central-1:123456789012:database/sales_lake
@@ -3401,7 +3651,7 @@ pcred databricks "jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpP
 check "databricks with PWD= and token=: PWD= is used" "$CPW" "$SEC"
 # Where the credential is not the connector's: not used, asked for as before.
 for _case in "s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$CPW" \
-             "iceberg-rest|https://ak:$CPW@catalog.example.com/api" "unity|https://dbc-1.cloud.databricks.com/?token=$CPW" \
+             "lakehouse|https://ak:$CPW@catalog.example.com/api" "lakehouse|https://dbc-1.cloud.databricks.com/?token=$CPW" \
              "bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=p1;OAuthPvtKey=$CPW;DefaultDataset=d1"; do
     pcred "${_case%%|*}" "${_case#*|}"
     check "not the connector's credential (${_case%%|*}): nothing written, none named" "0  None" "$RC $SEC $CRED"
@@ -3947,22 +4197,24 @@ cases = [("postgresql", {"host": "pg.example.com"}), ("postgresql", {"host": "19
          ("oracle", {"host": "ora.example.com"}),
          ("s3", {"bucket": "docs-bucket", "region": "ap-south-1"}), ("azure-blob", {"account": "acct", "container": "c"}),
          ("snowflake", {"account": "myorg-acct1"}), ("bigquery", {"project": "p", "dataset": "d"}),
-         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"region": "eu-west-1"}),
-         ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"catalog": "glue", "files": "s3", "region": "eu-west-1"}),
+         ("lakehouse", {"catalog": "unity", "files": "vended", "login": "token", "workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("lakehouse", {"catalog": "none", "files": "s3", "path": "s3://lake-bkt/p/", "region": "ap-south-1"}),
+         ("lakehouse", {"catalog": "none", "files": "azure", "path": "abfss://lake@acct1.dfs.core.windows.net/p/"}),
          ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/"}),
          ("mongodb", {"uri": "mongodb://10.0.0.5:27017,10.0.0.6:27017/"}),
          ("mongodb", {"uri": "mongodb://10.0.0.5:27017,shard.example.com:27017/"}),
-         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181"}),
-         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181", "endpoint": "http://192.168.64.1:9000"}),
-         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181", "endpoint": "https://s3.example.com"}),
-         ("iceberg-rest", {"catalog_url": "https://rest.example.com/api"})]
+         ("lakehouse", {"catalog": "iceberg-rest", "files": "vended", "login": "token", "catalog_url": "http://192.168.64.1:8181"}),
+         ("lakehouse", {"catalog": "iceberg-rest", "files": "s3", "login": "token", "catalog_url": "http://192.168.64.1:8181", "endpoint": "http://192.168.64.1:9000"}),
+         ("lakehouse", {"catalog": "iceberg-rest", "files": "s3", "login": "token", "catalog_url": "http://192.168.64.1:8181", "endpoint": "https://s3.example.com"}),
+         ("lakehouse", {"catalog": "iceberg-rest", "files": "vended", "login": "token", "catalog_url": "https://rest.example.com/api"})]
 for cid, values in cases:
-    print("%s=%s" % (cid, plan.public_host(defs.connector(cid), values)))
+    print("%s=%s" % (cid, plan.public_host(defs.connector(cid, values), values)))
 print(sorted(set(e["id"] for e in defs.entries()) - set(c for c, _ in cases)))
 PYS
 )"
 check "public_host decides per connector, from its connector.json" \
-    "postgresql=pg.example.com|postgresql=None|mysql=db.abc.eu-west-1.rds.amazonaws.com|sqlserver=None|oracle=ora.example.com|s3=docs-bucket.s3.ap-south-1.amazonaws.com|azure-blob=acct.blob.core.windows.net|snowflake=myorg-acct1.snowflakecomputing.com|bigquery=www.googleapis.com|databricks=dbc-1.cloud.databricks.com|lakehouse=glue.eu-west-1.amazonaws.com|unity=dbc-1.cloud.databricks.com|mongodb=cluster0.abcd.mongodb.net|mongodb=None|mongodb=shard.example.com|iceberg-rest=None|iceberg-rest=None|iceberg-rest=s3.example.com|iceberg-rest=rest.example.com|" \
+    "postgresql=pg.example.com|postgresql=None|mysql=db.abc.eu-west-1.rds.amazonaws.com|sqlserver=None|oracle=ora.example.com|s3=docs-bucket.s3.ap-south-1.amazonaws.com|azure-blob=acct.blob.core.windows.net|snowflake=myorg-acct1.snowflakecomputing.com|bigquery=www.googleapis.com|databricks=dbc-1.cloud.databricks.com|lakehouse=glue.eu-west-1.amazonaws.com|lakehouse=dbc-1.cloud.databricks.com|lakehouse=lake-bkt.s3.ap-south-1.amazonaws.com|lakehouse=acct1.dfs.core.windows.net|mongodb=cluster0.abcd.mongodb.net|mongodb=None|mongodb=shard.example.com|lakehouse=None|lakehouse=None|lakehouse=s3.example.com|lakehouse=rest.example.com|" \
     "$(printf '%s\n' "$SCOPE" | sed '$d' | tr '\n' '|')"
 check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$SCOPE" | tail -1)"
 
@@ -3978,23 +4230,23 @@ cases = [("postgresql", {"host": "pg.example.com", "tls": "verify"}), ("mysql", 
          ("sqlserver", {"host": "sql.example.com", "tls": "disable"}), ("oracle", {"host": "ora.example.com"}),
          ("s3", {"bucket": "docs-bucket", "region": "ap-south-1"}), ("azure-blob", {"account": "acct", "container": "c"}),
          ("snowflake", {"account": "myorg-acct1"}), ("bigquery", {"project": "my-project", "dataset": "d"}),
-         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"region": "eu-west-1"}),
-         ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com"}),
-         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181"}),
-         ("iceberg-rest", {"catalog_url": "https://rest.example.com/api", "endpoint": "http://10.0.0.5:9000"}),
+         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"catalog": "glue", "files": "s3", "region": "eu-west-1"}),
+         ("lakehouse", {"catalog": "unity", "files": "vended", "login": "token", "workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("lakehouse", {"catalog": "iceberg-rest", "files": "vended", "login": "token", "catalog_url": "http://192.168.64.1:8181"}),
+         ("lakehouse", {"catalog": "iceberg-rest", "files": "s3", "login": "token", "catalog_url": "https://rest.example.com/api", "endpoint": "http://10.0.0.5:9000"}),
          ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/?authSource=admin"}),
          ("mongodb", {"uri": "mongodb://10.0.0.5:27017,10.0.0.6:27017/"}),
          ("mongodb", {"uri": "mongodb://10.0.0.5:27017/?tls=true&tlsAllowInvalidCertificates=true"}),
          ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/?ssl=false"})]
 for cid, values in cases:
-    c = defs.connector(cid)
+    c = defs.connector(cid, values)
     print("%s=%s/%s" % (cid, lifecycle.source_where(c, values), lifecycle.tls_level(c, values)))
 print("gone=%s/%s" % (lifecycle.source_where(None, {"host": "h.example.com"}), lifecycle.tls_level(None, {})))
 print(sorted(set(e["id"] for e in defs.entries()) - set(c for c, _ in cases)))
 PYW
 )"
 check "list: host and tls per connector, from its connector.json" \
-    "postgresql=pg.example.com/verify|mysql=my.example.com/require|sqlserver=sql.example.com/disable|oracle=ora.example.com/verify|s3=docs-bucket.s3.ap-south-1.amazonaws.com/verify|azure-blob=acct.blob.core.windows.net/verify|snowflake=myorg-acct1.snowflakecomputing.com/verify|bigquery=my-project/verify|databricks=dbc-1.cloud.databricks.com/verify|lakehouse=glue.eu-west-1.amazonaws.com/verify|unity=dbc-1.cloud.databricks.com/verify|iceberg-rest=192.168.64.1/disable|iceberg-rest=rest.example.com/disable|mongodb=cluster0.abcd.mongodb.net/verify|mongodb=10.0.0.5/disable|mongodb=10.0.0.5/require|mongodb=cluster0.abcd.mongodb.net/disable|gone=h.example.com/None|" \
+    "postgresql=pg.example.com/verify|mysql=my.example.com/require|sqlserver=sql.example.com/disable|oracle=ora.example.com/verify|s3=docs-bucket.s3.ap-south-1.amazonaws.com/verify|azure-blob=acct.blob.core.windows.net/verify|snowflake=myorg-acct1.snowflakecomputing.com/verify|bigquery=my-project/verify|databricks=dbc-1.cloud.databricks.com/verify|lakehouse=glue.eu-west-1.amazonaws.com/verify|lakehouse=dbc-1.cloud.databricks.com/verify|lakehouse=192.168.64.1/disable|lakehouse=rest.example.com/disable|mongodb=cluster0.abcd.mongodb.net/verify|mongodb=10.0.0.5/disable|mongodb=10.0.0.5/require|mongodb=cluster0.abcd.mongodb.net/disable|gone=h.example.com/None|" \
     "$(printf '%s\n' "$WHERE" | sed '$d' | tr '\n' '|')"
 check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$WHERE" | tail -1)"
 check "a cloud store with no host input: the plan names its endpoint" \
@@ -4607,7 +4859,7 @@ has "...Enter opens it: the card and its menu" "Tables and columns" "$ROWS"
 printf '\n== exakit source catalog ==\n'
 jsonsrc /dev/null catalog
 check "catalog: exit 0" "0" "$JRC"
-has "...a box of id, name and aliases" "ID            NAME" "$JOUT"
+has "...a box of id, name and aliases" "ID          NAME" "$JOUT"
 has "...aliases trimmed" "aws-s3, s3-files, s3-documents, +1" "$JOUT"
 lacks "...no GA column" " GA " "$JOUT"
 lacks "...no status column" "candidate" "$JOUT"
