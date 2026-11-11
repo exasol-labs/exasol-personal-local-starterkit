@@ -271,6 +271,47 @@ def guide_list(defs, docs, width):
     return 0
 
 
+def settings_block(defs, cid, width):
+    """A connector with settings (lakehouse): its catalogs x files choices,
+    from connector.json, and how to pick them without the form."""
+    try:
+        doc = json.load(open(os.path.join(defs, "connectors", cid, "connector.json"), encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    settings = doc.get("settings")
+    if not settings:
+        return
+    files = settings["files"]
+    labels = dict((c["value"], c["label"]) for c in files["choices"])
+    say("N", "")
+    say("H", "  --set catalog=   and the --set files= it takes (* the default when files is left out)")
+    for choice in settings["catalog"]["choices"]:
+        valid = files["valid"].get(choice["value"], [])
+        default = files["default"].get(choice["value"])
+        cells = ", ".join("%s%s (%s)" % (f, "*" if f == default else "", ascii_text(labels[f])) for f in valid)
+        text = "%s. Files: %s" % (ascii_text(choice["label"]), cells)
+        for i, line in enumerate(wrap(text, max(24, width - 18), "", "")):
+            say("N", "  " + (choice["value"] if i == 0 else "").ljust(14) + "  " + line)
+    off = [ascii_text(c["label"]) for c in files["choices"] if c.get("disabled")]
+    if off:
+        say("D", "  " + "; ".join(off))
+    login = settings.get("login")
+    if login:
+        cats = ", ".join(login.get("when", {}).get("catalog", []))
+        text = "Login (--set login=..., %s only): %s; default %s." % (
+            cats, ", ".join("%s (%s)" % (c["value"], ascii_text(c["label"])) for c in login["choices"]), login["default"])
+        for line in wrap(text, width, "  ", "  "):
+            say("N", line)
+    for line in wrap("Secrets: the catalog's (a token, an OAuth client secret; Glue: the AWS secret key; no catalog: "
+                     "the storage secret) on --password-file or --password-stdin; the storage secret beside a catalog "
+                     "login (S3 secret key, Azure account key or SAS) on --storage-secret-file. Never as an argument.",
+                     width, "  ", "  "):
+        say("N", line)
+    say("A", "  e.g. exakit connect %s --name sales_lake --set catalog=unity --set files=vended "
+             "--set workspace_url=https://dbc-1.cloud.databricks.com --set namespace=main.sales "
+             "--password-file ~/token.txt" % cid)
+
+
 def guide_one(defs, docs, entry, width, shell):
     cid = entry["id"]
     path = os.path.join(docs, cid + ".md")
@@ -346,6 +387,7 @@ def guide_one(defs, docs, entry, width, shell):
                     first = re.split(r"(?<=\.)\s", plain(para))[0]
                     for line in wrap(first, width, "", "  ", 2):
                         say("N", line)
+    settings_block(defs, cid, width)
     say("A", "Connect: exakit connect %s" % cid)
     say("D", "Full guide: " + shown_path(path))
     options(defs, width)

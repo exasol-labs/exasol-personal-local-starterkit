@@ -1518,7 +1518,7 @@ Write-Host ""
 Write-Host "== the hint above the connection-string question: one form per line, every connector =="
 # ui.ps1 is loaded above: Split-ExakitWrap, which wraps a form too wide for the console.
 # The hint above the question asks for the string, then names every form the
-# connector reads on a line of its own, indented under the hint's text: all 13
+# connector reads on a line of its own, indented under the hint's text: all 11
 # connectors. Too narrow for a form, it wraps at the same indent.
 $hintN = 0
 foreach ($dir in @(Get-ChildItem -LiteralPath (J @("setup", "virtual-schemas", "connectors")) -Directory | Sort-Object Name)) {
@@ -1528,7 +1528,7 @@ foreach ($dir in @(Get-ChildItem -LiteralPath (J @("setup", "virtual-schemas", "
     Check ("the hint for " + $dir.Name + ": what to paste, then one form per line, indented under its text") ("INFO Paste the source's connection string, for example:`n" + ($want -join "`n")) ((@($script:shown) + $lines) -join "`n")
     $hintN++
 }
-Check "...every connector has one" 13 $hintN
+Check "...every connector has one" 11 $hintN
 $script:shown.Clear()
 $lines = @(Write-ExakitVsPasteHint -Forms @(Get-ExakitVsPasteForms "postgresql") -Cols 30 6>&1 | ForEach-Object { ("" + $_) -replace ([string][char]27 + "\[[0-9;]*m"), "" })
 Check "...a form wider than the console wraps at the same indent" "        jdbc:postgresql://ho|        st:5432/db|        postgres://user@host|        :5432/db|        host[:port][/databas|        e]" ($lines -join "|")

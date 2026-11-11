@@ -2,8 +2,9 @@
 
     cli.py [context] catalog    [--query Q] [--public-ip]
     cli.py [context] resolve    QUERY
-    cli.py [context] inputs     CONNECTOR
-    cli.py [context] field      CONNECTOR INPUT [--base64]   (the value on standard input)
+    cli.py [context] inputs     CONNECTOR [--set KEY=VALUE ...]   (a connector with settings: the
+                                settings chosen so far, e.g. --set catalog=unity --set files=azure)
+    cli.py [context] field      CONNECTOR INPUT [--set KEY=VALUE ...] [--base64]   (the value on standard input)
     cli.py [context] paste      CONNECTOR [--base64] [--secret-out FILE | --credential-given] [--as INPUT]
                                 (a connection string on standard input)
     cli.py [context] draft      CONNECTOR --name N [--set KEY=VALUE ...] --secret-stdin
@@ -38,7 +39,10 @@ is a conflict (exit 3).
 A secret is read from standard input only (--secret-stdin), never from an
 argument: arguments are visible to every local user through the process table.
 It is read as UTF-16 by its byte-order mark, else as UTF-8 with or without
-one (decode_secret); anything else is refused. --secret-stdin-base64
+one (decode_secret); anything else is refused. --secret-pair-base64 carries
+two (a lakehouse combination with a catalog login and storage keys): standard
+input is base64(the credential) "." base64(the storage secret), white space
+ignored, both shells' one way of sending two secrets down one pipe. --secret-stdin-base64
 takes it base64-encoded instead: the Windows bridge sends it so, because
 Windows PowerShell 5.1 re-encodes what it pipes to a native program (measured
 on CI: a byte-order mark added, every non-ASCII character turned into '?'),
@@ -111,10 +115,13 @@ def parse(argv):
     # an INFO event when it is known and public_ip in the result either way.
     cmd.add_argument("--public-ip", action="store_true")
     sub.add_parser("resolve").add_argument("query")
-    sub.add_parser("inputs").add_argument("connector")
+    cmd = sub.add_parser("inputs")
+    cmd.add_argument("connector")
+    cmd.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     cmd = sub.add_parser("field")
     cmd.add_argument("connector")
     cmd.add_argument("input")
+    cmd.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     cmd.add_argument("--base64", action="store_true")
     cmd = sub.add_parser("paste")
     cmd.add_argument("connector")
@@ -133,6 +140,7 @@ def parse(argv):
     cmd.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
     cmd.add_argument("--secret-stdin", action="store_true")
     cmd.add_argument("--secret-stdin-base64", action="store_true")
+    cmd.add_argument("--secret-pair-base64", action="store_true")
     for name in ("plan", "connect"):
         cmd = sub.add_parser(name)
         cmd.add_argument("connector")
@@ -140,6 +148,7 @@ def parse(argv):
         cmd.add_argument("--set", action="append", default=[], metavar="KEY=VALUE")
         cmd.add_argument("--secret-stdin", action="store_true")
         cmd.add_argument("--secret-stdin-base64", action="store_true")
+        cmd.add_argument("--secret-pair-base64", action="store_true")
         cmd.add_argument("--dry-run", action="store_true")
         # A credential will come with the connect (the shell knows before it
         # reads one): the plan of a connected source with no other change is
@@ -163,6 +172,7 @@ def parse(argv):
     cmd.add_argument("name")
     cmd.add_argument("--secret-stdin", action="store_true")
     cmd.add_argument("--secret-stdin-base64", action="store_true")
+    cmd.add_argument("--secret-pair-base64", action="store_true")
     sub.add_parser("refresh").add_argument("name")
     cmd = sub.add_parser("describe")
     cmd.add_argument("name")
@@ -275,6 +285,25 @@ def pairs(items):
     return values
 
 
+def read_secrets(args):
+    """(the credential, the storage secret or None) from standard input."""
+    if not getattr(args, "secret_pair_base64", False):
+        return read_secret(args), None
+    raw = sys.stdin.buffer.read()
+    parts = re.sub(rb"[^A-Za-z0-9+/=.]", b"", raw).split(b".")
+    if len(parts) != 2:
+        raise lifecycle.Failure("the credentials on standard input are not two base64 values joined by a dot",
+                                lifecycle.EXIT["input"])
+    out = []
+    for part in parts:
+        try:
+            text = decode_secret(base64.b64decode(part, validate=True)) if part else ""
+        except (ValueError, binascii.Error):
+            raise lifecycle.Failure("the credentials on standard input are not valid base64", lifecycle.EXIT["input"])
+        out.append(text.rstrip("\r\n") or None)
+    return out[0], out[1]
+
+
 def read_secret(args):
     if args.secret_stdin_base64:
         raw = sys.stdin.buffer.read()
@@ -376,6 +405,15 @@ def form_answer(args):
     connector_id = defs.resolve(args.connector)
     connector = defs.connector(connector_id)
     entry = defs.entry(connector_id)
+    chosen = None
+    if connector.get("settings"):
+        # The settings given so far (the picker's catalog and files, or the
+        # form's own answers): their combination's inputs, or - with no
+        # catalog yet - the catalog alone, asked first. A combination that is
+        # not valid is refused here, in the words a connect would get.
+        given = pairs(args.set)
+        chosen = planner.choose_settings(connector, given, partial=True)
+        connector = planner.specialize(connector, dict(given, **chosen))
     if args.command == "inputs":
         fields = [{"name": "name", "label": "Name (alias) for this connection", "kind": "source-name", "required": True,
                    "default": "", "choices": [], "secret": False}]
@@ -387,8 +425,17 @@ def form_answer(args):
                            # Said under the panel when it is asked; the question's own words; drafted when empty.
                            "hint": list(spec.get("hint", [])), "prompt": spec.get("prompt", ""),
                            "draft": connector.get("store", "bucket") if spec.get("draft") else ""})
-        return {"connector": connector_id, "name": entry["name"], "status": entry["status"],
-                "gate": entry.get("gate") or "", "inputs": fields}
+            if spec.get("setting"):
+                fields[-1].update(setting=True, choice_labels=spec.get("choice_labels", []),
+                                  disabled=spec.get("disabled", []))
+            if spec["name"] == planner.STORAGE_SECRET:
+                # The second secret: --storage-secret-file, never --password-file.
+                fields[-1]["storage"] = True
+        answer = {"connector": connector_id, "name": connector.get("label") or entry["name"], "status": entry["status"],
+                  "gate": entry.get("gate") or "", "inputs": fields}
+        if chosen is not None:
+            answer["settings"] = chosen
+        return answer
     raw = read_value(args)
     if args.input == "name":
         if not sources.NAME.match(raw):
@@ -490,8 +537,10 @@ def main(argv=None):
         log.write(level, text)
 
     def secret_of(args):
-        secret = read_secret(args)
-        log.secret(secret)
+        secret, storage = read_secrets(args)
+        log.secret(secret, storage)
+        if engine is not None:
+            engine.storage_secret = storage
         return secret
 
     result, code = None, 0
