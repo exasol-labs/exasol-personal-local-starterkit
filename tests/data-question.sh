@@ -350,7 +350,7 @@ check "menu: the note of a file backed out of is said before the wizard starts" 
 out="$(ext menu 0 1 1 3)"
 check "menu: a refused file, then the wizard, then exit 2 (bad input)" "local|;connect|connect;~rc=2" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
 out="$(ext offer 0 1 1 1)"
-check "offer: a failed file is booked, the wizard still runs" "local|;connect|connect;~rc=1" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
+check "offer: a failed file is not booked either (a warning, not an install failure), the wizard still runs" "local|;connect|connect;~rc=0" "$(printf '%s' "$out" | cut -d'~' -f1,2)"
 
 echo "the installer's own Ctrl+C trap is back as it was after the wizard:"
 # The runner holds INT with a trap that does nothing while the wizard runs, so

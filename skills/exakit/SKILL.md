@@ -54,7 +54,7 @@ fixes it — relay that exact line rather than composing your own.
 | MCP connection (read-only user) | the AI client reading the database | `exasol-mcp` (setup), `exasol-mcp-server` (using its tools) |
 | `exakit sql` | one statement from a shell, with remedies; reads unless `--write` | this one |
 | exapump | bulk upload, multi-statement scripts, BucketFS files | `exasol-exapump`, `exasol-database`, `exasol-bucketfs` |
-| pyexasol | Python programs outside notebooks | `exasol-pyexasol` + §6 below |
+| pyexasol | Python programs outside notebooks | `exasol-pyexasol` + §7 below |
 | Exasol SQL | writing correct SQL | `exasol-sql-dialect`, `exasol-system-tables`, `exasol-table-design`, `exasol-import-export`, `exasol-udfs` |
 | External sources | `exakit connect` / `exakit source`: a remote database or files queried in place as a virtual schema | `exasol-virtual-schemas` (the shared rules), then the `exasol-vs-<connector>` skill it names |
 | Marketplace | choosing, installing, updating, removing add-ons | `exasol-marketplace` |
@@ -71,7 +71,55 @@ An add-on's skill is placed only when the add-on is installed. Before using
 one, check `exakit marketplace --list --json`; if it is not installed, say so
 and offer `exakit marketplace <id>` — install only when the user agrees.
 
-## 3. MANDATORY: the order of tools for each task
+## 3. MANDATORY: read the column maps first (EXAKIT_SEMANTIC)
+
+Before you describe, query or chart any table, read its approved column map.
+It is the user's own statement of what each column means, and it wins over
+anything you infer from names, types or values.
+
+```sql
+SELECT V.VIEW_NAME, V.VIEW_COMMENT, C.COLUMN_NAME, C.COLUMN_COMMENT
+FROM SYS.EXA_ALL_VIEWS V
+JOIN SYS.EXA_ALL_COLUMNS C ON C.COLUMN_SCHEMA = V.VIEW_SCHEMA AND C.COLUMN_TABLE = V.VIEW_NAME
+WHERE V.VIEW_SCHEMA = 'EXAKIT_SEMANTIC'
+ORDER BY V.VIEW_NAME, C.COLUMN_ORDINAL_POSITION;
+```
+
+- `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>` describes `<SCHEMA>.<TABLE>`. Each column
+  comment starts `role=<role>` (key, time, measure, category, flag, text,
+  identifier, other), may say `sensitive`, and names the version
+  (`descriptor=v<n>`). The view comment gives the grain and the source.
+- Use the roles: group by a `category`, sum a `measure`, order by the `time`
+  column, count rows by the `key`. Never chart, group or send to a model a
+  column marked `sensitive`.
+- `<SCHEMA>__RELATIONS` views list the approved links between tables: join on
+  those before any link you find yourself.
+- The target (the outcome to predict) is chosen by the user. It is in the
+  descriptor, not the view: `exakit describe <id> --show --json` → `slots.target`.
+  Never guess it.
+
+**A table with no column map: warn, then ask.** List every table you are
+about to use that has no view in `EXAKIT_SEMANTIC`, before your first finding:
+
+> ⚠ No approved column map: `VS_CATALOG.inventory_weekly`, `RETAIL_SIGNALS.CUSTOMER_REVIEWS`.
+> Its column meanings below are my reading of names and values, not yours.
+> Approve a map so every agent and notebook reads the same meaning:
+>
+> ```bash
+> exakit describe VS_CATALOG.inventory_weekly          # proposes a role per column, writes nothing
+> exakit describe VS_CATALOG.inventory_weekly --approve --role target=<COLUMN>   # approves and publishes it
+> ```
+>
+> In a notebook: `nb.review_roles(connection, "VS_CATALOG.inventory_weekly")`, then **Approve column map**.
+> Should I go on with my reading, or will you approve the maps first?
+
+Wait for the answer. Approving writes to the database (the view in
+`EXAKIT_SEMANTIC`), so it is the user's command to run, never yours through
+MCP. `--role target=` only when the work predicts an outcome. A map whose
+table changed since approval is shown as a draft again by `exakit describe`:
+treat it as missing and say so.
+
+## 4. MANDATORY: the order of tools for each task
 
 Use the first that fits. Go further down only when the one above cannot do
 it, and say why when you do.
@@ -96,7 +144,7 @@ it, and say why when you do.
    `exakit sql --write`.
 
 Never load row by row from a Python loop of `INSERT`s. In a notebook, use
-`nb.load_own_file(...)` (§5).
+`nb.load_own_file(...)` (§6).
 
 Data that should stay where it is (another database, a lake, a bucket) is not
 loaded: `exakit connect` queries it in place through a virtual schema
@@ -110,7 +158,7 @@ agent connects with the unattended `exakit connect <connector> ...` form.
 1. The MCP tools — they connect as the read-only user, so nothing can change.
 2. `exakit sql "<statement>" [--json]` — one statement, with remedies.
 3. `exapump sql -p starter-kit` — a multi-statement script.
-4. pyexasol — only inside a Python program (§6); inside a notebook, `exakit.nb`.
+4. pyexasol — only inside a Python program (§7); inside a notebook, `exakit.nb`.
 
 **Change data or schema** — only when the user asked. Show the SQL first,
 then `exakit sql --write`. `exakit sql`, exapump and pyexasol connect as the
@@ -121,7 +169,7 @@ write the read-only MCP path refused.
 
 | Task | First choice | Then |
 |---|---|---|
-| Notebook work | the kit's notebooks via `exakit notebook` (§5) | — never a bare `pip install jupyter` |
+| Notebook work | the kit's notebooks via `exakit notebook` (§6) | — never a bare `pip install jupyter` |
 | Dashboard or chart | dash-server (`dash-server`, `exasol-dash`) | if missing: offer `exakit marketplace dash-server` — no other dashboard tool |
 | Run SQL on a schedule | exasol-scheduler | offer `exakit marketplace exasol-scheduler` |
 | UDFs, model scoring in the database | udf-devkit commands (`exakit udf-setup`, `udf-use`, `model put`, `udf-file`) | `exasol-udfs` for the `CREATE SCRIPT` itself |
@@ -130,7 +178,7 @@ write the read-only MCP path refused.
 | SQL models | dbt-exasol | — |
 | Install, update, remove anything | `exakit marketplace`, `exakit update`, `exakit uninstall <id> --dry-run` | never `pip`, `brew`, `exasol install`, `uvx` by hand |
 
-## 4. Personas: what to reach for first
+## 5. Personas: what to reach for first
 
 Confirm what the user's persona brings with `exakit persona show <id> --json`
 (the recorded ones: `persona list --json` → `recorded`); its `start_here` is
@@ -145,7 +193,7 @@ the first step. Then, in this order:
 Anything a persona lists as pending (`persona plan --json`) is brought in with
 `exakit persona add <id>` — not by installing pieces by hand.
 
-## 5. MANDATORY: notebooks
+## 6. MANDATORY: notebooks
 
 The kit's notebooks are connected, tested starting points. Use them; never
 start from an empty notebook or write connection code by hand.
@@ -158,7 +206,7 @@ start from an empty notebook or write connection code by hand.
   (JupyterLab) and `~/.exasol-starter-kit/notebooks/marimo/<persona>/` (Marimo).
   The persona's `notebooks[]` in `persona show <id> --json` gives each path,
   relative to those folders (`data-scientist/00_quickstart.ipynb`).
-- **Use first, in this order:** the persona's notebook for the task (see §4).
+- **Use first, in this order:** the persona's notebook for the task (see §5).
   Changing what it analyses is usually one assignment in its first cell
   (`DATASET = ...`, or a data file with a descriptor beside it).
 - **Editing:** edit the kit's notebook in place when the user asks for a change
@@ -180,7 +228,7 @@ start from an empty notebook or write connection code by hand.
 - **Never** put a host, user, password or token in a notebook cell, its
   output, or a file beside it.
 
-## 6. This machine's connection facts
+## 7. This machine's connection facts
 
 - The database: `127.0.0.1:8563`, with a **self-signed certificate that the kit
   pins**: its SHA-256 fingerprint is `runtime.tls_fingerprint` in
@@ -208,7 +256,7 @@ start from an empty notebook or write connection code by hand.
 - MCP reads through a dedicated read-only user; that boundary is real. The
   other connections are admin.
 
-## 7. Before anything that changes the machine
+## 8. Before anything that changes the machine
 
 The read-only commands in §1 are always safe. For an install, update, data
 load, write or removal: say what will happen, run the preview where there is

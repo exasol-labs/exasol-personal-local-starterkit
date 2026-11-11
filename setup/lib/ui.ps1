@@ -580,6 +580,14 @@ function Start-ExakitProgress {
                 if ($pct -lt $flag.Shown) { $pct = $flag.Shown }
                 $flag.Shown = $pct
 
+                # A child process may report its progress through a file
+                # (Set-ExakitProgressPhase cannot reach across processes).
+                if ($flag.PhaseFile) {
+                    try {
+                        $said = ([IO.File]::ReadAllText($flag.PhaseFile)).Trim()
+                        if ($said) { $flag.Label = $said }
+                    } catch { }
+                }
                 $text = "$($flag.Label)"
                 if ($text.Length -gt ($tw - 1)) { $text = $text.Substring(0, $tw - 2) + "…" }
                 $text = $text.PadRight($tw + $gap)

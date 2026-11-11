@@ -425,10 +425,14 @@ printf '\n== a FATAL upload failure names the reason too ==\n'
 # the very same engine line into words.
 #
 # exapump_upload is stubbed further up this suite, and `die` exits the shell it
-# runs in, so the real function is exercised in a child bash: the engine fails,
-# and the logfile already holds its Error: line, which is the whole situation.
+# runs in, so the real function is exercised in a child bash: the engine fails
+# and writes its Error: line to the logfile, which is the whole situation. An
+# earlier, unrelated Error: line (the MCP write probe's) is already there: the
+# reason is this upload's own, never that one.
 FATAL_LOG="$WORK/fatal.log"
-cat > "$FATAL_LOG" <<'FATALLOG'
+FATAL_SAYS="$WORK/fatal.says"
+printf '%s\n' 'Error: Query execution failed: Protocol error: insufficient privileges for creating table (SQL state: 42500)' > "$FATAL_LOG"
+cat > "$FATAL_SAYS" <<'FATALLOG'
 Error: SQL execution failed: Protocol error: ETL-2107: Error while parsing row=412 (starting from 0) [CSV Parser found at byte 8 of 76 single field delimiter in a not enclosed field]
 FATALLOG
 
@@ -439,12 +443,11 @@ fatal_upload() { # fatal_upload <log-file> -> the message a doomed upload prints
         . "$1/setup/lib/ui.sh"
         . "$1/setup/lib/common.sh"
         . "$1/setup/lib/exapump.sh"
-        EXAKIT_LOG_FILE="$2"
-        # The layer below: the upload fails, and the engine has already said why
-        # in the logfile.
-        run_logged() { return 1; }
+        EXAKIT_LOG_FILE="$2"; SAYS="$4"
+        # The layer below: the upload fails, and the engine says why in the logfile.
+        run_logged() { cat "$SAYS" >> "$EXAKIT_LOG_FILE"; return 1; }
         exapump_upload "$3" "STARTER_KIT.SALES"
-    ' _ "$ROOT" "$1" "$D/sales.csv" 2>&1
+    ' _ "$ROOT" "$1" "$D/sales.csv" "$FATAL_SAYS" 2>&1
 }
 
 FATAL_OUT="$(fatal_upload "$FATAL_LOG" || true)"
@@ -455,12 +458,14 @@ has "...and names the file and the table it was going into" \
     "Could not load sales.csv into STARTER_KIT.SALES" "$FATAL_OUT"
 lacks "the fatal path no longer sends the reader to the log" "Upload failed:" "$FATAL_OUT"
 
-# The fallback survives: with nothing in the log to translate, inventing a
-# reason would be worse than the old wording.
-: > "$FATAL_LOG"
+# The fallback survives: when this upload wrote nothing to translate, inventing a
+# reason would be worse than the old wording - and an EARLIER failure's Error:
+# line (the MCP probe's, still in the log) is not this upload's reason.
+: > "$FATAL_SAYS"
 FATAL_BARE="$(fatal_upload "$FATAL_LOG" || true)"
 has "an untranslatable failure keeps the old wording" "Upload failed:" "$FATAL_BARE"
 lacks "...and invents no reason" "Could not load sales.csv" "$FATAL_BARE"
+lacks "...nor borrows an earlier failure's" "insufficient privileges" "$FATAL_BARE"
 
 # Both paths call the same translator, on both sides of the kit.
 FATAL_SH="$(cat "$ROOT/setup/lib/exapump.sh")"

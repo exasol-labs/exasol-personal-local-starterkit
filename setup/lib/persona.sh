@@ -227,19 +227,19 @@ exakit_persona_data() {
     fi
     exakit_clear_failure_note
     if ! exakit_maybe_offer_data_load "$1"; then
-        exakit_record_soft_failure sample_data "exakit data-load" "$(exakit_take_failure_note)" "sample data"
-        warn "Sample data did not finish loading - carrying on so the rest of the install completes"
+        exakit_record_soft_failure sample_data "exakit data-load" "$(exakit_take_failure_note)" "some of the data"
+        warn "Some of the data did not finish loading - carrying on so the rest of the install completes"
     fi
     exakit_clear_failure_note
     return 0
 }
 
-# exakit_persona_marketplace_note — after the closing offer showed only the
-# personas' add-ons, the rest of the marketplace is named once. (Without that
-# offer the closing lines already name the marketplace: no second pointer.)
+# exakit_persona_marketplace_note — after the personas' closing offer, where
+# to add or remove add-ons later. (Without that offer the closing lines already
+# name the marketplace: no second pointer.)
 exakit_persona_marketplace_note() {
     [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] || return 0
-    info "Add more useful add-ons, like dashboards, notebooks, dbt, the scheduler or JSON tables: \"exakit marketplace\" (terminal or PowerShell)"
+    info "Add or remove add-ons any time: \"exakit marketplace\" (terminal or PowerShell)"
 }
 
 # exakit_persona_plan <ids> <json 0|1> — what these personas bring and what of
