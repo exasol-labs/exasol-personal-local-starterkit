@@ -436,6 +436,10 @@ function Read-ExakitMenuKey {
             'Spacebar'  { return @{ Name = 'Space' } }
             'UpArrow'   { return @{ Name = 'Up' } }
             'DownArrow' { return @{ Name = 'Down' } }
+            # Left/Right mean something only in a menu with a collapse group
+            # (Get-ExakitTreeArrow); every other menu has no arm for them.
+            'LeftArrow'  { return @{ Name = 'Left' } }
+            'RightArrow' { return @{ Name = 'Right' } }
         }
         $code = [int]$key.KeyChar
         if ($code -eq 13 -or $code -eq 10) { return @{ Name = 'Enter' } }
@@ -470,6 +474,8 @@ function ConvertFrom-ExakitMenuSequence {
     if (-not $Sequence) { return @{ Name = 'Escape' } }
     if ($Sequence -ceq '[A' -or $Sequence -ceq 'OA') { return @{ Name = 'Up' } }
     if ($Sequence -ceq '[B' -or $Sequence -ceq 'OB') { return @{ Name = 'Down' } }
+    if ($Sequence -ceq '[C' -or $Sequence -ceq 'OC') { return @{ Name = 'Right' } }
+    if ($Sequence -ceq '[D' -or $Sequence -ceq 'OD') { return @{ Name = 'Left' } }
     if ($Sequence -cmatch '^\[<(\d+);(\d+);(\d+)([Mm])$') {
         $button = [int]$Matches[1]
         if ($Matches[4] -ceq 'M' -and $button -eq 0) { return @{ Name = 'Click'; Y = [int]$Matches[3] } }
@@ -843,8 +849,12 @@ function New-ExakitTable {
 # which is how every later call names it.
 function Add-ExakitTableRow {
     param(
+        # Three levels deep: the connect menu's files under a catalog under
+        # Lakehouse (Get-ExakitTableFrame draws any depth).
         [ValidateSet("group", "tee", "corner", "plain", "tee-tee", "tee-corner",
-                     "corner-tee", "corner-corner")][string]$Kind = "plain",
+                     "corner-tee", "corner-corner",
+                     "tee-tee-tee", "tee-tee-corner", "tee-corner-tee", "tee-corner-corner",
+                     "corner-tee-tee", "corner-tee-corner", "corner-corner-tee", "corner-corner-corner")][string]$Kind = "plain",
         [Parameter(Mandatory)][string]$Label,
         [string]$Col2 = "",
         [string]$Col3 = "",
@@ -957,6 +967,7 @@ function Get-ExakitTableWidths {
     $col3Max = $script:UiTableCol3Max
     if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3Max = [int]$Table.Col3Fixed }
     if ($Table.Col3) { $col3W = $script:UiTableCol3Fixed; if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3W = [int]$Table.Col3Fixed } }
+    $rowNo = 0
     foreach ($row in $Table.Rows.ToArray()) {
         $len = $row.Label.Length
         if ($col2W -gt 0 -and ("" + $row.Col2).Length -gt $col2W) { $col2W = ("" + $row.Col2).Length }
@@ -964,7 +975,12 @@ function Get-ExakitTableWidths {
         # row one level deeper carries its parent's spine in front of its own -
         # 6. Measured short, the deeper label would be cut.
         if ($row.Kind -eq "tee" -or $row.Kind -eq "corner") { $len += 3 }
+        elseif ($row.Kind -like "*-*-*") { $len += 3 * ("" + $row.Kind).Split("-").Count }
         elseif ($row.Kind -like "*-tee" -or $row.Kind -like "*-corner") { $len += 6 }
+        # A radio row (a "one" group in Invoke-ExakitTableMenu) carries "( ) "
+        # after its connector.
+        $rowNo++
+        if ($Table.ContainsKey("Radio") -and (@($Table.Radio) -contains $rowNo)) { $len += 4 }
         if ($len -gt $nameW) { $nameW = $len }
         # Measured the way Get-ExakitTableCell RENDERS it, not as stored: a
         # finished cell is "<tick> <final>", so a column sized to the bare string
@@ -1246,8 +1262,14 @@ function Get-ExakitTableFrame {
     $allRows = $Table.Rows.ToArray()
     $rowAt = New-Object 'int[]' ($allRows.Count + 1)
     $i = 0
+    $hidden = @(); $radio = @()
+    if ($Table.ContainsKey("Hidden")) { $hidden = @($Table.Hidden) }
+    if ($Table.ContainsKey("Radio")) { $radio = @($Table.Radio) }
     foreach ($row in $allRows) {
         $i++
+        # A row a closed "collapse" group hides (Invoke-ExakitTableMenu): not
+        # drawn, and a click never lands on it (its line is the next row's).
+        if ($hidden -contains $i) { $rowAt[$i - 1] = $lines.Count; continue }
         # $spine is what a wrapped description's continuation lines draw in the
         # name cell: every spine that carries on PAST this row. A tee's spine
         # goes on to its next sibling; a corner's ends with it. A row one level
@@ -1263,6 +1285,19 @@ function Get-ExakitTableFrame {
             "tee-corner"    { $conn = $vb + "  " + $script:UiCorner + " "; $spine = $vb }
             "corner-tee"    { $conn = "   " + $script:UiTee + " "; $spine = "   " + $vb }
             "corner-corner" { $conn = "   " + $script:UiCorner + " " }
+            default {
+                # Three levels and deeper (the connect menu's files under a
+                # catalog under Lakehouse): every level but the last draws its
+                # spine, the last its connector. Twin of _ui_table_tree_conn.
+                $parts = ("" + $row.Kind).Split("-")
+                if ($parts.Count -ge 3) {
+                    for ($k = 0; $k -lt $parts.Count - 1; $k++) {
+                        if ($parts[$k] -eq "tee") { $conn += $vb + "  " } else { $conn += "   " }
+                    }
+                    if ($parts[$parts.Count - 1] -eq "tee") { $spine = $conn + $vb; $conn += $script:UiTee + " " }
+                    else { $spine = $conn; $conn += $script:UiCorner + " " }
+                }
+            }
         }
         # A row with children: its continuation lines also start the children's
         # spine, three columns in, under the first letter of its name.
@@ -1302,6 +1337,14 @@ function Get-ExakitTableFrame {
         }
         # A row nobody can pick never takes the cursor either.
         if ($row.State -eq "disabled") { $ptr = " " }
+        # A radio row (a "one" group): no checkbox; "(*)" or "( )" after its
+        # tree connector, in the row's own colour.
+        if ($radio -contains $i) {
+            $box = "   "; $boxLen = 3
+            if ($row.Tick) {
+                if ($script:UiFancy) { $conn += "(" + $script:UiBullet + ") " } else { $conn += "(*) " }
+            } else { $conn += "( ) " }
+        }
         # MEASURED plain, PRINTED possibly dim: a disabled row's name carries
         # colour escapes, and .Length would count those as width.
         $plain = $conn + $row.Label
@@ -1707,6 +1750,212 @@ function Stop-ExakitAnimation {
     Restore-ExakitCursor
 }
 
+# --- the tree group modes (collapse, one, first) ----------------------------
+# Twins of the _ui_checkbox_tree_* helpers in common.sh, shared by
+# Read-ExakitCheckboxMenu and Invoke-ExakitTableMenu. A tree mode is one or
+# more words joined by "+":
+#   collapse - the children are HIDDEN until the parent is ticked (not drawn,
+#              skipped by the cursor); ticking the parent ticks no child, and
+#              unticking it clears every row in the range.
+#   one      - the parent's DIRECT children are one-of-N radio rows: picking
+#              one unpicks the others and clears the rows under them, and Space
+#              on the picked one changes nothing. A direct child is a row of the
+#              range that no spec nested in it claims. Enter is refused while a
+#              ticked parent's "one" group has nothing picked.
+#   first    - with "one": opening the parent picks its first selectable
+#              direct child.
+# $Specs is the menu's list of @{ Parent; First; Last; Mode } (innermost
+# first); $Pickable the rows that can be ticked at all. Nothing here changes
+# the any/all/master/claim modes.
+
+function Test-ExakitTreeMode {
+    param([string]$Mode, [string]$Word)
+    return (("+" + $Mode + "+").Contains("+" + $Word + "+"))
+}
+
+# Test-ExakitTreeSpecs - whether any spec uses a tree mode.
+function Test-ExakitTreeSpecs {
+    param($Specs)
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if ((Test-ExakitTreeMode $s.Mode "collapse") -or (Test-ExakitTreeMode $s.Mode "one")) { return $true }
+    }
+    return $false
+}
+
+# ConvertTo-ExakitGroupSpecs - "parent:first:last[:mode]" strings to the
+# hashtables the menus use; a spec missing a field is left out.
+function ConvertTo-ExakitGroupSpecs {
+    param([string[]]$Groups = @())
+    $out = @()
+    foreach ($g in $Groups) {
+        $parts = ("" + $g).Split(":")
+        if ($parts.Count -lt 3) { continue }
+        $gm = "any"
+        if ($parts.Count -ge 4) { $gm = $parts[3] }
+        $out += @{ Parent = [int]$parts[0]; First = [int]$parts[1]; Last = [int]$parts[2]; Mode = $gm }
+    }
+    return $out
+}
+
+# Get-ExakitTreeMembers - the direct children of one spec's parent.
+function Get-ExakitTreeMembers {
+    param($Specs, [int]$Parent, [int]$First, [int]$Last, $Pickable)
+    $out = @()
+    for ($r = $First; $r -le $Last; $r++) {
+        if ($null -ne $Pickable -and -not (@($Pickable) -contains $r)) { continue }
+        $inner = $false
+        foreach ($s in @($Specs)) {
+            if ($null -eq $s) { continue }
+            $sp = [int]$s.Parent
+            if ($sp -eq $Parent) { continue }
+            if ($sp -lt $First -or $sp -gt $Last) { continue }
+            if ($r -ge [int]$s.First -and $r -le [int]$s.Last) { $inner = $true; break }
+        }
+        if (-not $inner) { $out += $r }
+    }
+    return $out
+}
+
+# Get-ExakitTreeRadio - every radio row (a direct child of a "one" group).
+function Get-ExakitTreeRadio {
+    param($Specs, $Pickable)
+    $out = @()
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if (-not (Test-ExakitTreeMode $s.Mode "one")) { continue }
+        foreach ($m in @(Get-ExakitTreeMembers -Specs $Specs -Parent $s.Parent -First $s.First -Last $s.Last -Pickable $Pickable)) {
+            if (-not ($out -contains $m)) { $out += $m }
+        }
+    }
+    return $out
+}
+
+# Get-ExakitTreeHidden - the rows a closed "collapse" group hides.
+function Get-ExakitTreeHidden {
+    param($Specs, $Selection)
+    $out = @()
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if (-not (Test-ExakitTreeMode $s.Mode "collapse")) { continue }
+        if (@($Selection) -contains [int]$s.Parent) { continue }
+        for ($r = [int]$s.First; $r -le [int]$s.Last; $r++) { if (-not ($out -contains $r)) { $out += $r } }
+    }
+    return $out
+}
+
+# Get-ExakitTreeMissing - the parent of the first open "one" group with
+# nothing picked; 0 when every open group has its pick.
+function Get-ExakitTreeMissing {
+    param($Specs, $Selection, $Pickable)
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s) { continue }
+        if (-not (Test-ExakitTreeMode $s.Mode "one")) { continue }
+        if (-not (@($Selection) -contains [int]$s.Parent)) { continue }
+        $members = @(Get-ExakitTreeMembers -Specs $Specs -Parent $s.Parent -First $s.First -Last $s.Last -Pickable $Pickable)
+        if ($members.Count -eq 0) { continue }
+        $any = $false
+        foreach ($m in $members) { if (@($Selection) -contains $m) { $any = $true; break } }
+        if (-not $any) { return [int]$s.Parent }
+    }
+    return 0
+}
+
+# Update-ExakitTreeGroup - one tree spec's rule after row $Toggled was toggled;
+# $Selection is the menu's List[int] and is changed in place.
+function Update-ExakitTreeGroup {
+    param($Selection, [int]$Toggled, $Spec, $Specs, $Pickable)
+    $gp = [int]$Spec.Parent; $gf = [int]$Spec.First; $gl = [int]$Spec.Last; $gm = [string]$Spec.Mode
+    if ($Toggled -eq $gp) {
+        if ($Selection.Contains($gp)) {
+            # Opened: nothing under it is ticked, unless "first" picks its
+            # first direct child.
+            if ((Test-ExakitTreeMode $gm "one") -and (Test-ExakitTreeMode $gm "first")) {
+                $members = @(Get-ExakitTreeMembers -Specs $Specs -Parent $gp -First $gf -Last $gl -Pickable $Pickable)
+                if ($members.Count -gt 0 -and -not $Selection.Contains([int]$members[0])) { [void]$Selection.Add([int]$members[0]) }
+            }
+        } else {
+            # Closed: nothing under it stays ticked.
+            for ($r = $gf; $r -le $gl; $r++) { [void]$Selection.Remove($r) }
+        }
+        return
+    }
+    if ($Toggled -lt $gf -or $Toggled -gt $gl) { return }
+    if (-not $Selection.Contains($Toggled)) { return }
+    if (Test-ExakitTreeMode $gm "one") {
+        $members = @(Get-ExakitTreeMembers -Specs $Specs -Parent $gp -First $gf -Last $gl -Pickable $Pickable)
+        if ($members -contains $Toggled) {
+            # Picked: every other row of the range goes - the other radio rows
+            # and their branches - but the picked row's own branch (an inner
+            # spec, applied first, may have just filled it) stays.
+            $keep = @($Toggled)
+            foreach ($s in @($Specs)) {
+                if ($null -eq $s -or [int]$s.Parent -ne $Toggled) { continue }
+                for ($r = [int]$s.First; $r -le [int]$s.Last; $r++) { $keep += $r }
+            }
+            for ($r = $gf; $r -le $gl; $r++) {
+                if (-not ($keep -contains $r)) { [void]$Selection.Remove($r) }
+            }
+        }
+    }
+    # A row under the parent went on: the parent is on.
+    if (-not $Selection.Contains($gp)) { [void]$Selection.Add($gp) }
+}
+
+# Get-ExakitTreeArrow - what Left or Right does on row $Row in a menu with
+# "collapse" groups, as the exakit-demo mock does it. Returns "toggle" (Right
+# on a closed collapse parent opens it, as Space would; Left on an open one
+# that is no one's child closes it), "move <r>" (Right on an open parent: its
+# first row shown that can be picked; Left on a row under a collapse parent:
+# that innermost parent), or "" (no children and no parent). A row that is
+# both answers Left as a child. Twin of _ui_checkbox_tree_arrow.
+function Get-ExakitTreeArrow {
+    param([string]$Direction, [int]$Row, $Selection, $Specs, $Pickable)
+    $own = $null; $up = 0; $upW = -1
+    foreach ($s in @($Specs)) {
+        if ($null -eq $s -or -not (Test-ExakitTreeMode $s.Mode "collapse")) { continue }
+        if ([int]$s.Parent -eq $Row) { $own = $s }
+        if ($Row -ge [int]$s.First -and $Row -le [int]$s.Last) {
+            $w = [int]$s.Last - [int]$s.First
+            if ($upW -lt 0 -or $w -lt $upW) { $up = [int]$s.Parent; $upW = $w }
+        }
+    }
+    $open = (@($Selection) -contains $Row)
+    if ($Direction -eq "Right") {
+        if ($null -eq $own) { return "" }
+        if (-not $open) { return "toggle" }
+        $hidden = @(Get-ExakitTreeHidden -Specs $Specs -Selection $Selection)
+        for ($c = [int]$own.First; $c -le [int]$own.Last; $c++) {
+            if ($null -ne $Pickable -and -not (@($Pickable) -contains $c)) { continue }
+            if ($hidden -contains $c) { continue }
+            return ("move " + $c)
+        }
+        return ""
+    }
+    if ($up -gt 0) { return ("move " + $up) }
+    if ($null -ne $own -and $open) { return "toggle" }
+    return ""
+}
+
+# Test-ExakitTreeCollapseOn - whether a "collapse" group is in the specs (the
+# hint then says "to open").
+function Test-ExakitTreeCollapseOn {
+    param($Specs)
+    foreach ($s in @($Specs)) { if ($null -ne $s -and (Test-ExakitTreeMode $s.Mode "collapse")) { return $true } }
+    return $false
+}
+
+# Test-ExakitTreeRadioRepick - Space on the picked radio row: it is picked
+# again and nothing else changes. Called after the toggle took it out; puts it
+# back and answers $true, so the menu applies no spec.
+function Test-ExakitTreeRadioRepick {
+    param($Selection, [int]$Toggled, $Radio)
+    if ($Selection.Contains($Toggled)) { return $false }
+    if (-not (@($Radio) -contains $Toggled)) { return $false }
+    [void]$Selection.Add($Toggled)
+    return $true
+}
+
 # Invoke-ExakitTableMenu - the SELECTION phase of the same table: ticks are
 # toggled in the rows the progress will later fill in, so the reader never has to
 # map one screen onto another. Returns the selected 1-based row numbers, ascending.
@@ -1774,10 +2023,25 @@ function Invoke-ExakitTableMenu {
             $at = $at + $dir
             if ($at -lt 1) { $at = $n }
             if ($at -gt $n) { $at = 1 }
-            if ($pickable.Contains($at)) { return $at }
+            # A row a closed "collapse" group hides cannot be reached either.
+            if ($pickable.Contains($at) -and -not (@($Table.Hidden) -contains $at)) { return $at }
             $tries++
         }
         return $from
+    }
+    # Every group, innermost first: the -Groups specs, then the single named
+    # one. The tree modes (collapse, one) need the whole list up front: which
+    # rows are radio buttons, which a closed group hides. Empty for every other
+    # table, which is then drawn exactly as before.
+    $groupSpecs = @(ConvertTo-ExakitGroupSpecs -Groups $Groups)
+    if ($GroupParent -ge 1) {
+        $groupSpecs += @{ Parent = $GroupParent; First = $GroupFirst; Last = $GroupLast; Mode = $GroupMode }
+    }
+    $treeOn = Test-ExakitTreeSpecs -Specs $groupSpecs
+    $Table.Radio = @(); $Table.Hidden = @()
+    if ($treeOn) {
+        $Table.Radio = @(Get-ExakitTreeRadio -Specs $groupSpecs -Pickable $pickable)
+        $Table.Hidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
     }
 
     $interactive = Test-ExakitMenuConsole
@@ -1791,6 +2055,7 @@ function Invoke-ExakitTableMenu {
         Set-ExakitTableTicks -Rows @($sel) -Table $Table
         Show-ExakitTable -Table $Table -Cursor 0
         $script:ExakitTableConfirmed = $true
+        $Table.Remove("Radio"); $Table.Remove("Hidden")
         return @($sel | Sort-Object)
     }
     if (-not $interactive -or -not $script:UiFancy) {
@@ -1798,6 +2063,7 @@ function Invoke-ExakitTableMenu {
         # once so a log still shows what was chosen.
         Set-ExakitTableTicks -Rows @($sel) -Table $Table
         Show-ExakitTable -Table $Table -Cursor 0
+        $Table.Remove("Radio"); $Table.Remove("Hidden")
         return @($sel | Sort-Object)
     }
 
@@ -1808,23 +2074,18 @@ function Invoke-ExakitTableMenu {
     # claim it), and "claim" the other way round: a child going ON ticks the
     # parent, one going OFF leaves it as it was - a parent its children need but
     # that stands on its own. Every group, innermost first: the -Groups specs,
-    # then the single named one.
-    $groupSpecs = @()
-    foreach ($g in $Groups) {
-        $parts = ("" + $g).Split(":")
-        if ($parts.Count -lt 3) { continue }
-        $gm = "any"
-        if ($parts.Count -ge 4) { $gm = $parts[3] }
-        $groupSpecs += @{ Parent = [int]$parts[0]; First = [int]$parts[1]; Last = [int]$parts[2]; Mode = $gm }
-    }
-    if ($GroupParent -ge 1) {
-        $groupSpecs += @{ Parent = $GroupParent; First = $GroupFirst; Last = $GroupLast; Mode = $GroupMode }
-    }
+    # then the single named one ($groupSpecs, built above). A tree spec
+    # (collapse, one) has its own rule, Update-ExakitTreeGroup.
     $applyGroup = {
         param($toggled)
+        if ($treeOn -and (Test-ExakitTreeRadioRepick -Selection $sel -Toggled $toggled -Radio $Table.Radio)) { return }
         foreach ($spec in $groupSpecs) {
             $gp = [int]$spec.Parent; $gf = [int]$spec.First; $gl = [int]$spec.Last; $gmode = [string]$spec.Mode
             if ($gp -lt 1 -or $gf -lt 1 -or $gl -lt $gf) { continue }
+            if ((Test-ExakitTreeMode $gmode "collapse") -or (Test-ExakitTreeMode $gmode "one")) {
+                Update-ExakitTreeGroup -Selection $sel -Toggled $toggled -Spec $spec -Specs $groupSpecs -Pickable $pickable
+                continue
+            }
             if ($toggled -eq $gp) {
                 $parentOn = $sel.Contains($gp)
                 for ($c = $gf; $c -le $gl; $c++) {
@@ -1883,6 +2144,9 @@ function Invoke-ExakitTableMenu {
     if ($StartRow -ge 1 -and $StartRow -le $n) { $cur = $StartRow }
     elseif ($n -ge 2) { $cur = [int](& $step $cur 1) }
     if (-not $pickable.Contains($cur)) { $cur = [int](& $step $cur 1) }
+    # Enter refused for an open "one" group with nothing picked: said under the
+    # hint until the next key.
+    $note = ""
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
     $drawn = 0
     if ($OnScreen -gt 0) { $drawn = $OnScreen }
@@ -1896,7 +2160,14 @@ function Invoke-ExakitTableMenu {
         # empty for that whole time.
         $drawnWidth = [int]$Table.Width
         $frame = Get-ExakitTableFrame -Table $Table -Cursor $cur
-        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle · Enter to confirm" + $script:UiReset
+        $openHint = ""
+        if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " · → to open" }
+        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $script:UiReset
+        $extra = 0
+        if ($note) {
+            $hint += "`r`n    " + $script:UiWarn + "!" + $script:UiReset + " " + $note
+            $extra = 1; $note = ""
+        }
         # Overwritten in place while the geometry is unchanged, and only erased
         # when it is not - the same rule as Update-ExakitTable, for the same
         # reason: [0J empties the region for the instant before the new frame
@@ -1906,7 +2177,7 @@ function Invoke-ExakitTableMenu {
         # ...and from column 0, like every other frame this file writes: cursor-up
         # preserves the column, so a cursor left mid-row would indent the frame and
         # an erase would spare the first N columns of the one before it.
-        $sameGeom = ($drawn -eq ([int]$Table.Lines + 1) -and $drawnWidth -eq [int]$Table.Width)
+        $sameGeom = ($drawn -eq ([int]$Table.Lines + 1 + $extra) -and $drawnWidth -eq [int]$Table.Width)
         if ($drawn -le 0) {
             [Console]::Write("`r" + $frame + "`r`n" + $hint + "`r`n")
         } elseif ($sameGeom) {
@@ -1914,7 +2185,7 @@ function Invoke-ExakitTableMenu {
         } else {
             [Console]::Write("`r$($script:UiEsc)[${drawn}A$($script:UiEsc)[0J" + $frame + "`r`n" + $hint + "`r`n")
         }
-        $drawn = [int]$Table.Lines + 1
+        $drawn = [int]$Table.Lines + 1 + $extra
         $key = Read-ExakitMenuKey
         $confirmed = $false
         if ($key.Name -eq 'Click') {
@@ -1928,7 +2199,10 @@ function Invoke-ExakitTableMenu {
                 # is ticked: pending rows start ticked, so "move to Skip, press
                 # Enter" used to load them anyway. Twin of ui_table_menu.
                 if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
-                if ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true }
+                $miss = 0
+                if ($treeOn) { $miss = Get-ExakitTreeMissing -Specs $groupSpecs -Selection $sel -Pickable $pickable }
+                if ($miss -gt 0) { $note = "Pick one of the options under " + $Table.Rows[$miss - 1].Label + "." }
+                elseif ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true }
             }
             "Space"     {
                 # A row that cannot be picked cannot be toggled either. The cursor
@@ -1942,6 +2216,18 @@ function Invoke-ExakitTableMenu {
             }
             "Up"        { $cur = [int](& $step $cur (-1)) }
             "Down"      { $cur = [int](& $step $cur 1) }
+            { $_ -eq "Left" -or $_ -eq "Right" } {
+                # Right opens a collapse group or steps into it, Left steps out
+                # or closes it; nothing in any other table.
+                if ($treeOn) {
+                    $act = Get-ExakitTreeArrow -Direction $key.Name -Row $cur -Selection $sel -Specs $groupSpecs -Pickable $pickable
+                    if ($act -eq "toggle") {
+                        if ($sel.Contains($cur)) { [void]$sel.Remove($cur) } else { [void]$sel.Add($cur) }
+                        & $applyGroup $cur
+                        & $applyExclusive $cur
+                    } elseif ($act -like "move *") { $cur = [int]$act.Substring(5) }
+                }
+            }
             "Char"      {
                 switch -Regex ($key.Char) {
                     '^[kK]$' { $cur = [int](& $step $cur (-1)) }
@@ -1950,6 +2236,11 @@ function Invoke-ExakitTableMenu {
             }
         }
         if ($confirmed) { break }
+        if ($treeOn) {
+            $Table.Hidden = @(Get-ExakitTreeHidden -Specs $groupSpecs -Selection $sel)
+            # The cursor's row closed under it: back up to the nearest row shown.
+            if (@($Table.Hidden) -contains $cur) { $cur = [int](& $step $cur (-1)) }
+        }
     }
     } finally { Disable-ExakitMenuMouse }
     # Redraw once without the pointer or the hint: the selection is made, and the
@@ -1958,6 +2249,7 @@ function Invoke-ExakitTableMenu {
     Set-ExakitTableTicks -Rows @($sel) -Table $Table
     $Table.Lines = $drawn
     Update-ExakitTable -Table $Table -Cursor 0
+    $Table.Remove("Radio"); $Table.Remove("Hidden")
     return @($sel | Sort-Object)
 }
 

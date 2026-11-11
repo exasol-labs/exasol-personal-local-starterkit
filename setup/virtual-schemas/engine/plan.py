@@ -8,6 +8,7 @@ values - nothing a user types is interpolated into SQL unchecked.
 """
 
 import base64
+import copy
 import difflib
 import ipaddress
 import json
@@ -49,7 +50,18 @@ KINDS = {
     # An S3-compatible store's region is any short name (MinIO: us-east-1).
     "storage-region": re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$"),
     "access-key": re.compile(r"^[A-Za-z0-9_.+/=-]{3,128}$"),
+    # The lakehouse connector's own (connectors/lakehouse): a Glue catalog's
+    # owning account, an OAuth client of the catalog and the scope it asks for.
+    "aws-account-id": re.compile(r"^\d{12}$"),
+    "oauth-client-id": re.compile(r"^[A-Za-z0-9_.@:/+=~-]{1,256}$"),
+    "oauth-scope": re.compile(r"^[A-Za-z0-9_.:/=+-]+( [A-Za-z0-9_.:/=+-]+){0,15}$"),
 }
+
+# A lakehouse folder of files with no catalog (catalog=none): an S3 prefix or an
+# ADLS Gen2 folder, read where it lies (CATALOG_KIND DIRECT_STORAGE).
+S3_PATH = re.compile(r"^s3://((?!xn--)[a-z0-9][a-z0-9.-]{1,61}[a-z0-9])(/[A-Za-z0-9!_.*'()/=+-]*)?$")
+ABFSS_PATH = re.compile(r"^abfss://((?!.*--)[a-z0-9][a-z0-9-]{1,61}[a-z0-9])@([a-z0-9]{3,24})\.dfs\.core\.windows\.net"
+                        r"(/[A-Za-z0-9!_.*'()/=+-]*)?$")
 
 # URL inputs (check_url): a catalog may be plain http on this computer or a
 # private network; a workspace is https only; a storage endpoint has no path.
@@ -238,10 +250,16 @@ class Definitions(object):
                 return item
         raise PlanError("unknown connector %s" % connector_id)
 
-    def connector(self, connector_id):
+    def connector(self, connector_id, values=None):
+        """The connector's definition. One with settings (lakehouse) is the
+        whole document without values, and the one combination's flat
+        connector (specialize) with them - a source's recorded inputs, or the
+        values validate_inputs returned."""
         doc = self._load("connectors", connector_id, "connector.json")
         if doc.get("adapter") and "arch" in doc["adapter"]:
             doc["adapter"] = resolve_arch(doc["adapter"])
+        if values is not None and doc.get("settings"):
+            return specialize(doc, values)
         return doc
 
     def profile(self, profile_id):
@@ -340,6 +358,10 @@ def check_value(spec, raw):
         raw, problem = check_url(name, raw, kind)
         if problem:
             return None, problem
+    elif kind == "storage-path":
+        raw, problem = check_storage_path(name, raw)
+        if problem:
+            return None, problem
     elif kind == "unity-namespace" and not KINDS[kind].match(raw):
         return None, "%s must be catalog.schema, e.g. main.sales (not %r)" % (name, raw)
     elif kind == "s3-bucket" and "." in raw:
@@ -388,8 +410,228 @@ def draft_prefix(connector, values):
     return mapping[5:] if mapping.startswith("auto:") else None
 
 
+def check_storage_path(name, raw):
+    """A folder of files with no catalog: (s3://bucket/prefix/ or
+    abfss://container@account.dfs.core.windows.net/prefix/, None), always
+    ending in /, or (None, the problem)."""
+    text = raw.strip()
+    low = text.lower()
+    if low.startswith(("s3a://", "s3n://")):
+        text = "s3://" + text.split("://", 1)[1]
+        low = text.lower()
+    if low.startswith("s3://"):
+        m = S3_PATH.match(text)
+        if not m:
+            return None, ("%s must be an S3 folder such as s3://bucket/prefix/ (a bucket name is lower case "
+                          "letters, digits and -), not %r" % (name, raw))
+        if "." in m.group(1):
+            return None, ("bucket %s has dots: its HTTPS name does not match the S3 certificate, and the kit "
+                          "reads only over verified HTTPS" % m.group(1))
+    elif low.startswith("abfss://"):
+        if not ABFSS_PATH.match(text):
+            return None, ("%s must be an ADLS Gen2 folder such as abfss://container@account.dfs.core.windows.net/"
+                          "prefix/, not %r" % (name, raw))
+    elif low.startswith(("gs://", "gcs://")):
+        return None, "Google Cloud Storage is not supported yet: the folder must be on S3 (s3://) or Azure (abfss://)"
+    else:
+        return None, ("%s must be s3://bucket/prefix/ or abfss://container@account.dfs.core.windows.net/prefix/, "
+                      "not %r" % (name, raw))
+    return text.rstrip("/") + "/", None
+
+
+def storage_path_parts(path):
+    """{"scheme": s3|azure, "bucket"|"container", "account"} of a checked folder path."""
+    m = S3_PATH.match(path or "")
+    if m:
+        return {"scheme": "s3", "bucket": m.group(1)}
+    m = ABFSS_PATH.match(path or "")
+    if m:
+        return {"scheme": "azure", "container": m.group(1), "account": m.group(2)}
+    return {}
+
+
+# --- settings: one connector, several combinations (connectors/lakehouse) -----
+#
+# A connector with "settings" is one connector whose inputs depend on the
+# values of a few choices (lakehouse: catalog, files, login). choose_settings
+# reads them from what was given (defaults and inference applied, the
+# combination checked); specialize lays the chosen catalog's "variants" over
+# the document and keeps the inputs whose "when" matches, so everything after
+# it - the plan, the credential, the virtual schema's properties, the form -
+# sees one ordinary flat connector. A source records its settings with its
+# other inputs, so Definitions.connector(id, recorded inputs) is its own
+# combination again.
+
+def applies(when, chosen):
+    """Does an input (or a setting) with this `when` belong to these settings?"""
+    return all(chosen.get(key) in allowed for key, allowed in (when or {}).items())
+
+
+def setting_labels(connector, key):
+    return {c["value"]: c["label"] for c in connector["settings"][key]["choices"]}
+
+
+def valid_files(connector, catalog):
+    return list(connector["settings"]["files"]["valid"].get(catalog, []))
+
+
+def combination_remedy(connector, catalog):
+    files = valid_files(connector, catalog)
+    labels = setting_labels(connector, "files")
+    if len(files) == 1:
+        return "catalog=%s takes files=%s (%s) only: leave --set files out or give --set files=%s" % (
+            catalog, files[0], labels[files[0]], files[0])
+    return "for catalog=%s give --set files=<%s> (%s)" % (
+        catalog, "|".join(files), "; ".join("%s: %s" % (f, labels[f]) for f in files))
+
+
+def choose_settings(connector, given, partial=False):
+    """The settings of a source from given: {catalog, files[, login]}.
+
+    catalog is given, or inferred from the inputs given when they belong to one
+    catalog only (catalog_url: iceberg-rest, workspace_url: unity, database:
+    glue, path: none). files defaults per catalog (none: by the path's scheme,
+    abfss:// is azure); login defaults to token where it applies. An invalid
+    combination is a PlanError (kind input) whose remedy names the valid files
+    values. partial: a missing catalog is not an error - {} comes back (the
+    form asks for it first)."""
+    settings = connector["settings"]
+    catalogs = [c["value"] for c in settings["catalog"]["choices"] if not c.get("disabled")]
+    raw = str(given.get("catalog") or "").strip().lower()
+    if not raw:
+        inferred = sorted(set(v for k, v in settings["catalog"].get("infer", {}).items()
+                              if str(given.get(k) or "").strip()))
+        if len(inferred) == 1:
+            raw = inferred[0]
+        elif partial and not inferred:
+            return {}
+        elif inferred:
+            raise PlanError("the inputs given belong to more than one catalog (%s)" % ", ".join(inferred),
+                            remedy="give the catalog with --set catalog=<%s>" % "|".join(inferred))
+        else:
+            raise PlanError("catalog is required (%s)" % ", ".join(
+                "%s: %s" % (c["value"], c["label"]) for c in settings["catalog"]["choices"]),
+                remedy="give it with --set catalog=<%s>" % "|".join(catalogs))
+    if raw not in catalogs:
+        raise PlanError("catalog must be one of %s, not %r" % (", ".join(catalogs), raw),
+                        remedy="give it with --set catalog=<%s>" % "|".join(catalogs))
+    chosen = {"catalog": raw}
+    files = settings["files"]
+    choices = [c["value"] for c in files["choices"]]
+    fraw = str(given.get("files") or "").strip().lower()
+    if not fraw:
+        fraw = files["default"][raw]
+        if raw == "none" and str(given.get("path") or "").strip().lower().startswith("abfss://"):
+            fraw = "azure"
+    if fraw not in choices:
+        raise PlanError("files must be one of %s, not %r" % (", ".join(valid_files(connector, raw)), fraw),
+                        remedy=combination_remedy(connector, raw))
+    disabled = [c for c in files["choices"] if c["value"] == fraw and c.get("disabled")]
+    if disabled:
+        raise PlanError("files=%s: %s" % (fraw, disabled[0]["label"]), remedy=combination_remedy(connector, raw))
+    if fraw not in valid_files(connector, raw):
+        raise PlanError("files=%s (%s) does not go with catalog=%s (%s)" % (
+            fraw, setting_labels(connector, "files")[fraw], raw, setting_labels(connector, "catalog")[raw]),
+            remedy=combination_remedy(connector, raw))
+    chosen["files"] = fraw
+    login = settings.get("login")
+    if login:
+        lraw = str(given.get("login") or "").strip().lower()
+        logins = [c["value"] for c in login["choices"]]
+        if applies(login.get("when"), chosen):
+            lraw = lraw or login["default"]
+            if lraw not in logins:
+                raise PlanError("login must be one of %s, not %r" % (", ".join(logins), lraw),
+                                remedy="give it with --set login=<%s>" % "|".join(logins))
+            chosen["login"] = lraw
+        elif lraw:
+            raise PlanError("login is for a catalog that signs in (%s), not catalog=%s" % (
+                ", ".join(login["when"]["catalog"]), raw),
+                remedy="leave --set login out: %s" % ("the AWS secret key is the credential" if raw == "glue"
+                                                       else "the storage secret is the credential"))
+    return chosen
+
+
+def combination_label(connector, chosen):
+    """"Lakehouse · Iceberg REST catalog · Azure ADLS Gen2": a combination's name."""
+    head = connector["name"].split(" (")[0]
+    parts = [head]
+    for key in ("catalog", "files"):
+        if chosen.get(key):
+            parts.append(setting_labels(connector, key).get(chosen[key], chosen[key]))
+    return " \u00b7 ".join(parts)
+
+
+def specialize(connector, values):
+    """The flat connector of one combination: the chosen catalog's variant laid
+    over the document, the settings as choice inputs first (files' choices the
+    catalog's valid ones), then the inputs whose `when` matches - each once, in
+    the document's order. With no catalog among values, the inputs are the
+    catalog setting alone (what the form asks first)."""
+    settings = connector["settings"]
+    chosen = {k: str(values.get(k)) for k in settings if values.get(k)}
+    doc = {k: copy.deepcopy(v) for k, v in connector.items()
+           if k not in ("settings", "variants", "inputs") and not k.startswith("_")}
+    doc.update(copy.deepcopy(connector.get("variants", {}).get(chosen.get("catalog"), {})))
+    fields = []
+    for key, spec in settings.items():
+        if not applies(spec.get("when"), chosen):
+            continue
+        if key != "catalog" and "catalog" not in chosen:
+            continue
+        options = [c for c in spec["choices"] if not c.get("disabled")]
+        if key == "files":
+            options = [c for c in options if c["value"] in spec["valid"].get(chosen["catalog"], [])]
+        default = spec.get("default", "")
+        if isinstance(default, dict):
+            default = default.get(chosen.get("catalog"), "")
+        field = {"name": key, "label": spec["label"], "kind": "choice", "required": True, "setting": True,
+                 "choices": [c["value"] for c in options], "choice_labels": [c["label"] for c in options],
+                 "disabled": [c["label"] for c in spec["choices"] if c.get("disabled")]}
+        if default:
+            field["default"] = default
+        fields.append(field)
+    inputs = []
+    if "catalog" in chosen and "files" in chosen:
+        for spec in connector["inputs"]:
+            if applies(spec.get("when"), chosen):
+                inputs.append({k: copy.deepcopy(v) for k, v in spec.items() if k != "when"})
+    doc["inputs"] = fields + inputs
+    doc["settings_chosen"] = chosen
+    doc["label"] = combination_label(connector, chosen)
+    if chosen.get("catalog") == "none":
+        parts = storage_path_parts(str(values.get("path") or ""))
+        if parts.get("scheme") == "azure":
+            doc["host"] = "%s.dfs.core.windows.net" % parts["account"]
+        elif parts.get("scheme") == "s3" and not values.get("endpoint") and values.get("region"):
+            doc["host"] = "%s.s3.%s.amazonaws.com" % (parts["bucket"], values["region"])
+        else:
+            # An S3-compatible endpoint is a URL input: reached_hosts has it.
+            doc["host"] = ""
+    return doc
+
+
 def validate_inputs(connector, given):
-    """Defaults applied, every value checked by kind; secrets are not taken here."""
+    """Defaults applied, every value checked by kind; secrets are not taken here.
+    A connector with settings: the settings chosen first (choose_settings), then
+    the inputs of that combination only, the settings among the values."""
+    if connector.get("settings"):
+        chosen = choose_settings(connector, given)
+        flat = specialize(connector, dict(given, **chosen))
+        values = _validate_flat(flat, dict(given, **chosen))
+        if chosen["catalog"] == "none":
+            scheme = storage_path_parts(values.get("path", "")).get("scheme")
+            if scheme and scheme != chosen["files"]:
+                raise PlanError("path %s is on %s, but files=%s" % (
+                    values["path"], "Azure (abfss://)" if scheme == "azure" else "S3 (s3://)", chosen["files"]),
+                    remedy="give --set files=%s for this path, or a %s path" % (
+                        scheme, "s3://bucket/prefix/" if chosen["files"] == "s3" else
+                        "abfss://container@account.dfs.core.windows.net/prefix/"))
+        return values
+    return _validate_flat(connector, given)
+
+
+def _validate_flat(connector, given):
     values, problems = {}, []
     known = {spec["name"] for spec in connector["inputs"]}
     secrets = {spec["name"] for spec in connector["inputs"] if spec["kind"] in ("secret", "secret-file")}
@@ -401,7 +643,12 @@ def validate_inputs(connector, given):
             problems.append("%s is a credential and is never taken with --set (other users can read the command "
                             "line): give it with --password-file <file> or --password-stdin" % key)
         elif key not in known:
-            problems.append("%s is not an input of %s (inputs: %s)" % (key, connector["id"], ", ".join(sorted(known))))
+            if connector.get("settings_chosen"):
+                problems.append("%s is not an input of %s with %s (its inputs: %s)" % (
+                    key, connector["id"], ", ".join("%s=%s" % kv for kv in connector["settings_chosen"].items()),
+                    ", ".join(sorted(known - secrets - set(connector["settings_chosen"])))))
+            else:
+                problems.append("%s is not an input of %s (inputs: %s)" % (key, connector["id"], ", ".join(sorted(known))))
     for spec in connector["inputs"]:
         name, kind = spec["name"], spec["kind"]
         if kind in ("secret", "secret-file"):
@@ -440,10 +687,21 @@ def validate_inputs(connector, given):
 
 
 def secret_input(connector):
+    """The connector's credential input: the one --password-file and
+    --password-stdin carry (never the second, storage_secret)."""
     for spec in connector["inputs"]:
-        if spec["kind"] in ("secret", "secret-file"):
+        if spec["kind"] in ("secret", "secret-file") and spec["name"] != STORAGE_SECRET:
             return spec
     return None
+
+
+# The second secret of a combination that has two (lakehouse: a catalog login
+# plus S3 or Azure keys): --storage-secret-file, or asked hidden.
+STORAGE_SECRET = "storage_secret"
+
+
+def storage_secret_input(connector):
+    return next((s for s in connector.get("inputs", []) if s["name"] == STORAGE_SECRET), None)
 
 
 def source_host(connector, values):
@@ -575,7 +833,7 @@ def tls_warning(connector, values):
 
 def describe(defs, connector_id, name, values, runtime, cache, store):
     """The plan, as data: what is downloaded, staged, created - before any of it happens."""
-    connector = defs.connector(connector_id)
+    connector = defs.connector(connector_id, values)
     entry = defs.entry(connector_id)
     names = objects(name, connector)
     profile = defs.profile(connector["profile"])
@@ -654,6 +912,7 @@ def describe(defs, connector_id, name, values, runtime, cache, store):
                   "verify metadata and one bounded read"]
     plan = {
         "connector": connector_id, "name": name, "tier": entry["tier"], "status": entry["status"],
+        "connector_name": connector.get("label") or entry["name"],
         "objects": names, "downloads": downloads, "steps": steps,
         "download_bytes": sum(d["bytes"] for d in downloads if not d["cached"]),
         "exposure": "the kit's MCP read-only user can read every table of %s (SELECT ANY TABLE)" % names["schema"],

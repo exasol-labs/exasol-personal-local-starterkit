@@ -17,7 +17,7 @@ warehouse (it costs compute and starts a stopped one - seconds when serverless,
 minutes for a classic one). One source is one catalog schema. Because the
 warehouse reads the data, this route needs **no** External Data Access on the
 metastore and works for a schema on Databricks Default Storage. To read tables
-from their storage without a warehouse, see `exasol-vs-unity`. Tier GA.
+from their storage without a warehouse, see `exasol-vs-lakehouse` (`catalog=unity`). Tier GA.
 
 ## 2. Fields
 

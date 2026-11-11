@@ -28,11 +28,18 @@ database and inspect it afterwards:
     A lakehouse catalog on AWS Glue is keyed by glue.<region>.amazonaws.com and
     takes "databases" ({name: [tables]}), "readable" (the databases the key may
     list; default all) and "key_id" (the access key it accepts)
+    A lakehouse folder with no catalog (CATALOG_KIND DIRECT_STORAGE) is keyed
+    by the host part of its s3:// or abfss:// URL and takes "tables" and the
+    keys it accepts ("key_id"/"secret_key", or "account_key"/"sas_token").
+    A catalog source with its own storage keys takes "key_id"/"secret_key" or
+    "account_name" with "account_key"/"sas_token" too, checked at the read;
+    an OAuth client is "client_id"/"client_secret".
     An Iceberg REST catalog or a Unity Catalog (the same engine) is keyed by
     the host of its URL and takes "catalog" ("rest" | "unity"), "namespaces"
     ({name: [tables]}), "token" (the token it accepts), "key_id" and
     "secret_key" (the storage keys it accepts), "warehouse" (the one it
-    knows), "region" (the bucket's) and "fail": "external" (Unity closed to
+    knows), "region" (the bucket's; vended credentials with none given fail
+    as S3 with an empty region does) and "fail": "external" (Unity closed to
     outside engines) | "managed" (a catalog-managed table, at the read)
     sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied"|"echo",
                         "secret": "<the credential the source accepts>",
@@ -331,12 +338,20 @@ def _catalog_source(doc, con, props, at_read=False):
     cred = json.loads(con["secret"] or "{}")
     unity = props.get("CATALOG_KIND") == "UNITY_CATALOG"
     namespace = props.get("NAMESPACE", "")
+    if props.get("CATALOG_KIND") == "DIRECT_STORAGE":
+        return _direct_source(src, con, cred, at_read)
+    _storage_check(src, cred, at_read)
     if con["url"].startswith("http://") and props.get("ALLOW_HTTP") != "true":
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: the catalog URL %s is plain http, which is refused "
                         "unless ALLOW_HTTP is true" % con["url"])
     if unity != (src.get("catalog") == "unity"):
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: catalog request failed: HTTP 404 Not Found")
-    if unity:
+    if "client_id" in cred:
+        # OAuth client credentials: the catalog's token endpoint takes the pair.
+        if cred.get("client_id") != src.get("client_id") or cred.get("client_secret") != src.get("client_secret"):
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: OAuth token request failed: HTTP 401: "
+                            '{"error":"invalid_client","error_description":"The client is not authorized"}')
+    elif unity:
         if cred.get("token") != src.get("token"):
             raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 401: '
                             '{"error_code":"UNAUTHENTICATED","message":"Invalid access token. [ReqId: r1]"}')
@@ -370,6 +385,14 @@ def _catalog_source(doc, con, props, at_read=False):
                             % namespace)
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
                         "NoSuchNamespaceException: Namespace does not exist: %s (HTTP 404)" % namespace)
+    if at_read and src.get("region") and not cred.get("region") and cred.get("use_vended_credentials"):
+        # Vended S3 credentials with no region given: object_store builds the
+        # endpoint from an empty region (measured live, Databricks on AWS).
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: failed to resolve the current Delta version for "
+                        "table root 's3://uc-bucket-1/ext/%s': Error interacting with object store: Generic S3 "
+                        "error: Error performing GET https://s3..amazonaws.com/uc-bucket-1/ext/%s/_delta_log/"
+                        "_last_checkpoint in 2.5s, after 10 retries, max_retries: 10, retry_timeout: 180s - HTTP "
+                        "error: error sending request" % (namespace, namespace))
     if at_read and src.get("region") and cred.get("region") != src["region"]:
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Received redirect without "
                         "LOCATION, this normally indicates an incorrectly configured region")
@@ -377,6 +400,40 @@ def _catalog_source(doc, con, props, at_read=False):
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: table %s.%s is a catalog-managed table: Max "
                         "catalog version is required" % (namespace, src["namespaces"][namespace][0]))
     return {"tables": [t.upper() for t in src["namespaces"][namespace]]}
+
+
+def _storage_check(src, cred, at_read):
+    """The files' own credential beside a catalog login (files s3 or azure):
+    the catalog lists, the store refuses a wrong key at the read."""
+    if not at_read:
+        return
+    if "account_name" in cred:
+        good = (cred.get("account_name") == src.get("account_name") and
+                (("account_key" in cred and cred["account_key"] == src.get("account_key")) or
+                 ("sas_token" in cred and cred["sas_token"] == src.get("sas_token"))))
+        if not good:
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
+                            "AuthenticationFailed: Server failed to authenticate the request.")
+    elif "access_key" in cred and "token" in cred or "access_key" in cred and "client_id" in cred:
+        if cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
+                            "SignatureDoesNotMatch: The request signature we calculated does not match the "
+                            "signature you provided. Check your key and signing method.")
+
+
+def _direct_source(src, con, cred, at_read):
+    """CATALOG_KIND DIRECT_STORAGE: the Parquet files under a folder, keyed by
+    the folder URL's host part (s3://<bucket>, abfss://<container>@<account>...);
+    takes "tables", "key_id"/"secret_key" or "account_key"/"sas_token"."""
+    if con["url"].startswith("abfss://"):
+        ok = cred.get("account_key", cred.get("sas_token")) in (src.get("account_key"), src.get("sas_token"))
+        if not ok:
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing LIST: "
+                            "AuthenticationFailed: Server failed to authenticate the request.")
+    elif cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing LIST: "
+                        "InvalidAccessKeyId: The AWS Access Key Id you provided does not exist in our records.")
+    return {"tables": [t.upper() for t in src.get("tables", [])]}
 
 
 def _source_for(doc, connection, via="adapter"):

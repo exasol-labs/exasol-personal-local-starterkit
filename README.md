@@ -133,7 +133,6 @@ exakit help            # the commands it offers
   - `exakit info` shows where the password is stored.
 - Python: pyexasol is preinstalled in its own environment.
 - Terminal: `exapump interactive -p starter-kit` opens a SQL shell.
-- Other databases and cloud storage: `exakit connect` queries them in place. See the [connector guides](docs/virtual-schemas/README.md).
 
 Run `exakit guide` for the full walkthrough.
 
