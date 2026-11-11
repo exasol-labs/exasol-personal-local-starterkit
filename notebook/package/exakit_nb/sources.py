@@ -192,9 +192,11 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     if show:
         print(f"exakit connect {' '.join(_shown(args))}")
     try:
-        done = subprocess.run([*command, "connect", *args], input=(password or "") if "--password-stdin" in args else None,
-                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                              errors="replace", timeout=TIMEOUT, stdin=None if "--password-stdin" in args else subprocess.DEVNULL)
+        # Its steps are shown as they happen (checking the inputs, the adapter, the connection, the virtual schema),
+        # the way the terminal shows them: a connect can take a minute, and a silent one looks stuck.
+        done = _run_live([*command, "connect", *args], input=(password or "") if "--password-stdin" in args else None,
+                         timeout=TIMEOUT, on_line=_say_step if show and not dry_run else None,
+                         log=_EngineLog("connect", name) if show and not dry_run else None)
     except subprocess.TimeoutExpired:
         raise SourceProblem(f"exakit connect took over {TIMEOUT // 60} minutes and was stopped. "
                             f"In a terminal: exakit source check {name}") from None
@@ -207,6 +209,10 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
         reason = answer.get("error") or (done.stderr or done.stdout).strip().splitlines()[-1:] or [f"exit {done.returncode}"]
         reason = reason if isinstance(reason, str) else reason[0]
         remedy = answer.get("remedy")
+        named = re.search(r"host name (\S+) does not resolve", reason)
+        note = _dns_note(named.group(1)) if named else ""
+        if note:                                  # the name is right: the kit's "check the spelling" would mislead
+            raise SourceProblem(f"{name} was not connected: {reason}\nFix: {note}")
         raise SourceProblem(f"{name} was not connected: {reason}" + (f"\nFix: {remedy}" if remedy else ""))
     if dry_run:
         print(f"The inputs are complete. Run it again without dry_run=True to connect {name}.")
@@ -214,6 +220,198 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     schema = str(answer.get("schema") or _schema_name(name))
     print(f"Connected: {schema}. Set SOURCE = \"{schema}.<TABLE>\"; nb.load_source(connection, \"{schema}\") lists its tables.")
     return schema
+
+
+PUBLIC_DNS = ("1.1.1.1", "8.8.8.8")      # asked only to tell a wrong name from a network whose own DNS will not answer
+DNS_ADVICE = ("This network's DNS does not answer for {host}, but public DNS does: the name is right. Use another "
+              "network (or a VPN), or set this computer's DNS server to 1.1.1.1 or 8.8.8.8, then connect again.")
+
+
+def _resolves_here(host: str) -> bool:
+    try:
+        socket.getaddrinfo(host, None)
+        return True
+    except OSError:
+        return False
+
+
+def _resolves_publicly(host: str, timeout: float = 2.0) -> bool:
+    """True when a public DNS server has an address for ``host``: one small question (the name only, over UDP) to
+    each of PUBLIC_DNS until one answers. It tells a misspelt name from a network whose own DNS refuses the name -
+    a home router or a hotspot that will not look up a cloud database's host - which this computer cannot tell
+    apart on its own. False when the name has no address there either, or nothing could be asked."""
+    import struct
+
+    try:
+        labels = [label.encode("idna") for label in host.strip(".").split(".")]
+    except UnicodeError:
+        return False
+    if not labels or any(not 0 < len(label) < 64 for label in labels):
+        return False
+    ident = int.from_bytes(os.urandom(2), "big")
+    question = (struct.pack(">HHHHHH", ident, 0x0100, 1, 0, 0, 0)
+                + b"".join(bytes([len(label)]) + label for label in labels) + b"\0" + struct.pack(">HH", 1, 1))
+    for server in PUBLIC_DNS:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as query:
+                query.settimeout(timeout)
+                query.sendto(question, (server, 53))
+                reply, _ = query.recvfrom(1232)
+        except OSError:
+            continue
+        if len(reply) < 12:
+            continue
+        got, flags, _, answers = struct.unpack(">HHHH", reply[:8])
+        if got == ident and flags & 0x000F == 0 and answers > 0:
+            return True
+    return False
+
+
+def _dns_note(host: str) -> str:
+    """What to say about a host name that would not resolve: DNS_ADVICE when the name is right and only this
+    network's DNS refuses it, else nothing (the kit's own words stand: check the spelling)."""
+    if not host or _resolves_here(host) or not _resolves_publicly(host):
+        return ""
+    return DNS_ADVICE.format(host=host)
+
+
+_STEP = re.compile(r"^(INFO|OK|WARN|ERROR)\s+(.*)$")
+
+
+def _say_step(line: str) -> None:
+    """One line the kit said while connecting, printed as it comes: its own words, without the level it carries
+    (a warning keeps its word). A guided card shows the printed lines under its running button."""
+    found = _STEP.match(line.strip())
+    if not found or not found.group(2).strip():
+        return
+    level, text = found.groups()
+    print(("Warning: " if level == "WARN" else "") + text.strip(), flush=True)
+
+
+_ENGINE_LINE = re.compile(r"^\S+ \S+ \[\d+\] (\S+) (\S+) (\S+)\s+(.*)$")
+
+
+class _EngineLog:
+    """The kit's source engine writes every step of a run to its day's log as it happens (<kit home>/logs/
+    virtual-schemas-YYYYMMDD.log: redacted there, no secret in it). With --json the terminal gets none of them, so
+    a notebook reads them from the log: the lines of this command and this source, from where the log stood when the
+    command began."""
+
+    def __init__(self, command: str, source: str) -> None:
+        self.command, self.source = command, source
+        self.folder = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit") / "logs"
+        self.path, self.offset = self._today(), 0
+        with contextlib.suppress(OSError):
+            self.offset = self.path.stat().st_size
+
+    def _today(self) -> Path:
+        import datetime
+
+        day = datetime.date.today()
+        return self.folder / f"virtual-schemas-{day.year:04d}{day.month:02d}{day.day:02d}.log"
+
+    def new(self) -> list[str]:
+        """The step lines written since the last look, as "LEVEL text": what the engine did (OK, INFO, WARN, FAIL)
+        and, for a statement it sent, its first words."""
+        path = self._today()
+        if path != self.path:                           # past midnight: the next day's file, from its start
+            self.path, self.offset = path, 0
+        try:
+            with open(self.path, encoding="utf-8", errors="replace") as handle:
+                handle.seek(self.offset)
+                chunk = handle.read()
+                self.offset = handle.tell()
+        except OSError:
+            return []
+        found = []
+        for line in chunk.splitlines():
+            parts = _ENGINE_LINE.match(line)
+            if not parts or parts.group(1) != self.command or parts.group(2) != self.source:
+                continue
+            level, text = parts.group(3), parts.group(4).strip()
+            if level in ("OK", "INFO", "WARN"):
+                found.append(f"{level} {text}")
+            elif level == "SQL" and text:
+                words = " ".join(text.split()[:4]).rstrip("(,;")
+                found.append(f"INFO Running: {words} ...")
+        return found
+
+
+def _run_live(command: list[str], *, input: str | None = None, timeout: float = TIMEOUT,
+              on_line: Callable[[str], None] | None = None, log: "_EngineLog | None" = None) -> subprocess.CompletedProcess:
+    """Run a kit command that answers with one JSON document on standard output, handing what it says while it
+    works to ``on_line`` as it happens, in this thread (so a card that follows this cell's output sees it): the
+    lines on its standard error, the steps its engine writes to the kit's log (``log``), and the kit's own progress
+    (the share done and the phase of a download or an install, EXAKIT_PROGRESS_LOG), the way the nb.exakit helper does.
+    ``input`` goes to standard input and is never echoed. Returns what subprocess.run would; a command over
+    ``timeout`` seconds is stopped (TimeoutExpired)."""
+    import queue
+    import threading
+    import time
+
+    from .kit_commands import _ProgressFollower
+
+    environment = dict(os.environ)
+    follow = _ProgressFollower(environment, True) if on_line else None
+    process = subprocess.Popen(command, stdin=subprocess.PIPE if input is not None else subprocess.DEVNULL,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+                               errors="replace", bufsize=1, env=environment)
+    if follow:
+        follow.start(process)
+    answer: list[str] = []
+    said: list[str] = []
+    heard: "queue.Queue[str]" = queue.Queue()
+
+    def listen() -> None:
+        for line in process.stderr:
+            said.append(line)
+            heard.put(line.rstrip("\n"))
+
+    readers = [threading.Thread(target=lambda: answer.append(process.stdout.read()), name="exakit-connect-answer", daemon=True),
+               threading.Thread(target=listen, name="exakit-connect-steps", daemon=True)]
+    for reader in readers:
+        reader.start()
+
+    def tell() -> None:
+        lines = []
+        while True:
+            try:
+                lines.append(heard.get_nowait())
+            except queue.Empty:
+                break
+        if log is not None:
+            lines += log.new()
+        for line in lines:
+            if on_line:
+                try:
+                    on_line(line)
+                except Exception:
+                    pass                           # showing a step never fails the connect
+
+    started, timed_out = time.monotonic(), False
+    try:
+        if input is not None:
+            with contextlib.suppress(OSError):
+                process.stdin.write(input)
+            with contextlib.suppress(OSError):
+                process.stdin.close()
+        while process.poll() is None:
+            tell()
+            if time.monotonic() - started >= timeout:
+                timed_out = True
+                process.kill()
+                break
+            time.sleep(0.2)
+        process.wait()
+        for reader in readers:
+            reader.join(timeout=5)
+        tell()                                     # what was said in the last moment
+    finally:
+        if follow:
+            follow.stop()
+    if timed_out:
+        raise subprocess.TimeoutExpired(command, timeout)
+    return subprocess.CompletedProcess(command, process.returncode, "".join(answer), "".join(said))
 
 
 def source_engine(*words: str, text: str | None = None) -> dict[str, Any]:
@@ -374,7 +572,8 @@ def test_source(connector: str, name: str, url: str | None = None, *, password_f
                 result.checks.append((f"this computer reaches {target}:{port}", True, "the port answered"))
         except OSError as error:
             reason = getattr(error, "strerror", None) or type(error).__name__
-            result.checks.append((f"this computer reaches {target}:{port}", False,
+            note = _dns_note(target) if isinstance(error, socket.gaierror) else ""
+            result.checks.append((f"this computer reaches {target}:{port}", False, note or
                                   f"{reason}: check the address, the port, and that the source allows this computer"))
     else:
         result.checks.append(("network", True, "no host and port to try here (a cloud service): connecting checks it"))
