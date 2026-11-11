@@ -1120,7 +1120,10 @@ function Format-ExakitVsTuiShort {
 function Format-ExakitVsTuiTail {
     param([string]$Text = "", [int]$Width = 10)
     if ($Text.Length -le $Width) { return $Text }
-    return $script:UiEllipsis + $Text.Substring($Text.Length - $Width + 1)
+    # The ellipsis is three dots without the fancy palette: the end kept is
+    # that much shorter, so the whole stays $Width wide.
+    $keep = [Math]::Max(0, $Width - ("" + $script:UiEllipsis).Length)
+    return $script:UiEllipsis + $Text.Substring($Text.Length - $keep)
 }
 
 # Format-ExakitVsTuiFit - the text, its end kept when it is wider, or nothing
@@ -1306,7 +1309,13 @@ function Show-ExakitVsTuiPanel {
             # The summary's number takes the tick's place, in as many columns.
             if ($Numbered) { $lead = " " + $script:UiAccent + ("{0,2}" -f ($i + 1)) + $script:UiReset + "  " }
             $v = "" + $f.Val
-            if ($f.Kind -eq "secret") { if ($v) { $v = "(given, hidden)" } else { $v = "(read from a file)" } }
+            $from = ""
+            if ($f.From) { $from = " (from the string)" }
+            if ($f.Kind -eq "secret") {
+                # Taken out of a pasted connection string: said in one.
+                if ($from) { $v = "(from the string, hidden)"; $from = "" }
+                elseif ($v) { $v = "(given, hidden)" } else { $v = "(read from a file)" }
+            }
             # Emptied with "-": the default is what the plan will use.
             if (-not $v) { $v = "" + $f.Def }
             if (-not $v) { $v = "(none)" }
@@ -1316,8 +1325,6 @@ function Show-ExakitVsTuiPanel {
                 if (-not $fv -or ($f.Drafted -and $fv -eq $f.Drafted)) { $v = "auto (drafted from the " + $f.Draft + ")" }
                 elseif ($fv -like "auto:*") { $v = "auto (drafted from " + $fv.Substring(5) + ")" }
             }
-            $from = ""
-            if ($f.From) { $from = " (from the string)" }
             # Too narrow for both: the mark goes first, then the value is cut.
             if ($v.Length + $from.Length -gt $room) { $from = "" }
             $plain = Format-ExakitVsTuiFit $v $room
@@ -1511,14 +1518,56 @@ function Get-ExakitVsPasteChoiceText {
 }
 
 # Format-ExakitVsPasteTyped - the engine's paste lines, for a string typed at a
-# prompt: its credential note (a WARN line) ends by saying the string was on the
-# command line, which a typed one was not, so that sentence is dropped. The
-# RESULT line, which repeats the notes, is left whole. Twin of
+# prompt: its credential notes (WARN lines) say the string was on the command
+# line, which a typed one was not, so the shell-history line and that sentence
+# are dropped. The RESULT line, which repeats the notes, is left whole. Twin of
 # _exakit_vs_paste_typed.
 function Format-ExakitVsPasteTyped {
     param([string[]]$Lines = @())
     foreach ($line in $Lines) {
+        if ("" + $line -like "WARN The password from the command line*") { continue }
         if ("" + $line -like "WARN *") { ("" + $line) -replace ' The string was on the command line.*$', '' } else { "" + $line }
+    }
+}
+
+# Invoke-ExakitVsPaste - a connection string read by the engine's paste (base64
+# on its stdin, never an argument). The credential it holds where the
+# connector's stands is written by the engine to an owner-only temporary file
+# (--secret-out), read back here and the file removed: @{ Code; Lines; Secret }.
+# -Given: --password-file or --password-stdin gives the credential, which wins
+# (--credential-given; nothing is written). -As: the string is that input's
+# value (--set uri=...). Twin of the engine call in _exakit_vs_paste.
+function Invoke-ExakitVsPaste {
+    param([string]$Connector, [string]$Text, [string]$As = "", [switch]$Given, [switch]$Json)
+    $argv = @()
+    if ($Json) { $argv += "--json" }
+    $argv += @("paste", $Connector, "--base64")
+    if ($As) { $argv += @("--as", $As) }
+    $out = ""
+    if ($Given) { $argv += "--credential-given" }
+    else {
+        $out = [System.IO.Path]::GetTempFileName()
+        $argv += @("--secret-out", $out)
+    }
+    $secret = ""
+    try {
+        $run = Invoke-ExakitVsEngine -Arguments $argv -Secret $Text
+        if ($out -and $run.Code -eq 0 -and (Test-Path -LiteralPath $out)) {
+            $secret = [System.IO.File]::ReadAllText($out, (New-Object System.Text.UTF8Encoding($false)))
+        }
+    } finally {
+        if ($out) { Remove-Item -Force -LiteralPath $out -ErrorAction SilentlyContinue }
+    }
+    return [pscustomobject]@{ Code = $run.Code; Lines = $run.Lines; Secret = $secret }
+}
+
+# Set-ExakitVsTuiSecretFrom - the form's credential field answered by a pasted
+# connection string: given, marked From (the panel shows "(from the string,
+# hidden)") and not asked. Twin of _exakit_vs_tui_secret_from.
+function Set-ExakitVsTuiSecretFrom {
+    param([hashtable]$Form, [string]$Value)
+    foreach ($f in $Form.Fields) {
+        if ($f.Kind -eq "secret") { $f.Val = $Value; $f.Done = $true; $f.From = $true; return }
     }
 }
 
@@ -1554,19 +1603,21 @@ function Write-ExakitVsLegend {
 # engine's paste, base64 on its stdin, never an argument; or Enter to type the
 # fields. It is shown back, its credentials masked by the engine ("Read: ..."),
 # and one key decides: Enter uses it, e asks for it again, Esc or n types the
-# fields instead. Returns @{ Sets; Names } for what the string named; only
-# those fields are shown. A string the engine cannot read is said, in its
+# fields instead. Returns @{ Sets; Names; Secret } for what the string named;
+# only those fields are shown. Secret is the credential it held where the
+# connector's stands (not asked again), "" with -Given (--password-file or
+# --password-stdin wins). A string the engine cannot read is said, in its
 # words, and asked again. Twin of _exakit_vs_ask_paste.
 function Read-ExakitVsLinePaste {
-    param([string]$Connector)
-    $answer = @{ Sets = @(); Names = @() }
+    param([string]$Connector, [switch]$Given)
+    $answer = @{ Sets = @(); Names = @(); Secret = "" }
     $forms = @(Get-ExakitVsPasteForms $Connector)
     if ($forms.Count -eq 0) { return $answer }
     Write-ExakitVsPasteHint -Forms $forms
     while ($true) {
         $url = "" + (Read-ExakitVsHidden -Question "Connection string (hidden) - paste + Enter, or Enter alone for the fields")
         if (-not $url) { return $answer }
-        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Connector, "--base64") -Secret $url
+        $pasted = Invoke-ExakitVsPaste -Connector $Connector -Text $url -Given:$Given
         $url = $null
         if ($pasted.Code -eq 0) {
             $read = Get-ExakitVsResultOf $pasted.Lines
@@ -1587,6 +1638,7 @@ function Read-ExakitVsLinePaste {
                 $answer.Sets += @("--set", ("{0}={1}" -f $p.Name, $p.Value)); $answer.Names += $p.Name
             }
         }
+        $answer.Secret = $pasted.Secret
         return $answer
     }
 }
@@ -1851,8 +1903,9 @@ function Read-ExakitVsTuiChoice {
 # in argv, and is not kept. It is shown back with its credentials masked by the
 # engine ("Read: ..."), and one key decides: Enter uses it, e asks for it again,
 # Esc or n types the fields instead. What it names is answered, marked "from the
-# string" and not asked; the engine's notes and the masked string stay under the
-# panel. A string it cannot read is said, in the engine's words, and asked
+# string" and not asked - its credential too, "(from the string, hidden)",
+# unless --password-file gives one; the engine's notes and the masked string
+# stay under the panel. A string it cannot read is said, in the engine's words, and asked
 # again; Enter types the fields instead. $false at end of input. Twin of
 # _exakit_vs_tui_paste.
 function Invoke-ExakitVsTuiPaste {
@@ -1877,7 +1930,9 @@ function Invoke-ExakitVsTuiPaste {
         $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
         if ($null -eq $a) { return $false }
         if (-not $a) { return $true }
-        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $Form.Connector, "--base64") -Secret $a
+        # The string's credential, where the connector's stands, answers its
+        # field - unless --password-file gives one.
+        $pasted = Invoke-ExakitVsPaste -Connector $Form.Connector -Text $a -Given:([bool]$Form.PwFile)
         $a = $null
         if ($pasted.Code -ne 0) {
             $why = (@($pasted.Lines) | Where-Object { $_ -like "FAIL *" } | Select-Object -First 1)
@@ -1899,6 +1954,7 @@ function Invoke-ExakitVsTuiPaste {
                 }
             }
         }
+        if ($pasted.Secret) { Set-ExakitVsTuiSecretFrom -Form $Form -Value $pasted.Secret }
         $Form.Notes = @(@("INFO Read: " + $masked) + @(Format-ExakitVsPasteTyped @(@($pasted.Lines) | Where-Object { $_ -like "WARN *" -or $_ -like "INFO *" })))
         return $true
     }
@@ -1934,7 +1990,7 @@ function Find-ExakitVsTuiNamed {
 # connector's definition could not be read. Twin of _exakit_vs_tui_form.
 function Invoke-ExakitVsTuiForm {
     param([string]$Connector, [int]$Pos, [int]$Total, [string]$GivenName = "", [string[]]$GivenSets = @(),
-          [string]$PasswordFile = "", [string[]]$Taken = @())
+          [string]$PasswordFile = "", [string[]]$Taken = @(), [string]$GivenSecret = "")
     $run = Invoke-ExakitVsEngine -Arguments @("inputs", $Connector)
     $doc = Get-ExakitVsResultOf $run.Lines
     if ($run.Code -ne 0 -or $null -eq $doc) {
@@ -1989,6 +2045,10 @@ function Invoke-ExakitVsTuiForm {
     $form = @{ Title = ("{0} of {1} {2} {3}" -f $Pos, $Total, $script:UiMidDot, $doc.name); Fields = $fields; LW = $lw
                Connector = $Connector; Taken = @($Taken); Notes = @(); PwFile = $PasswordFile; Refused = $false }
     $pwFile = $PasswordFile
+    # A credential --url's string held answers this form's, unless
+    # --password-file gives it.
+    if ($GivenSecret -and -not $PasswordFile) { Set-ExakitVsTuiSecretFrom -Form $form -Value $GivenSecret }
+    $GivenSecret = $null
     $script:EvtOnScreen = 0
     # 1. A connection string first, when the command line answered nothing but
     # the name: what it names is answered (and marked so), the rest asked next.
@@ -2243,7 +2303,7 @@ function Invoke-ExakitVsTuiRun {
 # Invoke-ExakitVsTui - the whole terminal flow; returns the connect's exit code.
 # Twin of _exakit_vs_tui.
 function Invoke-ExakitVsTui {
-    param([string]$Source = "", [string]$Name = "", [string]$PasswordFile = "", [string[]]$Sets = @())
+    param([string]$Source = "", [string]$Name = "", [string]$PasswordFile = "", [string[]]$Sets = @(), [string]$Secret = "")
     # Ctrl+C anywhere in the flow stops the script; this finally gives the
     # console back (a live table stopped, mouse reporting off, Ctrl+C input
     # mode as it was, the cursor shown) and says so in one line. Twin of
@@ -2253,7 +2313,8 @@ function Invoke-ExakitVsTui {
     $treat = $false
     try { $treat = [Console]::TreatControlCAsInput } catch { }
     try {
-        $code = Invoke-ExakitVsTuiFlow -Source $Source -Name $Name -PasswordFile $PasswordFile -Sets $Sets
+        $code = Invoke-ExakitVsTuiFlow -Source $Source -Name $Name -PasswordFile $PasswordFile -Sets $Sets -Secret $Secret
+        $Secret = $null
         $script:EvtFinished = $true
         return $code
     } finally {
@@ -2270,7 +2331,7 @@ function Invoke-ExakitVsTui {
 
 # Invoke-ExakitVsTuiFlow - the flow itself, under Invoke-ExakitVsTui's finally.
 function Invoke-ExakitVsTuiFlow {
-    param([string]$Source = "", [string]$Name = "", [string]$PasswordFile = "", [string[]]$Sets = @())
+    param([string]$Source = "", [string]$Name = "", [string]$PasswordFile = "", [string[]]$Sets = @(), [string]$Secret = "")
     # A person at a console: what the picked sources need is said, not asked.
     $script:ExakitVsInteractive = $true
     $script:EvtCols = 80
@@ -2289,13 +2350,14 @@ function Invoke-ExakitVsTuiFlow {
     }
     # 2. the details, one panel each; --name, --set and --password-file belong
     # to the one source the command named
-    if ($picked.Count -ne 1) { $Name = ""; $PasswordFile = ""; $Sets = @() }
+    if ($picked.Count -ne 1) { $Name = ""; $PasswordFile = ""; $Sets = @(); $Secret = "" }
     [Console]::Write("`r`n")
     $sources = @()
     $taken = @()
     for ($p = 0; $p -lt $picked.Count; $p++) {
         $src = Invoke-ExakitVsTuiForm -Connector $picked[$p] -Pos ($p + 1) -Total $picked.Count -GivenName $Name `
-            -GivenSets $Sets -PasswordFile $PasswordFile -Taken $taken
+            -GivenSets $Sets -PasswordFile $PasswordFile -Taken $taken -GivenSecret $Secret
+        $Secret = ""
         if ($src -is [string]) {
             if ($src -eq "broken") { return 2 }
             [Console]::Write("`r`n"); Info "Left out: $($picked[$p])"

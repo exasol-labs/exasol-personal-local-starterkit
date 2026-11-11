@@ -48,11 +48,14 @@ az storage account show -n <account> --query "{firewall:networkRuleSet.defaultAc
 - `abfss://<container>@<account>.dfs.core.windows.net` - the same;
 - `AccountName=...;AccountKey=...` - fills `account`.
 
-The path after the container is not used. A SAS query string or an
-`AccountKey` in the string is a credential: it is dropped, and the credential is
-asked for separately, hidden. A SAS carries `&`, so it always goes in a file
-(`--password-file`), never in an argument: on Windows cmd.exe splits an argument
-at `&` on its way through `exakit.cmd`. The `;` of a connection string is fine.
+The path after the container is not used. A credential in the string is the
+connector's: the URL's SAS query (`?sv=...&sig=...`), else the connection
+string's `SharedAccessSignature`, else its `AccountKey`. It is taken out of the
+string (never stored, logged or shown) and not asked again - paste it at the
+hidden prompt; `--password-file` or `--password-stdin` given too wins. A SAS
+carries `&`, so never give it in an argument: on Windows cmd.exe splits an
+argument at `&` on its way through `exakit.cmd`. The `;` of a connection string
+is fine.
 
 ## 4. Prepare the source (recommended: a container SAS; show, then run on a yes)
 

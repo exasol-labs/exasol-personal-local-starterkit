@@ -79,6 +79,7 @@
     }
   ],
   "paste": {
+    "credential": ["userinfo", "password"],
     "style": "oracle",
     "bare": true,
     "forms": ["jdbc:oracle:thin:@//host:1521/service", "jdbc:oracle:thin:@tcps://host:2484/service", "host[:port]/service"]

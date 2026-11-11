@@ -52,7 +52,8 @@ databricks schemas list <catalog>
 - a bare `<host>`
 
 The `;` separators pass through Windows unharmed. A token in the string
-(`PWD=`) is never used: give it separately.
+(`PWD=`, else `password=` or `token=`) is the credential: taken out of the
+string (never stored, logged or shown) and not asked again.
 
 ## 4. Prepare the source (show every statement, run on a yes)
 

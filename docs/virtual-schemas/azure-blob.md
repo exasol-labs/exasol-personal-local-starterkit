@@ -123,7 +123,9 @@ abfss://docs@mystorageacct.dfs.core.windows.net
 
 Both fill account and container. A storage connection string
 (`DefaultEndpointsProtocol=https;AccountName=mystorageacct;...`) fills the
-account only; its key is never taken from the string.
+account. A credential in the string is the connector's, taken out of the
+string and not asked again: the URL's SAS query (`?sv=...&sig=...`), else the
+connection string's `SharedAccessSignature`, else its `AccountKey`.
 
 ## Common problems
 

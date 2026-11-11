@@ -23,7 +23,7 @@ container. Tier GA.
 
 | Input | Required | Default | Where to find it |
 |---|---|---|---|
-| `uri` | yes | | Atlas > Database > Clusters > Connect > Drivers: the `mongodb+srv://` string without `user:password@`; self-hosted `mongodb://host:27017/?...` |
+| `uri` | yes | | Atlas > Database > Clusters > Connect > Drivers: the `mongodb+srv://` string (a `user:password@` in it is taken out: user and password); self-hosted `mongodb://host:27017/?...` |
 | `database` | yes | | Atlas > Database > Browse Collections, or `listDatabases` below |
 | `collection` | yes | | the same view: the one collection to expose |
 | `user` | yes | | Atlas > Security > Database Access: the reader account |
@@ -53,9 +53,11 @@ mongosh "<uri>" --username <admin> --eval 'db.getSiblingDB("<database>").getColl
 - `mongodb+srv://user@cluster.example.net/database?options`
 - `mongodb://user@host:27017/database?options`
 
-It fills `uri`, `database` and `user`. A password, or an
-`authMechanismProperties` option, is never used: it is dropped and the
-credential asked for separately, hidden.
+It fills `uri`, `database` and `user`. A `user:password@` gives the password
+too: taken out of the URI (never stored, logged or shown) and not asked again.
+`--set uri=` with `user:password@` is read the same way, with a warning that
+the password is now in the shell history. An `authMechanismProperties` option
+is never used: it is dropped.
 
 On Windows, cmd.exe splits an argument at `&` on its way through `exakit.cmd`.
 A URI with two or more options therefore breaks as `--url` or `--set uri=`.
@@ -154,7 +156,7 @@ exakit sql --file q.sql
 | "error while reading collection metadata" | a wrong password, this computer's IP not in the Atlas access list, or the server unreachable - the adapter does not say which: check the password (reauth tries it first), the access list, the URI |
 | "collection ... does not exist" | no such collection - or the account may not read that database (reported the same way): check the name and the `read` role |
 | "not authorized on <db> to execute command" (`privilege`) | signed in, but no `read` role on that database (section 4) |
-| "the MongoDB URI carries credentials" | take `user:password@` out; `--set user=` and `--password-file` |
+| "the MongoDB URI carries credentials" | give the URI with `--url`, `--set uri=` or the prompt (the kit takes `user:password@` out), or take it out; `--set user=` and `--password-file` |
 | "the MongoDB adapter always signs in against the admin database" | drop `authSource` or set it to `admin`; make the reader a user of admin |
 | "the connection string names more than one host" | give one host, or the `mongodb+srv://` name |
 | "is not a valid mongodb-uri" | `mongodb://` or `mongodb+srv://`, host, options - nothing else |

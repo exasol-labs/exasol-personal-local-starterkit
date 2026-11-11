@@ -148,8 +148,8 @@ jdbc:sqlserver://myserver.database.windows.net:1433;database=erp;user=exakit_rea
 
 The first fills host, port, database and TLS. The second (Azure portal →
 `<db>` → Connection strings → JDBC) also fills the user; the kit drops
-`hostNameInCertificate` and `loginTimeout` by name. A password in the string
-is never used.
+`hostNameInCertificate` and `loginTimeout` by name. A `password=` in the
+string is the credential: taken out of the string and not asked again.
 
 ## Common problems
 

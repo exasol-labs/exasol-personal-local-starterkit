@@ -67,6 +67,7 @@
     }
   ],
   "paste": {
+    "credential": ["pwd", "password", "token", "userinfo"],
     "schemes": ["jdbc:databricks", "jdbc:spark", "https"],
     "bare": true,
     "params": {"httppath": "http_path", "conncatalog": "catalog", "connschema": "schema"},
