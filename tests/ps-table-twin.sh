@@ -344,7 +344,7 @@ has "the frame draws it dim"       'if ($row.State -eq "disabled") {'       "$UI
 # one and the defaults are built by the caller; this is where both pass through.
 has "a tick is refused"            'if ($r.State -eq "disabled") { $on = $false }' "$UI_PS1"
 # The cursor steps over it, Space ignores it, and Select All leaves it alone.
-has "the cursor steps over it"     'if ($pickable.Contains($at)) { return $at }'   "$UI_PS1"
+has "the cursor steps over it"     'if ($pickable.Contains($at) -and -not (@($Table.Hidden) -contains $at)) { return $at }'   "$UI_PS1"
 has "Space ignores it"             'if ($pickable.Contains($cur)) {'               "$UI_PS1"
 has "Select All skips it"          'if (-not $pickable.Contains($c)) { [void]$sel.Remove($c); continue }' "$UI_PS1"
 has "and it is never where the cursor starts" 'if (-not $pickable.Contains($cur)) { $cur = [int](& $step $cur 1) }' "$UI_PS1"
@@ -415,7 +415,7 @@ has "an unchanged frame is overwritten" 'Write("`r$($script:UiEsc)[${prev}A" + $
 has "...and a changed one still erases" 'Write("`r$($script:UiEsc)[${prev}A$($script:UiEsc)[0J" + $frame' "$UI_PS1"
 # The menu's redraw is the one a reader watches keypress by keypress, so it needs
 # the same rule - it is a second write site, not a call into the first.
-has "the menu compares both halves too" '$sameGeom = ($drawn -eq ([int]$Table.Lines + 1) -and $drawnWidth -eq [int]$Table.Width)' "$UI_PS1"
+has "the menu compares both halves too" '$sameGeom = ($drawn -eq ([int]$Table.Lines + 1 + $extra) -and $drawnWidth -eq [int]$Table.Width)' "$UI_PS1"
 has "...overwriting in place"           'Write("`r$($script:UiEsc)[${drawn}A" + $frame' "$UI_PS1"
 has "...and erasing only on a change"   'Write("`r$($script:UiEsc)[${drawn}A$($script:UiEsc)[0J" + $frame' "$UI_PS1"
 # Exactly TWO erasing writes in the whole file, one per write site: a third would
