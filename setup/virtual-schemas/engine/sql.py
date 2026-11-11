@@ -269,9 +269,19 @@ def redact(text, secrets):
     try:
         text = re.sub(r"\s*\(Session: \d+\)", "", summarize(text))
         text = vslog.redact(text, secrets)
+        text = wallet(text)
     except Exception:  # noqa: BLE001 - never the clear text
         return "the database refused the statement (its message could not be made safe to show)"
     return text[:MAX_ERROR]
+
+
+def wallet(text):
+    """An Oracle URL's embedded CA wallet (wallet_location=data:;base64,...,
+    some 2.6 KB) said as its size: the cause after it stays within MAX_ERROR
+    and on the screen."""
+    return re.sub(r"wallet_location=data:;base64,([A-Za-z0-9+/=]+)",
+                  lambda m: "wallet_location=data:<wallet, %d bytes>"
+                  % (len(m.group(1)) * 3 // 4 - m.group(1)[-2:].count("=")), text)
 
 
 class Database(object):

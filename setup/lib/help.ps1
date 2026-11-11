@@ -526,7 +526,7 @@ function Get-ExakitHelpRows {
                 topics = @($key)
                 hidden = [bool]($entry.PSObject.Properties["hidden"] -and $entry.hidden)
             }
-            foreach ($field in @('parameters','parameter_note','examples','exit_codes','environment','warning')) {
+            foreach ($field in @('parameters','parameter_note','examples','exit_codes','environment','warning','primary','subcommands','example_notes')) {
                 if ($entry.PSObject.Properties[$field]) {
                     $row | Add-Member -NotePropertyName $field -NotePropertyValue $entry.$field
                 }
@@ -629,6 +629,33 @@ function Show-ExakitHelpCommand {
             (Get-ExakitHelpInvocation -DocId $key -Entry $_ -Doc $docs[$key]) -eq $row.invocation
         })[0]
         $label = $row.invocation
+        # An approved layout is the page, verbatim, with its Windows words
+        # (layout_windows). Twin of render_command_detail in help.sh.
+        if ($entry.PSObject.Properties['layout']) {
+            Write-Host ""
+            foreach ($line in @($entry.layout)) {
+                $text = "" + $line
+                if ($entry.PSObject.Properties['layout_windows']) {
+                    foreach ($pair in @($entry.layout_windows)) { $text = $text.Replace(("" + $pair[0]), ("" + $pair[1])) }
+                }
+                # layout_highlight: the two commands to remember, in the command green.
+                $lead = $null
+                if ($entry.PSObject.Properties['layout_highlight']) {
+                    $lead = @($entry.layout_highlight | Where-Object { $text.StartsWith("" + $_) }) | Select-Object -First 1
+                }
+                if ($lead) {
+                    $cmd = ("" + $lead).TrimEnd()
+                    $pad = $cmd.Length - $cmd.TrimStart().Length
+                    Write-Host $cmd.Substring(0, $pad) -NoNewline
+                    Write-Host $cmd.TrimStart() -ForegroundColor Green -NoNewline
+                    Write-Host $text.Substring($cmd.Length)
+                } else {
+                    Write-Host $text
+                }
+            }
+            Write-Host ""
+            continue
+        }
         Write-Host ""
         if ($entry.options) {
             Write-Host "  $label $($entry.options)"
