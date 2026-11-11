@@ -39,6 +39,11 @@ class DbError(Exception):
 NOJAVA = (r"No usable script language container|"
           r"required executable '[^'\n]*/exaudfclient' does not exist in BucketFS")
 
+# An S3 request made with no region at all: the lakehouse engine builds the
+# endpoint from an empty region when the catalog vended S3 credentials and
+# --set region was not given (Unity's vended credentials carry none).
+NOREGION = r"s3\.\.amazonaws\.com"
+
 # Ordered: the first match names the failure. Messages are the JDBC drivers'
 # and Exasol's own; a generic failure stays "error" rather than guessing.
 _KINDS = (
@@ -63,7 +68,11 @@ _KINDS = (
     ("region", r"must be addressed using the specified endpoint|PermanentRedirect|"
                r"AuthorizationHeaderMalformed.*region|the region '[\w-]+' is wrong|"
                # object_store (the lakehouse engine) on S3's redirect to the bucket's region.
-               r"incorrectly configured region|x-amz-bucket-region"),
+               r"incorrectly configured region|x-amz-bucket-region|"
+               # ...and on vended S3 credentials with no region given: the
+               # endpoint is built with an empty region (measured live against
+               # Databricks on AWS: "GET https://s3..amazonaws.com/<bucket>/...").
+               + NOREGION),
     ("nobucket", r"NoSuchBucket|The specified bucket does not exist|ContainerNotFound"),
     ("denied", r"AccessDenied|not authorized to perform|AuthorizationPermissionMismatch|AuthorizationFailure|"
                r"PERMISSION_DENIED"),
