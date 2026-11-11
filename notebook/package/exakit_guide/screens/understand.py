@@ -163,6 +163,7 @@ class ChooseData(Screen):
 
     kind = "card"
     step, connector, src_name, conn_n, tip = "connection", None, "", 0, ""
+    preset, settings_step, typed_storage = None, False, ""   # a source's settings (a Lakehouse's catalog and files)
 
     def __init__(self) -> None:
         super().__init__()
@@ -385,7 +386,7 @@ class ChooseData(Screen):
         first = set(read["missing"]) if read else {i["name"] for i in form.get("inputs", []) if i["required"]}
         needed, rest = [], []
         for spec in form.get("inputs", []):
-            if read and spec["kind"] == "secret" and read["credential_in_string"]:
+            if read and spec["kind"] == "secret" and read["credential_in_string"] and not spec.get("storage"):
                 continue                                   # the string holds it
             if spec["name"] in first or (spec["kind"] == "secret" and spec["required"]):
                 needed.append(self._input_field(sid, {**spec, "required": True}, None))
@@ -401,7 +402,8 @@ class ChooseData(Screen):
         """The steps of a new connection, for the data source chosen: only the ones it has."""
         form = self.forms.get(self.connector or "") or {}
         needed, rest = self._groups(self.connector) if form else ([], [])
-        return (["connection", "source"] + (["string"] if form.get("forms") else []) + ["name"]
+        return (["connection", "source"] + (["settings"] if self.settings_step else [])
+                + (["string"] if form.get("forms") else []) + ["name"]
                 + (["needed"] if needed else []) + (["optional"] if rest else []))
 
     def _source_fields(self, connect_only: dict) -> list[dict]:
@@ -429,10 +431,12 @@ class ChooseData(Screen):
                            "v": "Next asks for the data source, then its details, one step at a time."})
             return fields
         # Where this is, and what was settled so far.
-        titles = {"source": "Data source", "string": "Connection string", "name": "Name", "needed": "Details",
+        titles = {"source": "Data source", "settings": "Settings", "string": "Connection string", "name": "Name", "needed": "Details",
                   "optional": "Optional settings"}
         new = steps[1:]
         so_far = [form["name"]] if form and step != "source" else []
+        if form and step != "source":
+            so_far += self._setting_labels(form)
         if read and step != "string":
             so_far.append(read["masked"])
         if self.src_name and step != "name":
@@ -443,10 +447,27 @@ class ChooseData(Screen):
                         + f" · {titles[step]}"
                         + (f" · {' · '.join(so_far)}" if so_far else "")}]
         if step == "source":
-            connectors = [{"value": c["id"], "label": c["name"] + (" (not available yet)" if c.get("gate") else ""),
-                           "hint": c.get("summary") or ""} for c in self.connectors]
+            connectors = []
+            for c in self.connectors:
+                connectors.append({"value": c["id"], "label": c["name"] + (" (not available yet)" if c.get("gate") else ""),
+                                   "hint": c.get("summary") or ""})
+                # A connector with several kinds of source in one: its settings as a tree under it, as the kit's
+                # connect menu shows them (a Lakehouse's catalog, and under each the files it can read).
+                for node in (self.forms.get(c["id"]) or {}).get("tree", []):
+                    connectors.append({"value": self._pick(c["id"], node["set"]), "label": "\u00a0\u00a0\u00a0\u2514 " + node["label"]})
+                    connectors += [{"value": self._pick(c["id"], child["set"]),
+                                    "label": "\u00a0" * 8 + "\u2514 " + child["label"]} for child in node.get("children", [])]
             fields.append({"id": "connector", "type": "select", "label": "Data source",
-                           "value": cid or (connectors[0]["value"] if connectors else ""), "options": connectors})
+                           "value": self._pick(cid, self.preset or {}) if cid else (connectors[0]["value"] if connectors else ""),
+                           "options": connectors})
+        elif step == "settings":
+            for spec in self._pending(form):
+                labels = spec.get("choice_labels") or spec["choices"]
+                fields.append({"id": self._fid(cid, "set_" + spec["name"]), "type": "select",
+                               "label": spec["label"].split(" - ")[0] + " *", "value": spec["default"] or spec["choices"][0],
+                               "options": [{"value": value, "label": label} for value, label in zip(spec["choices"], labels)]})
+            for said in sorted({line for spec in self._pending(form) for line in spec.get("disabled") or []}):
+                fields.append({"id": self._fid(cid, "set_note"), "type": "note", "v": said})
         elif step == "string":
             how = self._fid(cid, "how")
             fields.append({"id": how, "type": "select", "label": "How to connect", "value": "string",
@@ -489,13 +510,24 @@ class ChooseData(Screen):
         steps = self._steps()
         step = self.step if self.step in steps else "connection"
         if step == "source":
-            connector = str(v.get("connector") or "").strip()
+            connector, preset = self._picked(str(v.get("connector") or "").strip())
             form = self.forms.get(connector)
             if not form:
                 raise ValueError("Choose the data source first.")
             if form.get("gate"):
                 raise ValueError(f"{form['name']} is not available yet: {form['gate']}")
-            self.connector = connector
+            self.connector, self.preset = connector, preset
+            if form.get("tree"):
+                # What this combination asks, from the kit's engine (`exakit connect lakehouse --set catalog=...`).
+                form = self._settle(connector, preset)
+            self.settings_step = bool(self._pending(form))
+        elif step == "settings":
+            form = self.forms.get(self.connector) or {}
+            chosen = {spec["name"]: str(v.get(self._fid(self.connector, "set_" + spec["name"])) or spec["default"])
+                      for spec in self._pending(form)}
+            self.preset = {**(self.preset or {}), **chosen}
+            if self._pending(self._settle(self.connector, self.preset)):
+                return                                       # that choice brought a further setting: ask it here
         elif step == "string":
             manual = v.get(self._fid(self.connector, "how")) == "manual"
             text = "" if manual else str(v.get(self._fid(self.connector, "url")) or "").strip()
@@ -518,6 +550,31 @@ class ChooseData(Screen):
         steps = self._steps()                                # the string read may have changed what is left
         self.step = steps[min(steps.index(step) + 1, len(steps) - 1)]
 
+    @staticmethod
+    def _pick(connector: str, settings: dict) -> str:
+        """A row of the Data source list as one value: the connector, and the settings a tree row under it gives."""
+        return "|".join([connector] + [f"{key}={value}" for key, value in settings.items()])
+
+    @staticmethod
+    def _picked(value: str) -> tuple[str, dict]:
+        connector, *pairs = value.split("|")
+        return connector, dict(pair.split("=", 1) for pair in pairs if "=" in pair)
+
+    def _pending(self, form: dict) -> list[dict]:
+        """The connector's setting questions the tree pick did not answer (a Lakehouse's catalog login)."""
+        return [spec for spec in form.get("setting_inputs", []) if spec["name"] not in (self.preset or {})]
+
+    def _setting_labels(self, form: dict) -> list[str]:
+        chosen = self.preset or {}
+        return [dict(zip(spec["choices"], spec.get("choice_labels") or spec["choices"])).get(chosen[spec["name"]], chosen[spec["name"]])
+                for spec in form.get("setting_inputs", []) if spec["name"] in chosen]
+
+    def _settle(self, connector: str, settings: dict) -> dict:
+        """The connector's form for these settings, asked of the kit (nb.connector_inputs(connector, **settings))."""
+        self.forms = actions.run("data.connector_form", connector=connector, settings=settings)
+        self.kit_said = SESSION.said or self.kit_said
+        return self.forms.get(connector) or {}
+
     def _read_string(self, connector: str, text: str) -> dict:
         """Read a connection string with the kit's own engine (nb.read_connection_string, `exakit connect --url`'s
         reader). The string stays in the notebook's SOURCE_URL variable, as the code section holds it: the code shown
@@ -525,7 +582,15 @@ class ChooseData(Screen):
         from ..actions import Var
 
         SESSION.set("SOURCE_URL", text)
-        read = dict(actions.run("data.read_string", connector=connector, text=Var("SOURCE_URL")))
+        read = dict(actions.run("data.read_string", connector=connector, text=Var("SOURCE_URL"), settings=self.preset or {}))
+        # A setting the string itself shows (a folder path: no catalog) is chosen with it: the steps after ask that
+        # combination's details. A setting is never a detail to type again.
+        names = {spec["name"] for spec in (self.forms.get(connector) or {}).get("setting_inputs", [])}
+        shown = {key: value for key, value in read["values"].items() if key in names and key not in (self.preset or {})}
+        if shown:
+            self.preset = {**(self.preset or {}), **shown}
+            self._settle(connector, self.preset)
+        read["values"] = {key: value for key, value in read["values"].items() if key not in names}
         read["text"] = text
         read["n"] = self.parsed.get(connector, {}).get("n", 0) + 1
         self.parsed[connector] = read
@@ -567,7 +632,11 @@ class ChooseData(Screen):
         for spec in specs:
             raw = v.get(self._fid(prefix, spec["name"]))
             value = str(raw or "").strip()
-            if spec["kind"] == "secret":
+            if spec["kind"] == "secret" and spec.get("storage"):
+                self.typed_storage = str(raw or "")         # the second secret: its own file, never the password's way
+                if spec["name"] in required and not self.typed_storage and not needed_only:
+                    missing.append(spec["label"].split(" - ")[0])
+            elif spec["kind"] == "secret":
                 password = str(raw or "") or password
             elif spec["kind"] == "secret-file":
                 if value:
@@ -579,7 +648,7 @@ class ChooseData(Screen):
                 missing.append(spec["label"].split(" - ")[0])
         if missing:
             raise ValueError("Fill in: " + ", ".join(missing))
-        return connector, name, settings, password
+        return connector, name, {**(self.preset or {}), **settings}, password
 
     def on_test_source(self, v: dict) -> None:
         """Test connection: the kit's own check of the inputs, then whether this computer reaches the source
@@ -599,7 +668,8 @@ class ChooseData(Screen):
         connector, name, settings, typed = self._source_inputs(v)
         # The card's box answers the kit's own password question (a source without one: Enter, empty).
         schema = actions.run("data.connect_source", connector=connector, name=name, settings=settings,
-                             secret={"secret": lambda _question: typed})
+                             secret={"secret": lambda _question: typed,
+                                     **({"storage_secret": lambda _question: self.typed_storage} if self.typed_storage else {})})
         self.kit_said = SESSION.said or self.kit_said
         if schema and schema not in self.sources:
             self.sources.append(schema)

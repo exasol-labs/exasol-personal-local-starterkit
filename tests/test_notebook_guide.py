@@ -139,12 +139,33 @@ class SourceFormTest(unittest.TestCase):
         for connector in nb.connectors():
             form = nb.connector_inputs(connector["id"])
             self.assertEqual(connector["id"], form["id"])
-            self.assertTrue(form["inputs"], connector["id"])
+            self.assertTrue(form["inputs"] or form["setting_inputs"], connector["id"])   # or its settings come first
             for spec in form["inputs"]:
                 self.assertTrue(spec["label"] and spec["kind"], (connector["id"], spec))
         self.assertEqual("postgresql", nb.connector_inputs("pg")["id"])           # an alias, as exakit connect takes
         self.assertEqual("secret-file", next(i["kind"] for i in nb.connector_inputs("bigquery")["inputs"] if i["file"]
                                              and i["secret"]))
+
+    def test_a_connector_with_settings_gives_its_tree_and_each_combinations_inputs(self):
+        """A connector that is several kinds of source in one (Lakehouse) is read from the kit like any other: its
+        settings as the connect menu's tree, and for each pick that combination's inputs - none of it typed here."""
+        nb = importlib.import_module("exakit_nb")
+        found = [c for c in nb.connectors() if nb.connector_inputs(c["id"])["tree"]]
+        self.assertTrue(found, "no connector has settings any more: drop this test with them")
+        for connector in found:
+            form = nb.connector_inputs(connector["id"])
+            self.assertEqual([], form["inputs"])                      # nothing to ask before the first setting
+            self.assertEqual(1, len(form["setting_inputs"]))
+            for node in form["tree"]:
+                for pick in [node] + node["children"]:
+                    with self.subTest(connector=connector["id"], pick=pick["set"]):
+                        chosen = nb.connector_inputs(connector["id"], **pick["set"])
+                        self.assertTrue(chosen["inputs"])
+                        self.assertEqual(pick["set"], {k: chosen["settings"][k] for k in pick["set"]})
+                        self.assertTrue(all(spec["choices"] and spec["default"] for spec in chosen["setting_inputs"]))
+        for connector in nb.connectors():
+            if connector not in found:
+                self.assertEqual([], nb.connector_inputs(connector["id"])["setting_inputs"])
 
     def test_the_form_is_the_kits_own_engine_not_a_copy(self):
         """Listing, inputs and the connection-string reader are asked of setup/virtual-schemas/engine/cli.py - what
@@ -383,6 +404,83 @@ class CardTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Fill in: Host name or address, Database, Reader account"):
                 card._connect({"connector": "postgresql", "src_name": "sales"})
         run.assert_not_called()
+
+    def test_a_source_with_settings_is_picked_from_a_tree_and_asked_only_what_is_left(self):
+        """Data source lists a connector's settings as a tree under it (a Lakehouse's catalogs, and under each the files
+        it reads). A leaf settles them; a setting the tree does not hold (the catalog login) is one more step; the
+        connector's own row asks them one by one. The settings go to exakit connect, the two secrets apart."""
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        nb = importlib.import_module("exakit_nb")
+        card = understand.ChooseData.__new__(understand.ChooseData)
+        card.sources, card.kit_said, card.parsed, card.source_tables = [], "", {}, {}
+        card.connectors = nb.connectors()
+        card.forms = {c["id"]: nb.connector_inputs(c["id"]) for c in card.connectors}
+        card._settle = lambda cid, chosen: card.forms.__setitem__(cid, nb.connector_inputs(cid, **chosen)) or card.forms[cid]
+        only = {"field": "src_schema", "equals": "__connect__"}
+        cid = next(c["id"] for c in card.connectors if card.forms[c["id"]]["tree"])
+        tree = card.forms[cid]["tree"]
+        card.step = "source"
+        values = [o["value"] for o in next(f for f in card._source_fields(only) if f["id"] == "connector")["options"]]
+        self.assertLess(values.index(cid), values.index(card._pick(cid, tree[0]["set"])))            # the parent, then its tree
+        for node in tree:
+            self.assertIn(card._pick(cid, node["set"]), values)
+            for child in node["children"]:
+                self.assertIn(card._pick(cid, child["set"]), values)
+        self.assertEqual(len(values), len(set(values)))
+
+        def pending():
+            return [spec["name"] for spec in card._pending(card.forms[cid])]
+
+        # A leaf with nothing left to choose goes straight on; one with a setting outside the tree asks it.
+        leaves = [child["set"] for node in tree for child in node["children"]]
+        for leaf in leaves:
+            card.step = "source"
+            card.on_src_next({"connector": card._pick(cid, leaf)})
+            with self.subTest(leaf=leaf):
+                self.assertEqual(leaf, card.preset)
+                self.assertEqual(bool(pending()), card.step == "settings")
+                self.assertEqual(bool(pending()), "settings" in card._steps())
+        asking = next(leaf for leaf in leaves if nb.connector_inputs(cid, **leaf)["setting_inputs"][-1]["name"] not in leaf)
+        card.step = "source"
+        card.on_src_next({"connector": card._pick(cid, asking)})
+        left = card._pending(card.forms[cid])
+        shown = [f for f in card._source_fields(only) if f.get("type") == "select"]
+        self.assertEqual([spec["label"].split(" - ")[0] + " *" for spec in left], [f["label"] for f in shown])
+        self.assertEqual(left[0]["choice_labels"], [o["label"] for o in shown[0]["options"]])
+        card.on_src_next({shown[0]["id"]: left[0]["choices"][-1]})
+        self.assertEqual(left[0]["choices"][-1], card.preset[left[0]["name"]])
+        self.assertNotEqual("settings", card.step)
+        self.assertEqual([], pending())
+
+        # The connector's own row: every setting is asked, one step, until none is left.
+        card.step = "source"
+        card.on_src_next({"connector": cid})
+        self.assertEqual(({}, "settings"), (card.preset, card.step))
+        for _ in range(4):
+            if card.step != "settings":
+                break
+            fields = [f for f in card._source_fields(only) if f.get("type") == "select"]
+            card.on_src_next({f["id"]: f["value"] for f in fields})
+        self.assertNotEqual("settings", card.step)
+        self.assertEqual([], pending())
+
+        # What goes to the kit: the settings as inputs, the login as the password, the storage secret apart.
+        both = next((leaf for leaf in leaves if any(i.get("storage") for i in nb.connector_inputs(cid, **leaf)["inputs"])), None)
+        self.assertIsNotNone(both, "no combination has a second secret any more: drop this part with it")
+        card.step = "source"
+        card.on_src_next({"connector": card._pick(cid, both)})
+        if card.step == "settings":
+            card.on_src_next({})
+        typed = {"src_name": "lake"}
+        for spec in card.forms[cid]["inputs"]:
+            typed[card._fid(cid, spec["name"])] = ("STORAGEKEY" if spec.get("storage") else "LOGINTOKEN" if spec["kind"] == "secret"
+                                                   else spec["default"] or "https://example.com/x")
+        connector, name, settings, password = card._source_inputs({**typed, card._fid(cid, "how"): "manual"})
+        self.assertEqual((cid, "lake", "LOGINTOKEN", "STORAGEKEY"), (connector, name, password, card.typed_storage))
+        for key, value in both.items():
+            self.assertEqual(value, settings[key])
+        self.assertNotIn("STORAGEKEY", repr(settings))
+        self.assertNotIn("LOGINTOKEN", repr(settings))
 
     def test_a_new_connection_is_entered_one_step_at_a_time(self):
         """Connection, data source, connection string, name, details, optional settings: Next checks each answer and

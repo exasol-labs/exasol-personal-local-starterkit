@@ -264,10 +264,13 @@ def _(nb):
     source_tips = nb.source_engine("catalog", "--public-ip")["events"]   # this computer's public IP, to allow at a cloud source
     CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
     SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
+    SOURCE_SETTINGS = {}   # a source with several kinds in one: {"catalog": "unity", "files": "s3"} for a Lakehouse (connector_forms["lakehouse"]["tree"] lists the picks)
+    if CONNECTOR and SOURCE_SETTINGS:
+        connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)   # what that combination asks
     SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)
-    source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL) if CONNECTOR and SOURCE_URL else None
+    source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL, **SOURCE_SETTINGS) if CONNECTOR and SOURCE_URL else None
     SOURCE_INPUTS = {}  # what the string did not give (source_reading["missing"]), e.g. {"user": "reader"}; no string: every input
-    SOURCE_INPUTS = {**({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
+    SOURCE_INPUTS = {**SOURCE_SETTINGS, **({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
     return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
 
 

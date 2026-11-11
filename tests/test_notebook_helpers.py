@@ -1559,6 +1559,36 @@ class SourcesTest(unittest.TestCase):
         self.assertEqual(command[-2:], ["--yes", "--json"])
         self.assertEqual(command[:3], ["exakit", "connect", "pg"])      # the kit's connect command, then the connector
 
+    def test_a_second_secret_reaches_the_kit_in_a_private_file_that_is_gone_afterwards(self):
+        """A Lakehouse with a catalog login and storage keys has two secrets: the login goes on standard input, the
+        storage secret in a file only this user can read (exakit connect --storage-secret-file), removed after the
+        run. Neither is in the command or in what is printed, and the settings go on as --set."""
+        sources = importlib.import_module("exakit_nb.sources")
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            file = command[command.index("--storage-secret-file") + 1]
+            seen.update(file=file, text=Path(file).read_text(encoding="utf-8"), mode=os.stat(file).st_mode & 0o777)
+            return subprocess.CompletedProcess([], 0, stdout='{"ok": true, "schema": "VS_LAKE"}', stderr="")
+
+        with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
+                mock.patch.object(sources.subprocess, "run", side_effect=fake_run) as run, redirect_stdout(io.StringIO()) as out:
+            schema = exakit_nb.connect_source("lakehouse", "lake", catalog="unity", files="s3", password="catalogtoken",
+                                              storage_secret=lambda _question: "storagekey",
+                                              workspace_url="https://dbc.example.com")
+        command, kwargs = run.call_args[0][0], run.call_args[1]
+        self.assertEqual(schema, "VS_LAKE")
+        self.assertEqual(seen["text"], "storagekey")
+        if os.name != "nt":
+            self.assertEqual(seen["mode"], 0o600)
+        self.assertFalse(Path(seen["file"]).exists())
+        self.assertEqual(kwargs["input"], "catalogtoken")
+        shown = " ".join(command) + out.getvalue()
+        self.assertNotIn("storagekey", shown)
+        self.assertNotIn("catalogtoken", shown)
+        for pair in ("catalog=unity", "files=s3"):
+            self.assertEqual(command[command.index(pair) - 1], "--set")
+
     def test_connect_asks_the_password_hidden_and_reports_the_kits_reason(self):
         sources = importlib.import_module("exakit_nb.sources")
         failed = subprocess.CompletedProcess([], 1, stdout='{"ok": false, "error": "password authentication failed", '

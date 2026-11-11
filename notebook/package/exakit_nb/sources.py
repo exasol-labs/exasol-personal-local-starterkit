@@ -10,6 +10,7 @@ asked in a hidden box and goes to the command on standard input: never into the 
 
 from __future__ import annotations
 
+import contextlib
 import getpass
 import json
 import os
@@ -116,7 +117,8 @@ def _in_marimo() -> bool:
 def connect_source(connector: str, name: str, url: str | None = None, *, password: Any = None,
                    password_file: str | Path | None = None,
                    ask_password: bool = True, dry_run: bool = False, show: bool = True,
-                   secret: Callable[[str], str] | None = None, **settings: Any) -> str | None:
+                   secret: Callable[[str], str] | None = None, storage_secret: Any = None,
+                   storage_secret_file: str | Path | None = None, **settings: Any) -> str | None:
     """Connect an external source as a virtual schema, from a notebook cell. ``connector`` is the kit's id or alias
     (``postgresql``, ``pg``, ``mysql``, ``snowflake`` ...; ``exakit help connect`` lists them), ``name`` becomes the
     schema ``VS_<NAME>``. Give the source's connection string as ``url`` (a JDBC URL, ``postgres://...``), or each
@@ -124,7 +126,11 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     The password is asked in a hidden box (Enter: none), or read from ``password_file``; a password inside ``url`` is
     taken out of it and used, never shown. Marimo has no hidden prompt: pass a password field as ``password``
     (``mo.ui.text(kind="password")``, its value is read) or a ``password_file``. ``dry_run`` checks the inputs and
-    connects nothing. Returns the schema name (``VS_SALES``) when connected, None for a dry run; raises SourceProblem with the kit's reason otherwise."""
+    connects nothing. A connector with several kinds of source in one takes its settings as keywords too
+    (``catalog="unity", files="s3"`` for a Lakehouse; nb.connector_inputs lists them). A source with a second secret
+    (a Lakehouse catalog login plus storage keys) takes it as ``storage_secret_file``, or as ``storage_secret`` (the
+    text, a Marimo password field, or a function that asks for it): it reaches the kit in a file only this user can
+    read, removed as soon as the kit has read it. Returns the schema name (``VS_SALES``) when connected, None for a dry run; raises SourceProblem with the kit's reason otherwise."""
     command = exakit_command()
     if command is None:
         raise SourceProblem("The kit's command line (exakit) is not on PATH. In a terminal: exakit connect")
@@ -166,6 +172,21 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
                                     "and pass password_file=\"~/.config/exakit/<name>.pw\".") from None
         if password:
             args.append("--password-stdin")
+    held: str | None = None                                # the storage secret's file, when this call wrote it
+    if storage_secret_file:
+        file = Path(clean_path(storage_secret_file))
+        if not file.is_file():
+            raise SourceProblem(f"No storage secret file at {file}.")
+        args += ["--storage-secret-file", str(file)]
+    elif storage_secret is not None and not dry_run:
+        typed = storage_secret(f"Storage secret for {name} (hidden): ") if callable(storage_secret) else getattr(storage_secret, "value", storage_secret)
+        if typed:
+            import tempfile
+
+            handle, held = tempfile.mkstemp(prefix="exakit-", suffix=".secret")      # 0600, this user only
+            with os.fdopen(handle, "w", encoding="utf-8") as out:
+                out.write(str(typed))
+            args += ["--storage-secret-file", held]
     args += ["--dry-run"] if dry_run else ["--yes"]
     args.append("--json")
     if show:
@@ -177,6 +198,10 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
     except subprocess.TimeoutExpired:
         raise SourceProblem(f"exakit connect took over {TIMEOUT // 60} minutes and was stopped. "
                             f"In a terminal: exakit source check {name}") from None
+    finally:
+        if held:
+            with contextlib.suppress(OSError):
+                os.unlink(held)
     answer = _last_json(done.stdout)
     if done.returncode != 0 or not answer.get("ok", False):
         reason = answer.get("error") or (done.stderr or done.stdout).strip().splitlines()[-1:] or [f"exit {done.returncode}"]
@@ -242,18 +267,21 @@ def source_engine(*words: str, text: str | None = None) -> dict[str, Any]:
     return answer
 
 
-def read_connection_string(connector: str, text: str) -> dict[str, Any]:
+def read_connection_string(connector: str, text: str, **settings: Any) -> dict[str, Any]:
     """Read a source's connection string exactly as `exakit connect --url` does: it is handed to the kit's engine
     (its ``paste`` command, on standard input, never as an argument). Returns {connector, values, notes, dropped,
     masked, credential_in_string, secret_input, missing}: ``values`` by input name, each checked as if typed;
     ``masked`` the string with every credential as ****; ``missing`` the connector's required inputs the string does
     not give (and no default covers). The string's password is used by nb.connect_source(url=...) and is never
-    returned, printed or logged here."""
+    returned, printed or logged here. For a connector with settings (a Lakehouse's ``catalog=``, ``files=``) give the
+    ones already chosen: a setting the string itself shows (an s3:// path
+    is a folder with no catalog) comes back in ``values``, and ``missing`` is what that combination still needs."""
     import tempfile
 
     from .kit_facts import connector_inputs
 
-    form = connector_inputs(connector)
+    chosen = {key: str(value) for key, value in settings.items() if value not in (None, "")}
+    form = connector_inputs(connector, **chosen)
     # The engine writes the string's credential to this owner-only file (its --secret-out), which tells it the
     # credential is the connector's own; the file is removed unread.
     fd, secret_out = tempfile.mkstemp(prefix="exakit-paste-")
@@ -267,6 +295,10 @@ def read_connection_string(connector: str, text: str) -> dict[str, Any]:
         except OSError:
             pass
     values = {k: str(v) for k, v in answer.get("values", {}).items()}
+    names = {i["name"] for i in form["setting_inputs"]}
+    shown = {k: v for k, v in values.items() if k in names and k not in chosen}
+    if shown:                                   # the string decided a setting: what that combination asks
+        form = connector_inputs(connector, **chosen, **shown)
     secret_input = next((i["name"] for i in form["inputs"] if i["kind"] == "secret"), None)
     missing = [i["name"] for i in form["inputs"]
                if i["required"] and i["name"] not in values and not i["default"]

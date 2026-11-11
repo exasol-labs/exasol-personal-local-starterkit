@@ -121,16 +121,49 @@ def loaded_files() -> list[dict[str, Any]]:
     return [{k: v for k, v in r.items() if k != "_at"} for r in rows_out]
 
 
-def connector_inputs(connector: str) -> dict[str, Any]:
+def _settings_tree(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    """A connector's settings as the tree its connect menu shows: each value of the first setting (a Lakehouse's
+    catalog), and under it the values the next setting may take with it (its files). Each node is {label, set}:
+    ``set`` is the settings that pick gives. A setting that depends on another only by ``when`` (a login) is not
+    part of the tree: the form asks it."""
+    names = list(settings)
+    if not names:
+        return []
+    parent = names[0]
+    child = next((n for n in names[1:] if isinstance(settings[n].get("valid"), dict)), None)
+    labels = {c["value"]: c for c in settings[child]["choices"]} if child else {}
+    rows = []
+    for choice in settings[parent].get("choices", []):
+        if choice.get("disabled"):
+            continue
+        children = [{"label": labels[value]["label"], "set": {parent: choice["value"], child: value}}
+                    for value in (settings[child]["valid"].get(choice["value"], []) if child else [])
+                    if value in labels and not labels[value].get("disabled")]
+        rows.append({"label": choice["label"], "set": {parent: choice["value"]}, "children": children})
+    return rows
+
+
+def connector_inputs(connector: str, **settings: Any) -> dict[str, Any]:
     """What `exakit connect <connector>` asks, from the kit's source engine (``inputs``: what its connect form reads,
     in the form's order). The connector may be named by id or alias. Returns {id, name, status, gate, name_input,
-    inputs, forms, access, tips}: ``name_input`` is the form's first question (the source's name); each of ``inputs``
-    is {name, label, kind, required, default, choices, secret, file, hint, prompt, draft} - ``secret`` a password or
-    key (never a cell's text), ``file`` a path to a file, ``hint`` the lines the form says above the question.
-    ``forms`` are the connection-string shapes it reads (``url=``), ``access`` and ``tips`` what its source card says."""
+    inputs, forms, access, tips, tree, settings, setting_inputs}: ``name_input`` is the form's first question (the
+    source's name); each of ``inputs`` is {name, label, kind, required, default, choices, secret, file, hint, prompt,
+    draft} - ``secret`` a password or key (never a cell's text), ``file`` a path to a file, ``hint`` the lines the form
+    says above the question. ``forms`` are the connection-string shapes it reads (``url=``), ``access`` and ``tips``
+    what its source card says.
+
+    A connector with several kinds of source in one (Lakehouse: Iceberg REST, Unity, Glue or a plain folder, on S3 or
+    Azure) has settings that decide what it asks. ``tree`` is those settings as the connect menu's tree (a catalog,
+    and under it the files it can read), each node with the settings its pick gives; give them here
+    (``connector_inputs("lakehouse", catalog="unity", files="s3")``) and ``inputs`` are that combination's.
+    ``settings`` are the ones in force (given, or the kit's default) and ``setting_inputs`` the setting questions
+    themselves, each with its ``choices``, their ``choice_labels`` and the default in force. Every other connector
+    has an empty ``tree`` and no ``setting_inputs``."""
     from .sources import source_engine
 
-    answer = source_engine("inputs", str(connector or "").strip().lower())
+    given = [word for key, value in settings.items() if value not in (None, "") for word in ("--set", f"{key}={value}")]
+    answer = source_engine("inputs", str(connector or "").strip().lower(), *given)
+    chosen = dict(answer.get("settings") or {})
     fields = [{**f, "hint": list(f.get("hint") or []), "prompt": f.get("prompt") or "", "draft": f.get("draft") or "",
                "file": f["kind"] in ("ca-file", "secret-file")} for f in answer["inputs"]]
     root = _kit_root()
@@ -138,12 +171,19 @@ def connector_inputs(connector: str) -> dict[str, Any]:
     # where the shell reads them (its paste hint and its source card).
     doc = json.loads((root / "setup" / "virtual-schemas" / "connectors" / answer["connector"] / "connector.json")
                      .read_text(encoding="utf-8"))
+    declared = doc.get("settings") or {}
+    # A combination has its own connection-string shape (an Iceberg REST catalog's URL, a folder's s3:// path).
+    variant = (doc.get("variants") or {}).get(str(chosen.get(next(iter(declared), ""), "")), {}) if declared else {}
+    paste = variant.get("paste") or doc.get("paste") or {}
     return {"id": answer["connector"], "name": answer["name"], "status": answer.get("status") or "",
             "gate": answer.get("gate") or "",
             "name_input": next((f for f in fields if f["kind"] == "source-name"), None),
-            "inputs": [f for f in fields if f["kind"] != "source-name"],
-            "forms": list((doc.get("paste") or {}).get("forms") or []),
-            "access": doc.get("access") or "", "tips": list(doc.get("tips") or [])}
+            "inputs": [f for f in fields if f["kind"] != "source-name" and not f.get("setting")],
+            "forms": list(paste.get("forms") or []),
+            "access": doc.get("access") or "", "tips": list(doc.get("tips") or []),
+            "tree": _settings_tree(declared), "settings": chosen,
+            "setting_inputs": [{**f, "default": str(chosen.get(f["name"], f.get("default") or ""))}
+                               for f in fields if f.get("setting")]}
 
 
 def addons() -> list[dict[str, Any]]:
