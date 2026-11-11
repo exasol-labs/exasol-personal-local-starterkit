@@ -1247,6 +1247,30 @@ has "...whose remedy names the warehouse and asks for the catalog's name" "the c
 run plan iceberg-rest --name rest1 --set catalog_url=https://rest.example.com --set warehouse=https://rest.example.com/api --set namespace=sales
 check "...plan with a URL warehouse: exit 2" "2" "$RC"
 
+E10="$(python3 - "$ROOT" "$WORK" <<'PYE'
+import base64, json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql, tlsca
+pem = "-----BEGIN CERTIFICATE-----\nQUJDRA==\nRUZHSA==\n-----END CERTIFICATE-----\n"
+lf, crlf = os.path.join(sys.argv[2], "lf.pem"), os.path.join(sys.argv[2], "crlf.pem")
+open(lf, "wb").write(pem.encode("ascii"))
+open(crlf, "wb").write(b"\xef\xbb\xbf" + pem.replace("\n", "  \r\n").encode("ascii"))
+print("same" if tlsca.certificates(lf) == tlsca.certificates(crlf) else "differs")
+print("no-cr" if "\r" not in "".join(tlsca.certificates(crlf)) else "has-cr")
+w = base64.b64encode(b"x" * 2000).decode()
+print(sql.redact("Connecting to 'jdbc:oracle:thin:@tcps://h:2484/ORCL?wallet_location=data:;base64,%s' failed: IO Error: ORA-17957" % w, ()))
+load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
+print(lifecycle.tls_fix(load("oracle")))
+print(lifecycle.tls_fix(load("postgresql")))
+PYE
+)"
+check "R3: a CRLF + BOM PEM gives the same certificates as the LF one" "same" "$(printf '%s\n' "$E10" | sed -n 1p)"
+check "...with no carriage return left (Oracle's wallet parser refuses one)" "no-cr" "$(printf '%s\n' "$E10" | sed -n 2p)"
+has "...an Oracle wallet in an error is said as its size" "wallet_location=data:<wallet, 2000 bytes>" "$(printf '%s\n' "$E10" | sed -n 3p)"
+has "...and the cause after it stays visible" "ORA-17957" "$(printf '%s\n' "$E10" | sed -n 3p)"
+lacks "...Oracle's TLS remedy never offers tls=require (it has no such level)" "tls=require" "$(printf '%s\n' "$E10" | sed -n 4p)"
+has "...PostgreSQL's still names it, as a knowing choice" "tls=require encrypts without checking it" "$(printf '%s\n' "$E10" | sed -n 5p)"
+
 printf '\n== a database clock left behind by a sleeping laptop ==\n'
 # Measured on Exasol Personal (macOS): the VM's clock does not catch up after
 # the Mac sleeps (32 min to 2 h 26 min behind), and an RDS certificate issued
@@ -5498,6 +5522,16 @@ for path in glob.glob(os.path.join(root, "setup/help/*.json")):
 print(keys & taken)
 PYC
 )"
+
+printf '\n== exakit source --help: the approved layout ==\n'
+SH="$(guide source --help)"
+check "source --help is the layout in setup/help/exakit.json, verbatim" \
+    "$(python3 -c 'import json,sys; print("\n".join([c for c in json.load(open(sys.argv[1]))["commands"] if c["command"] == "source"][0]["layout"]))' "$ROOT/setup/help/exakit.json")" \
+    "$(printf '%s\n' "$SH" | sed '1d')"
+has "...grouped: Observe, Check and fix, Remove" "  Check and fix" "$SH"
+has "...<name>, not N" "show <name>" "$SH"
+check "help source is the same page" "$SH" "$(guide help source)"
+has "...--json keeps the options" '"options": "list|issues [--status S]|catalog|show <name>' "$(guide help source --json)"
 
 printf '\n== the Read: line breaks a connection string only at a separator ==\n'
 RW="$( . "$ROOT/setup/lib/virtual-schemas.sh" 2>/dev/null

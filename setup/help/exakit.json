@@ -1201,7 +1201,7 @@
       ],
       "examples": [
         "exakit connect",
-  "exakit connect postgresql",
+        "exakit connect postgresql",
         "exakit connect pg --name sales --set host=db.example.com --set database=sales --set user=reader --password-file ~/.sales.pw",
         "exakit connect mssql --name erp --dry-run",
         "exakit connect pg --name sales --url 'postgres://reader@db.example.com:5432/sales?sslmode=verify-full' --password-file ~/.sales.pw",
@@ -1211,16 +1211,344 @@
     },
     {
       "command": "source",
-      "options": "list|issues [--status S]|catalog|show N|describe N [TABLE] [--ddl] [--schema S]|check N|--all|reauth N [--password-file F | --password-stdin]|refresh N|disconnect N|remove N [--dry-run] [--yes] [--json]",
+      "options": "list|issues [--status S]|catalog|show <name>|describe <name> [TABLE] [--ddl] [--schema S]|check <name>|--all|reauth <name> [--password-file F | --password-stdin]|refresh <name>|disconnect <name>|remove <name> [--dry-run] [--yes] [--json]",
       "summary": "List, check and manage connected external sources.",
       "description": "list shows saved sources: where each lives, its TLS level (verify, require or disable) and its last known state (--json rows carry host and tls); issues filters the failing ones with the command that fixes each; check runs a fresh bounded read through the adapter (--all for every source, one shot, not monitoring); reauth replaces the credential from a hidden prompt, --password-file or --password-stdin (all of standard input, as exakit connect reads it) and reads again; refresh re-reads the source's table list; describe lists its tables and columns as Exasol sees them, read from the local catalog without reaching the source, and --ddl prints CREATE TABLE statements (with --schema, for that schema) to copy a table locally; disconnect drops only the CONNECTION (queries fail until you connect again with the same name); remove drops the virtual schema, adapter and connection and deletes the downloaded files no other source still uses. disconnect and remove preview first and ask; --dry-run only previews, and without a terminal or with --json they need --yes (unconfirmed: exit 5, nothing changed; with --json the answer is kind declined and command names the --yes form). reauth tries the new credential before it replaces the old one. Remote data is never touched.",
       "examples": [
         "exakit source list",
+        "exakit source list --json",
         "exakit source issues",
-        "exakit source check --all",
-        "exakit source reauth sales",
+        "exakit source show sales",
+        "exakit source describe sales",
+        "exakit source describe sales orders",
         "exakit source describe sales orders --ddl --schema LOCAL > orders.sql",
-        "exakit source remove sales --dry-run"
+        "exakit source catalog",
+        "exakit source check sales",
+        "exakit source check --all",
+        "exakit source refresh sales",
+        "exakit source reauth sales",
+        "exakit source reauth sales --password-file ~/sales.pw",
+        "cat ~/sales.pw | exakit source reauth sales --password-stdin",
+        "exakit source disconnect sales",
+        "exakit source remove sales --dry-run",
+        "exakit source remove sales",
+        "exakit source remove sales --yes --json",
+        "exakit connect postgresql --name sales --set host=new.host --password-file ~/sales.pw",
+        "exakit connect postgresql --help"
+      ],
+      "layout": [
+        "  Remember two commands:",
+        "",
+        "    exakit source               pick a source from the list",
+        "    exakit source <name>        its card, and everything you can do with it",
+        "",
+        "  That is all you need. The commands below do the same things directly -",
+        "  for scripts and AI agents (each takes --json), or if you prefer typing.",
+        "",
+        "  exakit source <command> [options]",
+        "",
+        "  Observe",
+        "    list                          Every saved source, its TLS level and last state",
+        "    issues [--status S]           Only the failing ones, each with the command that fixes it",
+        "    show <name>                   One source: inputs, objects, type and naming notes",
+        "    describe <name> [table]       Its tables and columns as Exasol sees them",
+        "         [--ddl] [--schema S]       --ddl prints CREATE TABLE to copy a table locally",
+        "    catalog                       Every connector the kit can connect",
+        "",
+        "  Check and fix",
+        "    check <name> | --all          A fresh test read through the adapter (one shot)",
+        "    refresh <name>                Re-read the source's table list (new tables appear)",
+        "    reauth <name>                 New password or token - tried before it replaces the old",
+        "         [--password-file F | --password-stdin]",
+        "",
+        "  Remove",
+        "    disconnect <name>             Drop only the connection (connect again to restore)",
+        "    remove <name>                 Drop the schema, adapter and connection, and unused files",
+        "         [--dry-run] [--yes]        preview only / no question asked",
+        "",
+        "  Every command: --json for one machine-readable answer. Remote data is never touched.",
+        "",
+        "  Examples",
+        "    Observe",
+        "      exakit source list                              all sources at a glance",
+        "      exakit source list --json                       the same, for a script or an AI agent",
+        "      exakit source issues                            only what is broken, with the fix",
+        "      exakit source show sales                        everything about one source",
+        "      exakit source describe sales                    its tables",
+        "      exakit source describe sales orders             one table's columns",
+        "      exakit source describe sales orders --ddl --schema LOCAL > orders.sql",
+        "                                                      CREATE TABLE to copy it into Exasol",
+        "      exakit source catalog                           which connectors exist",
+        "",
+        "    Check and fix",
+        "      exakit source check sales                       is it working right now?",
+        "      exakit source check --all                       test every source",
+        "      exakit source refresh sales                     new tables in the source? show them",
+        "      exakit source reauth sales                      new password, asked hidden",
+        "      exakit source reauth sales --password-file ~/sales.pw",
+        "      cat ~/sales.pw | exakit source reauth sales --password-stdin",
+        "",
+        "    Remove",
+        "      exakit source disconnect sales                  pause it (connect again to restore)",
+        "      exakit source remove sales --dry-run            preview what would be removed",
+        "      exakit source remove sales                      remove it (asks first)",
+        "      exakit source remove sales --yes --json         remove from a script, no question",
+        "",
+        "    Related",
+        "      exakit connect postgresql --name sales --set host=new.host --password-file ~/sales.pw",
+        "                                                      move a source to a new host (keeps its schema)",
+        "      exakit connect postgresql --help                what a connector needs, and where to find it"
+      ],
+      "layout_windows": [
+        [
+          "cat ~/sales.pw | exakit source reauth sales --password-stdin",
+          "Get-Content L:\\sales.pw | exakit source reauth sales --password-stdin"
+        ],
+        [
+          "~/sales.pw",
+          "L:\\sales.pw"
+        ]
+      ],
+      "layout_highlight": [
+        "    exakit source               ",
+        "    exakit source <name>        "
+      ],
+      "primary": [
+        {
+          "command": "exakit source",
+          "summary": "pick a source from the list"
+        },
+        {
+          "command": "exakit source <name>",
+          "summary": "its card, and everything you can do with it"
+        }
+      ],
+      "subcommands": [
+        {
+          "group": "Observe",
+          "usage": "list",
+          "name": "list",
+          "options": [],
+          "description": "Every saved source, its TLS level and last state",
+          "examples": [
+            "exakit source list",
+            "exakit source list --json"
+          ]
+        },
+        {
+          "group": "Observe",
+          "usage": "issues [--status S]",
+          "name": "issues",
+          "options": [
+            "--status"
+          ],
+          "description": "Only the failing ones, each with the command that fixes it",
+          "examples": [
+            "exakit source issues"
+          ]
+        },
+        {
+          "group": "Observe",
+          "usage": "show <name>",
+          "name": "show",
+          "options": [],
+          "description": "One source: inputs, objects, type and naming notes",
+          "examples": [
+            "exakit source show sales"
+          ]
+        },
+        {
+          "group": "Observe",
+          "usage": "describe <name> [table]",
+          "name": "describe",
+          "options": [
+            "--ddl",
+            "--schema"
+          ],
+          "description": "Its tables and columns as Exasol sees them",
+          "option_note": "--ddl prints CREATE TABLE to copy a table locally",
+          "examples": [
+            "exakit source describe sales",
+            "exakit source describe sales orders",
+            "exakit source describe sales orders --ddl --schema LOCAL > orders.sql"
+          ]
+        },
+        {
+          "group": "Observe",
+          "usage": "catalog",
+          "name": "catalog",
+          "options": [],
+          "description": "Every connector the kit can connect",
+          "examples": [
+            "exakit source catalog"
+          ]
+        },
+        {
+          "group": "Check and fix",
+          "usage": "check <name> | --all",
+          "name": "check",
+          "options": [
+            "--all"
+          ],
+          "description": "A fresh test read through the adapter (one shot)",
+          "examples": [
+            "exakit source check sales",
+            "exakit source check --all"
+          ]
+        },
+        {
+          "group": "Check and fix",
+          "usage": "refresh <name>",
+          "name": "refresh",
+          "options": [],
+          "description": "Re-read the source's table list (new tables appear)",
+          "examples": [
+            "exakit source refresh sales"
+          ]
+        },
+        {
+          "group": "Check and fix",
+          "usage": "reauth <name>",
+          "name": "reauth",
+          "options": [
+            "--password-file",
+            "--password-stdin"
+          ],
+          "description": "New password or token - tried before it replaces the old",
+          "examples": [
+            "exakit source reauth sales",
+            "exakit source reauth sales --password-file ~/sales.pw",
+            "cat ~/sales.pw | exakit source reauth sales --password-stdin"
+          ]
+        },
+        {
+          "group": "Remove",
+          "usage": "disconnect <name>",
+          "name": "disconnect",
+          "options": [],
+          "description": "Drop only the connection (connect again to restore)",
+          "examples": [
+            "exakit source disconnect sales"
+          ]
+        },
+        {
+          "group": "Remove",
+          "usage": "remove <name>",
+          "name": "remove",
+          "options": [
+            "--dry-run",
+            "--yes"
+          ],
+          "description": "Drop the schema, adapter and connection, and unused files",
+          "option_note": "preview only / no question asked",
+          "examples": [
+            "exakit source remove sales --dry-run",
+            "exakit source remove sales",
+            "exakit source remove sales --yes --json"
+          ]
+        }
+      ],
+      "example_notes": [
+        {
+          "group": "Observe",
+          "command": "exakit source list",
+          "note": "all sources at a glance"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source list --json",
+          "note": "the same, for a script or an AI agent"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source issues",
+          "note": "only what is broken, with the fix"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source show sales",
+          "note": "everything about one source"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source describe sales",
+          "note": "its tables"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source describe sales orders",
+          "note": "one table's columns"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source describe sales orders --ddl --schema LOCAL > orders.sql",
+          "note": "CREATE TABLE to copy it into Exasol"
+        },
+        {
+          "group": "Observe",
+          "command": "exakit source catalog",
+          "note": "which connectors exist"
+        },
+        {
+          "group": "Check and fix",
+          "command": "exakit source check sales",
+          "note": "is it working right now?"
+        },
+        {
+          "group": "Check and fix",
+          "command": "exakit source check --all",
+          "note": "test every source"
+        },
+        {
+          "group": "Check and fix",
+          "command": "exakit source refresh sales",
+          "note": "new tables in the source? show them"
+        },
+        {
+          "group": "Check and fix",
+          "command": "exakit source reauth sales",
+          "note": "new password, asked hidden"
+        },
+        {
+          "group": "Check and fix",
+          "command": "exakit source reauth sales --password-file ~/sales.pw",
+          "note": ""
+        },
+        {
+          "group": "Check and fix",
+          "command": "cat ~/sales.pw | exakit source reauth sales --password-stdin",
+          "note": ""
+        },
+        {
+          "group": "Remove",
+          "command": "exakit source disconnect sales",
+          "note": "pause it (connect again to restore)"
+        },
+        {
+          "group": "Remove",
+          "command": "exakit source remove sales --dry-run",
+          "note": "preview what would be removed"
+        },
+        {
+          "group": "Remove",
+          "command": "exakit source remove sales",
+          "note": "remove it (asks first)"
+        },
+        {
+          "group": "Remove",
+          "command": "exakit source remove sales --yes --json",
+          "note": "remove from a script, no question"
+        },
+        {
+          "group": "Related",
+          "command": "exakit connect postgresql --name sales --set host=new.host --password-file ~/sales.pw",
+          "note": "move a source to a new host (keeps its schema)"
+        },
+        {
+          "group": "Related",
+          "command": "exakit connect postgresql --help",
+          "note": "what a connector needs, and where to find it"
+        }
       ]
     }
   ],
