@@ -404,6 +404,17 @@ class BlankFormTest(unittest.TestCase):
         self.assertIs(ok, actions.run("kit.data_load", session, what="x"))
 
 
+class KitSaidTest(unittest.TestCase):
+    def test_the_kit_output_opens_only_after_a_failure(self):
+        js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")
+        self.assertIn("open: ui.values[key] ?? !!r.output_open", js)
+        self.assertIn("open: ui.values[\"open:\" + b.title] ?? !!b.open", js)
+        card = (GUIDE / "card.py").read_text(encoding="utf-8")
+        self.assertIn('"title": "What the kit said", "open": True', card)       # under a failed action's error
+        for name in ("explore.py", "understand.py"):                            # after one that worked: closed
+            self.assertNotIn('"open": True', (GUIDE / "screens" / name).read_text(encoding="utf-8"))
+
+
 class ToggleTest(unittest.TestCase):
     def setUp(self):
         self.js = (GUIDE / "static" / "card.js").read_text(encoding="utf-8")

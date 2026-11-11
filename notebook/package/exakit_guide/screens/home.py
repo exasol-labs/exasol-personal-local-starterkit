@@ -80,6 +80,7 @@ class Home(Screen):
         self.data: dict | None = None
         self.loading = True
         self.outputs: dict[str, str] = {}
+        self.failed: set[str] = set()      # rows whose last command failed: their kit output opens by itself
         self.confirm: str | None = None
         self.refresh()
         threading.Thread(target=self._load, daemon=True).start()
@@ -239,6 +240,7 @@ class Home(Screen):
         for r in rows + other:
             if r["id"] in self.outputs:
                 r["output"] = self.outputs[r["id"]]
+                r["output_open"] = r["id"] in self.failed
             if self.confirm and any(a["id"] == self.confirm for a in r.get("actions", [])):
                 r["confirming"] = self.confirm
         attention = [r for r in rows if r["dot"] in ("bad", "warn")]
@@ -301,8 +303,10 @@ class Home(Screen):
                 raise ValueError("Enter both Langfuse keys: the public key and the secret key.")
             secret = {"ask": lambda _question, answers=answers: next(answers, "")}
         SESSION.said = ""
+        ok = False
         try:
             actions.run(action_id, secret=secret, **values)
+            ok = True
         finally:
             # What the kit printed stays under its row, open, whether the command worked or not.
             event = "run:" + json.dumps([action_id, values])
@@ -311,6 +315,9 @@ class Home(Screen):
                                for a in r.get("actions", []))), "database")
             if SESSION.said:
                 self.outputs[row] = SESSION.said
+            (self.failed.discard if ok else self.failed.add)(row)
+            if not ok:
+                SESSION.said = ""      # shown open under its own row; not a second time under the error
         self._reload()
         self.flash = {"kind": "ok", "v": f"Done: {actions.code(action_id, **values).splitlines()[0]}"}
 

@@ -95,7 +95,10 @@ class Screen:
             blocks = [{"t": "msg", "kind": "error",
                        "v": f"This screen couldn't load: {_plain(exc)} Details are in {LOG_DIR / 'guide.log'}."}]
         if self.flash:
-            blocks = [{"t": "msg", **self.flash}] + blocks
+            flash = {k: v for k, v in self.flash.items() if k != "said"}
+            said = [{"t": "details", "title": "What the kit said", "open": True, "blocks": [{"t": "pre", "v": self.flash["said"]}]}] \
+                if self.flash.get("said") else []
+            blocks = [{"t": "msg", **flash}] + said + blocks
         try:
             from .session import SESSION
 
@@ -115,6 +118,12 @@ class Screen:
         values = content.get("values") or {}
         self.flash = None
         try:
+            from .session import SESSION
+
+            SESSION.said = ""          # what this action prints, nothing older
+        except Exception:
+            pass
+        try:
             handler = getattr(self, f"on_{action}", None)
             if handler is None:
                 raise ValueError("That button isn't wired up yet.")
@@ -122,6 +131,13 @@ class Screen:
         except Exception as exc:
             _logger().error("action %s failed: %s\n%s", action, exc, traceback.format_exc())
             self.flash = {"kind": "error", "v": _plain(exc)}
+            try:
+                from .session import SESSION
+
+                if SESSION.said:   # the kit's own lines say why: shown open under the error
+                    self.flash["said"] = SESSION.said
+            except Exception:
+                pass
         finally:
             self.refresh()
             try:

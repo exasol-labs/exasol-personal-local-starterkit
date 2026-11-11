@@ -702,10 +702,11 @@ function render({ model, el }) {
     return h("label", { class: "guide-field" }, h("span", {}, f.label), input);
   }
 
-  // What the kit printed for a row's action: open, so the reason is read without a click; closing it is remembered.
+  // What the kit printed for a row's action: open by itself when the command failed, so the reason is read without a
+  // click; closed after one that worked. Each new output starts that way again.
   function kitSaid(r) {
-    const key = "out:" + r.id;
-    const d = h("details", { class: "guide-output", open: ui.values[key] ?? true },
+    const key = `out:${r.id}:${r.output_open ? 1 : 0}:${r.output.length}`;
+    const d = h("details", { class: "guide-output", open: ui.values[key] ?? !!r.output_open },
       h("summary", {}, "What the kit said"), h("pre", {}, r.output));
     d.addEventListener("toggle", () => { ui.values[key] = d.open; });
     return d;
