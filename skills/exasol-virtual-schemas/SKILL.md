@@ -1,6 +1,6 @@
 ---
 name: exasol-virtual-schemas
-description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the thirteen connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and the CA PEM the four JDBC databases always need with verify, the database clock after a laptop sleeps, Windows PowerShell quoting, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, with the credential again), disconnect versus remove, the EDML mapping S3 and Azure share, and the engine the three lakehouse routes share. Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "Unity Catalog", "lakehouse", "EDML mapping".
+description: The shared rules for querying an external source from the local Exasol database through a virtual schema with exakit connect and exakit source, and the index of the eleven connector skills (exasol-vs-<connector>) that hold each source's inputs, preparation and fixes. Covers the unattended command shape and its one JSON answer (ok, kind, remedy, command), passing the credential safely (a file or a closed pipe, never an argument), the "localhost inside the database is not this computer" trap, TLS and the CA PEM the four JDBC databases always need with verify, the database clock after a laptop sleeps, Windows PowerShell quoting, this computer's public IP for a cloud source, making a least-privilege reader without seeing its password, the language containers a first connect installs, exit codes and failure kinds (denied, privilege, missing_or_denied), query rules, reauth and refresh, re-pointing a source that moved to a new host, port or database (the same connect, with the credential again), disconnect versus remove, the EDML mapping S3 and Azure share, and the lakehouse engine every lakehouse catalog shares (Iceberg REST, Unity Catalog, AWS Glue, a Parquet folder). Triggers — "virtual schema", "federate a remote database", "exakit connect", "exakit source", "which sources can exakit connect", "my source password changed", "the virtual schema stopped working", "my database moved to a new host", "re-point a source", "change the host of a connected source", "the source says permission denied", "remove a connected source", "join local tables with a remote database", "query Iceberg tables", "query Delta tables", "Unity Catalog", "lakehouse", "EDML mapping".
 ---
 
 # Virtual schemas — the shared rules
@@ -23,16 +23,16 @@ below for its inputs, preparation and fixes; this one holds what they all share.
 | `s3` | [exasol-vs-s3](../exasol-vs-s3/SKILL.md) | GA | JSON, CSV, Parquet files in a bucket |
 | `azure-blob` | [exasol-vs-azure-blob](../exasol-vs-azure-blob/SKILL.md) | GA | the same, in an Azure container |
 | `databricks` | [exasol-vs-databricks](../exasol-vs-databricks/SKILL.md) | GA | a Unity Catalog schema, via a SQL warehouse |
-| `lakehouse` | [exasol-vs-lakehouse](../exasol-vs-lakehouse/SKILL.md) | GA | Iceberg tables in AWS Glue |
-| `iceberg-rest` | [exasol-vs-iceberg-rest](../exasol-vs-iceberg-rest/SKILL.md) | GA | an Iceberg REST catalog |
-| `unity` | [exasol-vs-unity](../exasol-vs-unity/SKILL.md) | GA | Unity Catalog, read from storage |
+| `lakehouse` | [exasol-vs-lakehouse](../exasol-vs-lakehouse/SKILL.md) | GA | Iceberg / Delta tables read from their files: Iceberg REST, Unity Catalog, AWS Glue or a Parquet folder, on S3 or Azure ADLS |
 | `mongodb` | [exasol-vs-mongodb](../exasol-vs-mongodb/SKILL.md) | GA | one MongoDB collection |
 
 Every connector is `candidate`: tested against a simulated database, not yet qualified
 against every real server.
-`exakit source catalog` is the live list; every alias names one connector. `iceberg`
-asks between Glue (`lakehouse`) and a REST catalog (`iceberg-rest`); `unity-catalog` is
-the engine reading storage (`unity`) - the SQL warehouse is `databricks`.
+`exakit source catalog` is the live list; every alias names one connector. The old ids
+`iceberg-rest` and `unity` are removed, with no aliases: both are now
+`lakehouse --set catalog=iceberg-rest` or `--set catalog=unity`, and a source saved under
+one is migrated in place on first read. Unity read through a SQL warehouse is
+`databricks`.
 
 ## Connect — the unattended shape
 
@@ -307,13 +307,22 @@ table. One `.json` file per table, or a folder of them (at most 50):
   ("No rows in EVENTS"). To change the mapping: `exakit source remove <name>`, then
   connect again.
 
-## The lakehouse engine (lakehouse, iceberg-rest, unity)
+## The lakehouse engine (lakehouse)
 
-All three routes run exasol-labs' lakehouse-engine-rs (Apache DataFusion) inside the
-database. First use installs the Rust language container (the one MongoDB uses), at once
+One connector, `lakehouse`, runs exasol-labs' lakehouse-engine-rs (Apache DataFusion)
+inside the database. It asks two things: the **catalog** (`iceberg-rest`, `unity`,
+`glue`, or `none` for Parquet files in a folder) and the **files** (`vended` by the
+catalog, `s3` with an optional S3-compatible `endpoint`, or `azure` for ADLS Gen2).
+Nine combinations work; Glue takes S3 only (no files question), `none` takes `s3` or
+`azure`, and Google Cloud Storage is refused by the adapter. A connection holds up to two
+secrets: `--password-file` / `--password-stdin` carry the catalog secret (for `glue` the
+AWS secret, for `none` the storage secret), and `--storage-secret-file` the storage
+secret when both exist. The fields and the adapter mapping are in `exasol-vs-lakehouse`.
+
+First use installs the Rust language container (the one MongoDB uses), at once
 at a terminal and with `--yes` in a script: pinned per CPU, checksum-verified, one restart. Four scripts are shared by every
 lakehouse source (`EXAKIT_VS.LAKEHOUSE_ADAPTER`, `LAKEHOUSE_SCAN`,
-`LAKEHOUSE_DISTRIBUTE_FILES`, `LAKEHOUSE_VERSION`); the last lakehouse source of any route
+`LAKEHOUSE_DISTRIBUTE_FILES`, `LAKEHOUSE_VERSION`); the last lakehouse source
 removes them. `SELECT EXAKIT_VS.LAKEHOUSE_VERSION()` names the build.
 
 - Iceberg deletes are applied (positional and deletion vectors); equality deletes, ORC
@@ -322,12 +331,11 @@ removes them. `SELECT EXAKIT_VS.LAKEHOUSE_VERSION()` names the build.
   text (`UPPER('straße')` is `STRASSE`), dates outside Exasol's range, `TO_DATE`/
   `TO_TIMESTAMP` with a format are stricter, `STDDEV`/`VARIANCE` precision. Mention them
   if a user compares results.
-- **Unity Catalog** (the `unity` route, and Databricks' Iceberg REST endpoint) needs
+- **Unity Catalog** (`catalog=unity`, and Databricks' Iceberg REST endpoint) needs
   External Data Access on the metastore, EXTERNAL USE SCHEMA for the principal, and a
-  schema on external storage: Default Storage cannot be read by outside engines.
-  `iceberg-rest` works against Databricks' `https://<workspace>/api/2.1/unity-catalog/iceberg-rest`
-  with a personal access token as the bearer and vended credentials.
-- AWS Glue's Iceberg REST endpoint needs SigV4 signing, which `iceberg-rest` does not
-  support: read Glue through `lakehouse`.
+  schema on external storage: Default Storage cannot be read by outside engines - read
+  such a schema through `databricks`.
+- AWS Glue's Iceberg REST endpoint needs SigV4 signing, which `catalog=iceberg-rest` does
+  not do: read Glue with `catalog=glue`.
 - `Fingerprint mismatch`: the Rust language container is not the version the engine was
   built for. `exakit connect` installs the pinned one; do not swap it by hand.

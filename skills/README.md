@@ -58,9 +58,7 @@ no skill here, or a skill misses one of its connector's inputs.
 | [`exasol-vs-s3`](exasol-vs-s3/SKILL.md) | Querying JSON, CSV or Parquet files in S3 — an EDML mapping, a prefix-scoped IAM key, the database clock for signed requests. |
 | [`exasol-vs-azure-blob`](exasol-vs-azure-blob/SKILL.md) | Querying the same in an Azure Blob Storage container — a read-and-list container SAS kept in a file, the storage firewall, the database clock. |
 | [`exasol-vs-databricks`](exasol-vs-databricks/SKILL.md) | Connecting a Unity Catalog schema through a SQL warehouse — a PAT, CAN USE, IP access lists; no External Data Access needed. |
-| [`exasol-vs-lakehouse`](exasol-vs-lakehouse/SKILL.md) | Reading Iceberg tables of an AWS Glue database from S3 — the Glue and S3 IAM policy (Glue's REST endpoint needs SigV4, so Glue goes here). |
-| [`exasol-vs-iceberg-rest`](exasol-vs-iceberg-rest/SKILL.md) | Reading Iceberg tables behind an Iceberg REST catalog, Databricks' Unity endpoint included — a catalog token with vended credentials, or storage keys. |
-| [`exasol-vs-unity`](exasol-vs-unity/SKILL.md) | Reading a Unity Catalog schema from storage without a warehouse — External Data Access, EXTERNAL USE SCHEMA, external storage (never Default Storage). |
+| [`exasol-vs-lakehouse`](exasol-vs-lakehouse/SKILL.md) | Reading Iceberg / Delta tables from their files with no warehouse — pick the catalog (Iceberg REST, Unity Catalog, AWS Glue, or a Parquet folder) and the files (vended, S3 or S3-compatible, Azure ADLS); token or OAuth login, the second secret, the Unity grants. |
 | [`exasol-vs-mongodb`](exasol-vs-mongodb/SKILL.md) | Connecting one MongoDB collection (Atlas or self-hosted) — the Atlas IP access list, child tables, quoted names on PowerShell. |
 
 **The wider Exasol ecosystem** — installed with the kit; it catalogs tools that are *not* part of it
