@@ -59,7 +59,18 @@ database and inspect it afterwards:
                 with no fields for a .csv/.parquet source is read at CREATE
                 (schema inference), and a failure there is wrapped in E-VSD-102
     connections {NAME: {"url", "user", "secret"}}    what the engine created
-    schemas, scripts, virtual {VS: {"connection", "tables"}}
+    schemas, scripts, virtual {VS: {"connection", "tables", "adapter"}}
+                adapter is the SCHEMA.SCRIPT its CREATE named (USING); one a
+                test placed without it runs on EXAKIT_VS.ADAPTER_<X> for VS_<X>,
+                as the kit names a source's own adapter. A
+                test may place a virtual schema no kit source records - one a
+                lost or another kit home left - and SYS.EXA_ALL_VIRTUAL_SCHEMAS
+                lists every one with ADAPTER_SCRIPT_SCHEMA/_NAME. As Exasol
+                does, an adapter script a virtual schema runs on cannot be
+                dropped, nor a schema holding one (CASCADE or not), nor a
+                schema with anything left in it without CASCADE; vs_list_fail
+                true -> listing the virtual schemas fails; drop_fail
+                scripts (SCHEMA.NAME) whose DROP is refused all the same
                 a CREATE ... SCRIPT into a schema not in schemas fails as
                 Exasol answers it (SQL state 42000, "schema <X> not found"):
                 the engine makes EXAKIT_VS itself, nothing makes it for it
@@ -475,6 +486,22 @@ def _source_for(doc, connection, via="adapter"):
     return src
 
 
+def _adapter_of(name, vs):
+    """SCHEMA.SCRIPT a virtual schema runs on: as its CREATE named it, or for a
+    VS_<X> a test placed by hand, the kit's own EXAKIT_VS.ADAPTER_<X>."""
+    if vs.get("adapter"):
+        return vs["adapter"]
+    return "EXAKIT_VS.ADAPTER_" + name[3:] if name.startswith("VS_") else ""
+
+
+def _adapter_users(doc, script):
+    """The virtual schemas on an adapter script SCHEMA.NAME (on any script in
+    the schema when it ends with a dot)."""
+    return sorted(name for name, vs in doc["virtual"].items()
+                  if _adapter_of(name, vs) and (_adapter_of(name, vs) == script or
+                                                (script.endswith(".") and _adapter_of(name, vs).startswith(script))))
+
+
 class Fake(object):
     def query(self, sql):
         doc = _load()
@@ -489,6 +516,9 @@ class Fake(object):
         doc["statements"].append(sql)
         try:
             self._execute(doc, sql)
+            m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING "?(\w+)"?\."?(\w+)"?', sql)
+            if m and m.group(1) in doc["virtual"]:
+                doc["virtual"][m.group(1)]["adapter"] = "%s.%s" % (m.group(2), m.group(3))
         finally:
             _save(doc)
 
@@ -518,6 +548,19 @@ class Fake(object):
                 rows += [{"COLUMN_TABLE": table, "COLUMN_NAME": c[0], "COLUMN_TYPE": c[1],
                           "COLUMN_IS_NULLABLE": c[2]} for c in cols]
             return rows
+        if sql == "SELECT * FROM SYS.EXA_ALL_VIRTUAL_SCHEMAS":
+            if doc.get("vs_list_fail"):
+                raise Exception("insufficient privileges for reading EXA_ALL_VIRTUAL_SCHEMAS (test)")
+            rows = []
+            for name, vs in sorted(doc["virtual"].items()):
+                owner, _, script = _adapter_of(name, vs).partition(".")
+                rows.append({"SCHEMA_NAME": name, "SCHEMA_OWNER": "SYS", "ADAPTER_SCRIPT_SCHEMA": owner or None,
+                             "ADAPTER_SCRIPT_NAME": script or None})
+            return rows
+        if sql.startswith("SELECT SCRIPT_NAME, SCRIPT_TYPE FROM EXA_ALL_SCRIPTS WHERE SCRIPT_SCHEMA = 'EXAKIT_VS'"):
+            return [{"SCRIPT_NAME": s.split(".", 1)[1],
+                     "SCRIPT_TYPE": "ADAPTER" if "ADAPTER" in s.split(".", 1)[1] else "UDF"}
+                    for s in sorted(doc["scripts"]) if s.startswith("EXAKIT_VS.")]
         m = re.search(r"FROM EXA_SCHEMAS WHERE SCHEMA_NAME = '([^']+)'", sql)
         if m:
             return [{"SCHEMA_NAME": m.group(1)}] if m.group(1) in doc["schemas"] + list(doc["virtual"]) else []
@@ -742,8 +785,15 @@ class Fake(object):
                 raise Exception("adapter call failed: connection %s not found" % vs["connection"])
             doc["virtual"].pop(m.group(2), None)
             return
+        m = re.match(r'DROP (?:ADAPTER )?SCRIPT "([^"]+)"\."([^"]+)"', sql)
+        if m and "%s.%s" % m.groups() in doc.get("drop_fail", []):
+            raise Exception("cannot drop script %s.%s: object is in use (test)" % m.groups())
         m = re.match(r'DROP ADAPTER SCRIPT "([^"]+)"\."([^"]+)"', sql)
         if m:
+            users = _adapter_users(doc, "%s.%s" % m.groups())
+            if users:
+                raise Exception("cannot drop adapter script %s.%s: virtual schema %s depends on it"
+                                % (m.group(1), m.group(2), users[0]))
             doc["scripts"] = [s for s in doc["scripts"] if s != "%s.%s" % m.groups()]
             return
         m = re.match(r'DROP SCRIPT "([^"]+)"\."([^"]+)"$', sql)
@@ -757,9 +807,17 @@ class Fake(object):
         if m:
             doc["connections"].pop(m.group(1), None)
             return
-        if sql == "DROP SCHEMA EXAKIT_VS CASCADE":
-            doc["schemas"] = [s for s in doc["schemas"] if s != "EXAKIT_VS"]
-            doc["scripts"] = [s for s in doc["scripts"] if not s.startswith("EXAKIT_VS.")]
+        m = re.match(r'DROP SCHEMA "?(\w+)"?( CASCADE)?$', sql)
+        if m:
+            users = _adapter_users(doc, m.group(1) + ".")
+            if users:
+                raise Exception("cannot drop schema %s: virtual schema %s depends on an adapter script in it"
+                                % (m.group(1), users[0]))
+            left = [s for s in doc["scripts"] if s.startswith(m.group(1) + ".")]
+            if left and not m.group(2):
+                raise Exception("schema %s is not empty - use DROP SCHEMA ... CASCADE" % m.group(1))
+            doc["schemas"] = [s for s in doc["schemas"] if s != m.group(1)]
+            doc["scripts"] = [s for s in doc["scripts"] if not s.startswith(m.group(1) + ".")]
             return
         raise Exception("fake: unexpected statement: %s" % sql[:80])
 
