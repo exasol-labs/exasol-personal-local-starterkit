@@ -380,9 +380,10 @@ def _cached_link(target: str) -> str:
 
 def mark(screen: "Screen", docs: str = "") -> "Screen":
     """Make a card the first of its page: the kit's mark (the logo, Starter Kit - <persona>) and the Docs button,
-    which opens ``docs``, this page's guide in the kit's documentation."""
+    which opens this persona's documentation at its start (/docs/<persona>): the whole workflow, every stage one
+    click away. A step's own page is what each card's Learn more links open (``docs`` names this notebook's)."""
     screen.brand = _persona_title()
-    screen.docs_url = _docs_url(docs)
+    screen.docs_url = _docs_url("")
     screen.refresh()
     return screen
 

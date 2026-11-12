@@ -853,16 +853,16 @@ class CardTest(unittest.TestCase):
 
     def test_the_first_card_of_a_page_gets_the_mark_and_a_docs_button(self):
         """card.mark makes a card the first of its page: the persona's title beside the logo and the Docs button's
-        address, this page's guide in the kit's documentation. A page the site does not have opens the persona's
+        address, the persona's start page in the kit's documentation. A page the site does not have opens the persona's
         section instead of a search; a kit without the documentation shows no button."""
         card = importlib.import_module("exakit_guide.card")
         exakit_nb = importlib.import_module("exakit_nb")
         screen = mock.Mock()
         with mock.patch.object(card, "_persona_title", return_value="Data Scientist"), \
-                mock.patch.object(card, "_docs_url", return_value="http://h:1/docs/data-scientist/guides/ask") as url:
+                mock.patch.object(card, "_docs_url", return_value="http://h:1/docs/data-scientist") as url:
             self.assertIs(screen, card.mark(screen, docs="guides/ask"))
-        url.assert_called_once_with("guides/ask")
-        self.assertEqual(("Data Scientist", "http://h:1/docs/data-scientist/guides/ask"), (screen.brand, screen.docs_url))
+        url.assert_called_once_with("")          # the Docs button opens the persona's start page, whatever the notebook
+        self.assertEqual(("Data Scientist", "http://h:1/docs/data-scientist"), (screen.brand, screen.docs_url))
         screen.refresh.assert_called_once()
 
         def docs(what=None, **_):

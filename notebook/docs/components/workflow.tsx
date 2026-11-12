@@ -150,8 +150,10 @@ export function flowChart(steps: FlowStep[], vertical?: boolean): string {
     const [open, close] = SHAPES[tone];
     const label =
       `<b>${wrap(step.title, width)}</b>` +
-      (step.text ? `<br/><span style='font-size:12px;opacity:.82'>${wrap(step.text, width + 4)}</span>` : '') +
-      (step.code ? `<br/><code style='font-size:11px'>${wrap(step.code, width + 6)}</code>` : '');
+      // no opacity, filter or transform in a label: WebKit (Safari) draws such content of an SVG label in the
+      // wrong place, piling every node's text on the first node. A plain colour and size only.
+      (step.text ? `<br/><span class='flow-sub'>${wrap(step.text, width + 4)}</span>` : '') +
+      (step.code ? `<br/><span class='flow-code'>${wrap(step.code, width + 6)}</span>` : '');
     lines.push(`  s${i}${open}"${label}"${close}:::${tone}`);
     if (step.href) lines.push(`  click s${i} href "${step.href.startsWith('/') ? `/docs${step.href}` : step.href}"`);
   });

@@ -215,10 +215,30 @@ body[data-sidebar-resizing] .sidebar-resizer::after {
   }
 }
 
-/* A chart's nodes are links: to another page, or to the section of this page that explains them. */
-figure svg g.node[role='link']:hover > *:not(title),
-figure svg a:hover g.node > * {
-  filter: brightness(1.12);
+/*
+ * A chart's labels and links. No opacity, filter or transform on anything inside a chart: WebKit (Safari) draws
+ * such content of an SVG label in the wrong place. Colours and outlines only.
+ */
+figure svg .flow-sub {
+  font-size: 12px;
+  color: var(--color-fd-muted-foreground);
+}
+figure svg .flow-code {
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--color-fd-foreground);
+}
+figure svg g.node[role='link'],
+figure svg a g.node {
+  cursor: pointer;
+}
+figure svg g.node[role='link']:hover > rect,
+figure svg g.node[role='link']:hover > path,
+figure svg g.node[role='link']:hover > polygon,
+figure svg a:hover g.node > rect,
+figure svg a:hover g.node > path,
+figure svg a:hover g.node > polygon {
+  stroke-width: 3px;
 }
 figure svg g.node[role='link']:focus-visible {
   outline: 2px solid var(--color-fd-primary);
