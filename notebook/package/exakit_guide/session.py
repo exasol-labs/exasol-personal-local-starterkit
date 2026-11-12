@@ -25,6 +25,9 @@ class Session:
         self.source_label: str = ""
         self.source_rows: int | None = None
         self.broken: dict | None = None  # a saved column map the kit refuses to open, and why
+        # every table chosen in step 1 ({label, table, rows, broken}); `chosen_data` is the one being worked on
+        self.chosen: list[dict] = []
+        self.chosen_n = 0                # counts the choices made, so a card's pickers start afresh
         self.code: list[str] = []        # the code every action ran, in order (Code mode, Copy as cell)
         self.said: str = ""              # what the last action printed
         self._listeners: list[weakref.ref] = []

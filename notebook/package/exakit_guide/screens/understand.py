@@ -155,16 +155,33 @@ def _ago(ts) -> str:
     return f"{day} at {local.strftime('%H:%M')}"
 
 
+def _listed(value) -> list[str]:
+    """A card value that may be one text or a list of ticks, as a list of the non-empty ones."""
+    values = value if isinstance(value, (list, tuple)) else [value]
+    return [str(x).strip() for x in values if x is not None and str(x).strip()]
+
+
+def use_chosen(entry: dict) -> None:
+    """Make one of the chosen tables the one the cards work on (`chosen_data` already holds it)."""
+    SESSION.source_label = entry["label"]
+    SESSION.source_rows = entry.get("rows")
+    SESSION.broken = entry.get("broken")
+    SESSION.review, SESSION.dataset = None, None
+
+
 # =====================================================================================================
 class ChooseData(Screen):
-    """Choose the data: a kit dataset, your own (a table already in the database, or a new file or folder), or an
-    external source (one connected, or a new connection). Every option and every step is one cell of the
-    quickstart's code section (actions: data.*)."""
+    """Choose the data: kit datasets, your own (tables already in the database, or a new file or folder) and
+    external sources (connected ones, or a new connection) - any number of them, from any mix of the three. Each
+    ticked table is loaded with its own cell; the first is the one the column map opens on, and the column map card
+    moves between them. Semantic views starts with their schemas ticked. Every option and every step is one cell of
+    the quickstart's code section (actions: data.*)."""
     help = (('Load your data', 'get-the-data'),
             ('Connect an external source', 'get-the-data/external-sources#step-by-step-a-new-external-source'),)
 
     kind = "card"
     step, connector, src_name, conn_n, tip = "connection", None, "", 0, ""
+    failed: list[str] = []          # what was ticked and could not be loaded, with the kit's reason
     preset, settings_step, typed_storage = None, False, ""   # a source's settings (a Lakehouse's catalog and files)
     # The password typed for the connection being set up, held here until it connects: the card's own box is emptied
     # the moment it is sent, and it sits on an earlier step, so a connect tried again (the source refused, a name did
@@ -232,7 +249,8 @@ class ChooseData(Screen):
 
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Choose your data",
-                "sub": "Pick what you want to work on. You can change it at any time."}
+                "sub": "Tick everything you want to work on: kit datasets, your own tables and external sources, "
+                       "together. You can change it at any time."}
         if self.loading:
             return [head, {"t": "empty", "v": "Looking at what's available…"}]
         samples = [{"value": s["id"], "label": s["label"], "hint": "Loaded" if s["loaded"] else "Downloads the first time"}
@@ -242,15 +260,15 @@ class ChooseData(Screen):
         conn = self._cf()
         connect_only = {"field": conn, "equals": "__connect__"}
         options = [
-            {"value": "sample", "title": "A kit dataset", "text": "Ready-made data that comes with the kit.",
+            {"value": "sample", "title": "Kit datasets", "text": "Ready-made data that comes with the kit.",
              "disabled": not samples, "disabled_reason": "The kit lists no dataset with a column map.",
-             "fields": [{"id": "sample", "type": "select", "label": "Dataset", "value": samples[0]["value"] if samples else "",
-                         "options": samples}]},
-            {"value": "file", "title": "Your own data", "text": "A table in the database, or a new file or folder.",
-             "fields": [{"id": "own", "type": "select", "label": "Data", "value": own_options[0]["value"], "options": own_options},
+             "fields": [{"id": "sample", "type": "picks", "label": "Datasets",
+                         "value": [samples[0]["value"]] if samples else [], "options": samples}]},
+            {"value": "file", "title": "Your own data", "text": "Tables in the database, or a new file or folder.",
+             "fields": [{"id": "own", "type": "picks", "label": "Tables", "value": [own_options[0]["value"]], "options": own_options},
                         {"id": "path", "type": "text", "label": "File or folder (CSV, Excel, Parquet, JSON)", "placeholder": "~/Downloads/sales.xlsx", "show_if": new_only},
                         {"id": "schema", "type": "text", "label": "Save it under (optional)", "placeholder": "MY_DATA", "show_if": new_only}]},
-            {"value": "source", "title": "An external source", "text": "Live data in another system, read where it is.",
+            {"value": "source", "title": "External sources", "text": "Live data in other systems, read where it is.",
              "fields": self._source_fields(connect_only)},
         ]
         # A new connection is entered one step at a time (Back / Next); its last step tests and connects.
@@ -258,73 +276,128 @@ class ChooseData(Screen):
         at = steps.index(self.step) if self.step in steps else 0
         last = at == len(steps) - 1
         connecting = [{"field": "kind", "equals": "source"}, connect_only]
+        # "Use this data" loads everything ticked. A new connection being entered has its own buttons (Back / Next,
+        # then Connect); the plain button shows whenever no new connection is being entered.
+        plain = {"any": [{"field": "kind", "not": "source"}, {"field": conn, "not": "__connect__"}]}
         use = {"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}
         items = []
         if at > 0:
             items.append({"id": "src_back", "label": "Back", "show_if": connecting, "no_secret": True})
         if not last:
-            items.append({"id": "src_next", "label": "Next", "primary": True, "busy": "Reading…", "show_if": connecting, "no_secret": True})
-            # Other data is used straight away; a new connection first reaches its last step.
-            items += [{**use, "show_if": {"field": "kind", "in": ["sample", "file"]}},
-                      {**use, "show_if": [{"field": "kind", "equals": "source"}, {"field": conn, "in": list(self.sources)}]}]
+            items += [{"id": "src_next", "label": "Next", "primary": True, "busy": "Reading…", "show_if": connecting, "no_secret": True},
+                      {**use, "show_if": plain}]
         else:
             items += [{"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
                       {**use, "label": "Connect and use this data", "show_if": connecting},
-                      {**use, "show_if": {"field": "kind", "in": ["sample", "file"]}}]
-        blocks = [head, {"t": "choice", "id": "kind", "value": "sample" if samples else "file", "options": options, "below": True,
-                         "actions": items}]     # the buttons sit inside the picked option's box
+                      {**use, "show_if": plain}]
+        blocks = [head, {"t": "choice", "id": "kind", "multi": True, "value": ["sample"] if samples else ["file"],
+                         "options": options, "below": True,
+                         "actions": items}]     # the buttons sit inside the panel under the ticked options
         if self.done and SESSION.source is not None:
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
-            blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
+            if len(SESSION.chosen) > 1:
+                others = ", ".join(e["table"] for e in SESSION.chosen)
+                blocks.append({"t": "msg", "kind": "ok", "keep": True,
+                               "v": f"Using {len(SESSION.chosen)} tables: {others}. The column map below opens on "
+                                    f"{SESSION.source.fact_table}; move between the tables there, then link them under "
+                                    "Semantic views."})
+            else:
+                blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
+        if self.failed:
+            blocks.append({"t": "msg", "kind": "warn", "v": "Not loaded: " + "; ".join(self.failed)})
         if self.kit_said:
             blocks.append({"t": "details", "title": "What the kit said", "blocks": [{"t": "pre", "v": self.kit_said}]})
         if SESSION.code:
             blocks.append({"t": "code", "code_only": True, "title": "The code behind this step", "v": "\n".join(SESSION.code)})
         return blocks
 
+    def _wanted(self, v: dict) -> tuple[list[tuple[str, str, dict, str]], bool]:
+        """Everything ticked, as the loading cells to run: (action, variable, its values, label). A new connection
+        is connected here first (on its last step); the second value says whether one was."""
+        kinds = _listed(v.get("kind")) or ["sample"]
+        wanted: list[tuple[str, str, dict, str]] = []
+        connected = False
+        if "sample" in kinds:
+            for dataset_id in _listed(v.get("sample")):
+                label = next((s["label"] for s in self.samples if s["id"] == dataset_id), dataset_id)
+                wanted.append(("data.sample", "sample_data", {"dataset_id": dataset_id}, label))
+        if "file" in kinds:
+            for own in _listed(v.get("own")) or ["__new__"]:
+                if own.startswith("ds:"):
+                    wanted.append(("data.approved", "own_data", {"dataset_id": own[3:]}, own[3:]))
+                elif own.startswith("tbl:"):
+                    wanted.append(("data.table", "own_data", {"table": own[4:]}, own[4:]))
+                else:
+                    path = str(v.get("path") or "").strip()
+                    if not path:
+                        raise ValueError("Enter the path to a file or folder.")
+                    schema = str(v.get("schema") or "").strip() or None
+                    wanted.append(("data.own_file", "own_data", {"path": path, "schema": schema}, Path(path).expanduser().name))
+        if "source" in kinds:
+            for schema in _listed(v.get(self._cf())):
+                if schema == "__connect__":
+                    steps = self._steps()
+                    if len(kinds) > 1 or len(_listed(v.get(self._cf()))) > 1:
+                        if self.step != steps[-1] or self.step == "connection":
+                            continue          # a new connection not entered to its end: the rest is loaded without it
+                    schema = self._connect(v)
+                    self.step, self.conn_n = "connection", self.conn_n + 1     # the next one starts from the list again
+                    connected = True
+                    tables = _listed(v.get("table")) or [""]
+                else:
+                    tables = _listed(v.get(self._tid(schema))) or _listed(v.get("table")) or [""]
+                for table in tables:
+                    source = f"{schema}.{table}" if table and "." not in table else (table or schema)
+                    wanted.append(("data.source", "source_data", {"source": source}, source))
+        return wanted, connected
+
     def on_use(self, v: dict) -> None:
         from ..actions import Var
 
-        kind = v.get("kind") or "sample"
         SESSION.broken = None
+        self.failed = []
         if not SESSION.get("workflow_id"):      # guide.start() began one; a screen shown on its own begins it here
             actions.run("data.workflow")
-        if kind == "sample":
-            dataset_id = str(v.get("sample") or "").strip()
-            if not dataset_id:
-                raise ValueError("Pick a kit dataset.")
-            variable, label = self._open("data.sample", "sample_data", dataset_id=dataset_id), dataset_id
-            label = next((s["label"] for s in self.samples if s["id"] == dataset_id), dataset_id)
-        elif kind == "file":
-            own = str(v.get("own") or "__new__")
-            if own.startswith("ds:"):
-                variable, label = self._open("data.approved", "own_data", dataset_id=own[3:]), own[3:]
-            elif own.startswith("tbl:"):
-                variable, label = self._open("data.table", "own_data", table=own[4:]), own[4:]
-            else:
-                path = str(v.get("path") or "").strip()
-                if not path:
-                    raise ValueError("Enter the path to a file or folder.")
-                schema = str(v.get("schema") or "").strip() or None
-                variable, label = self._open("data.own_file", "own_data", path=path, schema=schema), Path(path).expanduser().name
+        wanted, connected = self._wanted(v)
+        if not wanted:
+            raise ValueError("Tick at least one dataset, table or source.")
+        several = len(wanted) > 1
+        if several:
+            actions.run("data.several")
+        chosen: list[dict] = []
+        for action_id, variable, values, label in wanted:
+            SESSION.broken = None
+            try:
+                variable = self._open(action_id, variable, **values)
+                data = SESSION.get(variable)
+                if data is None:
+                    raise ValueError("nothing was loaded")
+            except Exception as exc:
+                if not several:
+                    raise
+                self.failed.append(f"{label} ({str(exc).splitlines()[0] if str(exc) else type(exc).__name__})")
+                continue
+            table = str(data.fact_table)
+            if any(e["table"] == table for e in chosen):
+                continue                              # two ticks that open the same table
+            if several:
+                actions.run("data.keep", table=table, data=Var(variable))
+            chosen.append({"label": f"{label} ({table})", "table": table, "variable": variable,
+                           "rows": self.rows.get(table.upper()), "broken": SESSION.broken})
+        if not chosen:
+            SESSION.broken = None
+            raise ValueError("Nothing was loaded. The kit's note is under 'What the kit said'.")
+        if several:
+            actions.run("data.switch", table=chosen[0]["table"])
         else:
-            schema = str(v.get(self._cf()) or "").strip()
-            connected = schema == "__connect__"
-            if connected:
-                schema = self._connect(v)
-                self.step, self.conn_n = "connection", self.conn_n + 1     # the next one starts from the list again
-            table = str(v.get(self._tid(schema)) or v.get("table") or "").strip()
-            source = f"{schema}.{table}" if table and "." not in table else (table or schema)
-            variable, label = self._open("data.source", "source_data", source=source), source
-        actions.run("data.choose", data=Var(variable))
+            actions.run("data.choose", data=Var(chosen[0]["variable"]))
         if SESSION.source is None:
             raise ValueError("Nothing was loaded. The kit's note is under 'What the kit said'.")
-        SESSION.source_label = f"{label} ({SESSION.source.fact_table})"
-        SESSION.source_rows = self.rows.get(str(SESSION.source.fact_table).upper())
-        SESSION.review, SESSION.dataset = None, None
+        SESSION.chosen, SESSION.chosen_n = chosen, SESSION.chosen_n + 1
+        use_chosen(chosen[0])
         self.done = True
-        if kind == "file" or (kind == "source" and connected):     # what was just loaded or connected can be picked
-            self._load_options()
+        if connected or any(action_id == "data.own_file" for action_id, *_rest in wanted):
+            self._load_options()                      # what was just loaded or connected can be picked
         SESSION.changed("source", self)
 
     def _open(self, action_id: str, variable: str, **values) -> str:
@@ -423,14 +496,14 @@ class ChooseData(Screen):
         form, read = self.forms.get(cid) or {}, self.parsed.get(cid)
         if step == "connection":
             tables = self.source_tables or {}
-            fields: list[dict] = [{"id": self._cf(), "type": "select", "label": "Connection",
-                                   "value": self.sources[0] if self.sources else "__connect__",
+            fields: list[dict] = [{"id": self._cf(), "type": "picks", "label": "Connections",
+                                   "value": [self.sources[0] if self.sources else "__connect__"],
                                    "options": [{"value": x, "label": x, "hint": f"{len(tables.get(x, []))} tables" if tables.get(x) else ""}
                                                for x in self.sources] + [{"value": "__connect__", "label": "New connection…"}]}]
             for schema in self.sources:
                 found, only = tables.get(schema, []), {"field": self._cf(), "equals": schema}
-                fields.append({"id": self._tid(schema), "type": "select", "label": "Table", "value": found[0]["value"],
-                               "options": found, "show_if": only} if found else
+                fields.append({"id": self._tid(schema), "type": "picks", "label": f"Tables of {schema}",
+                               "value": [found[0]["value"]], "options": found, "show_if": only} if found else
                               {"id": self._tid(schema), "type": "text", "label": "Table (empty: its one table, or the list of them)",
                                "placeholder": "ORDERS", "show_if": only})
             fields.append({"id": "src_new", "type": "note", "show_if": connect_only,
@@ -737,6 +810,36 @@ class ColumnMap(Screen):
 
     # -- view ---------------------------------------------------------------------------
     def build(self) -> list[dict]:
+        """The card, with the table picker on top when several tables were chosen: each has its own column map."""
+        blocks = self._blocks()
+        if len(SESSION.chosen) > 1 and SESSION.source is not None:
+            try:
+                approved = {a["table"].upper() for a in actions.run("kit.approved")}
+            except Exception:
+                approved = set()
+            now = str(SESSION.source.fact_table)
+            options = [{"value": e["table"], "label": e["table"],
+                        "hint": "column map approved" if e["table"].upper() in approved else "not approved yet"}
+                       for e in SESSION.chosen]
+            left = sum(1 for e in SESSION.chosen if e["table"].upper() not in approved)
+            blocks[1:1] = [{"t": "fields", "items": [{"id": f"map_table_{SESSION.chosen_n}", "type": "select",
+                                                      "label": f"Table ({len(SESSION.chosen)} chosen"
+                                                               + (f", {left} to approve)" if left else ", all approved)"),
+                                                      "value": now, "options": options, "send_on_change": "map_switch"}]}]
+        return blocks
+
+    def on_map_switch(self, v: dict) -> None:
+        """Another of the chosen tables: its column map opens here (the cell: chosen_data = chosen_tables[...])."""
+        table = next((str(value) for key, value in v.items() if str(key).startswith("map_table_")), "")
+        entry = next((e for e in SESSION.chosen if e["table"] == table), None)
+        if entry is None or (SESSION.source is not None and str(SESSION.source.fact_table) == table):
+            return
+        actions.run("data.switch", table=table)
+        use_chosen(entry)
+        self._review()
+        SESSION.changed("source", self)
+
+    def _blocks(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "What each column means",
                 "sub": "The kit looked at every column. Answer three questions, then approve. You can change your mind later."}
         rv = SESSION.review
@@ -1134,11 +1237,20 @@ class SemanticViews(Screen):
         self.result_text = ""
         self.error = None
         self.loading = True
+        self.ticked: set[str] = self._chosen_schemas()   # the schemas of the tables chosen above start ticked
+        self.gen = 0                                     # a new choice above: the ticks start from it again
         SESSION.listen(self)
         self.refresh()
         import threading
 
         threading.Thread(target=self._load, daemon=True).start()
+
+    @staticmethod
+    def _chosen_schemas() -> set[str]:
+        return {e["table"].split(".", 1)[0].upper() for e in SESSION.chosen if "." in e["table"]}
+
+    def _sid(self, schema: str) -> str:
+        return f"sv{self.gen}:{schema}" if self.gen else "sv:" + schema
 
     def _load(self) -> None:
         try:
@@ -1163,7 +1275,7 @@ class SemanticViews(Screen):
         SESSION.release()
 
     def _chosen(self, v: dict) -> tuple[str, list[str], list[str], bool]:
-        schemas = [e["schema"] for e in self.schemas if v.get("sv:" + e["schema"])]
+        schemas = [e["schema"] for e in self.schemas if v.get(self._sid(e["schema"]))]
         links = [f"{l['from']}={l['to']}" for l in self.links or [] if v.get("svl:" + l["from"])]
         links += [line.strip() for line in str(v.get("sv_links") or "").replace(";", "\n").splitlines() if line.strip()]
         return (str(v.get("sv_name") or "").strip() or "my_data", schemas, links, bool(v.get("sv_ai")))
@@ -1191,10 +1303,11 @@ class SemanticViews(Screen):
                            {"t": "actions", "items": [{"id": "sv_refresh", "label": "Refresh it", "busy": "Rebuilding…"}]}]
         usable = [e for e in self.schemas if e["approved"]]
         blocks += [{"t": "subhead", "v": "Build a model"},
-                   {"t": "p", "muted": True, "v": "Tick the schemas, from as many origins as you like. Every table of them "
+                   {"t": "p", "muted": True, "v": "Tick the schemas, from as many origins as you like (the ones of the "
+                    "tables you chose above start ticked). Every table of them "
                     "with an approved column map goes in; a table without one is named in the preview, with the way to "
                     "approve it."},
-                   {"t": "checks", "items": [{"id": "sv:" + e["schema"],
+                   {"t": "checks", "items": [{"id": self._sid(e["schema"]), "value": e["schema"].upper() in self.ticked,
                                               "label": f"{e['schema']}  ·  {e['origin']}  ·  {e['approved']} of {e['tables']} "
                                                        f"table{'s' if e['tables'] != 1 else ''} approved"}
                                              for e in self.schemas]}]
@@ -1285,6 +1398,10 @@ class SemanticViews(Screen):
         if what in ("source", "dataset", "data"):
             import threading
 
+            now = self._chosen_schemas()
+            if what == "source" and now != self.ticked:
+                self.ticked, self.gen = now, self.gen + 1
+                self.links, self.links_note = None, ""
             self.loading = True
             self.refresh()
             threading.Thread(target=self._load, daemon=True).start()

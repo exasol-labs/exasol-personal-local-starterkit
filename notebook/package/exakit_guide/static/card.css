@@ -509,3 +509,12 @@
   background: var(--guide-surface); }
 .guide-row-panel .guide-subhead { margin-top: 0; }
 .guide-row-panel > * + * { margin-top: 10px; }
+
+/* a choice where several options can be ticked, and a list of ticks as a field */
+.guide-tick { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid var(--guide-border-strong); flex: none; position: relative; }
+.guide-choice.is-on .guide-tick { background: var(--guide-accent); border-color: var(--guide-accent); }
+.guide-choice.is-on .guide-tick::after { content: ""; position: absolute; left: 4px; top: 1px; width: 4px; height: 8px; border: solid var(--guide-accent-text); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.guide-choice-part { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--guide-muted, #6b7280); margin-top: 6px; }
+.guide-choice-part:first-child { margin-top: 0; }
+.guide-picks { display: flex; flex-direction: column; gap: 6px; }
+.guide-picks-list { max-height: 220px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--guide-border); border-radius: 8px; max-width: 560px; }

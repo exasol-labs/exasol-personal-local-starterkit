@@ -87,6 +87,10 @@ ACTIONS: dict[str, Action] = {
                                    "connector_forms", False),
     "data.source": Action("00_quickstart", "source_data = nb.load_source(connection, {source})", "source_data"),
     "data.choose": Action("00_quickstart", "chosen_data = {data}", "chosen_data", False),
+    # several tables chosen at once: each is kept by its table name, and one of them is the one being worked on
+    "data.several": Action("00_quickstart", "chosen_tables = {{}}", "chosen_tables", False),
+    "data.keep": Action("00_quickstart", "chosen_tables[{table}] = {data}", "chosen_tables", False),
+    "data.switch": Action("00_quickstart", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
     "data.map": Action("00_quickstart", "data_map = nb.data_map(connection)", "data_map", False),
     "data.connectors": Action("00_quickstart", "connectors = nb.connectors()", "connectors", False),
     "semantic.models": Action("00_quickstart", "semantic_models = nb.semantic_models(connection)", "semantic_models", False),

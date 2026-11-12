@@ -23,7 +23,26 @@ You do not need a terminal for this stage. Every step runs from a cell or a card
 
 | Guided view | Notebook code | Terminal |
 |---|---|---|
-| The **Choose your data** card in `00_quickstart`. Pick a kit dataset, your own data or an external source. | The shared cells in `00_quickstart`, under *Choose a dataset*, *Load your own data*, *An external source*: `SAMPLE`, `MY_DATA`, `MY_SCHEMA`, `MY_TABLE`, `CONNECTOR`, `SOURCE_URL`, `SOURCE`, then `nb.first(...)`, which picks the first loaded source | `exakit data-load` for a kit dataset, a file or a folder. `exakit connect` for an external source. |
+| The **Choose your data** card in `00_quickstart`. Tick kit datasets, your own tables and external sources, any number of them together. | The shared cells in `00_quickstart`, under *Choose a dataset*, *Load your own data*, *An external source*: `SAMPLE`, `MY_DATA`, `MY_SCHEMA`, `MY_TABLE`, `CONNECTOR`, `SOURCE_URL`, `SOURCE`, then `nb.first(...)`, which picks the first loaded source | `exakit data-load` for a kit dataset, a file or a folder. `exakit connect` for an external source. |
+
+## Several tables at once
+
+The three options of the **Choose your data** card are tick boxes, and so is every list under them: datasets, your tables, connections, and the tables of each connection. Tick what you want from any mix of them and press **Use this data**.
+
+| What the card does | The cell it runs |
+|---|---|
+| Loads each ticked table | The same cell as for one table: `nb.load_sample`, `nb.use_table`, `nb.dataset` or `nb.load_source` |
+| Keeps each one by its table name | `chosen_tables[<table>] = ...` |
+| Opens the column map on the first | `chosen_data = chosen_tables[<table>]` |
+
+A table that could not be loaded is named under the card with the kit's reason. The others are used.
+
+What follows from the choice:
+
+- **What each column means** shows a *Table* list when you chose more than one. It says how many still need approval. Picking another table opens its column map; each table is approved on its own.
+- **Semantic views** starts with the schemas of your tables ticked, so **Find links between them** and **Publish the model** work on the same choice. See [Semantic views](/data-scientist/explore/semantic-views).
+
+With one table ticked the card runs the cells it always ran, and `chosen_tables` is not created.
 
 ## In this stage
 

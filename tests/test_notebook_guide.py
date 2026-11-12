@@ -615,7 +615,7 @@ class CardTest(unittest.TestCase):
         card.forms = {c["id"]: nb.connector_inputs(c["id"]) for c in card.connectors}
         only = {"field": "src_schema", "equals": "__connect__"}
         first = card._source_fields(only)
-        self.assertEqual("Connection", first[0]["label"])                       # the connections there are, first
+        self.assertEqual("Connections", first[0]["label"])                       # the connections there are, first
         self.assertEqual(["VS_OLD", "__connect__"], [o["value"] for o in first[0]["options"]])
         card.on_src_next({})
         self.assertEqual("source", card.step)
@@ -1134,6 +1134,131 @@ class LoadIntoSchemaTest(unittest.TestCase):
                 if thread is not __import__("threading").current_thread() and thread.daemon:
                     thread.join(timeout=2)
         load.assert_called_once()
+
+
+class SeveralTablesTest(unittest.TestCase):
+    """Choose your data takes any number of tables from any mix of kit datasets, your own tables and external
+    sources: each is loaded with its own cell and kept, the column map moves between them, and Semantic views
+    starts with their schemas ticked. One table chosen runs the cells it always ran."""
+
+    def setUp(self):
+        self.understand = importlib.import_module("exakit_guide.screens.understand")
+        self.session = self.understand.SESSION
+        self.kept = (self.session._ns, self.session.chosen, self.session.chosen_n, list(self.session.code))
+        self.session._ns = {"nb": None, "workflow_id": "wf"}
+        self.ran: list[tuple[str, dict]] = []
+        tables = {"amazon": "AMAZON.ORDER_LINES", "MY_DATA.TARGETS": "MY_DATA.TARGETS",
+                  "VS_LOGISTICS.COURIER_DAILY": "VS_LOGISTICS.COURIER_DAILY", "VS_LOGISTICS.STATE_LOGISTICS": None}
+
+        def run(action_id, session=None, **values):
+            self.ran.append((action_id, values))
+            ns = self.session._ns
+            if action_id in ("data.sample", "data.table", "data.source"):
+                key = values.get("dataset_id") or values.get("table") or values.get("source")
+                if tables[key] is None:
+                    raise ValueError("the source refused the read\nmore")
+                ns[self.understand.actions.ACTIONS[action_id].result] = mock.Mock(fact_table=tables[key])
+            elif action_id == "data.several":
+                ns["chosen_tables"] = {}
+            elif action_id == "data.keep":
+                ns["chosen_tables"][values["table"]] = ns[values["data"].expr]
+            elif action_id == "data.switch":
+                ns["chosen_data"] = ns["chosen_tables"][values["table"]]
+            elif action_id == "data.choose":
+                ns["chosen_data"] = ns[values["data"].expr]
+            elif action_id == "kit.approved":
+                return [{"id": "amazon", "table": "AMAZON.ORDER_LINES", "version": 1}]
+            return None
+
+        patch = mock.patch.object(self.understand.actions, "run", side_effect=run)
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(self._restore)
+        self.card = self.understand.ChooseData.__new__(self.understand.ChooseData)
+        self.card.__dict__.update(samples=[{"id": "amazon", "label": "Amazon sales"}], sources=["VS_LOGISTICS"], rows={},
+                                  kit_said="", source_tables={}, forms={}, parsed={}, connectors=[], done=False)
+
+    def _restore(self):
+        self.session._ns, self.session.chosen, self.session.chosen_n, self.session.code = self.kept
+
+    def use(self, values):
+        with mock.patch.object(self.session, "changed"):
+            self.card.on_use(values)
+        return [a for a, _v in self.ran if a != "kit.approved"]      # (a refused load looks its table up there)
+
+    def test_one_table_runs_the_cells_it_always_ran(self):
+        for values in ({"kind": "sample", "sample": "amazon"}, {"kind": ["sample"], "sample": ["amazon"]}):
+            self.ran.clear()
+            self.assertEqual(["data.sample", "data.choose"], self.use(values))
+            self.assertEqual(["AMAZON.ORDER_LINES"], [e["table"] for e in self.session.chosen])
+
+    def test_tables_of_every_kind_are_loaded_kept_and_the_first_is_worked_on(self):
+        ran = self.use({"kind": ["sample", "file", "source"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"],
+                        "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY", "STATE_LOGISTICS"]})
+        self.assertEqual(["data.several", "data.sample", "data.keep", "data.table", "data.keep", "data.source", "data.keep",
+                          "data.source", "data.switch"], ran)
+        self.assertEqual(["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"],
+                         [e["table"] for e in self.session.chosen])
+        self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table)
+        # one that could not be read is named with the reason's first line; the others are used
+        self.assertEqual(["VS_LOGISTICS.STATE_LOGISTICS (the source refused the read)"], self.card.failed)
+
+    def test_nothing_ticked_and_nothing_loaded_are_said(self):
+        with self.assertRaisesRegex(ValueError, "Tick at least one"):
+            self.use({"kind": ["sample"], "sample": []})
+        with self.assertRaisesRegex(ValueError, "refused the read"):         # one table: the kit's own reason
+            self.use({"kind": ["source"], "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["STATE_LOGISTICS"]})
+
+    def test_a_new_connection_left_unfinished_does_not_stop_the_rest(self):
+        ran = self.use({"kind": ["sample", "source"], "sample": ["amazon"], "src_schema": ["__connect__"]})
+        self.assertEqual(["data.sample", "data.choose"], ran)
+
+    def test_the_card_offers_ticks_and_one_use_button(self):
+        self.card.__dict__.update(loading=False, own=[{"value": "tbl:MY_DATA.TARGETS", "label": "MY_DATA.TARGETS"}],
+                                  source_tables={"VS_LOGISTICS": [{"value": "COURIER_DAILY", "label": "COURIER_DAILY"}]})
+        self.card.samples = [{"id": "amazon", "label": "Amazon sales", "loaded": True}]
+        choice = next(b for b in self.card.build() if b["t"] == "choice")
+        self.assertTrue(choice["multi"])
+        self.assertEqual(["sample"], choice["value"])
+        ticks = {f["id"]: f for o in choice["options"] for f in o["fields"] if f.get("type") == "picks"}
+        self.assertEqual({"sample", "own", "src_schema", self.card._tid("VS_LOGISTICS")}, set(ticks))
+        self.assertTrue(all(isinstance(f["value"], list) for f in ticks.values()))
+        self.assertEqual(1, sum(1 for a in choice["actions"] if a["id"] == "use"))     # before a new connection's last step
+
+    def test_the_column_map_moves_between_the_chosen_tables(self):
+        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
+        card = self.understand.ColumnMap.__new__(self.understand.ColumnMap)
+        with mock.patch.object(card, "_blocks", return_value=[{"t": "head"}, {"t": "empty"}]):
+            picker = card.build()[1]["items"][0]
+        self.assertEqual(("AMAZON.ORDER_LINES", "map_switch"), (picker["value"], picker["send_on_change"]))
+        self.assertEqual(["column map approved", "not approved yet"], [o["hint"] for o in picker["options"]])
+        self.assertIn("1 to approve", picker["label"])
+        with mock.patch.object(card, "_review") as review, mock.patch.object(self.session, "changed"):
+            card.on_map_switch({picker["id"]: "MY_DATA.TARGETS"})
+        review.assert_called_once()
+        self.assertEqual("MY_DATA.TARGETS", self.session.source.fact_table)
+        self.assertEqual("tbl:MY_DATA.TARGETS"[4:] + " (MY_DATA.TARGETS)", self.session.source_label)
+        self.session.chosen = self.session.chosen[:1]                                 # one table: no picker
+        with mock.patch.object(card, "_blocks", return_value=[{"t": "head"}, {"t": "empty"}]):
+            self.assertEqual(["head", "empty"], [b["t"] for b in card.build()])
+
+    def test_semantic_views_starts_with_the_chosen_schemas_ticked(self):
+        views = self.understand.SemanticViews.__new__(self.understand.SemanticViews)
+        views.__dict__.update(ticked=set(), gen=0, links=[{"from": "x"}], links_note="x", loading=False, error=None, models=[],
+                              preview_text="", result_text="",
+                              schemas=[{"schema": s, "origin": "o", "tables": 1, "approved": 1} for s in ("AMAZON", "MY_DATA", "TPCH")])
+        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
+        with mock.patch.object(views, "refresh"), mock.patch.object(views, "_load"):
+            views.on_session("source")
+        for thread in __import__("threading").enumerate():
+            if thread is not __import__("threading").current_thread() and thread.daemon:
+                thread.join(timeout=2)
+        self.assertEqual(({"AMAZON", "MY_DATA"}, 1, None), (views.ticked, views.gen, views.links))
+        views.loading = False
+        with mock.patch.object(self.understand.actions, "code", return_value=""):
+            checks = next(b for b in views.build() if b["t"] == "checks")
+        self.assertEqual({"sv1:AMAZON": True, "sv1:MY_DATA": True, "sv1:TPCH": False}, {c["id"]: c["value"] for c in checks["items"]})
+        self.assertEqual(["AMAZON", "TPCH"], views._chosen({"sv1:AMAZON": True, "sv1:TPCH": True, "sv:MY_DATA": True})[1])
 
 
 class MarimoShownCodeTest(unittest.TestCase):

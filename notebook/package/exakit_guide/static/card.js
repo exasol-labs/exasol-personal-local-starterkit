@@ -202,9 +202,14 @@ function render({ model, el }) {
 
   // A field's or a button's condition: one {field, equals}, or a list that must all hold (a choice or a field).
   // {field, in: [...]} holds when the field is one of them.
+  // A field that holds several values (a multi choice, a list of ticks) holds when one of them matches.
+  // {field, not: value} holds when the value is not among them; {any: [conditions]} when one of them holds.
   const shown = (cond) => !cond || (Array.isArray(cond) ? cond : [cond]).every((c) => {
-    const now = String(st.fields[c.field] ?? st.choice[c.field] ?? "");
-    return Array.isArray(c.in) ? c.in.map(String).includes(now) : now === String(c.equals);
+    if (Array.isArray(c.any)) return c.any.some((one) => shown(one));
+    const now = st.fields[c.field] ?? st.choice[c.field] ?? "";
+    const have = (Array.isArray(now) ? now : [now]).map(String);
+    if (c.not !== undefined) return !have.includes(String(c.not));
+    return Array.isArray(c.in) ? c.in.map(String).some((x) => have.includes(x)) : have.includes(String(c.equals));
   });
 
   const send = (id, values = {}, opts = {}) => {
@@ -374,24 +379,39 @@ function render({ model, el }) {
       })), items.map((a) => progressPanel(a.id)));
     },
     choice(b) {
-      if (st.choice[b.id] === undefined) st.choice[b.id] = b.value;
+      // multi: any number of the options can be ticked (its value is the list of them); one stays ticked.
+      const multi = !!b.multi;
+      if (st.choice[b.id] === undefined) st.choice[b.id] = multi ? [].concat(b.value || []) : b.value;
       const sel = st.choice[b.id];
+      const isOn = (o) => (multi ? sel.includes(o.value) : sel === o.value);
       // below: the options are boxes of one size in a row, and the chosen one's fields sit under the row, full width.
-      const picked = b.below ? b.options.find((o) => o.value === sel) : null;
-      const boxes = h("div", { class: `guide-choices${b.cols ? " guide-choices-" + b.cols : ""}${b.below ? " guide-choices-even" : ""}`, role: "radiogroup" }, b.options.map((o) => {
-        const on = sel === o.value;
-        const pick = () => { if (o.disabled || on) return; st.choice[b.id] = o.value; draw(); };
-        return h("div", { class: `guide-choice${on ? " is-on" : ""}${o.disabled ? " is-off" : ""}`, role: "radio", tabindex: o.disabled ? "-1" : "0",
+      const picked = b.below ? b.options.filter(isOn) : [];
+      const boxes = h("div", { class: `guide-choices${b.cols ? " guide-choices-" + b.cols : ""}${b.below ? " guide-choices-even" : ""}`, role: multi ? "group" : "radiogroup" }, b.options.map((o) => {
+        const on = isOn(o);
+        const pick = () => {
+          if (o.disabled) return;
+          if (!multi) { if (on) return; st.choice[b.id] = o.value; draw(); return; }
+          if (on && sel.length === 1) return;
+          st.choice[b.id] = on ? sel.filter((x) => x !== o.value) : b.options.map((x) => x.value).filter((x) => x === o.value || sel.includes(x));
+          draw();
+        };
+        return h("div", { class: `guide-choice${on ? " is-on" : ""}${o.disabled ? " is-off" : ""}`, role: multi ? "checkbox" : "radio", tabindex: o.disabled ? "-1" : "0",
           "aria-checked": on ? "true" : "false", "aria-disabled": o.disabled ? "true" : "false",
           onClick: pick, onKeydown: (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); pick(); } } },
-          h("div", { class: "guide-choice-head" }, h("span", { class: "guide-radio" }), h("strong", {}, o.title)),
+          h("div", { class: "guide-choice-head" }, h("span", { class: multi ? "guide-tick" : "guide-radio" }), h("strong", {}, o.title)),
           h("div", { class: "guide-choice-text" }, o.disabled && o.disabled_reason ? o.disabled_reason : o.text),
           on && !b.below ? h("div", { class: "guide-choice-fields", onClick: (e) => e.stopPropagation() }, (o.fields || []).map(field)) : null);
       }));
       if (!b.below) return boxes;
       // The block's own actions (Back / Next / Use this data) sit inside the picked option's box, under its fields.
       // The fields are drawn first: drawing one records its value, which decides the buttons that show.
-      const fields = (picked ? (picked.fields || []) : []).map(field).filter(Boolean);
+      const fields = [];
+      picked.forEach((o) => {
+        const drawn = (o.fields || []).map(field).filter(Boolean);
+        if (!drawn.length) return;
+        if (multi && picked.length > 1) fields.push(h("div", { class: "guide-choice-part" }, o.title));
+        fields.push(...drawn);
+      });
       const acts = b.actions && b.actions.some((a) => shown(a.show_if)) ? B.actions({ items: b.actions }) : null;
       return h("div", { class: "guide-choice-wrap" }, boxes,
         fields.length || acts ? h("div", { class: "guide-choice-panel guide-choice-fields" }, fields, acts) : null);
@@ -752,6 +772,20 @@ function render({ model, el }) {
     if (!shown(f.show_if)) return null;
     if (f.type === "note") return h("div", { class: "guide-field" }, h("p", { class: "guide-p guide-muted guide-field-note" }, f.v),
       (f.help || []).length ? h("span", { class: "guide-field-help" }, f.help.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label))) : null);
+    // picks: a list of ticks; the field's value is the list of the ticked options' values.
+    if (f.type === "picks") {
+      const cur = Array.isArray(st.fields[f.id]) ? st.fields[f.id] : (st.fields[f.id] ? [st.fields[f.id]] : []);
+      st.fields[f.id] = cur;
+      const has = (o) => cur.map(String).includes(String(o.value));
+      return h("div", { class: "guide-field guide-picks", role: "group", "aria-label": f.label },
+        h("span", {}, f.label, cur.length > 1 ? ` · ${cur.length} ticked` : ""),
+        h("div", { class: "guide-checks guide-picks-list" }, (f.options || []).map((o) => h("label", { class: "guide-checkrow" },
+          h("input", { type: "checkbox", checked: has(o) ? true : null, disabled: !!ui.busy, onChange: (e) => {
+            const next = (f.options || []).map((x) => x.value).filter((x) => (String(x) === String(o.value) ? e.target.checked : cur.map(String).includes(String(x))));
+            st.fields[f.id] = next; draw();
+          } }),
+          h("span", {}, o.label, o.hint ? h("span", { class: "guide-muted guide-small" }, ` · ${o.hint}`) : null)))));
+    }
     const opt = (o) => h("option", { value: o.value, selected: String(st.fields[f.id]) === String(o.value) ? "selected" : null }, o.hint ? `${o.label} · ${o.hint}` : o.label);
     const grouped = () => {
       const out = [], groups = new Map();
