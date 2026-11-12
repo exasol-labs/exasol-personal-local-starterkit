@@ -57,6 +57,21 @@ _KINDS = (
     # read yet. Neither is a credential problem.
     ("external", r"EXTERNAL[ _]USE[ _]SCHEMA|External Data Access|EXTERNAL_ACCESS_DISABLED"),
     ("managed", r"catalog-managed table|Max catalog version is required"),
+    # The lakehouse engine's own words for a catalog that refused the login
+    # (HTTP 401) or the operation (HTTP 403), whichever catalog answered:
+    # "<what> request failed with HTTP <code>: <body>", where <what> is
+    # "catalog", "OAuth2 token" or "Unity Catalog <kind>" (lakehouse-engine-rs
+    # 0.57.3, catalog_http.rs). Measured: Polaris answers a wrong token 401
+    # with an empty body (under "failed to read the catalog config for
+    # warehouse ...", so this comes before "catalog"), a wrong OAuth client
+    # 401 unauthorized_client, open-source Unity Catalog 401 UNAUTHENTICATED.
+    # Lakekeeper's permission check says "answered HTTP <code>". Unity's 403
+    # for a schema closed to outside engines is "external", above.
+    ("auth", r"\b(?:catalog|OAuth2 token|Unity Catalog [a-z -]+) request failed with HTTP 401\b|"
+             r"\bOAuth2 token request failed with HTTP 400: .*\b(?:invalid|unauthorized)_client\b|"
+             r"Lakekeeper batch-check at \S+ answered HTTP 401\b"),
+    ("denied", r"\b(?:catalog|Unity Catalog [a-z -]+) request failed with HTTP 403\b|"
+               r"Lakekeeper batch-check at \S+ answered HTTP 403\b"),
     # An Iceberg REST catalog or Unity Catalog without the namespace asked for.
     ("schema_missing", r"NoSuchNamespaceException|NoSuchWarehouseException|SCHEMA_DOES_NOT_EXIST|"
                        r"CATALOG_DOES_NOT_EXIST"),
@@ -115,6 +130,11 @@ _KINDS = (
              r"Invalid access token|REST API answered HTTP 401|"
              # An Iceberg REST catalog refusing the token or keys (the spec's error type).
              r"NotAuthorizedException"),
+    # The lakehouse engine's object store refusing a read (opendal: "source:
+    # PermissionDenied (persistent) at read, context: { ... status: 403"): a
+    # key that may not read the files. summarize lifts S3's own code out of
+    # the answer, so a wrong secret (SignatureDoesNotMatch) is "auth" above.
+    ("denied", r"\bPermissionDenied \((?:persistent|temporary|permanent)\) at \w+"),
     ("unreachable", r"Connection refused|connect timed out|The connection attempt failed|"
                     r"Communications link failure|No route to host|Network is unreachable|"
                     r"Connection timed out|ORA-12541|ORA-12170|TCP/IP connection to the host|"
@@ -224,6 +244,26 @@ def _sdk_line(cause):
     return "%s: %s%s" % (cause.group(1).split("$")[0], detail, " (HTTP %s)" % status.group(1) if status else "")
 
 
+def opendal_answer(line):
+    """The lakehouse engine's object-store failure with S3's own answer.
+
+    Measured (lakehouse-engine-rs 0.57.3, a wrong static S3 secret on an
+    Iceberg REST catalog): "... source: PermissionDenied (persistent) at read,
+    context: { uri: ..., response: Parts { status: 403, ... headers: {...} },
+    service: s3, path: ..., range: 0- } => S3Error { code:
+    "SignatureDoesNotMatch", message: "The request signature we calculated
+    does not match ...", ... }" - some 1.3 KB, so the code S3 gave sits past
+    the cut to MAX_ERROR. The context is replaced by that answer; any other
+    line is returned as it is."""
+    found = re.search(r'\bS3Error \{ code: "(\w+)", message: "((?:[^"\\]|\\.)*)"', line)
+    if not found:
+        return line
+    status = re.search(r"\bstatus: (\d{3})\b", line)
+    head = line.split(", context: {", 1)[0] if ", context: {" in line else line[:found.start()].rstrip(" =>")
+    return "%s - caused by S3 %s: %s%s" % (head, found.group(1), found.group(2),
+                                          " (HTTP %s)" % status.group(1) if status else "")
+
+
 def summarize(text):
     """One readable line out of Exasol's multi-line UDF error wrapper.
 
@@ -266,7 +306,7 @@ def summarize(text):
     more = next((l.strip() for l in rest.splitlines() if l.strip()), "")
     if line.rstrip().endswith(":") and more and not re.match(r"\w+\s*=>|at [\w$.]+\(|\)$", more):
         line = "%s %s" % (line, more)
-    return re.sub(r"\s+", " ", line).strip()
+    return re.sub(r"\s+", " ", opendal_answer(line)).strip()
 
 
 def redact(text, secrets):
