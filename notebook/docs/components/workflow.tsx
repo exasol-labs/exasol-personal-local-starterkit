@@ -5,9 +5,9 @@
  */
 import Link from 'next/link';
 import type { ReactNode } from 'react';
+import { Mermaid } from './mermaid';
 import {
   Activity,
-  ArrowDown,
   ArrowLeft,
   ArrowRight,
   Brain,
@@ -106,60 +106,74 @@ export function StageNav({ n }: { n: number }) {
 
 type FlowStep = { title: string; text?: string; code?: string; href?: string; tone?: 'you' | 'kit' | 'db' | 'ai' };
 
-const TONES: Record<NonNullable<FlowStep['tone']>, string> = {
-  you: 'border-fd-primary',
-  kit: 'border-sky-500/70',
-  db: 'border-amber-500/70',
-  ai: 'border-fuchsia-500/70',
+const NAMES = { you: 'You', kit: 'The kit', db: 'The database or a source', ai: 'An AI model or client' } as const;
+// One shape per actor, so a chart reads without its legend: a person acts in a rounded box, the kit in a
+// rectangle, data sits in a cylinder, an AI in a hexagon.
+const SHAPES: Record<NonNullable<FlowStep['tone']>, [string, string]> = {
+  you: ['([', '])'],
+  kit: ['[', ']'],
+  db: ['[(', ')]'],
+  ai: ['{{', '}}'],
+};
+const SWATCH: Record<NonNullable<FlowStep['tone']>, string> = {
+  you: 'border-[#3f8f22] dark:border-[#7ddc57] rounded-full',
+  kit: 'border-[#0369a1] dark:border-[#38bdf8] rounded-none',
+  db: 'border-[#b45309] dark:border-[#f59e0b] rounded-[40%]',
+  ai: 'border-[#a21caf] dark:border-[#e879f9] rounded-sm rotate-45',
 };
 
-function FlowBox({ step }: { step: FlowStep }) {
-  const body = (
-    <>
-      <span className="font-semibold text-fd-foreground">{step.title}</span>
-      {step.text && <span className="text-sm text-fd-muted-foreground">{step.text}</span>}
-      {step.code && <code className="mt-1 w-fit max-w-full break-all rounded bg-fd-muted px-1.5 py-0.5 text-xs">{step.code}</code>}
-    </>
-  );
-  const cls = `flex min-w-0 flex-1 flex-col gap-1 rounded-lg border-2 bg-fd-card p-3 ${TONES[step.tone ?? 'kit']}`;
-  return step.href ? (
-    <Link href={step.href} className={`${cls} no-underline hover:bg-fd-accent/40`}>
-      {body}
-    </Link>
-  ) : (
-    <div className={cls}>{body}</div>
-  );
+function safe(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '#quot;');
+}
+
+/** Break a line at words so a node stays compact: about `width` characters a line. */
+function wrap(text: string, width: number): string {
+  const lines: string[] = [];
+  let line = '';
+  for (const word of text.split(/\s+/)) {
+    if (line && (line + ' ' + word).length > width) {
+      lines.push(line);
+      line = word;
+    } else line = line ? `${line} ${word}` : word;
+  }
+  if (line) lines.push(line);
+  return lines.map(safe).join('<br/>');
+}
+
+/** The Mermaid text of a flow: its steps as nodes in order, each shaped and coloured by who acts. */
+export function flowChart(steps: FlowStep[], vertical?: boolean): string {
+  const down = vertical || steps.length > 4;      // five side by side shrink the text too far to read
+  const width = down ? 52 : 24;
+  const lines = [`flowchart ${down ? 'TB' : 'LR'}`];
+  steps.forEach((step, i) => {
+    const tone = step.tone ?? 'kit';
+    const [open, close] = SHAPES[tone];
+    const label =
+      `<b>${wrap(step.title, width)}</b>` +
+      (step.text ? `<br/><span style='font-size:12px;opacity:.82'>${wrap(step.text, width + 4)}</span>` : '') +
+      (step.code ? `<br/><code style='font-size:11px'>${wrap(step.code, width + 6)}</code>` : '');
+    lines.push(`  s${i}${open}"${label}"${close}:::${tone}`);
+    if (step.href) lines.push(`  click s${i} href "${step.href.startsWith('/') ? `/docs${step.href}` : step.href}"`);
+  });
+  for (let i = 0; i < steps.length - 1; i++) lines.push(`  s${i} --> s${i + 1}`);
+  return lines.join('\n');
 }
 
 /**
- * A flowchart: boxes joined by arrows, left to right on a wide screen and top to bottom on a phone (or always top
- * to bottom with vertical). A box's tone says who acts: you (green), the kit (blue), the database (amber), an AI
- * model (pink); the legend under the chart names the tones it uses.
+ * A flowchart, drawn with Mermaid: the steps in order, joined by arrows, left to right (top to bottom with
+ * `vertical`, or when there are more than four). A step's tone says who acts and sets its shape and colour; a step
+ * with an href is a link. The legend names the actors the chart uses.
  */
 export function Flow({ steps, vertical, caption }: { steps: FlowStep[]; vertical?: boolean; caption?: ReactNode }) {
   const used = Array.from(new Set(steps.map((s) => s.tone ?? 'kit')));
-  const names = { you: 'You', kit: 'The kit', db: 'The database', ai: 'An AI model' } as const;
-  const dir = vertical ? 'flex-col' : 'flex-col md:flex-row';
   return (
-    <figure className="not-prose my-6">
-      <div className={`flex ${dir} items-stretch gap-2`}>
-        {steps.map((step, i) => (
-          <div key={i} className={`flex ${dir} flex-1 items-stretch gap-2 ${vertical ? '' : 'md:items-center'}`}>
-            <FlowBox step={step} />
-            {i < steps.length - 1 && (
-              <span className="flex shrink-0 justify-center self-center text-fd-muted-foreground" aria-hidden>
-                <ArrowDown className={`size-5 ${vertical ? '' : 'md:hidden'}`} />
-                {!vertical && <ArrowRight className="hidden size-5 md:block" />}
-              </span>
-            )}
-          </div>
-        ))}
-      </div>
-      <figcaption className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-fd-muted-foreground">
-        {caption && <span>{caption}</span>}
+    <figure className="not-prose my-6 rounded-xl border bg-fd-card p-4">
+      <Mermaid chart={flowChart(steps, vertical)} />
+      <figcaption className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-3 text-xs text-fd-muted-foreground">
+        {caption && <span className="font-medium text-fd-foreground">{caption}</span>}
         {used.map((tone) => (
-          <span key={tone} className="flex items-center gap-1">
-            <span className={`inline-block size-3 rounded-sm border-2 ${TONES[tone]}`} /> {names[tone]}
+          <span key={tone} className="flex items-center gap-1.5">
+            <span className={`inline-block size-2.5 border-2 ${SWATCH[tone]}`} /> {NAMES[tone]}
           </span>
         ))}
       </figcaption>

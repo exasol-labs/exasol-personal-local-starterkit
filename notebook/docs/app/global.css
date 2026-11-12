@@ -214,3 +214,13 @@ body[data-sidebar-resizing] .sidebar-resizer::after {
     line-height: 1.25;
   }
 }
+
+/* A chart's nodes are links: to another page, or to the section of this page that explains them. */
+figure svg g.node[role='link']:hover > *:not(title),
+figure svg a:hover g.node > * {
+  filter: brightness(1.12);
+}
+figure svg g.node[role='link']:focus-visible {
+  outline: 2px solid var(--color-fd-primary);
+  outline-offset: 3px;
+}
