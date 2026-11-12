@@ -39,8 +39,11 @@ database and inspect it afterwards:
     ({name: [tables]}), "token" (the token it accepts), "key_id" and
     "secret_key" (the storage keys it accepts), "warehouse" (the one it
     knows), "region" (the bucket's; vended credentials with none given fail
-    as S3 with an empty region does) and "fail": "external" (Unity closed to
-    outside engines) | "managed" (a catalog-managed table, at the read)
+    as S3 with an empty region does), "oss" (an open-source Unity Catalog:
+    its own 401 body), "storage_fail": "denied" (the store refuses a key
+    that may not read the files) and "fail": "external" (Unity closed to
+    outside engines) | "managed" (a catalog-managed table, at the read) |
+    "forbidden" (an Iceberg REST catalog refusing the operation, HTTP 403)
     sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied"|"echo",
                         "secret": "<the credential the source accepts>",
                         "read_error": "<the driver's words for a refused read>"}}
@@ -59,7 +62,18 @@ database and inspect it afterwards:
                 with no fields for a .csv/.parquet source is read at CREATE
                 (schema inference), and a failure there is wrapped in E-VSD-102
     connections {NAME: {"url", "user", "secret"}}    what the engine created
-    schemas, scripts, virtual {VS: {"connection", "tables"}}
+    schemas, scripts, virtual {VS: {"connection", "tables", "adapter"}}
+                adapter is the SCHEMA.SCRIPT its CREATE named (USING); one a
+                test placed without it runs on EXAKIT_VS.ADAPTER_<X> for VS_<X>,
+                as the kit names a source's own adapter. A
+                test may place a virtual schema no kit source records - one a
+                lost or another kit home left - and SYS.EXA_ALL_VIRTUAL_SCHEMAS
+                lists every one with ADAPTER_SCRIPT_SCHEMA/_NAME. As Exasol
+                does, an adapter script a virtual schema runs on cannot be
+                dropped, nor a schema holding one (CASCADE or not), nor a
+                schema with anything left in it without CASCADE; vs_list_fail
+                true -> listing the virtual schemas fails; drop_fail
+                scripts (SCHEMA.NAME) whose DROP is refused all the same
                 a CREATE ... SCRIPT into a schema not in schemas fails as
                 Exasol answers it (SQL state 42000, "schema <X> not found"):
                 the engine makes EXAKIT_VS itself, nothing makes it for it
@@ -326,10 +340,39 @@ def _glue_source(doc, con, namespace=None):
     return {"tables": [t.upper() for t in src["databases"].get(database, [])]}
 
 
+# lakehouse-engine-rs 0.57.3's own words for a catalog's refusal: "<what>
+# request failed with HTTP <code>: <body>" (catalog_http.rs). Measured live,
+# 12 Nov 2026: Polaris 1.8 answers a wrong token 401 with an empty body and a
+# wrong OAuth client 401 unauthorized_client; open-source Unity Catalog
+# answers a wrong token 401 UNAUTHENTICATED.
+_UC_401 = "VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog list tables request failed with HTTP 401: %s"
+_UC_DATABRICKS_BODY = '{"error_code":"UNAUTHENTICATED","message":"Invalid access token. [ReqId: r1]"}'
+_UC_OSS_BODY = '{"error_code":"UNAUTHENTICATED","message":"missing or wrong bearer token"}'
+
+
+def _s3_refusal(code, message):
+    """The engine's object store refusing a read (opendal), as measured live
+    with a wrong static S3 secret on Polaris: the S3 code sits past 1 KB."""
+    return ("VM error: F-UDF-CL-RUST-9001: UDF error: failed to plan Iceberg files for 'sales.orders': Unexpected "
+            "=> Failed to load manifest list in cache, source: Unexpected => Failure in doing io operation, source: "
+            "PermissionDenied (persistent) at read, context: { uri: https://wh.s3.us-east-1.amazonaws.com/lake/sales/"
+            "orders/metadata/snap-5601018278928150396-0-b38ea888-5941-43ac-977c-9af40be8d813.avro, response: Parts "
+            "{ status: 403, version: HTTP/1.1, headers: {\"x-amz-request-id\": \"4HXN4V9A278ET1AN\", \"x-amz-id-2\": "
+            "\"75nSlKlLJoE4uLfi0/jU4u48QyqPpTzUq0V3d1lYc2kq9HkzWl1cJmTn8nBZq1nH3a7GmX1nB9n3m2yJp0vV8w==\", \"date\": "
+            "\"Thu, 12 Nov 2026 04:23:11 GMT\", \"content-type\": \"application/xml\", \"server\": \"AmazonS3\", "
+            "\"transfer-encoding\": \"chunked\"} }, service: s3, path: lake/sales/orders/metadata/snap-5601018278928150"
+            "396-0-b38ea888-5941-43ac-977c-9af40be8d813.avro, range: 0- } => S3Error { code: \"%s\", message: \"%s\", "
+            "resource: \"\", request_id: \"4HXN4V9A278ET1AN\" }" % (code, message))
+
+
+_S3_WRONG_SECRET = ("SignatureDoesNotMatch", "The request signature we calculated does not match the signature you "
+                                             "provided. Check your key and signing method.")
+
+
 def _catalog_source(doc, con, props, at_read=False):
-    # lakehouse-engine-rs over an Iceberg REST catalog or Unity Catalog. Not
-    # measured live: the shapes follow the Iceberg REST spec's error types,
-    # Databricks' error codes and object_store's own words.
+    # lakehouse-engine-rs over an Iceberg REST catalog or Unity Catalog. The
+    # refusals are measured (above); the other shapes follow the Iceberg REST
+    # spec's error types, Databricks' error codes and object_store's words.
     host = _host(con["url"])
     src = doc["sources"].get(host)
     if src is None:
@@ -349,22 +392,24 @@ def _catalog_source(doc, con, props, at_read=False):
     if "client_id" in cred:
         # OAuth client credentials: the catalog's token endpoint takes the pair.
         if cred.get("client_id") != src.get("client_id") or cred.get("client_secret") != src.get("client_secret"):
-            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: OAuth token request failed: HTTP 401: "
-                            '{"error":"invalid_client","error_description":"The client is not authorized"}')
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: OAuth2 token request failed with HTTP 401: "
+                            '{"error":"unauthorized_client","error_description":"The client is not authorized",'
+                            '"error_uri":null}')
     elif unity:
         if cred.get("token") != src.get("token"):
-            raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 401: '
-                            '{"error_code":"UNAUTHENTICATED","message":"Invalid access token. [ReqId: r1]"}')
+            raise Exception(_UC_401 % (_UC_OSS_BODY if src.get("oss") else _UC_DATABRICKS_BODY))
     elif "token" in cred:
         if cred["token"] != src.get("token"):
-            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
-                            "NotAuthorizedException: Not authorized to make this request (HTTP 401)")
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: failed to read the catalog config for "
+                            "warehouse '%s': catalog request failed with HTTP 401: " % cred.get("warehouse"))
     elif cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
         # Static keys: the catalog lists, the store refuses the signature.
         if at_read:
-            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
-                            "SignatureDoesNotMatch: The request signature we calculated does not match the "
-                            "signature you provided. Check your key and signing method.")
+            raise Exception(_s3_refusal(*_S3_WRONG_SECRET))
+    if not unity and src.get("fail") == "forbidden":
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: catalog request failed with HTTP 403: "
+                        '{"error":{"message":"Principal \'reader\' with activated PrincipalRoles \'[]\' is not '
+                        'authorized for op LIST_TABLES","type":"ForbiddenException","code":403}}')
     if not unity and src.get("fail") == "catalog-config":
         # Measured: the catalog URL given as the warehouse, against Databricks.
         raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: failed to read the catalog config for warehouse "
@@ -416,9 +461,9 @@ def _storage_check(src, cred, at_read):
                             "AuthenticationFailed: Server failed to authenticate the request.")
     elif "access_key" in cred and "token" in cred or "access_key" in cred and "client_id" in cred:
         if cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
-            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
-                            "SignatureDoesNotMatch: The request signature we calculated does not match the "
-                            "signature you provided. Check your key and signing method.")
+            raise Exception(_s3_refusal(*_S3_WRONG_SECRET))
+        if src.get("storage_fail") == "denied":
+            raise Exception(_s3_refusal("AccessDenied", "Access Denied"))
 
 
 def _direct_source(src, con, cred, at_read):
@@ -475,6 +520,22 @@ def _source_for(doc, connection, via="adapter"):
     return src
 
 
+def _adapter_of(name, vs):
+    """SCHEMA.SCRIPT a virtual schema runs on: as its CREATE named it, or for a
+    VS_<X> a test placed by hand, the kit's own EXAKIT_VS.ADAPTER_<X>."""
+    if vs.get("adapter"):
+        return vs["adapter"]
+    return "EXAKIT_VS.ADAPTER_" + name[3:] if name.startswith("VS_") else ""
+
+
+def _adapter_users(doc, script):
+    """The virtual schemas on an adapter script SCHEMA.NAME (on any script in
+    the schema when it ends with a dot)."""
+    return sorted(name for name, vs in doc["virtual"].items()
+                  if _adapter_of(name, vs) and (_adapter_of(name, vs) == script or
+                                                (script.endswith(".") and _adapter_of(name, vs).startswith(script))))
+
+
 class Fake(object):
     def query(self, sql):
         doc = _load()
@@ -489,6 +550,9 @@ class Fake(object):
         doc["statements"].append(sql)
         try:
             self._execute(doc, sql)
+            m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING "?(\w+)"?\."?(\w+)"?', sql)
+            if m and m.group(1) in doc["virtual"]:
+                doc["virtual"][m.group(1)]["adapter"] = "%s.%s" % (m.group(2), m.group(3))
         finally:
             _save(doc)
 
@@ -518,6 +582,19 @@ class Fake(object):
                 rows += [{"COLUMN_TABLE": table, "COLUMN_NAME": c[0], "COLUMN_TYPE": c[1],
                           "COLUMN_IS_NULLABLE": c[2]} for c in cols]
             return rows
+        if sql == "SELECT * FROM SYS.EXA_ALL_VIRTUAL_SCHEMAS":
+            if doc.get("vs_list_fail"):
+                raise Exception("insufficient privileges for reading EXA_ALL_VIRTUAL_SCHEMAS (test)")
+            rows = []
+            for name, vs in sorted(doc["virtual"].items()):
+                owner, _, script = _adapter_of(name, vs).partition(".")
+                rows.append({"SCHEMA_NAME": name, "SCHEMA_OWNER": "SYS", "ADAPTER_SCRIPT_SCHEMA": owner or None,
+                             "ADAPTER_SCRIPT_NAME": script or None})
+            return rows
+        if sql.startswith("SELECT SCRIPT_NAME, SCRIPT_TYPE FROM EXA_ALL_SCRIPTS WHERE SCRIPT_SCHEMA = 'EXAKIT_VS'"):
+            return [{"SCRIPT_NAME": s.split(".", 1)[1],
+                     "SCRIPT_TYPE": "ADAPTER" if "ADAPTER" in s.split(".", 1)[1] else "UDF"}
+                    for s in sorted(doc["scripts"]) if s.startswith("EXAKIT_VS.")]
         m = re.search(r"FROM EXA_SCHEMAS WHERE SCHEMA_NAME = '([^']+)'", sql)
         if m:
             return [{"SCHEMA_NAME": m.group(1)}] if m.group(1) in doc["schemas"] + list(doc["virtual"]) else []
@@ -742,8 +819,15 @@ class Fake(object):
                 raise Exception("adapter call failed: connection %s not found" % vs["connection"])
             doc["virtual"].pop(m.group(2), None)
             return
+        m = re.match(r'DROP (?:ADAPTER )?SCRIPT "([^"]+)"\."([^"]+)"', sql)
+        if m and "%s.%s" % m.groups() in doc.get("drop_fail", []):
+            raise Exception("cannot drop script %s.%s: object is in use (test)" % m.groups())
         m = re.match(r'DROP ADAPTER SCRIPT "([^"]+)"\."([^"]+)"', sql)
         if m:
+            users = _adapter_users(doc, "%s.%s" % m.groups())
+            if users:
+                raise Exception("cannot drop adapter script %s.%s: virtual schema %s depends on it"
+                                % (m.group(1), m.group(2), users[0]))
             doc["scripts"] = [s for s in doc["scripts"] if s != "%s.%s" % m.groups()]
             return
         m = re.match(r'DROP SCRIPT "([^"]+)"\."([^"]+)"$', sql)
@@ -757,9 +841,17 @@ class Fake(object):
         if m:
             doc["connections"].pop(m.group(1), None)
             return
-        if sql == "DROP SCHEMA EXAKIT_VS CASCADE":
-            doc["schemas"] = [s for s in doc["schemas"] if s != "EXAKIT_VS"]
-            doc["scripts"] = [s for s in doc["scripts"] if not s.startswith("EXAKIT_VS.")]
+        m = re.match(r'DROP SCHEMA "?(\w+)"?( CASCADE)?$', sql)
+        if m:
+            users = _adapter_users(doc, m.group(1) + ".")
+            if users:
+                raise Exception("cannot drop schema %s: virtual schema %s depends on an adapter script in it"
+                                % (m.group(1), users[0]))
+            left = [s for s in doc["scripts"] if s.startswith(m.group(1) + ".")]
+            if left and not m.group(2):
+                raise Exception("schema %s is not empty - use DROP SCHEMA ... CASCADE" % m.group(1))
+            doc["schemas"] = [s for s in doc["schemas"] if s != m.group(1)]
+            doc["scripts"] = [s for s in doc["scripts"] if not s.startswith(m.group(1) + ".")]
             return
         raise Exception("fake: unexpected statement: %s" % sql[:80])
 

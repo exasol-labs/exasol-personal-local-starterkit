@@ -199,7 +199,11 @@ Two secrets at most. `--password-file` (or `--password-stdin`) carries the
 catalog secret - for `glue` the AWS secret, for `none` the storage secret.
 `--storage-secret-file` carries the storage secret when a catalog and `s3` or
 `azure` are both used. Only one stdin exists, so the second secret is a file
-(or a hidden prompt at a terminal).
+(or a hidden prompt at a terminal). A pasted string (`--url`) fills only the
+catalog and its address (`catalog_url`, `workspace_url`, Glue `region` and
+`database`, or a folder `path`); a credential in it (`user:token@`, `?token=`,
+a signature) is dropped with a warning and never used, so the secret files
+are still needed. Never put a secret in `--url`.
 
 ```bash
 exakit connect lakehouse --name sales_lake --set catalog=unity --set files=azure \
@@ -261,7 +265,9 @@ Parquet (`none`: Parquet only); ORC and Hudi are not read.
 | `input` (exit 2) naming the valid `files` values | the combination is one of the 7 refused ones (section 2) |
 | a token and an OAuth client both given | pick `login=token` or `login=oauth` |
 | `gs://`, `abfs://` or `wasbs://` refused | GCS is not supported (use `exasol-vs-databricks` for Unity on GCS); Azure needs `abfss://...dfs.core.windows.net/...` |
-| "NotAuthorizedException", "HTTP 401", "Invalid access token" (`auth`) | a new token or client secret, then `exakit source reauth lake --password-file <file>` (plus `--storage-secret-file <file2>` for a two-secret combination) |
+| "request failed with HTTP 401" (any catalog: Polaris, Lakekeeper, open-source Unity, Databricks), "NotAuthorizedException", "Invalid access token", OAuth `unauthorized_client` (`auth`) | the catalog refused its login: a new token or client secret, then `exakit source reauth lake --password-file <file>` (plus `--storage-secret-file <file2>` for a two-secret combination); the remedy says "the catalog refused the ..." |
+| "PermissionDenied ... caused by S3 SignatureDoesNotMatch" or "InvalidAccessKeyId" (`auth`) | the store refused the storage key, not the catalog: `exakit source reauth lake --password-file <token file> --storage-secret-file <file with the right S3 secret key>` (`catalog=none`: `--password-file` only); the remedy says "the store refused the ..." |
+| "PermissionDenied ... caused by S3 AccessDenied", "request failed with HTTP 403" (`denied`) | the key or principal signs in but may not read: s3:ListBucket and s3:GetObject on the files, or the catalog's read grants (Polaris: a catalog role with TABLE_READ_DATA) |
 | "Unity Catalog does not let engines outside Databricks read this schema's files" (`external`) | External Data Access and EXTERNAL USE SCHEMA (section 5); Default Storage never works: `exakit connect databricks` |
 | "catalog-managed table, which this adapter version cannot read yet" (`managed`) | read it through `exakit connect databricks` |
 | other `PERMISSION_DENIED` (`denied`) | USE CATALOG, USE SCHEMA, SELECT for the token's user |

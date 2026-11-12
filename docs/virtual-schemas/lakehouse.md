@@ -153,8 +153,18 @@ SAS). Neither ever goes on the command line.
 
 There is only one stdin, so the second secret comes from a file, or from a
 hidden prompt at a terminal. Each file holds the secret alone, not JSON, and
-should be readable by you only. A credential inside a pasted connection string
-is used and not asked again.
+should be readable by you only.
+
+A pasted connection string (`--url`, or the first question of the form) fills
+the catalog and its address, never a secret: an `https://` catalog gives
+`catalog=iceberg-rest` and `catalog_url` (a Databricks workspace gives
+`catalog=unity` and `workspace_url`), a Glue endpoint or ARN gives
+`catalog=glue`, `region` and the `database`, and an `s3://` or `abfss://`
+folder gives `catalog=none` and `path`. A credential inside the string - a
+`user:token@`, a `?token=` or any other query string, a presigned or SAS
+signature - is taken out and not used, and a warning says so. The secret is
+still asked at a hidden prompt, or comes from `--password-file` (or
+`--password-stdin`), and the storage secret from `--storage-secret-file`.
 
 Write a secret to a file without it showing on screen or in the history:
 
@@ -427,7 +437,9 @@ the kit never stores secrets, so a reauth gives all of them again:
 | kind `input`: the combination is not valid | The remedy names the `files` values for that catalog. Glue takes S3 only; no catalog takes `s3` or `azure`. |
 | Both a token and an OAuth client given | Pick `login=token` or `login=oauth`, not both. |
 | A `gs://` path, or `abfs://` / `wasbs://`, refused | GCS is not supported; Azure needs `abfss://...dfs.core.windows.net/...`. For Unity tables on GCS use `exakit connect databricks`. |
-| "NotAuthorizedException", "HTTP 401", "Invalid access token" | The catalog refused the token or client: make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). |
+| kind `auth`: "request failed with HTTP 401" (Polaris, Lakekeeper, open-source Unity Catalog, Databricks), "NotAuthorizedException", "Invalid access token", OAuth `unauthorized_client` | The catalog refused the token or client: make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). The remedy starts "the catalog refused the ...". |
+| kind `auth`: "PermissionDenied (persistent) at read - caused by S3 SignatureDoesNotMatch" or "InvalidAccessKeyId" | The store refused the S3 key, not the catalog: `exakit source reauth <name> --password-file F --storage-secret-file F2`, F2 holding the right secret access key (`catalog=none`: `--password-file` only). The remedy starts "the store refused the ...". |
+| kind `denied`: "caused by S3 AccessDenied", or "request failed with HTTP 403" from the catalog | The key or principal signs in but may not read: grant s3:ListBucket and s3:GetObject on the files, or the catalog's read grants. |
 | "Unity Catalog does not let engines outside Databricks read this schema's files" | Turn on External Data Access and grant `EXTERNAL USE SCHEMA`. A Default Storage schema never works: use `exakit connect databricks`. |
 | "catalog-managed table, which this adapter version cannot read yet" | Read it with `exakit connect databricks`. |
 | `PERMISSION_DENIED` (Unity) | Grant USE CATALOG, USE SCHEMA and SELECT. |
