@@ -233,9 +233,105 @@ def described(dataset: Any) -> dict[str, Any]:
     return about
 
 
+MARK = "[built by exakit]"      # in the description of a semantic model the kit built
+
+
+def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], question: str):
+    """(Semantic SQL, the plain SQL it compiles to, assumptions, doubts) for a question, or None when the model says
+    the question cannot be answered from these metrics and dimensions."""
+    prompt = {"semantic_view": semantic["view"], "dimensions": semantic["dimensions"], "metrics": semantic["metrics"],
+              "question": question,
+              "rules": "Answer with Semantic SQL over the semantic view: SELECT <dimension names>, <metric names> FROM "
+                       "<semantic_view> [WHERE <dimension> = '<value>'] GROUP BY <the dimension names>. Use only the "
+                       "names listed. No joins, no aggregate functions, no other tables: the metrics already aggregate. "
+                       "If the question cannot be answered from these metrics and dimensions, return sql as an empty "
+                       "string and say why in doubts."}
+    answer = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Never execute SQL."},
+                  {"role": "user", "content": json.dumps(prompt)}], **options)
+    raw = answer.choices[0].message.content or ""
+    fences = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.S | re.I)
+    parsed = json.loads(fences[0] if len(fences) == 1 else raw)
+    semantic_sql = str(parsed.get("sql") or "").strip().rstrip(";")
+    if not semantic_sql:
+        raise ValueError("; ".join(str(d) for d in parsed.get("doubts") or []) or "the question is outside the model")
+    semantic_sql = _read_sql(semantic_sql)
+    if semantic["view"].upper() not in semantic_sql.upper():
+        raise ValueError("the draft does not query the semantic view")
+    plain = compile_semantic(semantic["conn"], semantic_sql)
+    return semantic_sql, plain, [str(v) for v in parsed.get("assumptions") or []], [str(v) for v in parsed.get("doubts") or []]
+
+
+def semantic_context(conn, table: str) -> dict[str, Any] | None:
+    """What the semantic layer says about ``table`` (SCHEMA.TABLE): the published view rooted at it in a model the
+    kit built, with that view's dimensions and metrics by name, business name and description. None when no model
+    has it, or Exasol Semantic Views is not installed. Reads the catalog only."""
+    schema, _, name = str(table).partition(".")
+    lit = lambda text: "'" + str(text).replace("'", "''") + "'"
+
+    def rows(sql: str) -> list[dict[str, Any]]:
+        done = conn.execute(sql)
+        names = [str(c) for c in done.column_names()] if hasattr(done, "column_names") else []
+        return [r if isinstance(r, dict) else dict(zip(names, r)) for r in done.fetchall()]
+
+    try:
+        views = rows("SELECT M.MODEL_NAME, M.PUBLISHED_SCHEMA, M.DESCRIPTION, O.OBJECT_NAME FROM SEMANTIC_CATALOG.ENTITIES E "
+                     "JOIN SEMANTIC_CATALOG.MODELS M ON M.MODEL_ID = E.MODEL_ID "
+                     "JOIN SEMANTIC_CATALOG.SEMANTIC_OBJECTS O ON O.MODEL_ID = E.MODEL_ID AND O.ROOT_ENTITY_NAME = E.ENTITY_NAME "
+                     f"WHERE E.SOURCE_SCHEMA = {lit(schema.upper())} AND E.SOURCE_OBJECT = {lit(name.upper())} "
+                     "AND E.STATUS = 'ACTIVE' AND O.STATUS = 'ACTIVE' AND M.STATUS = 'PUBLISHED' ORDER BY M.MODEL_NAME")
+        views = [v for v in views if MARK in str(v.get("DESCRIPTION") or "")]
+        if not views:
+            return None
+        # the model with the most to say first: a multi-source model has the joined tables' dimensions too
+        best, fields = None, None
+        for view in views:
+            view_name = f"{view['PUBLISHED_SCHEMA']}.{view['OBJECT_NAME']}"
+            columns = {str(r["COLUMN_NAME"]).lower() for r in rows(
+                "SELECT COLUMN_NAME FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = "
+                f"{lit(view['PUBLISHED_SCHEMA'])} AND COLUMN_TABLE = {lit(view['OBJECT_NAME'])}")}
+            if fields is None or len(columns) > len(fields):
+                best, fields = (view, view_name), columns
+        view, view_name = best
+        model = lit(view["MODEL_NAME"])
+        dims = rows("SELECT DIMENSION_NAME, DISPLAY_NAME, DESCRIPTION, DATA_TYPE FROM SEMANTIC_CATALOG.DIMENSIONS "
+                    f"WHERE MODEL_NAME = {model} AND STATUS = 'ACTIVE'")
+        metrics = rows("SELECT METRIC_NAME, DISPLAY_NAME, DESCRIPTION FROM SEMANTIC_CATALOG.METRICS "
+                       f"WHERE MODEL_NAME = {model} AND STATUS = 'ACTIVE'")
+    except Exception:
+        return None
+    pick = lambda items, key: [{"name": str(i[key]), "business_name": str(i.get("DISPLAY_NAME") or ""),
+                                "about": str(i.get("DESCRIPTION") or "")} for i in items if str(i[key]).lower() in fields]
+    found = {"model": str(view["MODEL_NAME"]), "view": view_name, "dimensions": pick(dims, "DIMENSION_NAME"),
+             "metrics": pick(metrics, "METRIC_NAME")}
+    return found if found["metrics"] else None
+
+
+def compile_semantic(conn, semantic_sql: str) -> str:
+    """The plain SQL Exasol Semantic Views compiles a Semantic SQL query into (SEMANTIC_ADMIN.COMPILE_SQL): the joins
+    and aggregates the model defines. Nothing of the user's data is read. ValueError with the product's reason when
+    the query names something the model does not have."""
+    done = conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.COMPILE_SQL('" + semantic_sql.replace("'", "''") + "')")
+    names = [str(c) for c in done.column_names()] if hasattr(done, "column_names") else []
+    row = done.fetchall()[0]
+    row = row if isinstance(row, dict) else dict(zip(names, row))
+    generated = next((v for k, v in row.items() if "GENERATED" in str(k).upper() and v), None)
+    if str(row.get("STATUS") or "").upper() != "OK" or not generated:
+        reason = next((str(v) for k, v in row.items() if "ERROR" in str(k).upper() or "MESSAGE" in str(k).upper() and v), "")
+        raise ValueError(f"The semantic model refused the query: {reason or row.get('STATUS')}")
+    return " ".join(str(generated).split())
+
+
 def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_description: str | None = None,
-        request_timeout: float | None = None, max_output_tokens: int | None = None) -> Proposal:
-    """Draft SQL from roles and the user's opted-in model endpoint; ``proposed_sql`` supports manual drafting."""
+        request_timeout: float | None = None, max_output_tokens: int | None = None, conn=None) -> Proposal:
+    """Draft SQL from the user's opted-in model endpoint; ``proposed_sql`` supports manual drafting.
+
+    With ``conn`` (the notebook's connection) and a semantic model the kit built over this data, the model answers
+    from the semantic layer: it is shown the model's metrics and dimensions, writes Semantic SQL over the published
+    view, and Exasol Semantic Views compiles that into the plain SQL you read and approve - the same definitions an
+    AI client over MCP uses, so both give the same number. Without a model over the data, or when the question
+    cannot be put in its terms, the SQL is drafted from the approved column map as before, and the proposal says so."""
     if request_timeout is not None and request_timeout <= 0:
         raise ValueError("request_timeout must be positive.")
     if max_output_tokens is not None and max_output_tokens <= 0:
@@ -259,6 +355,23 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
         options = dict(sampling())  # no temperature unless EXAKIT_MODEL_TEMPERATURE asks for one
         if max_output_tokens is not None:
             options["max_tokens"] = max_output_tokens
+        semantic = semantic_context(conn, dataset.fact_table) if conn is not None else None
+        if semantic:
+            semantic["conn"] = conn
+            try:
+                drafted = _ask_semantic(client, model, options, semantic, question)
+            except Exception as error:       # noqa: BLE001 - the column map still answers; the proposal says why
+                drafted = None
+                doubts.append(f"Not answered from the semantic model {semantic['model']} "
+                              f"({str(error).splitlines()[0][:160] if str(error) else type(error).__name__}); "
+                              "drafted from the column map instead.")
+            if drafted:
+                client.close()
+                semantic_sql, plain, said, unsure = drafted
+                return Proposal(dataset, question.strip(), _read_sql(plain),
+                                [f"Answered from the semantic model {semantic['model']} (view {semantic['view']}): the "
+                                 "same metrics and dimensions an AI client reads over MCP.",
+                                 f"Semantic SQL: {semantic_sql}", *said], unsure)
         prompt = {**described(dataset), "question": question,
                   "rules": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. Query the "
                            "table named above with its fully qualified name. Use only its columns listed above (or in "

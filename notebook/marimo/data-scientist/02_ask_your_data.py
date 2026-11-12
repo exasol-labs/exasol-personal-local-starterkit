@@ -140,7 +140,7 @@ def _(DRAFT_WITH_MODEL, QUESTION, connection, dataset, nb):
     if DRAFT_WITH_RULES:
         proposal = nb.draft_question(connection, dataset, QUESTION)
     else:
-        proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
+        proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql, conn=connection)
     EDITED_SQL = ""            # your own SQL for this question: it replaces the proposal's, not approved yet
     if EDITED_SQL:
         proposal.edit(EDITED_SQL)

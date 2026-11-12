@@ -20,10 +20,17 @@ nb.ask(
     table_description: str | None=None,
     request_timeout: float | None=None,
     max_output_tokens: int | None=None,
+    conn=None,
 ) -> Proposal
 ```
 
-Draft SQL from roles and the user's opted-in model endpoint; `proposed_sql` supports manual drafting.
+Draft SQL from the user's opted-in model endpoint; `proposed_sql` supports manual drafting.
+
+With `conn` (the notebook's connection) and a semantic model the kit built over this data, the model answers
+from the semantic layer: it is shown the model's metrics and dimensions, writes Semantic SQL over the published
+view, and Exasol Semantic Views compiles that into the plain SQL you read and approve - the same definitions an
+AI client over MCP uses, so both give the same number. Without a model over the data, or when the question
+cannot be put in its terms, the SQL is drafted from the approved column map as before, and the proposal says so.
 
 **Used in:** `data-scientist/02_ask_your_data`
 

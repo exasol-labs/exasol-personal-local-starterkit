@@ -203,14 +203,19 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             name_ = f"{name_}_{len(relationships) + 1}"
         used.add(name_)
         relationships.append({"name": name_, "from": a["name"], "to": b["name"], "from_column": from_column,
-                              "to_column": to_column,
+                              "to_column": to_column, "evidence": link.get("evidence"),
                               "join": f"{column_sql(a['alias'], from_column)} = {column_sql(b['alias'], to_column)}"})
         edges.setdefault(a["name"], []).append((b["name"], name_))
+        # a many-to-one link must end on a unique key the model declares: the column map's key, or this column,
+        # which the link's own check found unique (Semantic Views refuses the relationship otherwise)
+        if to_column not in b["key"] and to_column not in b.setdefault("unique", []):
+            b["unique"].append(to_column)
 
     def free(wanted: str, *prefixes: str) -> str:
         """A name not yet in the model: the wanted one, else prefixed with its entity (or view); never a keyword."""
         base = re.sub(r"_+", "_", re.sub(r"[^a-z0-9_]", "_", str(wanted).lower())).strip("_") or "field"
-        candidates = [base] + [f"{identifier(p, 'x')}_{base}" for p in prefixes] + [f"field_{base}"]
+        last = identifier(prefixes[-1], "x") if prefixes else "field"
+        candidates = [base] + [f"{identifier(p, 'x')}_{base}" for p in prefixes] + [f"{base}_of_{last}"]
         for candidate in candidates:
             candidate = candidate[:100]
             if candidate[0].isalpha() and candidate not in RESERVED and candidate not in used:
@@ -306,7 +311,10 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         raise ModelRefused("Nothing to model: no approved table has a time, category or flag column to group by.")
     schemas = sorted({e["schema"] for e in entities})
     about = description or f"{'Multi-source model over ' if len(schemas) > 1 else 'Model of '}{', '.join(schemas)}"
+    sources = [{"table": f"{e['schema']}.{e['table']}", "entity": e["name"],
+                "origin": "external source, read live" if e["virtual"] else "table in this database"} for e in entities]
     return {"model": model, "published_schema": published_schema(model), "description": f"{about} {MARK}",
+            "sources": sources,
             "entities": [{k: v for k, v in e.items() if k != "columns"} for e in entities],
             "relationships": relationships, "objects": objects, "notes": notes, "schemas": schemas}
 
@@ -360,9 +368,21 @@ def statements(spec: dict[str, Any]) -> list[str]:
             found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], f"{e['name']}_pk", "PRIMARY",
                                  f"Key of {e['schema']}.{e['table']}", "NATIVE",
                                  json.dumps([{"column_name": k, "ordinal_position": i} for i, k in enumerate(e["key"], 1)])))
+        for column in e.get("unique") or []:
+            found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk"),
+                                 "UNIQUE", f"{column} is unique in {e['schema']}.{e['table']}: a link ends on it", "NATIVE",
+                                 json.dumps([{"column_name": column, "ordinal_position": 1}])))
     for r in spec["relationships"]:
         found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], "MANY_TO_ONE", "LEFT", None))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
+        if r.get("evidence"):
+            # why this link is in the model (who proposed it, what the data showed): kept on the relationship itself,
+            # readable in SEMANTIC_CATALOG.CUSTOM_EXTENSIONS by anyone who reads the model
+            found.append(_script("ADD_CUSTOM_EXTENSION", model, "RELATIONSHIP", r["name"], "exakit",
+                                 json.dumps(r["evidence"], ensure_ascii=False, default=str), "EXAKIT", "link_evidence"))
+    if spec.get("sources"):
+        found.append(_script("ADD_CUSTOM_EXTENSION", model, "MODEL", None, "exakit",
+                             json.dumps(spec["sources"], ensure_ascii=False), "EXAKIT", "sources"))
     for obj in spec["objects"]:
         found.append(_script("ADD_SEMANTIC_OBJECT", model, obj["name"], obj["root"], obj["description"]))
         found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))

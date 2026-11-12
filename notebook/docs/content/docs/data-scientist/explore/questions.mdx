@@ -39,6 +39,14 @@ The three ways differ in who drafts the SQL:
 
 The rules drafter needs no model. `nb.ask` needs one, which you set up with `nb.model_setup()`. Without a model, `nb.ask` stops and says to pass `proposed_sql=` with SQL you wrote. To set up a model, see [Set up Exasol](/data-scientist/set-up/ai-and-langfuse).
 
+### Answers come from the semantic model
+
+When a semantic model covers your data, your AI model answers from it. It is shown the model's metrics and dimensions, writes Semantic SQL over the published view, and Exasol Semantic Views compiles that into the plain SQL you read and approve. An AI client over MCP uses the same definitions, so the notebook and the client give the same number for the same question.
+
+Measured: for *revenue by region*, the draft `SELECT region, total_amount FROM SEM_XSRC_TEST.ORDER_LINES GROUP BY region` compiled to a `SUM(AMOUNT)` over `AMAZON.ORDER_LINES` with a `LEFT JOIN` to the state table, the join the model defines. A draft naming a metric the model does not have was refused (`SEMANTIC_QUERY_020`).
+
+The proposal says which model answered and shows the Semantic SQL under *What the model assumed*. If no model covers the data, or the question cannot be put in the model's terms, the SQL is drafted from the approved column map and the proposal says so under *Check before you approve*.
+
 ## Read, edit and approve
 
 Read the proposal, and edit it if it is wrong:

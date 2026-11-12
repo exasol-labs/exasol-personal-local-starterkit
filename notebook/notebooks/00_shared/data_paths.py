@@ -174,8 +174,10 @@ SEMANTIC_NAME = "my_data"
 SEMANTIC_TABLES = [dataset.fact_table]        # add tables of other schemas: "VS_LOGISTICS.COURIER_DAILY", "MY_DATA.TARGETS"
 SEMANTIC_LINKS = []                           # e.g. "MY_DATA.ORDERS.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE"
 PUBLISH_SEMANTIC = False
-semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=SEMANTIC_LINKS, ai=None,
-                             preview=not PUBLISH_SEMANTIC)
+SEMANTIC_SCHEMAS = []                         # or whole schemas: every approved table of each, e.g. ["MY_DATA", "VS_LOGISTICS"]
+found_links = nb.find_links(connection, SEMANTIC_SCHEMAS, ai=None) if len(SEMANTIC_SCHEMAS) > 1 else None   # links across them, from the values
+semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=SEMANTIC_LINKS,
+                             schemas=SEMANTIC_SCHEMAS, find=bool(SEMANTIC_SCHEMAS), ai=None, preview=not PUBLISH_SEMANTIC)
 semantic
 
 # %% tags=["review"]

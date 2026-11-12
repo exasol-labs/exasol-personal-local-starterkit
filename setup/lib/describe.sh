@@ -9,6 +9,8 @@
 #   exakit describe --schema <SCHEMA> [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner <who>] [--no-comments]]
 # and a semantic model over tables of any schemas (sample data, loaded files, external sources):
 #   exakit describe --model <NAME> --table S.T... [--link S.T.COL=S.T.KEY]... [--ai] [--dry-run]  |  --refresh
+#   exakit describe --model <NAME> --schemas A,B,C --find-links     (every approved table; links found from the values)
+#   exakit describe --links A,B,C [--ai]                             (the links alone, each with its evidence)
 #   exakit describe --models
 # approve checks the roles and that the table has not changed, writes the next
 # version into ~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/ and
@@ -62,6 +64,7 @@ cmd_describe() {
     _cd_mode=""; _cd_owner=""; _cd_version=""; _cd_nocomments=""; _cd_roles=()
     _cd_schema=""; _cd_links=(); _cd_unlinks=()
     _cd_model=""; _cd_tables=(); _cd_ai=""; _cd_dry=""; _cd_desc=""; _cd_refresh=""; _cd_models=""
+    _cd_links_of=""; _cd_schemas=""; _cd_find=""
     while [ $# -gt 0 ]; do
         case "$1" in
             --help|-h) exakit_help_render command describe; return $? ;;
@@ -73,8 +76,9 @@ cmd_describe() {
             --ai) _cd_ai="--ai" ;;
             --dry-run) _cd_dry="--dry-run" ;;
             --refresh) _cd_refresh=1 ;;
+            --find-links) _cd_find="--find-links" ;;
             --models) _cd_models=1 ;;
-            --sample|--id|--write|--owner|--version|--role|--schema|--link|--unlink|--model|--table|--description)
+            --sample|--id|--write|--owner|--version|--role|--schema|--link|--unlink|--model|--table|--description|--links|--schemas)
                 _cd_opt="$1"
                 [ $# -ge 2 ] || reject "$_cd_opt needs a value: exakit describe ... $_cd_opt <value>"
                 case "$2" in -*) reject "$_cd_opt needs a value: exakit describe ... $_cd_opt <value>" ;; esac
@@ -122,33 +126,61 @@ cmd_describe() {
                     --description)
                         [ -z "$_cd_desc" ] || reject "--description was given twice."
                         _cd_desc="$2" ;;
+                    --links|--schemas)
+                        # schema names joined by commas: the sources to link, or to take every approved table of
+                        printf '%s' "$2" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*(,[A-Za-z_][A-Za-z0-9_]*)*$' || \
+                            reject "$_cd_opt takes schema names joined by commas (A,B,C), not '$2'."
+                        if [ "$_cd_opt" = --links ]; then
+                            [ -z "$_cd_links_of" ] || reject "--links was given twice."
+                            case "$2" in *,*) ;; *) reject "--links takes at least two schemas, to find the links between them: --links A,B" ;; esac
+                            _cd_links_of="$2"
+                        else
+                            [ -z "$_cd_schemas" ] || reject "--schemas was given twice."
+                            _cd_schemas="$2"
+                        fi ;;
                     --unlink)
                         printf '%s' "$2" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$' || \
                             reject "--unlink takes the TABLE.COLUMN a link starts from, not '$2'."
                         _cd_unlinks+=("$2") ;;
                 esac
                 shift ;;
-            -*) reject "Unknown option '$1' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink, --model, --table, --ai, --description, --dry-run, --refresh, --models)." ;;
+            -*) reject "Unknown option '$1' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink, --model, --table, --ai, --description, --dry-run, --refresh, --models, --links, --schemas, --find-links)." ;;
             *) [ -z "$_cd_target" ] || reject "Name one table or descriptor: exakit describe SCHEMA.TABLE | exakit describe <id> --approve|--show|--versions|--comments"
                _cd_target="$1" ;;
         esac
         shift
     done
+    if [ -n "$_cd_links_of" ]; then
+        # The links between tables of different schemas, found from their values; nothing is written.
+        [ -z "$_cd_target$_cd_sample$_cd_id$_cd_write$_cd_version$_cd_mode$_cd_schema$_cd_owner$_cd_nocomments$_cd_model$_cd_models$_cd_dry$_cd_desc$_cd_refresh$_cd_schemas$_cd_find" ] && \
+            [ ${#_cd_roles[@]} -eq 0 ] && [ ${#_cd_unlinks[@]} -eq 0 ] && [ ${#_cd_tables[@]} -eq 0 ] || \
+            reject "--links takes the schemas and only --ai, --link and --json: exakit describe --links A,B[,C...] [--ai] [--link S.T.COL=S.T.KEY]... [--json]"
+        set -- links "$_cd_links_of" ${_cd_ai:+"$_cd_ai"} ${_cd_json:+"$_cd_json"}
+        _cd_n=0
+        while [ "$_cd_n" -lt ${#_cd_links[@]} ]; do
+            printf '%s' "${_cd_links[$_cd_n]}" | grep -Eq '^[^.=]+\.[^.=]+\.[^.=]+=[^.=]+\.[^.=]+\.[^.=]+$' || \
+                reject "--link with --links takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY (a pair to check), not '${_cd_links[$_cd_n]}'."
+            set -- "$@" --link "${_cd_links[$_cd_n]}"; _cd_n=$((_cd_n + 1))
+        done
+        describe_installed || die "The notebook add-on is not installed; its Python runs the describe service. Install it with: exakit marketplace notebook"
+        describe_run "$@"
+        return $?
+    fi
     if [ -n "$_cd_models$_cd_model" ]; then
         # Semantic models (Exasol Semantic Views): every model, one built over tables of any schemas, or a refresh.
         [ -z "$_cd_target$_cd_sample$_cd_id$_cd_write$_cd_version$_cd_mode$_cd_schema$_cd_owner$_cd_nocomments" ] && [ ${#_cd_roles[@]} -eq 0 ] && [ ${#_cd_unlinks[@]} -eq 0 ] || \
             reject "--model and --models take only --table, --link, --ai, --description, --dry-run, --refresh and --json: exakit describe --model NAME --table SCHEMA.TABLE... [--link S.T.COL=S.T.KEY]..."
         if [ -n "$_cd_models" ]; then
-            [ -z "$_cd_model$_cd_ai$_cd_dry$_cd_desc$_cd_refresh" ] && [ ${#_cd_tables[@]} -eq 0 ] && [ ${#_cd_links[@]} -eq 0 ] || \
+            [ -z "$_cd_model$_cd_ai$_cd_dry$_cd_desc$_cd_refresh$_cd_schemas$_cd_find" ] && [ ${#_cd_tables[@]} -eq 0 ] && [ ${#_cd_links[@]} -eq 0 ] || \
                 reject "--models lists the models and takes only --json: exakit describe --models [--json]"
             set -- models ${_cd_json:+"$_cd_json"}
         elif [ -n "$_cd_refresh" ]; then
-            [ -z "$_cd_ai$_cd_dry$_cd_desc" ] && [ ${#_cd_tables[@]} -eq 0 ] && [ ${#_cd_links[@]} -eq 0 ] || \
+            [ -z "$_cd_ai$_cd_dry$_cd_desc$_cd_schemas$_cd_find" ] && [ ${#_cd_tables[@]} -eq 0 ] && [ ${#_cd_links[@]} -eq 0 ] || \
                 reject "--refresh rebuilds a model from what it was built on and takes only --json: exakit describe --model NAME --refresh"
             set -- refresh "$_cd_model" ${_cd_json:+"$_cd_json"}
         else
-            [ ${#_cd_tables[@]} -gt 0 ] || reject "Name the tables of the model: exakit describe --model $_cd_model --table SCHEMA.TABLE [--table SCHEMA.TABLE]..."
-            set -- model "$_cd_model" ${_cd_ai:+"$_cd_ai"} ${_cd_dry:+"$_cd_dry"} ${_cd_json:+"$_cd_json"} ${_cd_desc:+--description "$_cd_desc"}
+            [ ${#_cd_tables[@]} -gt 0 ] || [ -n "$_cd_schemas" ] || reject "Name the tables of the model, or whole schemas: exakit describe --model $_cd_model --table SCHEMA.TABLE... | --schemas A,B[,C...] [--find-links]"
+            set -- model "$_cd_model" ${_cd_ai:+"$_cd_ai"} ${_cd_dry:+"$_cd_dry"} ${_cd_json:+"$_cd_json"} ${_cd_desc:+--description "$_cd_desc"} ${_cd_schemas:+--schemas "$_cd_schemas"} ${_cd_find:+"$_cd_find"}
             _cd_n=0
             while [ "$_cd_n" -lt ${#_cd_tables[@]} ]; do set -- "$@" --table "${_cd_tables[$_cd_n]}"; _cd_n=$((_cd_n + 1)); done
             _cd_n=0
@@ -162,8 +194,8 @@ cmd_describe() {
         describe_run "$@"
         return $?
     fi
-    [ -z "$_cd_ai$_cd_dry$_cd_desc$_cd_refresh" ] && [ ${#_cd_tables[@]} -eq 0 ] || \
-        reject "--table, --ai, --description, --dry-run and --refresh go with --model: exakit describe --model NAME --table SCHEMA.TABLE..."
+    [ -z "$_cd_ai$_cd_dry$_cd_desc$_cd_refresh$_cd_schemas$_cd_find" ] && [ ${#_cd_tables[@]} -eq 0 ] || \
+        reject "--table, --schemas, --find-links, --ai, --description, --dry-run and --refresh go with --model: exakit describe --model NAME --table SCHEMA.TABLE..."
     if [ -n "$_cd_schema" ]; then
         _cd_n=0
         while [ "$_cd_n" -lt ${#_cd_links[@]} ]; do

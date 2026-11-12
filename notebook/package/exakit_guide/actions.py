@@ -94,6 +94,11 @@ ACTIONS: dict[str, Action] = {
                                "links={links}, ai={ai}, preview=True)", "semantic", False),
     "semantic.publish": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
                                "links={links}, ai={ai}, preview=False)", "semantic"),
+    "semantic.links": Action("00_quickstart", "found_links = nb.find_links(connection, {schemas}, ai={ai})", "found_links", False),
+    "semantic.preview_schemas": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
+                                       "links={links}, ai={ai}, preview=True)", "semantic", False),
+    "semantic.publish_schemas": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
+                                       "links={links}, ai={ai}, preview=False)", "semantic"),
     "semantic.refresh": Action("00_quickstart", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
     "map.review": Action("00_quickstart", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
     "map.approve": Action("00_quickstart", "role_review.approve({choices}, {slots})\ndataset = role_review.dataset()", "dataset"),
@@ -135,7 +140,7 @@ ACTIONS: dict[str, Action] = {
                                              "dataset = nb.dataset(connection, nb.chosen_dataset({dataset_id}))\n"
                                              'dataset.require_approved("ask")', "dataset", False),
     "ask.examples": Action("02_ask_your_data", "examples = nb.example_questions(dataset)", "examples", False),
-    "ask.model": Action("02_ask_your_data", "proposal = nb.ask(dataset, {question})", "proposal"),
+    "ask.model": Action("02_ask_your_data", "proposal = nb.ask(dataset, {question}, conn=connection)", "proposal"),
     "ask.rules": Action("02_ask_your_data", "proposal = nb.draft_question(connection, dataset, {question})", "proposal"),
     "ask.edit": Action("02_ask_your_data", "proposal.edit({sql})", None),
     "ask.run": Action("02_ask_your_data", "proposal.approve()\nanswer = proposal.run()", "answer"),

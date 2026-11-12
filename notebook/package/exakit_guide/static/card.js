@@ -394,7 +394,7 @@ function render({ model, el }) {
     fields(b) { return h("div", { class: "guide-fieldrow" }, b.items.map(field)); },
     checks(b) {
       return h("div", { class: "guide-checks" }, b.items.map((c) => {
-        if (st.fields[c.id] === undefined) st.fields[c.id] = false;
+        if (st.fields[c.id] === undefined) st.fields[c.id] = !!c.value;     // value: ticked to start with
         return h("label", { class: "guide-checkrow" },
           h("input", { type: "checkbox", checked: st.fields[c.id] ? true : null, onChange: (e) => { st.fields[c.id] = e.target.checked; } }),
           h("span", {}, c.label));

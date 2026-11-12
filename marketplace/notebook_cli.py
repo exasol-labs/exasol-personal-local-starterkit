@@ -364,13 +364,18 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
             if command is None:
                 raise AddonFailure("JupyterLab is missing; run exakit notebook setup")
             config = home / "jupyter_server_config.json"
+            # pre_save_hook: a guided card is a live widget, so its output is not saved into the notebook (it would
+            # come back as "model not found" when the notebook is opened again): notebook/kit/exakit_save_hook.py
             config.write_text(json.dumps({"ContentsManager": {"hide_globs": ["__pycache__", "*.pyc", "*.pyo",
-                                                                       ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"]},
+                                                                       ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"],
+                                                              "pre_save_hook": "exakit_save_hook.strip_guided"},
                                           "LabApp": {"custom_css": _guided_view_css(ctx, venv)}}),
                               encoding="utf-8")
             token_file = notebook._credential(ctx, "notebook_jupyter_token")
             token = token_file.read_text(encoding="utf-8").strip()
-            env = kit_telemetry.default_off({**os.environ, "JUPYTER_TOKEN": token})
+            hook_dir = str(ctx.root / "notebook" / "kit")       # where the server finds exakit_save_hook
+            paths = os.pathsep.join(p for p in (hook_dir, os.environ.get("PYTHONPATH", "")) if p)
+            env = kit_telemetry.default_off({**os.environ, "JUPYTER_TOKEN": token, "PYTHONPATH": paths})
             argv = [str(venv_python(venv)), str(ctx.root / "notebook" / "kit" / "server_wrapper.py"),
                     str(token_file), str(command), "--no-browser", "--ServerApp.ip=127.0.0.1", f"--ServerApp.port={port}",
                     "--ServerApp.port_retries=0", f"--ServerApp.root_dir={directory}", f"--config={config}"]

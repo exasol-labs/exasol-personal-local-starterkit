@@ -169,6 +169,8 @@ default and say so. Keep these in mind through every round:
 | Approve the column map | `exakit describe <SCHEMA.TABLE>`, then `exakit describe <id> --approve --role target=<COLUMN>`; in a notebook `nb.review_roles(conn, data)` |
 | Read the semantic layer | Exasol Semantic Views: `SEMANTIC_CATALOG.MODELS`, `ENTITIES`, `DIMENSIONS`, `METRICS`, `RELATIONSHIPS`; ask it with Semantic SQL (`set_exasol_preprocessor` to `SEMANTIC_ADMIN.SEMANTIC_PREPROCESSOR` through MCP; `nb.semantic_sql(conn, ...)` in a notebook) |
 | One model across sources | `exakit describe --model <NAME> --table S.T ... --link S.T.COL=S.T.KEY --ai [--dry-run]`; in a notebook `nb.semantic_model(conn, name, tables=[...], links=[...], preview=True)` or the **Semantic views** card |
+| Find how sources join | `exakit describe --links A,B,C` (from the values, no foreign key needed); check a pair you believe in with `--link S.T.COL=S.T.KEY`; in a notebook `nb.find_links(conn, ["A", "B"])` |
+| One model over whole schemas | `exakit describe --model <NAME> --schemas A,B,C --find-links --ai --dry-run`, then without `--dry-run` on the user's yes; `nb.semantic_model(conn, name, schemas=[...], find=True)` |
 | Keep a model current | approving a column map rebuilds every model it is in; otherwise `exakit describe --model <NAME> --refresh` (`nb.refresh_semantic`) |
 | Links between tables | `exakit describe --schema <SCHEMA>`; in a notebook `nb.describe_schema` |
 | Clean the data | `nb.typed_view(conn, ds)`: proposes types, NULLs for blanks and placeholders, no exact copies |

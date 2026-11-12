@@ -132,6 +132,11 @@ run --model m --table A.B --approve; check "--model with --approve" "2" "$CODE"
 run --model m --refresh --table A.B; check "--refresh with --table" "2" "$CODE"; contains "says what it takes" "--refresh rebuilds a model" "$OUT"
 run --models --model m;            check "--models with --model" "2" "$CODE"
 run LAB.READINGS --ai;             check "--ai without --model" "2" "$CODE"; contains "says where it goes" "go with --model" "$OUT"
+run --links AMAZON;                check "--links with one schema" "2" "$CODE"; contains "asks for two" "at least two schemas" "$OUT"
+run --links 'A B,C';               check "--links with a space" "2" "$CODE"
+run --links A,B --model m;         check "--links with --model" "2" "$CODE"; contains "says what it takes" "--links takes the schemas" "$OUT"
+run LAB.READINGS --schemas A,B;    check "--schemas without --model" "2" "$CODE"
+run --model m --find-links;        check "--model with neither tables nor schemas" "2" "$CODE"
 OUT="$( (cmd_describe LAB.READINGS --json --bogus) 2>/dev/null )"; CODE=$?
 check "with --json the refusal is one object" "2" "$CODE"
 check "and it says rejected" "yes" "$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d.get("rejected") and d.get("ok") is False else "no")')"
@@ -182,6 +187,9 @@ run --model sales_360 --table A.ORDERS --table VS_X.DAILY --link A.ORDERS.STATE=
 check "every model option, in the service's order" "model sales_360 --ai --dry-run --json --description Sales and deliveries --table A.ORDERS --table VS_X.DAILY --link A.ORDERS.STATE=VS_X.STATES.STATE" "$(asked args)"
 run --model sales_360 --refresh;   check "refresh" "refresh sales_360" "$(asked args)"
 run --models --json;               check "models" "models --json" "$(asked args)"
+run --model all_data --schemas AMAZON,VS_LOGISTICS,MY_DATA --find-links --ai
+check "whole schemas, links found from the values" "model all_data --ai --schemas AMAZON,VS_LOGISTICS,MY_DATA --find-links" "$(asked args)"
+run --links AMAZON,VS_LOGISTICS --ai -j; check "the links alone" "links AMAZON,VS_LOGISTICS --ai --json" "$(asked args)"
 STUB_EXIT=2 run readings --approve --role entity=NOPE; check "the service's 2 (a bad role) is the command's" "2" "$CODE"
 STUB_EXIT=3 run nowhere --versions; check "3: no such id" "3" "$CODE"
 STUB_EXIT=5 run readings --approve; check "5: a version conflict" "5" "$CODE"
@@ -203,7 +211,7 @@ check "the help document has the command" "describe" "$(python3 -c 'import json,
 check "in the personas and notebooks group" "yes" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if any("describe" in g["commands"] for g in d["groups"] if g["title"]=="Personas and notebooks") else "no")' "$ROOT/setup/help/exakit.json")"
 _cd_page="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=[c for c in d["commands"] if c["command"]=="describe"][0]; print(c["options"]); print(c["description"]); print("\n".join(c["examples"]))' "$ROOT/setup/help/exakit.json")"
 contains "and its page names the add-on" "exakit marketplace notebook" "$_cd_page"
-for _opt in --approve --role --owner --no-comments --show --version --versions --comments --schema --link --unlink --model --table --ai --dry-run --refresh --models; do
+for _opt in --approve --role --owner --no-comments --show --version --versions --comments --schema --link --unlink --model --table --ai --dry-run --refresh --models --links --schemas --find-links; do
     contains "the options list $_opt" "$_opt" "$(printf '%s' "$_cd_page" | sed -n 1p)"
 done
 contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" "$_cd_page"

@@ -175,6 +175,10 @@ try {
     Check "every model option, in the service's order" "model sales_360 --ai --dry-run --table A.ORDERS --table VS_X.DAILY --link A.ORDERS.STATE=VS_X.STATES.STATE --json" (Asked "args")
     Run @("--model", "sales_360", "--refresh");  Check "refresh" "refresh sales_360" (Asked "args")
     Run @("--models", "--json");                 Check "models" "models --json" (Asked "args")
+    Run @("--model", "all_data", "--schemas", "AMAZON,VS_LOGISTICS,MY_DATA", "--find-links", "--ai")
+    Check "whole schemas, links found from the values" "model all_data --ai --schemas AMAZON,VS_LOGISTICS,MY_DATA --find-links" (Asked "args")
+    Run @("--links", "AMAZON,VS_LOGISTICS", "--ai", "-j"); Check "the links alone" "links AMAZON,VS_LOGISTICS --ai --json" (Asked "args")
+    Run @("--links", "AMAZON");                  Check "--links with one schema" 2 $CODE
     Run @("--model", "m");                       Check "--model without tables" 2 $CODE
     Run @("--model", "m", "--table", "A.B", "--link", "A.B=C.D"); Check "a two-part --link with --model" 2 $CODE
     $env:STUB_EXIT = "2"
@@ -204,7 +208,7 @@ try {
     Check "the help document has the command" 1 @($help.commands | Where-Object { $_.command -eq "describe" }).Count
     Check "in the personas and notebooks group" $true ((@($help.groups | Where-Object { $_.title -eq "Personas and notebooks" })[0].commands) -contains "describe")
     $page = @($help.commands | Where-Object { $_.command -eq "describe" })[0]
-    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments", "--schema", "--link", "--unlink", "--model", "--table", "--ai", "--dry-run", "--refresh", "--models")) {
+    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments", "--schema", "--link", "--unlink", "--model", "--table", "--ai", "--dry-run", "--refresh", "--models", "--links", "--schemas", "--find-links")) {
         Contains "the options list $opt" $opt $page.options
     }
     Contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" $page.description

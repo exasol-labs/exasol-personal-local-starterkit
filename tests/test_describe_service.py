@@ -236,6 +236,32 @@ class Service(unittest.TestCase):
         self.assertTrue(all(m["kit"] and m["refreshable"] for m in json.loads(out)))
         self.assertEqual(3, self.run_main("refresh", "never_built")[0])
 
+    def test_whole_schemas_go_into_a_model_and_only_backed_links_are_used(self):
+        self.run_main("draft", "support.tickets", "--id", "support_tickets")
+        self.run_main("approve", "support_tickets")
+        high = {"from": "SUPPORT.TICKETS.CHANNEL", "to": "CRM.CHANNELS.NAME", "confidence": "high", "proposed_by": "values",
+                "found": 3, "checked": 3, "share": 1.0, "key_evidence": "measured", "from_live": False, "to_live": False,
+                "evidence_text": "3 of 3"}
+        low = dict(high, **{"from": "SUPPORT.TICKETS.TICKET_ID", "to": "CRM.CASES.ID", "confidence": "low"})
+        found = {"links": [high, low], "partial": [{"from": "SUPPORT.TICKETS.BODY", "to": "CRM.X.Y", "share": 0.6, "found": 3, "checked": 5}],
+                 "schemas": ["SUPPORT", "CRM"], "checked": 2, "statements": 9, "not_checked": 0}
+        with mock.patch.object(svc, "find_links", return_value=found) as finder, \
+                mock.patch.object(svc.publishing, "approved_tables", side_effect=lambda schema, home=None: (
+                    {"SUPPORT.TICKETS": svc.flow.load(store.current("SUPPORT.TICKETS"))} if schema == "SUPPORT" else {})):
+            result = svc.semantic_model(self.db, "everything", [], schemas=["support"], dry_run=True, discover=True)
+            self.assertFalse(finder.called, "one schema: nothing to link across")
+            # two schemas: the search runs; the table of the other schema has no approved map, so no link can be used
+            result = svc.semantic_model(self.db, "everything", ["SUPPORT.TICKETS"], schemas=["SUPPORT"], dry_run=True)
+        self.assertEqual(("dry run", ["TICKETS"]), (result["status"], [o["name"] for o in result["spec"]["objects"]]))
+        with self.assertRaises(svc.Refused):
+            svc.semantic_model(self.db, "nothing", [], schemas=["CRM"], dry_run=True)
+        text = svc.links_text(dict(found, ai=None, rejected=[{"from": "A.B.C", "to": "D.E.F", "why": "no"}]))
+        self.assertIn("[high] 3 of 3", text)
+        self.assertIn("[low]", text)
+        self.assertIn("[partial] SUPPORT.TICKETS.BODY", text)
+        self.assertIn("[rejected] A.B.C -> D.E.F", text)
+        self.assertEqual(2, self.run_main("links", "SUPPORT")[0])           # two schemas at least
+
     def test_set_gives_a_column_a_role_and_a_bad_one_is_exit_2(self):
         self.run_main("draft", "support.tickets")
         code, out, _ = self.run_main("approve", "SUPPORT.TICKETS", "--set", "CHANNEL=identifier", "--role", "category=-", "--json")

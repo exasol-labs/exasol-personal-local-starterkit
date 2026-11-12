@@ -351,6 +351,26 @@ class SemanticModelTest(unittest.TestCase):
         self.assertIn("COMMENT ''Order value incl. tax''", definition)        # a column note is the field's comment
         self.assertIn("AS total_o_totalprice / NULLIF(orders_count, 0)", definition)
 
+    def test_a_link_found_from_the_values_is_declared_unique_and_keeps_its_evidence(self):
+        """A link ends on a column that is unique but is not the column map's key (a state name): Semantic Views
+        refuses the relationship unless that column is a declared unique key (SEMANTIC_MODEL_033, met live)."""
+        states = {"columns": {"STATE_CODE": {"role": "key"}, "STATE_NAME": {"role": "category"}, "REGION": {"role": "category"}},
+                  "slots": {"key": "STATE_CODE"}}
+        evidence = {"proposed_by": "values", "rows": {"rows": 128942, "matched": 128921, "unmatched": 21}}
+        spec = semantic_model.build(
+            [semantic_model.table_input("TPCH.ORDERS", self.ORDERS, {"O_TOTALPRICE": "DECIMAL(15,2)", "O_ORDERDATE": "DATE"}),
+             semantic_model.table_input("GEO.STATES", states, {})],
+            [{"from": "TPCH.ORDERS.O_ORDERSTATUS", "to": "GEO.STATES.STATE_NAME", "evidence": evidence}], "orders by state")
+        sent = semantic_model.statements(spec)
+        self.assertTrue(any("ADD_UNIQUE_KEY_WITH_COLUMNS('orders_by_state', 'states', 'states_state_name_uk', 'UNIQUE'" in s
+                            for s in sent), "the link's target is a declared unique key")
+        stored = next(s for s in sent if "ADD_CUSTOM_EXTENSION" in s and "'RELATIONSHIP'" in s)
+        self.assertIn("'orders_to_states', 'exakit'", stored)
+        self.assertIn('"matched": 128921', stored)                       # why the link is there, kept in the model
+        sources = next(s for s in sent if "ADD_CUSTOM_EXTENSION" in s and "'MODEL'" in s)
+        self.assertIn('"table": "GEO.STATES"', sources)
+        self.assertLess(sent.index(stored), sent.index(next(s for s in sent if "ADD_SEMANTIC_OBJECT" in s)))
+
     def test_an_ai_proposal_is_checked_before_it_is_used(self):
         spec = self.spec()
         labels, extra, refused = semantic_model.ai_accept(spec, {

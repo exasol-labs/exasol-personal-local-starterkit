@@ -116,6 +116,88 @@ In the guided view, open **Understand** and scroll to **Semantic views**. Then:
 
 **Models in the database** lists every model. **Refresh it** rebuilds a model the kit built, from the column maps and links approved since.
 
+## Links across sources [#links-across-sources]
+
+Tables of different sources rarely declare how they join, and the same thing is often named differently: a customer number in one, a client id in another. The kit finds such a link from the values the columns hold. It does not match column names, and it needs no foreign key.
+
+<Flow
+  caption="How a link between two sources is found"
+  steps="[
+  { title: &#x22;Pick the schemas&#x22;, text: &#x22;Sample data, your files, external sources&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;Find the keys&#x22;, text: &#x22;Columns whose every value is present and different&#x22;, code: &#x22;one aggregate per table&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Compare values&#x22;, text: &#x22;Up to 500 values of a column, asked of each key&#x22;, code: &#x22;COUNT ... WHERE key IN (...)&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;Count the rows&#x22;, text: &#x22;A text link may miss at most 0.1% of its rows&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;You confirm&#x22;, text: &#x22;Tick or untick each link, then publish&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+In the **Semantic views** card, tick the schemas and click **Find links between them**. In a cell or a terminal:
+
+```python
+found_links = nb.find_links(connection, ["AMAZON", "RETAIL_SIGNALS", "VS_LOGISTICS"])
+```
+
+```bash
+exakit describe --links AMAZON,RETAIL_SIGNALS,VS_LOGISTICS
+```
+
+Each link comes back with its evidence. Measured on a real database, between the Amazon sample data and a PostgreSQL source read live:
+
+```text
+[high] AMAZON.ORDER_LINES.SHIP_STATE -> VS_LOGISTICS.STATE_LOGISTICS.SHIP_STATE:
+       128,921 of 128,942 rows have a value in the key; 21 do not
+       (not matching: LAKSHADWEEP, ORISSA, RAJSHTHAN, NL, RAJSTHAN)
+```
+
+Only 36 of the 47 different state names match (77%), because 11 are misspelt or abbreviated. Those 11 are 21 rows out of 128,942. The kit counts rows, so the link stands and the misspellings are listed for you to clean.
+
+### What a link's confidence means [#what-a-links-confidence-means]
+
+| Confidence | When                                                                    | What to do                                                   |
+| ---------- | ----------------------------------------------------------------------- | ------------------------------------------------------------ |
+| high       | A text column (a code, a name) whose rows are in another table's key    | It is ticked for you. Untick it if the meaning is wrong      |
+| low        | A link between two plain number columns                                 | Tick it only if you know the two columns mean the same thing |
+| partial    | Text values that only partly match, with more than 0.1% of rows missing | Not a link. Look at the spellings first                      |
+
+Numbers get the low mark for a measured reason. A key that is simply 1, 2, 3 and so on holds every small number. On a database with six schemas, the first version of this search proposed 18 links into one such key: a meter id, a quantity and a count of delayed shipments all "matched" an order line id. So a number column is only considered when it spans at least half the key's range and something else supports it: a similar name, an approved column map that calls it a key or an identifier, or a pair proposed by you or an AI. Even then the data can only contradict such a link, never prove it. Two were still proposed between unrelated order numbers, which is why the last word is yours.
+
+### Let an AI, or an AI client, propose links [#let-an-ai-or-an-ai-client-propose-links]
+
+An AI reads what the columns mean; the search above does not. With **Let the AI help** ticked (or `--ai`), your model proposes pairs from column names, types and notes. It is never sent a value. Each pair is then checked against the data like any other.
+
+An AI client such as Claude Code or Codex does the same with its own reading. It checks a pair with:
+
+```bash
+exakit describe --links AMAZON,CRM --link AMAZON.ORDER_LINES.CUST_NO=CRM.CUSTOMERS.CUSTOMER_ID
+```
+
+A pair the data contradicts comes back as `[rejected]`.
+
+### What is stored [#what-is-stored]
+
+A link you publish becomes a relationship of the model. Its evidence is stored with it: who proposed it, how many rows matched, and which values did not. Read it back with:
+
+```sql
+SELECT SCOPE_NAME, DATA_JSON FROM SEMANTIC_CATALOG.CUSTOM_EXTENSIONS
+WHERE MODEL_NAME = 'sales_360' AND VENDOR_NAME = 'exakit'
+```
+
+The model also lists each table it is built on and whether it is a table in this database or an external source read live.
+
+### What it costs on large data [#what-it-costs-on-large-data]
+
+Every statement of the search is bounded: one aggregate per table, one `SELECT DISTINCT ... LIMIT 500` per column, one count with a list of values per pair, and at most 400 pairs. Measured: six schemas with 25 tables took 223 statements and about 60 seconds, most of it the live source. Three schemas took 26 statements and 23 seconds.
+
+Queries on the published model were measured on 10,002,745 rows joined to a 30,000-row table:
+
+| Query                                          | Semantic SQL | Hand-written SQL |
+| ---------------------------------------------- | ------------ | ---------------- |
+| Group by a category                            | 0.20 s       | 0.13 s           |
+| Join, group by priority and month (415 groups) | 0.27 s       | 0.21 s           |
+| Join with a filter                             | 0.12 s       | not measured     |
+
+The totals were identical in all 415 groups, and the row counts added up to the table. The SQL the model compiles is one scan of the main table, one `LEFT JOIN` per table a dimension needs (none when the dimensions are the main table's own), and one `GROUP BY`. See it for any query with `EXECUTE SCRIPT SEMANTIC_ADMIN.COMPILE_SQL('<your Semantic SQL>')`.
+
 ## The AI proposes the fields [#the-ai-proposes-the-fields]
 
 With `ai=None`, the notebook asks the AI only when a model is set up. The AI proposes business names, comments, synonyms and the metrics people will ask for. It works from names, types, grains, column notes and a category's most frequent values. It never receives a row, and never a sensitive column.

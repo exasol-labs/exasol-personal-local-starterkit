@@ -129,6 +129,8 @@ semantic = semantic.publish()                    # Semantic Views installed when
 nb.semantic_sql(conn, "SELECT order_date_month, total_amount FROM SEM_SALES_360.ORDER_LINES GROUP BY order_date_month")
 nb.refresh_semantic(conn, "sales_360")           # after a new link or table; an approval refreshes by itself
 nb.semantic_models(conn)                         # every model, and which the kit can refresh
+nb.find_links(conn, ["AMAZON", "MY_DATA", "VS_LOGISTICS"])     # how the sources join, from the values, with evidence
+nb.semantic_model(conn, "all_data", schemas=["AMAZON", "MY_DATA", "VS_LOGISTICS"], find=True, preview=True)
 ```
 
 The guided view's Understand step has the same as the **Semantic views** card.

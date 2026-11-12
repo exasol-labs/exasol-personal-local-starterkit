@@ -572,12 +572,38 @@ class NotebookPlanTest(unittest.TestCase):
             config = home / "jupyter_server_config.json"
             self.assertIn(f"--config={config}", jupyter_args)
             self.assertIn(f"--ServerApp.root_dir={directory}", jupyter_args)
-            self.assertIn("marimo", json.loads(config.read_text(encoding="utf-8"))["ContentsManager"]["hide_globs"])
+            written = json.loads(config.read_text(encoding="utf-8"))["ContentsManager"]
+            self.assertIn("marimo", written["hide_globs"])
+            # a guided card's output is not saved: the hook is named, and the server is told where to find it
+            self.assertEqual("exakit_save_hook.strip_guided", written["pre_save_hook"])
+            env = server_type.return_value.start.call_args.kwargs["env"]
+            self.assertIn(str(self.ctx.root / "notebook" / "kit"), env["PYTHONPATH"].split(os.pathsep))
+            self.assertTrue((self.ctx.root / "notebook" / "kit" / "exakit_save_hook.py").is_file())
             with redirect_stdout(StringIO()):
                 notebook_cli._start_frontend(self.ctx, "marimo", 2718, False, False)
             marimo_args = server_type.return_value.start.call_args.args[0]
             self.assertEqual("edit", marimo_args[4])
             self.assertEqual(str(directory / "marimo"), marimo_args[5])
+
+    def test_a_guided_cells_output_is_not_saved(self) -> None:
+        """Reopening a notebook showed "model not found" where the card was: a saved widget has no kernel behind it."""
+        sys.path.insert(0, str(ROOT / "notebook" / "kit"))
+        import exakit_save_hook
+
+        widget = {"output_type": "display_data", "data": {exakit_save_hook.WIDGET: {"model_id": "x"}, "text/plain": "Card()"}}
+        table = {"output_type": "execute_result", "data": {"text/html": "<table></table>"}}
+        model = {"type": "notebook", "content": {"cells": [
+            {"cell_type": "markdown", "source": "hint"},
+            {"cell_type": "code", "metadata": {"tags": ["exakit-guide"]}, "execution_count": 3, "outputs": [widget, table]},
+            {"cell_type": "code", "metadata": {}, "execution_count": 4, "outputs": [table, widget]},
+            {"cell_type": "code", "metadata": {}, "execution_count": 5, "outputs": [table]}]}}
+        exakit_save_hook.strip_guided(model, path="x.ipynb", contents_manager=None)
+        cells = model["content"]["cells"]
+        self.assertEqual(([], None), (cells[1]["outputs"], cells[1]["execution_count"]))     # the guided cell: ready to run
+        self.assertEqual(([table], 4), (cells[2]["outputs"], cells[2]["execution_count"]))   # a stray widget goes, the table stays
+        self.assertEqual([table], cells[3]["outputs"])
+        exakit_save_hook.strip_guided({"type": "file"})                  # anything else is left alone
+        exakit_save_hook.strip_guided({"type": "notebook", "content": None})      # a notebook it cannot read is saved untouched
 
     def test_guided_notebooks_open_in_the_guided_view(self) -> None:
         """The kit's JupyterLab loads custom.css from its own venv: the code section of a guided notebook stays hidden

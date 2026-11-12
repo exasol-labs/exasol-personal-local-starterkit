@@ -52,6 +52,17 @@ exakit describe --model sales_360 \
 * An external source (a virtual schema, `VS_<NAME>`) is read live: nothing is copied.
 * `--dry-run` prints what would be built and writes nothing. Run it again without `--dry-run` to publish.
 
+### Whole schemas, and links found for you [#whole-schemas-and-links-found-for-you]
+
+Name schemas and the kit takes every table of them that has an approved column map. `--find-links` looks for the joins between the schemas in the values, with no foreign key and no matching names needed:
+
+```bash
+exakit describe --links AMAZON,MY_DATA,VS_LOGISTICS                 # the links alone, each with its evidence
+exakit describe --model all_data --schemas AMAZON,MY_DATA,VS_LOGISTICS --find-links --ai --dry-run
+```
+
+A text link the data backs is used. A link between plain numbers is only named, because numbers in a sequence match by chance: pass it with `--link` if it is right. A pair you or an AI client believes in is checked with `exakit describe --links A,B --link S.T.COL=S.T.KEY`. How the search works, and what it measured, is on [Semantic views](/data-scientist/explore/semantic-views#links-across-sources).
+
 ### Let the AI propose the fields [#let-the-ai-propose-the-fields]
 
 With `--ai`, the model you set up for the kit (`EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL`) proposes business names, comments and synonyms for every field, and the metrics people will ask for: filtered totals (completed revenue), differences and ratios.

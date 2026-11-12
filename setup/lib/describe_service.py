@@ -32,6 +32,11 @@ Runs on the kit's notebook Python (pyexasol is there); otherwise the standard li
         a semantic model over tables of any schemas - sample data, loaded files, external sources - from their approved
         column maps, each schema's approved links and the links given; --ai lets the user's model propose business
         names, synonyms and metrics (each checked before use); --dry-run says what it would publish.
+        --schemas A,B,C takes every approved table of those schemas; --find-links finds the links between the
+        schemas from their values and uses the ones the data backs (the doubtful ones are only named).
+    python describe_service.py links <A,B,C> [--ai] [--link <S.T.COL>=<S.T.KEY> ...] [--json]
+        the links between tables of different schemas, each with its evidence; --link checks a pair you (or an agent)
+        have in mind against the data; nothing is written.
     python describe_service.py refresh <NAME> [--json]     rebuild a model the kit published, with what was approved since
     python describe_service.py models [--json]             every semantic model in the database
 
@@ -575,7 +580,8 @@ def semantic_ai(spec: dict[str, Any], chat=None) -> dict[str, Any]:
 
 
 def semantic_model(conn, name: str, tables: list[str], links: list[str] | None = None, *, ai: bool = False,
-                   dry_run: bool = False, description: str | None = None, chat=None, progress=None) -> dict[str, Any]:
+                   dry_run: bool = False, description: str | None = None, chat=None, progress=None,
+                   schemas: list[str] | None = None, discover: bool = False) -> dict[str, Any]:
     """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
     approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). With
     ``ai`` the user's model proposes the fields first. ``dry_run`` builds the spec and says what it would publish."""
@@ -585,14 +591,37 @@ def semantic_model(conn, name: str, tables: list[str], links: list[str] | None =
     for table in tables:
         schema, object_name = split_table(table)
         names.append(f"{schema}.{object_name}")
+    skipped: list[str] = []
+    wanted = [schema_map.schema_name(s) for s in schemas or []]
+    if wanted:
+        # whole schemas: every table of them with an approved column map (the rest are named, never guessed)
+        approved, _keys, _roles, _notes = _approved_in(wanted)
+        names += [t for t in sorted(approved) if t not in names]
+        from descriptor import links as linking
+        every, _virtual = linking.columns(lambda sql: _rows(conn, sql), wanted)
+        skipped = sorted(t for t in every if t not in approved)
     if not names:
-        raise Refused("Name the tables of the model: --table SCHEMA.TABLE (repeat it).")
+        raise Refused("Nothing to model: name tables (--table SCHEMA.TABLE) or schemas (--schemas A,B) that have "
+                      "approved column maps. Approve one with: exakit describe SCHEMA.TABLE --approve")
     joins = []
     for spec in links or []:
         source, sep, target = spec.partition("=")
         if not sep or source.count(".") != 2 or target.count(".") != 2:
             raise Refused(f"--link takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY, not '{spec}'.")
-        joins.append({"from": source.strip().upper(), "to": target.strip().upper()})
+        joins.append({"from": source.strip().upper(), "to": target.strip().upper(),
+                      "evidence": {"proposed_by": "you", "note": "given with --link"}})
+    discovered: dict[str, Any] | None = None
+    model_schemas = sorted({n.split(".", 1)[0] for n in names})
+    if discover and len(model_schemas) > 1:
+        # links across the sources, from the values: the ones the data backs are used, the doubtful ones only named
+        discovered = find_links(conn, model_schemas, ai=ai, chat=chat, progress=progress)
+        for link in discovered["links"]:
+            inside = link["from"].rsplit(".", 1)[0] in names and link["to"].rsplit(".", 1)[0] in names
+            if inside and link["confidence"] == "high" and not any(j["from"] == link["from"] for j in joins):
+                joins.append({"from": link["from"], "to": link["to"],
+                              "evidence": {k: link[k] for k in ("proposed_by", "found", "checked", "share", "key_evidence",
+                                                                "from_live", "to_live", "evidence_text", "rows")
+                                           if k in link}})
     for schema in sorted({n.split(".", 1)[0] for n in names}):
         for link in publishing.schema_links(schema):
             if link["from"].rsplit(".", 1)[0] in names and link["to"].rsplit(".", 1)[0] in names \
@@ -606,8 +635,17 @@ def semantic_model(conn, name: str, tables: list[str], links: list[str] | None =
     proposal = semantic_ai(spec, chat) if ai else {"labels": {}, "extra": [], "refused": [], "error": None}
     if proposal["labels"]:
         publishing.apply_labels(spec, proposal["labels"])
+    for table in skipped:
+        spec["notes"].append(f"{table} has no approved column map, so it is not in the model: exakit describe {table}")
+    for link in (discovered or {}).get("links") or []:
+        if link["confidence"] != "high" and not any(j["from"] == link["from"] for j in joins):
+            spec["notes"].append(f"possible link, not used until you confirm it: --link {link['from']}={link['to']} "
+                                 f"({link['found']} of {link['checked']} sampled values match; plain numbers match by chance)")
+    for part in (discovered or {}).get("partial") or []:
+        spec["notes"].append(f"partial match, not a link: {part['from']} ~ {part['to']} ({part['share']:.0%} of sampled values)")
     found: dict[str, Any] = {"model": spec["model"], "published_schema": spec["published_schema"], "spec": spec,
                              "summary": sm.summary(spec), "ai": {k: proposal[k] for k in ("refused", "error")},
+                             "links": [{"from": j["from"], "to": j["to"], "evidence": j.get("evidence")} for j in joins],
                              "proposed_metrics": [ddl for _view, ddl in proposal["extra"]]}
     if dry_run:
         found["status"] = "dry run"
@@ -621,6 +659,92 @@ def semantic_model(conn, name: str, tables: list[str], links: list[str] | None =
         raise Refused(str(err)) from err
     found.update(result, status="published")
     return found
+
+
+def _approved_in(schemas: list[str]) -> tuple[dict[str, dict[str, Any]], dict[str, str], dict[str, str], dict[str, str]]:
+    """(approved column maps by table, their keys, every column's role, every column's note) for these schemas."""
+    docs: dict[str, dict[str, Any]] = {}
+    for schema in schemas:
+        docs.update(publishing.approved_tables(schema))
+    keys, roles, notes = {}, {}, {}
+    for table, doc in docs.items():
+        key = (doc.get("slots") or {}).get("key")
+        if key:
+            keys[f"{table}.{key}"] = "the approved column map's key"
+        for column, entry in (doc.get("columns") or {}).items():
+            roles[f"{table}.{column}"] = str(entry.get("role") or "")
+            if entry.get("note") and not entry.get("sensitive"):
+                notes[f"{table}.{column}"] = str(entry["note"])
+    return docs, keys, roles, notes
+
+
+def find_links(conn, schemas: list[str], *, ai: bool = False, chat=None, progress=None,
+               check: list[str] | None = None) -> dict[str, Any]:
+    """The links between tables of different schemas (sample data, loaded files, external sources), found from their
+    values and each shown with its evidence (descriptor/links.py). With ``ai`` the user's model proposes more pairs
+    from names, types and notes only; each is checked against the data like any other. ``check`` is pairs someone
+    already has in mind (``S.T.COL=S.T.KEY``: an agent's reading of what the columns mean, or yours): they are checked
+    the same way and come back with their evidence, or under ``rejected`` with what the data showed. Nothing is written."""
+    from descriptor import links as linking
+
+    names = []
+    for schema in schemas:
+        try:
+            names.append(schema_map.schema_name(schema))
+        except ValueError as err:
+            raise Refused(str(err)) from err
+    if len(names) < 2:
+        raise Refused("Name at least two schemas to find the links between them: exakit describe --links A,B[,C...]")
+    rows = lambda sql: _rows(conn, sql)
+    _docs, keys, roles, notes = _approved_in(names)
+    proposals, ai_note = [], None
+    asked = []
+    for pair in check or []:
+        source, sep, target = pair.partition("=")
+        if not sep or source.count(".") != 2 or target.count(".") != 2:
+            raise Refused(f"--link takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY, not '{pair}'.")
+        asked.append((source.strip().upper(), target.strip().upper()))
+    proposals += asked
+    if ai:
+        if chat is None and not (os.environ.get("EXAKIT_MODEL_ID", "").strip() and os.environ.get("EXAKIT_PROVIDER_BASE_URL", "").strip()):
+            ai_note = "no model is configured, so only the values were used"
+        else:
+            try:
+                tables, _virtual = linking.columns(rows, names)
+                text = (chat or _chat)(linking.AI_INSTRUCTIONS + "\n\nTables: "
+                                       + json.dumps(linking.ai_facts(tables, notes), ensure_ascii=False)).strip()
+                proposals += linking.ai_pairs(json.loads(text[text.find("{"):text.rfind("}") + 1]), tables)
+                ai_note = f"the model proposed {len(proposals) - len(asked)} pair(s); each was checked against the data"
+            except Exception as err:               # noqa: BLE001 - the search by values stands
+                ai_note = f"the model's proposal was not used ({type(err).__name__})"
+    found = linking.find(rows, names, approved_keys=keys, roles=roles, proposals=proposals, progress=progress)
+    found["ai"] = ai_note
+    for link in found["links"]:
+        link["evidence_text"] = linking.evidence_text(link)
+    kept = {(l["from"], l["to"]) for l in found["links"]}
+    found["rejected"] = [{"from": a, "to": b, "why": "the data does not back it: too few of its values are in that "
+                          "column, the two columns are of different kinds, or the target is not unique"}
+                         for a, b in asked if (a, b) not in kept]
+    return found
+
+
+def links_text(found: dict[str, Any]) -> str:
+    lines = [f"Links across {', '.join(found['schemas'])}: {len(found['links'])} found "
+             f"({found['checked']} pairs checked with {found['statements']} bounded statements"
+             + (f"; {found['not_checked']} more were not checked" if found["not_checked"] else "") + ")."]
+    if found.get("ai"):
+        lines.append(f"AI: {found['ai']}.")
+    for link in found["links"]:
+        lines.append(f"  [{link['confidence']}] {link['evidence_text']}")
+        lines.append(f"      use it: --link {link['from']}={link['to']}")
+    for part in found.get("partial") or []:
+        lines.append(f"  [partial] {part['from']} ~ {part['to']}: {part['found']} of {part['checked']} sampled values match "
+                     f"({part['share']:.0%}). Not a link: look at the spellings before joining on it.")
+    for item in found.get("rejected") or []:
+        lines.append(f"  [rejected] {item['from']} -> {item['to']}: {item['why']}.")
+    if not found["links"] and not found.get("partial"):
+        lines.append("  No column of one schema points at a key of another. Give a link yourself with --link if you know one.")
+    return "\n".join(lines)
 
 
 def refresh_model(conn, name: str) -> dict[str, Any]:
@@ -664,10 +788,11 @@ def _workflow_log():
 
 def _options(args: list[str]) -> tuple[list[str], dict[str, Any]]:
     words, opts = [], {"role": [], "set": [], "link": [], "unlink": [], "table": []}
-    flags = {"--json": "json", "--no-comments": "no_comments", "--force": "force", "--ai": "ai", "--dry-run": "dry_run"}
+    flags = {"--json": "json", "--no-comments": "no_comments", "--force": "force", "--ai": "ai", "--dry-run": "dry_run",
+             "--find-links": "find_links"}
     valued = {"--sample": "sample", "--id": "id", "--write": "write", "--owner": "owner", "--version": "version",
               "--role": "role", "--set": "set", "--link": "link", "--unlink": "unlink", "--table": "table",
-              "--description": "description"}
+              "--description": "description", "--schemas": "schemas"}
     i = 0
     while i < len(args):
         arg = args[i]
@@ -763,12 +888,23 @@ def _run(command: str, words: list[str], opts: dict[str, Any]) -> None:
         conn = connect()
         try:
             found = semantic_model(conn, target, opts["table"], opts["link"], ai=bool(opts.get("ai")),
+                                   schemas=[w for w in str(opts.get("schemas") or "").split(",") if w.strip()],
+                                   discover=bool(opts.get("find_links")),
                                    dry_run=bool(opts.get("dry_run")), description=opts.get("description"),
                                    progress=lambda line: print(line, file=sys.stderr, flush=True))
         finally:
             conn.close()
         _emit({k: v for k, v in found.items() if k != "spec"} if not opts.get("json") else found, bool(opts.get("json")),
               _model_text(found))
+    elif command == "links":
+        conn = connect()
+        try:
+            found = find_links(conn, [w for w in target.split(",") if w.strip()], ai=bool(opts.get("ai")),
+                               check=opts["link"],
+                               progress=lambda line: print(line, file=sys.stderr, flush=True))
+        finally:
+            conn.close()
+        _emit(found, bool(opts.get("json")), links_text(found))
     elif command == "refresh":
         conn = connect()
         try:
@@ -788,7 +924,7 @@ def _run(command: str, words: list[str], opts: dict[str, Any]) -> None:
             for m in found) or "No semantic models yet (or Semantic Views is not installed).")
     else:
         raise Refused(f"Unknown command '{command}' (draft, approve, show, versions, comments, profile, schema, "
-                      "schema-approve, model, refresh, models).")
+                      "schema-approve, model, links, refresh, models).")
 
 
 def _counts(found: dict[str, Any]) -> str:

@@ -98,7 +98,7 @@
   - Development
     - [Development](/data-scientist/development): How the kit's notebooks, helpers and CLI fit together, where the files live, how to add a command and how these docs are built.
     - Notebook commands
-      - [All commands](/data-scientist/development/reference): Every public helper of exakit.nb, 119 in all, with the page that documents it.
+      - [All commands](/data-scientist/development/reference): Every public helper of exakit.nb, 120 in all, with the page that documents it.
       - [Connect, SQL and tracing](/data-scientist/development/reference/core): Helpers for the Exasol Personal Local Starter Kit's notebooks: exakit.nb (this module; exakit_nb is the same module under its older name).
       - [Quickstart steps](/data-scientist/development/reference/quickstart): The steps both quickstarts share (notebook/notebooks/00_shared): is the database there, what does it hold, and one loader per way data comes in - a sample dataset the kit ships, your own file, an external source connected as a virtual schema.
       - [Your own file or table](/data-scientist/development/reference/own-file): Your own CSV, Parquet or JSON file as a dataset: loaded into a table over the kit's connection, described by a few role assignments, and checked by the same rules as a kit dataset - so the notebooks run on it unchanged.

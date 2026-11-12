@@ -1117,12 +1117,14 @@ class DataMap(Screen):
 
 
 class SemanticViews(Screen):
-    """The semantic layer: Exasol Semantic Views models over any of the data - sample datasets, your own files and
-    any number of external sources at once (nb.semantic_model). Tables with an approved column map are offered; the
-    AI (when a model is configured) proposes the fields' business names, synonyms and metrics; a preview shows what
-    would be built before anything is written. Models the kit built can be refreshed here; approving a column map
-    refreshes every model it is in by itself."""
+    """The semantic layer: one Exasol Semantic Views model over any of the data. Pick whole schemas - sample
+    datasets, your own files, any number of external sources - and the kit takes every table of them with an approved
+    column map. Find links looks for the joins between the schemas in the values (no foreign key or matching name
+    needed) and shows each with its evidence: the ones the data backs are ticked, a link between plain numbers is
+    left for you to tick. The AI (when a model is configured) proposes more links and the fields' business names and
+    metrics. A preview shows what would be built before anything is written; models the kit built can be refreshed."""
     help = (('One model across sources', 'explore/semantic-views#one-model-across-sources'),
+            ('How links are found', 'explore/semantic-views#links-across-sources'),
             ('What the AI sees', 'explore/semantic-views#the-ai-proposes-the-fields'),
             ('Keeping it current', 'explore/semantic-views#keep-the-model-current'),)
 
@@ -1130,8 +1132,10 @@ class SemanticViews(Screen):
 
     def __init__(self) -> None:
         super().__init__()
-        self.tables: list[dict] = []
+        self.schemas: list[dict] = []
         self.models: list[dict] = []
+        self.links: list[dict] | None = None      # what Find links found, for the schemas it was asked about
+        self.links_note = ""
         self.preview_text = ""
         self.result_text = ""
         self.error = None
@@ -1145,7 +1149,13 @@ class SemanticViews(Screen):
     def _load(self) -> None:
         try:
             found = actions.run("data.map")
-            self.tables = [r for r in found.table_rows if str(r.get("map", "")).startswith(("approved", "shipped"))]
+            by_schema: dict[str, dict] = {}
+            for r in found.table_rows:
+                schema = r["table"].split(".", 1)[0]
+                entry = by_schema.setdefault(schema, {"schema": schema, "origin": r["origin_label"], "tables": 0, "approved": 0})
+                entry["tables"] += 1
+                entry["approved"] += str(r.get("map", "")).startswith("approved")
+            self.schemas = sorted(by_schema.values(), key=lambda e: (e["origin"], e["schema"]))
             try:
                 listed = actions.run("semantic.models")
                 self.models = listed.to_dict("records") if hasattr(listed, "to_dict") else list(listed or [])
@@ -1159,18 +1169,19 @@ class SemanticViews(Screen):
         SESSION.release()
 
     def _chosen(self, v: dict) -> tuple[str, list[str], list[str], bool]:
-        tables = [r["table"] for r in self.tables if v.get("sv:" + r["table"])]
-        links = [line.strip() for line in str(v.get("sv_links") or "").replace(";", "\n").splitlines() if line.strip()]
-        return (str(v.get("sv_name") or "").strip() or "my_data", tables, links, bool(v.get("sv_ai")))
+        schemas = [e["schema"] for e in self.schemas if v.get("sv:" + e["schema"])]
+        links = [f"{l['from']}={l['to']}" for l in self.links or [] if v.get("svl:" + l["from"])]
+        links += [line.strip() for line in str(v.get("sv_links") or "").replace(";", "\n").splitlines() if line.strip()]
+        return (str(v.get("sv_name") or "").strip() or "my_data", schemas, links, bool(v.get("sv_ai")))
 
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Semantic views",
                 "sub": "One semantic model over any of your data - sample data, your files and external sources - "
                        "that AI clients and notebooks query by its business names."}
         if self.loading:
-            return [head, {"t": "empty", "v": "Reading which tables have an approved column map…"}]
+            return [head, {"t": "empty", "v": "Reading the schemas and which tables have an approved column map…"}]
         if self.error:
-            return [head, {"t": "msg", "kind": "warn", "v": f"The tables could not be read: {self.error}"},
+            return [head, {"t": "msg", "kind": "warn", "v": f"The schemas could not be read: {self.error}"},
                     {"t": "actions", "items": [{"id": "sv_reload", "label": "Read it again"}]}]
         blocks = [head]
         if self.models:
@@ -1184,23 +1195,39 @@ class SemanticViews(Screen):
                                                       "value": kit_models[0]["model"],
                                                       "options": [{"value": m["model"], "label": m["model"]} for m in kit_models]}]},
                            {"t": "actions", "items": [{"id": "sv_refresh", "label": "Refresh it", "busy": "Rebuilding…"}]}]
-        if not self.tables:
-            blocks.append({"t": "msg", "kind": "info", "v": "No table has an approved column map yet. Approve one above "
-                           "(Column map), and it is offered here."})
-            return blocks
+        usable = [e for e in self.schemas if e["approved"]]
         blocks += [{"t": "subhead", "v": "Build a model"},
-                   {"t": "p", "muted": True, "v": "Pick the tables, from as many origins as you like. Their approved "
-                    "column maps decide the fields: time, category and flag columns become dimensions, measures become "
-                    "totals and averages, every table gets a row count."},
-                   {"t": "checks", "items": [{"id": "sv:" + r["table"],
-                                              "label": f"{r['table']}  ·  {r['origin_label']}  ·  {r['rows_shown']} rows"}
-                                             for r in self.tables]},
-                   {"t": "fields", "items": [
+                   {"t": "p", "muted": True, "v": "Tick the schemas, from as many origins as you like. Every table of them "
+                    "with an approved column map goes in; a table without one is named in the preview, with the way to "
+                    "approve it."},
+                   {"t": "checks", "items": [{"id": "sv:" + e["schema"],
+                                              "label": f"{e['schema']}  ·  {e['origin']}  ·  {e['approved']} of {e['tables']} "
+                                                       f"table{'s' if e['tables'] != 1 else ''} approved"}
+                                             for e in self.schemas]}]
+        if not usable:
+            blocks.append({"t": "msg", "kind": "info", "v": "No table has an approved column map yet. Approve one above "
+                           "(Column map), and its schema can be modelled."})
+        blocks += [{"t": "checks", "items": [{"id": "sv_ai", "label": "Let the AI help: propose links between the sources, "
+                                                                        "business names, synonyms and metrics (names, types "
+                                                                        "and notes only, never a row)"}]},
+                   {"t": "actions", "items": [{"id": "sv_find", "label": "Find links between them", "busy": "Comparing values…"}]}]
+        if self.links is not None:
+            blocks.append({"t": "subhead", "v": "Links found"})
+            if self.links:
+                blocks += [{"t": "p", "muted": True, "v": "Each link was checked against the data. A ticked one is used. "
+                            "A link between plain numbers is not ticked: numbers in a sequence match by chance, so tick it "
+                            "only if you know the two columns mean the same thing."},
+                           {"t": "checks", "items": [{"id": "svl:" + l["from"], "value": l["confidence"] == "high",
+                                                      "label": l["evidence_text"]} for l in self.links]}]
+            else:
+                blocks.append({"t": "p", "muted": True, "v": "No column of one schema points at a key of another. Add a "
+                                                             "link below if you know one."})
+            if self.links_note:
+                blocks.append({"t": "pre", "v": self.links_note})
+        blocks += [{"t": "fields", "items": [
                        {"id": "sv_name", "label": "Model name", "value": "my_data", "placeholder": "sales_360"},
-                       {"id": "sv_links", "label": "Links across schemas (optional)", "value": "",
+                       {"id": "sv_links", "label": "A link of your own (optional)", "value": "",
                         "placeholder": "SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY; ..."}]},
-                   {"t": "checks", "items": [{"id": "sv_ai", "label": "Let the AI propose business names, synonyms and "
-                                                                        "metrics (metadata only, never a row)"}]},
                    {"t": "actions", "items": [{"id": "sv_preview", "label": "Preview", "busy": "Building the preview…"},
                                               {"id": "sv_publish", "label": "Publish the model", "primary": True,
                                                "busy": "Publishing…"}]}]
@@ -1208,28 +1235,45 @@ class SemanticViews(Screen):
             blocks += [{"t": "subhead", "v": "Preview"}, {"t": "pre", "v": self.preview_text}]
         if self.result_text:
             blocks += [{"t": "msg", "kind": "good", "v": self.result_text}]
+        example = [e["schema"] for e in usable[:3]] or ["MY_DATA", "VS_SALES"]
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
-                       "v": actions.code("semantic.publish", name="sales_360", tables=[r["table"] for r in self.tables[:3]],
-                                         links=[], ai=True)})
+                       "v": "\n".join([actions.code("semantic.links", schemas=example, ai=True),
+                                       actions.code("semantic.publish_schemas", name="sales_360", schemas=example,
+                                                    links=[], ai=True)])})
         return blocks
 
     def on_sv_reload(self, _v: dict) -> None:
         self.loading = True
         self._load()
 
+    def on_sv_find(self, v: dict) -> None:
+        _name, schemas, _links, ai = self._chosen(v)
+        if len(schemas) < 2:
+            raise ValueError("Tick at least two schemas: links are looked for between schemas.")
+        found = actions.run("semantic.links", schemas=schemas, ai=ai)
+        self.links = list(found.get("links") or [])
+        notes = [f"{p['from']} ~ {p['to']}: {p['found']} of {p['checked']} sampled values match. Not a link: look at the "
+                 "spellings first." for p in found.get("partial") or []]
+        if found.get("ai"):
+            notes.append(f"AI: {found['ai']}.")
+        notes.append(f"{found['checked']} pairs checked with {found['statements']} bounded statements"
+                     + (f"; {found['not_checked']} more were not checked." if found.get("not_checked") else "."))
+        self.links_note = "\n".join(notes)
+        self.refresh()
+
+    def _build(self, v: dict, action: str):
+        name, schemas, links, ai = self._chosen(v)
+        if not schemas:
+            raise ValueError("Tick at least one schema.")
+        return actions.run(action, name=name, schemas=schemas, links=links, ai=ai)
+
     def on_sv_preview(self, v: dict) -> None:
-        name, tables, links, ai = self._chosen(v)
-        if not tables:
-            raise ValueError("Pick at least one table.")
-        found = actions.run("semantic.preview", name=name, tables=tables, links=links, ai=ai)
+        found = self._build(v, "semantic.preview_schemas")
         self.preview_text, self.result_text = str(found), ""
         self.refresh()
 
     def on_sv_publish(self, v: dict) -> None:
-        name, tables, links, ai = self._chosen(v)
-        if not tables:
-            raise ValueError("Pick at least one table.")
-        found = actions.run("semantic.publish", name=name, tables=tables, links=links, ai=ai)
+        found = self._build(v, "semantic.publish_schemas")
         self.preview_text = str(found)
         self.result_text = (f"Published {', '.join(found.views)}. AI clients query it over MCP; a notebook with "
                             "nb.semantic_sql. Approving a column map in it refreshes it by itself.")
