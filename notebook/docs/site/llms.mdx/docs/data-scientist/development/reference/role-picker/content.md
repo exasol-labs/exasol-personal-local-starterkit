@@ -12,8 +12,10 @@ ds = review.dataset()                     # the approved dataset; waits for the 
 The picker is the descriptor itself: one dropdown per column with the eight roles (key, time, measure, category, flag,
 text, identifier, other), set to the role the rules drafted and labelled with the evidence that chose it; then one
 dropdown per slot - the columns the notebooks use (key, time, text, target, category, entity) - set to the drafted
-column; then an Approve button. In JupyterLab it is
-ipywidgets; in Marimo the review itself is a `mo.ui.dictionary` of `mo.ui.dropdown` with a `mo.ui.run_button`, so
+column; then an Approve button. Each dropdown is the kit's own (`exakit_nb.picklist.PickList`, the guided cards'
+look: the list opens in place and says what each role is for). In JupyterLab the rest is ipywidgets; in Marimo the
+review itself is a `mo.ui.dictionary` of those dropdowns (through `mo.ui.anywidget`; `mo.ui.dropdown` where it
+is missing) with a `mo.ui.run_button`, so
 `ds = review.dataset()` runs again when the button is clicked and stops cleanly (`mo.stop`) until then; in a plain
 Python session `review.approve({"COLUMN": "role", ...})` is the same path.
 

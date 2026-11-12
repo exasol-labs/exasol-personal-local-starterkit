@@ -165,7 +165,7 @@ class ReviewTest(unittest.TestCase):
         headings = [w.args[0] for w in box.args[0] if type(w).__name__ == "HTML"]
         self.assertIn("<b>Check these first</b> - 2 drafted at low confidence, where the draft guessed", headings)
         self.assertIn("<b>The rest</b> - drafted at high confidence", headings)
-        self.assertEqual([o for o, _ in dropdowns[0]["options"]],
+        self.assertEqual([o[0] for o in dropdowns[0]["options"]],
                          ["key", "time", "measure", "category", "flag", "text", "identifier", "other"])
         self.assertEqual(dropdowns[4]["options"][0], ("—", None))
         html = [w for w in box.args[0] if type(w).__name__ == "VBox"]
@@ -440,6 +440,66 @@ class FileWithoutRolesTest(unittest.TestCase):
                     mock.patch.object(Draft, "save", autospec=True) as save, redirect_stdout(io.StringIO()):
                 review.approve()
             self.assertEqual(save.call_args.args[1], source.parent / "my-data.descriptor.yaml")
+
+
+
+class KitDropdownTest(unittest.TestCase):
+    """The notebooks' code paths use the kit's own dropdown (exakit_nb.picklist, the guided cards' look): in JupyterLab
+    in place of ipywidgets.Dropdown, in Marimo through mo.ui.anywidget, with what each role is for under it. A marimo
+    without mo.ui.anywidget keeps mo.ui.dropdown."""
+
+    def setUp(self):
+        try:
+            import anywidget  # noqa: F401
+        except ImportError:
+            self.skipTest("anywidget is not installed here (run: uv run --with anywidget --with traitlets python tests/test_role_picker.py)")
+        from exakit_nb import picklist
+        self.picklist = picklist
+
+    def test_options_take_every_shape_the_old_dropdowns_took(self):
+        to = self.picklist.pick_options
+        self.assertEqual([{"label": "a", "value": 1, "hint": ""}], to([("a", 1)]))
+        self.assertEqual([{"label": "a", "value": None, "hint": "h"}], to([("a", None, "h")]))
+        self.assertEqual([{"label": "a", "value": "x", "hint": ""}], to({"a": "x"}))
+        pick = self.picklist.PickList([("key", "key", "unique")], value="key", description="ID", style={"description_width": "1px"})
+        self.assertEqual(("key", "ID", "unique"), (pick.value, pick.description, pick.options[0]["hint"]))
+        self.assertTrue((self.picklist.STATIC / "picklist.js").is_file() and (self.picklist.STATIC / "picklist.css").is_file())
+
+    def test_marimo_shows_the_kit_dropdown_and_reads_its_pick(self):
+        mo = FakeMarimo()
+        wrapped = []
+
+        class AnyWidget:
+            def __init__(self, widget):
+                wrapped.append(widget)
+                self.widget, self.kwargs = widget, {"value": {"value": widget.value}}
+
+        mo.ui.anywidget = AnyWidget
+        with redirect_stdout(io.StringIO()):
+            review = marimo_review(mo, draft(), object()).show()
+        roles = review.elements["roles"].elements
+        self.assertTrue(all(isinstance(d, AnyWidget) for d in roles.values()))
+        self.assertEqual("Check first: C", roles["C"].widget.description)
+        self.assertIn("Only two values", next(o["hint"] for o in roles["A"].widget.options if o["value"] == "flag"))
+        self.assertEqual({"A": "category", "B": "category", "C": "other", "D": "category"}, review.choices())
+        self.assertEqual("B", review.slot_choices()["category"])
+        self.assertIsNone(review.slot_choices()["key"])
+
+    def test_jupyter_uses_the_kit_dropdown(self):
+        import sys
+        import types as t
+        from unittest import mock
+
+        made = []
+        fake_widgets = t.SimpleNamespace(**{n: (lambda n: lambda *a, **k: made.append(n) or t.SimpleNamespace(on_click=lambda f: None, value=k.get("value")))(n)
+                                            for n in ("Dropdown", "HTML", "VBox", "Button", "Output")})
+        shell = t.SimpleNamespace(kernel=object())
+        with mock.patch.dict(sys.modules, {"ipywidgets": fake_widgets}), \
+                mock.patch("IPython.get_ipython", return_value=shell), \
+                mock.patch.object(self.picklist.PickList, "__init__", lambda self, *a, **k: made.append("PickList")):
+            RoleReview(draft(), object()).jupyter_picker()
+        self.assertIn("PickList", made)
+        self.assertNotIn("Dropdown", made)
 
 
 if __name__ == "__main__":

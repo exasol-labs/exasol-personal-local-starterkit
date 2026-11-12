@@ -17,3 +17,4 @@ packages = ["exakit_nb", "exakit", "exakit.nb", "exakit_guide", "exakit_guide.sc
 
 [tool.setuptools.package-data]
 exakit_guide = ["static/*.js", "static/*.css"]
+exakit_nb = ["static/*.js", "static/*.css"]
