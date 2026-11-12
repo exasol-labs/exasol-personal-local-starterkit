@@ -351,6 +351,16 @@ def tls_level(connector, values):
     return "disable" if planner.plain_http(connector, values) else "verify"
 
 
+def in_use_words(users):
+    """Why a shared object stays: the virtual schemas still on it, or that
+    the database could not say."""
+    if users is None:
+        return "the database could not list its virtual schemas, so it may still be in use"
+    shown = ", ".join(users[:5]) + (" and %d more" % (len(users) - 5) if len(users) > 5 else "")
+    return "virtual schema%s %s still use%s it" % ("" if len(users) == 1 else "s", shown,
+                                                   "s" if len(users) == 1 else "")
+
+
 class Failure(Exception):
     """A failure the engine names. str() is what happened; kind is its class;
     remedy the fix in words and command the one exakit command that is the
@@ -1061,6 +1071,79 @@ class Engine(object):
             return self.defs.connector(connector_id).get("shared_adapter")
         except (OSError, ValueError, planner.PlanError):
             return None
+
+    def virtual_adapters(self, besides=()):
+        """[(virtual schema, adapter script schema, adapter script name)] for
+        every virtual schema in the DATABASE but those in besides - not the
+        registry's answer: a kit home deleted, lost or reinstalled, or another
+        one, leaves virtual schemas no source record names, still running the
+        shared adapters. An adapter a row does not name is (None, None); None
+        means the database could not say."""
+        try:
+            rows = self.db().query("SELECT * FROM SYS.EXA_ALL_VIRTUAL_SCHEMAS")
+        except (Failure, sql.DbError) as error:
+            self.log.write("INFO", "could not list the virtual schemas in the database: %s" % error)
+            return None
+        skip = set(str(b).upper() for b in besides)
+        found = []
+        for row in rows:
+            vs = str(row.get("SCHEMA_NAME") or "")
+            if vs.upper() in skip:
+                continue
+            owner, adapter = row.get("ADAPTER_SCRIPT_SCHEMA"), row.get("ADAPTER_SCRIPT_NAME")
+            if not (owner and adapter) and row.get("ADAPTER_SCRIPT"):
+                # Older releases name it in one column, SCHEMA.SCRIPT.
+                owner, _, adapter = str(row["ADAPTER_SCRIPT"]).replace('"', "").rpartition(".")
+            found.append((vs, str(owner).upper() if owner else None, str(adapter).upper() if adapter else None))
+        return found
+
+    def adapter_users(self, script_schema, script=None, besides=()):
+        """The virtual schemas in the database, other than besides, on the
+        adapter script_schema.script (on any script there when script is
+        None). One whose adapter cannot be read counts as a user; None when
+        the database cannot say. Either way the shared object stays."""
+        found = self.virtual_adapters(besides)
+        if found is None:
+            return None
+        return sorted(vs for vs, owner, adapter in found
+                      if owner is None or adapter is None or
+                      (owner == script_schema.upper() and (script is None or adapter == script.upper())))
+
+    def companion_users(self, connector, names, besides=()):
+        """The virtual schemas in the database that may call this connector's
+        companion scripts: those on its shared adapter; for a connector whose
+        sources each have their own adapter (S3, Azure Blob share one import
+        script), any on a kit script but those known to be another
+        connector's - on another connector's shared adapter, or a registered
+        source of another connector. None when the database cannot say."""
+        if connector.get("shared_adapter"):
+            return self.adapter_users(names["script_schema"], connector["shared_adapter"], besides)
+        found = self.virtual_adapters(besides)
+        if found is None:
+            return None
+        others = set()
+        for entry in self.defs.entries():
+            if entry["id"] != connector.get("id") and self._shared_adapter(entry["id"]):
+                others.add(self._shared_adapter(entry["id"]).upper())
+        foreign = set()
+        for n in self.store.names():
+            config = self.store.config(n)
+            if config.get("connector") != connector.get("id"):
+                foreign.add(config["objects"]["schema"].upper())
+        return sorted(vs for vs, owner, adapter in found
+                      if owner is None or adapter is None or
+                      (owner == names["script_schema"].upper() and adapter not in others
+                       and vs.upper() not in foreign))
+
+    def drop_shared(self, statement, what, kept):
+        """Drop one shared object; a refusal is a note in kept, never the end
+        of the command - the source's own objects are already gone."""
+        try:
+            self.db().execute(statement)
+            return True
+        except sql.DbError as error:
+            kept.append("%s (the database refused the drop: %s)" % (what, error))
+            return False
 
     @staticmethod
     def vs_properties(connector, names, values, extra=None):
@@ -2433,6 +2516,24 @@ class Engine(object):
         shared = [spec["name"] for spec in self.companions(connector, self.defs.profile(connector["profile"]))]
         last = bool(shared) and not self.import_script_users(config["connector"], name)
         own_adapter = not connector.get("shared_adapter") or last
+        # The registry knows this kit home's sources only: the database says
+        # which virtual schemas still run a shared script (a lost or another
+        # kit home's), and those keep it. When the database cannot say (a
+        # dry run with it down too), every shared script is kept.
+        mine_vs = (names["schema"], self.pending(names)["schema"])
+        kept = []
+        if own_adapter:
+            users = self.adapter_users(names["script_schema"], names["script"], mine_vs)
+            if users is None or users:
+                own_adapter = False
+                kept.append("adapter script %s.%s (%s)" % (names["script_schema"], names["script"],
+                                                          in_use_words(users)))
+        if last:
+            users = self.companion_users(connector, names, mine_vs)
+            if users is None or users:
+                last = False
+                kept += ["script %s.%s (%s)" % (names["script_schema"], script, in_use_words(users))
+                         for script in shared]
         kind = "import script" if connector.get("import_script") else "script"
         family = connector.get("family") or config["connector"]
         plan = {"name": name, "drop": ["virtual schema %s" % names["schema"]] +
@@ -2446,6 +2547,12 @@ class Engine(object):
                                       ["CONNECTION %s" % names["connection"]],
                 "delete_files": reclaim, "keep_files": [p for p in mine if p not in reclaim],
                 "note": "remote data and source accounts are never touched"}
+        if kept:
+            # Both front ends show keep as "keeps:", as disconnect's. Its
+            # adapter's files stay with the script that loads them.
+            plan["keep"] = list(kept)
+            plan["delete_files"] = [p for p in reclaim if self.per_source_file(p, name)]
+            plan["keep_files"] = [p for p in mine if p not in plan["delete_files"]]
         if dry_run:
             return plan
         with self.store.lock():
@@ -2463,11 +2570,9 @@ class Engine(object):
             # and a re-point its previous CONNECTION.
             self.drop_pending(names)
             self.drop_previous(name, names)
-            if own_adapter and self.exists("script", names["script_schema"], names["script"]):
-                db.execute("DROP ADAPTER SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(names["script"])))
-            for script in shared if last else []:
-                if self.exists("script", names["script_schema"], script):
-                    db.execute("DROP SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(script)))
+            # The source's own objects first - its virtual schema, then its
+            # CONNECTION - so a shared script kept or refused below never
+            # leaves half a source behind.
             if connection_present:
                 db.execute("DROP CONNECTION %s" % sql.ident(names["connection"]))
             # A reauth killed mid-try can leave its pending credential behind.
@@ -2475,23 +2580,61 @@ class Engine(object):
             # CONNECTION of a source called <name>_pending, which stays.
             if not self.store.exists(name + "_pending"):
                 db.execute("DROP CONNECTION IF EXISTS %s" % sql.ident(names["connection"] + "_PENDING"))
-            for path in self.store.release(name):
+            if own_adapter and self.exists("script", names["script_schema"], names["script"]):
+                self.drop_shared("DROP ADAPTER SCRIPT %s.%s" % (sql.ident(names["script_schema"]),
+                                                                sql.ident(names["script"])),
+                                 "adapter script %s.%s" % (names["script_schema"], names["script"]), kept)
+            for script in shared if last else []:
+                if self.exists("script", names["script_schema"], script):
+                    self.drop_shared("DROP SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(script)),
+                                     "script %s.%s" % (names["script_schema"], script), kept)
+            released = self.store.release(name)
+            for path in released:
+                if kept and not self.per_source_file(path, name):
+                    continue        # a kept script still loads it
                 if os.path.isfile(path):
                     os.remove(path)
                     self.prune(os.path.dirname(path))
             self.store.delete_source(name)
-            self.drop_kit_schema_if_unused()
+            self.drop_kit_schema_if_unused(kept)
+            for note in kept:
+                self.emit("INFO", "Kept the shared %s" % note)
+            if kept:
+                plan["keep"] = list(kept)
         return plan
 
-    def drop_kit_schema_if_unused(self):
-        """EXAKIT_VS (the adapters and the DNS probe) goes with the last source."""
+    def per_source_file(self, path, name):
+        """A file only this source ever reads: its own mappings folder."""
+        own = os.path.join(self.runtime.bucket_dir("mappings", name), "")
+        return os.path.abspath(path).startswith(os.path.abspath(own))
+
+    def drop_kit_schema_if_unused(self, kept=None):
+        """EXAKIT_VS (the adapters and the DNS probe) goes with the last
+        source - when the DATABASE agrees nothing uses it. An empty registry
+        is not proof: a lost, reinstalled or other kit home leaves virtual
+        schemas on these adapters. So never DROP SCHEMA ... CASCADE: with no
+        virtual schema on any of its scripts, each script is dropped by name,
+        then the schema alone, which Exasol refuses while anything is left
+        in it. Whatever stays is a note in kept (remove reports it), or only
+        the run log's (a failed first connect)."""
         if self.store.names() or self._db is None:
             return
+        note = (lambda text: kept.append(text)) if kept is not None else \
+            (lambda text: self.log.write("INFO", "kept the shared " + text))
         try:
             if self.exists("schema", "EXAKIT_VS"):
-                self._db.execute("DROP SCHEMA EXAKIT_VS CASCADE")
-        except sql.DbError as error:
-            self.emit("WARN", "could not drop the unused EXAKIT_VS schema: %s" % error)
+                users = self.adapter_users("EXAKIT_VS")
+                if users is None or users:
+                    note("schema EXAKIT_VS (%s)" % in_use_words(users))
+                    return
+                for row in self._db.query("SELECT SCRIPT_NAME, SCRIPT_TYPE FROM EXA_ALL_SCRIPTS "
+                                          "WHERE SCRIPT_SCHEMA = 'EXAKIT_VS' ORDER BY SCRIPT_NAME"):
+                    adapter = "ADAPTER " if str(row.get("SCRIPT_TYPE") or "").upper() == "ADAPTER" else ""
+                    self._db.execute("DROP %sSCRIPT %s.%s" % (adapter, sql.ident("EXAKIT_VS"),
+                                                              sql.ident(row["SCRIPT_NAME"])))
+                self._db.execute("DROP SCHEMA EXAKIT_VS")
+        except (Failure, sql.DbError) as error:
+            note("schema EXAKIT_VS (the database refused the drop: %s)" % error)
         # The kit's own empty folders go too - exakit/vs and exakit, never the
         # bucket above them (on Personal a bucket directory IS the bucket).
         for folder in (self.runtime.bucket_dir(), os.path.dirname(self.runtime.bucket_dir())):
