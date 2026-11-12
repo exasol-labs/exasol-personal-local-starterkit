@@ -73,6 +73,15 @@ def _sample_values(action) -> dict:
     return {f: "X" for f in fields if f not in ("secret", "settings")}
 
 
+def _flat(fields: list[dict]) -> list[dict]:
+    """A form's fields with the ones inside its groups (fields shown side by side) after each group."""
+    out = []
+    for f in fields:
+        out.append(f)
+        out += _flat(f.get("fields") or []) if f.get("type") == "group" else []
+    return out
+
+
 class LayoutTest(unittest.TestCase):
     def test_each_notebook_opens_with_its_card_then_its_code_under_one_heading(self):
         for name, call in CARDS.items():
@@ -504,12 +513,12 @@ class CardTest(unittest.TestCase):
         cid = next(c["id"] for c in card.connectors if card.forms[c["id"]]["setting_inputs"])
 
         def fields():
-            return {f["id"]: f for f in card._new_connection()}
+            return {f["id"]: f for f in _flat(card._new_connection())}
 
         # Before a pick: the list of sources, each once, in the kit's order, and nothing else to fill in.
         first = fields()
         self.assertEqual([c["id"] for c in card.connectors], [o["value"] for o in first["connector"]["options"]])
-        self.assertEqual({"heading", "select"}, {f["type"] for f in first.values()})
+        self.assertEqual({"heading", "select", "group"}, {f["type"] for f in first.values()})
         self.assertFalse(card._ready())
 
         card.on_src_pick({"connector": cid})
@@ -617,14 +626,17 @@ class CardTest(unittest.TestCase):
         first = card._source_fields(only)
         self.assertEqual("Connections", first[0]["label"])                      # the connections there are, first
         self.assertEqual(["VS_OLD", "__connect__"], [o["value"] for o in first[0]["options"]])
-        self.assertEqual(["Data source *"], [f["label"] for f in first if f.get("type") == "select"])
+        self.assertEqual(["Data source *"], [f["label"] for f in _flat(first) if f.get("type") == "select"])
         with self.assertRaisesRegex(ValueError, "Choose the data source"):
             card.on_src_pick({"connector": "nope"})
         self.assertFalse(card._ready())
         card.on_src_pick({"connector": "postgresql"})
         self.assertTrue(card._ready())
-        form = {f["id"]: f for f in card._source_fields(only)}
-        new = [f for f in form.values() if f["id"] not in ("src_schema", card._tid("VS_OLD"))]
+        top = card._source_fields(only)
+        form = {f["id"]: f for f in _flat(top)}
+        new = [f for f in top if f["id"] not in ("src_schema", card._tid("VS_OLD"))]
+        side = next(f for f in top if f["id"] == "src_top")["fields"]             # the source and how, side by side
+        self.assertEqual(["connector", card._fid("postgresql", "how")], [f["id"] for f in side])
         self.assertTrue(all(only in (f["show_if"] if isinstance(f["show_if"], list) else [f["show_if"]]) for f in new))
         self.assertEqual(["manual", "string"], [o["value"] for o in form[card._fid("postgresql", "how")]["options"]])
         self.assertEqual("src_read", form[card._fid("postgresql", "url")]["send_on_change"])
@@ -644,7 +656,7 @@ class CardTest(unittest.TestCase):
         card.forms["plain"] = {**card.forms["postgresql"], "forms": []}          # a data source that takes no string
         card.connectors = card.connectors + [{"id": "plain", "name": "Plain"}]
         card.on_src_pick({"connector": "plain"})
-        self.assertNotIn(card._fid("plain", "how"), {f["id"] for f in card._source_fields(only)})
+        self.assertNotIn(card._fid("plain", "how"), {f["id"] for f in _flat(card._source_fields(only))})
 
     def test_a_connection_string_is_read_first_and_only_the_rest_is_asked(self):
         """The string is read as `exakit connect --url` reads it; then only what it did not give is required, every

@@ -499,7 +499,9 @@ class ChooseData(Screen):
         cid = self.connector or ""
         form, read = self.forms.get(cid) or {}, self.parsed.get(cid)
         out: list[dict] = [{"id": "src_h_new", "type": "heading", "v": "New connection"}]
-        out.append({"id": "connector", "type": "select", "label": "Data source *", "value": cid, "sync": True,
+        top: list[dict] = []                    # the data source and how to fill it in, side by side
+        out.append({"id": "src_top", "type": "group", "fields": top})
+        top.append({"id": "connector", "type": "select", "label": "Data source *", "value": cid, "sync": True,
                     "placeholder": "Choose a data source…", "send_on_change": "src_pick",
                     "options": [{"value": c["id"], "label": c["name"], "disabled": bool(c.get("gate")),
                                  "hint": (f"not available yet: {c['gate']}" if c.get("gate") else c.get("summary") or "")}
@@ -523,7 +525,7 @@ class ChooseData(Screen):
             return out + [{"id": self._fid(cid, "pending"), "type": "note", "v": "Choose these and the details to fill in show here."}]
         how = self._fid(cid, "how")
         if form.get("forms"):
-            out.append({"id": how, "type": "select", "label": "How to fill it in", "value": "manual",
+            top.append({"id": how, "type": "select", "label": "How to fill it in", "value": "manual",
                         "options": [{"value": "manual", "label": "Fill in the details", "hint": "the name, the host, the account and the rest, below"},
                                     {"value": "string", "label": "Paste a connection string", "hint": "the kit reads it and fills in the details"}]})
             out.append({"id": self._fid(cid, "url"), "type": "text", "wide": True, "by": {"field": how, "equals": "string"},
@@ -533,8 +535,8 @@ class ChooseData(Screen):
                         "v": (f"Read: {read['masked']}. What it did not hold is marked * below." if read else
                               "Paste it: the kit reads it, fills in the details below and leaves only what it does not hold.")})
         needed, rest = self._groups(cid)
-        name = {"id": "src_name", "type": "text", "placeholder": "sales", "value": self.src_name,
-                "label": self._name_label() + " * (lower case; its tables appear as VS_<NAME>)"}
+        name = {"id": "src_name", "type": "text", "value": self.src_name,
+                "label": self._name_label() + " *", "placeholder": "sales (lower case; tables appear as VS_SALES)"}
         for field in needed + rest:
             if field.get("type") == "password" or len(field["label"]) > 70:
                 field["wide"] = True
