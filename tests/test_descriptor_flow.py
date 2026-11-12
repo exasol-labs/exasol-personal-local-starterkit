@@ -102,7 +102,7 @@ class Database:
         self.sent.append(sql)
         if self.fail_publish:
             raise PermissionError("insufficient privileges for EXECUTE SCRIPT")
-        if not self.sv.apply(sql) and not sql.startswith(("GRANT ", f"DROP SCHEMA IF EXISTS {semantic_model.OLD_SCHEMA}")):
+        if not self.sv.apply(sql) and not sql.startswith("GRANT "):
             raise AssertionError(f"unexpected statement {sql}")
 
 
@@ -158,7 +158,7 @@ class FlowTest(unittest.TestCase):
         self.assertIn(semantic_model.MARK, model["description"])
         self.assertIn('GRANT SEMANTIC_USER TO "MCP_READONLY"', self.db.sent)
         self.assertIn('GRANT SELECT ON SCHEMA SEM_SUPPORT TO "MCP_READONLY"', self.db.sent)
-        self.assertIn(f"DROP SCHEMA IF EXISTS {semantic_model.OLD_SCHEMA} CASCADE", self.db.sent)   # the old layer is retired
+        self.assertFalse(any(s.startswith("DROP SCHEMA") for s in self.db.sent), "no schema is ever dropped")
         definition = model["definitions"][0]
         self.assertIn("DIMENSION opened_on", definition)
         self.assertIn("DIMENSION channel", definition)

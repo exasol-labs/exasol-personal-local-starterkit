@@ -8,8 +8,7 @@ tables are never commented or altered.
 
 Exasol Semantic Views is a marketplace add-on (semantic-views). When the database does not have it yet, publishing
 installs it first, as ``exakit marketplace semantic-views`` would (an install that fails leaves the approval standing,
-unpublished, with the command to run). The kit's former semantic layer, a schema of views of its own, is dropped the
-first time a model is published.
+unpublished, with the command to run).
 
 The spec each publish built is kept in ~/.exasol-starter-kit/semantic/<model>.json: a rebuild that fails puts the
 last published one back, and ``refresh`` rebuilds a model from it with the column maps approved since.

@@ -35,8 +35,6 @@ from typing import Any, Callable, Iterable
 MARK = "[built by exakit]"
 PUBLISHED_PREFIX = "SEM_"
 ADDON = "semantic-views"
-# The kit's former semantic layer: a schema of views only the kit wrote, dropped when a model is published.
-OLD_SCHEMA = "_".join(("EXAKIT", "SEMANTIC"))
 MAX_DEPTH = 3
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PLAIN_COLUMN = re.compile(r"^[A-Z][A-Z0-9_]*$")
@@ -410,15 +408,6 @@ def models(rows: Run) -> list[dict[str, Any]]:
              "kit": MARK in str(r.get("DESCRIPTION") or ""), "status": str(r.get("STATUS") or "")} for r in found]
 
 
-def retire_old_layer(execute: Callable[[str], Any]) -> bool:
-    """Drop the kit's former semantic layer (OLD_SCHEMA): only the kit ever wrote that schema."""
-    try:
-        execute(f"DROP SCHEMA IF EXISTS {OLD_SCHEMA} CASCADE")
-        return True
-    except Exception:
-        return False
-
-
 def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, reader: str | None = None,
           previous: dict[str, Any] | None = None, extra: list[tuple[str, str]] | None = None,
           progress: Callable[[str], None] | None = None) -> dict[str, Any]:
@@ -467,7 +456,6 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
                 execute(sql)
             except Exception as err:
                 warnings.append(f"the read-only user {reader}: {' '.join(str(err).split())[:200]}")
-    retire_old_layer(execute)
     counts = {"views": len(spec["objects"]), "entities": len(spec["entities"]),
               "relationships": len(spec["relationships"]),
               "dimensions": sum(len(o["dimensions"]) for o in spec["objects"]),
