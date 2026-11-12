@@ -38,7 +38,7 @@ class MarketplaceModelTest(unittest.TestCase):
 
     def test_catalog_reads_existing_version_source(self) -> None:
         addons = load_addons(self.root)
-        self.assertEqual(7, len(addons))
+        self.assertEqual(8, len(addons))
         versions = json.loads((self.root / "versions.json").read_text())
         self.assertEqual([versions["components"][item.id]["version"] for item in addons],
                          [item.version for item in addons])
@@ -205,7 +205,7 @@ class MarketplaceModelTest(unittest.TestCase):
         (self.root / "marketplace/addons/udf_devkit.py").unlink()
         with self.assertRaisesRegex(CatalogError, "udf-devkit: Python add-on module is missing"):
             _module(self.root, "udf-devkit")
-        self.assertEqual(7, len(load_addons(self.root)))
+        self.assertEqual(8, len(load_addons(self.root)))
         self.assertTrue(any(line.startswith("udf-devkit|") for line in rows(self.root, "registry")))
         self.assertFalse(any(line.startswith("udf-devkit|") for line in rows(self.root, "shell-hooks")))
 

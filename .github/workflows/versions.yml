@@ -124,7 +124,7 @@ jobs:
           expected = {"personal", "exapump", "uv", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
                       "exasol-scheduler", "dbt-exasol", "preprocessor", "notebook",
-                      "udf-devkit"}
+                      "udf-devkit", "semantic-views"}
           components = doc.get("components") or {}
           if set(components) != expected:
               problems.append("components must be exactly %s, found %s"
@@ -1082,6 +1082,9 @@ jobs:
       # The notebooks' documentation: the generated reference is current, every link leads somewhere, the shipped
       # site was built from these sources, and nb.docs() serves it from this computer only.
       - run: python3 tests/test_notebook_docs.py
+        if: matrix.shard == 4
+      # The semantic-views add-on: the pinned release, its digest, its installer and a removal that keeps models.
+      - run: python3 tests/test_marketplace_semantic_views.py
         if: matrix.shard == 4
       # How the source engine reads a database's error: never from the connection string it quotes.
       - run: python3 tests/test_vs_error_class.py

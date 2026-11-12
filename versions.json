@@ -58,7 +58,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.24.23",
+      "version": "1.24.24",
       "severity": "normal"
     },
     "dash-server": {
@@ -99,6 +99,15 @@
         "macos-aarch64": "05150b0fe35416ad3600d34a8247e05c9c208ef7560d43acacebe0bfb18da367",
         "wheel": "b934cf0d2f521a2f132bb6b1af7c3d8b8f7fb311ddd021d6441d08efda502145",
         "windows-x86_64": "5ce3b9f01bdf90eb6f0d57baff7fcdcd9d0d0a9b2837afaf610282d6c6902bd2"
+      }
+    },
+    "semantic-views": {
+      "version": "v0.6.1",
+      "repo": "exasol-labs/exasol-semantic-views",
+      "severity": "normal",
+      "asset": "exasol-semantic-views-v0.6.1.zip",
+      "sha256": {
+        "archive": "e9773247aab170741b958d43ed6be61f3b2f6c4e20d3cf60d4ad48c18653cf6e"
       }
     },
     "dbt-exasol": {

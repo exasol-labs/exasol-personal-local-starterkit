@@ -117,6 +117,9 @@ the version the kit installs.
 | [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | `exasol-labs/exasol-agent-skills` | The pyexasol API; this machine's interpreter, TLS setting and credentials are in the `exakit` skill. |
 | [`exasol-bucketfs`](exasol-bucketfs/SKILL.md) | `exasol-labs/exasol-agent-skills` | Files in BucketFS with exapump. |
 | [`exasol-dash`](exasol-dash/SKILL.md) | `exasol-labs/dash-server` | Writing the Dash app for a dashboard on dash-server. Placed with the dash-server add-on. |
+| [`exasol-semantic-analyst`](exasol-semantic-analyst/SKILL.md) | `exasol-labs/exasol-semantic-views` | Answering business questions through a semantic model. Placed with the semantic-views add-on. |
+| [`exasol-semantic-modeler`](exasol-semantic-modeler/SKILL.md) | `exasol-labs/exasol-semantic-views` | Creating and maintaining a semantic model. Placed with the semantic-views add-on. |
+| [`exasol-semantic-reviewer`](exasol-semantic-reviewer/SKILL.md) | `exasol-labs/exasol-semantic-views` | Reviewing a model and preparing it for approval. Placed with the semantic-views add-on. |
 
 The set is versioned as one component (`components.skills` in `versions.json`),
 and it updates like one: when the maintainers change a skill and bump that
