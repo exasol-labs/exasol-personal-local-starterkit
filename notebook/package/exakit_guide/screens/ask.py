@@ -105,8 +105,7 @@ def _readable(col: str) -> str:
 # =====================================================================================================
 class Ask(Screen):
     """One question: draft -> plan -> approve -> answer. With no question given, shows a question box."""
-    help = (('How a question becomes SQL', 'explore/questions#questions-in-plain-language'),
-            ('Is my data sent anywhere?', 'explore/data-privacy#is-my-data-sent-anywhere'),)
+    help = (('Ask questions in plain language', 'explore/questions'),)
 
     kind = "card"
 

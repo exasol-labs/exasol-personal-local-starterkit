@@ -60,8 +60,7 @@ def _state():
 
 # =====================================================================================================
 class WorkingOn(Screen):
-    help = (('Which data a notebook uses', 'get-the-data/the-dataset'),
-            ('The workflow log', 'monitor/the-workflow-log#the-workflow-log'),)
+    help = (('Pick the data for a notebook', 'get-the-data/the-dataset'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -128,9 +127,7 @@ class WorkingOn(Screen):
 
 # =====================================================================================================
 class Prepare(Screen):
-    help = (('What the checks look for', 'prepare/data-checks#the-checks'),
-            ('How it gets cleaned', 'prepare/cleaned-views'),
-            ('Columns that give the answer away', 'prepare/leakage#columns-that-give-the-answer-away'),)
+    help = (('Check and clean the data', 'prepare'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -217,8 +214,7 @@ class Prepare(Screen):
 
 # =====================================================================================================
 class Compare(Screen):
-    help = (('Comparing groups and trends', 'explore/compare-groups#compare-groups-and-trends'),
-            ('Reading the notes', 'evaluate/readout-notes#the-readout-notes'),)
+    help = (('Compare groups and trends', 'explore/compare-groups'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -341,10 +337,8 @@ class Compare(Screen):
 # =====================================================================================================
 class Predict(Screen):
     """The model lab: the Data Scientist picks the task, the model and the split; the results follow."""
-    help = (('Start with a baseline', 'model/baseline#start-with-a-baseline'),
-            ('What the model lab tries', 'model/the-models#the-models-the-lab-tries'),
-            ('How rows are held out', 'evaluate/hold-out#hold-out-how-rows-are-kept-apart'),
-            ('Reading ROC AUC', 'evaluate/roc-auc#reading-roc-auc'),)
+    help = (('Build a model', 'model'),
+            ('Evaluate it', 'evaluate'),)
 
     kind = "card"
 
@@ -529,8 +523,7 @@ class Predict(Screen):
 
 # =====================================================================================================
 class Ideas(Screen):
-    help = (('Feature ideas', 'model/feature-ideas#feature-ideas'),
-            ('What the AI sees', 'model/ai-model#your-ai-model-in-this-stage'),)
+    help = (('Feature ideas', 'model/feature-ideas'),)
     kind = "card"
 
     def __init__(self) -> None:

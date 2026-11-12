@@ -79,8 +79,7 @@ def _first_notebook() -> dict | None:
 
 # =====================================================================================================
 class Dashboard(Screen):
-    help = (('Preview, check, publish', 'communicate/preview-check-publish#preview-check-publish'),
-            ('What a reader sees', 'communicate/what-a-reader-sees#what-a-reader-sees'),)
+    help = (('Make a dashboard', 'communicate/preview-check-publish'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -224,8 +223,7 @@ class Dashboard(Screen):
 
 # =====================================================================================================
 class Handoff(Screen):
-    help = (('What the hand-off holds', 'communicate/hand-off-bundle#the-hand-off-bundle'),
-            ('When a hand-off goes stale', 'monitor/stale-hand-off#a-training-hand-off-that-went-stale'),)
+    help = (('Hand off the work', 'communicate/hand-off-bundle'),)
     kind = "card"
 
     def __init__(self) -> None:

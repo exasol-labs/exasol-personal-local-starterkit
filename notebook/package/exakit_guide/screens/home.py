@@ -87,9 +87,8 @@ def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
 
 
 class Home(Screen):
-    help = (('What the kit set up', 'set-up'),
-            ('Set up AI and Langfuse', 'set-up/ai-and-langfuse'),
-            ('Workflows', 'set-up/workflows#workflows'),)
+    help = (('Set up the kit', 'set-up'),
+            ('Set up AI and Langfuse', 'set-up/ai-and-langfuse'),)
     kind = "home"
 
     def __init__(self, tab: str = "kit") -> None:
@@ -436,11 +435,12 @@ class Home(Screen):
                                                        f"Next: {nxt['title']}" if nxt else ""] if x),
                         "path": nxt["path"] if nxt else None,
                         "cmd": actions.code("kit.workflow_log", workflow_id=last["id"]) if last else ""}]
+        for r in rows:                      # a row's set-up opens right under that row
+            if r["id"] == "model" and self.ai_open:
+                r["panel"] = self._ai_panel()
+            if r["id"] == "langfuse" and self.lf_open:
+                r["panel"] = self._langfuse_panel()
         blocks += [{"t": "section", "v": "Your setup"}, {"t": "setup", "rows": rows}]
-        if self.ai_open:
-            blocks += self._ai_panel()
-        if self.lf_open:
-            blocks += self._langfuse_panel()
         blocks += [
                    {"t": "details", "title": "The kit's other tools" + (" · updates available" if any(r["id"] == "updates" for r in other) else ""),
                     "blocks": ([{"t": "setup", "rows": other}] if other else [])
@@ -471,9 +471,12 @@ class Home(Screen):
 
             self.ai_provider = provider_of(model.get("provider_base_url") or "") if model.get("configured") else providers[0]["id"]
         p = next(x for x in providers if x["id"] == self.ai_provider)
-        how = doc_link(f"set-up/ai-and-langfuse#{p['docs_anchor']}")
-        key_help = ([{"label": "How do I get this?", "href": how}] if how else []) + (
-            [{"label": f"Get it from {p['name'].split(' (')[0]}", "href": p["get_key"]}] if p.get("get_key") else [])
+        # help goes straight to the place that answers it: the provider's own key page and model list
+        key_help = [{"label": f"Get your key at {p['name'].split(' (')[0]}", "href": p["get_key"]}] if p.get("get_key") else []
+        if p["key"] == "none" and p.get("get_key"):
+            key_help = [{"label": f"Get {p['name'].split(' (')[0]}", "href": p["get_key"]}]
+        models_help = [{"label": f"{p['name'].split(' (')[0]}'s models", "href": p["models_page"]}] if p.get("models_page") else []
+        guide = doc_link("set-up/ai-and-langfuse")
         key_label = {"required": "API key (hidden; kept for every notebook, readable only by you)",
                      "optional": "API key, if your server asks for one (hidden)",
                      "none": "API key: not needed for this provider"}[p["key"]]
@@ -486,8 +489,7 @@ class Home(Screen):
                 {"id": "ai_provider", "type": "select", "label": "Provider", "value": self.ai_provider,
                  "send_on_change": "ai_pick",
                  "options": [{"value": x["id"], "label": x["name"]} for x in providers],
-                 "help": [{"label": "Which provider should I use?", "href": doc_link("set-up/ai-and-langfuse#get-a-model-provider")}]
-                         if doc_link("set-up/ai-and-langfuse") else []},
+                 "help": [{"label": "Guide: set up AI and Langfuse", "href": guide}] if guide else []},
                 {"id": "ai_base", "type": "select", "editable": True, "label": "Address (the pencil types your own)",
                  "value": p["base_url"], "options": [{"value": p["base_url"], "label": p["base_url"] or "type the address"}]},
             ]},
@@ -509,17 +511,19 @@ class Home(Screen):
                           + [{"value": lvl, "label": lvl.capitalize()} for lvl in effort_levels(self.ai_provider, m)]
                        for m in self.ai_models if effort_levels(self.ai_provider, m)}
             choose = doc_link("set-up/ai-and-langfuse#choose-the-model-and-its-effort")
+            effort_help = [{"label": p["effort_page_label"], "href": p["effort_page"]}] if p.get("effort_page") else (
+                [{"label": "What does effort change?", "href": choose}] if choose else [])
             blocks += [{"t": "msg", "kind": "ok", "v": f"The key works: {len(self.ai_models)} models you may use."
                                                        if self.ai_models else "The key works, but the provider listed "
                                                        "no chat model: type one with the pencil."},
                        {"t": "fields", "items": [
                            {"id": "ai_model", "type": "select", "editable": True, "label": "Model (the pencil types any model)",
                             "value": current, "options": [{"value": m, "label": m} for m in self.ai_models],
-                            "help": [{"label": "Which model should I pick?", "href": choose}] if choose else []},
+                            "help": models_help},
                            {"id": "ai_effort", "type": "select", "label": "Effort (how hard the model thinks)",
                             "value": "", "options_from": {"field": "ai_model", "map": efforts},
                             "empty": "This model takes no effort setting: it uses its own.",
-                            "help": [{"label": "What does effort change?", "href": choose}] if choose else []}]},
+                            "help": effort_help}]},
                        {"t": "actions", "items": [{"id": "ai_use", "label": "Use this model", "primary": True,
                                                    "busy": "Saving…"}]}]
         blocks.append({"t": "code", "code_only": True, "title": "The code behind these steps",
@@ -530,8 +534,6 @@ class Home(Screen):
         return blocks
 
     def _langfuse_panel(self) -> list[dict]:
-        how = doc_link("set-up/ai-and-langfuse#langfuse-cloud")
-        own = doc_link("set-up/ai-and-langfuse#your-own-langfuse")
         return [
             {"t": "subhead", "v": "Trace every AI call to Langfuse"},
             {"t": "p", "muted": True, "v": "Pick where your Langfuse is, then give the project's two keys. Every call the "
@@ -540,11 +542,11 @@ class Home(Screen):
                 {"id": "lf_url", "type": "select", "editable": True, "label": "Where (the pencil types your own Langfuse's address)",
                  "value": self.LANGFUSE_REGIONS[0][0],
                  "options": [{"value": url, "label": f"{name} · {url}"} for url, name in self.LANGFUSE_REGIONS],
-                 "help": ([{"label": "Which one is mine?", "href": how}] if how else [])
-                         + ([{"label": "Run your own Langfuse", "href": own}] if own else [])},
+                 "help": [{"label": "Which region is mine? (Langfuse data regions)", "href": "https://langfuse.com/security/data-regions"},
+                          {"label": "Run your own Langfuse", "href": "https://langfuse.com/self-hosting"}]},
                 {"id": "lf_public", "type": "password", "label": "Public key (from the project's API keys)",
-                 "help": ([{"label": "How do I get the keys?", "href": how}] if how else [])
-                         + [{"label": "Sign up at Langfuse Cloud", "href": "https://cloud.langfuse.com/auth/sign-up"}]},
+                 "help": [{"label": "Where are my Langfuse API keys?", "href": "https://langfuse.com/faq/all/where-are-langfuse-api-keys"},
+                          {"label": "Sign up at Langfuse Cloud", "href": "https://cloud.langfuse.com/auth/sign-up"}]},
                 {"id": "lf_secret", "type": "password", "label": "Secret key (Langfuse shows it once; kept for every notebook, readable only by you)"},
             ]},
             {"t": "actions", "items": [{"id": "lf_use", "label": "Trace to Langfuse", "primary": True, "busy": "Saving…"},

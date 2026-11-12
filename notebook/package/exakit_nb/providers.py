@@ -25,20 +25,21 @@ from . import model_config
 __all__ = ["effort_levels", "model_providers", "provider", "provider_models"]
 
 # The page of these docs that says how to get each provider's key or server (anchor on the AI set-up page).
+# models_page / effort_page: the provider's own page, given only where it was checked to load.
 DOCS_PAGE = "set-up/ai-and-langfuse"
 
 PROVIDERS: list[dict[str, Any]] = [
-    {"id": "openai", "docs_anchor": "openai", "name": "OpenAI", "base_url": "https://api.openai.com/v1/", "key": "required",
+    {"id": "openai", "effort_page": "https://developers.openai.com/api/docs/guides/reasoning", "effort_page_label": "OpenAI: reasoning effort", "docs_anchor": "openai", "name": "OpenAI", "base_url": "https://api.openai.com/v1/", "key": "required",
      "get_key": "https://platform.openai.com/api-keys", "local": False},
-    {"id": "anthropic", "docs_anchor": "claude-anthropic", "name": "Anthropic (Claude)", "base_url": "https://api.anthropic.com/v1/", "key": "required",
+    {"id": "anthropic", "models_page": "https://platform.claude.com/docs/en/models/overview", "docs_anchor": "claude-anthropic", "name": "Anthropic (Claude)", "base_url": "https://api.anthropic.com/v1/", "key": "required",
      "get_key": "https://platform.claude.com/settings/keys", "local": False, "models_url": "https://api.anthropic.com/v1/models?limit=1000"},
-    {"id": "gemini", "docs_anchor": "gemini-google", "name": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    {"id": "gemini", "effort_page": "https://aistudio.google.com/docs/openai", "effort_page_label": "Gemini: reasoning effort", "docs_anchor": "gemini-google", "name": "Google Gemini", "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
      "key": "required", "get_key": "https://aistudio.google.com/apikey", "local": False},
     {"id": "mistral", "docs_anchor": "mistral", "name": "Mistral", "base_url": "https://api.mistral.ai/v1/", "key": "required",
      "get_key": "https://console.mistral.ai/", "local": False},
-    {"id": "groq", "docs_anchor": "groq", "name": "Groq", "base_url": "https://api.groq.com/openai/v1/", "key": "required",
+    {"id": "groq", "models_page": "https://console.groq.com/docs/models", "effort_page": "https://console.groq.com/docs/reasoning", "effort_page_label": "Groq: reasoning effort", "docs_anchor": "groq", "name": "Groq", "base_url": "https://api.groq.com/openai/v1/", "key": "required",
      "get_key": "https://console.groq.com/keys", "local": False},
-    {"id": "ollama", "docs_anchor": "ollama-on-this-computer", "name": "Ollama (on this computer)", "base_url": "http://localhost:11434/v1/", "key": "none",
+    {"id": "ollama", "models_page": "https://ollama.com/library", "effort_page": "https://docs.ollama.com/api/openai-compatibility", "effort_page_label": "Ollama: which models think", "docs_anchor": "ollama-on-this-computer", "name": "Ollama (on this computer)", "base_url": "http://localhost:11434/v1/", "key": "none",
      "get_key": "https://ollama.com/download", "local": True},
     {"id": "lmstudio", "docs_anchor": "lm-studio-on-this-computer", "name": "LM Studio (on this computer)", "base_url": "http://localhost:1234/v1/", "key": "optional",
      "get_key": "https://lmstudio.ai/docs/developer/core/authentication", "local": True},

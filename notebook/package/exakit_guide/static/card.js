@@ -290,12 +290,17 @@ function render({ model, el }) {
         return h("div", { class: `guide-row guide-row-${r.dot}` },
           h("span", { class: `guide-dot guide-dot-${r.dot}`, "aria-hidden": "true" }),
           h("div", { class: "guide-row-main" },
-            h("div", { class: "guide-row-line" }, h("span", { class: "guide-row-name" }, r.name), h("span", { class: "guide-row-text" }, r.text)),
-            r.sub ? h("div", { class: "guide-row-sub" }, r.sub) : null,
+            // the row's description is a tooltip (on the name and on its (i) mark), not a second line of text
+            h("div", { class: "guide-row-line", title: r.sub || null },
+              h("span", { class: "guide-row-name" }, r.name,
+                r.sub ? h("span", { class: "guide-info", tabindex: "0", role: "note", "aria-label": r.sub, title: r.sub }, "i") : null),
+              h("span", { class: "guide-row-text" }, r.text)),
             r.cmd ? h("code", { class: "guide-code-only guide-cmd", title: "Click to copy as a cell", onClick: (e) => copyCode(r.cmd, e.currentTarget) }, r.cmd) : null,
             confirming ? h("div", { class: "guide-confirm" }, h("span", {}, confirming.confirm),
               button("Yes, continue", confirming.id, { primary: true, busyLabel: "Updating…" }), button("Cancel", "cancel")) : null,
             formAction ? form(r, formAction) : null,
+            // panel: this row's own set-up, drawn right under it (the AI model's, Langfuse's)
+            r.panel ? h("div", { class: "guide-row-panel" }, r.panel.map(block).filter(Boolean)) : null,
             actions.filter((a) => !a.form).map((a) => progressPanel(a.id)),
             r.output ? kitSaid(r) : null),
           h("div", { class: "guide-row-actions" }, actions.map((a) => a.href
@@ -738,7 +743,7 @@ function render({ model, el }) {
   // A card's help: links to the kit's own docs, each to the section that explains this step (in a new tab).
   function helpLinks(items) {
     if (!items || !items.length) return null;
-    return h("div", { class: "guide-help" }, h("span", { class: "guide-help-label" }, "Learn more:"),
+    return h("div", { class: "guide-help" }, h("span", { class: "guide-help-label" }, "Guide:"),
       items.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label)));
   }
 

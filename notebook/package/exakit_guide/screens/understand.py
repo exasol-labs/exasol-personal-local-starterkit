@@ -160,9 +160,8 @@ class ChooseData(Screen):
     """Choose the data: a kit dataset, your own (a table already in the database, or a new file or folder), or an
     external source (one connected, or a new connection). Every option and every step is one cell of the
     quickstart's code section (actions: data.*)."""
-    help = (('How loading works', 'get-the-data#where-you-do-it'),
-            ('A new external source, step by step', 'get-the-data/external-sources#step-by-step-a-new-external-source'),
-            ('Where passwords go', 'get-the-data/external-sources#passwords'),)
+    help = (('Load your data', 'get-the-data'),
+            ('Connect an external source', 'get-the-data/external-sources#step-by-step-a-new-external-source'),)
 
     kind = "card"
     step, connector, src_name, conn_n, tip = "connection", None, "", 0, ""
@@ -699,9 +698,7 @@ class ChooseData(Screen):
 
 # =====================================================================================================
 class ColumnMap(Screen):
-    help = (('Roles and slots', 'explore/column-map#the-column-map-and-approval'),
-            ('What approving checks and writes', 'explore/approve-the-column-map#what-approval-checks-and-writes'),
-            ('Behind the scenes: the semantic model', 'explore/semantic-views#publish-the-semantic-model'),)
+    help = (('Approve the column map', 'explore/approve-the-column-map'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -1055,8 +1052,7 @@ class DataMap(Screen):
     """Every table in the database by origin - external source, your data, sample data - with its column map's state
     and the roles in it (nb.data_map, metadata only). Redrawn when data is chosen or a column map approved, so an
     approval shows up here as "approved vN, in semantic model ..."."""
-    help = (('How the map is read', 'get-the-data/the-data-map#the-data-map'),
-            ('How tables link', 'explore/linked-tables#the-schema-map-how-tables-link'),)
+    help = (('Read the data map', 'get-the-data/the-data-map'),)
 
     kind = "card"
 
@@ -1123,10 +1119,8 @@ class SemanticViews(Screen):
     needed) and shows each with its evidence: the ones the data backs are ticked, a link between plain numbers is
     left for you to tick. The AI (when a model is configured) proposes more links and the fields' business names and
     metrics. A preview shows what would be built before anything is written; models the kit built can be refreshed."""
-    help = (('One model across sources', 'explore/semantic-views#one-model-across-sources'),
-            ('How links are found', 'explore/semantic-views#links-across-sources'),
-            ('What the AI sees', 'explore/semantic-views#the-ai-proposes-the-fields'),
-            ('Keeping it current', 'explore/semantic-views#keep-the-model-current'),)
+    help = (('Build a semantic model', 'explore/semantic-views#one-model-across-sources'),
+            ('Find links across sources', 'explore/semantic-views#links-across-sources'),)
 
     kind = "card"
 

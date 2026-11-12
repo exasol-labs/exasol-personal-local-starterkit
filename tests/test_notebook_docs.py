@@ -360,7 +360,7 @@ class CardLinksTest(unittest.TestCase):
         from exakit_nb.providers import DOCS_PAGE, model_providers
 
         targets |= {f"{DOCS_PAGE}#{p['docs_anchor']}" for p in model_providers()}
-        self.assertGreater(len(targets), 30)
+        self.assertGreater(len(targets), 20)
         for target in sorted(targets):
             page, _, anchor = target.partition("#")
             with self.subTest(target=target):
