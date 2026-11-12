@@ -58,6 +58,8 @@ The dataset has no text column. `amazon_sales` and `fraud_transactions` have non
 nb.exakit("update", "notebook")
 ```
 
+The documentation is served on this computer at one of the ports 8790 to 8809, the first one free. A port another program holds is skipped, and when all of them are taken any free port is used. To choose the port yourself, set `EXAKIT_DOCS_PORT` before starting the notebooks.
+
 In a notebook that runs on another machine than your browser, the frame cannot reach the site. Use `nb.docs(browser=True)` on the machine that runs the kit.
 
 ## Find what a cell ran [#find-what-a-cell-ran]

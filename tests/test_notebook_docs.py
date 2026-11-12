@@ -243,6 +243,39 @@ class ServedDocsTest(unittest.TestCase):
         self.assertIn(second.url.replace("#", "#"), shown)
         self.assertEqual(second._mime_()[0], "text/html")
 
+    def test_a_fixed_port_a_busy_one_skipped_and_another_kernels_server_reused(self):
+        """The docs live at one of a few fixed ports, so a Docs link saved in a notebook still opens after a restart.
+        A port another program holds is skipped (never taken over); a port where this very site is already served by
+        another kernel is reused, not doubled; and with every fixed port taken any free port is used."""
+        import socket
+
+        free = []
+        for _ in range(3):
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                free.append(probe.getsockname()[1])
+        busy = socket.socket()
+        busy.bind(("127.0.0.1", free[0]))
+        busy.listen(1)
+        self.addCleanup(busy.close)
+        original = docs_module.PORTS
+        docs_module.PORTS = (free[0], free[1])
+        self.addCleanup(setattr, docs_module, "PORTS", original)
+        first = nb_docs().url
+        self.assertTrue(first.startswith(f"http://localhost:{free[1]}/"), first)            # the busy one skipped
+        self.assertEqual(200, self.get(first)[0])
+        held = docs_module._server
+        docs_module._server, docs_module._served = None, None                             # another kernel, same site
+        again = nb_docs().url
+        self.assertEqual(first, again)
+        self.assertIsNone(docs_module._server, "it reused the running server instead of starting a second")
+        docs_module._server = held
+        self.stop()
+        docs_module.PORTS = (free[0],)                                                    # every fixed port taken
+        last = nb_docs().url
+        self.assertNotIn(f":{free[0]}/", last)
+        self.assertEqual(200, self.get(last)[0])
+
     def test_a_kit_without_the_site_says_how_to_get_it(self):
         docs_module.site_dir = lambda: None
         with self.assertRaisesRegex(RuntimeError, "exakit update notebook"):

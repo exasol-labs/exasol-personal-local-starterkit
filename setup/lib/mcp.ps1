@@ -196,7 +196,7 @@ function Get-FirstSchema {
 function Invoke-ExapumpAdminSql {
     param([Parameter(Mandatory)][string]$ConfigPath, [Parameter(Mandatory)][string]$Profile, [Parameter(Mandatory)][string]$Sql)
     $bin = Get-ExakitExapumpBin
-    if (-not $bin) { Fail "exapump is required for MCP read-only setup but was not found." }
+    if (-not $bin) { Fail 'MCP initialisation failed: the read-only database user your AI clients sign in with could not be created, because exapump is not installed (the kit creates that user with it). Fix: exakit update exapump, then: exakit mcp-setup' }
     $previous = $env:EXAPUMP_CONFIG
     $previousErrorActionPreference = $ErrorActionPreference
     try {
@@ -418,6 +418,7 @@ function Set-McpReadonlyAccess {
     try {
         # Ensure exapump is on PATH for this session
         $exapumpBin = Get-ExakitExapumpBin
+        if (-not $exapumpBin) { Fail 'MCP initialisation failed: the read-only database user your AI clients sign in with could not be created, because exapump is not installed (the kit creates that user with it). Fix: exakit update exapump, then: exakit mcp-setup' }
         if ($exapumpBin) {
             $binDir = Split-Path -Parent $exapumpBin
             Ensure-ExakitOnPath $binDir
@@ -1902,6 +1903,10 @@ function Set-McpSidecar {
         $user = Get-ExakitManifestValue "components.mcp_server.connection.user"
         $pwFile = Get-ExakitManifestValue "components.mcp_server.connection.password_file"
         if (-not $user -or -not $pwFile -or -not (Test-Path -LiteralPath $pwFile)) {
+            if (-not (Get-ExakitExapumpBin)) {
+                & $fail "MCP initialisation failed: the read-only database user your AI clients sign in with could not be created, because exapump is not installed (the kit creates that user with it)." "exakit update exapump, then: exakit mcp-setup"
+                return $false
+            }
             & $fail "The read-only MCP user could not be set up." "exakit mcp-setup"
             return $false
         }

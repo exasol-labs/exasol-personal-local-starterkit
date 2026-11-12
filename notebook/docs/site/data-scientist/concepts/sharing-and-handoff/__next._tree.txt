@@ -1,3 +1,3 @@
 :HL["/docs/_next/static/chunks/3urpityty1yko.css","style"]
 :HL["/docs/_next/static/media/83afe278b6a6bb3c-s.p.2bn3s6zvc0dyp.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
-0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"slug","param":{"type":"oc","key":"data-scientist/concepts/sharing-and-handoff","siblings":["api","llms-full.txt","llms.mdx","llms.txt"]},"prefetchHints":4128,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4224,"slots":null}}}}},"staleTime":300,"buildId":"KoIrOwIWz4pvXenrMqz8-"}
+0:{"tree":{"name":"","param":null,"prefetchHints":4176,"slots":{"children":{"name":"slug","param":{"type":"oc","key":"data-scientist/concepts/sharing-and-handoff","siblings":["api","llms-full.txt","llms.mdx","llms.txt"]},"prefetchHints":4128,"slots":{"children":{"name":"__PAGE__","param":null,"prefetchHints":4224,"slots":null}}}}},"staleTime":300,"buildId":"9wobucRi6Ezp7PMAe9U9k"}

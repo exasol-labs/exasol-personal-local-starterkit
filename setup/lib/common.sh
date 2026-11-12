@@ -10544,7 +10544,7 @@ _exakit_run_exapump_sql() {
     _config_path="$1"
     _profile="$2"
     _sql="$3"
-    _bin="$(exakit_exapump_bin)" || die "exapump is required for MCP read-only setup but was not found."
+    _bin="$(exakit_exapump_bin)" || die "$EXAKIT_MCP_NO_EXAPUMP"
     # Feed the SQL over stdin, not as an argv: some of these statements are
     # CREATE/ALTER USER … IDENTIFIED BY <password>, and an argv is visible to any
     # local user via `ps` for the life of the call. stdin keeps it off the
@@ -10795,13 +10795,16 @@ PY
 # the login are phases of a single outcome -- the read-only access exists and
 # works -- and the tick at the end already said all three happened. They become
 # spinner phases; the tick goes through ok_step so it survives the quieting.
+# Said when the read-only user cannot be made for want of exapump: the cause, not "MCP failed".
+EXAKIT_MCP_NO_EXAPUMP="MCP initialisation failed: the read-only database user your AI clients sign in with could not be created, because exapump is not installed (the kit creates that user with it). Fix: exakit update exapump, then: exakit mcp-setup"
+
 exakit_configure_mcp_readonly_access() {
     _cmra_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     _cmra_t0="$(date +%s 2>/dev/null || echo 0)"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
     require_python3
     # Ensure exapump is on PATH (both current session and permanently)
-    _exapump_bin="$(exakit_exapump_bin)" || die "exapump is required for MCP read-only setup but was not found."
+    _exapump_bin="$(exakit_exapump_bin)" || die "$EXAKIT_MCP_NO_EXAPUMP"
     _exapump_dir="$(dirname "$_exapump_bin")"
     case ":$PATH:" in
         *":$_exapump_dir:"*) ;;

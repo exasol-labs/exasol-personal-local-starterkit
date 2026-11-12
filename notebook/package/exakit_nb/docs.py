@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import mimetypes
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -32,6 +33,10 @@ __all__ = ["Docs", "docs"]
 
 PREFIX = "/docs"                       # the site is built to live under this path (notebook/docs/next.config.mjs)
 BIND, SHOWN = "127.0.0.1", "localhost"   # served on the loopback address only: no other computer reaches it
+# The ports the documentation tries, in order. One fixed address means a Docs link saved in a notebook still opens
+# after the kernel restarts (another kernel, or this one again, serves the same address); a port another program
+# holds is skipped, and when every one is taken the system picks a free one. EXAKIT_DOCS_PORT puts one first.
+PORTS = tuple(range(8790, 8810))
 _TEXT = {".html", ".txt", ".md", ".json", ".js", ".css", ".svg", ".xml"}
 _lock = threading.Lock()
 _server: ThreadingHTTPServer | None = None
@@ -68,6 +73,7 @@ def _file_for(root: Path, path: str) -> Path | None:
 class _Handler(BaseHTTPRequestHandler):
     server_version = "exakit-docs"
     root: Path
+    stamp = ""
 
     def log_message(self, *args: Any) -> None:       # a notebook's output is not an access log
         pass
@@ -92,6 +98,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(data)))
+        self.send_header("X-Exakit-Docs-Site", self.stamp)       # which site this is: another kernel may reuse it
         # Built files under _next/static carry their content's hash in their name; a page must be read again.
         self.send_header("Cache-Control", "public, max-age=31536000, immutable" if "/_next/static/" in path else "no-cache")
         self.end_headers()
@@ -105,20 +112,63 @@ class _Handler(BaseHTTPRequestHandler):
         self._answer(False)
 
 
+def _stamp(root: Path) -> str:
+    """One word that names a built site: its folder and the build it holds (two kits never share an address)."""
+    import hashlib
+
+    build = root / "BUILD.json"
+    marker = build.read_bytes() if build.is_file() else str((root / "index.html").stat().st_mtime_ns).encode()
+    return hashlib.sha256(str(root.resolve()).encode() + b"\0" + marker).hexdigest()[:16]
+
+
+def _ours(port: int, stamp: str) -> bool:
+    """True when the documentation of this very site already answers on port (another kernel's server)."""
+    import http.client
+
+    try:
+        connection = http.client.HTTPConnection(BIND, port, timeout=1)
+        connection.request("HEAD", PREFIX)
+        answer = connection.getresponse()
+        same = answer.getheader("Server", "").startswith("exakit-docs") and answer.getheader("X-Exakit-Docs-Site") == stamp
+        connection.close()
+        return same
+    except OSError:
+        return False
+
+
+def _ports() -> list[int]:
+    wanted = os.environ.get("EXAKIT_DOCS_PORT", "").strip()
+    first = [int(wanted)] if wanted.isdigit() and 0 < int(wanted) < 65536 else []
+    return first + [port for port in PORTS if port not in first]
+
+
 def _serve(root: Path) -> str:
-    """The address the site is served at, starting the server on the first call (one per kernel)."""
+    """The address the site is served at: this kernel's server, another kernel's serving the same site, or a new
+    one on the first free port of PORTS (any free port when all are taken). A port held by another program is
+    never touched."""
     global _server, _served
     with _lock:
-        if _server is None or _served != root:
-            if _server is not None:
-                _server.shutdown()
-                _server.server_close()
-            handler = type("_SiteHandler", (_Handler,), {"root": root.resolve()})
-            _server = ThreadingHTTPServer((BIND, 0), handler)
-            _server.daemon_threads = True
-            threading.Thread(target=_server.serve_forever, name="exakit-docs", daemon=True).start()
-            _served = root
-        return f"http://{SHOWN}:{_server.server_address[1]}"
+        if _server is not None and _served == root:
+            return f"http://{SHOWN}:{_server.server_address[1]}"
+        if _server is not None:
+            _server.shutdown()
+            _server.server_close()
+            _server = None
+        stamp = _stamp(root)
+        handler = type("_SiteHandler", (_Handler,), {"root": root.resolve(), "stamp": stamp})
+        for port in _ports() + [0]:
+            if port and _ours(port, stamp):
+                _served = root
+                return f"http://{SHOWN}:{port}"
+            try:
+                server = ThreadingHTTPServer((BIND, port), handler)
+            except OSError:                        # taken by another program: the next one
+                continue
+            server.daemon_threads = True
+            threading.Thread(target=server.serve_forever, name="exakit-docs", daemon=True).start()
+            _server, _served = server, root
+            return f"http://{SHOWN}:{server.server_address[1]}"
+        raise RuntimeError("No free port on this computer for the documentation.")
 
 
 def _commands(root: Path) -> dict[str, str]:

@@ -538,6 +538,11 @@ mcp_sidecar_apply() {
         _msa_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
         _msa_pw="$(manifest_get components.mcp_server.connection.password_file 2>/dev/null || true)"
         if [ -z "$_msa_user" ] || [ ! -f "$_msa_pw" ]; then
+            if ! exakit_exapump_bin >/dev/null 2>&1; then
+                error "MCP initialisation failed: the read-only database user your AI clients sign in with could not be created, because exapump is not installed (the kit creates that user with it)."
+                info "Fix: exakit update exapump, then: exakit mcp-setup"
+                return 1
+            fi
             error "The read-only MCP user could not be set up."
             info "Fix: exakit mcp-setup (exakit logs setup says what failed)"
             return 1
