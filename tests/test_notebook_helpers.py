@@ -12,6 +12,7 @@ import hashlib
 import io
 import json
 import shutil
+import socket
 import os
 import re
 import subprocess
@@ -1629,11 +1630,18 @@ class SourcesTest(unittest.TestCase):
         """The kit says a host name that does not resolve may be misspelt. When public DNS does resolve it, the name
         is right and this network's DNS is what refuses it (a home router, a hotspot): say that, and what to do."""
         sources = importlib.import_module("exakit_nb.sources")
-        cases = {(False, True): True, (False, False): False, (True, True): False}
-        for (here, public), advised in cases.items():
-            with self.subTest(here=here, public=public), mock.patch.object(sources, "_resolves_here", return_value=here), \
+        # (IPv4 here, IPv6 here, public) -> what is said. The database asks this computer's DNS, over IPv4.
+        cases = {(False, False, True): "public DNS does",            # this network's DNS refuses the name
+                 (False, True, True): "IPv6 address only",           # it answers IPv6 and refuses IPv4
+                 (True, True, True): "resolves from this computer now",   # it failed a moment ago: try again
+                 (False, False, False): "", (True, True, False): ""}      # nobody knows the name: the kit's words stand
+        for (v4, v6, public), said in cases.items():
+            here = lambda host, family=0, v4=v4, v6=v6: v4 if family == socket.AF_INET else v6 if family == socket.AF_INET6 else (v4 or v6)
+            with self.subTest(v4=v4, v6=v6, public=public), mock.patch.object(sources, "_resolves_here", side_effect=here), \
                     mock.patch.object(sources, "_resolves_publicly", return_value=public):
-                self.assertEqual(advised, "public DNS does" in sources._dns_note("db.example.com"))
+                note = sources._dns_note("db.example.com")
+                self.assertEqual(bool(said), bool(note))
+                self.assertIn(said, note)
         self.assertFalse(sources._resolves_publicly("bad..name"))
         failed = subprocess.CompletedProcess([], 1, stderr="", stdout='{"ok": false, "error": "the host name db.example.com '
                                              'does not resolve", "remedy": "nothing was kept - check the spelling"}')

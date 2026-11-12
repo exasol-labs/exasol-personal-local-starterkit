@@ -225,11 +225,18 @@ def connect_source(connector: str, name: str, url: str | None = None, *, passwor
 PUBLIC_DNS = ("1.1.1.1", "8.8.8.8")      # asked only to tell a wrong name from a network whose own DNS will not answer
 DNS_ADVICE = ("This network's DNS does not answer for {host}, but public DNS does: the name is right. Use another "
               "network (or a VPN), or set this computer's DNS server to 1.1.1.1 or 8.8.8.8, then connect again.")
+DNS_IPV6_ONLY = ("This network's DNS gives {host} an IPv6 address only and refuses the IPv4 lookup, and the database "
+                 "looks names up over IPv4. Public DNS has the IPv4 address, so the name is right. Set this computer's "
+                 "DNS server to 1.1.1.1 or 8.8.8.8 (or use another network), then connect again.")
+DNS_NOW = ("{host} resolves from this computer now, so the name is right: the lookup failed a moment ago, which a "
+           "network's DNS does when it answers only some of the time (or just after a VPN or network change). Connect "
+           "again. If it keeps failing, set this computer's DNS server to 1.1.1.1 or 8.8.8.8.")
 
 
-def _resolves_here(host: str) -> bool:
+def _resolves_here(host: str, family: int = 0) -> bool:
+    """True when this computer's own DNS has an address for ``host`` (``family``: socket.AF_INET for IPv4 only)."""
     try:
-        socket.getaddrinfo(host, None)
+        socket.getaddrinfo(host, None, family)
         return True
     except OSError:
         return False
@@ -268,11 +275,15 @@ def _resolves_publicly(host: str, timeout: float = 2.0) -> bool:
 
 
 def _dns_note(host: str) -> str:
-    """What to say about a host name that would not resolve: DNS_ADVICE when the name is right and only this
-    network's DNS refuses it, else nothing (the kit's own words stand: check the spelling)."""
-    if not host or _resolves_here(host) or not _resolves_publicly(host):
+    """What to say about a host name the database could not resolve, when the name itself is right (public DNS has
+    it): the database asks this computer's DNS, over IPv4. No IPv4 answer here: this network's DNS refuses it (it may
+    still answer IPv6). An answer here now: the lookup failed a moment ago, so trying again is the fix. A name public
+    DNS does not know either gets nothing: the kit's own words stand (check the spelling)."""
+    if not host or not _resolves_publicly(host):
         return ""
-    return DNS_ADVICE.format(host=host)
+    if _resolves_here(host, socket.AF_INET):
+        return DNS_NOW.format(host=host)
+    return (DNS_IPV6_ONLY if _resolves_here(host, socket.AF_INET6) else DNS_ADVICE).format(host=host)
 
 
 _STEP = re.compile(r"^(INFO|OK|WARN|ERROR)\s+(.*)$")
