@@ -433,6 +433,19 @@
 @media (max-width: 760px) { .guide-journey-compact { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 
 .guide-codebox-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* A cell of the Code view: code you can edit, Run, and its output, as a notebook cell. */
+.guide-cell { margin: 10px 0 14px; }
+.guide-cells-title { margin-top: 16px; }
+.guide-cell-tools { display: inline-flex; align-items: center; gap: 10px; }
+.guide-cell-input { display: block; width: 100%; box-sizing: border-box; min-height: 44px; resize: vertical; font-family: var(--guide-mono);
+  font-size: 12.5px; line-height: 1.55; color: var(--guide-text); background: var(--guide-surface); border: 1px solid var(--guide-border);
+  border-left: 3px solid var(--guide-accent); border-radius: 6px; padding: 8px 10px; tab-size: 4; white-space: pre; overflow: auto; }
+.guide-cell-input:focus-visible { outline: 2px solid var(--guide-accent); outline-offset: 1px; }
+.guide-cell-run { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.guide-cell-hint { font-size: 12px; color: var(--guide-muted); }
+.guide-cell-out { margin: 8px 0 0; padding: 8px 10px; font-family: var(--guide-mono); font-size: 12px; line-height: 1.5; white-space: pre; overflow: auto;
+  max-height: 320px; color: var(--guide-text); background: var(--guide-card); border: 1px solid var(--guide-border); border-radius: 6px; }
+.guide-cell-err { color: var(--guide-bad); border-color: var(--guide-bad); white-space: pre-wrap; }
 .guide-copy { padding: 2px 8px; font-size: 11px; }
 .guide-cmd { cursor: copy; }
 

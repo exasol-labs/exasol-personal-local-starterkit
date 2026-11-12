@@ -182,6 +182,71 @@ def code(action_id: str, **values: Any) -> str:
     return _render(action_id, values, for_run=False)
 
 
+CELL = "<exakit.guide:cell>"
+SHOWN = 6000        # characters of a cell's output a card shows
+
+
+def _shown(value: Any) -> str:
+    """A cell's last value as text, the way a notebook shows it: a table as its first rows, anything else its repr."""
+    if value is None:
+        return ""
+    try:
+        if type(value).__name__ in ("DataFrame", "Series") and hasattr(value, "to_string"):
+            rows = len(value)
+            text = value.head(20).to_string(max_cols=12) if hasattr(value, "head") else value.to_string()
+            return text + (f"\n... {rows:,} rows, the first 20 shown" if rows > 20 else "")
+    except Exception:
+        pass
+    return repr(value)
+
+
+def run_text(text: str, session=None) -> dict[str, Any]:
+    """Run code typed into a card's Code view the way a notebook cell runs it: in the notebook's own namespace
+    (``nb``, ``connection``, ``dataset`` ... as the cards left them), every line executed, the last expression's value
+    kept. A cell that holds a query (SELECT or WITH) runs it with nb.sql on the notebook's connection. Returns
+    {ok, text, value}: ``text`` is what it printed and the value's display, or the error in one line
+    with the line it happened on. What ran is logged like every card action; an error does not raise."""
+    import ast
+    import textwrap
+    import traceback
+
+    from .session import SESSION, quiet
+
+    session = session or SESSION
+    source = textwrap.dedent(str(text or "")).strip()
+    if not source:
+        raise ValueError("Nothing to run: the cell is empty.")
+    namespace = session.namespace()
+    # A card also shows queries (the dashboard's SQL, a question's SQL). A cell holding one runs it as the notebook
+    # would, nb.sql(connection, ...): a read only, shown before its result like every query of the kit.
+    query = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#")).strip()
+    if re.match(r"(?is)^(select|with)\b", query):
+        source = f"nb.sql(connection, {query!r})" if "\n" not in query else f'nb.sql(connection, """\n{query}\n""")'
+    tree = ast.parse(source, CELL, "exec")                 # a syntax error is the reader's to fix: raised as it is
+    # The notebook's `connection`, when the cell uses it without making its own.
+    if re.search(r"\bconnection\b", source) and not re.search(r"(?m)^\s*connection\s*=", source):
+        session.connection()
+    value, error = None, ""
+    with quiet() as out:
+        try:
+            if tree.body and isinstance(tree.body[-1], ast.Expr):
+                last = tree.body.pop()
+                exec(compile(tree, CELL, "exec"), namespace)
+                value = eval(compile(ast.Expression(last.value), CELL, "eval"), namespace)
+            else:
+                exec(compile(tree, CELL, "exec"), namespace)
+        except Exception as exc:
+            line = next((frame.lineno for frame in reversed(traceback.extract_tb(exc.__traceback__)) if frame.filename == CELL), None)
+            error = "".join(traceback.format_exception_only(type(exc), exc)).strip() + (f"  (line {line})" if line else "")
+    printed = getattr(out, "text", "")
+    session.said = printed
+    session.log(source)                                    # what ran, worked or not: the Code view and the workflow log
+    shown = "\n".join(part for part in (printed, error or _shown(value)) if part)
+    if len(shown) > SHOWN:
+        shown = shown[:SHOWN] + "\n... (cut: the rest is not shown here)"
+    return {"ok": not error, "text": shown, "value": value}
+
+
 def run(action_id: str, session=None, **values: Any) -> Any:
     """Run the action's code in the notebook's namespace - that very text, nothing else - and log it. Returns the
     variable the code assigns (Action.result). A secret is a dict of keyword arguments ({"ask": ...})."""

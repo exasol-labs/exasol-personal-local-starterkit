@@ -196,7 +196,7 @@ function render({ model, el }) {
   // session (data, connection, approvals) is the kernel's and does not change with the view.
   const getMode = () => ui.mode;
   const setMode = (mode) => { ui.mode = mode; rememberMode(mode); draw(); };
-  const st = { choice: {}, fields: {}, roles: null, slots: null, mapKey: null, mapInit: null, secret: new Set() };
+  const st = { choice: {}, fields: {}, roles: null, slots: null, mapKey: null, mapInit: null, secret: new Set(), cells: {} };
   const collect = () => ({ ...st.fields, ...st.choice, roles: { ...(st.roles || {}) }, slots: { ...(st.slots || {}) } });
   const mapDirty = () => !!st.mapInit && JSON.stringify({ r: st.roles, s: st.slots }) !== st.mapInit;
 
@@ -815,20 +815,59 @@ function render({ model, el }) {
       if (o.t === "code" && typeof o.v === "string") add(o.v, o.title);
       Object.entries(o).forEach(([k, v]) => { if (k !== "cmd" && v && typeof v === "object") visit(v, here); });
     };
-    blocks.filter((b) => b.t !== "ran").forEach((b) => visit(b));
-    return [...seen.values()].join("\n\n");
+    blocks.filter((b) => b.t !== "ran" && b.t !== "cells").forEach((b) => visit(b));
+    return [...seen.values()];
+  }
+
+  // A cell of the Code view: the code in a box you can edit, Run under it, and what it printed or returned below,
+  // as a notebook cell. It runs in the notebook's own namespace (nb, connection, dataset ... as the cards left
+  // them). Shift+Enter (or Ctrl/Cmd+Enter) runs it; an edit is kept until the code it started from changes.
+  function cell(key, title, original, outputs) {
+    const kept = st.cells[key];
+    const edited = kept && kept.base === original ? kept.text : original;
+    const out = outputs[key];
+    const running = ui.busy === "run_code" && ui.cell === key;
+    const run = () => { if (ui.busy) return; ui.cell = key; send("run_code", { cell: key, code: (st.cells[key] && st.cells[key].base === original ? st.cells[key].text : original) }); };
+    const size = (el) => { el.style.height = "auto"; el.style.height = `${Math.min(el.scrollHeight + 2, 420)}px`; };
+    const box = h("textarea", { class: "guide-cell-input", spellcheck: "false", autocapitalize: "off", autocomplete: "off",
+      rows: String(Math.min(18, Math.max(2, edited.split("\n").length))), "aria-label": `${title}: code`,
+      onInput: (e) => { st.cells[key] = { base: original, text: e.target.value }; size(e.target); },
+      onKeydown: (e) => {
+        if (e.key === "Enter" && (e.shiftKey || e.ctrlKey || e.metaKey)) { e.preventDefault(); run(); }
+        if (e.key === "Tab" && !e.shiftKey) {                       // a tab indents, as in a cell
+          e.preventDefault();
+          const t = e.target, at = t.selectionStart;
+          t.value = `${t.value.slice(0, at)}    ${t.value.slice(t.selectionEnd)}`;
+          t.selectionStart = t.selectionEnd = at + 4;
+          st.cells[key] = { base: original, text: t.value };
+        }
+      } }, edited);
+    setTimeout(() => size(box), 0);
+    return h("div", { class: "guide-cell" },
+      h("div", { class: "guide-codebox-title" }, title,
+        h("span", { class: "guide-cell-tools" },
+          edited !== original ? h("button", { type: "button", class: "guide-link", onClick: () => { delete st.cells[key]; draw(); } }, "Reset") : null,
+          h("button", { type: "button", class: "guide-btn guide-btn-quiet guide-copy", onClick: (e) => copyCode(box.value, e.currentTarget) }, "Copy as cell"))),
+      box,
+      h("div", { class: "guide-cell-run" },
+        h("button", { type: "button", class: "guide-btn guide-btn-primary", disabled: !!ui.busy, onClick: run, title: "Run this code (Shift+Enter)" },
+          running ? h("span", { class: "guide-spinner" }) : null, running ? "Running…" : "Run"),
+        h("span", { class: "guide-cell-hint" }, "Shift+Enter runs it. It runs in this notebook, like a cell.")),
+      out ? h("pre", { class: `guide-cell-out${out.ok ? "" : " guide-cell-err"}`, role: "status" }, out.text || (out.ok ? "Done: nothing to show." : "")) : null);
   }
 
   function codeView(blocks) {
     const keep = blocks.filter((b) => ["home_head", "head", "tabs", "msg"].includes(b.t)
       || (b.t === "details" && b.title === "What the kit said"));
     const ran = blocks.find((b) => b.t === "ran");
+    const outputs = (blocks.find((b) => b.t === "cells") || {}).v || {};
     const calls = controlCode(blocks);
     return [
       ...keep.map(block),
-      ran ? B.code({ title: "What this card ran (this session, in order)", v: ran.v }) : h("p", { class: "guide-p guide-muted" },
-        "Nothing has run from this card yet. Each control below is one call; run it here or copy it into a cell."),
-      calls ? B.code({ title: "What each control on this card runs", v: calls }) : null,
+      ran ? cell("ran", "What this card ran (this session, in order)", ran.v, outputs) : h("p", { class: "guide-p guide-muted" },
+        "Nothing has run from this card yet. Each control below is one call: edit it and run it here, or copy it into a cell."),
+      calls.length ? h("div", { class: "guide-codebox-title guide-cells-title" }, "What each control on this card runs") : null,
+      ...calls.map((code, i) => cell(`call:${code}`, code.startsWith("# ") ? code.split("\n")[0].slice(2) : `Control ${i + 1}`, code, outputs)),
       h("div", { class: "guide-allcode" },
         h("button", { type: "button", class: "guide-link", onClick: () => setAllCode(!allCode()) },
           allCode() ? "Hide the notebook's code cells" : "Show all the notebook's code cells, below the cards")),

@@ -21,7 +21,7 @@ The first card of every notebook has a **Docs** button beside the logo. It opens
 
 Every card has a **Guided / Code** switch at its top right.
 
-* **Code** turns that card, in place, into its code: what it ran this session, in order, and the exact call behind each control. Each block has **Copy as cell**.
+* **Code** turns that card, in place, into its code as cells: what it ran this session, in order, and the exact call behind each control. Each cell can be edited and run right there with **Run** or Shift+Enter, and shows what it printed or returned under it, like a notebook cell. It runs in the notebook's own session, so it sees the same connection and data as the cards. **Copy as cell** copies it into a cell of your own, and **Reset** puts the original back.
 * **Guided** turns it back. Only that card changes. The connection, the chosen data and the approvals stay as they are.
 
 The notebook's own cells sit under **The code behind this page**. In the kit's JupyterLab they are hidden until you choose **Show all the notebook's code cells** at the foot of a card's Code view. In Marimo the cards show stacked, and the cells open with their code visible.

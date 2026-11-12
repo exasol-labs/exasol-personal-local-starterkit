@@ -160,6 +160,7 @@ class Screen:
         self.widget.on_msg(self._on_msg)
         self.flash: dict | None = None  # one message shown at the top until the next action
         self.ran: list[str] = []        # the code this card ran, in order: its Code view
+        self.cells: dict[str, dict] = {}    # what each cell of its Code view last showed when run from there
         _SCREENS.add(self)
 
     # Displaying the Screen object in a notebook shows its card.
@@ -241,7 +242,23 @@ class Screen:
         self._code_since(mark)
         if self.ran:
             blocks = blocks + [{"t": "ran", "v": "\n".join(self.ran)}]
+        if getattr(self, "cells", None):
+            blocks = blocks + [{"t": "cells", "v": self.cells}]
         self.widget.blocks = blocks
+
+    def on_run_code(self, values: dict) -> None:
+        """Run on a cell of this card's Code view: the code as it stands there (edited or not) runs in the notebook's
+        namespace, as a cell of the notebook would, and what it printed or returned shows under it. The other cards
+        redraw: the cell may have changed the data they show."""
+        from . import actions
+        from .session import SESSION
+
+        key = str(values.get("cell") or "")
+        result = actions.run_text(str(values.get("code") or ""))
+        if getattr(self, "cells", None) is None:
+            self.cells = {}
+        self.cells[key] = {"ok": bool(result["ok"]), "text": str(result["text"])}
+        SESSION.changed("code", self)
 
     def _on_msg(self, _widget, content, _buffers) -> None:
         if not isinstance(content, dict) or content.get("type") != "event":

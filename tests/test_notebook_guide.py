@@ -777,6 +777,71 @@ class CardTest(unittest.TestCase):
         for line in (share.Dashboard.build, share.Dashboard.__init__):
             self.assertNotIn("Start it from the Home screen", inspect.getsource(line))
 
+    def test_a_cell_of_the_code_view_runs_like_a_notebook_cell(self):
+        """Code typed (or edited) in a card's Code view runs in the notebook's own namespace: every line runs, the last
+        expression's value shows, what it prints shows, a name it assigns stays for the next cell, and an error is
+        one line with the line it happened on - never an exception that breaks the card. What ran is logged."""
+        actions = importlib.import_module("exakit_guide.actions")
+        session = importlib.import_module("exakit_guide.session")
+        fake = session.Session()
+        fake._ns = {"nb": mock.Mock(), "connection": object()}
+        result = actions.run_text("rows = [1, 2, 3]\nprint('counted')\nlen(rows) * 2", fake)
+        self.assertEqual((True, "counted\n6", 6), (result["ok"], result["text"], result["value"]))
+        self.assertEqual([1, 2, 3], fake.get("rows"))                              # it stays, as in a notebook
+        self.assertEqual({"ok": True, "text": "", "value": None}, actions.run_text("total = sum(rows)", fake))
+        self.assertEqual(6, fake.get("total"))
+        failed = actions.run_text("first = rows[0]\nrows[10]", fake)
+        self.assertFalse(failed["ok"])
+        self.assertIn("IndexError", failed["text"])
+        self.assertIn("(line 2)", failed["text"])
+        self.assertEqual(1, fake.get("first"))                                     # the lines before the error ran
+        self.assertEqual("rows = [1, 2, 3]\nprint('counted')\nlen(rows) * 2", fake.code[0])     # logged as it ran
+        with self.assertRaises(SyntaxError):
+            actions.run_text("def broken(:", fake)
+        # A cell that holds a query runs it on the notebook's connection, as nb.sql would.
+        fake._ns["nb"].sql.return_value = "the rows"
+        asked = actions.run_text("# The dashboard's query\nSELECT CATEGORY, COUNT(*)\nFROM AMAZON.ORDER_LINES\nGROUP BY 1", fake)
+        self.assertEqual((True, "the rows"), (asked["ok"], asked["value"]))
+        connection, statement = fake._ns["nb"].sql.call_args[0]
+        self.assertIs(connection, fake._ns["connection"])
+        self.assertEqual("SELECT CATEGORY, COUNT(*)\nFROM AMAZON.ORDER_LINES\nGROUP BY 1", statement.strip())
+        self.assertTrue(fake.code[-1].startswith('nb.sql(connection, """'))                  # logged as the call it was
+        self.assertEqual("select 1", (actions.run_text("select 1", fake), fake._ns["nb"].sql.call_args[0][1])[1])
+        with self.assertRaisesRegex(ValueError, "empty"):
+            actions.run_text("   \n", fake)
+        long = actions.run_text("'x' * 20000", fake)
+        self.assertLess(len(long["text"]), actions.SHOWN + 100)
+        self.assertIn("cut", long["text"])
+
+        class Frame:                                                               # a table shows its first rows
+            def __len__(self):
+                return 50
+
+            def head(self, n):
+                return self
+
+            def to_string(self, **_):
+                return "A  B\n1  2"
+
+        Frame.__name__ = "DataFrame"
+        self.assertEqual("A  B\n1  2\n... 50 rows, the first 20 shown", actions._shown(Frame()))
+
+    @unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
+    def test_a_card_keeps_what_each_cell_showed_and_tells_the_others(self):
+        card = importlib.import_module("exakit_guide.card")
+        screen = card.Screen.__new__(card.Screen)
+        screen.cells = None
+        with mock.patch.object(card, "SESSION", create=True), \
+                mock.patch("exakit_guide.actions.run_text", return_value={"ok": False, "text": "NameError: x  (line 1)", "value": None}) as ran, \
+                mock.patch("exakit_guide.session.SESSION") as shared:
+            screen.on_run_code({"cell": "call:nb.kit_check()", "code": "x"})
+        ran.assert_called_once_with("x")
+        self.assertEqual({"call:nb.kit_check()": {"ok": False, "text": "NameError: x  (line 1)"}}, screen.cells)
+        shared.changed.assert_called_once_with("code", screen)
+        script = (ROOT / "notebook/package/exakit_guide/static/card.js").read_text(encoding="utf-8")
+        self.assertIn('send("run_code", { cell: key, code:', script)
+        self.assertIn('b.t !== "ran" && b.t !== "cells"', script)                  # a cell's output is not a control
+
     def test_run_logs_exactly_what_it_ran_and_returns_the_result(self):
         actions = importlib.import_module("exakit_guide.actions")
         session = importlib.import_module("exakit_guide.session")
