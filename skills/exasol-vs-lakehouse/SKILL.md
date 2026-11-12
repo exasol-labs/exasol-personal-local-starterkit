@@ -199,7 +199,11 @@ Two secrets at most. `--password-file` (or `--password-stdin`) carries the
 catalog secret - for `glue` the AWS secret, for `none` the storage secret.
 `--storage-secret-file` carries the storage secret when a catalog and `s3` or
 `azure` are both used. Only one stdin exists, so the second secret is a file
-(or a hidden prompt at a terminal).
+(or a hidden prompt at a terminal). A pasted string (`--url`) fills only the
+catalog and its address (`catalog_url`, `workspace_url`, Glue `region` and
+`database`, or a folder `path`); a credential in it (`user:token@`, `?token=`,
+a signature) is dropped with a warning and never used, so the secret files
+are still needed. Never put a secret in `--url`.
 
 ```bash
 exakit connect lakehouse --name sales_lake --set catalog=unity --set files=azure \
