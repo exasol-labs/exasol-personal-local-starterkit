@@ -61,60 +61,57 @@ Run the cells in order. The reading shows what the connection string did not giv
 
 ## Step by step: a new external source [#step-by-step-a-new-external-source]
 
-The **Choose your data** card walks through a new connection one step at a time. Each step asks one question. The steps you see depend on the source you pick.
+Under **External sources**, the **Choose your data** card lists the connections you have. Tick one or more and the tables to read from each, then press **Use this data**.
+
+Tick **New connection…** and a single form opens under the list. There is no step to press through: you pick the source, fill in the form, and press one button.
 
 <Steps>
   <Step>
-    ### Connection [#connection]
-
-    Pick a connection you already have, or **New connection…**. Your existing connections are listed with their table counts. Choose one and press **Use this data** to load a table from it.
-  </Step>
-
-  <Step>
     ### Data source [#data-source]
 
-    Pick the kind of source: PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks, MongoDB, a lakehouse, or a file in S3 or Azure Blob Storage. Each kind has the same questions as `exakit connect`. A card shows the kit's own names for them.
+    One list of every kind of source the kit connects, each with a line saying what it is. Type in the box at its top to narrow it. The list opens inside the card, under the field, so it never covers the page.
+
+    The card does not hold this list. It asks the kit (`nb.connectors()`), which answers with what `exakit connect` offers. A source added to the kit appears here without a change to the notebook.
   </Step>
 
   <Step>
-    ### Settings [#settings]
+    ### The source's own settings [#the-sources-own-settings]
 
-    Shown only for a source with several kinds in one. A lakehouse asks for its catalog and where its files are, then asks only what that combination needs. See the lakehouse section above.
+    Shown only for a source that has several kinds in one. Each setting is its own list, in the order the kit asks them. A lakehouse, for example, asks for its catalog, then where its files are, then how to sign in.
+
+    A choice decides what the next lists offer. The card asks the kit again after each pick (`nb.connector_inputs(source, catalog=...)`) and takes the kit's default for the settings that follow, so the details below are always the ones that combination needs. A choice the kit does not support yet is shown greyed out with its reason.
   </Step>
 
   <Step>
-    ### Connection string or manual [#connection-string-or-manual]
+    ### How to fill it in [#how-to-fill-it-in]
 
-    Paste a connection string and press **Next**, and the kit reads it. The steps after it ask only for what the string did not give. Or choose **Manual configuration** and type each detail.
+    **Fill in the details** shows every question below. **Paste a connection string** adds a box for the string: paste it and the kit reads it (`nb.read_connection_string`), fills in the details, and marks only what the string did not hold.
   </Step>
 
   <Step>
-    ### Name [#name]
+    ### Details and optional settings [#details-and-optional-settings]
 
-    A lower-case name, for example `sales`. Its tables appear as `VS_SALES`.
-  </Step>
+    Everything `exakit connect` asks for that source, in one place:
 
-  <Step>
-    ### Details [#details]
+    | Part              | What is in it                                                                                                                                                                          |
+    | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Details           | The name (alias) first: lower case, for example `sales`, and its tables appear as `VS_SALES`. Then every required input, such as the host, the database, the account and the password. |
+    | Optional settings | A port, a schema, TLS, a CA certificate file and the like. Each shows the kit's default. Change one only to use another value.                                                         |
 
-    The inputs the kit still needs: the host, the database, the user and the password. The password goes into a hidden box. It is never shown, saved or logged by the card.
-  </Step>
-
-  <Step>
-    ### Optional settings [#optional-settings]
-
-    A port, a CA certificate file or another optional value. The kit fills in its own default for each one you leave alone.
+    The password goes into a hidden box. It is never shown, saved or logged by the card.
   </Step>
 
   <Step>
     ### Test connection, then Connect and use this data [#test-connection-then-connect-and-use-this-data]
 
-    **Test connection** checks the inputs and whether this computer reaches the source. It changes nothing and needs no password. **Connect and use this data** runs the kit's connect command with the password on its standard input, then loads the table you chose.
+    **Test connection** checks the inputs and whether this computer reaches the source. It changes nothing and needs no password. **Connect and use this data** runs the kit's connect command with the password on its standard input, then loads what you ticked.
   </Step>
 </Steps>
 
+From an empty card that is two picks and one button: tick **New connection…**, pick the data source, fill in the form, press **Connect and use this data**.
+
 <Flow
-  caption="A new external source, step by step"
+  caption="A new external source"
   steps="[
   { title: &#x22;You name the source&#x22;, text: &#x22;The kind, a connection string or the details, and a name&#x22;, tone: &#x22;you&#x22; },
   { title: &#x22;The kit checks the inputs&#x22;, text: &#x22;Every input, the way the kit's connect form checks it&#x22;, code: &#x22;nb.test_source(...)&#x22;, tone: &#x22;kit&#x22; },

@@ -518,3 +518,34 @@
 .guide-choice-part:first-child { margin-top: 0; }
 .guide-picks { display: flex; flex-direction: column; gap: 6px; }
 .guide-picks-list { max-height: 220px; overflow-y: auto; padding: 8px 10px; border: 1px solid var(--guide-border); border-radius: 8px; max-width: 560px; }
+
+/* the kit's dropdown: its list opens in place, inside the card */
+.guide-dd { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: 560px; min-width: 0; }
+.guide-dd-btn { display: flex; align-items: center; gap: 8px; width: 100%; height: 36px; padding: 0 10px; font: inherit; font-size: 14px; color: var(--guide-text); background: var(--guide-card); border: 1px solid var(--guide-border-strong); border-radius: 8px; cursor: pointer; text-align: left; }
+.guide-dd-btn:hover:not(:disabled) { border-color: var(--guide-accent); }
+.guide-dd-btn:focus-visible, .guide-dd-opt:focus-visible { outline: 2px solid var(--guide-accent); outline-offset: 1px; }
+.guide-dd-btn:disabled { opacity: .7; cursor: default; }
+.guide-dd-btn.is-open { border-color: var(--guide-accent); box-shadow: 0 0 0 3px var(--guide-accent-soft); }
+.guide-dd-btn.is-empty .guide-dd-now { color: var(--guide-muted); }
+.guide-dd-now { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.guide-dd-nowhint { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; color: var(--guide-muted); }
+.guide-dd-btn .guide-icon { margin-left: auto; color: var(--guide-muted); transition: transform .12s; flex: none; }
+.guide-dd-btn.is-open .guide-icon { transform: rotate(180deg); }
+.guide-dd-panel { display: flex; flex-direction: column; gap: 6px; padding: 6px; background: var(--guide-card); border: 1px solid var(--guide-border-strong); border-radius: 10px; }
+.guide-dd-find { width: 100%; max-width: none !important; height: 32px; }
+.guide-dd-list { display: flex; flex-direction: column; gap: 1px; max-height: 264px; overflow-y: auto; }
+.guide-dd-opt { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; width: 100%; padding: 7px 10px; font: inherit; font-size: 14px; color: var(--guide-text); background: none; border: 0; border-radius: 7px; cursor: pointer; text-align: left; }
+.guide-dd-opt:hover { background: var(--guide-surface); }
+.guide-dd-opt.is-on { background: var(--guide-accent-soft); }
+.guide-dd-opt.is-on .guide-dd-label { color: var(--guide-accent); font-weight: 600; }
+.guide-dd-opt:disabled { opacity: .5; cursor: default; }
+.guide-dd-hint { font-size: 12.5px; color: var(--guide-muted); }
+.guide-dd-group { padding: 8px 10px 3px; font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--guide-muted); }
+.guide-dd-opt[hidden], .guide-dd-group[hidden] { display: none; }
+.guide-field-edit .guide-dd { max-width: none; }
+/* a form: section titles, and short answers two to a row */
+.guide-form-heading { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--guide-border); font-size: 13.5px; font-weight: 600; color: var(--guide-text); }
+.guide-formgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; max-width: 760px; }
+.guide-formgrid .guide-input, .guide-formgrid .guide-dd { max-width: none; width: 100%; }
+.guide-formgrid .guide-field-wide { grid-column: 1 / -1; }
+@media (max-width: 620px) { .guide-formgrid { grid-template-columns: minmax(0, 1fr); } }

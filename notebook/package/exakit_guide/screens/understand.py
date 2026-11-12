@@ -180,9 +180,9 @@ class ChooseData(Screen):
             ('Connect an external source', 'get-the-data/external-sources#step-by-step-a-new-external-source'),)
 
     kind = "card"
-    step, connector, src_name, conn_n, tip = "connection", None, "", 0, ""
+    connector, src_name, conn_n, tip = None, "", 0, ""
     failed: list[str] = []          # what was ticked and could not be loaded, with the kit's reason
-    preset, settings_step, typed_storage = None, False, ""   # a source's settings (a Lakehouse's catalog and files)
+    preset, typed_storage = None, ""     # the settings chosen for a source that has some (the kit says which)
     # The password typed for the connection being set up, held here until it connects: the card's own box is emptied
     # the moment it is sent, and it sits on an earlier step, so a connect tried again (the source refused, a name did
     # not resolve) would go out with no password. Never shown, logged or saved; forgotten on success or a new source.
@@ -198,8 +198,7 @@ class ChooseData(Screen):
         self.parsed: dict[str, dict] = {}      # a connection string read per connector (nb.read_connection_string)
         self.tip = ""                          # the engine's tip about this computer's public IP
         self.source_tables: dict[str, list[dict]] = {}   # each connected source's tables
-        self.step = "connection"               # a new connection is entered one step at a time (Back / Next)
-        self.connector: str | None = None      # the data source chosen for it
+        self.connector: str | None = None      # the data source chosen for a new connection
         self.src_name = ""
         self.conn_n = 0
         self.rows: dict[str, str] = {}
@@ -271,25 +270,17 @@ class ChooseData(Screen):
             {"value": "source", "title": "External sources", "text": "Live data in other systems, read where it is.",
              "fields": self._source_fields(connect_only)},
         ]
-        # A new connection is entered one step at a time (Back / Next); its last step tests and connects.
-        steps = self._steps()
-        at = steps.index(self.step) if self.step in steps else 0
-        last = at == len(steps) - 1
+        # A new connection is one form; once its data source (and the source's own settings) are chosen, the form's
+        # two buttons show: test it, or connect it and use everything ticked.
         connecting = [{"field": "kind", "equals": "source"}, connect_only]
-        # "Use this data" loads everything ticked. A new connection being entered has its own buttons (Back / Next,
-        # then Connect); the plain button shows whenever no new connection is being entered.
+        # "Use this data" loads everything ticked; it shows whenever no new connection is being entered.
         plain = {"any": [{"field": "kind", "not": "source"}, {"field": conn, "not": "__connect__"}]}
         use = {"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}
         items = []
-        if at > 0:
-            items.append({"id": "src_back", "label": "Back", "show_if": connecting, "no_secret": True})
-        if not last:
-            items += [{"id": "src_next", "label": "Next", "primary": True, "busy": "Reading…", "show_if": connecting, "no_secret": True},
-                      {**use, "show_if": plain}]
-        else:
+        if self._ready():
             items += [{"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
-                      {**use, "label": "Connect and use this data", "show_if": connecting},
-                      {**use, "show_if": plain}]
+                      {**use, "label": "Connect and use this data", "busy": "Connecting…", "show_if": connecting}]
+        items.append({**use, "show_if": plain})
         blocks = [head, {"t": "choice", "id": "kind", "multi": True, "value": ["sample"] if samples else ["file"],
                          "options": options, "below": True,
                          "actions": items}]     # the buttons sit inside the panel under the ticked options
@@ -336,12 +327,11 @@ class ChooseData(Screen):
         if "source" in kinds:
             for schema in _listed(v.get(self._cf())):
                 if schema == "__connect__":
-                    steps = self._steps()
-                    if len(kinds) > 1 or len(_listed(v.get(self._cf()))) > 1:
-                        if self.step != steps[-1] or self.step == "connection":
-                            continue          # a new connection not entered to its end: the rest is loaded without it
+                    if not self._ready() and (len(kinds) > 1 or len(_listed(v.get(self._cf()))) > 1):
+                        continue              # a new connection with no data source chosen: the rest is loaded without it
                     schema = self._connect(v)
-                    self.step, self.conn_n = "connection", self.conn_n + 1     # the next one starts from the list again
+                    # the next new connection starts from an empty form, and the list of connections from its top
+                    self.conn_n, self.connector, self.preset, self.src_name = self.conn_n + 1, None, None, ""
                     connected = True
                     tables = _listed(v.get("table")) or [""]
                 else:
@@ -477,178 +467,152 @@ class ChooseData(Screen):
             rest.append(field)
         return needed, rest
 
-    def _steps(self) -> list[str]:
-        """The steps of a new connection, for the data source chosen: only the ones it has."""
-        form = self.forms.get(self.connector or "") or {}
-        needed, rest = self._groups(self.connector) if form else ([], [])
-        return (["connection", "source"] + (["settings"] if self.settings_step else [])
-                + (["string"] if form.get("forms") else []) + ["name"]
-                + (["needed"] if needed else []) + (["optional"] if rest else []))
+    def _ready(self) -> bool:
+        """A data source is chosen and every setting the kit asks for it is settled: its details can be filled in."""
+        form = self.forms.get(self.connector or "")
+        return bool(form) and not form.get("gate") and not self._pending(form)
 
     def _source_fields(self, connect_only: dict) -> list[dict]:
-        """An external source, one step at a time: the connections there are (and the table to read from one), or a
-        new connection - the data source, its connection string where it has one, the name, what is still needed (the
-        password with it), then the optional settings (a CA file, a port ...). Every question, label, default and
-        choice is `exakit connect`'s own (nb.connectors, nb.connector_inputs, nb.read_connection_string)."""
-        steps = self._steps()
-        step = self.step if self.step in steps else "connection"
-        cid = self.connector or ""
-        form, read = self.forms.get(cid) or {}, self.parsed.get(cid)
-        if step == "connection":
-            tables = self.source_tables or {}
-            fields: list[dict] = [{"id": self._cf(), "type": "picks", "label": "Connections",
-                                   "value": [self.sources[0] if self.sources else "__connect__"],
-                                   "options": [{"value": x, "label": x, "hint": f"{len(tables.get(x, []))} tables" if tables.get(x) else ""}
-                                               for x in self.sources] + [{"value": "__connect__", "label": "New connection…"}]}]
-            for schema in self.sources:
-                found, only = tables.get(schema, []), {"field": self._cf(), "equals": schema}
-                fields.append({"id": self._tid(schema), "type": "picks", "label": f"Tables of {schema}",
-                               "value": [found[0]["value"]], "options": found, "show_if": only} if found else
-                              {"id": self._tid(schema), "type": "text", "label": "Table (empty: its one table, or the list of them)",
-                               "placeholder": "ORDERS", "show_if": only})
-            fields.append({"id": "src_new", "type": "note", "show_if": connect_only,
-                           "v": "Next asks for the data source, then its details, one step at a time."})
-            return fields
-        # Where this is, and what was settled so far.
-        titles = {"source": "Data source", "settings": "Settings", "string": "Connection string", "name": "Name", "needed": "Details",
-                  "optional": "Optional settings"}
-        new = steps[1:]
-        so_far = [form["name"]] if form and step != "source" else []
-        if form and step != "source":
-            so_far += self._setting_labels(form)
-        if read and step != "string":
-            so_far.append(read["masked"])
-        if self.src_name and step != "name":
-            so_far.append(f"name {self.src_name}")
-        fields = [{"id": f"src_step_{step}", "type": "note", "show_if": connect_only,
-                   # Before the data source is chosen its steps are not known yet: no "of N" there.
-                   "v": f"New connection · step {new.index(step) + 1}" + (f" of {len(new)}" if step != "source" else "")
-                        + f" · {titles[step]}"
-                        + (f" · {' · '.join(so_far)}" if so_far else "")}]
-        if step == "source":
-            connectors = []
-            for c in self.connectors:
-                connectors.append({"value": c["id"], "label": c["name"] + (" (not available yet)" if c.get("gate") else ""),
-                                   "hint": c.get("summary") or ""})
-                # A connector with several kinds of source in one: its settings as a tree under it, as the kit's
-                # connect menu shows them (a Lakehouse's catalog, and under each the files it can read).
-                for node in (self.forms.get(c["id"]) or {}).get("tree", []):
-                    connectors.append({"value": self._pick(c["id"], node["set"]), "label": "\u00a0\u00a0\u00a0\u2514 " + node["label"]})
-                    connectors += [{"value": self._pick(c["id"], child["set"]),
-                                    "label": "\u00a0" * 8 + "\u2514 " + child["label"]} for child in node.get("children", [])]
-            fields.append({"id": "connector", "type": "select", "label": "Data source",
-                           "value": self._pick(cid, self.preset or {}) if cid else (connectors[0]["value"] if connectors else ""),
-                           "options": connectors})
-        elif step == "settings":
-            for spec in self._pending(form):
-                labels = spec.get("choice_labels") or spec["choices"]
-                fields.append({"id": self._fid(cid, "set_" + spec["name"]), "type": "select",
-                               "label": spec["label"].split(" - ")[0] + " *", "value": spec["default"] or spec["choices"][0],
-                               "options": [{"value": value, "label": label} for value, label in zip(spec["choices"], labels)]})
-            for said in sorted({line for spec in self._pending(form) for line in spec.get("disabled") or []}):
-                fields.append({"id": self._fid(cid, "set_note"), "type": "note", "v": said})
-        elif step == "string":
-            how = self._fid(cid, "how")
-            fields.append({"id": how, "type": "select", "label": "How to connect", "value": "string",
-                           "options": [{"value": "string", "label": "Connection string", "hint": "paste it, the kit reads it"},
-                                       {"value": "manual", "label": "Manual configuration", "hint": "type each detail"}]})
-            fields.append({"id": self._fid(cid, "url"), "type": "text", "by": {"field": how, "equals": "string"},
-                           "label": f"Connection string ({' or '.join(form['forms'][:2])})", "placeholder": form["forms"][0]})
-            fields.append({"id": self._fid(cid, "hint"), "type": "note", "by": {"field": how, "equals": "string"},
-                           "v": "Paste it and press Next: the kit reads it and asks only for what it does not hold."})
-            fields.append({"id": self._fid(cid, "manual"), "type": "note", "by": {"field": how, "equals": "manual"},
-                           "v": "Next asks for each detail: the host, the database, the account and so on."})
-        elif step == "name":
-            fields.append({"id": "src_name", "type": "text", "placeholder": "sales",
-                           "label": self._name_label() + " * (lower case; its tables appear as VS_<NAME>)"})
-        elif step == "needed":
-            fields += self._groups(cid)[0]
-        elif step == "optional":
-            fields.append({"id": self._fid(cid, "rest"), "type": "note",
-                           "v": ("Filled in from the string or the kit's default." if read else "The kit's defaults.")
-                                + " Change one only to use another value."})
-            fields += self._groups(cid)[1]
-        if step == steps[-1]:
-            said = ([f"Access the reader needs: {form['access']}."] if form.get("access") else []) + form.get("tips", [])[:1]
-            if said:
-                fields.append({"id": self._fid(cid, "note"), "type": "note", "v": " ".join(said)})
-            if self.tip:
-                fields.append({"id": "src_tip", "type": "note", "v": self.tip})
-        for field in fields[1:]:
+        """External sources: the connections there are, with the tables to read from each, and - under "New
+        connection" - one form for a new one: the data source, the source's own settings where it has some (each a
+        list; the ones after it follow the choice), how to fill it in, then the name and every detail in one place,
+        the required ones first. Nothing here names a source: the list, each setting, each question, label, default
+        and choice is what the kit's `exakit connect` asks (nb.connectors, nb.connector_inputs,
+        nb.read_connection_string), so a source added or changed in the kit shows here as it is."""
+        tables = self.source_tables or {}
+        fields: list[dict] = [{"id": self._cf(), "type": "picks", "label": "Connections",
+                               "value": [self.sources[0] if self.sources else "__connect__"],
+                               "options": [{"value": x, "label": x, "hint": f"{len(tables.get(x, []))} tables" if tables.get(x) else ""}
+                                           for x in self.sources] + [{"value": "__connect__", "label": "New connection…"}]}]
+        for schema in self.sources:
+            found, only = tables.get(schema, []), {"field": self._cf(), "equals": schema}
+            fields.append({"id": self._tid(schema), "type": "picks", "label": f"Tables of {schema}",
+                           "value": [found[0]["value"]], "options": found, "show_if": only} if found else
+                          {"id": self._tid(schema), "type": "text", "label": "Table (empty: its one table, or the list of them)",
+                           "placeholder": "ORDERS", "show_if": only})
+        for field in self._new_connection():
             field["show_if"] = [connect_only, field.pop("by")] if "by" in field else connect_only
+            fields.append(field)
         return fields
 
-    def on_src_back(self, _v: dict) -> None:
-        steps = self._steps()
-        at = steps.index(self.step) if self.step in steps else 0
-        self.step = steps[max(at - 1, 0)]
+    def _new_connection(self) -> list[dict]:
+        cid = self.connector or ""
+        form, read = self.forms.get(cid) or {}, self.parsed.get(cid)
+        out: list[dict] = [{"id": "src_h_new", "type": "heading", "v": "New connection"}]
+        out.append({"id": "connector", "type": "select", "label": "Data source *", "value": cid, "sync": True,
+                    "placeholder": "Choose a data source…", "send_on_change": "src_pick",
+                    "options": [{"value": c["id"], "label": c["name"], "disabled": bool(c.get("gate")),
+                                 "hint": (f"not available yet: {c['gate']}" if c.get("gate") else c.get("summary") or "")}
+                                for c in self.connectors]})
+        if not form:
+            return out
+        # The source's own settings, as the kit asks them: one list each. A choice decides what the next ones offer.
+        chosen = self.preset or {}
+        settings = []
+        for spec in form.get("setting_inputs", []):
+            labels = spec.get("choice_labels") or spec["choices"]
+            settings.append({"id": self._fid(cid, "set_" + spec["name"]), "type": "select", "sync": True,
+                             "label": spec["label"].split(" - ")[0] + " *", "value": chosen.get(spec["name"], ""),
+                             "placeholder": "Choose…", "send_on_change": "src_set",
+                             "options": [{"value": value, "label": label} for value, label in zip(spec["choices"], labels)]
+                                        + [{"value": f"__off__{n}", "label": said, "disabled": True}
+                                           for n, said in enumerate(spec.get("disabled") or [])]})
+        if settings:
+            out.append({"id": self._fid(cid, "settings"), "type": "group", "fields": settings})
+        if self._pending(form):
+            return out + [{"id": self._fid(cid, "pending"), "type": "note", "v": "Choose these and the details to fill in show here."}]
+        how = self._fid(cid, "how")
+        if form.get("forms"):
+            out.append({"id": how, "type": "select", "label": "How to fill it in", "value": "manual",
+                        "options": [{"value": "manual", "label": "Fill in the details", "hint": "the name, the host, the account and the rest, below"},
+                                    {"value": "string", "label": "Paste a connection string", "hint": "the kit reads it and fills in the details"}]})
+            out.append({"id": self._fid(cid, "url"), "type": "text", "wide": True, "by": {"field": how, "equals": "string"},
+                        "send_on_change": "src_read", "placeholder": form["forms"][0],
+                        "label": f"Connection string ({' or '.join(form['forms'][:2])})"})
+            out.append({"id": self._fid(cid, "hint"), "type": "note", "by": {"field": how, "equals": "string"},
+                        "v": (f"Read: {read['masked']}. What it did not hold is marked * below." if read else
+                              "Paste it: the kit reads it, fills in the details below and leaves only what it does not hold.")})
+        needed, rest = self._groups(cid)
+        name = {"id": "src_name", "type": "text", "placeholder": "sales", "value": self.src_name,
+                "label": self._name_label() + " * (lower case; its tables appear as VS_<NAME>)"}
+        for field in needed + rest:
+            if field.get("type") == "password" or len(field["label"]) > 70:
+                field["wide"] = True
+        out += [{"id": self._fid(cid, "h_needed"), "type": "heading", "v": "Details"},
+                {"id": self._fid(cid, "needed"), "type": "group", "fields": [name] + needed}]
+        if rest:
+            out += [{"id": self._fid(cid, "h_rest"), "type": "heading", "v": "Optional settings",
+                     "sub": ("filled in from the string or the kit's default" if read else "the kit's defaults")
+                            + "; change one only to use another value"},
+                    {"id": self._fid(cid, "rest"), "type": "group", "fields": rest}]
+        said = ([f"Access the reader needs: {form['access']}."] if form.get("access") else []) + form.get("tips", [])[:1]
+        if said:
+            out.append({"id": self._fid(cid, "note"), "type": "note", "v": " ".join(said)})
+        if self.tip:
+            out.append({"id": "src_tip", "type": "note", "v": self.tip})
+        return out
 
-    def on_src_next(self, v: dict) -> None:
-        """Next: check this step's answer, then show the next one. The connection string is read here, the way
-        `exakit connect --url` reads it, so the steps after it ask only for what it did not give."""
-        steps = self._steps()
-        step = self.step if self.step in steps else "connection"
-        if step == "source":
-            connector, preset = self._picked(str(v.get("connector") or "").strip())
-            form = self.forms.get(connector)
-            if not form:
-                raise ValueError("Choose the data source first.")
-            if form.get("gate"):
-                raise ValueError(f"{form['name']} is not available yet: {form['gate']}")
-            if (connector, preset) != (self.connector, self.preset or {}):
-                self._kept_secret, self.typed_storage = "", ""     # another source: its own secrets
-            self.connector, self.preset = connector, preset
-            if form.get("tree"):
-                # What this combination asks, from the kit's engine (`exakit connect lakehouse --set catalog=...`).
-                form = self._settle(connector, preset)
-            self.settings_step = bool(self._pending(form))
-        elif step == "settings":
-            form = self.forms.get(self.connector) or {}
-            chosen = {spec["name"]: str(v.get(self._fid(self.connector, "set_" + spec["name"])) or spec["default"])
-                      for spec in self._pending(form)}
-            self.preset = {**(self.preset or {}), **chosen}
-            if self._pending(self._settle(self.connector, self.preset)):
-                return                                       # that choice brought a further setting: ask it here
-        elif step == "string":
-            manual = v.get(self._fid(self.connector, "how")) == "manual"
-            text = "" if manual else str(v.get(self._fid(self.connector, "url")) or "").strip()
-            if not text and not manual:
-                raise ValueError("Paste the connection string, or choose Manual configuration.")
-            if text:
-                read = self.parsed.get(self.connector)
-                if not read or read.get("text") != text:
-                    self._read_string(self.connector, text)
-                    self.kit_said = SESSION.said or self.kit_said
-            else:
-                self.parsed.pop(self.connector, None)        # no string: every input is asked
-        elif step == "name":
-            name = str(v.get("src_name") or "").strip().lower()
-            if not re.fullmatch(r"[a-z][a-z0-9_]*", name):
-                raise ValueError("Give the connection a name: lower-case letters, digits and _ (e.g. sales).")
-            self.src_name = name
-        elif step == "needed":
-            self._source_inputs(v, needed_only=True)
-        steps = self._steps()                                # the string read may have changed what is left
-        self.step = steps[min(steps.index(step) + 1, len(steps) - 1)]
+    def on_src_pick(self, v: dict) -> None:
+        """A data source was picked: its form, as the kit gives it."""
+        connector = str(v.get("connector") or "").strip()
+        form = self.forms.get(connector)
+        if not form:
+            raise ValueError("Choose the data source first.")
+        if form.get("gate"):
+            raise ValueError(f"{form['name']} is not available yet: {form['gate']}")
+        if connector != self.connector:
+            self._kept_secret, self.typed_storage, self.preset = "", "", {}     # another source: its own secrets
+            self.src_name = str(v.get("src_name") or "").strip().lower()
+        self.connector = connector
+        self._settle_all()
 
-    @staticmethod
-    def _pick(connector: str, settings: dict) -> str:
-        """A row of the Data source list as one value: the connector, and the settings a tree row under it gives."""
-        return "|".join([connector] + [f"{key}={value}" for key, value in settings.items()])
+    def on_src_set(self, v: dict) -> None:
+        """One of the source's settings was picked: the settings before it stay, the ones after it are asked of the
+        kit again (what they offer follows this choice), and the details shown are that combination's."""
+        cid = self.connector or ""
+        before = self.preset or {}
+        chosen: dict = {}
+        for spec in (self.forms.get(cid) or {}).get("setting_inputs", []):
+            value = str(v.get(self._fid(cid, "set_" + spec["name"])) or "").strip()
+            if value not in spec["choices"]:
+                break
+            chosen[spec["name"]] = value
+            if value != before.get(spec["name"]):
+                break                                  # this is the one that changed: what follows it starts again
+        if chosen != before:
+            self._kept_secret, self.typed_storage = "", ""
+        self.preset = chosen
+        self.src_name = str(v.get("src_name") or self.src_name or "").strip().lower()
+        self._settle_all()
 
-    @staticmethod
-    def _picked(value: str) -> tuple[str, dict]:
-        connector, *pairs = value.split("|")
-        return connector, dict(pair.split("=", 1) for pair in pairs if "=" in pair)
+    def on_src_read(self, v: dict) -> None:
+        """A connection string was pasted: read it the way `exakit connect --url` reads it, so the details fill in
+        and only what it does not hold is left to type."""
+        cid = self.connector or ""
+        text = str(v.get(self._fid(cid, "url")) or "").strip()
+        if not text or not self.forms.get(cid):
+            return
+        read = self.parsed.get(cid)
+        if not read or read.get("text") != text:
+            self._read_string(cid, text)
+            self.kit_said = SESSION.said or self.kit_said
+
+    def _settle_all(self) -> None:
+        """Ask the kit for the form of the settings chosen so far, taking its own default for each setting it asks
+        next, until none is left to ask or the next one has no default (that one is the user's to pick)."""
+        form = self.forms.get(self.connector or "") or {}
+        if not form.get("setting_inputs"):
+            return
+        for _ in range(12):
+            form = self._settle(self.connector, self.preset or {})
+            pending = self._pending(form)
+            if not pending or not pending[0]["default"]:
+                return
+            self.preset = {**(self.preset or {}), pending[0]["name"]: pending[0]["default"]}
 
     def _pending(self, form: dict) -> list[dict]:
         """The connector's setting questions the tree pick did not answer (a Lakehouse's catalog login)."""
         return [spec for spec in form.get("setting_inputs", []) if spec["name"] not in (self.preset or {})]
-
-    def _setting_labels(self, form: dict) -> list[str]:
-        chosen = self.preset or {}
-        return [dict(zip(spec["choices"], spec.get("choice_labels") or spec["choices"])).get(chosen[spec["name"]], chosen[spec["name"]])
-                for spec in form.get("setting_inputs", []) if spec["name"] in chosen]
 
     def _settle(self, connector: str, settings: dict) -> dict:
         """The connector's form for these settings, asked of the kit (nb.connector_inputs(connector, **settings))."""

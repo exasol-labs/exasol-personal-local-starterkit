@@ -27,6 +27,46 @@ nb.docs(nb.describe)       # one command's page
 `nb.docs()` opens the section of the persona whose notebook you are in.
 
 
+# The data science workflow (/data-scientist)
+
+
+
+Most data science work is not a straight line. You set up, load the data, look at it, prepare it, model it and check the result. Then a finding in a later stage sends you back. A column you trusted turns out to give away the answer, so you prepare the data again. Treat the eight stages as a loop, not a checklist.
+
+Choose a stage to read its page. Each page says what the stage is for, where you do it in the kit, a worked example on the kit's sample data, and what can go wrong.
+
+<StageMap />
+
+## How the kit fits in [#how-the-kit-fits-in]
+
+The kit runs this workflow on an Exasol database on your computer. Four notebooks take you through the stages in order. Each notebook continues the same workflow, so you paste no id and copy nothing between them.
+
+<Flow
+  caption="The four notebooks, in order, and the stages each one covers"
+  steps="[
+  { title: &#x22;00_quickstart&#x22;, text: &#x22;Set up Exasol, Get the data, and the column map of Explore and understand&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/set-up&#x22; },
+  { title: &#x22;01_explore&#x22;, text: &#x22;Prepare, Explore, Model and Evaluate&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
+  { title: &#x22;02_ask_your_data&#x22;, text: &#x22;Explore and understand: asking questions in plain language&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/explore&#x22; },
+  { title: &#x22;03_share&#x22;, text: &#x22;Communicate and deploy: a dashboard and a hand-off folder&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate&#x22; },
+]"
+/>
+
+Monitor and iterate has no notebook of its own. The workflow log records what you did, and you iterate by changing the column map or the data and running the notebooks again. The notebooks read the newest approval.
+
+## Two ways through each notebook [#two-ways-through-each-notebook]
+
+Every notebook opens with a **guided card**. A card has buttons and forms for the page's steps. Each card has a **Guided / Code** switch at its top right.
+
+* **Guided** is the default. You click, choose and approve.
+* **Code** turns the same card into its code as cells. Each cell shows the exact `exakit.nb` call behind a control. You can edit and run those cells.
+
+Every button is one call, so clicking **Approve** and running the approve call do the same thing. The notebook's own code sits below the cards. You can use either way, or switch between them as you work.
+
+## Developers [#developers]
+
+If you build on the kit, or want the commands behind the notebooks, see [For developers](/data-scientist/development). It has the command reference, how the cards and helpers fit together, and where the kit keeps its files.
+
+
 # Add-ons and downloads (/security/add-ons-and-downloads)
 
 
@@ -595,46 +635,6 @@ The installer adds the kit's `bin` folder to your shell profile, through `ensure
 * The virtual schema log removes its files older than `KEEP_DAYS` when a new day's file is opened (`setup/virtual-schemas/engine/vslog.py`). This page found no pruning rule for the other logs.
 
 
-# The data science workflow (/data-scientist)
-
-
-
-Most data science work is not a straight line. You set up, load the data, look at it, prepare it, model it and check the result. Then a finding in a later stage sends you back. A column you trusted turns out to give away the answer, so you prepare the data again. Treat the eight stages as a loop, not a checklist.
-
-Choose a stage to read its page. Each page says what the stage is for, where you do it in the kit, a worked example on the kit's sample data, and what can go wrong.
-
-<StageMap />
-
-## How the kit fits in [#how-the-kit-fits-in]
-
-The kit runs this workflow on an Exasol database on your computer. Four notebooks take you through the stages in order. Each notebook continues the same workflow, so you paste no id and copy nothing between them.
-
-<Flow
-  caption="The four notebooks, in order, and the stages each one covers"
-  steps="[
-  { title: &#x22;00_quickstart&#x22;, text: &#x22;Set up Exasol, Get the data, and the column map of Explore and understand&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/set-up&#x22; },
-  { title: &#x22;01_explore&#x22;, text: &#x22;Prepare, Explore, Model and Evaluate&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
-  { title: &#x22;02_ask_your_data&#x22;, text: &#x22;Explore and understand: asking questions in plain language&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/explore&#x22; },
-  { title: &#x22;03_share&#x22;, text: &#x22;Communicate and deploy: a dashboard and a hand-off folder&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate&#x22; },
-]"
-/>
-
-Monitor and iterate has no notebook of its own. The workflow log records what you did, and you iterate by changing the column map or the data and running the notebooks again. The notebooks read the newest approval.
-
-## Two ways through each notebook [#two-ways-through-each-notebook]
-
-Every notebook opens with a **guided card**. A card has buttons and forms for the page's steps. Each card has a **Guided / Code** switch at its top right.
-
-* **Guided** is the default. You click, choose and approve.
-* **Code** turns the same card into its code as cells. Each cell shows the exact `exakit.nb` call behind a control. You can edit and run those cells.
-
-Every button is one call, so clicking **Approve** and running the approve call do the same thing. The notebook's own code sits below the cards. You can use either way, or switch between them as you work.
-
-## Developers [#developers]
-
-If you build on the kit, or want the commands behind the notebooks, see [For developers](/data-scientist/development). It has the command reference, how the cards and helpers fit together, and where the kit keeps its files.
-
-
 # The kit and its personas (/kit)
 
 
@@ -680,345 +680,6 @@ exakit status              # is the database up?
 ```
 
 The same help is built into the kit, so it always matches the version you have.
-
-
-# Build the dashboard query (/data-scientist/communicate/dashboard-query)
-
-
-
-A dashboard starts from one query. The notebook builds that query from the approved column map, so the group and the count follow the roles you approved and not a name you typed.
-
-## The code [#the-code]
-
-In `03_share`, the dataset's roles build the query. The group is the category, the count is named after the grain, and the title and name follow from both:
-
-```python
-GROUP_ROLE, GROUP_COLUMN = dataset.group_by()             # CATEGORY for amazon_sales
-GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
-dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
-dashboard_query = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
-dashboard_draft = nb.share(dataset, dashboard_query, dashboard_title, app_name, measure="count")
-```
-
-`dataset.group_by()` returns the category. When the dataset has no category, it uses the entity, and then the target. The notebook prints a line when that happens.
-
-## What it produces for amazon_sales [#what-it-produces-for-amazon_sales]
-
-* The query: `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`
-* The title: "amazon_sales by category"
-* The name: `amazon-sales-by-category`
-
-The count is called `ORDER_LINES` because the column map's grain says "one row per order line". The name comes from the grain, through `nb.count_name`.
-
-`TITLE` and `APP_NAME` at the top of the notebook replace the generated title and name. The name identifies the dashboard on Dash Server.
-
-## Before anything is sent [#before-anything-is-sent]
-
-The notebook prints the query and its digest first, so you can read the SQL before it goes anywhere. Nothing is sent to Dash Server until you run the next cell.
-
-## Next [#next]
-
-Build the preview and check it on [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Back to [Communicate and deploy](/data-scientist/communicate).
-
-
-# Deploying a model (/data-scientist/communicate/deploying-a-model)
-
-
-
-## Deploying a model [#deploying-a-model]
-
-The kit does not deploy a model from these notebooks.
-
-* The lab's fitted model is kept only in your kernel. Nothing saves or serves it. See [Saving, MLflow and training in the database](/data-scientist/model/saving-and-mlflow).
-* `nb.use_model` and `nb.forget_model` look like they are about a model, but they are about the AI model endpoint and the Langfuse keys. They do not save or delete a trained model.
-* Scoring a model inside the database is the ML Engineer's path. It needs the udf-devkit add-on (`exakit marketplace udf-devkit`), which provides a Python container for training and scoring.
-* `exakit model put <file>` copies a model file into the bucket folder that the database's functions read, and `exakit model list` shows what is there. `nb.model_list()` returns the same list in a notebook.
-* The ML Engineer's training runs `nb.prepare_training`, which is described on the [model page](/data-scientist/model/saving-and-mlflow). It writes the coefficients of a trained logistic regression beside the training hand-off, so a scoring notebook can read them without MLflow.
-
-If you need a model in production, that path is the one the kit has. The Data Scientist notebooks stop at the result, the dashboard and the hand-off.
-
-Back to [Communicate and deploy](/data-scientist/communicate).
-
-
-# The hand-off bundle (/data-scientist/communicate/hand-off-bundle)
-
-
-
-## The hand-off bundle [#the-hand-off-bundle]
-
-`nb.handoff_bundle(connection, dataset)` writes one folder to `~/.exasol-starter-kit/bundles/<workflow id>/`, with a zip beside it. It needs no Dash Server and holds no password. The folder is named after the workflow. A bundle made with no workflow is named after the dataset.
-
-<Flow
-  caption="From the approved roles to a folder a colleague can repeat"
-  steps="[
-  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml and the schema map, as approved&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
-  { title: &#x22;Every query the workflow ran&#x22;, text: &#x22;queries.sql, each query with its SHA-256 and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;The log and the README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Nothing in it is a password&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## What is in the bundle [#what-is-in-the-bundle]
-
-| File              | What it is                                                                                                                                                                                            |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `README.md`       | What the data is, which column map version the numbers rest on, which questions were approved, which dashboards were previewed or published, which model traces were made, and how to repeat the work |
-| `descriptor.yaml` | The approved column map, copied from the kit's store                                                                                                                                                  |
-| `schema-map.json` | The approved schema map, when the schema has one                                                                                                                                                      |
-| `queries.sql`     | Every distinct query the workflow ran, each with its SHA-256 and row count                                                                                                                            |
-| `workflow.jsonl`  | The workflow log, as it is                                                                                                                                                                            |
-
-For `amazon_sales`, the folder holds the approved column map, the queries the workflow ran, the workflow log and the README.
-
-## Writing it [#writing-it]
-
-```python
-handoff = nb.handoff_bundle(connection, dataset)
-```
-
-Running it again for the same workflow replaces the folder and the zip. It is a snapshot. Nothing in it checks itself against the data later. The page on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off) describes the one check the kit makes, and the bundle has no such check.
-
-## Repeating the work [#repeating-the-work]
-
-A colleague follows the README:
-
-1. Load the same table. For a kit dataset, run `exakit data-load <id>`.
-2. Open the approved column map with `nb.dataset(connection, "<id>")`, or `exakit describe <id> --show`.
-3. Run the statements in `queries.sql` in order.
-
-Back to [Communicate and deploy](/data-scientist/communicate). Next: [The training hand-off](/data-scientist/communicate/training-hand-off).
-
-
-# Communicate and deploy (/data-scientist/communicate)
-
-
-
-Communicating a result means two things: showing the figures to people who will not open the notebook, and leaving enough behind that someone else can repeat the work. The kit does both. A dashboard goes up on Dash Server, a kit add-on that the notebook installs and starts for you. It goes up as a preview first, and only a person can publish it. The hand-off bundle is one folder and a zip, and it needs no server. The kit does not deploy a model from these notebooks. The page on deploying a model explains what exists and where it lives.
-
-## The flow [#the-flow]
-
-<Flow
-  caption="A dashboard: preview first, publish only after you check it"
-  steps="[
-  { title: &#x22;One checked result&#x22;, text: &#x22;A query you have read, built from the approved roles&#x22;, code: &#x22;dashboard_draft = nb.share(dataset, dashboard_query, title, name, measure=\&#x22;count\&#x22;)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/dashboard-query&#x22; },
-  { title: &#x22;Preview on Dash Server&#x22;, text: &#x22;Built from the approved roles, with the query and its lineage&#x22;, code: &#x22;dashboard_draft.preview(dash_server)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
-  { title: &#x22;Exasol runs the query&#x22;, text: &#x22;As the kit's read-only user, through Dash Server's profile&#x22;, tone: &#x22;db&#x22; },
-  { title: &#x22;You check the figures&#x22;, text: &#x22;Categories and counts match the SQL. Filters update the charts and the table.&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/what-a-reader-sees&#x22; },
-  { title: &#x22;Publish&#x22;, text: &#x22;Only after you confirm, the exact healthy preview is promoted&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
-]"
-/>
-
-<Flow
-  caption="The hand-off folder: what is in it and how a colleague uses it"
-  steps="[
-  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml, the roles and their versions&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
-  { title: &#x22;Every query the work ran&#x22;, text: &#x22;queries.sql, each with its digest and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/hand-off-bundle&#x22; },
-  { title: &#x22;The log and a README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Under the kit's home. Nothing in it is a password.&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## Where you do it [#where-you-do-it]
-
-| Guided view                                                                              | Notebook code                                                                                                                                 | Terminal                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `03_share`: the **Share** card has the steps Dash Server, Preview, Publish and Hand off. | `03_share`: `nb.share`, `dashboard_draft.preview`, `dashboard_draft.confirm`, `nb.handoff_bundle`. `nb.dash_tools()` connects to Dash Server. | `exakit marketplace dash-server` installs the add-on. `exakit start dash-server` starts it. `exakit status --json` gives its address. `exakit workflow show <id>` lists the workflow's steps. The bundle has no command of its own. |
-
-The publish step is off by default in `03_share`. `FIGURES_CHECKED = False` stops the publish. The cell tells you to "open the healthy preview and check the figures before promoting." Set it to `True` only after you have checked the preview.
-
-## How we used it [#how-we-used-it]
-
-The worked example is `amazon_sales`, a result that counts order lines by category. The notebook builds the query from the approved roles, previews it, and writes the hand-off folder. The steps are on [Build the dashboard query](/data-scientist/communicate/dashboard-query).
-
-For `amazon_sales` the query is `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`. The descriptor records nine distinct values for `CATEGORY`. The chart groups the smallest categories as Other when more than eight rows are shown, so check that grouped figure against the SQL as well.
-
-## In this stage [#in-this-stage]
-
-<Cards>
-  <Card title="Build the dashboard query" href="/data-scientist/communicate/dashboard-query" description="The query the notebook builds from the roles, and its title and name" />
-
-  <Card title="Preview, check, publish" href="/data-scientist/communicate/preview-check-publish" description="The order the code enforces, and what each step checks" />
-
-  <Card title="What a reader sees" href="/data-scientist/communicate/what-a-reader-sees" description="The filters, charts and table on the dashboard page" />
-
-  <Card title="The hand-off bundle" href="/data-scientist/communicate/hand-off-bundle" description="The folder and zip a colleague uses to repeat the work" />
-
-  <Card title="The training hand-off" href="/data-scientist/communicate/training-hand-off" description="The file the ML Engineer's training reads, and its split rule" />
-
-  <Card title="Deploying a model" href="/data-scientist/communicate/deploying-a-model" description="What the kit does and does not deploy" />
-
-  <Card title="When it goes wrong" href="/data-scientist/communicate/troubleshooting" description="Dash Server, workflow and publish problems, and their fixes" />
-</Cards>
-
-## What you have at the end [#what-you-have-at-the-end]
-
-A dashboard, first as a preview and then, after you check it, as a live address that you keep with the workflow id. You also have one hand-off folder and its zip. The next step is to notice when the data, the column map or the model changes: [Monitor and iterate](/data-scientist/monitor).
-
-<StageNav n="7" />
-
-
-# Preview, check, publish (/data-scientist/communicate/preview-check-publish)
-
-
-
-## Preview, check, publish [#preview-check-publish]
-
-The code enforces the order. You cannot skip a step.
-
-<Flow
-  caption="The order is enforced: a preview that was not checked is never published"
-  steps="[
-  { title: &#x22;Preview&#x22;, text: &#x22;The kit checks the workflow, the read-only identity and Dash Server's profile, then creates the preview&#x22;, code: &#x22;print(\&#x22;Preview:\&#x22;, dash_server.url + preview_path)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Check&#x22;, text: &#x22;Open the preview and compare the figures with the SQL&#x22;, tone: &#x22;you&#x22; },
-  { title: &#x22;Publish&#x22;, text: &#x22;confirm refuses unless figures_checked is True and the preview is healthy&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22; },
-]"
-/>
-
-## Before you preview: Dash Server [#before-you-preview-dash-server]
-
-The notebook calls `nb.dash_tools()`, which starts Dash Server if it is stopped. Dash Server is a kit add-on. The add-on is installed with `exakit marketplace dash-server`. The [add-ons page](/kit/tools/add-ons) explains how add-ons work.
-
-```python
-dash_server = nb.dash_tools()                     # starts Dash Server if it is stopped
-preview_path = dashboard_draft.preview(dash_server)
-print("Preview:", dash_server.url + preview_path)
-```
-
-### Preview [#preview]
-
-`preview` checks four things before it creates anything:
-
-* that the workflow is the one the dashboard was made in
-* that the read-only identity is validated
-* that Dash Server's profile is the kit's read-only user on the kit's database
-* that the dashboard's name is not already taken by a dashboard that belongs to another dataset, or that has no readable lineage
-
-Then it creates the preview, confirms that the built copy holds the approved SQL and lineage files unchanged, and runs a health check. A preview that fails the health check is marked unhealthy, and the kit will not publish it.
-
-### Check [#check]
-
-Open the preview and compare the figures with the SQL. Use the page described on [What a reader sees](/data-scientist/communicate/what-a-reader-sees). The chart's grouped Other figure is one to check against the query. Only a person can make this check. The notebook never does it for you.
-
-### Publish [#publish]
-
-`FIGURES_CHECKED` is `False` in `03_share`. Set it to `True` after the check, and run the cell. In code:
-
-```python
-live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
-```
-
-`confirm` refuses unless `figures_checked=True` and the preview is healthy. It promotes that exact revision, starts the app if it is not mounted, and checks the live address. If the live check fails, the error says to roll back in Dash Server.
-
-In automated runs the check is never set, so nothing is published without a person.
-
-## The workflow log [#the-workflow-log]
-
-Each preview and each publish adds a line to the workflow log, with the query's digest, the descriptor version and the revision number. The kinds are listed on [The workflow log](/data-scientist/monitor/the-workflow-log).
-
-Back to [Communicate and deploy](/data-scientist/communicate). Next: [What a reader sees](/data-scientist/communicate/what-a-reader-sees).
-
-
-# The training hand-off (/data-scientist/communicate/training-hand-off)
-
-
-
-## The training hand-off [#the-training-hand-off]
-
-The training hand-off is the ML Engineer's file. It is one JSON file with the feature view, the target, the split and the training SQL. The Data Scientist notebooks do not write it. The ML Engineer's notebook writes one if none exists.
-
-```python
-path = nb.write_handoff(conn, ds)     # writes the file and returns its path
-```
-
-`nb.write_handoff(conn, ds)` writes the file to `~/.exasol-starter-kit/handoffs/<id>-v<n>.json`, where `<n>` is the descriptor's version. `nb.read_handoff` reads it back. The file names a table, columns, SQL and digests. It never names a host, a user or a password.
-
-## The split [#the-split]
-
-Two rules decide how the rows are split for training:
-
-* **A date in the column map gives a time split.** This is the default. The oldest rows train the model and the newest rows test it.
-* **No date means no time split.** The kit refuses a time split that the data cannot support, and names the fix. A dataset with no date, such as `fraud_transactions`, needs a split named on purpose: `nb.write_handoff(conn, ds, split="random")`.
-
-The kit does not choose a random split for you. `split="random"` is a reproducible hash of each row's role columns, so the same rows always give the same split.
-
-## When the hand-off goes stale [#when-the-hand-off-goes-stale]
-
-A hand-off that no longer matches the column map or the data is refused. The check and the fix are on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
-
-Back to [Communicate and deploy](/data-scientist/communicate). Next: [Deploying a model](/data-scientist/communicate/deploying-a-model).
-
-
-# Troubleshooting (/data-scientist/communicate/troubleshooting)
-
-
-
-Each entry quotes the message or describes the step that stops.
-
-<Accordions type="multiple">
-  <Accordion title="Dash Server is stopped or missing">
-    The notebook installs and starts it when you call `nb.dash_tools()` or `nb.addon_ready("dash-server")`. To do it yourself, run `exakit marketplace dash-server`, then `exakit start dash-server`, then `exakit status` to confirm. See [Add-ons](/kit/tools/add-ons).
-  </Accordion>
-
-  <Accordion title="Resume the workflow before previewing or promoting">
-    The dashboard belongs to the workflow it was made in. Run `nb.continue_workflow("share")` in this notebook, or resume the workflow with `nb.workflow(resume="wf-...")`, and try again.
-  </Accordion>
-
-  <Accordion title="The read-only identity is not validated, or the profile is wrong">
-    The preview needs the kit's read-only user to be validated. Run `exakit mcp-doctor` to check it. When the message says the profile must validate as the read-only user, run `exakit mcp-setup`, then restart Dash Server.
-  </Accordion>
-
-  <Accordion title="The dashboard name already exists without readable lineage">
-    The error reads "choose another APP_NAME". The name is taken by a dashboard the kit did not make, or one made for another dataset. Choose another `APP_NAME`. The kit never overwrites a dashboard that belongs to a different dataset.
-  </Accordion>
-
-  <Accordion title="The preview is unhealthy">
-    The health check failed, so the kit will not publish it. The error reads "Dash Server preview is unhealthy". Open the Dash Server log with `exakit logs dash-server`, fix the cause, and run the preview again.
-  </Accordion>
-
-  <Accordion title="confirm asks you to open the healthy preview">
-    `confirm` was called without `figures_checked=True`, or the preview is not healthy. Check the figures against the SQL, then confirm again. See [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
-  </Accordion>
-
-  <Accordion title="The live dashboard failed its health check">
-    The error reads "use app_rollback in Dash Server". The published revision is not healthy. Roll back there, then check the preview again before you publish another revision.
-  </Accordion>
-
-  <Accordion title="The hand-off is refused as stale">
-    The training hand-off no longer matches the column map or the data. Read the line the kit prints, then write the hand-off again with `nb.write_handoff(conn, ds)`. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
-  </Accordion>
-</Accordions>
-
-Back to [Communicate and deploy](/data-scientist/communicate).
-
-
-# What a reader sees (/data-scientist/communicate/what-a-reader-sees)
-
-
-
-## What a reader sees [#what-a-reader-sees]
-
-The dashboard is a view of the reviewed SQL result. It is not a new calculation over the table. Its page says so.
-
-* **Filters.** Categories, a Show setting (10 by default), Sort by, and Chart layout (horizontal or vertical bars). Top N applies after the filters. **Reset filters** clears them.
-* **Category comparison.** A bar chart of the values in the current selection.
-* **Composition.** A share-of-total chart. The kit draws it only when you pass `measure="count"`, because a total of a measure that is not a count has no meaning. With more than eight rows shown, the note says smaller categories are grouped as Other.
-* **Behind the charts.** The same filtered rows as a table, sortable, with **Export CSV**.
-
-## Check the figures against the SQL [#check-the-figures-against-the-sql]
-
-When you check a preview, compare three things with the query on [Build the dashboard query](/data-scientist/communicate/dashboard-query):
-
-1. The category names in the table match the values in the query's first column.
-2. The counts match the counts the query returns. `nb.show_sql()` prints the last query the notebook ran.
-3. The composition chart's Other group equals the sum of the categories it groups.
-
-```python
-nb.show_sql()   # the SQL the last query ran
-```
-
-Back to [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Next: [The hand-off bundle](/data-scientist/communicate/hand-off-bundle).
 
 
 # Add a command (/data-scientist/development/add-a-command)
@@ -1405,6 +1066,345 @@ Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` wh
 * [Database users and roles](https://docs.exasol.com/db/latest/database_concepts/database_users_roles.htm), for the users behind the credentials folder.
 * [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views), for the `SEMANTIC_*` and `SEM_<MODEL>` schemas.
 * [What the kit writes](/security/what-the-kit-writes) and [Credentials](/security/credentials), with the file modes and the limits of each.
+
+
+# Build the dashboard query (/data-scientist/communicate/dashboard-query)
+
+
+
+A dashboard starts from one query. The notebook builds that query from the approved column map, so the group and the count follow the roles you approved and not a name you typed.
+
+## The code [#the-code]
+
+In `03_share`, the dataset's roles build the query. The group is the category, the count is named after the grain, and the title and name follow from both:
+
+```python
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()             # CATEGORY for amazon_sales
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
+dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
+dashboard_query = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
+dashboard_draft = nb.share(dataset, dashboard_query, dashboard_title, app_name, measure="count")
+```
+
+`dataset.group_by()` returns the category. When the dataset has no category, it uses the entity, and then the target. The notebook prints a line when that happens.
+
+## What it produces for amazon_sales [#what-it-produces-for-amazon_sales]
+
+* The query: `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`
+* The title: "amazon_sales by category"
+* The name: `amazon-sales-by-category`
+
+The count is called `ORDER_LINES` because the column map's grain says "one row per order line". The name comes from the grain, through `nb.count_name`.
+
+`TITLE` and `APP_NAME` at the top of the notebook replace the generated title and name. The name identifies the dashboard on Dash Server.
+
+## Before anything is sent [#before-anything-is-sent]
+
+The notebook prints the query and its digest first, so you can read the SQL before it goes anywhere. Nothing is sent to Dash Server until you run the next cell.
+
+## Next [#next]
+
+Build the preview and check it on [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Back to [Communicate and deploy](/data-scientist/communicate).
+
+
+# Deploying a model (/data-scientist/communicate/deploying-a-model)
+
+
+
+## Deploying a model [#deploying-a-model]
+
+The kit does not deploy a model from these notebooks.
+
+* The lab's fitted model is kept only in your kernel. Nothing saves or serves it. See [Saving, MLflow and training in the database](/data-scientist/model/saving-and-mlflow).
+* `nb.use_model` and `nb.forget_model` look like they are about a model, but they are about the AI model endpoint and the Langfuse keys. They do not save or delete a trained model.
+* Scoring a model inside the database is the ML Engineer's path. It needs the udf-devkit add-on (`exakit marketplace udf-devkit`), which provides a Python container for training and scoring.
+* `exakit model put <file>` copies a model file into the bucket folder that the database's functions read, and `exakit model list` shows what is there. `nb.model_list()` returns the same list in a notebook.
+* The ML Engineer's training runs `nb.prepare_training`, which is described on the [model page](/data-scientist/model/saving-and-mlflow). It writes the coefficients of a trained logistic regression beside the training hand-off, so a scoring notebook can read them without MLflow.
+
+If you need a model in production, that path is the one the kit has. The Data Scientist notebooks stop at the result, the dashboard and the hand-off.
+
+Back to [Communicate and deploy](/data-scientist/communicate).
+
+
+# The hand-off bundle (/data-scientist/communicate/hand-off-bundle)
+
+
+
+## The hand-off bundle [#the-hand-off-bundle]
+
+`nb.handoff_bundle(connection, dataset)` writes one folder to `~/.exasol-starter-kit/bundles/<workflow id>/`, with a zip beside it. It needs no Dash Server and holds no password. The folder is named after the workflow. A bundle made with no workflow is named after the dataset.
+
+<Flow
+  caption="From the approved roles to a folder a colleague can repeat"
+  steps="[
+  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml and the schema map, as approved&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
+  { title: &#x22;Every query the workflow ran&#x22;, text: &#x22;queries.sql, each query with its SHA-256 and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The log and the README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Nothing in it is a password&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## What is in the bundle [#what-is-in-the-bundle]
+
+| File              | What it is                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `README.md`       | What the data is, which column map version the numbers rest on, which questions were approved, which dashboards were previewed or published, which model traces were made, and how to repeat the work |
+| `descriptor.yaml` | The approved column map, copied from the kit's store                                                                                                                                                  |
+| `schema-map.json` | The approved schema map, when the schema has one                                                                                                                                                      |
+| `queries.sql`     | Every distinct query the workflow ran, each with its SHA-256 and row count                                                                                                                            |
+| `workflow.jsonl`  | The workflow log, as it is                                                                                                                                                                            |
+
+For `amazon_sales`, the folder holds the approved column map, the queries the workflow ran, the workflow log and the README.
+
+## Writing it [#writing-it]
+
+```python
+handoff = nb.handoff_bundle(connection, dataset)
+```
+
+Running it again for the same workflow replaces the folder and the zip. It is a snapshot. Nothing in it checks itself against the data later. The page on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off) describes the one check the kit makes, and the bundle has no such check.
+
+## Repeating the work [#repeating-the-work]
+
+A colleague follows the README:
+
+1. Load the same table. For a kit dataset, run `exakit data-load <id>`.
+2. Open the approved column map with `nb.dataset(connection, "<id>")`, or `exakit describe <id> --show`.
+3. Run the statements in `queries.sql` in order.
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [The training hand-off](/data-scientist/communicate/training-hand-off).
+
+
+# Communicate and deploy (/data-scientist/communicate)
+
+
+
+Communicating a result means two things: showing the figures to people who will not open the notebook, and leaving enough behind that someone else can repeat the work. The kit does both. A dashboard goes up on Dash Server, a kit add-on that the notebook installs and starts for you. It goes up as a preview first, and only a person can publish it. The hand-off bundle is one folder and a zip, and it needs no server. The kit does not deploy a model from these notebooks. The page on deploying a model explains what exists and where it lives.
+
+## The flow [#the-flow]
+
+<Flow
+  caption="A dashboard: preview first, publish only after you check it"
+  steps="[
+  { title: &#x22;One checked result&#x22;, text: &#x22;A query you have read, built from the approved roles&#x22;, code: &#x22;dashboard_draft = nb.share(dataset, dashboard_query, title, name, measure=\&#x22;count\&#x22;)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/dashboard-query&#x22; },
+  { title: &#x22;Preview on Dash Server&#x22;, text: &#x22;Built from the approved roles, with the query and its lineage&#x22;, code: &#x22;dashboard_draft.preview(dash_server)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
+  { title: &#x22;Exasol runs the query&#x22;, text: &#x22;As the kit's read-only user, through Dash Server's profile&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;You check the figures&#x22;, text: &#x22;Categories and counts match the SQL. Filters update the charts and the table.&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/what-a-reader-sees&#x22; },
+  { title: &#x22;Publish&#x22;, text: &#x22;Only after you confirm, the exact healthy preview is promoted&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
+]"
+/>
+
+<Flow
+  caption="The hand-off folder: what is in it and how a colleague uses it"
+  steps="[
+  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml, the roles and their versions&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
+  { title: &#x22;Every query the work ran&#x22;, text: &#x22;queries.sql, each with its digest and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/hand-off-bundle&#x22; },
+  { title: &#x22;The log and a README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Under the kit's home. Nothing in it is a password.&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## Where you do it [#where-you-do-it]
+
+| Guided view                                                                              | Notebook code                                                                                                                                 | Terminal                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `03_share`: the **Share** card has the steps Dash Server, Preview, Publish and Hand off. | `03_share`: `nb.share`, `dashboard_draft.preview`, `dashboard_draft.confirm`, `nb.handoff_bundle`. `nb.dash_tools()` connects to Dash Server. | `exakit marketplace dash-server` installs the add-on. `exakit start dash-server` starts it. `exakit status --json` gives its address. `exakit workflow show <id>` lists the workflow's steps. The bundle has no command of its own. |
+
+The publish step is off by default in `03_share`. `FIGURES_CHECKED = False` stops the publish. The cell tells you to "open the healthy preview and check the figures before promoting." Set it to `True` only after you have checked the preview.
+
+## How we used it [#how-we-used-it]
+
+The worked example is `amazon_sales`, a result that counts order lines by category. The notebook builds the query from the approved roles, previews it, and writes the hand-off folder. The steps are on [Build the dashboard query](/data-scientist/communicate/dashboard-query).
+
+For `amazon_sales` the query is `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`. The descriptor records nine distinct values for `CATEGORY`. The chart groups the smallest categories as Other when more than eight rows are shown, so check that grouped figure against the SQL as well.
+
+## In this stage [#in-this-stage]
+
+<Cards>
+  <Card title="Build the dashboard query" href="/data-scientist/communicate/dashboard-query" description="The query the notebook builds from the roles, and its title and name" />
+
+  <Card title="Preview, check, publish" href="/data-scientist/communicate/preview-check-publish" description="The order the code enforces, and what each step checks" />
+
+  <Card title="What a reader sees" href="/data-scientist/communicate/what-a-reader-sees" description="The filters, charts and table on the dashboard page" />
+
+  <Card title="The hand-off bundle" href="/data-scientist/communicate/hand-off-bundle" description="The folder and zip a colleague uses to repeat the work" />
+
+  <Card title="The training hand-off" href="/data-scientist/communicate/training-hand-off" description="The file the ML Engineer's training reads, and its split rule" />
+
+  <Card title="Deploying a model" href="/data-scientist/communicate/deploying-a-model" description="What the kit does and does not deploy" />
+
+  <Card title="When it goes wrong" href="/data-scientist/communicate/troubleshooting" description="Dash Server, workflow and publish problems, and their fixes" />
+</Cards>
+
+## What you have at the end [#what-you-have-at-the-end]
+
+A dashboard, first as a preview and then, after you check it, as a live address that you keep with the workflow id. You also have one hand-off folder and its zip. The next step is to notice when the data, the column map or the model changes: [Monitor and iterate](/data-scientist/monitor).
+
+<StageNav n="7" />
+
+
+# Preview, check, publish (/data-scientist/communicate/preview-check-publish)
+
+
+
+## Preview, check, publish [#preview-check-publish]
+
+The code enforces the order. You cannot skip a step.
+
+<Flow
+  caption="The order is enforced: a preview that was not checked is never published"
+  steps="[
+  { title: &#x22;Preview&#x22;, text: &#x22;The kit checks the workflow, the read-only identity and Dash Server's profile, then creates the preview&#x22;, code: &#x22;print(\&#x22;Preview:\&#x22;, dash_server.url + preview_path)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Check&#x22;, text: &#x22;Open the preview and compare the figures with the SQL&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;Publish&#x22;, text: &#x22;confirm refuses unless figures_checked is True and the preview is healthy&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22; },
+]"
+/>
+
+## Before you preview: Dash Server [#before-you-preview-dash-server]
+
+The notebook calls `nb.dash_tools()`, which starts Dash Server if it is stopped. Dash Server is a kit add-on. The add-on is installed with `exakit marketplace dash-server`. The [add-ons page](/kit/tools/add-ons) explains how add-ons work.
+
+```python
+dash_server = nb.dash_tools()                     # starts Dash Server if it is stopped
+preview_path = dashboard_draft.preview(dash_server)
+print("Preview:", dash_server.url + preview_path)
+```
+
+### Preview [#preview]
+
+`preview` checks four things before it creates anything:
+
+* that the workflow is the one the dashboard was made in
+* that the read-only identity is validated
+* that Dash Server's profile is the kit's read-only user on the kit's database
+* that the dashboard's name is not already taken by a dashboard that belongs to another dataset, or that has no readable lineage
+
+Then it creates the preview, confirms that the built copy holds the approved SQL and lineage files unchanged, and runs a health check. A preview that fails the health check is marked unhealthy, and the kit will not publish it.
+
+### Check [#check]
+
+Open the preview and compare the figures with the SQL. Use the page described on [What a reader sees](/data-scientist/communicate/what-a-reader-sees). The chart's grouped Other figure is one to check against the query. Only a person can make this check. The notebook never does it for you.
+
+### Publish [#publish]
+
+`FIGURES_CHECKED` is `False` in `03_share`. Set it to `True` after the check, and run the cell. In code:
+
+```python
+live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
+```
+
+`confirm` refuses unless `figures_checked=True` and the preview is healthy. It promotes that exact revision, starts the app if it is not mounted, and checks the live address. If the live check fails, the error says to roll back in Dash Server.
+
+In automated runs the check is never set, so nothing is published without a person.
+
+## The workflow log [#the-workflow-log]
+
+Each preview and each publish adds a line to the workflow log, with the query's digest, the descriptor version and the revision number. The kinds are listed on [The workflow log](/data-scientist/monitor/the-workflow-log).
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [What a reader sees](/data-scientist/communicate/what-a-reader-sees).
+
+
+# The training hand-off (/data-scientist/communicate/training-hand-off)
+
+
+
+## The training hand-off [#the-training-hand-off]
+
+The training hand-off is the ML Engineer's file. It is one JSON file with the feature view, the target, the split and the training SQL. The Data Scientist notebooks do not write it. The ML Engineer's notebook writes one if none exists.
+
+```python
+path = nb.write_handoff(conn, ds)     # writes the file and returns its path
+```
+
+`nb.write_handoff(conn, ds)` writes the file to `~/.exasol-starter-kit/handoffs/<id>-v<n>.json`, where `<n>` is the descriptor's version. `nb.read_handoff` reads it back. The file names a table, columns, SQL and digests. It never names a host, a user or a password.
+
+## The split [#the-split]
+
+Two rules decide how the rows are split for training:
+
+* **A date in the column map gives a time split.** This is the default. The oldest rows train the model and the newest rows test it.
+* **No date means no time split.** The kit refuses a time split that the data cannot support, and names the fix. A dataset with no date, such as `fraud_transactions`, needs a split named on purpose: `nb.write_handoff(conn, ds, split="random")`.
+
+The kit does not choose a random split for you. `split="random"` is a reproducible hash of each row's role columns, so the same rows always give the same split.
+
+## When the hand-off goes stale [#when-the-hand-off-goes-stale]
+
+A hand-off that no longer matches the column map or the data is refused. The check and the fix are on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [Deploying a model](/data-scientist/communicate/deploying-a-model).
+
+
+# Troubleshooting (/data-scientist/communicate/troubleshooting)
+
+
+
+Each entry quotes the message or describes the step that stops.
+
+<Accordions type="multiple">
+  <Accordion title="Dash Server is stopped or missing">
+    The notebook installs and starts it when you call `nb.dash_tools()` or `nb.addon_ready("dash-server")`. To do it yourself, run `exakit marketplace dash-server`, then `exakit start dash-server`, then `exakit status` to confirm. See [Add-ons](/kit/tools/add-ons).
+  </Accordion>
+
+  <Accordion title="Resume the workflow before previewing or promoting">
+    The dashboard belongs to the workflow it was made in. Run `nb.continue_workflow("share")` in this notebook, or resume the workflow with `nb.workflow(resume="wf-...")`, and try again.
+  </Accordion>
+
+  <Accordion title="The read-only identity is not validated, or the profile is wrong">
+    The preview needs the kit's read-only user to be validated. Run `exakit mcp-doctor` to check it. When the message says the profile must validate as the read-only user, run `exakit mcp-setup`, then restart Dash Server.
+  </Accordion>
+
+  <Accordion title="The dashboard name already exists without readable lineage">
+    The error reads "choose another APP_NAME". The name is taken by a dashboard the kit did not make, or one made for another dataset. Choose another `APP_NAME`. The kit never overwrites a dashboard that belongs to a different dataset.
+  </Accordion>
+
+  <Accordion title="The preview is unhealthy">
+    The health check failed, so the kit will not publish it. The error reads "Dash Server preview is unhealthy". Open the Dash Server log with `exakit logs dash-server`, fix the cause, and run the preview again.
+  </Accordion>
+
+  <Accordion title="confirm asks you to open the healthy preview">
+    `confirm` was called without `figures_checked=True`, or the preview is not healthy. Check the figures against the SQL, then confirm again. See [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
+  </Accordion>
+
+  <Accordion title="The live dashboard failed its health check">
+    The error reads "use app_rollback in Dash Server". The published revision is not healthy. Roll back there, then check the preview again before you publish another revision.
+  </Accordion>
+
+  <Accordion title="The hand-off is refused as stale">
+    The training hand-off no longer matches the column map or the data. Read the line the kit prints, then write the hand-off again with `nb.write_handoff(conn, ds)`. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+  </Accordion>
+</Accordions>
+
+Back to [Communicate and deploy](/data-scientist/communicate).
+
+
+# What a reader sees (/data-scientist/communicate/what-a-reader-sees)
+
+
+
+## What a reader sees [#what-a-reader-sees]
+
+The dashboard is a view of the reviewed SQL result. It is not a new calculation over the table. Its page says so.
+
+* **Filters.** Categories, a Show setting (10 by default), Sort by, and Chart layout (horizontal or vertical bars). Top N applies after the filters. **Reset filters** clears them.
+* **Category comparison.** A bar chart of the values in the current selection.
+* **Composition.** A share-of-total chart. The kit draws it only when you pass `measure="count"`, because a total of a measure that is not a count has no meaning. With more than eight rows shown, the note says smaller categories are grouped as Other.
+* **Behind the charts.** The same filtered rows as a table, sortable, with **Export CSV**.
+
+## Check the figures against the SQL [#check-the-figures-against-the-sql]
+
+When you check a preview, compare three things with the query on [Build the dashboard query](/data-scientist/communicate/dashboard-query):
+
+1. The category names in the table match the values in the query's first column.
+2. The counts match the counts the query returns. `nb.show_sql()` prints the last query the notebook ran.
+3. The composition chart's Other group equals the sum of the categories it groups.
+
+```python
+nb.show_sql()   # the SQL the last query ran
+```
+
+Back to [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Next: [The hand-off bundle](/data-scientist/communicate/hand-off-bundle).
 
 
 # The checks (/data-scientist/evaluate/checks)
@@ -2625,60 +2625,57 @@ Run the cells in order. The reading shows what the connection string did not giv
 
 ## Step by step: a new external source [#step-by-step-a-new-external-source]
 
-The **Choose your data** card walks through a new connection one step at a time. Each step asks one question. The steps you see depend on the source you pick.
+Under **External sources**, the **Choose your data** card lists the connections you have. Tick one or more and the tables to read from each, then press **Use this data**.
+
+Tick **New connection…** and a single form opens under the list. There is no step to press through: you pick the source, fill in the form, and press one button.
 
 <Steps>
   <Step>
-    ### Connection [#connection]
-
-    Pick a connection you already have, or **New connection…**. Your existing connections are listed with their table counts. Choose one and press **Use this data** to load a table from it.
-  </Step>
-
-  <Step>
     ### Data source [#data-source]
 
-    Pick the kind of source: PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks, MongoDB, a lakehouse, or a file in S3 or Azure Blob Storage. Each kind has the same questions as `exakit connect`. A card shows the kit's own names for them.
+    One list of every kind of source the kit connects, each with a line saying what it is. Type in the box at its top to narrow it. The list opens inside the card, under the field, so it never covers the page.
+
+    The card does not hold this list. It asks the kit (`nb.connectors()`), which answers with what `exakit connect` offers. A source added to the kit appears here without a change to the notebook.
   </Step>
 
   <Step>
-    ### Settings [#settings]
+    ### The source's own settings [#the-sources-own-settings]
 
-    Shown only for a source with several kinds in one. A lakehouse asks for its catalog and where its files are, then asks only what that combination needs. See the lakehouse section above.
+    Shown only for a source that has several kinds in one. Each setting is its own list, in the order the kit asks them. A lakehouse, for example, asks for its catalog, then where its files are, then how to sign in.
+
+    A choice decides what the next lists offer. The card asks the kit again after each pick (`nb.connector_inputs(source, catalog=...)`) and takes the kit's default for the settings that follow, so the details below are always the ones that combination needs. A choice the kit does not support yet is shown greyed out with its reason.
   </Step>
 
   <Step>
-    ### Connection string or manual [#connection-string-or-manual]
+    ### How to fill it in [#how-to-fill-it-in]
 
-    Paste a connection string and press **Next**, and the kit reads it. The steps after it ask only for what the string did not give. Or choose **Manual configuration** and type each detail.
+    **Fill in the details** shows every question below. **Paste a connection string** adds a box for the string: paste it and the kit reads it (`nb.read_connection_string`), fills in the details, and marks only what the string did not hold.
   </Step>
 
   <Step>
-    ### Name [#name]
+    ### Details and optional settings [#details-and-optional-settings]
 
-    A lower-case name, for example `sales`. Its tables appear as `VS_SALES`.
-  </Step>
+    Everything `exakit connect` asks for that source, in one place:
 
-  <Step>
-    ### Details [#details]
+    | Part              | What is in it                                                                                                                                                                          |
+    | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Details           | The name (alias) first: lower case, for example `sales`, and its tables appear as `VS_SALES`. Then every required input, such as the host, the database, the account and the password. |
+    | Optional settings | A port, a schema, TLS, a CA certificate file and the like. Each shows the kit's default. Change one only to use another value.                                                         |
 
-    The inputs the kit still needs: the host, the database, the user and the password. The password goes into a hidden box. It is never shown, saved or logged by the card.
-  </Step>
-
-  <Step>
-    ### Optional settings [#optional-settings]
-
-    A port, a CA certificate file or another optional value. The kit fills in its own default for each one you leave alone.
+    The password goes into a hidden box. It is never shown, saved or logged by the card.
   </Step>
 
   <Step>
     ### Test connection, then Connect and use this data [#test-connection-then-connect-and-use-this-data]
 
-    **Test connection** checks the inputs and whether this computer reaches the source. It changes nothing and needs no password. **Connect and use this data** runs the kit's connect command with the password on its standard input, then loads the table you chose.
+    **Test connection** checks the inputs and whether this computer reaches the source. It changes nothing and needs no password. **Connect and use this data** runs the kit's connect command with the password on its standard input, then loads what you ticked.
   </Step>
 </Steps>
 
+From an empty card that is two picks and one button: tick **New connection…**, pick the data source, fill in the form, press **Connect and use this data**.
+
 <Flow
-  caption="A new external source, step by step"
+  caption="A new external source"
   steps="[
   { title: &#x22;You name the source&#x22;, text: &#x22;The kind, a connection string or the details, and a name&#x22;, tone: &#x22;you&#x22; },
   { title: &#x22;The kit checks the inputs&#x22;, text: &#x22;Every input, the way the kit's connect form checks it&#x22;, code: &#x22;nb.test_source(...)&#x22;, tone: &#x22;kit&#x22; },
@@ -3015,480 +3012,6 @@ You can describe your file's roles by hand, instead of reviewing the kit's propo
 The roles are a draft until you approve them. The approval is covered in [Explore and understand](/data-scientist/explore).
 
 Back to [Get the data](/data-scientist/get-the-data). Next: [External sources](/data-scientist/get-the-data/external-sources).
-
-
-# Your AI model in this stage (/data-scientist/model/ai-model)
-
-
-
-## Your AI model in this stage [#your-ai-model-in-this-stage]
-
-The AI model is optional. Every step in the model stage runs without one. Without a model, `nb.feature_ideas(lab)` still returns the rule-based ideas. With a model, `nb.feature_ideas(lab, ai=True)` adds up to four more.
-
-Your model has one job here: it suggests feature ideas. It never sees rows, never approves a column map, and never runs SQL.
-
-<Flow
-  caption="An AI suggestion, from names to a tested idea"
-  steps="[
-  { title: &#x22;The kit sends names and roles&#x22;, text: &#x22;Column names, roles, the model scores so far, the five kinds it may use, and the target's name. Never a row or a value.&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Your model suggests up to four&#x22;, text: &#x22;Only of the five kinds below, each built from existing columns&#x22;, code: &#x22;nb.feature_ideas(lab, ai=True, conn=connection)&#x22;, tone: &#x22;ai&#x22; },
-  { title: &#x22;The kit checks each suggestion&#x22;, text: &#x22;Suggestions that name the target, or a column the data does not have, are dropped&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;The kit tests the rest&#x22;, text: &#x22;Each one goes through the same verdict as any other idea&#x22;, code: &#x22;nb.try_feature(lab, idea)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;You read the SQL and decide&#x22;, text: &#x22;No idea is kept without you&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## What it is sent [#what-it-is-sent]
-
-The code in `lab.py` builds one request with these parts:
-
-* the target's name
-* every column name and its role. A column marked sensitive is left out.
-* the cross-validated score of each model so far, rounded to three decimals
-* the five kinds of idea it may suggest
-* a rule: suggest up to four, use only those kinds and existing column names, and never use the target or a column filled in after the outcome
-
-No row and no value is sent.
-
-## What it may suggest [#what-it-may-suggest]
-
-Five kinds only. The kit builds each one as SQL and tests it like any other idea.
-
-| Kind             | Columns                  | The SQL the kit writes                    |
-| ---------------- | ------------------------ | ----------------------------------------- |
-| `ratio_to_group` | a measure and a category | `"m" / AVG("m") OVER (PARTITION BY "c")`  |
-| `combine`        | two categories           | `` `"a" \|\| ' · ' \|\| "b"` ``           |
-| `days_since`     | a date                   | `DAYS_BETWEEN(CURRENT_DATE, "d")`         |
-| `as_number`      | one column               | `CAST("c" AS DOUBLE)`                     |
-| `is_missing`     | one column               | `CASE WHEN "c" IS NULL THEN 1 ELSE 0 END` |
-
-A suggestion of another kind, or with the wrong number of columns, is dropped.
-
-## What the kit checks, and what it cannot [#what-the-kit-checks-and-what-it-cannot]
-
-The kit checks two things. It drops a suggestion that names the target, and a suggestion that names a column the data does not have. It reads up to four suggestions and no more.
-
-The prompt also tells the model not to use a column written after the outcome. The kit cannot check that by itself. The verdict from `nb.try_feature` and your reading of the SQL are the check. An idea that scores above 0.98 on the held-out rows gets the verdict `suspicious`, and the kit tells you not to keep it.
-
-## Where the data goes [#where-the-data-goes]
-
-The model is the endpoint you set. It is called only when you pass `ai=True`, or when you run the themes step. With a model set up, feature ideas send names and roles, never rows.
-
-The optional themes step in `01_explore` is different. It sends a sample of the newest texts on each side of the target to your model, so it needs a text column. The practice datasets have none, so the step skips.
-
-## Tracing [#tracing]
-
-When Langfuse is set up, each call is traced. Pass `conn=connection` to `nb.feature_ideas`, and the call goes into one trace named `feature-ideas`, tagged with the database session. Set-up is on [AI and Langfuse](/data-scientist/set-up/ai-and-langfuse).
-
-## Set it up [#set-it-up]
-
-Run `nb.model_setup()` in a notebook, or call `nb.use_model(MODEL_ID, PROVIDER_BASE_URL)` yourself. Without one, `nb.feature_ideas(lab, ai=True)` stops with the message "No AI model is set up". Check what is set with `nb.model_settings()`. The providers and where to find their keys are on [Set up Exasol](/data-scientist/set-up).
-
-The model is never asked to approve anything, and it never changes your data.
-
-Back to [Model](/data-scientist/model). Troubleshooting is on [Model: when it goes wrong](/data-scientist/model/troubleshooting).
-
-
-# Start with a baseline (/data-scientist/model/baseline)
-
-
-
-A model with every column is only worth keeping if it does better than a simple rule. The baseline is that simple rule. If a real model cannot beat it, the columns carry little signal about the outcome. The kit has two baselines.
-
-## Start with a baseline [#start-with-a-baseline]
-
-* **The notebook baseline** is a small logistic regression in `01_explore`. It uses three inputs: the category, the state and the month of the date.
-* **The lab's baseline** is the model called `baseline` in each prediction task. For yes or no, it always gives the common answer. A constant prediction scores 0.5 ROC AUC, so any real model should score above 0.5.
-
-<Flow
-  caption="The notebook baseline, in 01_explore"
-  steps="[
-  { title: &#x22;Read the roles&#x22;, text: &#x22;The category, the entity and the date come from the approved column map&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Leave out the answer-givers&#x22;, text: &#x22;A flagged category or entity is skipped. The date is used only as its month.&#x22;, code: &#x22;nb.leakage_check(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Train on three quarters&#x22;, text: &#x22;A logistic regression, with one 0 or 1 column for each value&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Keep one quarter back&#x22;, text: &#x22;It is scored on the rows the model never saw. See Evaluate.&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/evaluate&#x22; },
-]"
-/>
-
-## The notebook baseline [#the-notebook-baseline]
-
-The cell reads the newest 20,000 rows when the table has a date, or the first 20,000 by key when it has none. The key makes a rerun read the same rows. The cell builds the features from the category, the state and the month, then trains this pipeline:
-
-```python
-model = Pipeline([
-    ("onehot", OneHotEncoder(handle_unknown="ignore")),
-    ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
-])
-```
-
-* `OneHotEncoder` turns each value of the category, the state and the month into a 0 or 1 column.
-* `class_weight="balanced"` tells the model to weigh the rarer answer more, so it does not just predict the common one.
-* The split is stratified, which keeps the same share of 1s on both sides, with a fixed seed (`random_state=0`). A quarter of the rows is kept back.
-
-The cell prints how many rows it trained on and how many it kept back. It uses a category or an entity only when that column is not flagged by `nb.leakage_check`. The notebook's comment gives the reason for the check: a column written after the outcome "predicts the target perfectly on old rows and fails on new rows."
-
-For `amazon_sales`, the baseline reads `CATEGORY`, `SHIP_STATE` and the month of `ORDER_DATE`. It never reads `STATUS`.
-
-## Do not judge a rare answer by accuracy [#do-not-judge-a-rare-answer-by-accuracy]
-
-When the answer is rare, accuracy is misleading. A model that always says "not fraud" is about 95% accurate on `fraud_transactions`, because 2,510 of its 51,000 rows are fraud (4.9%). `nb.data_checks` reports the rare answer and says what the always-common guess achieves. The readout note also compares every score with that guess. The reasons, and the metric the kit uses instead, are on the [rare answers](/data-scientist/evaluate/rare-answers) page of Evaluate.
-
-## Where to go next [#where-to-go-next]
-
-The lab trains many models on the same rows: [The model lab](/data-scientist/model/model-lab). Back to [Model](/data-scientist/model).
-
-
-# Feature ideas (/data-scientist/model/feature-ideas)
-
-
-
-## Feature ideas [#feature-ideas]
-
-A feature idea is a new input for the model, made from columns you already have. The kit proposes them, writes the SQL that builds each one, and tests them. You decide which ones to keep. Nothing is kept by default.
-
-<Flow
-  caption="Trying one feature idea"
-  steps="[
-  { title: &#x22;The kit proposes ideas&#x22;, text: &#x22;Up to eight, each with the SQL that builds it&#x22;, code: &#x22;ideas = nb.feature_ideas(lab)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Retrain with the idea added&#x22;, text: &#x22;The picked model, on the same split, with the idea as one more input&#x22;, code: &#x22;tried = nb.try_feature(lab, ideas[0])&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Read the verdict&#x22;, text: &#x22;helps, same, hurts or suspicious, in plain words&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Keep it or leave it out&#x22;, text: &#x22;Keep an idea by passing its series to the next lab&#x22;, code: &#x22;features={idea.id: tried['series']}&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## The ideas the kit makes [#the-ideas-the-kit-makes]
-
-`nb.feature_ideas(lab)` makes these, when the data has the columns for them. It returns at most eight.
-
-* **How long ago the date was**, when the table has a date. Newer and older records can behave differently.
-* **A measure compared with its category's usual value**, for the first two measures and the first two categories.
-* **Two categories together**, such as a category with a certain state.
-* **A category column that holds numbers, read as a number**, when it has more than two values. The model can then learn that more is worse, or better.
-* **Whether a measure is missing**, when more than 0.5% of its rows are blank.
-* **Whether a long text mentions a problem**, for a text column with long values. The words are price, slow, crash, wrong, cancel and a few others in `NEGATIVE_WORDS`.
-
-Each idea shows its title, the reason it was proposed, and the SQL. Read the SQL before you keep it. It is the same expression the kit would run on your table.
-
-## Try an idea [#try-an-idea]
-
-`nb.try_feature(lab, idea)` retrains the picked model with the idea added. It uses the same split and the same cross-validation folds, so the two scores can be compared. It returns a verdict and the idea's values as a series.
-
-| Verdict      | When                                                                                             | What it means                                            |
-| ------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `suspicious` | The held-out score is above 0.98 for yes or no, or above 0.995 for a number                      | The idea probably gives the answer away. Do not keep it. |
-| `helps`      | Cross-validation rises by 0.005 or more, and the held-out score does not fall by more than 0.002 | Keep it, if you can explain why it should work.          |
-| `hurts`      | Cross-validation falls by 0.005 or more                                                          | Leave it out.                                            |
-| `same`       | Anything else                                                                                    | Not worth the extra column.                              |
-
-These thresholds are the kit's rules of thumb. They are not statistical tests. A verdict of `helps` on a small held-out set can still be chance. Read the number of rows held out, and `cv_sd`, before you believe it.
-
-## Keep an idea [#keep-an-idea]
-
-To keep an idea, pass its series to the next lab with `features=`:
-
-```python
-kept_features = {}
-kept_features[ideas[0].id] = tried["series"]          # only when the verdict is "helps"
-lab = nb.model_lab(connection, dataset, "predict_yes_no", features=kept_features)
-```
-
-The notebook's `01_explore` does this for the first three ideas. It keeps the ones with the verdict `helps` and drops the others. A kept idea is used on the next run of the lab cell.
-
-Back to [Model](/data-scientist/model). The AI model's part in feature ideas is on [Your AI model in this stage](/data-scientist/model/ai-model).
-
-
-# Model (/data-scientist/model)
-
-
-
-Modelling turns the columns you approved into a prediction: will this order be cancelled, is this payment fraud, which rows look unusual. A model is only useful if it beats a simple guess, so start with the simplest one and improve it step by step. The kit gives you a baseline model in `01_explore`, a model lab that trains several models on the same rows, and feature ideas that you test before you keep them. Everything trains on this computer with scikit-learn, the Python machine-learning library the kit includes.
-
-## The flow [#the-flow]
-
-<Flow
-  caption="From approved roles to a model you can judge"
-  steps="[
-  { title: &#x22;You approve the roles&#x22;, text: &#x22;The target and the groups come from the column map&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/explore&#x22; },
-  { title: &#x22;Train the baseline&#x22;, text: &#x22;A small logistic regression, with the answer-givers left out&#x22;, code: &#x22;nb.leakage_check(connection, dataset)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/baseline&#x22; },
-  { title: &#x22;Run the model lab&#x22;, text: &#x22;Every model of one task trains on the same rows&#x22;, code: 'nb.model_lab(connection, dataset, &#x22;predict_yes_no&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/model-lab&#x22; },
-  { title: &#x22;Try feature ideas (optional)&#x22;, text: &#x22;Each idea is retrained on the same split before you keep it&#x22;, code: &#x22;nb.try_feature(lab, ideas[0])&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/feature-ideas&#x22; },
-  { title: &#x22;You decide what to keep&#x22;, text: &#x22;A verdict says whether an idea helped. Scoring on unseen rows is in Evaluate.&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/evaluate&#x22; },
-]"
-/>
-
-## Where you do it [#where-you-do-it]
-
-| Guided view                                                                                                 | Notebook code                                                                          | Terminal                             |
-| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ |
-| `01_explore`: the **Build a model** card runs the model lab. The baseline's result is in the same notebook. | The cells **Train a baseline model** and **The model lab (optional)** in `01_explore`. | None. Training runs in the notebook. |
-
-The first cell of `01_explore` holds the settings. `DATASET` picks the data. `USE_PREPARED = True` makes the model read the typed, cleaned view that [Prepare](/data-scientist/prepare) creates. The lab cell looks like this:
-
-```python
-LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
-lab_data = nb.lab_data(connection, dataset)   # read once; lab_data.left_out says what was left out and why
-kept_features = {}
-lab = nb.model_lab(connection, dataset, LAB_TASK, model="all", target_number=None, data=lab_data, features=kept_features)
-```
-
-## How we used it [#how-we-used-it]
-
-The sample dataset `amazon_sales` is the table `AMAZON.ORDER_LINES`. It has 128,975 order lines. 18,332 of them (14.2%) are cancelled, which is the target `CANCELLED`.
-
-* **The baseline** uses three inputs only: the category, the state and the month of `ORDER_DATE`. It does not read `STATUS`, which gives the target away. See [Start with a baseline](/data-scientist/model/baseline).
-* **The lab** scores with ROC AUC, because the rarer answer is above 5%. It splits by time, so it learns from the older rows and is tested on the newer ones. See [The model lab](/data-scientist/model/model-lab).
-
-The messy dataset, `fraud_transactions`, has a rare answer, no date and placeholder values. Its differences are listed in [The model lab](/data-scientist/model/model-lab).
-
-## In this stage [#in-this-stage]
-
-<Cards>
-  <Card title="Start with a baseline" href="/data-scientist/model/baseline" description="The simplest model, and the score a real model must beat" />
-
-  <Card title="The model lab" href="/data-scientist/model/model-lab" description="What the lab reads, how it splits the rows, and what it leaves out" />
-
-  <Card title="The models the lab tries" href="/data-scientist/model/the-models" description="Every model, the rule that picks one, and the settings" />
-
-  <Card title="Feature ideas" href="/data-scientist/model/feature-ideas" description="New inputs built from your columns, and the verdict for each" />
-
-  <Card title="Your AI model in this stage" href="/data-scientist/model/ai-model" description="What an AI model may suggest here, and what it is sent" />
-
-  <Card title="Saving, MLflow and training in the database" href="/data-scientist/model/saving-and-mlflow" description="What is kept after a run, and where the in-database path starts" />
-
-  <Card title="When it goes wrong" href="/data-scientist/model/troubleshooting" description="The warnings and errors you see while you model" />
-</Cards>
-
-## What you have at the end [#what-you-have-at-the-end]
-
-A baseline score, the lab's leaderboard with the model it picked, the importance list, and the feature ideas you kept with their verdicts. The next step is to check the score on rows the model never trained on, in [Evaluate](/data-scientist/evaluate).
-
-<StageNav n="5" />
-
-
-# The model lab (/data-scientist/model/model-lab)
-
-
-
-`nb.model_lab` trains one task on your approved data. It trains every model of that task on the same rows, scores each one, and picks the best. It is the second half of the model stage, after the baseline. The lab uses the same approved column map as the notebook baseline, but it reads more columns and more rows.
-
-## The tasks [#the-tasks]
-
-| Task                | What it learns                         | Example                           |
-| ------------------- | -------------------------------------- | --------------------------------- |
-| Predict yes or no   | The 0/1 target                         | Will this order be cancelled?     |
-| Predict a number    | A number you name with `target_number` | What will this order's amount be? |
-| Find natural groups | Nothing: no outcome is needed          | Which orders look alike?          |
-| Find unusual rows   | Nothing: no outcome is needed          | Which rows sit far from the rest? |
-
-<Flow
-  caption="What the lab does with your approved data"
-  steps="[
-  { title: &#x22;Read the approved columns&#x22;, text: &#x22;Every column with a role, up to 50,000 rows&#x22;, code: &#x22;nb.lab_data(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Leave out what it must not read&#x22;, text: &#x22;Answer-givers, personal data, keys, identifiers and free text&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Split the rows&#x22;, text: &#x22;The newest rows by time, a random share, or whole groups&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/evaluate/hold-out&#x22; },
-  { title: &#x22;Train every model of the task&#x22;, text: &#x22;On the same training rows, with cross-validation&#x22;, code: 'nb.model_lab(connection, dataset, &#x22;predict_yes_no&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/the-models&#x22; },
-  { title: &#x22;Score on the held-out rows&#x22;, text: &#x22;The held-out rows are scored, not used to choose&#x22;, tone: &#x22;kit&#x22; },
-]"
-/>
-
-## What the lab reads [#what-the-lab-reads]
-
-The kit decides the inputs from the roles in the column map. You do not type column names. The table gives each role's treatment.
-
-| Role                | How the lab uses it                     | Left out when                                       |
-| ------------------- | --------------------------------------- | --------------------------------------------------- |
-| `measure`           | As a number                             | It gives the answer away, or is personal data       |
-| `category`, `flag`  | As groups: one 0 or 1 column per value  | It gives the answer away, or is personal data       |
-| `time`              | Only the month of the date              | Never left out, but the full date is not used       |
-| `key`, `identifier` | Not used as inputs                      | Almost every row is different                       |
-| `text`              | Not used, except through a feature idea | Always. Free text is not a column the lab can read. |
-| `other`             | Not used                                | Always: its role says leave it out                  |
-| target              | The answer the model learns             | It is never an input                                |
-
-The lab reads at most 50,000 rows (`ROW_LIMIT` in the code). When the table has a date, those are the newest rows. Otherwise the query sorts by its first column and keeps 50,000 rows.
-
-## What the lab leaves out, and why [#what-the-lab-leaves-out-and-why]
-
-`lab_data.left_out` lists every column the lab did not use, with its reason. Read it after every run. The reasons come from the code in `lab.py`:
-
-* **gives the answer away**: the column is in the list from `nb.leakage_check`. See [Leakage](/data-scientist/evaluate/leakage) on the Evaluate pages.
-* **personal data**: the column is marked sensitive in the column map. It is never used as an input.
-* **different for (almost) every row, so there is nothing general to learn**: a key or an identifier.
-* **free text: see the feature ideas**: a text column.
-* **marked Leave out**: the column's role is `other`.
-
-```python
-lab_data = nb.lab_data(connection, dataset)
-print(lab_data.left_out)   # every column left out, and why
-```
-
-## The metric and the split for amazon_sales [#the-metric-and-the-split-for-amazon_sales]
-
-* **The metric.** The rarer answer is 14.2% of rows, which is above 5%, so the lab scores with ROC AUC. Below 5%, it uses PR AUC instead. Both are explained on [Reading ROC AUC](/data-scientist/evaluate/roc-auc) and [Metrics](/data-scientist/evaluate/metrics).
-* **The rows.** `amazon_sales` has 128,975 rows, so the lab reads the newest 50,000 by `ORDER_DATE`.
-* **The split.** `ORDER_DATE` is a date, so the lab uses a time split. It learns from the oldest 75% of those rows and is tested on the newest 25%.
-* **The inputs.** Every measure, category and flag column the column map gives a role to, plus the month of the date. Keys, identifiers, text, personal data and the answer-givers are left out.
-
-<Callout>
-  Check `AMOUNT` before you trust the lab. The dataset README says `AMOUNT` and `QTY` change once an order is cancelled, so a model that reads them learns the answer it was given. The leakage check tests only columns with 2 to 50 distinct values (`GROUPABLE` in `data_checks.py`), so it may not flag `AMOUNT`. To see how many values it has, run `SELECT COUNT(DISTINCT "AMOUNT") FROM AMAZON.ORDER_LINES`. If `AMOUNT` tops `lab.importance`, leave it out yourself:
-
-  ```python
-  leaks = nb.leakage_check(connection, dataset) + ["AMOUNT"]
-  lab = nb.model_lab(connection, dataset, "predict_yes_no", leaks=leaks)
-  ```
-</Callout>
-
-## What the model leans on [#what-the-model-leans-on]
-
-`lab.importance` lists up to eight inputs, the strongest first. For each input, the kit scrambles its values on the held-out rows and measures how far the score drops. A large drop means the model relies on that input. Only inputs whose drop is above zero are listed.
-
-The list is a lead, not proof. A value with few rows can look strong by chance.
-
-## The messy dataset: fraud_transactions [#the-messy-dataset-fraud_transactions]
-
-The README of `fraud_transactions` gives 51,000 rows, with 4.9% of them fraud. Measured on the database, the table has 50,000 distinct `TRANSACTION_ID` values, so 1,000 ids appear twice. Three things change for the lab:
-
-* **A rare answer.** Under 5% of rows are 1s, so the lab scores with PR AUC, which focuses on finding the rare rows. The lab records the reason in `lab.run.notes`: "The 1s are rare, so the score is PR AUC, which focuses on finding them."
-* **No date.** The table has only the hour of the day. The lab splits at random, stratified so both sides keep the same share of fraud. With no date it sorts by the first column of its query and keeps 50,000 of the 51,000 rows. The notebook baseline reads the first 20,000 rows by `ROW_ID` and leaves the month out.
-* **Placeholder values.** The README lists 1,530 `Unknown Device` and 1,530 `Invalid Method` values. The lab does not clean them. Each placeholder becomes one more category value. To read the typed, cleaned view from [Prepare](/data-scientist/prepare) instead, set `USE_PREPARED = True` in `01_explore`.
-
-## Settings [#settings]
-
-Pass settings by name. An unknown name is an error.
-
-| Setting                                                     | What it does                                                                                     |
-| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `train_pct`                                                 | The share of rows used for training, from 50 to 90. The default is 75.                           |
-| `split_method`                                              | `time`, `random` or `group`. See [Hold-out](/data-scientist/evaluate/hold-out).                  |
-| `split_group`                                               | The column whose whole groups are kept on one side, for `group`                                  |
-| `folds`                                                     | The number of cross-validation folds on the training rows. The default is 5.                     |
-| `effort`                                                    | `fast`, `balanced` (the default) or `thorough`. It sets the number of trees: 100, 200 or 400.    |
-| `max_depth`, `C`, `neighbours`, `learning_rate`, `clusters` | The settings of the models that use them                                                         |
-| `contamination`                                             | The share of rows to flag as unusual. The default is 2%. The code keeps it between 0.5% and 20%. |
-
-The full signatures are in the [model lab reference](/data-scientist/development/reference/lab).
-
-Back to [Model](/data-scientist/model). Next: [The models the lab tries](/data-scientist/model/the-models).
-
-
-# Saving, MLflow and training in the database (/data-scientist/model/saving-and-mlflow)
-
-
-
-Three things sit beside the model lab and are easy to confuse: keeping a result, the optional MLflow record, and the training that runs inside the database. The Data Scientist notebooks use the first only. The other two belong to the ML Engineer's path.
-
-## Saving a model [#saving-a-model]
-
-Nothing in the Data Scientist notebooks saves a fitted model to disk or to the database. The lab's fitted model lives in your kernel until you stop it. To keep a result, keep the numbers: the board, the importance list and the notes.
-
-The workflow log records only that a model ran, with its task, its row count and, for the small model, its score. See [The workflow log](/data-scientist/monitor/the-workflow-log).
-
-## MLflow, when it is installed [#mlflow-when-it-is-installed]
-
-MLflow is an optional record of training runs. The Data Scientist notebooks do not start MLflow runs. The runs come from the in-database training that the ML Engineer's notebooks do, described below.
-
-* `nb.use_mlflow()` sets where runs are recorded for this kernel. An empty address means the kit's own MLflow server (`exakit mlflow start`), or whatever the shell set. `nb.use_mlflow(login=True)` asks for a username and a password in a hidden box.
-* `nb.check_mlflow()` checks the client and the server. If the client is missing, it says to run `exakit update notebook`.
-* `exakit mlflow start` installs the MLflow server into the notebook environment when it is missing.
-
-The settings are listed in [Model, Langfuse and MLflow settings](/data-scientist/development/reference/setup-env).
-
-## Training inside the database (the ML Engineer's path) [#training-inside-the-database-the-ml-engineers-path]
-
-This is not a Data Scientist step, but it is where the kit's trained models come from. `nb.prepare_training(conn, ds, handoff, container=..., seed=0)` prepares in-database training from a training hand-off:
-
-* It refuses a hand-off that is stale, and a random split that nobody asked for. See [The training hand-off](/data-scientist/communicate/training-hand-off) for what a hand-off holds.
-* It creates a feature view in `STARTER_KIT`, drops features that are constant, and writes a training function that fits a logistic regression with a fixed seed.
-* It returns a plan. The caller runs `plan.create_script`, then `plan.training_sql`.
-
-It needs a Python container inside the database: `PYTHON3_ML` (`exakit udf-use default`) or `PYTHON3` (`exakit udf-setup`). Both come from the udf-devkit add-on, `exakit marketplace udf-devkit`. The [add-ons page](/kit/tools/add-ons) explains how add-ons are installed.
-
-Back to [Model](/data-scientist/model).
-
-
-# The models the lab tries (/data-scientist/model/the-models)
-
-
-
-The lab does not rely on one model. For each task it trains every model in a list on the same training rows, and it picks one. This page lists the models, the rule for the pick, and how to choose a model yourself. Every model is from scikit-learn. The key in brackets is the name you pass as `model=`.
-
-## The models the lab tries [#the-models-the-lab-tries]
-
-| Task             | Models                                                                                                                                                                                                                                                                                                                                | How the best one is picked                                                                         |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `predict_yes_no` | baseline (`baseline`), logistic regression (`logistic`), logistic regression with L1 (`logistic_l1`), decision tree (`decision_tree`), random forest (`random_forest`), extra trees (`extra_trees`), gradient boosting (`boosting`), k-nearest neighbours (`knn`), naive Bayes (`naive_bayes`), linear support vector machine (`svm`) | Cross-validated ROC AUC, or PR AUC when the rarer answer is under 5%                               |
-| `predict_number` | baseline (`baseline`), linear (`linear`), ridge (`ridge`), lasso (`lasso`), decision tree, random forest, extra trees, gradient boosting, k-nearest neighbours                                                                                                                                                                        | Cross-validated R squared                                                                          |
-| `find_groups`    | k-means (`kmeans`), Gaussian mixture (`gaussian_mixture`), hierarchical (`agglomerative`)                                                                                                                                                                                                                                             | Silhouette score. If you do not set the number of groups, the lab tries 2 to 6 and keeps the best. |
-| `find_unusual`   | isolation forest (`isolation_forest`), local outlier factor (`lof`)                                                                                                                                                                                                                                                                   | No score. The share you set as `contamination` (2% by default) decides how many rows are flagged.  |
-
-## How the best one is picked [#how-the-best-one-is-picked]
-
-With `model="all"`, the lab does this:
-
-1. It scores each model by cross-validation on the training rows. The score is the metric for the task.
-2. It takes the model with the highest mean score.
-3. It goes down a list of models from simplest to most complex. The first model on that list whose score is within 0.01 of the best wins.
-
-The order is: logistic regression, linear, ridge, logistic L1, lasso, naive Bayes, decision tree, k-nearest neighbours, SVM, random forest, extra trees, gradient boosting. The baseline is not on that list. It is picked only when it has the highest score and no model on the list is within 0.01 of it.
-
-The pick is made on cross-validation. The held-out rows are scored after the pick, for reading. They do not choose the model.
-
-<Callout>
-  The 0.01 rule is a rule for choosing a simple model. It is not a test that the gap between two models is real. To judge a gap, read `cv_sd` on the board. See [Comparing models](/data-scientist/evaluate/comparing-models) on the Evaluate pages.
-</Callout>
-
-## Choose a model yourself [#choose-a-model-yourself]
-
-Pass one key to `model=`, and the lab trains that model and its baseline on the same rows:
-
-```python
-lab = nb.model_lab(connection, dataset, "predict_yes_no", model="logistic")
-```
-
-With a named model, the pick is yours: the result's `chosen_by` is `you`, and the board holds only that model and the baseline.
-
-## The settings that change the models [#the-settings-that-change-the-models]
-
-`effort` sets the number of trees for the tree models: `fast` 100, `balanced` 200 (the default) and `thorough` 400. The other settings are listed on [The model lab](/data-scientist/model/model-lab#settings). Back to [Model](/data-scientist/model).
-
-
-# Troubleshooting (/data-scientist/model/troubleshooting)
-
-
-
-Each entry quotes the message the kit prints, or describes the step that stops.
-
-<Accordions type="multiple">
-  <Accordion title="A model step is skipped">
-    The dataset has no target, or no category or entity that is free of the answer, so the baseline cannot run. The step says so. Choose a target in the column map, approve it, and run the notebook again. `nb.model_settings()` shows whether the AI steps have a model. No model is needed for the baseline or the lab.
-  </Accordion>
-
-  <Accordion title="The model lab says nothing to predict was chosen">
-    The lab was asked to predict yes or no, but the column map has no yes-or-no target. The error reads "Nothing to predict was chosen". Pick a 0 or 1 column as the target in the column map, or choose another task: predict a number, find natural groups or find unusual rows.
-  </Accordion>
-
-  <Accordion title="One side of the split has only one answer">
-    The error reads "One side of the split has only one answer, so no score can be computed". A time split can put all the 1s on one side. Change the split to `split_method="random"`, which is stratified for yes or no. See [Hold-out](/data-scientist/evaluate/hold-out).
-  </Accordion>
-
-  <Accordion title="Only a few rows with a 1 are held out">
-    The warning reads "Only N rows with a 1 are held out, so the held-out score is shaky". It appears when fewer than 30 rows with a 1 are held out. Lower `train_pct` (50 is the lowest it accepts), so more rows are held out.
-  </Accordion>
-
-  <Accordion title="No model could be trained on this data">
-    The error reads "No model could be trained on this data", and lists the reason for each model that failed. The most common cause is a dataset with almost no rows on one side of the answer. Check the split first.
-  </Accordion>
-
-  <Accordion title="No AI model is set up">
-    `nb.feature_ideas(lab, ai=True)` stops with "No AI model is set up". Run `nb.model_setup()`, or `nb.use_model(MODEL_ID, PROVIDER_BASE_URL)`. Or call `nb.feature_ideas(lab)` without `ai=True`, which needs no model.
-  </Accordion>
-
-  <Accordion title="The lab leaves out a column you expected it to use">
-    Read `lab_data.left_out`. It gives the reason for each column left out: gives the answer away, personal data, a key or identifier, free text, or marked Leave out. A column marked sensitive, or flagged by the leakage check, is not used. Change the column map if the role is wrong, and approve it again.
-  </Accordion>
-</Accordions>
-
-Back to [Model](/data-scientist/model).
 
 
 # Monitor and iterate (/data-scientist/monitor)
@@ -4292,106 +3815,478 @@ Each entry starts with the finding or symptom you see. Find it, then read the fi
 Back to [Prepare](/data-scientist/prepare).
 
 
-# All exakit commands (/kit/reference/commands)
+# Your AI model in this stage (/data-scientist/model/ai-model)
 
 
 
-{/* Generated by tools/nb_docs.py from setup/help/exakit.json. Edit those, then run the tool. */}
+## Your AI model in this stage [#your-ai-model-in-this-stage]
 
-`exakit help <command>` prints a command's full reference on this computer, and `exakit catalog <word>`
-searches them.
+The AI model is optional. Every step in the model stage runs without one. Without a model, `nb.feature_ideas(lab)` still returns the rule-based ideas. With a model, `nb.feature_ideas(lab, ai=True)` adds up to four more.
 
-## Everyday [#everyday]
+Your model has one job here: it suggests feature ideas. It never sees rows, never approves a column map, and never runs SQL.
 
-| Command            | Takes                                                                   | What it does                                                                    |
-| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `exakit status`    | `[--json]`                                                              | Is the database up and healthy?                                                 |
-| `exakit info`      | `[--json]`                                                              | Your connection details.                                                        |
-| `exakit start`     | `[<service>]`                                                           | Start the database and every add-on service, or one of them.                    |
-| `exakit stop`      | `[<service>]`                                                           | Stop the add-on services and the database, or one of them.                      |
-| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]` | Run one SQL statement, with the error translated.                               |
-| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                               | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
-| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                         | Every log the kit can show.                                                     |
-| `exakit autostart` |                                                                         | Come back automatically after a restart?                                        |
+<Flow
+  caption="An AI suggestion, from names to a tested idea"
+  steps="[
+  { title: &#x22;The kit sends names and roles&#x22;, text: &#x22;Column names, roles, the model scores so far, the five kinds it may use, and the target's name. Never a row or a value.&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Your model suggests up to four&#x22;, text: &#x22;Only of the five kinds below, each built from existing columns&#x22;, code: &#x22;nb.feature_ideas(lab, ai=True, conn=connection)&#x22;, tone: &#x22;ai&#x22; },
+  { title: &#x22;The kit checks each suggestion&#x22;, text: &#x22;Suggestions that name the target, or a column the data does not have, are dropped&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The kit tests the rest&#x22;, text: &#x22;Each one goes through the same verdict as any other idea&#x22;, code: &#x22;nb.try_feature(lab, idea)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;You read the SQL and decide&#x22;, text: &#x22;No idea is kept without you&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
 
-## AI clients (MCP) [#ai-clients-mcp]
+## What it is sent [#what-it-is-sent]
 
-| Command             | Takes                      | What it does                       |
-| ------------------- | -------------------------- | ---------------------------------- |
-| `exakit mcp-setup`  |                            | Connect your AI clients.           |
-| `exakit mcp-doctor` | `[clients] [--json]`       | Test and repair the AI connection. |
-| `exakit mcp-status` | `[clients] [--json \| -j]` | Show managed MCP state per client. |
+The code in `lab.py` builds one request with these parts:
 
-## External sources (virtual schemas) [#external-sources-virtual-schemas]
+* the target's name
+* every column name and its role. A column marked sensitive is left out.
+* the cross-validated score of each model so far, rounded to three decimals
+* the five kinds of idea it may suggest
+* a rule: suggest up to four, use only those kinds and existing column names, and never use the target or a column filled in after the outcome
 
-| Command          | Takes                                                                                                                                                                                                                                                                                | What it does                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `exakit connect` | `[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F \| --password-stdin] [--storage-secret-file F] [--dry-run] [--yes] [--json]`                                                                                                                             | Query an external database from the local one (virtual schema). |
-| `exakit source`  | `list\|issues [--status S]\|catalog\|show <name>\|describe <name> [TABLE] [--ddl] [--schema S]\|check <name>\|--all\|reauth <name> [--password-file F \| --password-stdin] [--storage-secret-file F]\|refresh <name>\|disconnect <name>\|remove <name> [--dry-run] [--yes] [--json]` | List, check and manage connected external sources.              |
+No row and no value is sent.
 
-## Personas and notebooks [#personas-and-notebooks]
+## What it may suggest [#what-it-may-suggest]
 
-| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | What it does                                                                                                                                                                                      |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                       |
-| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                 |
-| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]` | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients. |
-| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                |
+Five kinds only. The kit builds each one as SQL and tests it like any other idea.
 
-## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
+| Kind             | Columns                  | The SQL the kit writes                    |
+| ---------------- | ------------------------ | ----------------------------------------- |
+| `ratio_to_group` | a measure and a category | `"m" / AVG("m") OVER (PARTITION BY "c")`  |
+| `combine`        | two categories           | `` `"a" \|\| ' · ' \|\| "b"` ``           |
+| `days_since`     | a date                   | `DAYS_BETWEEN(CURRENT_DATE, "d")`         |
+| `as_number`      | one column               | `CAST("c" AS DOUBLE)`                     |
+| `is_missing`     | one column               | `CASE WHEN "c" IS NULL THEN 1 ELSE 0 END` |
 
-| Command            | Takes                                                                                                                                          | What it does                                                                                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `exakit mlflow`    | `start\|stop\|disable\|status\|url\|replay [action options]`                                                                                   | Start or stop the local MLflow server, show its address, or replay pending runs.                                                 |
-| `exakit udf-setup` | `[--language python\|rust] [--force] [--yes] [--json]`                                                                                         | Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).        |
-| `exakit udf-use`   | `default [--language python\|rust] [--yes] [--json] \| <container.tar.gz> [--alias NAME] [--language python\|rust] [--yes] [--json] \| --list` | Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.                         |
-| `exakit udf-build` | `<requirements.txt> [--alias <NAME>] [--yes]`                                                                                                  | Build a container with your pinned packages and install it.                                                                      |
-| `exakit udf-file`  | `<file> [<path in the bucket>]`                                                                                                                | Copy a file into BucketFS and print the path a UDF reads it from.                                                                |
-| `exakit rust-udf`  | `new <name> [--coefficients <file>] \| build <name> \| deploy <name> [--schema <SCHEMA>] [--yes] [--json]`                                     | Create, build and deploy a Rust scoring UDF from exported coefficients.                                                          |
-| `exakit model`     | `put\|inspect\|list\|rm\|prune\|template [arguments]`                                                                                          | Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template. |
+A suggestion of another kind, or with the wrong number of columns, is dropped.
 
-## Add-ons [#add-ons]
+## What the kit checks, and what it cannot [#what-the-kit-checks-and-what-it-cannot]
 
-| Command              | Takes                                | What it does                                                             |
-| -------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
-| `exakit marketplace` | `[<addon-id>...] \| --list [--json]` | Optional add-ons: dashboards, notebooks, UDFs, dbt, scheduling and more. |
+The kit checks two things. It drops a suggestion that names the target, and a suggestion that names a column the data does not have. It reads up to four suggestions and no more.
 
-## Keeping up to date [#keeping-up-to-date]
+The prompt also tells the model not to use a column written after the outcome. The kit cannot check that by itself. The verdict from `nb.try_feature` and your reading of the SQL are the check. An idea that scores above 0.98 on the held-out rows gets the verdict `suspicious`, and the kit tells you not to keep it.
 
-| Command          | Takes                            | What it does                          |
-| ---------------- | -------------------------------- | ------------------------------------- |
-| `exakit version` | `[--json \| -j]`                 | What is installed, and what is newer. |
-| `exakit update`  | `[<component>] [--yes] [--json]` | Apply the updates that are waiting.   |
+## Where the data goes [#where-the-data-goes]
 
-## Repair and removal [#repair-and-removal]
+The model is the endpoint you set. It is called only when you pass `ai=True`, or when you run the themes step. With a model set up, feature ideas send names and roles, never rows.
 
-| Command                 | Takes                                                                                                                              | What it does                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `exakit preflight`      |                                                                                                                                    | Check this machine's requirements; install nothing.   |
-| `exakit repair-runtime` | `[--yes] [--json \| -j]`                                                                                                           | Rebuild a database that cannot start.                 |
-| `exakit tls-pin`        | `[--accept [--yes]] [--json \| -j]`                                                                                                | Compare or re-pin the database's TLS certificate.     |
-| `exakit migrate`        | `docker-nano [--container NAME] [--engine docker\|podman] [--dsn HOST:PORT] [--user USER] [--password-file PATH] [--yes] [--json]` | Copy an older kit's container database into this one. |
-| `exakit uninstall`      | `[<addon-id>] [--dry-run] [--yes]`                                                                                                 | Remove what the kit installed.                        |
+The optional themes step in `01_explore` is different. It sends a sample of the newest texts on each side of the target to your model, so it needs a text column. The practice datasets have none, so the step skips.
 
-## Reference [#reference]
+## Tracing [#tracing]
 
-| Command            | Takes                                                             | What it does                                                                                       |
-| ------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `exakit docs`      | `[<add-on \| command \| page \| words>] [--print] [--json \| -j]` | Open the kit's documentation in the browser: all of it, an add-on, a command, a page, or a search. |
-| `exakit guide`     |                                                                   | Friendly walkthrough of every way to connect.                                                      |
-| `exakit skills`    | `[--json \| -j]`                                                  | List the AI skills the kit carries.                                                                |
-| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]`       | This screen.                                                                                       |
-| `exakit catalog`   | `[search] [--json \| -j]`                                         | Browse or search every command.                                                                    |
-| `exakit whats-new` | `[<version>]`                                                     | What changed in this kit version.                                                                  |
+When Langfuse is set up, each call is traced. Pass `conn=connection` to `nb.feature_ideas`, and the call goes into one trace named `feature-ideas`, tagged with the database session. Set-up is on [AI and Langfuse](/data-scientist/set-up/ai-and-langfuse).
 
-## Other [#other]
+## Set it up [#set-it-up]
 
-| Command                 | Takes                    | What it does                                               |
-| ----------------------- | ------------------------ | ---------------------------------------------------------- |
-| `exakit mcp-remove`     | `<client> [<client>...]` | Remove the kit's MCP entries from named AI clients.        |
-| `exakit skills-install` |                          | Re-place the AI skills the kit copy carries (repair only). |
-| `exakit upgrade-kit2`   |                          | Add the Kit 2 trust assets to this install (internal).     |
-| `exakit rollback-kit2`  |                          | Remove exactly what upgrade-kit2 added (internal).         |
+Run `nb.model_setup()` in a notebook, or call `nb.use_model(MODEL_ID, PROVIDER_BASE_URL)` yourself. Without one, `nb.feature_ideas(lab, ai=True)` stops with the message "No AI model is set up". Check what is set with `nb.model_settings()`. The providers and where to find their keys are on [Set up Exasol](/data-scientist/set-up).
+
+The model is never asked to approve anything, and it never changes your data.
+
+Back to [Model](/data-scientist/model). Troubleshooting is on [Model: when it goes wrong](/data-scientist/model/troubleshooting).
+
+
+# Start with a baseline (/data-scientist/model/baseline)
+
+
+
+A model with every column is only worth keeping if it does better than a simple rule. The baseline is that simple rule. If a real model cannot beat it, the columns carry little signal about the outcome. The kit has two baselines.
+
+## Start with a baseline [#start-with-a-baseline]
+
+* **The notebook baseline** is a small logistic regression in `01_explore`. It uses three inputs: the category, the state and the month of the date.
+* **The lab's baseline** is the model called `baseline` in each prediction task. For yes or no, it always gives the common answer. A constant prediction scores 0.5 ROC AUC, so any real model should score above 0.5.
+
+<Flow
+  caption="The notebook baseline, in 01_explore"
+  steps="[
+  { title: &#x22;Read the roles&#x22;, text: &#x22;The category, the entity and the date come from the approved column map&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Leave out the answer-givers&#x22;, text: &#x22;A flagged category or entity is skipped. The date is used only as its month.&#x22;, code: &#x22;nb.leakage_check(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Train on three quarters&#x22;, text: &#x22;A logistic regression, with one 0 or 1 column for each value&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Keep one quarter back&#x22;, text: &#x22;It is scored on the rows the model never saw. See Evaluate.&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/evaluate&#x22; },
+]"
+/>
+
+## The notebook baseline [#the-notebook-baseline]
+
+The cell reads the newest 20,000 rows when the table has a date, or the first 20,000 by key when it has none. The key makes a rerun read the same rows. The cell builds the features from the category, the state and the month, then trains this pipeline:
+
+```python
+model = Pipeline([
+    ("onehot", OneHotEncoder(handle_unknown="ignore")),
+    ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
+])
+```
+
+* `OneHotEncoder` turns each value of the category, the state and the month into a 0 or 1 column.
+* `class_weight="balanced"` tells the model to weigh the rarer answer more, so it does not just predict the common one.
+* The split is stratified, which keeps the same share of 1s on both sides, with a fixed seed (`random_state=0`). A quarter of the rows is kept back.
+
+The cell prints how many rows it trained on and how many it kept back. It uses a category or an entity only when that column is not flagged by `nb.leakage_check`. The notebook's comment gives the reason for the check: a column written after the outcome "predicts the target perfectly on old rows and fails on new rows."
+
+For `amazon_sales`, the baseline reads `CATEGORY`, `SHIP_STATE` and the month of `ORDER_DATE`. It never reads `STATUS`.
+
+## Do not judge a rare answer by accuracy [#do-not-judge-a-rare-answer-by-accuracy]
+
+When the answer is rare, accuracy is misleading. A model that always says "not fraud" is about 95% accurate on `fraud_transactions`, because 2,510 of its 51,000 rows are fraud (4.9%). `nb.data_checks` reports the rare answer and says what the always-common guess achieves. The readout note also compares every score with that guess. The reasons, and the metric the kit uses instead, are on the [rare answers](/data-scientist/evaluate/rare-answers) page of Evaluate.
+
+## Where to go next [#where-to-go-next]
+
+The lab trains many models on the same rows: [The model lab](/data-scientist/model/model-lab). Back to [Model](/data-scientist/model).
+
+
+# Feature ideas (/data-scientist/model/feature-ideas)
+
+
+
+## Feature ideas [#feature-ideas]
+
+A feature idea is a new input for the model, made from columns you already have. The kit proposes them, writes the SQL that builds each one, and tests them. You decide which ones to keep. Nothing is kept by default.
+
+<Flow
+  caption="Trying one feature idea"
+  steps="[
+  { title: &#x22;The kit proposes ideas&#x22;, text: &#x22;Up to eight, each with the SQL that builds it&#x22;, code: &#x22;ideas = nb.feature_ideas(lab)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Retrain with the idea added&#x22;, text: &#x22;The picked model, on the same split, with the idea as one more input&#x22;, code: &#x22;tried = nb.try_feature(lab, ideas[0])&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Read the verdict&#x22;, text: &#x22;helps, same, hurts or suspicious, in plain words&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Keep it or leave it out&#x22;, text: &#x22;Keep an idea by passing its series to the next lab&#x22;, code: &#x22;features={idea.id: tried['series']}&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## The ideas the kit makes [#the-ideas-the-kit-makes]
+
+`nb.feature_ideas(lab)` makes these, when the data has the columns for them. It returns at most eight.
+
+* **How long ago the date was**, when the table has a date. Newer and older records can behave differently.
+* **A measure compared with its category's usual value**, for the first two measures and the first two categories.
+* **Two categories together**, such as a category with a certain state.
+* **A category column that holds numbers, read as a number**, when it has more than two values. The model can then learn that more is worse, or better.
+* **Whether a measure is missing**, when more than 0.5% of its rows are blank.
+* **Whether a long text mentions a problem**, for a text column with long values. The words are price, slow, crash, wrong, cancel and a few others in `NEGATIVE_WORDS`.
+
+Each idea shows its title, the reason it was proposed, and the SQL. Read the SQL before you keep it. It is the same expression the kit would run on your table.
+
+## Try an idea [#try-an-idea]
+
+`nb.try_feature(lab, idea)` retrains the picked model with the idea added. It uses the same split and the same cross-validation folds, so the two scores can be compared. It returns a verdict and the idea's values as a series.
+
+| Verdict      | When                                                                                             | What it means                                            |
+| ------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `suspicious` | The held-out score is above 0.98 for yes or no, or above 0.995 for a number                      | The idea probably gives the answer away. Do not keep it. |
+| `helps`      | Cross-validation rises by 0.005 or more, and the held-out score does not fall by more than 0.002 | Keep it, if you can explain why it should work.          |
+| `hurts`      | Cross-validation falls by 0.005 or more                                                          | Leave it out.                                            |
+| `same`       | Anything else                                                                                    | Not worth the extra column.                              |
+
+These thresholds are the kit's rules of thumb. They are not statistical tests. A verdict of `helps` on a small held-out set can still be chance. Read the number of rows held out, and `cv_sd`, before you believe it.
+
+## Keep an idea [#keep-an-idea]
+
+To keep an idea, pass its series to the next lab with `features=`:
+
+```python
+kept_features = {}
+kept_features[ideas[0].id] = tried["series"]          # only when the verdict is "helps"
+lab = nb.model_lab(connection, dataset, "predict_yes_no", features=kept_features)
+```
+
+The notebook's `01_explore` does this for the first three ideas. It keeps the ones with the verdict `helps` and drops the others. A kept idea is used on the next run of the lab cell.
+
+Back to [Model](/data-scientist/model). The AI model's part in feature ideas is on [Your AI model in this stage](/data-scientist/model/ai-model).
+
+
+# Model (/data-scientist/model)
+
+
+
+Modelling turns the columns you approved into a prediction: will this order be cancelled, is this payment fraud, which rows look unusual. A model is only useful if it beats a simple guess, so start with the simplest one and improve it step by step. The kit gives you a baseline model in `01_explore`, a model lab that trains several models on the same rows, and feature ideas that you test before you keep them. Everything trains on this computer with scikit-learn, the Python machine-learning library the kit includes.
+
+## The flow [#the-flow]
+
+<Flow
+  caption="From approved roles to a model you can judge"
+  steps="[
+  { title: &#x22;You approve the roles&#x22;, text: &#x22;The target and the groups come from the column map&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/explore&#x22; },
+  { title: &#x22;Train the baseline&#x22;, text: &#x22;A small logistic regression, with the answer-givers left out&#x22;, code: &#x22;nb.leakage_check(connection, dataset)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/baseline&#x22; },
+  { title: &#x22;Run the model lab&#x22;, text: &#x22;Every model of one task trains on the same rows&#x22;, code: 'nb.model_lab(connection, dataset, &#x22;predict_yes_no&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/model-lab&#x22; },
+  { title: &#x22;Try feature ideas (optional)&#x22;, text: &#x22;Each idea is retrained on the same split before you keep it&#x22;, code: &#x22;nb.try_feature(lab, ideas[0])&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/feature-ideas&#x22; },
+  { title: &#x22;You decide what to keep&#x22;, text: &#x22;A verdict says whether an idea helped. Scoring on unseen rows is in Evaluate.&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/evaluate&#x22; },
+]"
+/>
+
+## Where you do it [#where-you-do-it]
+
+| Guided view                                                                                                 | Notebook code                                                                          | Terminal                             |
+| ----------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- | ------------------------------------ |
+| `01_explore`: the **Build a model** card runs the model lab. The baseline's result is in the same notebook. | The cells **Train a baseline model** and **The model lab (optional)** in `01_explore`. | None. Training runs in the notebook. |
+
+The first cell of `01_explore` holds the settings. `DATASET` picks the data. `USE_PREPARED = True` makes the model read the typed, cleaned view that [Prepare](/data-scientist/prepare) creates. The lab cell looks like this:
+
+```python
+LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
+lab_data = nb.lab_data(connection, dataset)   # read once; lab_data.left_out says what was left out and why
+kept_features = {}
+lab = nb.model_lab(connection, dataset, LAB_TASK, model="all", target_number=None, data=lab_data, features=kept_features)
+```
+
+## How we used it [#how-we-used-it]
+
+The sample dataset `amazon_sales` is the table `AMAZON.ORDER_LINES`. It has 128,975 order lines. 18,332 of them (14.2%) are cancelled, which is the target `CANCELLED`.
+
+* **The baseline** uses three inputs only: the category, the state and the month of `ORDER_DATE`. It does not read `STATUS`, which gives the target away. See [Start with a baseline](/data-scientist/model/baseline).
+* **The lab** scores with ROC AUC, because the rarer answer is above 5%. It splits by time, so it learns from the older rows and is tested on the newer ones. See [The model lab](/data-scientist/model/model-lab).
+
+The messy dataset, `fraud_transactions`, has a rare answer, no date and placeholder values. Its differences are listed in [The model lab](/data-scientist/model/model-lab).
+
+## In this stage [#in-this-stage]
+
+<Cards>
+  <Card title="Start with a baseline" href="/data-scientist/model/baseline" description="The simplest model, and the score a real model must beat" />
+
+  <Card title="The model lab" href="/data-scientist/model/model-lab" description="What the lab reads, how it splits the rows, and what it leaves out" />
+
+  <Card title="The models the lab tries" href="/data-scientist/model/the-models" description="Every model, the rule that picks one, and the settings" />
+
+  <Card title="Feature ideas" href="/data-scientist/model/feature-ideas" description="New inputs built from your columns, and the verdict for each" />
+
+  <Card title="Your AI model in this stage" href="/data-scientist/model/ai-model" description="What an AI model may suggest here, and what it is sent" />
+
+  <Card title="Saving, MLflow and training in the database" href="/data-scientist/model/saving-and-mlflow" description="What is kept after a run, and where the in-database path starts" />
+
+  <Card title="When it goes wrong" href="/data-scientist/model/troubleshooting" description="The warnings and errors you see while you model" />
+</Cards>
+
+## What you have at the end [#what-you-have-at-the-end]
+
+A baseline score, the lab's leaderboard with the model it picked, the importance list, and the feature ideas you kept with their verdicts. The next step is to check the score on rows the model never trained on, in [Evaluate](/data-scientist/evaluate).
+
+<StageNav n="5" />
+
+
+# The model lab (/data-scientist/model/model-lab)
+
+
+
+`nb.model_lab` trains one task on your approved data. It trains every model of that task on the same rows, scores each one, and picks the best. It is the second half of the model stage, after the baseline. The lab uses the same approved column map as the notebook baseline, but it reads more columns and more rows.
+
+## The tasks [#the-tasks]
+
+| Task                | What it learns                         | Example                           |
+| ------------------- | -------------------------------------- | --------------------------------- |
+| Predict yes or no   | The 0/1 target                         | Will this order be cancelled?     |
+| Predict a number    | A number you name with `target_number` | What will this order's amount be? |
+| Find natural groups | Nothing: no outcome is needed          | Which orders look alike?          |
+| Find unusual rows   | Nothing: no outcome is needed          | Which rows sit far from the rest? |
+
+<Flow
+  caption="What the lab does with your approved data"
+  steps="[
+  { title: &#x22;Read the approved columns&#x22;, text: &#x22;Every column with a role, up to 50,000 rows&#x22;, code: &#x22;nb.lab_data(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Leave out what it must not read&#x22;, text: &#x22;Answer-givers, personal data, keys, identifiers and free text&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Split the rows&#x22;, text: &#x22;The newest rows by time, a random share, or whole groups&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/evaluate/hold-out&#x22; },
+  { title: &#x22;Train every model of the task&#x22;, text: &#x22;On the same training rows, with cross-validation&#x22;, code: 'nb.model_lab(connection, dataset, &#x22;predict_yes_no&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/the-models&#x22; },
+  { title: &#x22;Score on the held-out rows&#x22;, text: &#x22;The held-out rows are scored, not used to choose&#x22;, tone: &#x22;kit&#x22; },
+]"
+/>
+
+## What the lab reads [#what-the-lab-reads]
+
+The kit decides the inputs from the roles in the column map. You do not type column names. The table gives each role's treatment.
+
+| Role                | How the lab uses it                     | Left out when                                       |
+| ------------------- | --------------------------------------- | --------------------------------------------------- |
+| `measure`           | As a number                             | It gives the answer away, or is personal data       |
+| `category`, `flag`  | As groups: one 0 or 1 column per value  | It gives the answer away, or is personal data       |
+| `time`              | Only the month of the date              | Never left out, but the full date is not used       |
+| `key`, `identifier` | Not used as inputs                      | Almost every row is different                       |
+| `text`              | Not used, except through a feature idea | Always. Free text is not a column the lab can read. |
+| `other`             | Not used                                | Always: its role says leave it out                  |
+| target              | The answer the model learns             | It is never an input                                |
+
+The lab reads at most 50,000 rows (`ROW_LIMIT` in the code). When the table has a date, those are the newest rows. Otherwise the query sorts by its first column and keeps 50,000 rows.
+
+## What the lab leaves out, and why [#what-the-lab-leaves-out-and-why]
+
+`lab_data.left_out` lists every column the lab did not use, with its reason. Read it after every run. The reasons come from the code in `lab.py`:
+
+* **gives the answer away**: the column is in the list from `nb.leakage_check`. See [Leakage](/data-scientist/evaluate/leakage) on the Evaluate pages.
+* **personal data**: the column is marked sensitive in the column map. It is never used as an input.
+* **different for (almost) every row, so there is nothing general to learn**: a key or an identifier.
+* **free text: see the feature ideas**: a text column.
+* **marked Leave out**: the column's role is `other`.
+
+```python
+lab_data = nb.lab_data(connection, dataset)
+print(lab_data.left_out)   # every column left out, and why
+```
+
+## The metric and the split for amazon_sales [#the-metric-and-the-split-for-amazon_sales]
+
+* **The metric.** The rarer answer is 14.2% of rows, which is above 5%, so the lab scores with ROC AUC. Below 5%, it uses PR AUC instead. Both are explained on [Reading ROC AUC](/data-scientist/evaluate/roc-auc) and [Metrics](/data-scientist/evaluate/metrics).
+* **The rows.** `amazon_sales` has 128,975 rows, so the lab reads the newest 50,000 by `ORDER_DATE`.
+* **The split.** `ORDER_DATE` is a date, so the lab uses a time split. It learns from the oldest 75% of those rows and is tested on the newest 25%.
+* **The inputs.** Every measure, category and flag column the column map gives a role to, plus the month of the date. Keys, identifiers, text, personal data and the answer-givers are left out.
+
+<Callout>
+  Check `AMOUNT` before you trust the lab. The dataset README says `AMOUNT` and `QTY` change once an order is cancelled, so a model that reads them learns the answer it was given. The leakage check tests only columns with 2 to 50 distinct values (`GROUPABLE` in `data_checks.py`), so it may not flag `AMOUNT`. To see how many values it has, run `SELECT COUNT(DISTINCT "AMOUNT") FROM AMAZON.ORDER_LINES`. If `AMOUNT` tops `lab.importance`, leave it out yourself:
+
+  ```python
+  leaks = nb.leakage_check(connection, dataset) + ["AMOUNT"]
+  lab = nb.model_lab(connection, dataset, "predict_yes_no", leaks=leaks)
+  ```
+</Callout>
+
+## What the model leans on [#what-the-model-leans-on]
+
+`lab.importance` lists up to eight inputs, the strongest first. For each input, the kit scrambles its values on the held-out rows and measures how far the score drops. A large drop means the model relies on that input. Only inputs whose drop is above zero are listed.
+
+The list is a lead, not proof. A value with few rows can look strong by chance.
+
+## The messy dataset: fraud_transactions [#the-messy-dataset-fraud_transactions]
+
+The README of `fraud_transactions` gives 51,000 rows, with 4.9% of them fraud. Measured on the database, the table has 50,000 distinct `TRANSACTION_ID` values, so 1,000 ids appear twice. Three things change for the lab:
+
+* **A rare answer.** Under 5% of rows are 1s, so the lab scores with PR AUC, which focuses on finding the rare rows. The lab records the reason in `lab.run.notes`: "The 1s are rare, so the score is PR AUC, which focuses on finding them."
+* **No date.** The table has only the hour of the day. The lab splits at random, stratified so both sides keep the same share of fraud. With no date it sorts by the first column of its query and keeps 50,000 of the 51,000 rows. The notebook baseline reads the first 20,000 rows by `ROW_ID` and leaves the month out.
+* **Placeholder values.** The README lists 1,530 `Unknown Device` and 1,530 `Invalid Method` values. The lab does not clean them. Each placeholder becomes one more category value. To read the typed, cleaned view from [Prepare](/data-scientist/prepare) instead, set `USE_PREPARED = True` in `01_explore`.
+
+## Settings [#settings]
+
+Pass settings by name. An unknown name is an error.
+
+| Setting                                                     | What it does                                                                                     |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `train_pct`                                                 | The share of rows used for training, from 50 to 90. The default is 75.                           |
+| `split_method`                                              | `time`, `random` or `group`. See [Hold-out](/data-scientist/evaluate/hold-out).                  |
+| `split_group`                                               | The column whose whole groups are kept on one side, for `group`                                  |
+| `folds`                                                     | The number of cross-validation folds on the training rows. The default is 5.                     |
+| `effort`                                                    | `fast`, `balanced` (the default) or `thorough`. It sets the number of trees: 100, 200 or 400.    |
+| `max_depth`, `C`, `neighbours`, `learning_rate`, `clusters` | The settings of the models that use them                                                         |
+| `contamination`                                             | The share of rows to flag as unusual. The default is 2%. The code keeps it between 0.5% and 20%. |
+
+The full signatures are in the [model lab reference](/data-scientist/development/reference/lab).
+
+Back to [Model](/data-scientist/model). Next: [The models the lab tries](/data-scientist/model/the-models).
+
+
+# Saving, MLflow and training in the database (/data-scientist/model/saving-and-mlflow)
+
+
+
+Three things sit beside the model lab and are easy to confuse: keeping a result, the optional MLflow record, and the training that runs inside the database. The Data Scientist notebooks use the first only. The other two belong to the ML Engineer's path.
+
+## Saving a model [#saving-a-model]
+
+Nothing in the Data Scientist notebooks saves a fitted model to disk or to the database. The lab's fitted model lives in your kernel until you stop it. To keep a result, keep the numbers: the board, the importance list and the notes.
+
+The workflow log records only that a model ran, with its task, its row count and, for the small model, its score. See [The workflow log](/data-scientist/monitor/the-workflow-log).
+
+## MLflow, when it is installed [#mlflow-when-it-is-installed]
+
+MLflow is an optional record of training runs. The Data Scientist notebooks do not start MLflow runs. The runs come from the in-database training that the ML Engineer's notebooks do, described below.
+
+* `nb.use_mlflow()` sets where runs are recorded for this kernel. An empty address means the kit's own MLflow server (`exakit mlflow start`), or whatever the shell set. `nb.use_mlflow(login=True)` asks for a username and a password in a hidden box.
+* `nb.check_mlflow()` checks the client and the server. If the client is missing, it says to run `exakit update notebook`.
+* `exakit mlflow start` installs the MLflow server into the notebook environment when it is missing.
+
+The settings are listed in [Model, Langfuse and MLflow settings](/data-scientist/development/reference/setup-env).
+
+## Training inside the database (the ML Engineer's path) [#training-inside-the-database-the-ml-engineers-path]
+
+This is not a Data Scientist step, but it is where the kit's trained models come from. `nb.prepare_training(conn, ds, handoff, container=..., seed=0)` prepares in-database training from a training hand-off:
+
+* It refuses a hand-off that is stale, and a random split that nobody asked for. See [The training hand-off](/data-scientist/communicate/training-hand-off) for what a hand-off holds.
+* It creates a feature view in `STARTER_KIT`, drops features that are constant, and writes a training function that fits a logistic regression with a fixed seed.
+* It returns a plan. The caller runs `plan.create_script`, then `plan.training_sql`.
+
+It needs a Python container inside the database: `PYTHON3_ML` (`exakit udf-use default`) or `PYTHON3` (`exakit udf-setup`). Both come from the udf-devkit add-on, `exakit marketplace udf-devkit`. The [add-ons page](/kit/tools/add-ons) explains how add-ons are installed.
+
+Back to [Model](/data-scientist/model).
+
+
+# The models the lab tries (/data-scientist/model/the-models)
+
+
+
+The lab does not rely on one model. For each task it trains every model in a list on the same training rows, and it picks one. This page lists the models, the rule for the pick, and how to choose a model yourself. Every model is from scikit-learn. The key in brackets is the name you pass as `model=`.
+
+## The models the lab tries [#the-models-the-lab-tries]
+
+| Task             | Models                                                                                                                                                                                                                                                                                                                                | How the best one is picked                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `predict_yes_no` | baseline (`baseline`), logistic regression (`logistic`), logistic regression with L1 (`logistic_l1`), decision tree (`decision_tree`), random forest (`random_forest`), extra trees (`extra_trees`), gradient boosting (`boosting`), k-nearest neighbours (`knn`), naive Bayes (`naive_bayes`), linear support vector machine (`svm`) | Cross-validated ROC AUC, or PR AUC when the rarer answer is under 5%                               |
+| `predict_number` | baseline (`baseline`), linear (`linear`), ridge (`ridge`), lasso (`lasso`), decision tree, random forest, extra trees, gradient boosting, k-nearest neighbours                                                                                                                                                                        | Cross-validated R squared                                                                          |
+| `find_groups`    | k-means (`kmeans`), Gaussian mixture (`gaussian_mixture`), hierarchical (`agglomerative`)                                                                                                                                                                                                                                             | Silhouette score. If you do not set the number of groups, the lab tries 2 to 6 and keeps the best. |
+| `find_unusual`   | isolation forest (`isolation_forest`), local outlier factor (`lof`)                                                                                                                                                                                                                                                                   | No score. The share you set as `contamination` (2% by default) decides how many rows are flagged.  |
+
+## How the best one is picked [#how-the-best-one-is-picked]
+
+With `model="all"`, the lab does this:
+
+1. It scores each model by cross-validation on the training rows. The score is the metric for the task.
+2. It takes the model with the highest mean score.
+3. It goes down a list of models from simplest to most complex. The first model on that list whose score is within 0.01 of the best wins.
+
+The order is: logistic regression, linear, ridge, logistic L1, lasso, naive Bayes, decision tree, k-nearest neighbours, SVM, random forest, extra trees, gradient boosting. The baseline is not on that list. It is picked only when it has the highest score and no model on the list is within 0.01 of it.
+
+The pick is made on cross-validation. The held-out rows are scored after the pick, for reading. They do not choose the model.
+
+<Callout>
+  The 0.01 rule is a rule for choosing a simple model. It is not a test that the gap between two models is real. To judge a gap, read `cv_sd` on the board. See [Comparing models](/data-scientist/evaluate/comparing-models) on the Evaluate pages.
+</Callout>
+
+## Choose a model yourself [#choose-a-model-yourself]
+
+Pass one key to `model=`, and the lab trains that model and its baseline on the same rows:
+
+```python
+lab = nb.model_lab(connection, dataset, "predict_yes_no", model="logistic")
+```
+
+With a named model, the pick is yours: the result's `chosen_by` is `you`, and the board holds only that model and the baseline.
+
+## The settings that change the models [#the-settings-that-change-the-models]
+
+`effort` sets the number of trees for the tree models: `fast` 100, `balanced` 200 (the default) and `thorough` 400. The other settings are listed on [The model lab](/data-scientist/model/model-lab#settings). Back to [Model](/data-scientist/model).
+
+
+# Troubleshooting (/data-scientist/model/troubleshooting)
+
+
+
+Each entry quotes the message the kit prints, or describes the step that stops.
+
+<Accordions type="multiple">
+  <Accordion title="A model step is skipped">
+    The dataset has no target, or no category or entity that is free of the answer, so the baseline cannot run. The step says so. Choose a target in the column map, approve it, and run the notebook again. `nb.model_settings()` shows whether the AI steps have a model. No model is needed for the baseline or the lab.
+  </Accordion>
+
+  <Accordion title="The model lab says nothing to predict was chosen">
+    The lab was asked to predict yes or no, but the column map has no yes-or-no target. The error reads "Nothing to predict was chosen". Pick a 0 or 1 column as the target in the column map, or choose another task: predict a number, find natural groups or find unusual rows.
+  </Accordion>
+
+  <Accordion title="One side of the split has only one answer">
+    The error reads "One side of the split has only one answer, so no score can be computed". A time split can put all the 1s on one side. Change the split to `split_method="random"`, which is stratified for yes or no. See [Hold-out](/data-scientist/evaluate/hold-out).
+  </Accordion>
+
+  <Accordion title="Only a few rows with a 1 are held out">
+    The warning reads "Only N rows with a 1 are held out, so the held-out score is shaky". It appears when fewer than 30 rows with a 1 are held out. Lower `train_pct` (50 is the lowest it accepts), so more rows are held out.
+  </Accordion>
+
+  <Accordion title="No model could be trained on this data">
+    The error reads "No model could be trained on this data", and lists the reason for each model that failed. The most common cause is a dataset with almost no rows on one side of the answer. Check the split first.
+  </Accordion>
+
+  <Accordion title="No AI model is set up">
+    `nb.feature_ideas(lab, ai=True)` stops with "No AI model is set up". Run `nb.model_setup()`, or `nb.use_model(MODEL_ID, PROVIDER_BASE_URL)`. Or call `nb.feature_ideas(lab)` without `ai=True`, which needs no model.
+  </Accordion>
+
+  <Accordion title="The lab leaves out a column you expected it to use">
+    Read `lab_data.left_out`. It gives the reason for each column left out: gives the answer away, personal data, a key or identifier, free text, or marked Leave out. A column marked sensitive, or flagged by the leakage check, is not used. Change the column map if the role is wrong, and approve it again.
+  </Accordion>
+</Accordions>
+
+Back to [Model](/data-scientist/model).
 
 
 # Set up AI and Langfuse (/data-scientist/set-up/ai-and-langfuse)
@@ -5379,6 +5274,108 @@ General is ticked to begin with in the install question, and combines with the o
 * [Add-ons](/kit/tools/add-ons), with each add-on's repository and documentation.
 
 Next: [choose and change a persona](/kit/personas/choose-and-change).
+
+
+# All exakit commands (/kit/reference/commands)
+
+
+
+{/* Generated by tools/nb_docs.py from setup/help/exakit.json. Edit those, then run the tool. */}
+
+`exakit help <command>` prints a command's full reference on this computer, and `exakit catalog <word>`
+searches them.
+
+## Everyday [#everyday]
+
+| Command            | Takes                                                                   | What it does                                                                    |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `exakit status`    | `[--json]`                                                              | Is the database up and healthy?                                                 |
+| `exakit info`      | `[--json]`                                                              | Your connection details.                                                        |
+| `exakit start`     | `[<service>]`                                                           | Start the database and every add-on service, or one of them.                    |
+| `exakit stop`      | `[<service>]`                                                           | Stop the add-on services and the database, or one of them.                      |
+| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]` | Run one SQL statement, with the error translated.                               |
+| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                               | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
+| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                         | Every log the kit can show.                                                     |
+| `exakit autostart` |                                                                         | Come back automatically after a restart?                                        |
+
+## AI clients (MCP) [#ai-clients-mcp]
+
+| Command             | Takes                      | What it does                       |
+| ------------------- | -------------------------- | ---------------------------------- |
+| `exakit mcp-setup`  |                            | Connect your AI clients.           |
+| `exakit mcp-doctor` | `[clients] [--json]`       | Test and repair the AI connection. |
+| `exakit mcp-status` | `[clients] [--json \| -j]` | Show managed MCP state per client. |
+
+## External sources (virtual schemas) [#external-sources-virtual-schemas]
+
+| Command          | Takes                                                                                                                                                                                                                                                                                | What it does                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `exakit connect` | `[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F \| --password-stdin] [--storage-secret-file F] [--dry-run] [--yes] [--json]`                                                                                                                             | Query an external database from the local one (virtual schema). |
+| `exakit source`  | `list\|issues [--status S]\|catalog\|show <name>\|describe <name> [TABLE] [--ddl] [--schema S]\|check <name>\|--all\|reauth <name> [--password-file F \| --password-stdin] [--storage-secret-file F]\|refresh <name>\|disconnect <name>\|remove <name> [--dry-run] [--yes] [--json]` | List, check and manage connected external sources.              |
+
+## Personas and notebooks [#personas-and-notebooks]
+
+| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | What it does                                                                                                                                                                                      |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                       |
+| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                 |
+| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]` | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients. |
+| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                |
+
+## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
+
+| Command            | Takes                                                                                                                                          | What it does                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit mlflow`    | `start\|stop\|disable\|status\|url\|replay [action options]`                                                                                   | Start or stop the local MLflow server, show its address, or replay pending runs.                                                 |
+| `exakit udf-setup` | `[--language python\|rust] [--force] [--yes] [--json]`                                                                                         | Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).        |
+| `exakit udf-use`   | `default [--language python\|rust] [--yes] [--json] \| <container.tar.gz> [--alias NAME] [--language python\|rust] [--yes] [--json] \| --list` | Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.                         |
+| `exakit udf-build` | `<requirements.txt> [--alias <NAME>] [--yes]`                                                                                                  | Build a container with your pinned packages and install it.                                                                      |
+| `exakit udf-file`  | `<file> [<path in the bucket>]`                                                                                                                | Copy a file into BucketFS and print the path a UDF reads it from.                                                                |
+| `exakit rust-udf`  | `new <name> [--coefficients <file>] \| build <name> \| deploy <name> [--schema <SCHEMA>] [--yes] [--json]`                                     | Create, build and deploy a Rust scoring UDF from exported coefficients.                                                          |
+| `exakit model`     | `put\|inspect\|list\|rm\|prune\|template [arguments]`                                                                                          | Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template. |
+
+## Add-ons [#add-ons]
+
+| Command              | Takes                                | What it does                                                             |
+| -------------------- | ------------------------------------ | ------------------------------------------------------------------------ |
+| `exakit marketplace` | `[<addon-id>...] \| --list [--json]` | Optional add-ons: dashboards, notebooks, UDFs, dbt, scheduling and more. |
+
+## Keeping up to date [#keeping-up-to-date]
+
+| Command          | Takes                            | What it does                          |
+| ---------------- | -------------------------------- | ------------------------------------- |
+| `exakit version` | `[--json \| -j]`                 | What is installed, and what is newer. |
+| `exakit update`  | `[<component>] [--yes] [--json]` | Apply the updates that are waiting.   |
+
+## Repair and removal [#repair-and-removal]
+
+| Command                 | Takes                                                                                                                              | What it does                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `exakit preflight`      |                                                                                                                                    | Check this machine's requirements; install nothing.   |
+| `exakit repair-runtime` | `[--yes] [--json \| -j]`                                                                                                           | Rebuild a database that cannot start.                 |
+| `exakit tls-pin`        | `[--accept [--yes]] [--json \| -j]`                                                                                                | Compare or re-pin the database's TLS certificate.     |
+| `exakit migrate`        | `docker-nano [--container NAME] [--engine docker\|podman] [--dsn HOST:PORT] [--user USER] [--password-file PATH] [--yes] [--json]` | Copy an older kit's container database into this one. |
+| `exakit uninstall`      | `[<addon-id>] [--dry-run] [--yes]`                                                                                                 | Remove what the kit installed.                        |
+
+## Reference [#reference]
+
+| Command            | Takes                                                             | What it does                                                                                       |
+| ------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `exakit docs`      | `[<add-on \| command \| page \| words>] [--print] [--json \| -j]` | Open the kit's documentation in the browser: all of it, an add-on, a command, a page, or a search. |
+| `exakit guide`     |                                                                   | Friendly walkthrough of every way to connect.                                                      |
+| `exakit skills`    | `[--json \| -j]`                                                  | List the AI skills the kit carries.                                                                |
+| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]`       | This screen.                                                                                       |
+| `exakit catalog`   | `[search] [--json \| -j]`                                         | Browse or search every command.                                                                    |
+| `exakit whats-new` | `[<version>]`                                                     | What changed in this kit version.                                                                  |
+
+## Other [#other]
+
+| Command                 | Takes                    | What it does                                               |
+| ----------------------- | ------------------------ | ---------------------------------------------------------- |
+| `exakit mcp-remove`     | `<client> [<client>...]` | Remove the kit's MCP entries from named AI clients.        |
+| `exakit skills-install` |                          | Re-place the AI skills the kit copy carries (repair only). |
+| `exakit upgrade-kit2`   |                          | Add the Kit 2 trust assets to this install (internal).     |
+| `exakit rollback-kit2`  |                          | Remove exactly what upgrade-kit2 added (internal).         |
 
 
 # Column maps (/kit/data/column-maps)

@@ -26,6 +26,7 @@ const ICON = {
   check: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   warn: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M8 2.2l6.2 11H1.8z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M8 6.5v3.2M8 11.6v.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
   info: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="8" cy="8" r="6.2" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M8 7.2v4M8 4.9v.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+  chevron: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   arrow: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M3 8h9.5M8.5 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   refresh: '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M13 8a5 5 0 1 1-1.5-3.6M13 2.5v3h-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>',
 };
@@ -767,9 +768,51 @@ function render({ model, el }) {
       items.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label)));
   }
 
+  // The kit's own dropdown: a button that shows the choice, and its list opened in place, under it - inside the
+  // card, pushing what follows down, so it never covers the screen or is cut off by the cell. A long list has a
+  // box to narrow it; an option can carry a second line (hint) and sit under a group heading.
+  function dropdown(f, onPick) {
+    const options = f.options || [];
+    const now = options.find((o) => String(o.value) === String(st.fields[f.id]));
+    const open = ui.openDrop === f.id && !ui.busy;
+    const toggle = (e) => { e.preventDefault(); ui.openDrop = open ? null : f.id; draw(); };
+    const head = h("button", { type: "button", class: `guide-dd-btn${open ? " is-open" : ""}${now ? "" : " is-empty"}`, disabled: !!ui.busy,
+      "aria-haspopup": "listbox", "aria-expanded": open ? "true" : "false", "aria-label": f.label || null, onClick: toggle,
+      onKeydown: (e) => { if (e.key === "Escape" && open) { ui.openDrop = null; draw(); } } },
+      h("span", { class: "guide-dd-now" }, now ? now.label : (f.placeholder || "Choose…")),
+      now && now.hint ? h("span", { class: "guide-dd-nowhint" }, now.hint) : null, icon("chevron"));
+    if (!open) return h("div", { class: "guide-dd" }, head);
+    const rows = [];
+    let group = null;
+    options.forEach((o) => {
+      if (o.group && o.group !== group) rows.push(h("div", { class: "guide-dd-group" }, o.group));
+      group = o.group || null;
+      const on = now === o;
+      rows.push(h("button", { type: "button", role: "option", "aria-selected": on ? "true" : "false", disabled: o.disabled ? true : null,
+        class: `guide-dd-opt${on ? " is-on" : ""}${o.depth ? " guide-dd-depth-" + o.depth : ""}`, "data-find": `${o.label} ${o.hint || ""}`.toLowerCase(),
+        onClick: (e) => { e.preventDefault(); ui.openDrop = null; st.fields[f.id] = o.value; onPick(o.value); } },
+        h("span", { class: "guide-dd-label" }, o.label), o.hint ? h("span", { class: "guide-dd-hint" }, o.hint) : null));
+    });
+    const list = h("div", { class: "guide-dd-list", role: "listbox", "aria-label": f.label || null }, rows);
+    // The box narrows the list in place (no redraw: the box keeps its cursor).
+    const find = options.length > 8 ? h("input", { class: "guide-input guide-dd-find", type: "text", placeholder: "Type to narrow the list", spellcheck: "false",
+      "aria-label": "Narrow the list", onInput: (e) => {
+        const q = e.target.value.trim().toLowerCase();
+        rows.forEach((r) => { if (r.dataset.find !== undefined) r.hidden = !!q && !r.dataset.find.includes(q); else r.hidden = !!q; });
+      }, onKeydown: (e) => { if (e.key === "Escape") { ui.openDrop = null; draw(); } } }) : null;
+    return h("div", { class: "guide-dd is-open" }, head, h("div", { class: "guide-dd-panel" }, find, list));
+  }
+
   function field(f) {
-    if (st.fields[f.id] === undefined) st.fields[f.id] = f.value ?? "";
+    // sync: the field shows what the card says (a pick the card answered, whose options followed another pick).
+    if (st.fields[f.id] === undefined || f.sync) st.fields[f.id] = f.value ?? "";
     if (!shown(f.show_if)) return null;
+    // group: fields side by side (a form's short answers, two to a row); heading: a form's section title.
+    if (f.type === "group") {
+      const inner = (f.fields || []).map(field).filter(Boolean);
+      return inner.length ? h("div", { class: `guide-formgrid guide-formgrid-${f.cols || 2}` }, inner) : null;
+    }
+    if (f.type === "heading") return h("div", { class: "guide-form-heading" }, f.v, f.sub ? h("span", { class: "guide-muted guide-small" }, f.sub) : null);
     if (f.type === "note") return h("div", { class: "guide-field" }, h("p", { class: "guide-p guide-muted guide-field-note" }, f.v),
       (f.help || []).length ? h("span", { class: "guide-field-help" }, f.help.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label))) : null);
     // picks: a list of ticks; the field's value is the list of the ticked options' values.
@@ -786,16 +829,6 @@ function render({ model, el }) {
           } }),
           h("span", {}, o.label, o.hint ? h("span", { class: "guide-muted guide-small" }, ` · ${o.hint}`) : null)))));
     }
-    const opt = (o) => h("option", { value: o.value, selected: String(st.fields[f.id]) === String(o.value) ? "selected" : null }, o.hint ? `${o.label} · ${o.hint}` : o.label);
-    const grouped = () => {
-      const out = [], groups = new Map();
-      (f.options || []).forEach((o) => {
-        if (!o.group) { out.push(opt(o)); return; }
-        if (!groups.has(o.group)) { const g = h("optgroup", { label: o.group }); groups.set(o.group, g); out.push(g); }
-        groups.get(o.group).appendChild(opt(o));
-      });
-      return out;
-    };
     if (f.type === "range") {
       return h("label", { class: "guide-field" }, h("span", {}, `${f.label}: ${st.fields[f.id]}${f.unit || ""}`),
         h("input", { class: "guide-range", type: "range", min: String(f.min), max: String(f.max), step: String(f.step || 1), value: String(st.fields[f.id]),
@@ -819,24 +852,32 @@ function render({ model, el }) {
           "aria-label": typing ? "Pick from the list" : "Type your own value", disabled: !!ui.busy,
           onClick: (e) => { e.preventDefault(); st.fields[`${f.id}:typing`] = !typing; draw(); } }, typing ? "▾" : "✎")
       : null;
+    // send_on_change: the card answers a pick by itself (the next fields follow the choice). On a text box it
+    // answers what was pasted or typed once the box is left - unless a button was pressed meanwhile (its own
+    // action reads the box).
+    const later = () => setTimeout(() => {
+      if (!ui.busy && String(st.fields[f.id] || "").trim() && st.fields[`${f.id}:sent`] !== st.fields[f.id]) {
+        st.fields[`${f.id}:sent`] = st.fields[f.id];
+        send(f.send_on_change, { [f.id]: st.fields[f.id] }, { noSecret: true });
+      }
+    }, 250);
     const input = f.type === "select" && !typing
-      ? h("select", { class: "guide-select", disabled: !!ui.busy, onChange: (e) => {
-          st.fields[f.id] = e.target.value;
-          // send_on_change: the card answers a pick by itself (the next step's fields follow the choice)
-          if (f.send_on_change) send(f.send_on_change, { [f.id]: e.target.value }, { noSecret: true }); else draw();
-        } }, grouped())
+      ? dropdown(f, (value) => { if (f.send_on_change) send(f.send_on_change, { ...collect(), [f.id]: value }, { noSecret: true }); else draw(); })
       : f.type === "number"
       ? h("input", { class: "guide-input guide-input-num", type: "text", inputmode: "decimal", value: st.fields[f.id], placeholder: f.placeholder || "", disabled: !!ui.busy,
           onInput: (e) => { st.fields[f.id] = e.target.value; } })
       : h("input", { class: "guide-input", type: f.type === "password" ? "password" : "text", value: st.fields[f.id],
           placeholder: f.placeholder || "", spellcheck: "false", autocomplete: f.type === "password" ? "new-password" : null,
-          disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = e.target.value; } });
+          disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = e.target.value; },
+          onChange: f.send_on_change && f.type !== "password" ? later : null,
+          onPaste: f.send_on_change && f.type !== "password" ? later : null });
     if (f.type === "password") st.secret.add(f.id);
     // help: links under the field - "How do I get this?" to the kit's own docs, the provider's page - each in a new tab.
     const help = (f.help || []).length
       ? h("span", { class: "guide-field-help" }, f.help.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label)))
       : null;
-    return h("label", { class: "guide-field" }, h("span", {}, f.label),
+    // A dropdown is a group of buttons, not one control: no <label> around it (a click on a label presses its first button).
+    return h(f.type === "select" && !typing ? "div" : "label", { class: `guide-field${f.wide ? " guide-field-wide" : ""}` }, h("span", {}, f.label),
       pencil ? h("span", { class: "guide-field-edit" }, input, pencil) : input, help);
   }
 
@@ -980,6 +1021,10 @@ function render({ model, el }) {
       draw();
     }
   };
+  // A press anywhere outside an open dropdown closes it.
+  root.ownerDocument.addEventListener("mousedown", (e) => {
+    if (ui.openDrop && !(e.target.closest && e.target.closest(".guide-dd"))) { ui.openDrop = null; draw(); }
+  });
   model.on("change:blocks", onBlocks);
   model.on("msg:custom", onMsg);
   draw();
