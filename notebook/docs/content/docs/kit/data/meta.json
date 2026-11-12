@@ -6,6 +6,7 @@
     "load-data",
     "column-maps",
     "semantic-views",
+    "semantic-fusion",
     "run-sql"
   ]
 }

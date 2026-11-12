@@ -12,6 +12,7 @@
     - [Load data](/kit/data/load-data): Load a kit dataset, one file or a whole folder with exakit data-load, and what happens when you run it again.
     - [Column maps](/kit/data/column-maps): Say what each column of a table means with exakit describe - draft, correct, approve, and see every version.
     - [Semantic views](/kit/data/semantic-views): The kit's semantic layer is Exasol Semantic Views - one model per schema from your approved column maps, or one model across any number of sources, kept current.
+    - [Semantic fusion](/kit/data/semantic-fusion): Several data sources, one meaning, no copies - how the kit joins sources where they live, puts a semantic model over them, and turns it into answers and dashboards.
     - [Run SQL](/kit/data/run-sql): Run one statement from the terminal with exakit sql, read-only unless you say otherwise.
   - Tools
     - [Add-ons](/kit/tools/add-ons): Optional tools the kit can install, start, update and remove - the marketplace, with each add-on's repository and documentation.
