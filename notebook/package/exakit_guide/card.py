@@ -201,10 +201,24 @@ class Screen:
         self.ran.extend(line for line in dict.fromkeys(new) if line not in self.ran)   # a card's code once each
         return new
 
+    # help: the links under this card's title, as (label, "page#heading") into the kit's documentation - what a step
+    # does behind the scenes, how the data is cleaned, where a key comes from - each opening that very section.
+    help: tuple[tuple[str, str], ...] = ()
+
+    def _add_help(self, blocks: list[dict]) -> None:
+        if not self.help:
+            return
+        head = next((b for b in blocks if b.get("t") in ("head", "home_head")), None)
+        if head is None or "help" in head:
+            return
+        links = [{"label": label, "href": _cached_link(target)} for label, target in self.help]
+        head["help"] = [link for link in links if link["href"]]
+
     def refresh(self) -> None:
         mark = self._code_mark()
         try:
             blocks = self.build()
+            self._add_help(blocks)
         except Exception as exc:  # never leave a blank card
             _logger().error("build failed: %s\n%s", exc, traceback.format_exc())
             blocks = [{"t": "msg", "kind": "error",
@@ -341,6 +355,27 @@ def _docs_url(page: str) -> str:
         return found if found and "?q=" not in found else nb.docs().url
     except Exception:
         return ""
+
+
+def doc_link(target: str) -> str:
+    """The kit's documentation at a page and, after #, a heading on it ("set-up/ai-and-langfuse#get-langfuse"):
+    the link a field's "How do I get this?" opens. Empty when the kit copy has no documentation."""
+    page, _, anchor = str(target or "").partition("#")
+    url = _docs_url(page)
+    if not url:
+        return ""
+    found_page = url.split("?", 1)[0].rstrip("/").endswith("/" + page.strip("/")) if page else True
+    return url + (f"#{anchor}" if anchor and found_page else "")
+
+
+_LINKS: dict[str, str] = {}
+
+
+def _cached_link(target: str) -> str:
+    """doc_link, once per target and kernel (it may start the documentation's server)."""
+    if target not in _LINKS:
+        _LINKS[target] = doc_link(target)
+    return _LINKS[target]
 
 
 def mark(screen: "Screen", docs: str = "") -> "Screen":

@@ -3,6 +3,7 @@ import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 import { Accordion, Accordions } from 'fumadocs-ui/components/accordion';
 import type { MDXComponents } from 'mdx/types';
+import { Flow, StageMap, StageNav } from './workflow';
 
 export function getMDXComponents(components?: MDXComponents) {
   return {
@@ -14,6 +15,9 @@ export function getMDXComponents(components?: MDXComponents) {
     Steps,
     Accordion,
     Accordions,
+    Flow,
+    StageMap,
+    StageNav,
     ...components,
   } satisfies MDXComponents;
 }

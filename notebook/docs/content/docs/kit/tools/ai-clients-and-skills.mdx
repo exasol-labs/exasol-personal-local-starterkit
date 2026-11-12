@@ -43,7 +43,7 @@ Skills update with the kit, so a new skill reaches every installed kit through `
 
 - It reads through the read-only user. It cannot change your data.
 - It reads the approved [column maps](/kit/data/column-maps), so it works from the roles you approved.
-- Rows are not sent to a model by the kit's notebooks unless you turn an AI step on. See [AI and tracing](/data-scientist/concepts/ai-and-tracing).
+- The notebooks send a model names, types, notes and a column's most frequent values for most AI steps. One step sends row text: the themes step in Explore (`nb.themes`) sends the text column of sampled rows, up to 600 characters each, to sort them into themes. Every AI step is off until you set a model up. See [What goes to a model](/security/what-goes-to-a-model) and [AI and tracing](/data-scientist/set-up/ai-and-langfuse).
 
 ## From a notebook
 
@@ -51,3 +51,9 @@ Skills update with the kit, so a new skill reaches every installed kit through `
 nb.ai_clients()                # the clients the kit can connect, and which are connected
 nb.exakit("mcp-doctor")        # check the connection
 ```
+
+## Further reading
+
+- [Exasol MCP server documentation](https://exasol.github.io/mcp-server/main/index.html), and its [repository](https://github.com/exasol/mcp-server). The kit runs this server beside the database and copies its skills.
+- [Privileges](https://docs.exasol.com/db/latest/database_concepts/privileges.htm) and [GRANT](https://docs.exasol.com/db/latest/sql/grant.htm), the rules behind the read-only user.
+- [AI clients and the read-only user](/security/ai-clients), the security view of the same connection, with its limits.

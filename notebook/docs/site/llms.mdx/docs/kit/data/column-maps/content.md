@@ -2,7 +2,7 @@
 
 
 
-A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Column map and approval](/data-scientist/concepts/descriptor).
+A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Column map and approval](/data-scientist/explore).
 
 ## Draft [#draft]
 
@@ -83,4 +83,4 @@ draft.slot(target="CANCELLED")
 dataset = draft.approve()
 ```
 
-See [Review and approve the column map](/data-scientist/guides/approve-column-map).
+See [Review and approve the column map](/data-scientist/explore).

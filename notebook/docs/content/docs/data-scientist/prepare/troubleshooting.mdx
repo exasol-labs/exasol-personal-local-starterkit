@@ -1,0 +1,87 @@
+---
+title: Troubleshooting
+description: What each data-check finding means, why a joined or typed view is not created, and how to see the SQL that ran.
+---
+
+Each entry starts with the finding or symptom you see. Find it, then read the fix.
+
+<Accordions type="multiple">
+
+<Accordion title="Does preparing the data change my table?">
+
+No. The checks only read. The joined view and the typed view are views in `EXAKIT_PREPARED`, and they are created only when you ask.
+
+</Accordion>
+
+<Accordion title="A finding says repeated key or repeated id">
+
+One identifier repeats in some rows. If one row should be one value, those rows count twice. Count distinct values, or keep one row per value. If the repeats are correct, for example an order with several lines, keep the data as it is and say so in your notes.
+
+</Accordion>
+
+<Accordion title="A finding says exact copies">
+
+Some rows copy another row in every column except the key. They count twice. Drop them before you count. The typed view can drop them for you when you create it.
+
+</Accordion>
+
+<Accordion title="A finding says empty cells">
+
+A column has blank values. An average leaves those rows out, and a grouping puts them in a group of their own. Decide whether a blank means zero, not known, or not applicable. The typed view turns a blank into `NULL`.
+
+</Accordion>
+
+<Accordion title="A finding says placeholder">
+
+A value such as `Unknown Device` looks like a category and means "not known". Treat it as empty. The typed view turns it into `NULL` for you, when the check can list its values.
+
+</Accordion>
+
+<Accordion title="A finding says rare outcome">
+
+The target is 1 in less than 10% of rows, or 0 in less than 10%. A model that always gives the common answer is right most of the time. Judge a model by a ranking score, ROC AUC or PR AUC, or by the baseline, and not by accuracy. The lab uses PR AUC when the rarer answer is under 5% of rows.
+
+</Accordion>
+
+<Accordion title="A column is flagged as giving the answer away">
+
+This is a warning, not an error. Read the column's values. If the column is written after the outcome, leave it out of the model, as the model does. If it is not, keep it in the map and say why it looks perfect. For the rule, see [Columns that give the answer away](/data-scientist/prepare/leakage).
+
+</Accordion>
+
+<Accordion title="The joined view says there is nothing to join">
+
+Your table links to no other table in its schema. The schema map shows which links the search found. To add a link the search missed, use `schema_map.link(...)`. A link needs every value of the column in the other table's key, with at most 0.1% missing. A name alone never makes a link.
+
+</Accordion>
+
+<Accordion title="The typed view says the table needs no typed view">
+
+Every column already has its type, and nothing needs cleaning. That is the right result. No view is created.
+
+</Accordion>
+
+<Accordion title="A code column stayed text">
+
+The typed view keeps a column named like a code as text, even when its values are digits. A postal code, a phone number and a SKU are names, not quantities. A number with a leading zero also stays text, so no zero is lost.
+
+</Accordion>
+
+<Accordion title="A column name has spaces or small letters">
+
+The kit's queries cannot read such names without quotes. `nb.use_table` then creates a view with plain names in `EXAKIT_PREPARED`, and uses it. The message says so in one line. The table itself is unchanged. See [Prepared views](/data-scientist/prepare/prepared-views).
+
+</Accordion>
+
+<Accordion title="I want to see the SQL that ran">
+
+```python
+nb.show_sql()                              # the SQL the last query ran
+nb.workflow_log(nb.current_workflow())     # everything this workflow did
+```
+
+</Accordion>
+
+</Accordions>
+
+Back to [Prepare](/data-scientist/prepare).

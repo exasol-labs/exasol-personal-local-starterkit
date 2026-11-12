@@ -254,7 +254,7 @@ function render({ model, el }) {
           b.brand !== undefined ? null : h("h2", { class: "guide-title" }, "Your kit"),     // the mark is the heading
           h("div", { class: `guide-summary guide-summary-${b.state}` },
             b.state === "loading" ? h("span", { class: "guide-spinner" }) : icon(b.state === "ok" ? "check" : b.state === "bad" ? "warn" : "info"),
-            b.summary)),
+            b.summary), helpLinks(b.help)),
         h("div", { class: "guide-head-actions" },
           h("div", { class: "guide-switch", role: "group", "aria-label": "View" },
             h("button", { type: "button", class: guided ? "is-on" : "", "aria-pressed": guided ? "true" : "false", onClick: () => setMode("guided") }, "Guided"),
@@ -332,7 +332,8 @@ function render({ model, el }) {
       const guided = getMode() === "guided";
       return h("div", { class: "guide-head" },
         h("div", {}, b.brand !== undefined ? brand(b.brand, b.docs) : null, b.kicker ? h("div", { class: "guide-kicker" }, b.kicker) : null,
-          h("h2", { class: "guide-title guide-title-sm" }, b.title), b.sub ? h("p", { class: "guide-sub" }, b.sub) : null),
+          h("h2", { class: "guide-title guide-title-sm" }, b.title), b.sub ? h("p", { class: "guide-sub" }, b.sub) : null,
+          helpLinks(b.help)),
         h("div", { class: "guide-switch", role: "group", "aria-label": "View" },
           h("button", { type: "button", class: guided ? "is-on" : "", onClick: () => setMode("guided") }, "Guided"),
           h("button", { type: "button", class: !guided ? "is-on" : "", onClick: () => setMode("code") }, "Code")));
@@ -734,10 +735,18 @@ function render({ model, el }) {
   };
   const block = (b) => (B[b.t] ? B[b.t](b) : null);
 
+  // A card's help: links to the kit's own docs, each to the section that explains this step (in a new tab).
+  function helpLinks(items) {
+    if (!items || !items.length) return null;
+    return h("div", { class: "guide-help" }, h("span", { class: "guide-help-label" }, "Learn more:"),
+      items.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label)));
+  }
+
   function field(f) {
     if (st.fields[f.id] === undefined) st.fields[f.id] = f.value ?? "";
     if (!shown(f.show_if)) return null;
-    if (f.type === "note") return h("p", { class: "guide-p guide-muted guide-field-note" }, f.v);
+    if (f.type === "note") return h("div", { class: "guide-field" }, h("p", { class: "guide-p guide-muted guide-field-note" }, f.v),
+      (f.help || []).length ? h("span", { class: "guide-field-help" }, f.help.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label))) : null);
     const opt = (o) => h("option", { value: o.value, selected: String(st.fields[f.id]) === String(o.value) ? "selected" : null }, o.hint ? `${o.label} · ${o.hint}` : o.label);
     const grouped = () => {
       const out = [], groups = new Map();
@@ -753,8 +762,30 @@ function render({ model, el }) {
         h("input", { class: "guide-range", type: "range", min: String(f.min), max: String(f.max), step: String(f.step || 1), value: String(st.fields[f.id]),
           disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = Number(e.target.value); draw(); } }));
     }
-    const input = f.type === "select"
-      ? h("select", { class: "guide-select", disabled: !!ui.busy, onChange: (e) => { st.fields[f.id] = e.target.value; draw(); } }, grouped())
+    // options_from: the options follow another field ({field, map: {its value: [options]}}), e.g. a model's effort
+    // levels; none for the value shown: the field's empty note instead, and its value is cleared.
+    if (f.options_from) {
+      const picked = (f.options_from.map || {})[String(st.fields[f.options_from.field] ?? "")] || [];
+      f = { ...f, options: picked };
+      if (!picked.length) {
+        st.fields[f.id] = "";
+        return f.empty ? h("p", { class: "guide-p guide-muted guide-field-note" }, f.empty) : null;
+      }
+      if (!picked.some((o) => String(o.value) === String(st.fields[f.id]))) st.fields[f.id] = picked[0].value;
+    }
+    // editable: a pencil beside a dropdown switches it to a box to type any value (and back).
+    const typing = f.type === "select" && f.editable && st.fields[`${f.id}:typing`];
+    const pencil = f.type === "select" && f.editable
+      ? h("button", { type: "button", class: "guide-pencil", title: typing ? "Pick from the list" : "Type your own value",
+          "aria-label": typing ? "Pick from the list" : "Type your own value", disabled: !!ui.busy,
+          onClick: (e) => { e.preventDefault(); st.fields[`${f.id}:typing`] = !typing; draw(); } }, typing ? "▾" : "✎")
+      : null;
+    const input = f.type === "select" && !typing
+      ? h("select", { class: "guide-select", disabled: !!ui.busy, onChange: (e) => {
+          st.fields[f.id] = e.target.value;
+          // send_on_change: the card answers a pick by itself (the next step's fields follow the choice)
+          if (f.send_on_change) send(f.send_on_change, { [f.id]: e.target.value }, { noSecret: true }); else draw();
+        } }, grouped())
       : f.type === "number"
       ? h("input", { class: "guide-input guide-input-num", type: "text", inputmode: "decimal", value: st.fields[f.id], placeholder: f.placeholder || "", disabled: !!ui.busy,
           onInput: (e) => { st.fields[f.id] = e.target.value; } })
@@ -762,7 +793,12 @@ function render({ model, el }) {
           placeholder: f.placeholder || "", spellcheck: "false", autocomplete: f.type === "password" ? "new-password" : null,
           disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = e.target.value; } });
     if (f.type === "password") st.secret.add(f.id);
-    return h("label", { class: "guide-field" }, h("span", {}, f.label), input);
+    // help: links under the field - "How do I get this?" to the kit's own docs, the provider's page - each in a new tab.
+    const help = (f.help || []).length
+      ? h("span", { class: "guide-field-help" }, f.help.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label)))
+      : null;
+    return h("label", { class: "guide-field" }, h("span", {}, f.label),
+      pencil ? h("span", { class: "guide-field-edit" }, input, pencil) : input, help);
   }
 
   // What the kit printed for a row's action: open by itself when the command failed, so the reason is read without a

@@ -1,0 +1,15 @@
+{
+  "title": "Evaluate",
+  "pages": [
+    "index",
+    "hold-out",
+    "metrics",
+    "roc-auc",
+    "rare-answers",
+    "leakage",
+    "comparing-models",
+    "readout-notes",
+    "checks",
+    "troubleshooting"
+  ]
+}

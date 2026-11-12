@@ -1,0 +1,39 @@
+---
+title: A training hand-off that went stale
+description: How the kit detects that a training hand-off no longer matches the column map or the data, and how to write a new one.
+---
+
+## A training hand-off that went stale
+
+The training hand-off is written with `nb.write_handoff` on the ML Engineer's side, and read by the training step. A hand-off is a snapshot. When the column map or the rows change after it was written, the hand-off is stale. The kit can tell you that, and refuses to train on it.
+
+<Flow
+  caption="A training hand-off that went stale"
+  steps={[
+    { title: "You write a training hand-off", text: "The feature view, the target and the split, in one file", code: "nb.write_handoff(conn, ds)", tone: "you" },
+    { title: "The data or the column map changes", text: "A new version, or new rows", tone: "db" },
+    { title: "The kit compares them", text: "The descriptor version and digest first, then the data digest", code: "nb.handoff_is_stale(conn, handoff, ds)", tone: "kit" },
+    { title: "It names what changed", text: "The line says what changed, and the fix", tone: "kit" },
+    { title: "You write it again", text: "A new file, and the old one stays", code: "nb.write_handoff(conn, ds)", tone: "you" },
+  ]}
+/>
+
+## What the check looks at
+
+`nb.handoff_is_stale(conn, handoff, ds)` returns `None` when the hand-off still describes the dataset and its data. Otherwise it returns one line that says what changed and what to do. It checks, in this order:
+
+- **The hand-off is for another descriptor.** The line names both ids.
+- **The descriptor's version changed**, or its digest did. The line gives both versions, such as v2 to v3.
+- **The data no longer matches.** With a connection, the check compares the data digest. A mismatch means the rows or the dates differ.
+
+## The fix
+
+The fix in every case is the same: write it again with `nb.write_handoff(conn, ds)`. The old file stays where it is. The file name carries the descriptor version, so the new one is saved beside the old one.
+
+The training step on the ML Engineer's side refuses a stale hand-off and prints the same line. Check the line first, so you know whether the change was to the column map or to the data.
+
+## The hand-off bundle has no such check
+
+The hand-off bundle, from [The hand-off bundle](/data-scientist/communicate/hand-off-bundle), is a snapshot too. It has no staleness check. Write a new one when the work changes.
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [Tracing model calls](/data-scientist/monitor/tracing).

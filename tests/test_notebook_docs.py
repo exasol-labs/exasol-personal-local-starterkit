@@ -128,7 +128,8 @@ class PagesTest(unittest.TestCase):
         self.assertGreaterEqual(len(named), 5, "start, understand, explore, ask and share each name their page")
         for page in named:
             with self.subTest(page=page):
-                self.assertTrue((CONTENT / tool.SECTION / f"{page}.mdx").is_file())
+                self.assertTrue((CONTENT / tool.SECTION / f"{page}.mdx").is_file()
+                                or (CONTENT / tool.SECTION / page / "index.mdx").is_file())
 
     def test_no_page_shows_a_password_or_a_key(self):
         for path in pages():
@@ -280,6 +281,45 @@ class ServedDocsTest(unittest.TestCase):
         docs_module.site_dir = lambda: None
         with self.assertRaisesRegex(RuntimeError, "exakit update notebook"):
             nb_docs()
+
+
+class CardLinksTest(unittest.TestCase):
+    """Every "Learn more" link of a guided card, every field's help link and every notebook's Docs button opens a page
+    the documentation has, at a heading that page has: a renamed heading or a moved page fails here, not for a reader."""
+
+    SECTION = ROOT / "notebook" / "docs" / "content" / "docs" / "data-scientist"
+
+    def _page(self, path: str):
+        for candidate in (self.SECTION / f"{path}.mdx", self.SECTION / path / "index.mdx"):
+            if candidate.is_file():
+                return candidate.read_text(encoding="utf-8")
+        return None
+
+    @staticmethod
+    def _anchors(text: str) -> set:
+        return {re.sub(r"[^\w\- ]", "", h.strip().lower()).replace(" ", "-")
+                for h in re.findall(r"^#{2,4} (.+)$", text, re.M)}
+
+    def test_every_link_lands_on_a_page_and_a_heading(self):
+        targets = set()
+        for screen in (ROOT / "notebook/package/exakit_guide/screens").glob("*.py"):
+            text = screen.read_text(encoding="utf-8")
+            targets |= set(re.findall(r"\('[^']+', '([a-z0-9/#-]+)'\)", text))       # help = (("label", "page#heading"), ...)
+            targets |= set(re.findall(r'doc_link\(f?"([a-z0-9/#-]+)"\)', text))
+            targets |= set(re.findall(r'docs="([a-z0-9/#-]+)"', text))
+        targets |= set(re.findall(r'docs="([a-z0-9/#-]+)"', (ROOT / "notebook/package/exakit_guide/__init__.py").read_text()))
+        sys.path.insert(0, str(ROOT / "notebook" / "package"))
+        from exakit_nb.providers import DOCS_PAGE, model_providers
+
+        targets |= {f"{DOCS_PAGE}#{p['docs_anchor']}" for p in model_providers()}
+        self.assertGreater(len(targets), 30)
+        for target in sorted(targets):
+            page, _, anchor = target.partition("#")
+            with self.subTest(target=target):
+                text = self._page(page)
+                self.assertIsNotNone(text, f"no page {page}")
+                if anchor:
+                    self.assertIn(anchor, self._anchors(text), f"{page} has no heading for #{anchor}")
 
 
 if __name__ == "__main__":

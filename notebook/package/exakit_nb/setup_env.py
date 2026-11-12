@@ -57,12 +57,21 @@ def _secret(name: str, prompt: str, ask: Ask, notes: list[str]) -> None:
 
 
 def use_model(model_id: str = "", provider_base_url: str = "", langfuse_base_url: str = "", *,
-              ask: Ask | None = None, remember: bool = False) -> dict:
+              effort: str | None = None, ask: Ask | None = None, remember: bool = False) -> dict:
     """Your model and Langfuse tracing for this kernel. ``model_id`` and ``provider_base_url`` (a Chat Completions base
-    URL) set the model and ask for its API key (Enter for none: a local server); ``langfuse_base_url`` turns tracing on
-    and asks for its two keys. Prints what is in use, never a key; returns that summary."""
+    URL) set the model and ask for its API key (Enter for none: a local server); ``effort`` sets how hard a reasoning
+    model thinks ("low", "medium", "high"; "" for the model's default; nb.effort_levels says which a model takes);
+    ``langfuse_base_url`` turns tracing on and asks for its two keys. Prints what is in use, never a key; returns that summary."""
     ask = ask or getpass.getpass
     notes: list[str] = []
+    if effort is not None:
+        chosen = str(effort).strip().lower()
+        if chosen and chosen not in model_config.EFFORTS:
+            raise ValueError(f"effort must be one of {', '.join(model_config.EFFORTS)}, or '' for the model's default.")
+        if chosen:
+            os.environ[model_config.EFFORT] = chosen
+        else:
+            os.environ.pop(model_config.EFFORT, None)
     if (model_id or "").strip() or (provider_base_url or "").strip():
         _put(model_config.MODEL_ID, model_id)
         if _put(model_config.BASE_URL, provider_base_url):
@@ -84,7 +93,7 @@ def use_model(model_id: str = "", provider_base_url: str = "", langfuse_base_url
             _secret(LANGFUSE_PUBLIC_KEY, "Langfuse public key: ", ask, notes)
             _secret(LANGFUSE_SECRET_KEY, "Langfuse secret key (hidden): ", ask, notes)
     if remember and not notes:
-        _remember(model=bool((model_id or "").strip() or (provider_base_url or "").strip()),
+        _remember(model=bool((model_id or "").strip() or (provider_base_url or "").strip() or effort is not None),
                   langfuse=bool((langfuse_base_url or "").strip()))
         notes_saved = "Saved for every notebook of this kit (readable by you only); forget_model() deletes it."
     else:
@@ -98,10 +107,11 @@ def use_model(model_id: str = "", provider_base_url: str = "", langfuse_base_url
 # -- remembered for every notebook (opt-in: use_model(..., remember=True)) --------------------------------------------
 _REMEMBERED = {  # file in the kit's credentials folder -> the variable it holds
     "notebook_model_id": model_config.MODEL_ID, "notebook_model_base_url": model_config.BASE_URL,
-    "notebook_model_api_key": model_config.API_KEY, "notebook_langfuse_base_url": LANGFUSE_BASE_URL,
+    "notebook_model_api_key": model_config.API_KEY, "notebook_model_effort": model_config.EFFORT,
+    "notebook_langfuse_base_url": LANGFUSE_BASE_URL,
     "notebook_langfuse_public_key": LANGFUSE_PUBLIC_KEY, "notebook_langfuse_secret_key": LANGFUSE_SECRET_KEY,
 }
-_MODEL_FILES = ("notebook_model_id", "notebook_model_base_url", "notebook_model_api_key")
+_MODEL_FILES = ("notebook_model_id", "notebook_model_base_url", "notebook_model_api_key", "notebook_model_effort")
 _LANGFUSE_FILES = ("notebook_langfuse_base_url", "notebook_langfuse_public_key", "notebook_langfuse_secret_key")
 
 
@@ -161,7 +171,8 @@ def _model_summary(notes: list[str]) -> dict:
         problem = None
     if config:
         key = "API key set" if config.api_key else "no API key"
-        model_line = f"model: {config.model_id} at {config.base_url} ({key})."
+        effort = os.environ.get(model_config.EFFORT, "").strip()
+        model_line = f"model: {config.model_id} at {config.base_url} ({key}{', effort ' + effort if effort else ''})."
     elif problem:
         model_line = f"model: not usable - {problem}."
     else:

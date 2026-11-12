@@ -3,7 +3,7 @@
     nb.docs()                   # the documentation (this notebook's persona section), shown under the cell
     nb.docs("descriptor")       # search it for a word
     nb.docs(nb.describe)        # one command's page (or nb.docs("describe"))
-    nb.docs("concepts/descriptor")   # one page, by its address
+    nb.docs("explore")              # one page, by its address
     nb.docs(browser=True)       # in a browser tab instead
 
 The documentation is a site of plain files the kit ships (``notebook/docs/site`` in the kit copy): pages, styles and
@@ -243,7 +243,7 @@ def docs(what: Any = None, *, height: int = 640, browser: bool = False) -> Docs:
     """Open the notebooks' documentation: all of it, one command's page, one page, or a search.
 
     ``what`` is nothing (the section of the persona whose notebook this is, else the start page), a helper or its name (``nb.describe``, ``"describe"``: that command's page),
-    a page's address (``"concepts/descriptor"``), or any other words (searched, typos forgiven). The result shows
+    a page's address (``"explore"``, ``"set-up/ai-and-langfuse"``), or any other words (searched, typos forgiven). The result shows
     under the cell in a frame ``height`` pixels tall; ``browser=True`` opens a browser tab too. Served from this
     computer only, from files the kit ships: nothing is fetched from the internet."""
     root = site_dir()

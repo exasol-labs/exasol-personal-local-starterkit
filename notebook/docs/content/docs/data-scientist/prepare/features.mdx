@@ -1,0 +1,56 @@
+---
+title: Features
+description: What a feature is, the rule-based ideas the kit proposes, how each idea is tested on held-out rows, and how to keep one for the model.
+---
+
+A **feature** is a new input for a model, built from the columns you have. For example, "how long ago the order date was" is a feature built from one column. The kit proposes feature ideas from your data, and it tests each one before you keep it. The model is trained in the [Model](/data-scientist/model) stage. These helpers belong to the model lab, and you can call them from here.
+
+## Propose and test an idea
+
+```python
+lab = nb.model_lab(connection, dataset)              # the model lab: the task, the model and the split
+ideas = nb.feature_ideas(lab)                        # ideas, each with the SQL that would make it
+result = nb.try_feature(lab, ideas[0])               # retrain with one idea added, on the same split
+result["verdict"], result["text"]                    # whether it helps, and by how much
+```
+
+<Flow
+  caption="How a feature idea is tested"
+  steps={[
+    { title: "The kit proposes ideas", text: "From rules, and optionally your AI model", code: "nb.feature_ideas(lab)", tone: "kit" },
+    { title: "The model retrains", text: "With the idea added, on the same split", code: "nb.try_feature(lab, idea)", tone: "kit" },
+    { title: "Held-out rows decide", text: "The score must rise in cross-validation and not fall on the rows held out", tone: "kit" },
+    { title: "You keep it or not", text: "A suspicious idea cannot be kept", code: "nb.model_lab(..., features=...)", tone: "you" },
+  ]}
+/>
+
+## The ideas
+
+The ideas come from rules. They include:
+
+- how long ago the time column's date was,
+- a value compared with its group's usual value,
+- two categories taken together,
+- a number read as a number, when it holds counts,
+- whether a number is missing, when some rows are blank,
+- a flag for words such as `price`, `slow` or `wrong`, in a column of sentences.
+
+The rules are in `notebook/package/exakit_nb/lab.py`, in `feature_ideas`.
+
+## How an idea is judged
+
+The lab leaves out the columns that give the answer away and the personal data. See [Columns that give the answer away](/data-scientist/prepare/leakage).
+
+The kit tests each idea on rows the model did not train on. An idea helps when the score rises in cross-validation and does not fall on the held-out rows. An idea that pushes a yes-or-no score almost to perfect is marked suspicious, usually because it gives the answer away. The card does not let you keep a suspicious idea.
+
+## Keep an idea
+
+Keep an idea by passing its series to the next model lab:
+
+```python
+lab = nb.model_lab(connection, dataset, features={idea.id: result["series"]})
+```
+
+With an AI model set up, `nb.feature_ideas(lab, ai=True)` adds up to four more ideas. The model receives the column names, their roles and the scores. It never receives a row or a value.
+
+Back to [Prepare](/data-scientist/prepare). Previous: [Prepared views](/data-scientist/prepare/prepared-views). Next: [When it goes wrong](/data-scientist/prepare/troubleshooting).

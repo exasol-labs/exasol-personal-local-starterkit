@@ -160,6 +160,9 @@ class ChooseData(Screen):
     """Choose the data: a kit dataset, your own (a table already in the database, or a new file or folder), or an
     external source (one connected, or a new connection). Every option and every step is one cell of the
     quickstart's code section (actions: data.*)."""
+    help = (('How loading works', 'get-the-data#where-you-do-it'),
+            ('A new external source, step by step', 'get-the-data/external-sources#step-by-step-a-new-external-source'),
+            ('Where passwords go', 'get-the-data/external-sources#passwords'),)
 
     kind = "card"
     step, connector, src_name, conn_n, tip = "connection", None, "", 0, ""
@@ -696,6 +699,9 @@ class ChooseData(Screen):
 
 # =====================================================================================================
 class ColumnMap(Screen):
+    help = (('Roles and slots', 'explore/column-map#the-column-map-and-approval'),
+            ('What approving checks and writes', 'explore/approve-the-column-map#what-approval-checks-and-writes'),
+            ('Behind the scenes: the semantic model', 'explore/semantic-views#publish-the-semantic-model'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -1049,6 +1055,8 @@ class DataMap(Screen):
     """Every table in the database by origin - external source, your data, sample data - with its column map's state
     and the roles in it (nb.data_map, metadata only). Redrawn when data is chosen or a column map approved, so an
     approval shows up here as "approved vN, in semantic model ..."."""
+    help = (('How the map is read', 'get-the-data/the-data-map#the-data-map'),
+            ('How tables link', 'explore/linked-tables#the-schema-map-how-tables-link'),)
 
     kind = "card"
 
@@ -1114,6 +1122,9 @@ class SemanticViews(Screen):
     AI (when a model is configured) proposes the fields' business names, synonyms and metrics; a preview shows what
     would be built before anything is written. Models the kit built can be refreshed here; approving a column map
     refreshes every model it is in by itself."""
+    help = (('One model across sources', 'explore/semantic-views#one-model-across-sources'),
+            ('What the AI sees', 'explore/semantic-views#the-ai-proposes-the-fields'),
+            ('Keeping it current', 'explore/semantic-views#keep-the-model-current'),)
 
     kind = "card"
 
@@ -1246,7 +1257,7 @@ def understand():
     data, and build the semantic views AI clients and notebooks query."""
     from ..card import show
 
-    return show(ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="guides/approve-column-map")
+    return show(ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="explore")
 
 
 def _publish_note(said: str) -> str:

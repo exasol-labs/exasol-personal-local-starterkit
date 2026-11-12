@@ -46,7 +46,7 @@ def start():
     from .screens.home import Home
     from .screens.understand import ChooseData, ColumnMap, DataMap
 
-    return show(Home(), ChooseData(), ColumnMap(), DataMap(), docs="guides/load-data")
+    return show(Home(), ChooseData(), ColumnMap(), DataMap(), docs="get-the-data")
 
 
 def load_ipython_extension(ip) -> None:

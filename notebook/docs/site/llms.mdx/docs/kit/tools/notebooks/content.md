@@ -56,3 +56,9 @@ nb.docs()
 ```
 
 See [Data Scientist](/data-scientist) for the four notebooks and their nine steps.
+
+## Further reading [#further-reading]
+
+* [exasol/notebook-connector](https://github.com/exasol/notebook-connector), the connection package the notebook add-on installs.
+* [PyExasol](https://docs.exasol.com/db/latest/connect_exasol/drivers/python/pyexasol.htm), Exasol's documentation of the Python driver the notebooks connect with, and its [repository](https://github.com/exasol/pyexasol).
+* [How the notebooks handle credentials and model keys](/security/credentials).

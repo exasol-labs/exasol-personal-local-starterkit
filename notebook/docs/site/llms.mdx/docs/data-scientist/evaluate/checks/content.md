@@ -1,0 +1,17 @@
+# The checks (/data-scientist/evaluate/checks)
+
+
+
+Three checks sit behind the evaluation. The first two print what they find and return it as a value. The third returns true or false.
+
+## The checks [#the-checks]
+
+* **`nb.leakage_check`** lists the columns that give the answer away. It tests each column that is not the target, a key, an identifier or free text. The approval runs it too. See [Leakage](/data-scientist/evaluate/leakage).
+* **`nb.data_checks`** reports repeated keys and ids, exact copies of a row, empty cells, placeholder values such as `Unknown Device`, and a rare label. The repeated keys and copies can inflate a score when a copied row lands on both sides of the split. The data checks are documented on the [data checks reference](/data-scientist/development/reference/data-checks) page.
+* **`nb.check_model_compatibility(conn, model_version, alias="PYTHON3", model_path="model.pkl")`** checks a pickled scikit-learn model before anything is scored in the database. It refuses when the model's scikit-learn version differs from the version in the database's Python container. The Data Scientist notebooks do not pickle or score models, so this check belongs to the ML Engineer's scoring notebook.
+
+## What to do with a finding [#what-to-do-with-a-finding]
+
+Each finding says what it does to a result. The kit does not fix the table or drop rows for you. Decide what to do, make the change in your own cleaned view or column map, and run the check again. The cleaned views are on [Prepare](/data-scientist/prepare).
+
+Back to [Evaluate](/data-scientist/evaluate). Next: [When it goes wrong](/data-scientist/evaluate/troubleshooting).

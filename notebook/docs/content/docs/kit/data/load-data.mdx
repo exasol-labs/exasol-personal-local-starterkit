@@ -78,8 +78,17 @@ nb.exakit("data-load", "fraud_transactions")
 own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
 ```
 
-See [Load data in the Data Scientist notebooks](/data-scientist/guides/load-data).
+See [Load data in the Data Scientist notebooks](/data-scientist/get-the-data).
 
 ## An external source
 
-Data in another database is not copied. It is connected with `exakit connect` and read where it lives. See [Sources](/data-scientist/concepts/sources).
+Data in another database is not copied. It is connected with `exakit connect` and read where it lives. See [Sources](/data-scientist/get-the-data).
+
+## Further reading
+
+- [IMPORT](https://docs.exasol.com/db/latest/sql/import.htm), the statement that moves data into a table.
+- [Load data from local or remote files](https://docs.exasol.com/db/latest/loading_data/load_data_local_remote_location.htm) and [Load data from external sources](https://docs.exasol.com/db/latest/loading_data/load_data_from_externalsources.htm).
+- [Virtual Schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm) and the [Virtual Schema User Guide](https://docs.exasol.com/db/latest/database_concepts/virtual_schema/user_guide.htm), for the external sources the kit connects.
+- [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses to load files.
+- [exasol/virtual-schemas](https://github.com/exasol/virtual-schemas), the entry-point repository for Exasol's virtual schemas.
+- [How the kit handles credentials and external sources](/security/credentials).

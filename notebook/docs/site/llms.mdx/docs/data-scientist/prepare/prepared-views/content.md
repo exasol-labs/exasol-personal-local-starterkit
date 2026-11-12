@@ -1,0 +1,30 @@
+# Prepared views (/data-scientist/prepare/prepared-views)
+
+
+
+Every view the preparation steps create goes into one schema, `EXAKIT_PREPARED`. Your table is never changed. The kit creates a view and never alters the table under it. Each view is a separate dataset, so the later stages can read it like any table.
+
+## The views and their names [#the-views-and-their-names]
+
+| View                                                       | Created by                                | Name                                          |
+| ---------------------------------------------------------- | ----------------------------------------- | --------------------------------------------- |
+| Joined view                                                | `schema_map.joined_view(...).create(...)` | `EXAKIT_PREPARED."<SCHEMA>__<TABLE>__JOINED"` |
+| Typed view of a table in another schema                    | `nb.typed_view(...).create(...)`          | `EXAKIT_PREPARED."<SCHEMA>__<TABLE>"`         |
+| Typed view of a view in `EXAKIT_PREPARED`                  | `nb.typed_view(...).create(...)`          | `EXAKIT_PREPARED."<NAME>__TYPED"`             |
+| Plain-name view of a table with spaces in its column names | `nb.use_table(...)`                       | `EXAKIT_PREPARED."<SCHEMA>__<TABLE>__PLAIN"`  |
+
+The plain-name view is for tables whose column names have spaces or small letters. See [When it goes wrong](/data-scientist/prepare/troubleshooting).
+
+## Each view gets its own column map [#each-view-gets-its-own-column-map]
+
+Each view gets its own approved column map. The new map starts from the roles of the table it came from. A text column that became a date takes the time role. If the time slot is empty, the converted column fills it.
+
+Each view is a separate dataset with its own versions, so approving a view does not change its source table's map. A view you create is saved with the same rules as any column map: each approval is a new version, and nothing is overwritten. See [Approve the column map](/data-scientist/explore/approve-the-column-map#versions).
+
+The column map itself, its roles and slots, is described in [The column map](/data-scientist/explore/column-map).
+
+## Your table stays as it was [#your-table-stays-as-it-was]
+
+The checks only read. The joined view and the typed view are views in `EXAKIT_PREPARED`, and they are created only when you ask. The kit never alters the table under a view.
+
+Back to [Prepare](/data-scientist/prepare). Previous: [A typed, cleaned view](/data-scientist/prepare/cleaned-views). Next: [Features](/data-scientist/prepare/features).

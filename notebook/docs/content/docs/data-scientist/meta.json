@@ -1,15 +1,17 @@
 {
   "title": "Data Scientist",
-  "description": "Four notebooks, nine steps, on your local database",
+  "description": "One workflow in eight stages, on your local database",
   "root": true,
   "pages": [
     "index",
-    "start",
-    "concepts",
-    "guides",
-    "reference",
-    "develop",
-    "faq",
-    "troubleshooting"
+    "set-up",
+    "get-the-data",
+    "explore",
+    "prepare",
+    "model",
+    "evaluate",
+    "communicate",
+    "monitor",
+    "development"
   ]
 }

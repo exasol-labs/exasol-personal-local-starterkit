@@ -1,0 +1,13 @@
+{
+  "title": "Prepare",
+  "pages": [
+    "index",
+    "data-checks",
+    "leakage",
+    "linked-tables-view",
+    "cleaned-views",
+    "prepared-views",
+    "features",
+    "troubleshooting"
+  ]
+}

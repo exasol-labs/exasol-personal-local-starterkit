@@ -39,4 +39,10 @@ General is ticked to begin with in the install question, and combines with the o
 * It does not lock anything. Any dataset or add-on can be added later, whatever the persona.
 * It does not remove anything when you leave it. Removing a persona only removes the membership; the data, notebooks and add-ons stay.
 
+## Further reading [#further-reading]
+
+* [User-defined functions (UDFs)](https://docs.exasol.com/db/latest/database_concepts/udf_scripts.htm) and [BucketFS](https://docs.exasol.com/db/latest/database_concepts/bucketfs/bucketfs.htm), the two parts of the UDF runtime that the ML Engineer persona uses.
+* [exasol/exasol-personal](https://github.com/exasol/exasol-personal), the local database the kit deploys.
+* [Add-ons](/kit/tools/add-ons), with each add-on's repository and documentation.
+
 Next: [choose and change a persona](/kit/personas/choose-and-change).

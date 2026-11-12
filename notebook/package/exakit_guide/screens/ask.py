@@ -105,6 +105,8 @@ def _readable(col: str) -> str:
 # =====================================================================================================
 class Ask(Screen):
     """One question: draft -> plan -> approve -> answer. With no question given, shows a question box."""
+    help = (('How a question becomes SQL', 'explore/questions#questions-in-plain-language'),
+            ('Is my data sent anywhere?', 'explore/data-privacy#is-my-data-sent-anywhere'),)
 
     kind = "card"
 
@@ -217,4 +219,4 @@ def ask(question: str | None = None) -> Ask:
     """Step 3 in the guided view: an Ask card. With a question, drafts it right away."""
     from ..card import mark
 
-    return mark(Ask(question, box=True), docs="guides/ask")     # the page's first card: the kit's mark and Docs
+    return mark(Ask(question, box=True), docs="explore")     # the page's first card: the kit's mark and Docs

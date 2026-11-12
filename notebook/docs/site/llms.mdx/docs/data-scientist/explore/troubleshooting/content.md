@@ -1,0 +1,69 @@
+# Troubleshooting (/data-scientist/explore/troubleshooting)
+
+
+
+Each entry starts with the message or symptom you see. Find it, then read the fix.
+
+<Accordions type="multiple">
+  <Accordion title="Why does a notebook say my data is not approved?">
+    Explore, Ask and Share read only an approved column map. A step given a draft raises `DescriptorNotApproved`. Open `00_quickstart`, review the map and approve it. The message says the same.
+  </Accordion>
+
+  <Accordion title="A step says the column map is not approved">
+    The message is a `DescriptorNotApproved` error. Explore, Ask and Share do not read a draft. Open `00_quickstart` and approve the map. This is the same error as the entry above.
+  </Accordion>
+
+  <Accordion title="Step 1 approved a different dataset after this notebook opened">
+    You approved a different dataset in the quickstart while this notebook was open. Run this notebook's first cell again. It switches to the newly approved dataset.
+  </Accordion>
+
+  <Accordion title="Approval gave a warning about a column">
+    A warning about a column that gives the target away is not an error. The column stays in the map and is left out of the model. Read the warning, check the column, and approve. If the column is correct, keep it in the map. The model still leaves it out. For the rule, see [Columns that give the answer away](/data-scientist/prepare/leakage).
+  </Accordion>
+
+  <Accordion title="The kit says a value is refused as a target">
+    A target must hold 0 and 1, or true and false. A column with other values cannot be predicted. Pick another column, or leave the target empty and explore the data without one.
+  </Accordion>
+
+  <Accordion title="A text step is skipped">
+    The dataset has no text column. `amazon_sales` and `fraud_transactions` have none, so the text steps skip on them and say so.
+  </Accordion>
+
+  <Accordion title="A step is skipped: no date, no target, no group">
+    The step needs a column the approved map does not give it. The step prints which role is missing. Set the slot in the column map, or use a dataset that has the column.
+  </Accordion>
+
+  <Accordion title="A question gets no answer, or an error">
+    The rules drafter drafts only the question shapes it knows. Rephrase the question, or write the SQL yourself with `proposed_sql=` and approve it. If the query cannot run, the message says why. If the MCP server does not answer, run `exakit mcp-doctor`.
+  </Accordion>
+
+  <Accordion title="A semantic model publish failed">
+    The approval still stands, and the message says why. Retry with `exakit describe <id> --comments`, or refresh the model with `nb.refresh_semantic(connection, "<name>")` once the cause is fixed.
+  </Accordion>
+
+  <Accordion title="Where is my work saved?">
+    Under `~/.exasol-starter-kit`:
+
+    * Column maps and their versions, in `descriptors/`.
+    * Semantic model definitions, in `semantic/`, so a refresh rebuilds a model the same way.
+    * Workflow logs, in `workflows/`. See [Get the data](/data-scientist/get-the-data) for the workflow log.
+    * Hand-off bundles, written by the share stage.
+  </Accordion>
+
+  <Accordion title="Find what a cell ran">
+    ```python
+    nb.show_sql()                              # the SQL the last query ran
+    nb.workflow_log(nb.current_workflow())     # everything this workflow did
+    ```
+  </Accordion>
+
+  <Accordion title="Do I need an AI model?">
+    No. Every step runs without one. A model is used only to draft SQL in Ask and to sort texts into themes, and both are off until you turn them on. Ask also has a drafter with no model: `nb.draft_question`.
+  </Accordion>
+
+  <Accordion title="Why is a column never charted or sent to a model?">
+    The kit marks a column as sensitive when its values look like personal data: e-mail addresses, phone numbers, IBANs or postcodes. A sensitive column is never charted, grouped or sent to a model, and it is never exposed in the semantic model. The card says so beside the column. A sensitive column cannot be the target, a category or an entity.
+  </Accordion>
+</Accordions>
+
+Back to [Explore and understand](/data-scientist/explore). Previous: [Is my data sent anywhere?](/data-scientist/explore/data-privacy).

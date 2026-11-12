@@ -64,6 +64,9 @@ ACTIONS: dict[str, Action] = {
     "kit.update": Action("00_quickstart", "nb.kit_update()"),
     "kit.update_one": Action("00_quickstart", "nb.kit_update({component})"),
     "model.use": Action("00_quickstart", "nb.use_model({model_id}, {base_url}, remember=True{secret})"),
+    "model.providers": Action("00_quickstart", "providers = nb.model_providers()", "providers", False),
+    "model.list": Action("00_quickstart", "models = nb.provider_models({provider}, base_url={base_url}{secret})", "models", False),
+    "model.use_effort": Action("00_quickstart", "nb.use_model({model_id}, {base_url}, effort={effort}, remember=True{secret})"),
     "model.langfuse": Action("00_quickstart", "nb.use_model(langfuse_base_url={langfuse_url}, remember=True{secret})"),
     "model.forget": Action("00_quickstart", "nb.forget_model(model={model}, langfuse={langfuse})"),
     # -- step 1: access and understand ------------------------------------------------------------------------------

@@ -487,3 +487,15 @@
 .guide-brand-logo svg { height: 18px; width: auto; display: block; }
 .guide-brand-text { font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--guide-muted);
   padding-left: 10px; border-left: 1px solid var(--guide-border); line-height: 18px; }
+
+/* A dropdown with a pencil to type any value; help links under a field. */
+.guide-field-edit { display: flex; gap: 6px; align-items: stretch; }
+.guide-field-edit > :first-child { flex: 1; min-width: 0; }
+.guide-pencil { border: 1px solid var(--guide-border); background: transparent; border-radius: 6px; padding: 0 9px;
+  cursor: pointer; color: var(--guide-muted); font-size: 14px; }
+.guide-pencil:hover { color: var(--guide-text); border-color: var(--guide-border-strong); }
+.guide-field-help { display: flex; flex-wrap: wrap; gap: 12px; font-size: 12px; }
+.guide-field-help a { color: var(--guide-accent); text-decoration: underline; }
+.guide-help { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 12px; align-items: baseline; }
+.guide-help-label { color: var(--guide-muted); }
+.guide-help a { color: var(--guide-accent); text-decoration: underline; text-underline-offset: 2px; }

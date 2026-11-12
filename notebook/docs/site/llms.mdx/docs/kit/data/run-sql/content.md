@@ -51,3 +51,10 @@ One JSON object comes back and nothing else: the rows and their count on success
 <Callout>
   On Windows PowerShell 5.1, a double quote inside an argument is dropped before `exakit` runs. Pass a statement with quoted names through `--file`.
 </Callout>
+
+## Further reading [#further-reading]
+
+* [SELECT](https://docs.exasol.com/db/latest/sql/select.htm), the statement the examples on this page use.
+* [Privileges](https://docs.exasol.com/db/latest/database_concepts/privileges.htm), the rules behind the admin and read-only users.
+* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses for SQL and loading.
+* [AI clients and the read-only user](/security/ai-clients), which explains why `exakit sql` is not the read-only path.

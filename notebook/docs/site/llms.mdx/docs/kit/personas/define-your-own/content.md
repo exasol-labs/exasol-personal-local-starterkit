@@ -43,7 +43,7 @@ The first shows the checks, the question, the answers and the data table. The se
 * **No secrets and no machine paths.** A persona names things, it never holds them.
 * **It appears where `order` puts it** when `visible` and `picker` are true.
 * **Its notebooks** go in `notebook/notebooks/<id>/`, listed in `notebook/catalog.json`.
-* **Its documentation** goes in `notebook/docs/content/docs/<id>/`. See [These docs](/data-scientist/develop/docs-site).
+* **Its documentation** goes in `notebook/docs/content/docs/<id>/`. See [These docs](/data-scientist/development/docs-site).
 
 ## Checks [#checks]
 

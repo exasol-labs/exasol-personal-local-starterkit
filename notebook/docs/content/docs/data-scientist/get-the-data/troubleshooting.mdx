@@ -1,0 +1,71 @@
+---
+title: Troubleshooting
+description: What the kit says when a file will not load, a source is not connected, or a connected table does not read, and what to do about each.
+---
+
+Each entry gives the message the kit shows, then what to do.
+
+<Accordions type="multiple">
+
+<Accordion title="Can I use my own table?">
+
+Yes. Load a file with `nb.load_own_file(...)`, or use a table already in the database with `nb.use_table(...)`. Both are shown on [Your own file](/data-scientist/get-the-data/your-own-files).
+
+</Accordion>
+
+<Accordion title="How do I switch to another dataset?">
+
+Approve it in the quickstart. With `DATASET = None`, the other notebooks follow the dataset you approved last, when you run their first cell again. To pin one notebook to a dataset, set `DATASET = "..."` in that notebook. See [The dataset](/data-scientist/get-the-data/the-dataset).
+
+</Accordion>
+
+<Accordion title="My file will not load">
+
+The kit names the reason in one line. The usual ones:
+
+| Message | What to do |
+|---|---|
+| `... is not a file load_own_file reads` | Use a CSV, Parquet, JSON or Excel file, or a folder of them. |
+| `... has columns that are the same name in SQL` | Rename the columns in the file so each name is different. |
+| `... holds no rows` | Check the file. An empty file cannot be loaded. |
+| `... already exists and was not loaded by load_own_file` | Name another table. To replace the table, pass `replace=True` on purpose. |
+| `'...' is not SCHEMA.TABLE` | Use plain SQL names: letters, digits and `_`, starting with a letter. |
+
+</Accordion>
+
+<Accordion title="A source was not connected">
+
+The message is `<name> was not connected:` and the lines after it give the reason. The usual causes:
+
+| Reason | What to do |
+|---|---|
+| The source refuses the connection, or the connection times out | Allow this computer's address at the source: a firewall rule, a security group or the server's access list. |
+| The password or user is refused | Check the user, then enter the password again in the hidden box. |
+| A certificate cannot be verified | Give the source's CA certificate in the optional settings. |
+| The schema is not found | Check the schema name and its case. |
+| The host name does not resolve | Read the note the kit gives. It tells you whether the name is wrong, or whether this network's DNS does not answer. Another network, a VPN, or a DNS server of 1.1.1.1 or 8.8.8.8 on this computer can fix it. |
+
+Use **Test connection** first. It checks the inputs and reaches the source, and changes nothing. To check a connected source later, run `exakit source check <name>`, or `exakit source issues` to list the sources that fail and the command that fixes each.
+
+</Accordion>
+
+<Accordion title="The table of a connected source does not read">
+
+`nb.load_source` reads one row to check the table. If it fails, the message names the table and the reason. Run `exakit source check <name>`. If the source has new tables, run `exakit source refresh <name>`.
+
+</Accordion>
+
+<Accordion title="The database does not answer">
+
+```python
+nb.kit_check()          # is the database running?
+nb.exakit("start")      # start it, for example after a restart of this computer
+```
+
+More entries are on [Set up Exasol: Troubleshooting](/data-scientist/set-up/troubleshooting).
+
+</Accordion>
+
+</Accordions>
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [Explore and understand](/data-scientist/explore).

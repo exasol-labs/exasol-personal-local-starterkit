@@ -1,0 +1,44 @@
+# The models the lab tries (/data-scientist/model/the-models)
+
+
+
+The lab does not rely on one model. For each task it trains every model in a list on the same training rows, and it picks one. This page lists the models, the rule for the pick, and how to choose a model yourself. Every model is from scikit-learn. The key in brackets is the name you pass as `model=`.
+
+## The models the lab tries [#the-models-the-lab-tries]
+
+| Task             | Models                                                                                                                                                                                                                                                                                                                                | How the best one is picked                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `predict_yes_no` | baseline (`baseline`), logistic regression (`logistic`), logistic regression with L1 (`logistic_l1`), decision tree (`decision_tree`), random forest (`random_forest`), extra trees (`extra_trees`), gradient boosting (`boosting`), k-nearest neighbours (`knn`), naive Bayes (`naive_bayes`), linear support vector machine (`svm`) | Cross-validated ROC AUC, or PR AUC when the rarer answer is under 5%                               |
+| `predict_number` | baseline (`baseline`), linear (`linear`), ridge (`ridge`), lasso (`lasso`), decision tree, random forest, extra trees, gradient boosting, k-nearest neighbours                                                                                                                                                                        | Cross-validated R squared                                                                          |
+| `find_groups`    | k-means (`kmeans`), Gaussian mixture (`gaussian_mixture`), hierarchical (`agglomerative`)                                                                                                                                                                                                                                             | Silhouette score. If you do not set the number of groups, the lab tries 2 to 6 and keeps the best. |
+| `find_unusual`   | isolation forest (`isolation_forest`), local outlier factor (`lof`)                                                                                                                                                                                                                                                                   | No score. The share you set as `contamination` (2% by default) decides how many rows are flagged.  |
+
+## How the best one is picked [#how-the-best-one-is-picked]
+
+With `model="all"`, the lab does this:
+
+1. It scores each model by cross-validation on the training rows. The score is the metric for the task.
+2. It takes the model with the highest mean score.
+3. It goes down a list of models from simplest to most complex. The first model on that list whose score is within 0.01 of the best wins.
+
+The order is: logistic regression, linear, ridge, logistic L1, lasso, naive Bayes, decision tree, k-nearest neighbours, SVM, random forest, extra trees, gradient boosting. The baseline is not on that list. It is picked only when it has the highest score and no model on the list is within 0.01 of it.
+
+The pick is made on cross-validation. The held-out rows are scored after the pick, for reading. They do not choose the model.
+
+<Callout>
+  The 0.01 rule is a rule for choosing a simple model. It is not a test that the gap between two models is real. To judge a gap, read `cv_sd` on the board. See [Comparing models](/data-scientist/evaluate/comparing-models) on the Evaluate pages.
+</Callout>
+
+## Choose a model yourself [#choose-a-model-yourself]
+
+Pass one key to `model=`, and the lab trains that model and its baseline on the same rows:
+
+```python
+lab = nb.model_lab(connection, dataset, "predict_yes_no", model="logistic")
+```
+
+With a named model, the pick is yours: the result's `chosen_by` is `you`, and the board holds only that model and the baseline.
+
+## The settings that change the models [#the-settings-that-change-the-models]
+
+`effort` sets the number of trees for the tree models: `fast` 100, `balanced` 200 (the default) and `thorough` 400. The other settings are listed on [The model lab](/data-scientist/model/model-lab#settings). Back to [Model](/data-scientist/model).

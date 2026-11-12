@@ -1,0 +1,84 @@
+---
+title: AI clients and the read-only user
+description: The database user that AI clients connect as, what it may and may not do, and how a notebook question is approved before its SQL runs.
+---
+
+AI clients never connect as the admin. The kit creates a second database user, `mcp_readonly` (the default of `EXAKIT_MCP_READONLY_USER`, set in `setup/lib/common.sh`), and the Exasol MCP server connects as that user. The server runs beside the database, on 127.0.0.1, by default on port 4896 (`EXAKIT_MCP_SIDECAR_PORT`).
+
+## Who connects as whom
+
+The launcher starts the Exasol MCP server as a sidecar. Its own default connects it as the admin. The kit's comment in `setup/lib/mcp.sh` says so: "the launcher connects it as SYS ... the kit connects it as its read-only MCP user." `_mcp_sidecar_definition()` in the same file writes the kit's definition, with `EXA_USER` set to the read-only user and `EXA_PASSWORD` read from `mcp_readonly_password`.
+
+```text
+You -> AI client -> Exasol MCP server (127.0.0.1:4896) -> database, as mcp_readonly
+You -> exakit sql -> database, as the admin profile (not sandboxed; see Limits)
+```
+
+## What the read-only user may do
+
+`exakit_configure_mcp_readonly_access()` in `setup/lib/common.sh` grants exactly three system privileges and then checks that nothing else is held:
+
+- `CREATE SESSION`, so it can connect.
+- `USE ANY SCHEMA`, so it can see every schema.
+- `SELECT ANY TABLE`, so it can read every table and view, including ones created later.
+
+The grant comment says `SELECT ANY DICTIONARY` is deliberately not granted, so system dictionaries stay private. `_exakit_assert_mcp_readonly_posture()` checks that the user holds those three and no other system privilege, directly, through a role, or as an object grant. It also runs a write probe that must be rejected. The install stops if any check fails.
+
+The read-only user's default schema is `STARTER_KIT` (`EXAKIT_MCP_READONLY_SCHEMAS`). It is only the landing schema for local uploads. It does not limit what the user may read.
+
+## What the server allows
+
+`_mcp_sidecar_definition()` in `setup/lib/mcp.sh` sets these server settings:
+
+| Setting | Value |
+|---|---|
+| `enable_read_query` | `true` |
+| `enable_write_query` | `false` |
+| `enable_preprocessor_tools` | `false` |
+| `enable_read_bucketfs` | `false` |
+| `enable_write_bucketfs` | `false` |
+| `default_row_limit` | `1000` |
+
+These are the server's own switches. The database's grants are the real limit. A client that sends a write is refused by the database, because the user has no write privilege.
+
+<Callout type="warn">
+
+`SELECT ANY TABLE` means an AI client can read every column of every table, including columns that hold personal data. The sensitive-column rule in [What is sent to an AI model](/security/what-goes-to-a-model) limits what the kit's helpers send to a model. It does not limit what the MCP user can read.
+
+</Callout>
+
+## The server has no token
+
+The sidecar runs with `--no-auth` on 127.0.0.1 (`args` in `_mcp_sidecar_definition()`). The kit also sets `FASTMCP_HTTP_HOST_ORIGIN_PROTECTION` to `true`. This repository does not document what that setting blocks beyond its name. Any program on this computer that can reach port 4896 can call the server, and the server answers with whatever the read-only user may read.
+
+## How a notebook question is approved
+
+A notebook never runs SQL it has not shown you. The steps are in `notebook/package/exakit_nb/ask.py`:
+
+1. `ask()` drafts one SQL statement from the approved column map. Nothing runs.
+2. You read the SQL. `Proposal.approve()` records its SHA-256 digest and writes an `ASK_APPROVE` line to the workflow log with the SQL text.
+3. `Proposal.edit()` replaces the SQL and clears the approval.
+4. `Proposal.run()` computes the digest of the text it is about to run. If it differs from the approved digest, it raises `This SQL has not been approved`.
+5. `_read_sql()` accepts text that starts with `SELECT` or `WITH` and has no semicolon before the end. This is a shape check. It is not a SQL parser. The database user and the server settings above are the real limit.
+6. `_mcp_settings()` refuses to run unless the connection user is not the admin, the password file is `mcp_readonly_password`, `connection.validated` is `true`, and the server URL is loopback `http`. The notebook sends no password. The sidecar holds the read-only login.
+
+```python
+proposal = ask(ds, "How many orders were cancelled per category?")
+print(proposal)          # the SQL, one clause per line, not yet approved
+proposal.approve()       # records the digest of this exact text
+result = proposal.run()  # refuses if the SQL changed after approval
+```
+
+The approval is per SQL text. It is not per session and not per question. The workflow log keeps the statement text, its digest and the row count.
+
+## What the admin can do from the terminal
+
+`exakit sql` runs as the admin. Its help entry in `setup/help/exakit.json` says so in its warning: "This connects with the starter-kit profile, which is the ADMIN user and is NOT sandboxed. The read-only boundary is the MCP user, not this command." `exakit sql --write` runs writes as the admin. Use the read-only path for anything an AI client or an untrusted script should run.
+
+## Limits
+
+- The MCP server has no authentication token. Its protection is the loopback address and the read-only user.
+- The read-only user reads every table, so an AI client can query personal-data columns the kit would not send to a model.
+- `_read_sql()` checks the shape of the text. It does not parse SQL. A statement that passes the shape check still runs as the read-only user, so the database decides what it may do.
+- `exakit sql` is not read-only and not sandboxed.
+- The read-only user's password is kept in the credentials folder (see [Credentials](/security/credentials)).

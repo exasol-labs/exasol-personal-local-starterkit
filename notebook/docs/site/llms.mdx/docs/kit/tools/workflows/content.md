@@ -2,7 +2,7 @@
 
 
 
-A notebook starts a **workflow** and gets an id such as `wf-20261027-3f9a1c`. While it is active, every step the helpers run adds one line to its log. For the idea, see [Workflow](/data-scientist/concepts/workflow).
+A notebook starts a **workflow** and gets an id such as `wf-20261027-3f9a1c`. While it is active, every step the helpers run adds one line to its log. For the idea, see [Workflow](/data-scientist/set-up).
 
 ## List [#list]
 

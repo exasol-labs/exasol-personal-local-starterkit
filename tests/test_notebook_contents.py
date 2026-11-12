@@ -394,9 +394,10 @@ class NotebookShapeTest(unittest.TestCase):
                 # nb.docs() serves the documentation on the loopback address only: the address it binds and shows is
                 # a rule about who can reach it, not a connection value. Exactly that one line is exempt.
                 text = text.replace('BIND, SHOWN = "127.0.0.1", "localhost"   # served on the loopback address only: no other computer reaches it', "")
-            if path == ROOT / "notebook/MODEL-PROVIDERS.md":
+            if path in (ROOT / "notebook/MODEL-PROVIDERS.md", ROOT / "notebook/package/exakit_nb/providers.py"):
                 # These exact model-server examples are public defaults, not database
-                # connection values. Keep all other hosts and every credential check.
+                # connection values (the provider list offers them for a server on this computer).
+                # Keep all other hosts and every credential check.
                 for endpoint in ("http://localhost:11434/v1/", "http://localhost:1234/v1/",
                                  "http://localhost:8000/v1/"):
                     text = text.replace(endpoint, "<documented-model-endpoint>")

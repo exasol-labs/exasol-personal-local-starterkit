@@ -1,0 +1,15 @@
+{
+  "title": "Security",
+  "description": "How the kit protects your data, credentials and computer",
+  "root": true,
+  "pages": [
+    "index",
+    "credentials",
+    "ai-clients",
+    "what-goes-to-a-model",
+    "network-and-tls",
+    "add-ons-and-downloads",
+    "what-the-kit-writes",
+    "report-an-issue"
+  ]
+}

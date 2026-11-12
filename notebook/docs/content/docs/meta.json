@@ -3,6 +3,7 @@
   "pages": [
     "index",
     "kit",
-    "data-scientist"
+    "data-scientist",
+    "security"
   ]
 }

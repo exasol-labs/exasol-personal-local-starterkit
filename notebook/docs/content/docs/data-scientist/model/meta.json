@@ -1,0 +1,13 @@
+{
+  "title": "Model",
+  "pages": [
+    "index",
+    "baseline",
+    "model-lab",
+    "the-models",
+    "feature-ideas",
+    "ai-model",
+    "saving-and-mlflow",
+    "troubleshooting"
+  ]
+}

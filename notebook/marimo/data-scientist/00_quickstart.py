@@ -128,13 +128,22 @@ def _(nb):
 @app.cell
 def _(nb):
     # Your AI model and Langfuse tracing, remembered for every notebook of this kit (readable by you only). The keys are
-    # asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered.
-    MODEL_ID = ""            # e.g. "claude-opus-5-5"
-    PROVIDER_BASE_URL = ""   # e.g. "https://api.anthropic.com/v1/"
+    # asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered. The Home card's AI model
+    # row does the same with menus: pick the provider, give the key, pick the model and its effort.
+    providers = {p["id"]: p for p in nb.model_providers()}   # the providers the kit knows, with their addresses
+    PROVIDER = ""            # one of providers, e.g. "anthropic", "openai", "gemini", "ollama"
+    SHOW_MODELS = False      # True: list the models your key may use (the key is asked in a hidden box)
+    MODEL_ID = ""            # one of those models
+    EFFORT = ""              # where the model takes one (nb.effort_levels(PROVIDER, MODEL_ID)): "low", "medium", "high"
+    PROVIDER_BASE_URL = ""   # empty: the provider's own address; or any Chat Completions address of your own
     LANGFUSE_BASE_URL = ""   # e.g. "https://cloud.langfuse.com"
     FORGET = False
-    if MODEL_ID or PROVIDER_BASE_URL:
-        nb.use_model(MODEL_ID, PROVIDER_BASE_URL, remember=True)
+    if PROVIDER and not PROVIDER_BASE_URL:
+        PROVIDER_BASE_URL = providers[PROVIDER]["base_url"]
+    if PROVIDER and SHOW_MODELS:
+        print(nb.provider_models(PROVIDER, base_url=PROVIDER_BASE_URL))
+    if MODEL_ID:
+        nb.use_model(MODEL_ID, PROVIDER_BASE_URL, effort=EFFORT, remember=True)
     if LANGFUSE_BASE_URL:
         nb.use_model(langfuse_base_url=LANGFUSE_BASE_URL, remember=True)
     if FORGET:

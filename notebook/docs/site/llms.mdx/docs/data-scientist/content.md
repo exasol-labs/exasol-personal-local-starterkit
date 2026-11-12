@@ -1,54 +1,38 @@
-# Data Scientist notebooks (/data-scientist)
+# The data science workflow (/data-scientist)
 
 
 
-The Data Scientist persona gives you four notebooks that run on the Exasol database on this computer. They are one path with nine steps: get the data in, agree what each column means, prepare, explore, train and check a small model, ask questions in plain language, share a dashboard and hand the work off.
+Most data science work is not a straight line. You set up, load the data, look at it, prepare it, model it and check the result. Then a finding in a later stage sends you back. A column you trusted turns out to give away the answer, so you prepare the data again. Treat the eight stages as a loop, not a checklist.
 
-Every notebook opens with a **guided card** that does the page's steps with buttons and forms. Each card has a **Code** switch that shows the exact `exakit.nb` call behind every button, so anything you click you can also run in a cell.
+Choose a stage to read its page. Each page says what the stage is for, where you do it in the kit, a worked example on the kit's sample data, and what can go wrong.
 
-<Cards>
-  <Card title="Start here" href="/data-scientist/start/notebooks">
-    The four notebooks, the nine steps, and how to open them.
-  </Card>
+<StageMap />
 
-  <Card title="Concepts" href="/data-scientist/concepts/descriptor">
-    The column map, approval, workflows, sources and hand-off.
-  </Card>
+## How the kit fits in [#how-the-kit-fits-in]
 
-  <Card title="How-to guides" href="/data-scientist/guides/load-data">
-    Load data, approve the map, explore, ask, share.
-  </Card>
+The kit runs this workflow on an Exasol database on your computer. Four notebooks take you through the stages in order. Each notebook continues the same workflow, so you paste no id and copy nothing between them.
 
-  <Card title="Command reference" href="/data-scientist/reference">
-    Every 
+<Flow
+  caption="The four notebooks, in order, and the stages each one covers"
+  steps="[
+  { title: &#x22;00_quickstart&#x22;, text: &#x22;Set up Exasol, Get the data, and the column map of Explore and understand&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/set-up&#x22; },
+  { title: &#x22;01_explore&#x22;, text: &#x22;Prepare, Explore, Model and Evaluate&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
+  { title: &#x22;02_ask_your_data&#x22;, text: &#x22;Explore and understand: asking questions in plain language&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/explore&#x22; },
+  { title: &#x22;03_share&#x22;, text: &#x22;Communicate and deploy: a dashboard and a hand-off folder&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate&#x22; },
+]"
+/>
 
-    `nb.*`
+Monitor and iterate has no notebook of its own. The workflow log records what you did, and you iterate by changing the column map or the data and running the notebooks again. The notebooks read the newest approval.
 
-     helper with its signature.
-  </Card>
+## Two ways through each notebook [#two-ways-through-each-notebook]
 
-  <Card title="For developers" href="/data-scientist/develop/how-it-fits">
-    How the cards, the helpers and the kit fit together.
-  </Card>
+Every notebook opens with a **guided card**. A card has buttons and forms for the page's steps. Each card has a **Guided / Code** switch at its top right.
 
-  <Card title="FAQ" href="/data-scientist/faq">
-    Short answers to common questions.
-  </Card>
-</Cards>
+* **Guided** is the default. You click, choose and approve.
+* **Code** turns the same card into its code as cells. Each cell shows the exact `exakit.nb` call behind a control. You can edit and run those cells.
 
-## These docs, from a notebook [#these-docs-from-a-notebook]
+Every button is one call, so clicking **Approve** and running the approve call do the same thing. The notebook's own code sits below the cards. You can use either way, or switch between them as you work.
 
-```python
-import exakit.nb as nb
+## Developers [#developers]
 
-nb.docs()                  # this site, under the cell
-nb.docs("descriptor")      # search it
-nb.docs(nb.describe)       # one command's page
-nb.docs(browser=True)      # in a browser tab instead
-```
-
-The site is a folder of files that ships with the kit. `nb.docs()` serves it from this computer only, so reading and searching work without internet.
-
-## What you need [#what-you-need]
-
-Nothing beyond the kit. The persona installs the notebooks and their Python. An AI model is optional: every step except the AI ones runs without it.
+If you build on the kit, or want the commands behind the notebooks, see [For developers](/data-scientist/development). It has the command reference, how the cards and helpers fit together, and where the kit keeps its files.

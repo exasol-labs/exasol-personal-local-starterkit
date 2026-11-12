@@ -1,0 +1,49 @@
+---
+title: The hand-off bundle
+description: The folder and zip that let a colleague repeat your work, what each file holds, and how to rerun it.
+---
+
+## The hand-off bundle
+
+`nb.handoff_bundle(connection, dataset)` writes one folder to `~/.exasol-starter-kit/bundles/<workflow id>/`, with a zip beside it. It needs no Dash Server and holds no password. The folder is named after the workflow. A bundle made with no workflow is named after the dataset.
+
+<Flow
+  caption="From the approved roles to a folder a colleague can repeat"
+  steps={[
+    { title: "The approved column map", text: "descriptor.yaml and the schema map, as approved", tone: "kit", href: "/kit/data/column-maps" },
+    { title: "Every query the workflow ran", text: "queries.sql, each query with its SHA-256 and row count", code: "handoff = nb.handoff_bundle(connection, dataset)", tone: "kit" },
+    { title: "The log and the README", text: "workflow.jsonl and README.md, which say what was approved and published", tone: "kit" },
+    { title: "One folder and a zip", text: "Nothing in it is a password", tone: "kit" },
+    { title: "A colleague repeats the work", text: "From the README, with the same column map and queries", tone: "you" },
+  ]}
+/>
+
+## What is in the bundle
+
+| File | What it is |
+|---|---|
+| `README.md` | What the data is, which column map version the numbers rest on, which questions were approved, which dashboards were previewed or published, which model traces were made, and how to repeat the work |
+| `descriptor.yaml` | The approved column map, copied from the kit's store |
+| `schema-map.json` | The approved schema map, when the schema has one |
+| `queries.sql` | Every distinct query the workflow ran, each with its SHA-256 and row count |
+| `workflow.jsonl` | The workflow log, as it is |
+
+For `amazon_sales`, the folder holds the approved column map, the queries the workflow ran, the workflow log and the README.
+
+## Writing it
+
+```python
+handoff = nb.handoff_bundle(connection, dataset)
+```
+
+Running it again for the same workflow replaces the folder and the zip. It is a snapshot. Nothing in it checks itself against the data later. The page on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off) describes the one check the kit makes, and the bundle has no such check.
+
+## Repeating the work
+
+A colleague follows the README:
+
+1. Load the same table. For a kit dataset, run `exakit data-load <id>`.
+2. Open the approved column map with `nb.dataset(connection, "<id>")`, or `exakit describe <id> --show`.
+3. Run the statements in `queries.sql` in order.
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [The training hand-off](/data-scientist/communicate/training-hand-off).

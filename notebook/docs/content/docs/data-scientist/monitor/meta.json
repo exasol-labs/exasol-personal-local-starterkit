@@ -1,0 +1,13 @@
+{
+  "title": "Monitor and iterate",
+  "pages": [
+    "index",
+    "what-changed",
+    "the-workflow-log",
+    "versions-and-semantic-models",
+    "stale-hand-off",
+    "tracing",
+    "rerunning-and-limits",
+    "troubleshooting"
+  ]
+}

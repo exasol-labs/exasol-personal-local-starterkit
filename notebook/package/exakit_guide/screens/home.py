@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .. import actions
-from ..card import Screen
+from ..card import Screen, doc_link
 from ..session import SESSION
 
 
@@ -87,6 +87,9 @@ def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
 
 
 class Home(Screen):
+    help = (('What the kit set up', 'set-up'),
+            ('Set up AI and Langfuse', 'set-up/ai-and-langfuse'),
+            ('Workflows', 'set-up/workflows#workflows'),)
     kind = "home"
 
     def __init__(self, tab: str = "kit") -> None:
@@ -97,6 +100,13 @@ class Home(Screen):
         self.outputs: dict[str, str] = {}
         self.failed: set[str] = set()      # rows whose last command failed: their kit output opens by itself
         self.confirm: str | None = None
+        # The AI model and Langfuse set-up panels: open or not, the provider picked, the models its key may use. The
+        # key is held in this kernel's memory between "Check" and "Use" only, never shown or written by the card.
+        self.ai_open = self.lf_open = False
+        self.ai_provider = ""
+        self.ai_models: list[str] | None = None
+        self.ai_error = ""
+        self._ai_key = ""
         self.refresh()
         threading.Thread(target=self._load, daemon=True).start()
         SESSION.listen(self)        # a card below approves a column map or trains a model: the steps here follow
@@ -244,22 +254,16 @@ class Home(Screen):
         rows += self._addon_rows(everything=False)
 
         model = d.get("model") if isinstance(d.get("model"), dict) else {}
-        from exakit_nb.setup_env import EXAMPLE_LANGFUSE, EXAMPLE_MODEL, EXAMPLE_URL
+        import os
 
+        effort = os.environ.get("EXAKIT_MODEL_EFFORT", "").strip()
         rows.append({"id": "model", "name": "AI model", "dot": "ok" if model.get("configured") else "off",
-                     "text": f"Using {model.get('model_id')}" if model.get("configured") else "Not set up",
+                     "text": (f"Using {model.get('model_id')}" + (f" · effort {effort}" if effort else ""))
+                             if model.get("configured") else "Not set up",
                      "sub": "Drafts questions in step 3 and suggests feature ideas in step 2. Everything else works without it.",
                      "cmd": actions.code("kit.model"),
                      "actions": ([self._act("model.forget", "Forget", model=True, langfuse=False)] if model.get("configured") else [])
-                                + [{**self._act("model.use", "Change" if model.get("configured") else "Set up",
-                                                model_id=model.get("model_id") or EXAMPLE_MODEL,
-                                                base_url=model.get("provider_base_url") or EXAMPLE_URL),
-                                    "form": [{"id": "model_id", "type": "text", "label": "Model", "value": model.get("model_id") or EXAMPLE_MODEL},
-                                             {"id": "base_url", "type": "text", "label": "Provider address",
-                                              "value": model.get("provider_base_url") or EXAMPLE_URL},
-                                             {"id": "key", "type": "password", "optional": True,
-                                              "label": "API key (saved for every notebook, readable only by you, never shown)"}],
-                                    "submit": "Use this model"}]})
+                                + [{"id": "ai_open", "label": "Change" if model.get("configured") else "Set up"}]})
 
         tracing = d.get("tracing") is True
         rows.append({"id": "langfuse", "name": "Langfuse tracing", "dot": "ok" if tracing else "off",
@@ -267,11 +271,7 @@ class Home(Screen):
                      "sub": "The prompt, the answer and the time of every AI call, in your own Langfuse. No rows are sent.",
                      "cmd": actions.code("kit.tracing"),
                      "actions": ([self._act("model.forget", "Forget", model=False, langfuse=True)] if tracing else [])
-                                + [{**self._act("model.langfuse", "Change" if tracing else "Set up", langfuse_url=EXAMPLE_LANGFUSE),
-                                    "form": [{"id": "langfuse_url", "type": "text", "label": "Langfuse address", "value": EXAMPLE_LANGFUSE},
-                                             {"id": "public", "type": "password", "label": "Public key (never shown)"},
-                                             {"id": "secret_key", "type": "password", "label": "Secret key (saved for every notebook, readable only by you)"}],
-                                    "submit": "Trace to Langfuse"}]})
+                                + [{"id": "lf_open", "label": "Change" if tracing else "Set up"}]})
         return rows
 
     def _addon_rows(self, everything: bool) -> list[dict]:
@@ -436,7 +436,12 @@ class Home(Screen):
                                                        f"Next: {nxt['title']}" if nxt else ""] if x),
                         "path": nxt["path"] if nxt else None,
                         "cmd": actions.code("kit.workflow_log", workflow_id=last["id"]) if last else ""}]
-        blocks += [{"t": "section", "v": "Your setup"}, {"t": "setup", "rows": rows},
+        blocks += [{"t": "section", "v": "Your setup"}, {"t": "setup", "rows": rows}]
+        if self.ai_open:
+            blocks += self._ai_panel()
+        if self.lf_open:
+            blocks += self._langfuse_panel()
+        blocks += [
                    {"t": "details", "title": "The kit's other tools" + (" · updates available" if any(r["id"] == "updates" for r in other) else ""),
                     "blocks": ([{"t": "setup", "rows": other}] if other else [])
                               + [{"t": "chips", "label": "Add-ons", "items": self._addon_chips()}]}]
@@ -446,6 +451,167 @@ class Home(Screen):
             blocks.append({"t": "code", "code_only": True, "title": "The code behind this card", "v": "\n".join(SESSION.code)})
         blocks.append({"t": "foot", "v": "Every row reads the kit live, and every button runs one exakit.nb call. Switch to Code to see each one."})
         return blocks
+
+    # -- the AI model and Langfuse, set up from menus -----------------------------------------
+    LANGFUSE_REGIONS = (("https://cloud.langfuse.com", "Langfuse Cloud, EU (Ireland)"),
+                        ("https://us.cloud.langfuse.com", "Langfuse Cloud, US (Oregon)"),
+                        ("https://jp.cloud.langfuse.com", "Langfuse Cloud, Japan (Tokyo)"),
+                        ("https://hipaa.cloud.langfuse.com", "Langfuse Cloud, HIPAA (Oregon)"))
+
+    def _ai_panel(self) -> list[dict]:
+        """Pick the provider, give its key (a link says how to get one), check it: the models it may use come back to
+        pick from, with the effort the chosen one takes. A pencil beside the address and the model lets you type
+        your own. Every step names its page in the docs."""
+        from exakit_nb.providers import effort_levels, model_providers
+
+        providers = model_providers()
+        model = (self.data or {}).get("model") if isinstance((self.data or {}).get("model"), dict) else {}
+        if not self.ai_provider:
+            from exakit_nb.providers import provider_of
+
+            self.ai_provider = provider_of(model.get("provider_base_url") or "") if model.get("configured") else providers[0]["id"]
+        p = next(x for x in providers if x["id"] == self.ai_provider)
+        how = doc_link(f"set-up/ai-and-langfuse#{p['docs_anchor']}")
+        key_help = ([{"label": "How do I get this?", "href": how}] if how else []) + (
+            [{"label": f"Get it from {p['name'].split(' (')[0]}", "href": p["get_key"]}] if p.get("get_key") else [])
+        key_label = {"required": "API key (hidden; kept for every notebook, readable only by you)",
+                     "optional": "API key, if your server asks for one (hidden)",
+                     "none": "API key: not needed for this provider"}[p["key"]]
+        blocks: list[dict] = [
+            {"t": "subhead", "v": "Set up your AI model"},
+            {"t": "p", "muted": True, "v": "Pick the provider, give its key and check it: the kit asks the provider "
+                                           "which models the key may use. Then pick the model and how hard it thinks. "
+                                           "The model only ever sees names, types and notes: never a row of your data."},
+            {"t": "fields", "items": [
+                {"id": "ai_provider", "type": "select", "label": "Provider", "value": self.ai_provider,
+                 "send_on_change": "ai_pick",
+                 "options": [{"value": x["id"], "label": x["name"]} for x in providers],
+                 "help": [{"label": "Which provider should I use?", "href": doc_link("set-up/ai-and-langfuse#get-a-model-provider")}]
+                         if doc_link("set-up/ai-and-langfuse") else []},
+                {"id": "ai_base", "type": "select", "editable": True, "label": "Address (the pencil types your own)",
+                 "value": p["base_url"], "options": [{"value": p["base_url"], "label": p["base_url"] or "type the address"}]},
+            ]},
+        ]
+        if p["key"] != "none":
+            blocks.append({"t": "fields", "items": [{"id": "ai_key", "type": "password", "label": key_label,
+                                                     "help": key_help}]})
+        else:
+            blocks.append({"t": "fields", "items": [{"id": "ai_note", "type": "note", "help": key_help,
+                                                     "v": "No key needed: start the server on this computer first."}]})
+        blocks.append({"t": "actions", "items": [{"id": "ai_check", "label": "Check and list the models",
+                                                  "primary": self.ai_models is None, "busy": "Asking the provider…"},
+                                                 {"id": "ai_close", "label": "Cancel"}]})
+        if self.ai_error:
+            blocks.append({"t": "msg", "kind": "warn", "v": self.ai_error})
+        if self.ai_models is not None:
+            current = model.get("model_id") if model.get("model_id") in self.ai_models else (self.ai_models or [""])[0]
+            efforts = {m: [{"value": "", "label": "The model's default"}]
+                          + [{"value": lvl, "label": lvl.capitalize()} for lvl in effort_levels(self.ai_provider, m)]
+                       for m in self.ai_models if effort_levels(self.ai_provider, m)}
+            choose = doc_link("set-up/ai-and-langfuse#choose-the-model-and-its-effort")
+            blocks += [{"t": "msg", "kind": "ok", "v": f"The key works: {len(self.ai_models)} models you may use."
+                                                       if self.ai_models else "The key works, but the provider listed "
+                                                       "no chat model: type one with the pencil."},
+                       {"t": "fields", "items": [
+                           {"id": "ai_model", "type": "select", "editable": True, "label": "Model (the pencil types any model)",
+                            "value": current, "options": [{"value": m, "label": m} for m in self.ai_models],
+                            "help": [{"label": "Which model should I pick?", "href": choose}] if choose else []},
+                           {"id": "ai_effort", "type": "select", "label": "Effort (how hard the model thinks)",
+                            "value": "", "options_from": {"field": "ai_model", "map": efforts},
+                            "empty": "This model takes no effort setting: it uses its own.",
+                            "help": [{"label": "What does effort change?", "href": choose}] if choose else []}]},
+                       {"t": "actions", "items": [{"id": "ai_use", "label": "Use this model", "primary": True,
+                                                   "busy": "Saving…"}]}]
+        blocks.append({"t": "code", "code_only": True, "title": "The code behind these steps",
+                       "v": "\n".join([actions.code("model.providers"),
+                                       actions.code("model.list", provider=self.ai_provider, base_url=p["base_url"]),
+                                       actions.code("model.use_effort", model_id=model.get("model_id") or "<model>",
+                                                    base_url=p["base_url"], effort="")])})
+        return blocks
+
+    def _langfuse_panel(self) -> list[dict]:
+        how = doc_link("set-up/ai-and-langfuse#langfuse-cloud")
+        own = doc_link("set-up/ai-and-langfuse#your-own-langfuse")
+        return [
+            {"t": "subhead", "v": "Trace every AI call to Langfuse"},
+            {"t": "p", "muted": True, "v": "Pick where your Langfuse is, then give the project's two keys. Every call the "
+                                           "notebooks make to your model is traced there: the prompt, the answer, the time."},
+            {"t": "fields", "items": [
+                {"id": "lf_url", "type": "select", "editable": True, "label": "Where (the pencil types your own Langfuse's address)",
+                 "value": self.LANGFUSE_REGIONS[0][0],
+                 "options": [{"value": url, "label": f"{name} · {url}"} for url, name in self.LANGFUSE_REGIONS],
+                 "help": ([{"label": "Which one is mine?", "href": how}] if how else [])
+                         + ([{"label": "Run your own Langfuse", "href": own}] if own else [])},
+                {"id": "lf_public", "type": "password", "label": "Public key (from the project's API keys)",
+                 "help": ([{"label": "How do I get the keys?", "href": how}] if how else [])
+                         + [{"label": "Sign up at Langfuse Cloud", "href": "https://cloud.langfuse.com/auth/sign-up"}]},
+                {"id": "lf_secret", "type": "password", "label": "Secret key (Langfuse shows it once; kept for every notebook, readable only by you)"},
+            ]},
+            {"t": "actions", "items": [{"id": "lf_use", "label": "Trace to Langfuse", "primary": True, "busy": "Saving…"},
+                                       {"id": "lf_close", "label": "Cancel"}]},
+            {"t": "code", "code_only": True, "title": "The code behind these steps",
+             "v": actions.code("model.langfuse", langfuse_url=self.LANGFUSE_REGIONS[0][0])},
+        ]
+
+    def on_ai_open(self, _v: dict) -> None:
+        self.ai_open, self.lf_open, self.ai_models, self.ai_error, self._ai_key = True, False, None, "", ""
+        self.ai_provider = ""
+
+    def on_ai_close(self, _v: dict) -> None:
+        self.ai_open, self.ai_models, self.ai_error, self._ai_key = False, None, "", ""
+
+    def on_ai_pick(self, v: dict) -> None:
+        self.ai_provider = str(v.get("ai_provider") or "")
+        self.ai_models, self.ai_error, self._ai_key = None, "", ""      # a key belongs to its provider
+
+    def on_ai_check(self, v: dict) -> None:
+        from exakit_nb.providers import provider
+
+        p = provider(self.ai_provider)
+        key = str(v.get("ai_key") or "").strip()
+        if key:
+            self._ai_key = key
+        if p["key"] == "required" and not self._ai_key:
+            raise ValueError(f"Paste the API key for {p['name']} first (the link under the box says where to get one).")
+        base = str(v.get("ai_base") or p["base_url"]).strip()
+        try:
+            self.ai_models = list(actions.run("model.list", provider=p["id"], base_url=base,
+                                              secret={"api_key": self._ai_key}) or [])
+            self.ai_error = ""
+        except Exception as exc:
+            self.ai_models, self.ai_error = None, str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+            raise
+
+    def on_ai_use(self, v: dict) -> None:
+        model_id = str(v.get("ai_model") or "").strip()
+        if not model_id:
+            raise ValueError("Pick a model (or type one with the pencil).")
+        base = str(v.get("ai_base") or "").strip()
+        effort = str(v.get("ai_effort") or "").strip()
+        key = self._ai_key
+        actions.run("model.use_effort", model_id=model_id, base_url=base, effort=effort,
+                    secret={"ask": lambda _question, key=key: key})
+        self.ai_open, self.ai_models, self._ai_key = False, None, ""
+        self._reload()
+        self.flash = {"kind": "ok", "v": f"Using {model_id}" + (f" with {effort} effort" if effort else "")
+                                         + " in every notebook of this kit."}
+
+    def on_lf_open(self, _v: dict) -> None:
+        self.lf_open, self.ai_open = True, False
+
+    def on_lf_close(self, _v: dict) -> None:
+        self.lf_open = False
+
+    def on_lf_use(self, v: dict) -> None:
+        url = str(v.get("lf_url") or "").strip()
+        public, secret_key = str(v.get("lf_public") or "").strip(), str(v.get("lf_secret") or "").strip()
+        if not (url and public and secret_key):
+            raise ValueError("Give the address and both Langfuse keys: the public key and the secret key.")
+        answers = iter((public, secret_key))
+        actions.run("model.langfuse", langfuse_url=url, secret={"ask": lambda _question, answers=answers: next(answers, "")})
+        self.lf_open = False
+        self._reload()
+        self.flash = {"kind": "ok", "v": f"Tracing every AI call to {url}."}
 
     # -- actions ---------------------------------------------------------------------------
     def __getattr__(self, name: str):

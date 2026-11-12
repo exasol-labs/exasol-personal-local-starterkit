@@ -79,6 +79,8 @@ def _first_notebook() -> dict | None:
 
 # =====================================================================================================
 class Dashboard(Screen):
+    help = (('Preview, check, publish', 'communicate/preview-check-publish#preview-check-publish'),
+            ('What a reader sees', 'communicate/what-a-reader-sees#what-a-reader-sees'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -222,6 +224,8 @@ class Dashboard(Screen):
 
 # =====================================================================================================
 class Handoff(Screen):
+    help = (('What the hand-off holds', 'communicate/hand-off-bundle#the-hand-off-bundle'),
+            ('When a hand-off goes stale', 'monitor/stale-hand-off#a-training-hand-off-that-went-stale'),)
     kind = "card"
 
     def __init__(self) -> None:
@@ -270,4 +274,4 @@ def share():
     """Step 4 in the guided view: preview and publish a dashboard, then create the hand-off bundle."""
     from ..card import show
 
-    return show(Dashboard(), Handoff(), docs="guides/share")
+    return show(Dashboard(), Handoff(), docs="communicate")

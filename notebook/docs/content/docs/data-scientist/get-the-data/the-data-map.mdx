@@ -1,0 +1,39 @@
+---
+title: The data map
+description: What nb.data_map shows for each table, how it finds links between tables, and what it does not read.
+---
+
+The data map lists every table the kit can see, grouped by where it came from. It is the place to check what you have before you choose a dataset.
+
+## The data map
+
+```python
+nb.data_map(connection)
+```
+
+The map has one table per origin: external sources first, then your data, then the samples. Each table shows its rows, its column map state and its roles. Under the tables it lists the links between them.
+
+`nb.data_map(connection)` reads the database's metadata, and only the metadata. It does not read rows from your tables.
+
+| Column | What it shows |
+|---|---|
+| Origin | `Sample data`, `Your data` or `External source` |
+| Table | `SCHEMA.TABLE`. A virtual table shows its rows as `live`. |
+| Column map | `none yet`, `draft`, `approved vN`, or `shipped` for a kit dataset. It also says whether the table is in a semantic model. |
+| Roles | The slots by name, then a count of each role |
+
+The map returns a DataFrame through `data.tables`, `data.columns` and `data.links`.
+
+## How links are found
+
+Links come from three places:
+
+- An approved schema map gives its links.
+- A semantic model you published gives its links.
+- The rest are **possible** links, or **shared dimensions**.
+
+Two tables are a **possible** link when they have a key-like column with the same name, for example `ID`, `_ID` or `_CODE`. They are a **shared dimension** when they share a name such as `STATE`, `REGION`, `CATEGORY`, `MONTH` or `YEAR`.
+
+A possible link is a lead to check, not a join the kit made for you. Check either kind before you join on it.
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [The dataset](/data-scientist/get-the-data/the-dataset).

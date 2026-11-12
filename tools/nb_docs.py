@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 PACKAGE = ROOT / "notebook" / "package" / "exakit_nb"
 DOCS = ROOT / "notebook" / "docs"
 SECTION = "data-scientist"              # the persona section the reference sits in (its folder under content/docs)
-REFERENCE = DOCS / "content" / "docs" / SECTION / "reference"
+REFERENCE = DOCS / "content" / "docs" / SECTION / "development" / "reference"   # under the section's Developers group
 COMMANDS = DOCS / "public" / "commands.json"
 KIT_COMMANDS = DOCS / "content" / "docs" / "kit" / "reference" / "commands.mdx"      # every exakit command, from the kit's help
 KIT_HELP = ROOT / "setup" / "help" / "exakit.json"
@@ -324,13 +324,13 @@ def build() -> dict[Path, str]:
             if node is None:
                 raise SystemExit(f"nb_docs: {stem}.py has no top-level definition named {original} (exported as nb.{name})")
             body += [_entry(name, node, usage.get(name, [])), ""]
-            commands[name] = f"/{SECTION}/reference/{slug}#{name}"
+            commands[name] = f"/{SECTION}/development/reference/{slug}#{name}"
             index_rows.append((name, slug, _summary(ast.get_docstring(node))))
         files[REFERENCE / f"{slug}.mdx"] = "\n".join(body).rstrip() + "\n"
 
     table = ["| Command | What it does |", "|---|---|"]
     for name, slug, summary in sorted(index_rows, key=lambda row: (row[0].lower(), row[0])):
-        table.append(f"| [`nb.{name}`](/{SECTION}/reference/{slug}#{name}) | {_cell(summary)} |")
+        table.append(f"| [`nb.{name}`](/{SECTION}/development/reference/{slug}#{name}) | {_cell(summary)} |")
     files[REFERENCE / "index.mdx"] = "\n".join([
         "---", 'title: "All commands"',
         f'description: "Every public helper of exakit.nb, {len(index_rows)} in all, with the page that documents it."',
@@ -341,7 +341,7 @@ def build() -> dict[Path, str]:
         *table, "",
     ])
     files[REFERENCE / "meta.json"] = json.dumps(
-        {"title": "Command reference", "pages": ["index", *(slug for _, slug, _ in pages)]}, indent=2) + "\n"
+        {"title": "Notebook commands", "pages": ["index", *(slug for _, slug, _ in pages)]}, indent=2) + "\n"
     files[KIT_COMMANDS] = _kit_commands()
     files[COMMANDS] = json.dumps(dict(sorted(commands.items(), key=lambda item: (item[0].lower(), item[0]))), indent=2) + "\n"
     return files

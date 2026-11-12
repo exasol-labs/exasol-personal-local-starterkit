@@ -1,0 +1,75 @@
+# Data checks (/data-scientist/prepare/data-checks)
+
+
+
+The data checks read your table and report five kinds of problem: repeated ids, exact copies, empty cells, placeholder values and a rare outcome. Each finding is one sentence in the notebook and one row in the result. The checks change nothing. Deciding what to do about a finding is yours.
+
+A **target** is the column you want to predict. The **label** in the code is the same column. ROC AUC is a score from 0 to 1 for how well a model puts the rows with a 1 above the rows with a 0. A model that guesses at random scores 0.5.
+
+## The checks [#the-checks]
+
+`nb.data_checks` finds five kinds of problem. Each is built from the column map alone, so the same cell runs on every dataset.
+
+| Check              | What it finds                                                                                                                                                                                                                                            | What it means for a result                                                                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Repeated key or id | A column with the role `key` or `identifier` where at least 90% of rows are distinct. A value that many rows share, such as a customer on every purchase, is not reported.                                                                               | A count of rows counts the repeats twice. Count distinct values, or keep one row per value.                                                           |
+| Exact copies       | Rows equal to another row in every column except the key                                                                                                                                                                                                 | The copies count twice. Drop them before you count.                                                                                                   |
+| Empty cells        | Blank values in any column                                                                                                                                                                                                                               | An average leaves those rows out. A grouping puts them in a group of their own.                                                                       |
+| Placeholders       | Values that stand for "not known" but look like categories, in category and flag columns with at most 50 values. Examples: `Unknown...`, `Invalid...`, `N/A`, `none`, `null`, `missing`, `not available`, `undefined`, `TBD`, dashes and question marks. | The value counts as a category. Treat it as empty, or say what it is.                                                                                 |
+| Rare outcome       | A target that is 1 in less than 10% of rows, or 0 in less than 10%                                                                                                                                                                                       | A model that always gives the common answer is right most of the time. Judge a model by a ranking score, or by the baseline. Never by accuracy alone. |
+
+The rules are in `notebook/package/exakit_nb/data_checks.py`. The placeholder list is one pattern, `PLACEHOLDER`, in the same file.
+
+The guided card shows the findings under plain titles: **Repeated IDs**, **Repeated rows**, **Empty cells**, **Placeholder values** and **Rare outcome**.
+
+Run the checks:
+
+```python
+findings = nb.data_checks(connection, dataset)
+findings      # one row per finding: CHECK, COLUMN_NAME, ROWS_AFFECTED, PCT, MEANS
+```
+
+For the rare outcome, the ranking score depends on the outcome's rate. In the lab, a rate under 5% makes the score PR AUC, which focuses on finding the rare 1s. Otherwise the score is ROC AUC. See `notebook/package/exakit_nb/lab.py`.
+
+## How we used it: fraud_transactions [#how-we-used-it-fraud_transactions]
+
+`fraud_transactions` is the messy sample table, so it shows every check. The dataset README records the problems in the table on purpose, with counts. The checks look for these same things. The table below lists each problem, the README's count, and what the check reports.
+
+| Problem                  | Count                                                                                                                          | What the check reports                                                               |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------ |
+| `TRANSACTION_ID` repeats | Measured: 51,000 rows, 50,000 distinct ids, so 1,000 rows repeat an id. The README says 881 are exact copies and 119 disagree. | A repeated-id line for `TRANSACTION_ID`. The row key `ROW_ID` is unique.             |
+| Exact copies             | The README: 881 rows copy another row in every column except the key                                                           | An exact-copies line                                                                 |
+| Empty cells              | The README: about 5% each in amount, hour, device, city and payment method                                                     | An empty-cells line for each column                                                  |
+| Placeholders             | The README: 1,530 `Unknown Device` in `DEVICE_USED`, 1,530 `Invalid Method` in `PAYMENT_METHOD`                                | A placeholder line for each value                                                    |
+| Rare outcome             | Measured: 2,510 of 51,000 rows are `FRAUDULENT = 1`, which is 4.9%                                                             | A rare-outcome line: a model that always says "not fraud" is right 95.1% of the time |
+| No date                  | The table has an hour, but no date                                                                                             | No time check. The steps that need a date skip.                                      |
+
+The repeated-id count is measured: 51,000 rows minus 50,000 distinct `TRANSACTION_ID` values is 1,000. The fraud rate is measured too, as 2,510 of 51,000. The other counts are the README's. Run the checks to see the lines the kit prints for your copy of the data.
+
+A finding for a placeholder reads, in the kit's words, like this: `PAYMENT_METHOD = 'Invalid Method' in 1,530 rows looks like a category but means 'not known': treat it as empty, or say what it is`.
+
+For the rare outcome, the printed line has this form, with the measured 4.9%:
+
+```text
+- FRAUDULENT = 1 in only 4.9% of rows: a model that always answers 0 is right 95.1% of the time, so judge a model by ROC AUC or by that baseline, never by accuracy
+```
+
+The typed view proposes what it will change. For this table it turns each placeholder into `NULL` and drops the copies. See [A typed, cleaned view](/data-scientist/prepare/cleaned-views).
+
+## How we used it: amazon_sales [#how-we-used-it-amazon_sales]
+
+`amazon_sales` is cleaner, so its checks stay quiet on most lines and one warning matters.
+
+**A repeated id that is by design.** `ORDER_ID` is an identifier. The descriptor records 120,378 distinct values in 128,975 rows, measured on the database. That is 8,597 repeats. An order has several lines, so repeats are expected. The check still names it, because 93% of the rows are distinct, which is above the 90% line. The line reads:
+
+```text
+ORDER_ID repeats in 8,597 rows. If one row should be one ORDER_ID, those rows count twice: count DISTINCT, or keep one row per value (the descriptor's grain: one row per order line)
+```
+
+Here the repeat is correct, because one row is one order line. Read the line, then decide. Nothing in the data changes.
+
+**A rare outcome that is not rare.** `CANCELLED` is 1 in 14.2% of rows, measured as 18,332 of 128,975. That is above the 10% line, so the checks do not report a rare outcome.
+
+**The answer-giving column.** The checks above do not catch `STATUS`. It is found by the leakage check. See [Columns that give the answer away](/data-scientist/prepare/leakage).
+
+Back to [Prepare](/data-scientist/prepare). Next: [Columns that give the answer away](/data-scientist/prepare/leakage).
