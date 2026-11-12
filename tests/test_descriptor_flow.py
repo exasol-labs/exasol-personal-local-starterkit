@@ -360,10 +360,12 @@ class SemanticModelTest(unittest.TestCase):
                         {"view": "ORDERS", "name": "made_up", "expression": "SUM(o_orderstatus)", "filter": "o_orderstatus = 'Z'"},
                         {"view": "ORDERS", "name": "secret_sum", "expression": "SUM(o_secret)"},
                         {"view": "ORDERS", "name": "drop", "expression": "SUM(o_totalprice); DROP TABLE X"},
-                        {"view": "ORDERS", "name": "orders_count", "expression": "SUM(o_totalprice)"}]})
+                        {"view": "ORDERS", "name": "orders_count", "expression": "SUM(o_totalprice)"},
+                        {"view": "ORDERS", "name": "open_share", "expression": "open_order_value / NULLIF(total_o_totalprice, 0)"}]})
         self.assertEqual({"o_totalprice": {"display": "Order value"}, "model": "Orders and deliveries"}, labels)
-        self.assertEqual(1, len(extra))
+        self.assertEqual(2, len(extra))                    # open_share builds on the open_order_value accepted before it
         self.assertIn("FILTER (WHERE o_orderstatus = 'O')", extra[0][1])
+        self.assertIn("RATIO PUBLIC", extra[1][1])
         self.assertEqual(4, len(refused))
 
     def test_names_are_never_sql_keywords(self):

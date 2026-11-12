@@ -263,7 +263,12 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
     objects: list[dict[str, Any]] = []
     roots = [e for e in entities if any(not f.get("row") for f in facts_of[e["name"]])] or list(entities)
     covered: set[str] = set()
-    for root in roots:
+    # The tables with measures first; then every table no view reached yet gets a view of its own (its row count and
+    # its dimensions), so a table without measures and without a link is still asked about.
+    pending = list(roots) + [e for e in entities if e not in roots]
+    for root in pending:
+        if root not in roots and root["name"] in covered:
+            continue
         object_name = root["name"].upper()           # one view per root entity: entity names are unique
         reach = _paths(root["name"], edges)
         joined = [entity_by_name[target] for target, paths in reach.items() if len(paths) == 1]
@@ -297,10 +302,6 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         objects.append({"name": object_name, "root": root["name"], "dimensions": dimensions,
                         "facts": [f for f in facts_of[root["name"]]], "metrics": metrics,
                         "description": f"{_words(root['name'])}: {root['grain']}"})
-    for e in entities:
-        if e["name"] not in covered and objects:
-            notes.append(f"{e['schema']}.{e['table']} is an entity of the model but no view groups by it: link it to a "
-                         "table with measures (a schema map, or links=) to use its columns")
     if not objects:
         raise ModelRefused("Nothing to model: no approved table has a time, category or flag column to group by.")
     schemas = sorted({e["schema"] for e in entities})
@@ -551,6 +552,7 @@ def ai_accept(spec: dict[str, Any], answer: dict[str, Any]) -> tuple[dict[str, A
     extra, refused = [], []
     taken = set(known) | {e["name"] for e in spec["entities"]}
     views = {o["name"]: o for o in spec["objects"]}
+    accepted: dict[str, set[str]] = {}           # per view: the proposed metrics accepted so far, usable by the next
     for metric in (answer.get("metrics") or [])[:8] if isinstance(answer.get("metrics"), list) else []:
         if not isinstance(metric, dict):
             continue
@@ -564,7 +566,7 @@ def ai_accept(spec: dict[str, Any], answer: dict[str, Any]) -> tuple[dict[str, A
             refused.append(f"metric {name or '?'}: {why}")
             continue
         facts = {f["name"] for f in view["facts"] if not f["private"]}
-        metrics = {m["name"] for m in view["metrics"]}
+        metrics = {m["name"] for m in view["metrics"]} | accepted.get(view["name"], set())
         expression = " ".join(str(metric.get("expression") or "").split())
         ok, used_facts, used_metrics = _expression_ok(expression, facts, metrics)
         kind = str(metric.get("kind") or "").upper()
@@ -589,6 +591,7 @@ def ai_accept(spec: dict[str, Any], answer: dict[str, Any]) -> tuple[dict[str, A
         if not re.fullmatch(r"DOUBLE|DECIMAL\(\d{1,2},\d{1,2}\)", rtype):
             rtype = "DOUBLE"
         taken.add(name)
+        accepted.setdefault(view["name"], set()).add(name)
         synonyms = [" ".join(str(s).split())[:60] for s in metric.get("synonyms") or [] if str(s).strip()][:6]
         ddl = (f"ALTER SEMANTIC VIEW {spec['model']}.{view['name']}\nADD OR REPLACE METRIC {name}\n  AS {expression}\n"
                f"  ON ENTITY {view['root']}\n  RETURNS {rtype}" + (f"\n  FILTER (WHERE {flt})" if flt else "")
