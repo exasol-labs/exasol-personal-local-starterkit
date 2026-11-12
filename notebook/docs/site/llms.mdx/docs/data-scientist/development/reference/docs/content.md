@@ -8,6 +8,7 @@
 nb.docs()                   # the documentation (this notebook's persona section), shown under the cell
 nb.docs("descriptor")       # search it for a word
 nb.docs(nb.describe)        # one command's page (or nb.docs("describe"))
+nb.docs("dash-server")      # an add-on's entry; nb.docs("data-load"): a kit command
 nb.docs("explore")              # one page, by its address
 nb.docs(browser=True)       # in a browser tab instead
 ```

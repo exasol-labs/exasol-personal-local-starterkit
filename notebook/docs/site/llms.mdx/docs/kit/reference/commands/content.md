@@ -81,13 +81,14 @@ searches them.
 
 ## Reference [#reference]
 
-| Command            | Takes                                                       | What it does                                  |
-| ------------------ | ----------------------------------------------------------- | --------------------------------------------- |
-| `exakit guide`     |                                                             | Friendly walkthrough of every way to connect. |
-| `exakit skills`    | `[--json \| -j]`                                            | List the AI skills the kit carries.           |
-| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]` | This screen.                                  |
-| `exakit catalog`   | `[search] [--json \| -j]`                                   | Browse or search every command.               |
-| `exakit whats-new` | `[<version>]`                                               | What changed in this kit version.             |
+| Command            | Takes                                                             | What it does                                                                                       |
+| ------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `exakit docs`      | `[<add-on \| command \| page \| words>] [--print] [--json \| -j]` | Open the kit's documentation in the browser: all of it, an add-on, a command, a page, or a search. |
+| `exakit guide`     |                                                                   | Friendly walkthrough of every way to connect.                                                      |
+| `exakit skills`    | `[--json \| -j]`                                                  | List the AI skills the kit carries.                                                                |
+| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]`       | This screen.                                                                                       |
+| `exakit catalog`   | `[search] [--json \| -j]`                                         | Browse or search every command.                                                                    |
+| `exakit whats-new` | `[<version>]`                                                     | What changed in this kit version.                                                                  |
 
 ## Other [#other]
 

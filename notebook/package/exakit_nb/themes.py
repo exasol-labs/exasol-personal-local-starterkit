@@ -101,6 +101,27 @@ def _score(span, name_: str, value: float, comment: str) -> None:
             return
 
 
+def _may_send(ds) -> None:
+    """This is the one helper that sends the content of rows to a model, so it checks first and says what leaves:
+    a text column the column map marks sensitive is refused, and so is a model reached over plain http on another
+    computer (the texts would cross the network in clear text). Then one line names what is sent and where."""
+    import os
+
+    from . import model_config
+
+    descriptor = getattr(ds, "descriptor", None)
+    column = (getattr(descriptor, "slots", None) or {}).get("text")
+    if column and column in (getattr(descriptor, "sensitive", None) or ()):
+        raise ValueError(f"{column} is marked sensitive in the column map, so its text is not sent to a model. "
+                         "Choose another text column, or change the mark in the column map if it is wrong.")
+    base = os.environ.get(model_config.BASE_URL, "").strip()
+    if base and not model_config.clear_text_ok(base):
+        raise ValueError(f"The model's address ({base}) is plain http:// on another computer: the texts of your rows "
+                         "would cross the network in clear text. Use its https:// address.")
+    print(f"Sending the text of the sampled rows{' (' + column + ')' if column else ''}, up to {CLIP} characters each, "
+          f"to your model{' at ' + base if base else ''}. Nothing else of the rows is sent.")
+
+
 def themes(conn, ds, sample, endpoint, *, sql: str | None = None):
     """Sort each side's texts into themes with ``endpoint`` = (client, model) from nb.model_client(); return the table
     (a pandas DataFrame when pandas is there, else a list of rows) and print the note. None without an endpoint."""
@@ -108,6 +129,7 @@ def themes(conn, ds, sample, endpoint, *, sql: str | None = None):
         return None
     from . import trace
 
+    _may_send(ds)
     client, model = endpoint
     label = ds.col("label") if ds.has("label") else None
     side_column, count_column, things = name(label) if label else "SAMPLE", count_name(ds), noun(ds)

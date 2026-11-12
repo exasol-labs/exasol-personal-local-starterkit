@@ -70,6 +70,8 @@
 #                         add-on); --check, --setup, --stop, --no-browser, --port N
 #   workflow              list | show <id> [--json]: the workflow logs the notebook
 #                         helpers write, one JSON line per step (X-1)
+#   docs                  [<add-on | command | page | words>]: the kit's documentation,
+#                         served from this computer and opened in the browser
 #   mlflow                start | stop | status | url | replay: local model run server
 #   describe <table>      profile SCHEMA.TABLE and draft its descriptor, or approve
 #                         one: --sample N, --id, --json, --write, --approve, --versions
@@ -5435,6 +5437,9 @@ try {
         }
         "workflow"     {
             Invoke-ExakitMarketplaceCli -Script workflow_cli -CmdArgs $RestArgs
+        }
+        "docs"         {
+            Invoke-ExakitMarketplaceCli -Script docs_cli -CmdArgs $RestArgs
         }
         "mlflow"       {
             Invoke-ExakitMarketplaceCli -Script mlflow_cli -CmdArgs $RestArgs

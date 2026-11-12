@@ -6044,7 +6044,7 @@ function Invoke-ExakitMarketplacePythonNow {
 }
 
 function Invoke-ExakitMarketplaceCli {
-    param([ValidateSet('notebook_cli', 'udf_cli', 'model_cli', 'udf_manage', 'mlflow_cli', 'rust_cli', 'workflow_cli', 'persona_apply', 'installer_flow')][string]$Script,
+    param([ValidateSet('notebook_cli', 'udf_cli', 'model_cli', 'udf_manage', 'mlflow_cli', 'rust_cli', 'workflow_cli', 'docs_cli', 'persona_apply', 'installer_flow')][string]$Script,
           [string[]]$CmdArgs = @(), [switch]$AllowFailure)
     $root = Get-ExakitMarketplaceRoot
     $target = Join-Path (Join-Path $root 'marketplace') "$Script.py"
@@ -6053,7 +6053,7 @@ function Invoke-ExakitMarketplaceCli {
                 ($Script -eq 'udf_manage' -and $CmdArgs.Count -gt 1 -and $CmdArgs[0] -eq 'udf-use' -and $CmdArgs -contains '--list') -or
                 ($Script -eq 'notebook_cli' -and $CmdArgs.Count -gt 0 -and $CmdArgs[0] -in @('status','url')) -or
                 ($Script -eq 'mlflow_cli' -and $CmdArgs.Count -gt 0 -and $CmdArgs[0] -in @('status','url')) -or
-                ($Script -eq 'workflow_cli')
+                ($Script -eq 'workflow_cli') -or ($Script -eq 'docs_cli')
     $python = if ($readOnly -and (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue)) { Get-ExakitPersonaPython } else { '' }
     $uv = if ($python) { '' } else { Get-ExakitUvBin }
     if (-not $uv -and -not $readOnly) { $uv = Install-ExakitUv }

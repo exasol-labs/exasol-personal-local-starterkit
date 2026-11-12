@@ -75,6 +75,8 @@
 #                       add-on); --check, --setup, --stop, --no-browser, --port N
 #   workflow            list | show <id> [--json]: the workflow logs the notebook
 #                       helpers write, one JSON line per step (X-1)
+#   docs                [<add-on | command | page | words>]: the kit's documentation,
+#                       served from this computer and opened in the browser
 #   mlflow              start | stop | status | url | replay: local model run server
 #   describe <table>    profile SCHEMA.TABLE and draft its descriptor, or approve
 #                       one: --sample N, --id, --json, --write, --approve, --versions
@@ -3355,6 +3357,7 @@ case "${1:-help}" in
         ;;
     notebook) shift; _exakit_marketplace_cli notebook_cli "$@" ;;
     workflow) shift; _exakit_marketplace_cli workflow_cli "$@" ;;
+    docs) shift; _exakit_marketplace_cli docs_cli "$@" ;;
     mlflow) shift; _exakit_marketplace_cli mlflow_cli "$@" ;;
     describe) shift; command -v cmd_describe >/dev/null 2>&1 || die "The describe module is missing from this kit copy. Repair with: exakit update"; cmd_describe "$@" ;;
     rust-udf) shift; _exakit_marketplace_cli rust_cli "$@" ;;

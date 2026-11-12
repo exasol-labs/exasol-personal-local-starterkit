@@ -3,6 +3,7 @@
     nb.docs()                   # the documentation (this notebook's persona section), shown under the cell
     nb.docs("descriptor")       # search it for a word
     nb.docs(nb.describe)        # one command's page (or nb.docs("describe"))
+    nb.docs("dash-server")      # an add-on's entry; nb.docs("data-load"): a kit command
     nb.docs("explore")              # one page, by its address
     nb.docs(browser=True)       # in a browser tab instead
 
@@ -21,6 +22,7 @@ import html
 import json
 import os
 import mimetypes
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -186,6 +188,41 @@ def _sections(root: Path) -> list[str]:
     return ([here] if here in found else []) + [name for name in found if name != here]
 
 
+def _kit_root() -> Path:
+    kit = setting("EXAKIT_NB_KIT")
+    return Path(kit) if kit else Path(__file__).resolve().parents[3]
+
+
+def _kit_names() -> tuple[set[str], set[str]]:
+    """(the marketplace's add-on ids, the kit's commands), from the kit copy's own catalog and help."""
+    addons: set[str] = set()
+    commands: set[str] = set()
+    try:
+        catalog = json.loads((_kit_root() / "marketplace" / "catalog.json").read_text(encoding="utf-8"))
+        addons = {str(a["id"]) for a in catalog.get("addons") or [] if isinstance(a, dict) and a.get("id")}
+    except (OSError, ValueError):
+        pass
+    try:
+        helped = json.loads((_kit_root() / "setup" / "help" / "exakit.json").read_text(encoding="utf-8"))
+        commands = {str(c["command"]) for c in helped.get("commands") or [] if isinstance(c, dict) and c.get("command")}
+    except (OSError, ValueError):
+        pass
+    return addons, commands
+
+
+def _kit_page(root: Path, word: str) -> str | None:
+    """The page for an add-on's id (its entry on the add-ons page) or a kit command (the command table)."""
+    addons, commands = _kit_names()
+    name = word.strip().lower()
+    if name.startswith("exakit "):
+        name = name[len("exakit "):].strip()
+    if name in addons and _file_for(root, f"{PREFIX}/kit/tools/add-ons") is not None:
+        return f"{PREFIX}/kit/tools/add-ons#{name}"
+    if name in commands and _file_for(root, f"{PREFIX}/kit/reference/commands") is not None:
+        return f"{PREFIX}/kit/reference/commands?q={quote('exakit ' + name)}"
+    return None
+
+
 def _path_for(root: Path, what: Any) -> str:
     """The site path for what was asked: this notebook's persona section, a command's page, a page by its address
     (in any section, this persona's first), else a search."""
@@ -203,6 +240,9 @@ def _path_for(root: Path, what: Any) -> str:
     name = name[:-2] if name.endswith("()") else name
     if name in commands:
         return PREFIX + commands[name]
+    kit_page = _kit_page(root, text)
+    if kit_page:
+        return kit_page
     page = text.strip("/")
     for address in ([page] + [f"{section}/{page}" for section in sections] if page else []):
         if _file_for(root, f"{PREFIX}/{address}") is not None:
@@ -254,3 +294,51 @@ def docs(what: Any = None, *, height: int = 640, browser: bool = False) -> Docs:
     if browser:
         page.open()
     return page
+
+
+def main(argv: list[str]) -> int:
+    """``exakit docs [<add-on | command | page | words>] [--print] [--json]``: open the kit's documentation in the
+    browser - all of it, an add-on's entry, a kit command, a page by its address, or a search for any other
+    words - served from this computer. With no server of the kit's running yet, this one serves until Ctrl+C.
+    ``--print`` and ``--json`` only say the address (and whether it is being served) and open nothing."""
+    words = [a for a in argv if not a.startswith("-")]
+    flags = {a for a in argv if a.startswith("-")}
+    unknown = flags - {"--print", "--json", "-j", "--help", "-h"}
+    if unknown:
+        print(f"Unknown option '{sorted(unknown)[0]}' for docs (supported: --print, --json).", file=sys.stderr)
+        return 2
+    if flags & {"--help", "-h"}:
+        print("Use: exakit docs [<add-on | command | page | words to search>] [--print] [--json]")
+        return 0
+    root = site_dir()
+    if root is None:
+        print("The documentation site is not in this kit copy (notebook/docs/site). Fix: exakit update notebook", file=sys.stderr)
+        return 1
+    what = " ".join(words) or None
+    # from the terminal a kit command or an add-on comes first (`exakit docs describe` is the command, not the
+    # notebook helper of the same name); then a helper, a page, a search
+    path = (_kit_page(root, what) or _path_for(root, what)) if what else PREFIX
+    stamp = _stamp(root)
+    running = next((port for port in _ports() if _ours(port, stamp)), None)
+    only_say = bool(flags & {"--print", "--json", "-j"})
+    if only_say:
+        port = running or _ports()[0]
+        url = f"http://{SHOWN}:{port}{path}"
+        if flags & {"--json", "-j"}:
+            print(json.dumps({"url": url, "serving": running is not None, "start": None if running else "exakit docs"}))
+        else:
+            print(url if running else f"{url}  (not served yet: run exakit docs to serve and open it)")
+        return 0
+    url = _serve(root) + path
+    import webbrowser
+
+    webbrowser.open(url)
+    if running is not None:
+        print(f"Opened {url}")
+        return 0
+    print(f"Serving the kit's documentation at {url}\nPress Ctrl+C to stop.", flush=True)
+    try:
+        threading.Event().wait()
+    except KeyboardInterrupt:
+        print()
+    return 0

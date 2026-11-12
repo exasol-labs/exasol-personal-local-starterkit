@@ -20,7 +20,7 @@
     - [Workflows](/kit/tools/workflows): Read the log of a piece of work from the terminal - every query, approval and dashboard, in order.
     - [AI clients and skills](/kit/tools/ai-clients-and-skills): Connect your AI clients to the database, check the connection, and see the skills the kit gives them.
   - Reference
-    - [All exakit commands](/kit/reference/commands): Every command of the kit, 41 in all, with what it takes and what it does.
+    - [All exakit commands](/kit/reference/commands): Every command of the kit, 42 in all, with what it takes and what it does.
 - Data Scientist: One workflow in eight stages, on your local database
   - [The data science workflow](/data-scientist): The end-to-end workflow most data scientists follow, in eight stages, and how the Starter Kit supports each one.
   - Set up Exasol

@@ -7,8 +7,10 @@ computer only, finds a command's page, a page by its address, or falls back to t
 
 from __future__ import annotations
 
+import os
 import importlib.util
 import json
+from unittest import mock
 import re
 import sys
 import tempfile
@@ -281,6 +283,52 @@ class ServedDocsTest(unittest.TestCase):
         docs_module.site_dir = lambda: None
         with self.assertRaisesRegex(RuntimeError, "exakit update notebook"):
             nb_docs()
+
+
+class DocsCommandTest(unittest.TestCase):
+    """`exakit docs [<add-on | command | page | words>]`: the address each word opens, said without opening anything."""
+
+    def say(self, *argv):
+        import contextlib
+        import io
+
+        sys.path.insert(0, str(ROOT / "notebook" / "package"))
+        module = __import__("importlib").import_module("exakit_nb.docs")
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {"EXAKIT_NB_KIT": str(ROOT)}), mock.patch.object(module, "_ours", return_value=False), \
+                contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = module.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_each_kind_of_word_opens_its_place(self):
+        for words, ending in (((), "/docs"),
+                              (("semantic-views",), "/docs/kit/tools/add-ons#semantic-views"),      # an add-on
+                              (("data-load",), "/docs/kit/reference/commands?q=exakit%20data-load"),  # an exakit command
+                              (("describe",), "/docs/kit/reference/commands?q=exakit%20describe"),    # the command, not the helper
+                              (("semantic_model",), "/semantic#semantic_model"),                       # a notebook helper
+                              (("security",), "/docs/security"),                                       # a page
+                              (("how", "links", "are", "found"), "/docs?q=how%20links%20are%20found")):  # a search
+            with self.subTest(words=words):
+                code, out, _ = self.say(*words, "--json")
+                self.assertEqual(0, code)
+                found = json.loads(out)
+                self.assertTrue(found["url"].endswith(ending), found["url"])
+                self.assertEqual((False, "exakit docs"), (found["serving"], found["start"]))
+
+    def test_the_add_ons_page_has_an_entry_for_every_add_on_of_the_catalog(self):
+        catalog = json.loads((ROOT / "marketplace" / "catalog.json").read_text(encoding="utf-8"))
+        page = (ROOT / "notebook/docs/content/docs/kit/tools/add-ons.mdx").read_text(encoding="utf-8")
+        for addon in catalog["addons"]:
+            with self.subTest(addon=addon["id"]):
+                self.assertRegex(page, rf"(?m)^### {re.escape(addon['id'])}$")       # what `exakit docs <id>` lands on
+
+    def test_an_unknown_option_is_exit_2_and_the_command_is_wired_on_both_shells(self):
+        code, _, err = self.say("--bogus")
+        self.assertEqual((2, True), (code, "Unknown option '--bogus'" in err))
+        self.assertIn('docs) shift; _exakit_marketplace_cli docs_cli "$@"', (ROOT / "setup" / "exakit").read_text(encoding="utf-8"))
+        self.assertIn("Invoke-ExakitMarketplaceCli -Script docs_cli", (ROOT / "setup" / "exakit.ps1").read_text(encoding="utf-8"))
+        helped = json.loads((ROOT / "setup/help/exakit.json").read_text(encoding="utf-8"))
+        self.assertIn("docs", [c["command"] for c in helped["commands"]])
 
 
 class CardLinksTest(unittest.TestCase):

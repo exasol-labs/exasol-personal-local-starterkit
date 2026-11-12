@@ -4804,12 +4804,12 @@ _exakit_marketplace_python() {
 # Direct add-on commands share one platform boundary. The command parsers and
 # side effects live in marketplace/*.py, not in parallel shell implementations.
 _exakit_marketplace_cli() {
-    case "$1" in notebook_cli|udf_cli|model_cli|udf_manage|mlflow_cli|rust_cli|workflow_cli|persona_apply|installer_flow) ;; *) return 2 ;; esac
+    case "$1" in notebook_cli|udf_cli|model_cli|udf_manage|mlflow_cli|rust_cli|workflow_cli|docs_cli|persona_apply|installer_flow) ;; *) return 2 ;; esac
     _emc_script="$1"
     shift
     _emc_mode=mutate
     case "$_emc_script:${1:-}:${2:-}" in
-        model_cli:list:*|model_cli:inspect:*|model_cli:template:*|udf_manage:udf-use:--list|notebook_cli:status:*|notebook_cli:url:*|mlflow_cli:status:*|mlflow_cli:url:*|workflow_cli:*) _emc_mode=query ;;
+        model_cli:list:*|model_cli:inspect:*|model_cli:template:*|udf_manage:udf-use:--list|notebook_cli:status:*|notebook_cli:url:*|mlflow_cli:status:*|mlflow_cli:url:*|workflow_cli:*|docs_cli:*) _emc_mode=query ;;
     esac
     EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
         _exakit_marketplace_run_python "$_emc_mode" "$(_exakit_marketplace_root)/marketplace/$_emc_script.py" "$@"

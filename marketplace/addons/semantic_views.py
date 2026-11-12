@@ -28,6 +28,7 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+import kit_telemetry
 from runtime import AddonFailure, KitContext
 
 ID = "semantic-views"
@@ -81,6 +82,7 @@ def installed_version(ctx: KitContext) -> str | None:
 
 _QUERY = r"""
 import json, os, ssl, sys
+os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")   # pyexasol's usage telemetry stays off unless the user set it
 import pyexasol
 con = pyexasol.connect(dsn=os.environ["EXAKIT_SV_DSN"], user=os.environ["EXAKIT_SV_USER"],
                        password=os.environ["EXAKIT_SV_PASSWORD"], encryption=True,
@@ -102,7 +104,8 @@ def _connection_env(ctx: KitContext) -> dict[str, str]:
         raise AddonFailure("The kit's database password file is missing; check exakit status")
     return {"EXAKIT_SV_DSN": ctx.client_dsn(), "EXAKIT_SV_USER": str(ctx.manifest.get("runtime.user") or "sys"),
             "EXAKIT_SV_PASSWORD": Path(str(credential)).read_text(encoding="utf-8").strip(),
-            "PYEXASOL_TELEMETRY": "0", "EXASOL_TELEMETRY_DISABLE": "1"}
+            "PYEXASOL_TELEMETRY": "0"}
+    kit_telemetry.default_off(env)             # off unless the user set the variable (kit_telemetry.py)
 
 
 def _db(ctx: KitContext, *statements: str, timeout: int = 120) -> list:
@@ -223,7 +226,8 @@ def _run_installer(ctx: KitContext, release: Path) -> None:
     host, _, port = connection["EXAKIT_SV_DSN"].rpartition(":")
     env = {**os.environ, "EXASOL_HOST": host, "EXASOL_PORT": port, "EXASOL_USER": connection["EXAKIT_SV_USER"],
            "EXASOL_PASSWORD": connection["EXAKIT_SV_PASSWORD"], "NO_COLOR": "1", "TERM": "dumb",
-           "PYEXASOL_TELEMETRY": "0", "EXASOL_TELEMETRY_DISABLE": "1"}
+           "PYEXASOL_TELEMETRY": "0"}
+    kit_telemetry.default_off(env)             # off unless the user set the variable (kit_telemetry.py)
     ctx.run_logged("Installing Exasol Semantic Views into the database", str(_python(ctx)),
                    str(release / "tools" / "install.py"), "--skip-package", env=env, cwd=release,
                    timeout=INSTALL_TIMEOUT)

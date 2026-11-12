@@ -83,6 +83,7 @@
     {
       "title": "Reference",
       "commands": [
+        "docs",
         "guide",
         "skills",
         "preflight",
@@ -570,6 +571,20 @@
         "exakit workflow list --json",
         "exakit workflow show wf-20261027-3f9a1c",
         "exakit workflow show wf-20261027-3f9a1c --json"
+      ]
+    },
+    {
+      "command": "docs",
+      "options": "[<add-on | command | page | words>] [--print] [--json | -j]",
+      "summary": "Open the kit's documentation in the browser: all of it, an add-on, a command, a page, or a search.",
+      "description": "Opens the documentation the kit ships (the workflow in eight stages, the personas, data, add-ons, security and the command reference), served from this computer only by the notebook add-on's Python, so reading and searching need no internet. With no argument it opens the start page. An add-on's id (dash-server, semantic-views, ...) opens its entry on the add-ons page; an exakit command (data-load, describe, ...) opens the command table searched for it; a notebook helper's name (describe, semantic_model) its reference; a page's address (security, data-scientist/explore/semantic-views) that page; any other words are searched, typos forgiven. The site is served on the first free port of 8790 to 8809 (EXAKIT_DOCS_PORT puts one first); when a notebook already serves it the page just opens, otherwise this command serves it until Ctrl+C. --print prints the address and --json one object {url, serving, start} without opening anything. Exit 0; 1 when the notebook add-on is not installed (exakit marketplace notebook) or the kit copy has no documentation (exakit update notebook); 2 on an unknown option.",
+      "examples": [
+        "exakit docs",
+        "exakit docs semantic-views",
+        "exakit docs data-load",
+        "exakit docs security",
+        "exakit docs how are links found",
+        "exakit docs --print"
       ]
     },
     {
