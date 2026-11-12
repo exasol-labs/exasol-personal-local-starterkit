@@ -51,7 +51,7 @@ This is step 2 of `00_quickstart`. Until the map is approved, Explore, Ask and S
 
 ## What you get at the end [#what-you-get-at-the-end]
 
-An approved column map. It is saved as a new version, and its roles are published on a view in `EXAKIT_SEMANTIC`. Explore, Ask and Share read only an approved map.
+An approved column map. It is saved as a new version, and the schema's [semantic model](/data-scientist/guides/semantic-views) in Exasol Semantic Views is rebuilt with it, so AI clients read the same meaning. Explore, Ask and Share read only an approved map.
 
 ## After approving [#after-approving]
 

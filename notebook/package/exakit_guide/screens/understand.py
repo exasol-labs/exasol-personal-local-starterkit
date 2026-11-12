@@ -1048,7 +1048,7 @@ class ColumnMap(Screen):
 class DataMap(Screen):
     """Every table in the database by origin - external source, your data, sample data - with its column map's state
     and the roles in it (nb.data_map, metadata only). Redrawn when data is chosen or a column map approved, so an
-    approval shows up here as "approved vN, published"."""
+    approval shows up here as "approved vN, in semantic model ..."."""
 
     kind = "card"
 
@@ -1108,21 +1108,155 @@ class DataMap(Screen):
             threading.Thread(target=self._load, daemon=True).start()
 
 
+class SemanticViews(Screen):
+    """The semantic layer: Exasol Semantic Views models over any of the data - sample datasets, your own files and
+    any number of external sources at once (nb.semantic_model). Tables with an approved column map are offered; the
+    AI (when a model is configured) proposes the fields' business names, synonyms and metrics; a preview shows what
+    would be built before anything is written. Models the kit built can be refreshed here; approving a column map
+    refreshes every model it is in by itself."""
+
+    kind = "card"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.tables: list[dict] = []
+        self.models: list[dict] = []
+        self.preview_text = ""
+        self.result_text = ""
+        self.error = None
+        self.loading = True
+        SESSION.listen(self)
+        self.refresh()
+        import threading
+
+        threading.Thread(target=self._load, daemon=True).start()
+
+    def _load(self) -> None:
+        try:
+            found = actions.run("data.map")
+            self.tables = [r for r in found.table_rows if str(r.get("map", "")).startswith(("approved", "shipped"))]
+            try:
+                listed = actions.run("semantic.models")
+                self.models = listed.to_dict("records") if hasattr(listed, "to_dict") else list(listed or [])
+            except Exception:
+                self.models = []
+            self.error = None
+        except Exception as exc:
+            self.error = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        self.loading = False
+        self.refresh()
+        SESSION.release()
+
+    def _chosen(self, v: dict) -> tuple[str, list[str], list[str], bool]:
+        tables = [r["table"] for r in self.tables if v.get("sv:" + r["table"])]
+        links = [line.strip() for line in str(v.get("sv_links") or "").replace(";", "\n").splitlines() if line.strip()]
+        return (str(v.get("sv_name") or "").strip() or "my_data", tables, links, bool(v.get("sv_ai")))
+
+    def build(self) -> list[dict]:
+        head = {"t": "head", "kicker": KICKER, "title": "Semantic views",
+                "sub": "One semantic model over any of your data - sample data, your files and external sources - "
+                       "that AI clients and notebooks query by its business names."}
+        if self.loading:
+            return [head, {"t": "empty", "v": "Reading which tables have an approved column map…"}]
+        if self.error:
+            return [head, {"t": "msg", "kind": "warn", "v": f"The tables could not be read: {self.error}"},
+                    {"t": "actions", "items": [{"id": "sv_reload", "label": "Read it again"}]}]
+        blocks = [head]
+        if self.models:
+            blocks += [{"t": "subhead", "v": "Models in the database"},
+                       {"t": "table", "columns": ["Model", "Published as", "Built by", "About"],
+                        "rows": [[m.get("model"), m.get("published_schema"), "the kit" if m.get("kit") else "someone else",
+                                  m.get("description")] for m in self.models]}]
+            kit_models = [m for m in self.models if m.get("refreshable")]
+            if kit_models:
+                blocks += [{"t": "fields", "items": [{"id": "sv_refresh_name", "label": "Refresh a model", "type": "select",
+                                                      "value": kit_models[0]["model"],
+                                                      "options": [{"value": m["model"], "label": m["model"]} for m in kit_models]}]},
+                           {"t": "actions", "items": [{"id": "sv_refresh", "label": "Refresh it", "busy": "Rebuilding…"}]}]
+        if not self.tables:
+            blocks.append({"t": "msg", "kind": "info", "v": "No table has an approved column map yet. Approve one above "
+                           "(Column map), and it is offered here."})
+            return blocks
+        blocks += [{"t": "subhead", "v": "Build a model"},
+                   {"t": "p", "muted": True, "v": "Pick the tables, from as many origins as you like. Their approved "
+                    "column maps decide the fields: time, category and flag columns become dimensions, measures become "
+                    "totals and averages, every table gets a row count."},
+                   {"t": "checks", "items": [{"id": "sv:" + r["table"],
+                                              "label": f"{r['table']}  ·  {r['origin_label']}  ·  {r['rows_shown']} rows"}
+                                             for r in self.tables]},
+                   {"t": "fields", "items": [
+                       {"id": "sv_name", "label": "Model name", "value": "my_data", "placeholder": "sales_360"},
+                       {"id": "sv_links", "label": "Links across schemas (optional)", "value": "",
+                        "placeholder": "SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY; ..."}]},
+                   {"t": "checks", "items": [{"id": "sv_ai", "label": "Let the AI propose business names, synonyms and "
+                                                                        "metrics (metadata only, never a row)"}]},
+                   {"t": "actions", "items": [{"id": "sv_preview", "label": "Preview", "busy": "Building the preview…"},
+                                              {"id": "sv_publish", "label": "Publish the model", "primary": True,
+                                               "busy": "Publishing…"}]}]
+        if self.preview_text:
+            blocks += [{"t": "subhead", "v": "Preview"}, {"t": "pre", "v": self.preview_text}]
+        if self.result_text:
+            blocks += [{"t": "msg", "kind": "good", "v": self.result_text}]
+        blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
+                       "v": actions.code("semantic.publish", name="sales_360", tables=[r["table"] for r in self.tables[:3]],
+                                         links=[], ai=True)})
+        return blocks
+
+    def on_sv_reload(self, _v: dict) -> None:
+        self.loading = True
+        self._load()
+
+    def on_sv_preview(self, v: dict) -> None:
+        name, tables, links, ai = self._chosen(v)
+        if not tables:
+            raise ValueError("Pick at least one table.")
+        found = actions.run("semantic.preview", name=name, tables=tables, links=links, ai=ai)
+        self.preview_text, self.result_text = str(found), ""
+        self.refresh()
+
+    def on_sv_publish(self, v: dict) -> None:
+        name, tables, links, ai = self._chosen(v)
+        if not tables:
+            raise ValueError("Pick at least one table.")
+        found = actions.run("semantic.publish", name=name, tables=tables, links=links, ai=ai)
+        self.preview_text = str(found)
+        self.result_text = (f"Published {', '.join(found.views)}. AI clients query it over MCP; a notebook with "
+                            "nb.semantic_sql. Approving a column map in it refreshes it by itself.")
+        self.loading = True
+        self._load()
+
+    def on_sv_refresh(self, v: dict) -> None:
+        name = str(v.get("sv_refresh_name") or "")
+        found = actions.run("semantic.refresh", name=name)
+        self.result_text = f"Refreshed {found.get('view')}."
+        self.loading = True
+        self._load()
+
+    def on_session(self, what: str) -> None:
+        if what in ("source", "dataset", "data"):
+            import threading
+
+            self.loading = True
+            self.refresh()
+            threading.Thread(target=self._load, daemon=True).start()
+
+
 def understand():
-    """Step 1 in the guided view: choose the data, approve what each column means, and see it on the map of all your data."""
+    """Step 1 in the guided view: choose the data, approve what each column means, see it on the map of all your
+    data, and build the semantic views AI clients and notebooks query."""
     from ..card import show
 
-    return show(ChooseData(), ColumnMap(), DataMap(), docs="guides/approve-column-map")
+    return show(ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="guides/approve-column-map")
 
 
 def _publish_note(said: str) -> str:
-    """Whether the approval reached the AI agents: the kit publishes the roles as column comments on a view in
-    EXAKIT_SEMANTIC, which agents read over MCP, and says so (or why not) in its own lines."""
+    """Whether the approval reached the AI agents: the kit rebuilds the schema's Exasol Semantic Views model, which
+    agents read over MCP, and says so (or why not) in its own lines."""
     import re
 
-    found = re.search(r"Published as (\S+?)[:.]?(?:\s|$)", said or "")
+    found = re.search(r"Published in Exasol Semantic Views as (.+?): agents", said or "")
     if found:
-        return f"Published as {found.group(1)}: AI agents read the roles from it."
+        return f"Published in Exasol Semantic Views as {found.group(1)}: AI agents read the fields from it."
     missed = re.search(r"Approved, not published: ([^\n]+?)\. Retry with: (.+)", said or "")
     if missed:
         return f"Not published for AI agents yet ({missed.group(1)}); retry with {missed.group(2).strip()}."

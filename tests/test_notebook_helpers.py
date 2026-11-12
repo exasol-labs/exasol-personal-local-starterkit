@@ -1749,7 +1749,7 @@ class DataMapTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def build(self, semantic=None, relations=None):
+    def build(self, semantic=None):
         tables = _Frame(TABLE_SCHEMA=["AMAZON", "STARTER_KIT", "PREPROC", "EXAKIT_PREPARED", "VS_SALES"],
                         TABLE_NAME=["ORDER_LINES", "EMPLOYEES", "CONFIG", "J", "ORDERS"],
                         TABLE_ROW_COUNT=[128975, 10, 2, 1, None], TABLE_COMMENT=[None] * 5,
@@ -1758,13 +1758,12 @@ class DataMapTest(unittest.TestCase):
                          COLUMN_TABLE=["ORDER_LINES", "ORDER_LINES", "EMPLOYEES", "ORDERS", "ORDERS", "ORDERS"],
                          COLUMN_NAME=["ORDER_LINE_ID", "SKU", "EMPLOYEE_ID", "ORDER_ID", "SKU", "EMPLOYEE_ID"],
                          COLUMN_TYPE=["DECIMAL(18,0)", "VARCHAR(40)", "DECIMAL(9,0)", "DECIMAL(9,0)", "VARCHAR(40)", "DECIMAL(9,0)"])
-        semantic = semantic or _Frame(VIEW_NAME=[], VIEW_COMMENT=[], COLUMN_NAME=[], COLUMN_COMMENT=[])
         module = importlib.import_module("exakit_nb.data_map")
 
         def answer(conn, statement):
-            if "__RELATIONS" in statement:
-                return relations
-            if "EXA_ALL_VIEWS" in statement:
+            if "SEMANTIC_CATALOG" in statement:
+                if semantic is None:                       # Semantic Views is not installed
+                    raise RuntimeError("object SEMANTIC_CATALOG.ENTITIES not found")
                 return semantic
             return columns if "COLUMN_OBJECT_TYPE" in statement else tables
         with mock.patch.object(module, "_sql", side_effect=answer):
@@ -1801,30 +1800,39 @@ class DataMapTest(unittest.TestCase):
         found = {(l["from_column"].upper(), l["kind"]) for l in links}
         self.assertEqual(found, {("CATEGORY", "shared dimension"), ("SHIP_STATE", "shared dimension")})
 
-    def test_an_approved_map_and_its_relations_win(self):
-        semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS", "VS_SALES__ORDERS", "VS_SALES__RELATIONS"],
-                          VIEW_COMMENT=["grain=x; source=VS_SALES.ORDERS; descriptor=v2"] * 2 + ["r"],
-                          COLUMN_NAME=["ORDER_ID", "EMPLOYEE_ID", "FROM_TABLE"],
-                          COLUMN_COMMENT=["role=key; descriptor=v2", "role=identifier; descriptor=v2", None])
-        relations = _Frame(FROM_TABLE=["VS_SALES.ORDERS"], FROM_COLUMN=["EMPLOYEE_ID"], TO_TABLE=["STARTER_KIT.EMPLOYEES"],
-                           TO_COLUMN=["EMPLOYEE_ID"], KIND=["found"])
-        found = self.build(semantic, relations)
-        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2, published")
-        self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"})
-        kinds = [l["kind"] for l in found.link_rows if "EMPLOYEE_ID" == l["from_column"]]
-        self.assertEqual(kinds, ["found"])                         # the declared one, not repeated as possible
+    def test_an_approved_map_its_semantic_model_and_its_approved_links_win(self):
+        import json
 
-    def test_a_newer_approval_than_the_view_shows_its_own_roles_and_every_slot(self):
         module = importlib.import_module("exakit_nb.data_map")
-        semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS"], VIEW_COMMENT=["source=VS_SALES.ORDERS; descriptor=v1"],
-                          COLUMN_NAME=["ORDER_ID"], COLUMN_COMMENT=["role=key; descriptor=v1"])
+        semantic = _Frame(SOURCE_SCHEMA=["VS_SALES"], SOURCE_OBJECT=["ORDERS"], MODEL_NAME=["vs_sales"],
+                          PUBLISHED_SCHEMA=["SEM_VS_SALES"], DESCRIPTION=["Model of VS_SALES [built by exakit]"])
+        folder = Path(self.home.name) / "descriptors" / "VS_SALES"
+        folder.mkdir(parents=True)
+        (folder / "current.json").write_text(json.dumps({"schema": "VS_SALES", "relations": [
+            {"from": "ORDERS.EMPLOYEE_ID", "to": "EMPLOYEES.EMPLOYEE_ID"}]}), encoding="utf-8")
+        (Path(self.home.name) / "semantic").mkdir()
+        (Path(self.home.name) / "semantic" / "sales_360.json").write_text(json.dumps({"inputs": {"links": [
+            {"from": "VS_SALES.ORDERS.SKU", "to": "AMAZON.ORDER_LINES.SKU"}]}}), encoding="utf-8")
+        stored = ("approved", {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"}, {"key": "ORDER_ID"}, 2)
+        none = (None, {}, {}, 0)
+        with mock.patch.object(module, "_store_map", side_effect=lambda t: stored if t == "VS_SALES.ORDERS" else none):
+            found = self.build(semantic)
+        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2, in semantic model vs_sales")
+        self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"})
+        kinds = {(l["from_table"], l["from_column"]): l["kind"] for l in found.link_rows}
+        self.assertEqual("approved", kinds[("VS_SALES.ORDERS", "EMPLOYEE_ID")])
+        self.assertEqual("in semantic model sales_360", kinds[("VS_SALES.ORDERS", "SKU")])
+        self.assertEqual(1, sum(1 for l in found.link_rows if l["from_column"] == "SKU"), "not repeated as possible")
+
+    def test_an_approval_not_yet_in_a_model_says_so_and_shows_every_slot(self):
+        module = importlib.import_module("exakit_nb.data_map")
         stored = ("approved", {"ORDER_ID": "key", "EMPLOYEE_ID": "category"},
                   {"key": "ORDER_ID", "category": "EMPLOYEE_ID", "entity": "EMPLOYEE_ID"}, 2)
         none = (None, {}, {}, 0)
         with mock.patch.object(module, "_store_map", side_effect=lambda t: stored if t == "VS_SALES.ORDERS" else none):
-            found = self.build(semantic)
+            found = self.build()                           # Semantic Views is not installed yet
         row = found.table("VS_SALES.ORDERS")
-        self.assertEqual(row["map"], "approved v2, not published (the view still says v1)")
+        self.assertEqual(row["map"], "approved v2, not in a semantic model yet")
         self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "category"})
         self.assertEqual(row["named_roles"], [("key", "ORDER_ID"), ("category", "EMPLOYEE_ID"), ("entity", "EMPLOYEE_ID")])
         html = found._repr_html_()

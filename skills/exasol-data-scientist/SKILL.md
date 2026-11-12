@@ -29,11 +29,14 @@ what the kit can tell you.
 (`nb.data_map(conn)`). Say in three lines what is there: sample datasets,
 the user's loaded tables, connected sources.
 
-**Round 0, first: the column maps.** Read `EXAKIT_SEMANTIC` as the `exakit`
-skill says (section 3), and use the roles found there over anything you infer.
-Warn about every table you will use that has no approved map, give the
-`exakit describe` commands for it, and ask whether to go on with your reading
-or wait for the user to approve. A prediction needs an approved map with a
+**Round 0, first: the semantic layer.** Read the Exasol Semantic Views models
+as the `exakit` skill says (section 3: `SEMANTIC_CATALOG.MODELS`, `ENTITIES`,
+`DIMENSIONS`, `METRICS`, `RELATIONSHIPS`), and answer from their metrics and
+dimensions over anything you infer. Warn about every table you will use that is
+in no model, give the `exakit describe` commands for it (and
+`exakit describe --model <NAME> --table ... --link ... --ai --dry-run` for a
+question across sources), and ask whether to go on with your reading or wait
+for the user to approve. A prediction needs an approved column map with a
 target: without one, stop and ask for it.
 
 **Round 0, continued: find what connects the sources.** Before you describe
@@ -164,7 +167,9 @@ default and say so. Keep these in mind through every round:
 | Find tables and columns | MCP: list schemas, list and describe tables |
 | Profile a table | MCP SELECTs (see `references/sql-recipes.md`), or `nb.data_checks(conn, ds)` |
 | Approve the column map | `exakit describe <SCHEMA.TABLE>`, then `exakit describe <id> --approve --role target=<COLUMN>`; in a notebook `nb.review_roles(conn, data)` |
-| Read the approved roles | `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`: one column comment per role |
+| Read the semantic layer | Exasol Semantic Views: `SEMANTIC_CATALOG.MODELS`, `ENTITIES`, `DIMENSIONS`, `METRICS`, `RELATIONSHIPS`; ask it with Semantic SQL (`set_exasol_preprocessor` to `SEMANTIC_ADMIN.SEMANTIC_PREPROCESSOR` through MCP; `nb.semantic_sql(conn, ...)` in a notebook) |
+| One model across sources | `exakit describe --model <NAME> --table S.T ... --link S.T.COL=S.T.KEY --ai [--dry-run]`; in a notebook `nb.semantic_model(conn, name, tables=[...], links=[...], preview=True)` or the **Semantic views** card |
+| Keep a model current | approving a column map rebuilds every model it is in; otherwise `exakit describe --model <NAME> --refresh` (`nb.refresh_semantic`) |
 | Links between tables | `exakit describe --schema <SCHEMA>`; in a notebook `nb.describe_schema` |
 | Clean the data | `nb.typed_view(conn, ds)`: proposes types, NULLs for blanks and placeholders, no exact copies |
 | Find leakage | `nb.leakage_check(conn, ds)` |

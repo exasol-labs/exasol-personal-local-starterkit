@@ -17,8 +17,9 @@ otherwise the table is profiled once, in SQL, and every column gets one of eight
 it; the slots name the columns the notebooks use. show() lists each column with the schema and table it came from,
 its type, role, confidence, evidence and note, low confidence first, the slots above (rows() gives the same as dicts;
 a notebook renders it as a table). approve() checks every column has a role and none sits in two slots, checks
-the table has not changed since it was profiled, writes the next version into the kit's store and publishes the
-roles as column comments on a view in EXAKIT_SEMANTIC (a publish that fails leaves the approval standing, and says
+the table has not changed since it was profiled, writes the next version into the kit's store and rebuilds the
+schema's Exasol Semantic Views model with it - the roles become its dimensions, facts and metrics; Semantic Views is
+installed first when the database does not have it (a publish that fails leaves the approval standing, and says
 why). The active workflow's log gets one line.
 
 The work is the kit's own service, setup/lib/describe_service.py in the kit copy (the one `exakit describe` runs),
@@ -75,6 +76,6 @@ A descriptor proposed for a table (status draft), or the approved one describe()
 | `to_dict() -> dict[str, Any]` | The descriptor document (a copy). |
 | `to_yaml() -> str` |  |
 | `save(path: str \| Path) -> Path` | Write the descriptor as YAML; exakit_nb.dataset(conn, path) reads it back. |
-| `approve(owner: str \| None=None, comments: bool=True, *, conn=None, sample: int \| None=None)` | Approve: every column has a role and none sits in two slots, the table has not changed since it was profiled, the next version is written into the kit's store with current.yaml, and the roles are published on a view in EXAKIT_SEMANTIC (`comments=False` skips it). |
+| `approve(owner: str \| None=None, comments: bool=True, *, conn=None, sample: int \| None=None)` | Approve: every column has a role and none sits in two slots, the table has not changed since it was profiled, the next version is written into the kit's store with current.yaml, and the schema's Exasol Semantic Views model is rebuilt with it (`comments=False` skips that). |
 | `rows() -> list[dict[str, str]]` | One dict per column, low confidence first: the schema and table it came from, its name, type, role, confidence, evidence and note. |
 | `show() -> None` | Print each column with its schema and table, type, role, confidence, evidence and note, low confidence first, the slots above. |

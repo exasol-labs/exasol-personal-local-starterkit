@@ -31,13 +31,13 @@ Approval:
 
 - checks that every column has a role, that none sits in two slots, and that the table has not changed since it was profiled
 - writes a new version, never rewriting an old one
-- publishes the roles as column comments on a view, `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`, readable by the read-only AI user
+- publishes the roles in [Exasol Semantic Views](/kit/data/semantic-views): the schema's semantic model is rebuilt with this table as an entity, readable by the read-only AI user. Semantic Views is installed first when the database does not have it yet.
 
 Your own table is never commented. If publishing fails, the approval still stands and the message says why.
 
 ## What you get at the end
 
-A new version of the column map, kept under `~/.exasol-starter-kit/descriptors/`, and the roles published on the view `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`. The notebooks and AI clients read the approved version from then on.
+A new version of the column map, kept under `~/.exasol-starter-kit/descriptors/`, and the schema's semantic model (its views in `SEM_<SCHEMA>`) rebuilt from it. The notebooks and AI clients read the approved version from then on.
 
 ## See and compare
 
@@ -45,7 +45,7 @@ A new version of the column map, kept under `~/.exasol-starter-kit/descriptors/`
 exakit describe amazon_sales --show              # the current version
 exakit describe amazon_sales --show --version 1  # an earlier one
 exakit describe amazon_sales --versions          # every version
-exakit describe orders --comments                # publish the roles again
+exakit describe orders --comments                # rebuild the schema's semantic model again
 ```
 
 Add `--json` to any of them for a script.
@@ -62,7 +62,7 @@ This lists every table with its rows and key, and every many-to-one link between
 exakit describe --schema TPCH --approve --unlink ORDERS.O_CLERK
 ```
 
-`--link TABLE.COLUMN=TABLE.KEY` adds a link and `--unlink TABLE.COLUMN` removes one. The approved links are published as the view `EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS`.
+`--link TABLE.COLUMN=TABLE.KEY` adds a link and `--unlink TABLE.COLUMN` removes one. The approved links become relationships of the schema's semantic model. To join tables of different schemas, build a [multi-source model](/kit/data/semantic-views).
 
 ## Where they are kept
 

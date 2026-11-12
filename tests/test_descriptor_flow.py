@@ -1,5 +1,6 @@
 """Steps 4 and 5 of the descriptor plan: describe and approve against a stand-in database, the store's versions,
-the carry-over when a table changes, and the EXAKIT_SEMANTIC view (DS5.2, DS2.5, DS5.4's statements)."""
+the carry-over when a table changes, and the schema's Exasol Semantic Views model an approval rebuilds (DS5.2,
+DS2.5, DS5.4)."""
 
 from __future__ import annotations
 
@@ -12,8 +13,11 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path[:0] = [str(ROOT / "setup" / "lib"), str(ROOT / "tools")]
-from descriptor import draft, flow, profile, publish, store  # noqa: E402
+sys.path[:0] = [str(ROOT / "setup" / "lib"), str(ROOT / "tools"), str(ROOT / "tests")]
+from descriptor import draft, flow, profile, publish, semantic_model, store  # noqa: E402
+from semantic_fake import SemanticViews  # noqa: E402
+
+MODEL = "semantic model support (SEM_SUPPORT)"
 
 COLUMNS = [("TICKET_ID", "DECIMAL(9,0)"), ("OPENED_ON", "DATE"), ("CHANNEL", "VARCHAR(10) UTF8"),
            ("ESCALATED", "DECIMAL(1,0)"), ("BODY", "VARCHAR(400) UTF8")]
@@ -26,21 +30,23 @@ def rows(n: int = 120) -> list[list]:
 
 
 class Database:
-    """Answers the shape query from its columns and the view read-back from the comments it was sent."""
+    """Answers the shape query from its columns, and Semantic Views' catalog from the scripts it was sent."""
 
     def __init__(self, columns, data, fail_publish=False):
         self.columns, self.data, self.fail_publish = list(columns), data, fail_publish
         self.sent: list[str] = []
-        self.views: dict[str, list[tuple[str, str]]] = {}
+        self.sv = SemanticViews()
 
     def run(self, sql: str) -> list[dict]:
         self.sent.append(sql)
-        if "EXAKIT_SEMANTIC" in sql and "COLUMN_COMMENT" in sql:
-            name = re.search(r"COLUMN_TABLE = '([^']+)'", sql).group(1)
-            return [{"COLUMN_NAME": c, "COLUMN_COMMENT": comment} for c, comment in self.views.get(name, [])]
-        if "EXA_ALL_VIEWS" in sql:
-            name = re.search(r"VIEW_NAME = '([^']+)'", sql).group(1)
-            return [{"VIEW_NAME": name}] if name in self.views else []
+        answer = self.sv.answer(sql)
+        if answer is not None:
+            return answer
+        if "EXA_ALL_COLUMNS" in sql and "COLUMN_SCHEMA IN" in sql:
+            return [{"COLUMN_SCHEMA": "SUPPORT", "COLUMN_TABLE": "TICKETS", "COLUMN_NAME": n, "COLUMN_TYPE": t}
+                    for n, t in self.columns]
+        if "EXA_SCHEMAS" in sql:
+            return []
         if "EXA_ALL_COLUMNS" in sql:
             return [{"COLUMN_NAME": n, "COLUMN_TYPE": t, "IS_VIRTUAL": 0} for n, t in self.columns]
         answer = self.review(sql)
@@ -95,10 +101,9 @@ class Database:
     def execute(self, sql: str) -> None:
         self.sent.append(sql)
         if self.fail_publish:
-            raise PermissionError("insufficient privileges for CREATE VIEW")
-        match = re.match(r'CREATE OR REPLACE VIEW EXAKIT_SEMANTIC\."([^"]+)"', sql)
-        if match:
-            self.views[match.group(1)] = re.findall(r'"([A-Z_]+)" COMMENT IS \'((?:[^\']|\'\')*)\'', sql.split(") AS SELECT")[0])
+            raise PermissionError("insufficient privileges for EXECUTE SCRIPT")
+        if not self.sv.apply(sql) and not sql.startswith(("GRANT ", f"DROP SCHEMA IF EXISTS {semantic_model.OLD_SCHEMA}")):
+            raise AssertionError(f"unexpected statement {sql}")
 
 
 class FlowTest(unittest.TestCase):
@@ -107,6 +112,9 @@ class FlowTest(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.home = Path(self.temp.name)
         self.db = Database(COLUMNS, rows())
+        installer = mock.patch.object(publish, "INSTALL", side_effect=self.db.sv.install)
+        installer.start()
+        self.addCleanup(installer.stop)
         patcher = mock.patch.object(profile, "profile", side_effect=self._profile)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -121,7 +129,8 @@ class FlowTest(unittest.TestCase):
 
     def approve(self, doc, **kw):
         kw.setdefault("now", lambda: dt.datetime(2026, 11, 3, 10, 14, tzinfo=dt.timezone.utc))
-        return flow.approve(self.db.run, self.db.execute, doc, home=self.home, reader="MCP_READONLY", owner="dana", **kw)
+        with mock.patch.object(store, "kit_home", return_value=self.home):
+            return flow.approve(self.db.run, self.db.execute, doc, home=self.home, reader="MCP_READONLY", owner="dana", **kw)
 
     def test_a_new_table_is_drafted_and_nothing_is_versioned_yet(self):
         found = self.describe()
@@ -133,18 +142,28 @@ class FlowTest(unittest.TestCase):
         self.assertEqual([], store.versions("SUPPORT.TICKETS", self.home))
         self.assertIsNotNone(store.draft("SUPPORT.TICKETS", self.home))
 
-    def test_approve_writes_v1_current_and_publishes_the_view(self):
+    def test_approve_writes_v1_current_and_publishes_the_semantic_model(self):
         doc = self.describe()["doc"]
         doc["slots"]["target"] = "ESCALATED"
         result = self.approve(doc)
-        self.assertEqual(("approved", 1, "EXAKIT_SEMANTIC.SUPPORT__TICKETS"), (result["status"], result["version"], result["published"]))
+        self.assertEqual(("approved", 1, MODEL), (result["status"], result["version"], result["published"]))
         v1 = store.read("SUPPORT.TICKETS", 1, self.home)
         self.assertEqual(v1, store.current("SUPPORT.TICKETS", self.home))
         self.assertIn('owner: "dana"', v1)
         self.assertIn('approved_at: "2026-11-03T10:14:00Z"', v1)
         self.assertIsNone(store.draft("SUPPORT.TICKETS", self.home))
         self.assertIsNotNone(store.read_profile("SUPPORT.TICKETS", 1, self.home))
-        self.assertTrue(any(s.startswith('GRANT SELECT ON EXAKIT_SEMANTIC."SUPPORT__TICKETS" TO "MCP_READONLY"') for s in self.db.sent))
+        model = self.db.sv.models["support"]
+        self.assertEqual(([("SUPPORT", "TICKETS")], "SEM_SUPPORT", True), (model["entities"], model["published_schema"], model["published"]))
+        self.assertIn(semantic_model.MARK, model["description"])
+        self.assertIn('GRANT SEMANTIC_USER TO "MCP_READONLY"', self.db.sent)
+        self.assertIn('GRANT SELECT ON SCHEMA SEM_SUPPORT TO "MCP_READONLY"', self.db.sent)
+        self.assertIn(f"DROP SCHEMA IF EXISTS {semantic_model.OLD_SCHEMA} CASCADE", self.db.sent)   # the old layer is retired
+        definition = model["definitions"][0]
+        self.assertIn("DIMENSION opened_on", definition)
+        self.assertIn("DIMENSION channel", definition)
+        self.assertNotIn("body", definition.lower().split("replace facts")[0])            # text is no dimension
+        self.assertTrue((self.home / "semantic" / "support.json").is_file())
 
     def test_describe_on_an_unchanged_approved_table_returns_it_without_profiling(self):
         self.approve(self.describe()["doc"])
@@ -161,29 +180,30 @@ class FlowTest(unittest.TestCase):
         self.assertEqual([1], store.versions("SUPPORT.TICKETS", self.home))
         # Nothing written, but the run still says where the approval it uses lives, and where agents read it.
         self.assertEqual(str(store.folder("SUPPORT.TICKETS", self.home) / "v1.yaml"), again["path"])
-        self.assertEqual("EXAKIT_SEMANTIC.SUPPORT__TICKETS", again["published"])
-        self.assertIn(f"It is stored at {again['path']}; published as EXAKIT_SEMANTIC.SUPPORT__TICKETS", again["message"])
+        self.assertEqual(MODEL, again["published"])
+        self.assertIn(f"It is stored at {again['path']}; published as {MODEL}", again["message"])
 
-    def test_an_unchanged_approval_never_names_a_view_that_is_gone(self):
+    def test_an_unchanged_approval_never_names_a_model_that_is_gone(self):
         doc = self.describe()["doc"]
         self.approve(doc)
-        self.db.views.clear()
+        self.db.sv.models.clear()
         again = self.approve(doc, publish=False)
         self.assertIsNone(again["published"])
         self.assertNotIn("published as", again["message"])
 
     def test_an_unchanged_approval_that_was_never_published_is_published_now(self):
         """A shipped dataset's descriptor the store adopted (or an approval whose publish failed) is approved but has
-        no view: approving the same again writes no version and publishes it, so agents find its roles."""
+        no model: approving the same again writes no version and publishes it, so agents find its roles."""
         doc = self.describe()["doc"]
         self.approve(doc)
-        self.db.views.clear()
+        self.db.sv.models.clear()
         again = self.approve(doc)
-        self.assertEqual(("unchanged", "EXAKIT_SEMANTIC.SUPPORT__TICKETS"), (again["status"], again["published"]))
-        self.assertIn("SUPPORT__TICKETS", self.db.views)
+        self.assertEqual("unchanged", again["status"])
+        self.assertTrue(again["published"].startswith("semantic model support"))
+        self.assertIn("support", self.db.sv.models)
         self.assertEqual([1], store.versions("SUPPORT.TICKETS", self.home))
-        self.assertIn("published as EXAKIT_SEMANTIC.SUPPORT__TICKETS", again["message"])
-        self.db.views.clear()
+        self.assertIn("published as semantic model support", again["message"])
+        self.db.sv.models.clear()
         self.db.fail_publish = True
         failed = self.approve(doc)
         self.assertEqual("unchanged", failed["status"], "the approval stands")
@@ -249,31 +269,106 @@ class FlowTest(unittest.TestCase):
         lines = []
         self.approve(self.describe()["doc"], log=lambda kind, **payload: lines.append((kind, payload)))
         self.assertEqual([("describe.approve", {"table": "SUPPORT.TICKETS", "version": 1,
-                                                   "published": "EXAKIT_SEMANTIC.SUPPORT__TICKETS", "warnings": []})], lines)
+                                                   "published": MODEL, "warnings": []})], lines)
+
+    def test_semantic_views_is_installed_first_when_the_database_lacks_it(self):
+        self.db.sv.installed = False
+        result = self.approve(self.describe()["doc"])
+        self.assertEqual(("approved", MODEL), (result["status"], result["published"]))
+        publish.INSTALL.assert_called_once()
+
+    def test_an_install_that_fails_leaves_the_approval_standing_and_names_the_command(self):
+        self.db.sv.installed = False
+        publish.INSTALL.side_effect = lambda: False
+        result = self.approve(self.describe()["doc"])
+        self.assertEqual("approved, not published", result["status"])
+        self.assertIn("exakit marketplace semantic-views", result["reason"])
+
+    def test_a_model_of_that_name_the_kit_did_not_build_is_left_alone(self):
+        self.db.sv.apply("EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('support', 'SEM_HAND', 'made by hand', NULL)")
+        result = self.approve(self.describe()["doc"])
+        self.assertEqual("approved, not published", result["status"])
+        self.assertIn("the kit did not build it", result["reason"])
+        self.assertEqual("SEM_HAND", self.db.sv.models["support"]["published_schema"])
+
+    def test_a_rebuild_the_product_refuses_puts_the_last_published_model_back(self):
+        doc = self.describe()["doc"]
+        self.approve(doc)
+        doc = self.describe(force=True)["doc"]
+        doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], role="identifier")
+        doc["slots"]["category"] = None
+        self.db.sv.refuse = "PUBLISH_MODEL"
+        result = self.approve(doc)
+        self.assertEqual("approved, not published", result["status"])
+        self.assertIn("SEMANTIC_MODEL_030", result["reason"])
+        self.db.sv.refuse = None
 
 
-class PublishTest(unittest.TestCase):
-    DOC = {"source": {"object": "BANKING.COMPLAINTS"}, "version": 3, "grain": "one row per complaint",
-           "columns": {"COMPLAINT_ID": {"role": "key"}, "ZIP_CODE": {"role": "identifier", "sensitive": True},
-                       "PRODUCT": {"role": "category", "note": "Product line as filed"}}}
+class SemanticModelTest(unittest.TestCase):
+    """The model an approval builds: entities, keys, relationships, dimensions, facts and metrics, from roles."""
 
-    def test_the_view_names_every_column_with_its_role_and_never_star(self):
-        create = publish.statements(self.DOC, "MCP_READONLY")[1]
-        self.assertIn('CREATE OR REPLACE VIEW EXAKIT_SEMANTIC."BANKING__COMPLAINTS"', create)
-        self.assertIn("\"ZIP_CODE\" COMMENT IS 'role=identifier; sensitive; descriptor=v3'", create)
-        self.assertIn("\"PRODUCT\" COMMENT IS 'role=category; descriptor=v3 | Product line as filed'", create)
-        self.assertIn('AS SELECT "COMPLAINT_ID", "ZIP_CODE", "PRODUCT" FROM "BANKING"."COMPLAINTS"', create)
-        self.assertIn("COMMENT IS 'grain=one row per complaint; source=BANKING.COMPLAINTS; descriptor=v3'", create)
-        self.assertNotIn("*", create)
+    ORDERS = {"columns": {"O_ORDERKEY": {"role": "key"}, "O_CUSTKEY": {"role": "identifier"},
+                          "O_ORDERDATE": {"role": "time"}, "O_ORDERSTATUS": {"role": "category"},
+                          "O_TOTALPRICE": {"role": "measure", "note": "Order value incl. tax"},
+                          "O_SECRET": {"role": "measure", "sensitive": True}, "O_COMMENT": {"role": "text"}},
+              "slots": {"key": "O_ORDERKEY"}, "grain": "one row per order"}
+    CUSTOMER = {"columns": {"C_CUSTKEY": {"role": "key"}, "C_MKTSEGMENT": {"role": "category"},
+                            "C_PHONE": {"role": "category", "sensitive": True}}, "slots": {"key": "C_CUSTKEY"}}
+    COURIER = {"columns": {"STATE": {"role": "category"}, "DELIVERIES": {"role": "measure"}, "DAY": {"role": "time"}}}
 
-    def test_a_long_note_is_trimmed_never_the_marker(self):
-        comment = publish.column_comment({"role": "text", "note": "x" * 5000}, 7)
-        self.assertEqual(publish.COMMENT_LIMIT, len(comment))
-        self.assertTrue(comment.startswith("role=text; descriptor=v7 | "))
+    def spec(self):
+        tables = [semantic_model.table_input("TPCH.ORDERS", self.ORDERS, {"O_TOTALPRICE": "DECIMAL(15,2)",
+                                             "O_ORDERDATE": "DATE", "O_ORDERSTATUS": "CHAR(1) UTF8", "O_SECRET": "DOUBLE"},
+                                             profile={"columns": [{"column": "O_ORDERSTATUS", "top": [["F", 9], ["O", 4]]}]}),
+                  semantic_model.table_input("TPCH.CUSTOMER", self.CUSTOMER, {"C_MKTSEGMENT": "VARCHAR(10) UTF8"}),
+                  semantic_model.table_input("VS_LOGISTICS.COURIER_DAILY", self.COURIER, {"DELIVERIES": "VARCHAR(20) UTF8",
+                                             "DAY": "DATE"}, virtual=True)]
+        return semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "TPCH.CUSTOMER.C_CUSTKEY"}], "Sales 360")
 
-    def test_the_grant_follows_every_replace_and_is_left_out_without_a_reader(self):
-        self.assertTrue(publish.statements(self.DOC, "MCP_READONLY")[-1].startswith("GRANT SELECT"))
-        self.assertFalse(any(s.startswith("GRANT") for s in publish.statements(self.DOC, None)))
+    def test_one_model_spans_local_tables_and_an_external_source(self):
+        spec = self.spec()
+        self.assertEqual(("sales_360", "SEM_SALES_360", ["TPCH", "VS_LOGISTICS"]),
+                         (spec["model"], spec["published_schema"], spec["schemas"]))
+        self.assertEqual(["ORDERS", "COURIER_DAILY"], [o["name"] for o in spec["objects"]])   # the tables with measures
+        orders = spec["objects"][0]
+        names = [d["name"] for d in orders["dimensions"]]
+        self.assertEqual(["o_orderdate", "o_orderdate_month", "o_orderstatus", "c_mktsegment"], names)
+        self.assertNotIn("c_phone", " ".join(names))                       # a sensitive column is never a dimension
+        self.assertEqual(["orders_count", "total_o_totalprice", "average_o_totalprice"], [m["name"] for m in orders["metrics"]])
+        self.assertTrue(next(f for f in orders["facts"] if f.get("column") == "O_SECRET")["private"])
+        courier = spec["objects"][1]
+        self.assertEqual("CAST(t3.DELIVERIES AS DOUBLE)", courier["facts"][1]["expression"])   # a number sent as text
+        self.assertEqual(["courier_daily_state", "courier_daily_day", "day_month"], [d["name"] for d in courier["dimensions"]])
+        self.assertTrue(spec["entities"][2]["virtual"])
+
+    def test_the_statements_create_the_model_then_publish_it(self):
+        sent = semantic_model.statements(self.spec())
+        self.assertTrue(sent[0].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('sales_360', 'SEM_SALES_360', "))
+        self.assertIn("EXECUTE SCRIPT SEMANTIC_ADMIN.ADD_RELATIONSHIP('sales_360', 'orders_to_customer', 'orders', "
+                      "'customer', 't1.O_CUSTKEY = t2.C_CUSTKEY', 'MANY_TO_ONE', 'LEFT', NULL)", sent)
+        self.assertEqual("EXECUTE SCRIPT SEMANTIC_ADMIN.PUBLISH_MODEL('sales_360')", sent[-1])
+        definition = next(s for s in sent if "ALTER SEMANTIC VIEW sales_360.ORDERS" in s)
+        self.assertIn("COMMENT ''Order value incl. tax''", definition)        # a column note is the field's comment
+        self.assertIn("AS total_o_totalprice / NULLIF(orders_count, 0)", definition)
+
+    def test_an_ai_proposal_is_checked_before_it_is_used(self):
+        spec = self.spec()
+        labels, extra, refused = semantic_model.ai_accept(spec, {
+            "model": "Orders and deliveries", "labels": {"o_totalprice": {"display": "Order value"}, "nope": {}},
+            "metrics": [{"view": "ORDERS", "name": "open_order_value", "expression": "SUM(o_totalprice)",
+                         "filter": "o_orderstatus = 'O'"},
+                        {"view": "ORDERS", "name": "made_up", "expression": "SUM(o_orderstatus)", "filter": "o_orderstatus = 'Z'"},
+                        {"view": "ORDERS", "name": "secret_sum", "expression": "SUM(o_secret)"},
+                        {"view": "ORDERS", "name": "drop", "expression": "SUM(o_totalprice); DROP TABLE X"},
+                        {"view": "ORDERS", "name": "orders_count", "expression": "SUM(o_totalprice)"}]})
+        self.assertEqual({"o_totalprice": {"display": "Order value"}, "model": "Orders and deliveries"}, labels)
+        self.assertEqual(1, len(extra))
+        self.assertIn("FILTER (WHERE o_orderstatus = 'O')", extra[0][1])
+        self.assertEqual(4, len(refused))
+
+    def test_names_are_never_sql_keywords(self):
+        for word in ("date", "order", "state", "year"):
+            self.assertNotIn(semantic_model.identifier(word), semantic_model.RESERVED)
 
 
 class ShippedDescriptorTest(unittest.TestCase):

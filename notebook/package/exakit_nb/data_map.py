@@ -12,8 +12,9 @@ Three origins, one view:
 - **local**: your own file or folder (``exakit data-load <path>``, the quickstart's MY_DATA cell);
 - **source**: a connected external source, read live through its virtual schema (``exakit connect``).
 
-Roles come from the approved column maps (EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>, one column comment per role) and the
-links from approved schema maps (EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS). Columns that share a key-like name across
+Roles come from the approved column maps in the kit's store, and the semantic layer is Exasol Semantic Views: a table
+that is an entity of a semantic model the kit built says which model (SEMANTIC_CATALOG.ENTITIES). The links are the
+approved schema maps' and the multi-source models' (nb.semantic_model). Columns that share a key-like name across
 two tables are listed as possible links: a lead to check, never a join made for you. Only metadata is read.
 """
 
@@ -27,8 +28,9 @@ from typing import Any
 
 __all__ = ["DataMap", "data_map"]
 
-SEMANTIC = "EXAKIT_SEMANTIC"
-KIT_SCHEMAS = ("SYS", "EXA_STATISTICS", "PREPROC")      # the kit's and the database's own; EXAKIT_* too
+MARK = "[built by exakit]"                              # in the description of a model the kit built
+KIT_SCHEMAS = ("SYS", "EXA_STATISTICS", "PREPROC", "SYS_SEMANTIC", "SEMANTIC_CATALOG", "SEMANTIC_ADMIN",
+               "SEMANTIC_AGENT", "SEMANTIC_SOURCE")       # the kit's, the database's and Semantic Views' own; EXAKIT_* too
 ORIGINS = {"sample": "Sample data", "local": "Your data", "source": "External source"}
 ORDER = ("source", "local", "sample")
 KEYISH = re.compile(r"(^ID$|_ID$|_KEY$|_CODE$|_NO$|_NUMBER$|^SKU$|^ASIN$|^EMAIL$)")
@@ -265,34 +267,28 @@ ORDER BY T.TABLE_SCHEMA, T.TABLE_NAME"""))
 FROM SYS.EXA_ALL_COLUMNS
 WHERE COLUMN_OBJECT_TYPE = 'TABLE'
 ORDER BY COLUMN_SCHEMA, COLUMN_TABLE, COLUMN_ORDINAL_POSITION"""))
-    semantic = _records(_sql(conn, f"""SELECT V.VIEW_NAME, V.VIEW_COMMENT, C.COLUMN_NAME, C.COLUMN_COMMENT
-FROM SYS.EXA_ALL_VIEWS V
-JOIN SYS.EXA_ALL_COLUMNS C ON C.COLUMN_SCHEMA = V.VIEW_SCHEMA AND C.COLUMN_TABLE = V.VIEW_NAME
-WHERE V.VIEW_SCHEMA = '{SEMANTIC}'"""))
+    try:
+        semantic = _records(_sql(conn, """SELECT E.SOURCE_SCHEMA, E.SOURCE_OBJECT, M.MODEL_NAME, M.PUBLISHED_SCHEMA,
+       M.DESCRIPTION
+FROM SEMANTIC_CATALOG.ENTITIES E
+JOIN SEMANTIC_CATALOG.MODELS M ON M.MODEL_ID = E.MODEL_ID
+WHERE E.STATUS = 'ACTIVE'
+ORDER BY M.MODEL_NAME"""))
+    except Exception:                                      # Semantic Views is not installed yet: no models
+        semantic = []
     samples, shipped = _sample_maps()
 
     def kept(schema: str) -> bool:
         upper = schema.upper()
         return include_kit or not (upper.startswith(("EXAKIT", "PREPROC")) or upper in KIT_SCHEMAS)
 
-    # roles per SCHEMA.TABLE from the approved column maps, and the relation views
-    roles: dict[str, dict[str, str]] = {}
-    versions: dict[str, str] = {}
-    relation_views: set[str] = set()
+    # the semantic models each table is an entity of
+    in_models: dict[str, list[str]] = {}
     for row in semantic:
-        view, about = str(row["VIEW_NAME"]), str(row.get("VIEW_COMMENT") or "")
-        if view.endswith("__RELATIONS"):
-            relation_views.add(view)
-            continue
-        source = re.search(r"source=([^;\s]+)", about)
-        table = source.group(1).upper() if source else view.replace("__", ".", 1)
-        version = re.search(r"descriptor=(v\d+)", about)
-        if version:
-            versions[table] = version.group(1)
-        role = re.match(r"role=([a-z_]+)", str(row.get("COLUMN_COMMENT") or ""))
-        if role:
-            roles.setdefault(table, {})[str(row["COLUMN_NAME"])] = role.group(1)
-
+        table = f"{row['SOURCE_SCHEMA']}.{row['SOURCE_OBJECT']}".upper()
+        label = f"{row['MODEL_NAME']}" + ("" if MARK in str(row.get("DESCRIPTION") or "") else " (not the kit's)")
+        if label not in in_models.setdefault(table, []):
+            in_models[table].append(label)
     by_table: dict[str, list[dict[str, Any]]] = {}
     for row in columns:
         by_table.setdefault(f"{row['COLUMN_SCHEMA']}.{row['COLUMN_TABLE']}".upper(), []).append(row)
@@ -307,28 +303,19 @@ WHERE V.VIEW_SCHEMA = '{SEMANTIC}'"""))
         virtual = row.get("SCHEMA_IS_VIRTUAL") in (True, "TRUE", "true", 1)
         origin = "source" if virtual else ("sample" if schema.upper() in samples else "local")
         origin_of[table.upper()] = origin
-        mapped, slots = roles.get(table.upper(), {}), {}
-        state, stored, stored_slots, stored_version = _store_map(table)
-        published = versions.get(table.upper(), "")
-        newer = bool(published) and state == "approved" and stored_version > int(published[1:])
-        if mapped and not newer:
-            shown_map = f"approved {published}, published" if published else "approved, published"
-            slots = stored_slots
-        elif stored:
-            # the store is the truth: an approval whose publish failed (or never ran) still shows its own roles
-            mapped, slots = stored, stored_slots
+        state, mapped, slots, stored_version = _store_map(table)
+        models = in_models.get(table.upper(), [])
+        where = f", in semantic model {', '.join(models)}" if models else ""
+        if state == "approved":
             label = f"approved v{stored_version}" if stored_version else "approved"
-            if state != "approved":
-                shown_map = "draft"
-            elif published:
-                shown_map = f"{label}, not published (the view still says {published})"
-            else:
-                shown_map = f"{label}, not published"
+            shown_map = label + (where or ", not in a semantic model yet")
+        elif state == "draft":
+            shown_map = "draft" + where
         elif table.upper() in shipped:
             mapped, slots = shipped[table.upper()]
-            shown_map = "shipped"
+            shown_map = "shipped" + where
         else:
-            shown_map = "none yet"
+            shown_map = "none yet" + where
         summary, named, counts = _summary(mapped, slots)
         count = row.get("TABLE_ROW_COUNT")
         rows_shown = "live" if virtual else (f"{int(count):,}" if count is not None else "?")
@@ -345,18 +332,41 @@ WHERE V.VIEW_SCHEMA = '{SEMANTIC}'"""))
                                       "role": mapped.get(name)})
 
     seen: set[tuple[str, str, str, str]] = set()
-    for view in sorted(relation_views):
-        try:
-            links = _records(_sql(conn, f'SELECT FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN, KIND FROM "{SEMANTIC}"."{view}"'))
-        except Exception:                                  # a relation view that cannot be read is left out
+    for key, kind in _approved_links():
+        if key in seen:
             continue
-        for link in links:
-            key = (str(link["FROM_TABLE"]).upper(), str(link["FROM_COLUMN"]), str(link["TO_TABLE"]).upper(), str(link["TO_COLUMN"]))
-            if key in seen:
-                continue
-            seen.add(key)
-            found.link_rows.append(_link(key, str(link.get("KIND") or "found"), origin_of))
+        seen.add(key)
+        found.link_rows.append(_link(key, kind, origin_of))
     found.link_rows.extend(_shared_keys(found.column_rows, origin_of, seen))
+    return found
+
+
+def _approved_links() -> list[tuple[tuple[str, str, str, str], str]]:
+    """((FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN), kind) of every link approved in a schema map, and of every
+    multi-source semantic model the kit published (the store's descriptors/<SCHEMA>/current.json and semantic/*.json)."""
+    import json
+
+    from .descriptor_store import kit_home
+
+    found = []
+    root = kit_home()
+    for path in sorted((root / "descriptors").glob("*/current.json")):
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        schema = str(doc.get("schema") or path.parent.name).upper()
+        for link in doc.get("relations") or []:
+            (ft, _, fc), (tt, _, tc) = str(link["from"]).partition("."), str(link["to"]).partition(".")
+            found.append(((f"{schema}.{ft}".upper(), fc, f"{schema}.{tt}".upper(), tc), "approved"))
+    for path in sorted((root / "semantic").glob("*.json")):
+        try:
+            inputs = json.loads(path.read_text(encoding="utf-8"))["inputs"]
+        except (OSError, ValueError, KeyError):
+            continue
+        for link in inputs.get("links") or []:
+            (ft, fc), (tt, tc) = str(link["from"]).rsplit(".", 1), str(link["to"]).rsplit(".", 1)
+            found.append(((ft.upper(), fc, tt.upper(), tc), f"in semantic model {path.stem}"))
     return found
 
 

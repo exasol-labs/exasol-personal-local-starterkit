@@ -2,9 +2,9 @@
 """The service behind `exakit describe` (DS-2, DS-5), shared by setup/lib/describe.sh and describe.ps1 so the two
 cannot drift, and by exakit_nb.describe() in a notebook. It drives the role-per-column descriptor in
 setup/lib/descriptor: roles.py (one of eight roles per column), profile.py (one profiling pass in SQL), draft.py (a
-deterministic draft), flow.py (describe and approve, versioned in the kit's store) and publish.py (the roles as column
-comments on a view in EXAKIT_SEMANTIC). Runs on the kit's notebook Python (pyexasol is there); otherwise the standard
-library only.
+deterministic draft), flow.py (describe and approve, versioned in the kit's store), publish.py and semantic_model.py
+(the approved roles and links as an Exasol Semantic Views model, the add-on installed when the database lacks it).
+Runs on the kit's notebook Python (pyexasol is there); otherwise the standard library only.
 
     python describe_service.py draft <SCHEMA.TABLE> [--id <dataset id>] [--json] [--write <path>] [--force]
         the approved descriptor when the table still matches it, else a fresh draft (kept in the store as draft.yaml
@@ -14,10 +14,10 @@ library only.
                                        [--set <COLUMN>=<role> ...] [--owner <who>] [--no-comments] [--json]
         approves the table's latest draft with the corrections given: --role sets a slot (key, time, text, target,
         category, entity; date and label still name time and target; slot=- empties it), --set gives a column a role. Writes
-        v<n+1>.yaml and current.yaml, then publishes the view (--no-comments skips it).
+        v<n+1>.yaml and current.yaml, then rebuilds the schema's semantic model (--no-comments skips it).
     python describe_service.py show <id | SCHEMA.TABLE> [--version n] [--json]   one version (the current one)
     python describe_service.py versions <id | SCHEMA.TABLE> [--json]             every version with its owner
-    python describe_service.py comments <id | SCHEMA.TABLE> [--json]             publish the current version again
+    python describe_service.py comments <id | SCHEMA.TABLE> [--json]             rebuild its schema's model again
     python describe_service.py profile <SCHEMA.TABLE>                            the profile alone, as JSON
     python describe_service.py schema <SCHEMA> [--json]
         the whole schema as one map: every table (rows, key) and every many-to-one link between them, declared or
@@ -26,15 +26,23 @@ library only.
     python describe_service.py schema-approve <SCHEMA> [--link <T.COL>=<T.KEY> ...] [--unlink <T.COL> ...]
                                                        [--owner <who>] [--no-comments] [--json]
         approves the schema's draft with the corrections given (--link adds a link, --unlink removes one): writes
-        v<n+1>.json and current.json, then publishes the links as EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS.
+        v<n+1>.json and current.json, then rebuilds the schema's semantic model with the links as relationships.
+    python describe_service.py model <NAME> --table <SCHEMA.TABLE> ... [--link <S.T.COL>=<S.T.KEY> ...] [--ai]
+                                            [--description <text>] [--dry-run] [--json]
+        a semantic model over tables of any schemas - sample data, loaded files, external sources - from their approved
+        column maps, each schema's approved links and the links given; --ai lets the user's model propose business
+        names, synonyms and metrics (each checked before use); --dry-run says what it would publish.
+    python describe_service.py refresh <NAME> [--json]     rebuild a model the kit published, with what was approved since
+    python describe_service.py models [--json]             every semantic model in the database
 
 Exit codes: 0 ok; 2 bad arguments or roles (the message names the column, the slot and the reason); 3 the table or
 the descriptor is not there; 4 the database is not reachable; 5 another writer took the version number.
 
 The database steps connect through pyexasol as the kit's admin user: EXAKIT_PYX_DSN, EXAKIT_PYX_USER and
 EXAKIT_PYX_PWFILE (the FILE holding the password - the password itself never reaches a command line, an output or a
-log). EXAKIT_MCP_READER names the read-only user the published view is granted to. Profiling is SELECTs; approving
-writes to the database only the view in EXAKIT_SEMANTIC - the user's own tables are never commented or altered.
+log). EXAKIT_MCP_READER names the read-only user the published model is granted to. Profiling is SELECTs; approving
+writes to the database only the semantic model (Semantic Views' own catalog and its SEM_<MODEL> schema) - the user's
+own tables are never commented or altered.
 
 digest() is the content hash of a descriptor's role columns that a training handoff records (unchanged from the
 kit's earlier describe service): one order-independent statement over the role columns, the table's first rows only
@@ -525,6 +533,115 @@ def model_notes(doc: dict[str, Any], profile: dict[str, Any]) -> dict[str, str] 
         return None
 
 
+def _chat(prompt: str) -> str:
+    """One answer from the user's own model (EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL), as text."""
+    folder = kit_root() / "notebook" / "package"
+    if folder.is_dir() and str(folder) not in sys.path:
+        sys.path.insert(0, str(folder))
+    from exakit_nb.model_config import create_client, resolve, sampling
+    config = resolve()
+    try:
+        answer = create_client(config).chat.completions.create(model=config.model_id, **sampling(),
+                                                              messages=[{"role": "user", "content": prompt}])
+    except Exception as err:                   # the key never reaches a message
+        raise RuntimeError(config.redact(str(err)) if config else str(err)) from None
+    return answer.choices[0].message.content or ""
+
+
+def semantic_ai(spec: dict[str, Any], chat=None) -> dict[str, Any]:
+    """The user's model proposes the semantic fields: business names, comments and synonyms for every dimension,
+    fact and metric, and the metrics people will ask for. One call, metadata only (names, types, grains, column notes,
+    a category's top values; never a row, never a sensitive column). Every proposed metric is checked (ai_accept)
+    before it is offered. {labels, extra, refused, error}: with no model configured, nothing but the reason."""
+    from descriptor import semantic_model as sm
+
+    if chat is None:
+        if not os.environ.get("EXAKIT_MODEL_ID", "").strip() or not os.environ.get("EXAKIT_PROVIDER_BASE_URL", "").strip():
+            return {"labels": {}, "extra": [], "refused": [], "error": "no model is configured (EXAKIT_MODEL_ID and "
+                    "EXAKIT_PROVIDER_BASE_URL); the model keeps the names the column maps give"}
+        chat = _chat
+    prompt = sm.AI_INSTRUCTIONS + "\n\nModel: " + json.dumps(sm.ai_facts(spec), ensure_ascii=False, default=str)
+    try:
+        text = chat(prompt).strip()
+        if text.startswith("```"):
+            text = text.strip("`").split("\n", 1)[1] if "\n" in text else text
+            text = text.rsplit("```", 1)[0]
+        answer = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    except Exception as err:                   # noqa: BLE001 - whatever the model answered, the model stands
+        return {"labels": {}, "extra": [], "refused": [],
+                "error": f"the model's answer was not used ({type(err).__name__}: {str(err).splitlines()[0][:160] if str(err) else ''})"}
+    labels, extra, refused = sm.ai_accept(spec, answer if isinstance(answer, dict) else {})
+    return {"labels": labels, "extra": extra, "refused": refused, "error": None}
+
+
+def semantic_model(conn, name: str, tables: list[str], links: list[str] | None = None, *, ai: bool = False,
+                   dry_run: bool = False, description: str | None = None, chat=None, progress=None) -> dict[str, Any]:
+    """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
+    approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). With
+    ``ai`` the user's model proposes the fields first. ``dry_run`` builds the spec and says what it would publish."""
+    from descriptor import semantic_model as sm
+
+    names = []
+    for table in tables:
+        schema, object_name = split_table(table)
+        names.append(f"{schema}.{object_name}")
+    if not names:
+        raise Refused("Name the tables of the model: --table SCHEMA.TABLE (repeat it).")
+    joins = []
+    for spec in links or []:
+        source, sep, target = spec.partition("=")
+        if not sep or source.count(".") != 2 or target.count(".") != 2:
+            raise Refused(f"--link takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY, not '{spec}'.")
+        joins.append({"from": source.strip().upper(), "to": target.strip().upper()})
+    for schema in sorted({n.split(".", 1)[0] for n in names}):
+        for link in publishing.schema_links(schema):
+            if link["from"].rsplit(".", 1)[0] in names and link["to"].rsplit(".", 1)[0] in names \
+                    and not any(j["from"] == link["from"] for j in joins):
+                joins.append(link)
+    rows = lambda sql: _rows(conn, sql)
+    try:
+        spec = publishing.build_model(rows, names, joins, name, description=description)
+    except sm.ModelRefused as err:
+        raise Refused(str(err)) from err
+    proposal = semantic_ai(spec, chat) if ai else {"labels": {}, "extra": [], "refused": [], "error": None}
+    if proposal["labels"]:
+        publishing.apply_labels(spec, proposal["labels"])
+    found: dict[str, Any] = {"model": spec["model"], "published_schema": spec["published_schema"], "spec": spec,
+                             "summary": sm.summary(spec), "ai": {k: proposal[k] for k in ("refused", "error")},
+                             "proposed_metrics": [ddl for _view, ddl in proposal["extra"]]}
+    if dry_run:
+        found["status"] = "dry run"
+        return found
+    inputs = {"tables": names, "links": joins, "name": name, "description": description,
+              "labels": proposal["labels"], "extra": proposal["extra"]}
+    try:
+        result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
+                                          extra=proposal["extra"], progress=progress)
+    except sm.ModelRefused as err:
+        raise Refused(str(err)) from err
+    found.update(result, status="published")
+    return found
+
+
+def refresh_model(conn, name: str) -> dict[str, Any]:
+    """Rebuild a semantic model the kit published, with the column maps and links approved since."""
+    from descriptor import semantic_model as sm
+
+    try:
+        return publishing.refresh(conn.execute, lambda sql: _rows(conn, sql), name, os.environ.get(READER_VARIABLE))
+    except sm.ModelRefused as err:
+        raise NotFound(str(err)) from err
+
+
+def list_models(conn) -> list[dict[str, Any]]:
+    from descriptor import semantic_model as sm
+
+    found = sm.models(lambda sql: _rows(conn, sql))
+    for model in found:
+        model["refreshable"] = publishing.kept(model["model"]) is not None
+    return found
+
+
 def with_notes(doc: dict[str, Any], notes: dict[str, str] | None) -> dict[str, Any]:
     for column, note in (notes or {}).items():
         doc["columns"][column] = dict(doc["columns"][column], note=note)
@@ -546,10 +663,11 @@ def _workflow_log():
 # --- the command line ------------------------------------------------------------------------------------------------
 
 def _options(args: list[str]) -> tuple[list[str], dict[str, Any]]:
-    words, opts = [], {"role": [], "set": [], "link": [], "unlink": []}
-    flags = {"--json": "json", "--no-comments": "no_comments", "--force": "force"}
+    words, opts = [], {"role": [], "set": [], "link": [], "unlink": [], "table": []}
+    flags = {"--json": "json", "--no-comments": "no_comments", "--force": "force", "--ai": "ai", "--dry-run": "dry_run"}
     valued = {"--sample": "sample", "--id": "id", "--write": "write", "--owner": "owner", "--version": "version",
-              "--role": "role", "--set": "set", "--link": "link", "--unlink": "unlink"}
+              "--role": "role", "--set": "set", "--link": "link", "--unlink": "unlink", "--table": "table",
+              "--description": "description"}
     i = 0
     while i < len(args):
         arg = args[i]
@@ -559,7 +677,7 @@ def _options(args: list[str]) -> tuple[list[str], dict[str, Any]]:
             if i + 1 >= len(args):
                 raise Refused(f"{arg} needs a value.")
             key = valued[arg]
-            if key in ("role", "set", "link", "unlink"):
+            if key in ("role", "set", "link", "unlink", "table"):
                 opts[key].append(args[i + 1])
             else:
                 opts[key] = args[i + 1]
@@ -640,9 +758,61 @@ def _run(command: str, words: list[str], opts: dict[str, Any]) -> None:
             found = comments(conn, target)
         finally:
             conn.close()
-        _emit(found, bool(opts.get("json")), f"Published {found['view']} ({found['columns']} columns)")
+        _emit(found, bool(opts.get("json")), f"Published {found['view']}" + _counts(found))
+    elif command == "model":
+        conn = connect()
+        try:
+            found = semantic_model(conn, target, opts["table"], opts["link"], ai=bool(opts.get("ai")),
+                                   dry_run=bool(opts.get("dry_run")), description=opts.get("description"),
+                                   progress=lambda line: print(line, file=sys.stderr, flush=True))
+        finally:
+            conn.close()
+        _emit({k: v for k, v in found.items() if k != "spec"} if not opts.get("json") else found, bool(opts.get("json")),
+              _model_text(found))
+    elif command == "refresh":
+        conn = connect()
+        try:
+            found = refresh_model(conn, target)
+        finally:
+            conn.close()
+        _emit(found, bool(opts.get("json")), f"Refreshed {found['view']}" + _counts(found))
+    elif command == "models":
+        conn = connect()
+        try:
+            found = list_models(conn)
+        finally:
+            conn.close()
+        _emit(found, bool(opts.get("json")), "\n".join(
+            f"{m['model']:<24} {m['published_schema']:<28} {'kit' if m['kit'] else 'not the kit'}"
+            f"{', refresh: exakit describe --model ' + m['model'] + ' --refresh' if m['refreshable'] else ''}  {m['description']}"
+            for m in found) or "No semantic models yet (or Semantic Views is not installed).")
     else:
-        raise Refused(f"Unknown command '{command}' (draft, approve, show, versions, comments, profile, schema, schema-approve).")
+        raise Refused(f"Unknown command '{command}' (draft, approve, show, versions, comments, profile, schema, "
+                      "schema-approve, model, refresh, models).")
+
+
+def _counts(found: dict[str, Any]) -> str:
+    counts = found.get("counts") or {}
+    text = (f": {counts.get('views', 0)} views, {counts.get('dimensions', 0)} dimensions, {counts.get('metrics', 0)} metrics"
+            if counts else "")
+    return text + "".join(f"\nNote: {n}" for n in found.get("notes") or []) + "".join(
+        f"\nWarning: {w}" for w in found.get("warnings") or [])
+
+
+def _model_text(found: dict[str, Any]) -> str:
+    lines = [found["summary"]]
+    if found.get("ai", {}).get("error"):
+        lines.append(f"AI: {found['ai']['error']}")
+    for ddl in found.get("proposed_metrics") or []:
+        lines.append("AI proposed: " + " ".join(ddl.split())[:220])
+    for refused in found.get("ai", {}).get("refused") or []:
+        lines.append(f"AI proposal refused: {refused}")
+    if found["status"] == "dry run":
+        lines.append("Dry run: nothing was written. Publish it without --dry-run.")
+    else:
+        lines.append(f"Published {', '.join(found.get('views') or [])}" + _counts(found)
+                     + f"\nQuery it: SELECT * FROM SEMANTIC_AGENT.METRICS WHERE MODEL_NAME = '{found['model']}'")
+    return "\n".join(lines)
 
 
 def main(argv: list[str]) -> int:
@@ -651,12 +821,17 @@ def main(argv: list[str]) -> int:
         return 0 if argv else 2
     try:
         words, opts = _options(argv[1:])
+        if argv[0] == "models":
+            words = words or ["-"]
         if len(words) != 1:
             raise Refused("Name one table, dataset id or draft file.")
         _run(argv[0], words, opts)
     except (Refused, Unreachable, Conflict) as err:
         print(f"{err}", file=sys.stderr)
         return err.code
+    except RuntimeError as err:                    # Semantic Views did not install, or the product refused the model
+        print(f"{err}", file=sys.stderr)
+        return 1
     return 0
 
 

@@ -149,7 +149,7 @@ def system_present(ctx: KitContext) -> bool:
 # --- the release ----------------------------------------------------------------------------------------------------
 
 def _asset(version: str) -> tuple[str, str]:
-    repo = os.environ.get("EXAKIT_SEMANTIC_VIEWS_REPO", REPO)
+    repo = REPO                                        # the pinned repository: never one from the environment
     if not re.fullmatch(r"[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", repo):
         raise AddonFailure("invalid Semantic Views repository")
     return repo, f"exasol-semantic-views-{version}.zip"
@@ -184,7 +184,7 @@ def _expected_digest(ctx: KitContext, version: str, repo: str, name: str) -> str
 def _download(ctx: KitContext, version: str, archive: Path) -> None:
     repo, name = _asset(version)
     expected = _expected_digest(ctx, version, repo, name)
-    if not expected and os.environ.get("EXAKIT_ALLOW_UNVERIFIED_SEMANTIC_VIEWS") != "1":
+    if not expected:
         raise AddonFailure(f"No checksum for {name}; refusing an unverified archive")
     ctx.activity(f"Downloading Exasol Semantic Views {version}")
     digest = hashlib.sha256()

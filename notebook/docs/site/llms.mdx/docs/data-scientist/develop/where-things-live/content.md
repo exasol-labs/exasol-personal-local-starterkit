@@ -20,11 +20,12 @@ Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` wh
 
 ## In the database [#in-the-database]
 
-| Schema            | What it holds                                             |
-| ----------------- | --------------------------------------------------------- |
-| `EXAKIT_SEMANTIC` | Views whose column comments carry the approved roles      |
-| `EXAKIT_PREPARED` | Joined views and typed, cleaned views you chose to create |
-| `VS_<NAME>`       | The tables of an external source named `<NAME>`           |
+| Schema                                                 | What it holds                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `SEMANTIC_CATALOG`, `SEMANTIC_ADMIN`, `SEMANTIC_AGENT` | Exasol Semantic Views: the semantic models built from the approved column maps |
+| `SEM_<MODEL>`                                          | A model's published semantic views, queried with Semantic SQL                  |
+| `EXAKIT_PREPARED`                                      | Joined views and typed, cleaned views you chose to create                      |
+| `VS_<NAME>`                                            | The tables of an external source named `<NAME>`                                |
 
 ## What an update touches [#what-an-update-touches]
 

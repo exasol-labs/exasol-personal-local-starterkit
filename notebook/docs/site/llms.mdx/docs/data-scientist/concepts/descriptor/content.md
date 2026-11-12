@@ -88,7 +88,7 @@ Nothing downstream uses a draft. Explore, Ask and Share open only an **approved*
 * The table has not changed since it was profiled.
 * The data is checked again, and a column that gives the target away is reported.
 * The next **version** is written to the kit's store on this computer, under `~/.exasol-starter-kit/descriptors/`.
-* The roles are published as column comments on a view in the `EXAKIT_SEMANTIC` schema. If publishing fails, the approval still stands and the message says why.
+* The roles are published in Exasol Semantic Views: the schema's semantic model is rebuilt, with time, category and flag columns as dimensions and measures as facts and metrics. A sensitive column is never exposed. If publishing fails, the approval still stands and the message says why.
 * The active workflow's log gets one line.
 
 ## Versions [#versions]

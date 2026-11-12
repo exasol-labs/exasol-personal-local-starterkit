@@ -116,6 +116,23 @@ nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", .
 nb.load_own_file("~/data/claims/", "MY_DATA")   # a folder: exakit data-load, one table per file, named after it
 ```
 
+The semantic layer is Exasol Semantic Views - never a view of your own. Approving a column map publishes the table in its schema's
+model; a notebook that answers business questions asks the model, and a notebook
+that spans sources builds one model over them first:
+
+```python
+semantic = nb.semantic_model(conn, "sales_360",
+                             tables=["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"],
+                             links=["AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE"],
+                             preview=True)       # the fields, and what the AI proposes (ai=None: when a model is set)
+semantic = semantic.publish()                    # Semantic Views installed when the database lacks it
+nb.semantic_sql(conn, "SELECT order_date_month, total_amount FROM SEM_SALES_360.ORDER_LINES GROUP BY order_date_month")
+nb.refresh_semantic(conn, "sales_360")           # after a new link or table; an approval refreshes by itself
+nb.semantic_models(conn)                         # every model, and which the kit can refresh
+```
+
+The guided view's Understand step has the same as the **Semantic views** card.
+
 `data-scientist/01_explore` starts with the two checks a result should pass before anyone trusts it,
 both built from the descriptor so they run on any dataset: `nb.data_checks(conn, ds)` (Prepare:
 repeated keys and ids, exact copies, empty cells, placeholder values such as `Unknown Device`, a rare
@@ -126,8 +143,8 @@ Two proposals follow, each shown with its exact SQL and created only on request 
 `USE_PREPARED` in the first cell, or `.create(conn)`), each becoming a dataset with its own approved
 column map that every later step reads: `nb.describe_schema(conn, ds).joined_view(ds)` - the table
 with every table its many-to-one links reach (the schema map: keys and links, declared or found and
-checked on the values; `exakit describe --schema <SCHEMA>`; the approved links are published as
-`EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS`, so join along them instead of guessing a join) - and
+checked on the values; `exakit describe --schema <SCHEMA>`; the approved links become relationships
+of the schema's Exasol Semantic Views model, so join along them instead of guessing a join) - and
 `nb.typed_view(conn, ds)` - numbers and dates in their types, placeholders as NULL, copies dropped.
 Both go into `EXAKIT_PREPARED`; neither touches the user's tables.
 `data-scientist/01_explore` is built that way: its settings are all in the first cell, one

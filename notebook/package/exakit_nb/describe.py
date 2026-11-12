@@ -10,8 +10,9 @@ otherwise the table is profiled once, in SQL, and every column gets one of eight
 it; the slots name the columns the notebooks use. show() lists each column with the schema and table it came from,
 its type, role, confidence, evidence and note, low confidence first, the slots above (rows() gives the same as dicts;
 a notebook renders it as a table). approve() checks every column has a role and none sits in two slots, checks
-the table has not changed since it was profiled, writes the next version into the kit's store and publishes the
-roles as column comments on a view in EXAKIT_SEMANTIC (a publish that fails leaves the approval standing, and says
+the table has not changed since it was profiled, writes the next version into the kit's store and rebuilds the
+schema's Exasol Semantic Views model with it - the roles become its dimensions, facts and metrics; Semantic Views is
+installed first when the database does not have it (a publish that fails leaves the approval standing, and says
 why). The active workflow's log gets one line.
 
 The work is the kit's own service, setup/lib/describe_service.py in the kit copy (the one `exakit describe` runs),
@@ -283,8 +284,8 @@ class Draft:
 
     def approve(self, owner: str | None = None, comments: bool = True, *, conn=None, sample: int | None = None):
         """Approve: every column has a role and none sits in two slots, the table has not changed since it was
-        profiled, the next version is written into the kit's store with current.yaml, and the roles are published on
-        a view in EXAKIT_SEMANTIC (``comments=False`` skips it). ``owner`` defaults to EXAKIT_DESCRIPTOR_OWNER or the
+        profiled, the next version is written into the kit's store with current.yaml, and the schema's Exasol Semantic
+        Views model is rebuilt with it (``comments=False`` skips that). ``owner`` defaults to EXAKIT_DESCRIPTOR_OWNER or the
         OS user. Returns the Dataset read back from the store."""
         from .dataset import dataset
         from .workflow import log_event
@@ -304,13 +305,15 @@ class Draft:
                 print(f"{result['table']} v{result['version']} already says this; nothing was written.")
                 print(f"Stored at: {result['path']}")
                 if result.get("published"):
-                    print(f"Published as {result['published']}: agents read the roles from its column comments.")
+                    print(f"Published in Exasol Semantic Views as {result['published']}: agents read the fields from it.")
             else:
                 print(f"Approved {result['table']} v{result['version']} (owner {result['owner']}): {result['path']}")
                 if result.get("published"):
-                    print(f"Published as {result['published']}: agents read the roles from its column comments.")
+                    print(f"Published in Exasol Semantic Views as {result['published']}: agents read the fields from it.")
                 elif result.get("reason"):
                     print(f"Approved, not published: {result['reason']}. Retry with: exakit describe {self.id} --comments")
+                for model in result.get("refreshed") or []:
+                    print(f"Refreshed the semantic model {model}, which has this table in it.")
                 for warning in result.get("warnings") or []:
                     print(f"Warning: {warning}")
             current = service.store.folder(result["table"]) / service.store.CURRENT

@@ -263,7 +263,7 @@ def _(mo):
     mo.md(r"""
     ### Check the map again
 
-    The same map, read again after the approval. The table you approved now shows `approved vN, published` and every slot by name. `not published` means the roles are saved but agents cannot read them yet: approve again to publish.
+    The same map, read again after the approval. The table you approved now shows `approved vN, in semantic model <name>` and every slot by name. `not in a semantic model yet` means the roles are saved but agents cannot read them yet: approve again to publish.
     """)
     return
 
@@ -273,6 +273,46 @@ def _(connection, dataset, nb):
     # Cell tags: review
     dataset  # read after the approval above, so this map shows it
     nb.data_map(connection)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Semantic views: one model over all your data
+
+    Approving a column map published it in **Exasol Semantic Views**, the database's semantic layer: the schema's model, with the table as an entity, its time, category and flag columns as dimensions and its measures as `total_` and `average_` metrics. AI clients read it over MCP; a notebook asks it with `nb.semantic_sql`. The kit installs Semantic Views the first time it is needed.
+
+    A model can also span sources: sample data, your own files and any number of external sources at once. List the tables (each with an approved column map) and the links between them (`SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY`). With `ai=True` your model proposes business names, synonyms and the metrics people ask for, from names, types and notes only (never a row). `preview=True` shows the result and writes nothing.
+
+    **Do now:** put your tables into `SEMANTIC_TABLES`, run the cell, read the preview, then set `PUBLISH_SEMANTIC = True` and run it again.
+
+    A model is built from what was approved at the time. Approving a column map refreshes every model its table is in. After a link or a new table, run `nb.refresh_semantic(connection, "<name>")`.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    SEMANTIC_NAME = "my_data"
+    SEMANTIC_TABLES = [dataset.fact_table]        # add tables of other schemas: "VS_LOGISTICS.COURIER_DAILY", "MY_DATA.TARGETS"
+    SEMANTIC_LINKS = []                           # e.g. "MY_DATA.ORDERS.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE"
+    PUBLISH_SEMANTIC = False
+    semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=SEMANTIC_LINKS, ai=None,
+                                 preview=not PUBLISH_SEMANTIC)
+    semantic
+    return PUBLISH_SEMANTIC, SEMANTIC_NAME
+
+
+@app.cell
+def _(PUBLISH_SEMANTIC, SEMANTIC_NAME, connection, nb):
+    # Cell tags: review
+    semantic_models = nb.semantic_models(connection)       # every model in the database; "refreshable" ones the kit built
+    if PUBLISH_SEMANTIC:
+        refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
+    semantic_models
     return
 
 

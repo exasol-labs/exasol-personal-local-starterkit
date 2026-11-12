@@ -1,5 +1,6 @@
 """The schema map (setup/lib/descriptor/schema.py): keys, links declared and found, the containment check that keeps a
-name match from making a link on its own, approving and publishing, and the joined view's SQL. The database is a
+name match from making a link on its own, approving (the schema's semantic model rebuilt with the links), and the
+joined view's SQL. The database is a
 stand-in that answers each statement the module sends, so no database is needed; the live behaviour was checked on
 TPCH (8 tables, 9 links found, ORDERS joined to CUSTOMER, NATION and REGION with its 30,000 rows kept)."""
 
@@ -99,29 +100,30 @@ class SchemaMapTest(unittest.TestCase):
         self.assertEqual((["NAME"], "declared primary key"),
                          (doc["tables"]["PRODUCTS"]["key"], doc["tables"]["PRODUCTS"]["key_evidence"]))
 
-    def test_approve_writes_a_version_publishes_the_links_and_says_when_nothing_changed(self):
+    def test_approve_writes_a_version_rebuilds_the_semantic_model_and_says_when_nothing_changed(self):
         doc, database = self.draft()
         executed = []
-        result = schema.approve(database, executed.append, doc, owner="analyst", reader="EXAKIT_READER", home=self.path)
+        built = {"view": "semantic model shop (SEM_SHOP)", "model": "shop"}
+        with mock.patch.object(schema.publishing, "publish_schema", return_value=built) as publish_schema:
+            result = schema.approve(database, executed.append, doc, owner="analyst", reader="EXAKIT_READER", home=self.path)
         self.assertEqual((1, "approved", 2), (result["version"], result["status"], result["relations"]))
-        self.assertEqual("EXAKIT_SEMANTIC.SHOP__RELATIONS", result["published"])
+        self.assertEqual(("semantic model shop (SEM_SHOP)", "shop"), (result["published"], result["model"]))
+        self.assertEqual(("SHOP", "EXAKIT_READER"), publish_schema.call_args.args[2:4])
         self.assertTrue((schema.folder("SHOP", self.path) / "v1.json").is_file())
         self.assertFalse((schema.folder("SHOP", self.path) / "draft.json").exists())
-        view = next(s for s in executed if s.startswith("CREATE OR REPLACE VIEW"))
-        self.assertIn('EXAKIT_SEMANTIC."SHOP__RELATIONS" (FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN', view)
-        self.assertIn("'ORDERS', 'CUSTOMER_ID', 'CUSTOMERS', 'ID'", view)
-        self.assertIn('GRANT SELECT ON EXAKIT_SEMANTIC."SHOP__RELATIONS" TO "EXAKIT_READER"', executed)
-        self.assertFalse(any("SHOP\".\"ORDERS\"" in s and s.startswith(("COMMENT", "ALTER")) for s in executed),
-                         "the user's own tables are never touched")
+        self.assertEqual([], executed, "the links reach the model through publish_schema; nothing else is written")
+        # the approved links are what the model's relationships are built from
+        with mock.patch.object(schema.publishing.store, "kit_home", return_value=self.path):
+            links = schema.publishing.schema_links("SHOP", self.path)
+        self.assertIn({"from": "SHOP.ORDERS.CUSTOMER_ID", "to": "SHOP.CUSTOMERS.ID"}, links)
         again = schema.approve(database, executed.append, doc, owner="analyst", home=self.path)
         self.assertEqual("unchanged", again["status"])
         self.assertIn(str(schema.folder("SHOP", self.path) / "v1.json"), again["message"])
 
     def test_a_failed_publish_keeps_the_approval(self):
         doc, database = self.draft()
-        def refuse(sql):
-            raise RuntimeError("insufficient privileges")
-        result = schema.approve(database, refuse, doc, owner="analyst", home=self.path)
+        with mock.patch.object(schema.publishing, "publish_schema", side_effect=RuntimeError("insufficient privileges")):
+            result = schema.approve(database, lambda sql: None, doc, owner="analyst", home=self.path)
         self.assertEqual("approved, not published", result["status"])
         self.assertIn("insufficient privileges", result["reason"])
         self.assertEqual(1, schema.current("SHOP", self.path)["version"])

@@ -19,8 +19,9 @@ Three origins, one view:
 - \*\*local\*\*: your own file or folder (`exakit data-load <path>`, the quickstart's MY_DATA cell);
 - \*\*source\*\*: a connected external source, read live through its virtual schema (`exakit connect`).
 
-Roles come from the approved column maps (EXAKIT_SEMANTIC.\<SCHEMA\>\_\_\<TABLE\>, one column comment per role) and the
-links from approved schema maps (EXAKIT_SEMANTIC.\<SCHEMA\>\_\_RELATIONS). Columns that share a key-like name across
+Roles come from the approved column maps in the kit's store, and the semantic layer is Exasol Semantic Views: a table
+that is an entity of a semantic model the kit built says which model (SEMANTIC_CATALOG.ENTITIES). The links are the
+approved schema maps' and the multi-source models' (nb.semantic_model). Columns that share a key-like name across
 two tables are listed as possible links: a lead to check, never a join made for you. Only metadata is read.
 
 

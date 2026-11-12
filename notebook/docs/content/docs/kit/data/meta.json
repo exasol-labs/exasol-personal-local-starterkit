@@ -5,6 +5,7 @@
     "datasets",
     "load-data",
     "column-maps",
+    "semantic-views",
     "run-sql"
   ]
 }

@@ -15,9 +15,10 @@ A table's key is its declared PRIMARY KEY, else the first column named like a ke
 and never empty. Links are many-to-one: the key side is unique, so joining along them never multiplies rows.
 
 The store keeps one folder per schema beside the tables' folders: ~/.exasol-starter-kit/descriptors/<SCHEMA>/ with
-v<n>.json (never rewritten), current.json and draft.json. Approving publishes the links as a view any read-only client
-can query, EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS (FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN, KIND, EVIDENCE); the
-user's own schema and tables are never commented or altered.
+v<n>.json (never rewritten), current.json and draft.json. Approving rebuilds the schema's Exasol Semantic Views
+model (publish.py): each link between two tables with approved column maps becomes a relationship of that model, which
+any read-only client can read in SEMANTIC_CATALOG.RELATIONSHIPS; the user's own schema and tables are never commented
+or altered.
 """
 
 from __future__ import annotations
@@ -34,7 +35,6 @@ from . import publish as publishing
 from . import store
 
 FORMAT = 1
-SCHEMA = publishing.SCHEMA                     # EXAKIT_SEMANTIC
 PREPARED = "EXAKIT_PREPARED"                    # where a joined view is created
 MAX_ORPHANS = 0.001                             # a link may miss at most this share of its values
 MAX_DEPTH = 3                                   # how far a joined view follows links from the main table
@@ -274,32 +274,12 @@ def approve(run: Run, execute: Callable[[str], Any], doc: dict[str, Any], *, own
                               "path": str(path), "relations": len(final["relations"])}
     if publish:
         try:
-            for sql in statements(final, reader):
-                execute(sql)
-            result["published"] = f"{SCHEMA}.{schema}__RELATIONS"
+            published = publishing.publish_schema(execute, run, schema, reader, home=home)
+            result["published"] = published["view"]
+            result["model"] = published["model"]
         except Exception as err:                      # the approval stands; say why it is not published
             result["status"], result["reason"] = "approved, not published", f"{type(err).__name__}: {err}"
     return result
-
-
-def statements(doc: dict[str, Any], reader: str | None) -> list[str]:
-    """The view that publishes an approved schema map's links (one row per link), and its grant."""
-    schema = schema_name(doc["schema"])
-    view = f"{SCHEMA}.{_q(f'{schema}__RELATIONS')}"
-    rows = []
-    for link in doc.get("relations") or []:
-        ft, _, fc = link["from"].partition(".")
-        tt, _, tc = link["to"].partition(".")
-        rows.append(f"SELECT {_lit(ft)}, {_lit(fc)}, {_lit(tt)}, {_lit(tc)}, {_lit(link['kind'])}, "
-                    f"{_lit(str(link['evidence'])[:500])} FROM DUAL")
-    body = "\nUNION ALL ".join(rows) if rows else "SELECT '', '', '', '', '', '' FROM DUAL WHERE FALSE"
-    about = f"schema={schema}; schema map v{doc['version']}; one row per approved link between its tables"
-    found = [f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}",
-             f"CREATE OR REPLACE VIEW {view} (FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN, KIND, EVIDENCE) AS\n{body}\n"
-             f"COMMENT IS {_lit(about)}"]
-    if reader:
-        found.append(f"GRANT SELECT ON {view} TO {_q(reader)}")
-    return found
 
 
 # --- one wide view along the links ---------------------------------------------------------------------------------------

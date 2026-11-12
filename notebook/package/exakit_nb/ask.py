@@ -213,8 +213,8 @@ class Proposal:
 def described(dataset: Any) -> dict[str, Any]:
     """What the model is told about the data: the approved descriptor - the table, what one row is, the version, the
     slots, and every column with its role, the evidence that chose it and its note. A sensitive column is named with
-    its role only, and the model is told never to select its values. The same approved version the EXAKIT_SEMANTIC
-    view carries, so the notebook and the AI clients over MCP answer from one meaning."""
+    its role only, and the model is told never to select its values. The same approved version the schema's
+    Exasol Semantic Views model is built from, so the notebook and the AI clients over MCP answer from one meaning."""
     descriptor = getattr(dataset, "descriptor", None)
     about: dict[str, Any] = {"table": dataset.fact_table,
                              "descriptor": f"{dataset.id} v{dataset.version} (approved)",

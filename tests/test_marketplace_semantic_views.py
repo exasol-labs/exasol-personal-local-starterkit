@@ -67,8 +67,7 @@ class SemanticViewsTest(unittest.TestCase):
                                 "runtime.password_file": str(credential), "components.pyexasol.python": str(python)})
         self.ctx = KitContext(ROOT, self.home, self.home / "bin", self.manifest, Path("uv"))
         self.addCleanup(self.temp.cleanup)
-        for name in ("EXAKIT_MARKETPLACE_TARGET_VERSION", "EXAKIT_SEMANTIC_VIEWS_VERSION", "EXAKIT_SEMANTIC_VIEWS_REPO",
-                     "EXAKIT_ALLOW_UNVERIFIED_SEMANTIC_VIEWS", "EXAKIT_VERSION_POLICY"):
+        for name in ("EXAKIT_MARKETPLACE_TARGET_VERSION", "EXAKIT_VERSION_POLICY"):
             self.addCleanup(os.environ.pop, name, None)
             os.environ.pop(name, None)
         os.environ["EXAKIT_VERSION_POLICY"] = "pinned"

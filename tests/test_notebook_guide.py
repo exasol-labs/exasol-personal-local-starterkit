@@ -387,7 +387,7 @@ class CardTest(unittest.TestCase):
 
         opened = [{"kind": wf.START, "name": "n0"}] + [{"kind": wf.SQL, "sql": "SELECT 1"}] * 8
         self.assertEqual(["next", "todo", "todo", "todo"], states(opened))
-        approved = opened + [{"kind": wf.DESCRIBE_APPROVE}, {"kind": wf.SQL, "sql": "CREATE OR REPLACE VIEW EXAKIT_SEMANTIC.X AS SELECT 1"}]
+        approved = opened + [{"kind": wf.DESCRIBE_APPROVE}, {"kind": wf.SQL, "sql": "CREATE OR REPLACE VIEW EXAKIT_PREPARED.X AS SELECT 1"}]
         self.assertEqual(["done", "next", "todo", "todo"], states(approved))
         exploring = approved + [{"kind": wf.STEP, "name": "n1"}] + [{"kind": wf.SQL, "sql": "SELECT 2"}] * 6
         self.assertEqual(["done", "next", "todo", "todo"], states(exploring))

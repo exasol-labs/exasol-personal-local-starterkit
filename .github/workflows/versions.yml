@@ -1079,6 +1079,10 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
+      # The guided cards: every card action is a cell of its notebook, every nb call one the kit has, and the cards'
+      # blocks (the Semantic views card's included); the cards that need anywidget skip without it.
+      - run: python3 tests/test_notebook_guide.py
+        if: matrix.shard == 4
       # The notebooks' documentation: the generated reference is current, every link leads somewhere, the shipped
       # site was built from these sources, and nb.docs() serves it from this computer only.
       - run: python3 tests/test_notebook_docs.py

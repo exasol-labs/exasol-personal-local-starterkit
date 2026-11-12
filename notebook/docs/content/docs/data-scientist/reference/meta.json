@@ -29,6 +29,7 @@
     "kit-facts",
     "handoff",
     "ml-train",
-    "checks"
+    "checks",
+    "semantic"
   ]
 }

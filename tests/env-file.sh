@@ -98,7 +98,7 @@ catalog = json.load(open(f"{root}/marketplace/catalog.json"))
 read |= {"EXAKIT_" + a["id"].upper().replace("-", "_") + "_VERSION" for a in catalog["addons"]}
 read |= {f"EXAKIT_NOTEBOOK_{tool}_VERSION" for tool in ("JUPYTERLAB", "MARIMO")}
 template = set(re.findall(r"^# (EXAKIT_[A-Z0-9_]+)=", open(f"{root}/setup/exakit.env").read(), re.M))
-not_settings = {"EXAKIT_SEMANTIC", "EXAKIT_SCORING", "EXAKIT_UDF", "EXAKIT_SMOKE", "EXAKIT_PREPARED",   # schema names, not settings
+not_settings = {"EXAKIT_SCORING", "EXAKIT_UDF", "EXAKIT_SMOKE", "EXAKIT_PREPARED",   # schema names, not settings
                 "EXAKIT_HOME", "EXAKIT_ENV_FILE",                                     # where the file is
                 "EXAKIT_DBT_DSN",                       # handed to dbt by its launcher on every run, not set by anyone
                 "EXAKIT_SRC_"}                          # the CONNECTION name prefix of exakit connect (EXAKIT_SRC_<NAME>)

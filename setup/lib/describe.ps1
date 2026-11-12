@@ -64,11 +64,14 @@ function Invoke-DescribeService {
 # exakit describe <id|draft.yaml> --approve [--role r=COL]... [--owner x] [--no-comments] [--json]
 # exakit describe <id> --show [--version n] | --versions | --comments [--json]
 # exakit describe --schema <SCHEMA> [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner x] [--no-comments]] [--json]
+# exakit describe --model <NAME> --table S.T... [--link S.T.COL=S.T.KEY]... [--ai] [--description text] [--dry-run] [--json]
+# exakit describe --model <NAME> --refresh [--json] | exakit describe --models [--json]
 function Invoke-CmdDescribe {
     param([string[]]$CmdArgs = @())
     $target = ""; $sample = ""; $id = ""; $json = $false; $write = ""
     $mode = ""; $owner = ""; $version = ""; $noComments = $false; $roles = @()
     $schema = ""; $links = @(); $unlinks = @()
+    $model = ""; $tables = @(); $ai = $false; $dryRun = $false; $description = ""; $refresh = $false; $listModels = $false
     $i = 0
     while ($i -lt $CmdArgs.Count) {
         $arg = "$($CmdArgs[$i])"
@@ -79,7 +82,11 @@ function Invoke-CmdDescribe {
             $mode = $arg
         }
         elseif ($arg -eq "--no-comments") { $noComments = $true }
-        elseif ($arg -in @("--sample", "--id", "--write", "--owner", "--version", "--role", "--schema", "--link", "--unlink")) {
+        elseif ($arg -eq "--ai") { $ai = $true }
+        elseif ($arg -eq "--dry-run") { $dryRun = $true }
+        elseif ($arg -eq "--refresh") { $refresh = $true }
+        elseif ($arg -eq "--models") { $listModels = $true }
+        elseif ($arg -in @("--sample", "--id", "--write", "--owner", "--version", "--role", "--schema", "--link", "--unlink", "--model", "--table", "--description")) {
             $value = ""
             if ($i + 1 -lt $CmdArgs.Count) { $value = "$($CmdArgs[$i + 1])" }
             if (-not $value -or $value.StartsWith("-")) { Deny-ExakitInput "$arg needs a value: exakit describe ... $arg <value>" }
@@ -120,10 +127,24 @@ function Invoke-CmdDescribe {
                     $schema = $value
                 }
                 "--link" {
-                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') {
-                        Deny-ExakitInput "--link takes TABLE.COLUMN=TABLE.KEY (the column, then the key it points at), not '$value'."
+                    # TABLE.COLUMN=TABLE.KEY with --schema; SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY with --model.
+                    if ($value -notmatch '^([A-Za-z_][A-Za-z0-9_]*\.){1,2}[A-Za-z_][A-Za-z0-9_]*=([A-Za-z_][A-Za-z0-9_]*\.){1,2}[A-Za-z_][A-Za-z0-9_]*$') {
+                        Deny-ExakitInput "--link takes TABLE.COLUMN=TABLE.KEY (the column, then the key it points at; with --model SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY), not '$value'."
                     }
                     $links += $value
+                }
+                "--model" {
+                    if ($model) { Deny-ExakitInput "--model was given twice." }
+                    if ($value -notmatch '^[A-Za-z][A-Za-z0-9_]*$') { Deny-ExakitInput "--model takes a model name (a letter, then letters, digits and _), not '$value'." }
+                    $model = $value
+                }
+                "--table" {
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') { Deny-ExakitInput "--table takes SCHEMA.TABLE, not '$value'." }
+                    $tables += $value
+                }
+                "--description" {
+                    if ($description) { Deny-ExakitInput "--description was given twice." }
+                    $description = $value
                 }
                 "--unlink" {
                     if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') {
@@ -134,14 +155,55 @@ function Invoke-CmdDescribe {
             }
             $i++
         }
-        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink)." }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink, --model, --table, --ai, --description, --dry-run, --refresh, --models)." }
         elseif ($target) { Deny-ExakitInput "Name one table or descriptor: exakit describe SCHEMA.TABLE | exakit describe <id> --approve|--show|--versions|--comments" }
         else { $target = $arg }
         $i++
     }
     $idShape = '^[a-z0-9]+([-_][a-z0-9]+)*$'
     $serviceArgs = @()
+    if ($listModels -or $model) {
+        # Semantic models (Exasol Semantic Views): every model, one built over tables of any schemas, or a refresh.
+        # Twin of the --model arm in describe.sh.
+        if ($target -or $sample -or $id -or $write -or $version -or $mode -or $schema -or $owner -or $noComments -or $roles.Count -gt 0 -or $unlinks.Count -gt 0) {
+            Deny-ExakitInput "--model and --models take only --table, --link, --ai, --description, --dry-run, --refresh and --json: exakit describe --model NAME --table SCHEMA.TABLE... [--link S.T.COL=S.T.KEY]..."
+        }
+        if ($listModels) {
+            if ($model -or $ai -or $dryRun -or $description -or $refresh -or $tables.Count -gt 0 -or $links.Count -gt 0) {
+                Deny-ExakitInput "--models lists the models and takes only --json: exakit describe --models [--json]"
+            }
+            $serviceArgs = @("models")
+        }
+        elseif ($refresh) {
+            if ($ai -or $dryRun -or $description -or $tables.Count -gt 0 -or $links.Count -gt 0) {
+                Deny-ExakitInput "--refresh rebuilds a model from what it was built on and takes only --json: exakit describe --model NAME --refresh"
+            }
+            $serviceArgs = @("refresh", $model)
+        }
+        else {
+            if ($tables.Count -eq 0) { Deny-ExakitInput "Name the tables of the model: exakit describe --model $model --table SCHEMA.TABLE [--table SCHEMA.TABLE]..." }
+            $serviceArgs = @("model", $model)
+            if ($ai) { $serviceArgs += "--ai" }
+            if ($dryRun) { $serviceArgs += "--dry-run" }
+            if ($description) { $serviceArgs += @("--description", $description) }
+            foreach ($table in $tables) { $serviceArgs += @("--table", $table) }
+            foreach ($link in $links) {
+                if ($link -notmatch '^[^.=]+\.[^.=]+\.[^.=]+=[^.=]+\.[^.=]+\.[^.=]+$') { Deny-ExakitInput "--link with --model takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY, not '$link'." }
+                $serviceArgs += @("--link", $link)
+            }
+        }
+        if ($json) { $serviceArgs += "--json" }
+        if (-not (Test-DescribeInstalled)) { Fail "The notebook add-on is not installed; its Python runs the describe service. Install it with: exakit marketplace notebook" }
+        Invoke-DescribeService -ServiceArgs $serviceArgs
+        return
+    }
+    if ($ai -or $dryRun -or $description -or $refresh -or $tables.Count -gt 0) {
+        Deny-ExakitInput "--table, --ai, --description, --dry-run and --refresh go with --model: exakit describe --model NAME --table SCHEMA.TABLE..."
+    }
     if ($schema) {
+        foreach ($link in $links) {
+            if ($link -notmatch '^[^.=]+\.[^.=]+=[^.=]+\.[^.=]+$') { Deny-ExakitInput "--link with --schema takes TABLE.COLUMN=TABLE.KEY, not '$link'." }
+        }
         # The whole schema: its tables and the links between them, drafted or approved. Twin of the --schema arm in
         # describe.sh.
         if ($target -or $sample -or $id -or $write -or $version -or $roles.Count -gt 0) {

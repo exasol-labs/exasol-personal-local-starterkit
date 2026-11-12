@@ -11,6 +11,7 @@
     - [Datasets](/kit/data/datasets): The sample datasets the kit carries, where each comes from, and which persona loads it.
     - [Load data](/kit/data/load-data): Load a kit dataset, one file or a whole folder with exakit data-load, and what happens when you run it again.
     - [Column maps](/kit/data/column-maps): Say what each column of a table means with exakit describe - draft, correct, approve, and see every version.
+    - [Semantic views](/kit/data/semantic-views): The kit's semantic layer is Exasol Semantic Views - one model per schema from your approved column maps, or one model across any number of sources, kept current.
     - [Run SQL](/kit/data/run-sql): Run one statement from the terminal with exakit sql, read-only unless you say otherwise.
   - Tools
     - [Add-ons](/kit/tools/add-ons): Optional tools the kit can install, start, update and remove - the marketplace.
@@ -35,13 +36,14 @@
   - How-to guides
     - [Load data](/data-scientist/guides/load-data): Three ways to get data in front of the notebooks - a kit dataset, your own file or table, or an external source.
     - [Review and approve the column map](/data-scientist/guides/approve-column-map): Check the roles the kit proposed, correct them, choose the target and approve.
+    - [Build semantic views](/data-scientist/guides/semantic-views): In 00_quickstart - one Exasol Semantic Views model over your sample data, your files and your external sources, with the fields your AI proposes.
     - [Explore and model](/data-scientist/guides/explore-and-model): Steps 3 to 6 in 01_explore - prepare the data, compare groups, train a baseline model and check it.
     - [Ask your data](/data-scientist/guides/ask): Ask in plain language, read the proposed SQL, approve it and run it read-only.
     - [Share a dashboard and hand off](/data-scientist/guides/share): Steps 8 and 9 in 03_share - a dashboard that is previewed, checked and published, then one folder to hand the work on.
     - [Set up a model](/data-scientist/guides/set-up-a-model): Point the notebooks at your AI model and, optionally, at Langfuse for tracing.
     - [Run the kit from a notebook](/data-scientist/guides/run-the-kit): Check, update and extend the kit without leaving the notebook.
   - Command reference
-    - [All commands](/data-scientist/reference): Every public helper of exakit.nb, 111 in all, with the page that documents it.
+    - [All commands](/data-scientist/reference): Every public helper of exakit.nb, 116 in all, with the page that documents it.
     - [Connect, SQL and tracing](/data-scientist/reference/core): Helpers for the Exasol Personal Local Starter Kit's notebooks: exakit.nb (this module; exakit_nb is the same module under its older name).
     - [Quickstart steps](/data-scientist/reference/quickstart): The steps both quickstarts share (notebook/notebooks/00_shared): is the database there, what does it hold, and one loader per way data comes in - a sample dataset the kit ships, your own file, an external source connected as a virtual schema.
     - [Your own file or table](/data-scientist/reference/own-file): Your own CSV, Parquet or JSON file as a dataset: loaded into a table over the kit's connection, described by a few role assignments, and checked by the same rules as a kit dataset - so the notebooks run on it unchanged.
@@ -70,6 +72,7 @@
     - [Training handoff](/data-scientist/reference/handoff): The handoff from the Data Scientist to the ML Engineer (DS-3 -> ML-3, design 4): one JSON file that holds everything 01_train needs to train without opening the descriptor - which descriptor version and digest it came from, a digest of the data, the feature view built from the roles (as CREATE OR REPLACE VIEW SQL), the label and its positive class, the training SELECT with a reproducible time split, and the input and output schemas.
     - [In-database training](/data-scientist/reference/ml-train): Prepare the ML Engineer's in-database training from an approved, fresh handoff (ML-3, design 7).
     - [ML Engineer checks](/data-scientist/reference/checks): The three things the ML Engineer's notebooks depend on, one check each (ml-engineer/00_quickstart): the database's Python container answers a smoke UDF with the packages training needs, the MLflow server is reachable, and the bucket directory is where the kit expects it.
+    - [Semantic](/data-scientist/reference/semantic): Semantic views from a notebook: Exasol Semantic Views models over any of your data.
   - For developers
     - [How it fits together](/data-scientist/develop/how-it-fits): The helpers, the guided cards and the kit - which part owns what, and the rules that keep them honest.
     - [Add a command](/data-scientist/develop/add-a-command): Add an exakit.nb helper, wire it to a card, and get its documentation for free.

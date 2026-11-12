@@ -197,14 +197,44 @@ class Service(unittest.TestCase):
         code, out, err = self.run_main("approve", "support_tickets", "--role", "label=ESCALATED", "--json")
         result = json.loads(out)
         self.assertEqual((code, result["status"], result["version"], result["owner"]), (0, "approved", 1, "dana"))
-        self.assertEqual("EXAKIT_SEMANTIC.SUPPORT__TICKETS", result["published"])
+        self.assertEqual("semantic model support (SEM_SUPPORT)", result["published"])
         self.assertIn('target: "ESCALATED"', store.current("SUPPORT.TICKETS"))
         code, out, _ = self.run_main("versions", "support_tickets", "--json")
         self.assertEqual([(1, "approved", "dana")], [(v["version"], v["status"], v["owner"]) for v in json.loads(out)])
         code, out, _ = self.run_main("show", "SUPPORT.TICKETS")
         self.assertTrue(out.startswith("descriptor: 1"))
         code, out, _ = self.run_main("comments", "support_tickets")
-        self.assertEqual((0, "Published EXAKIT_SEMANTIC.SUPPORT__TICKETS (5 columns)\n"), (code, out))
+        self.assertEqual(0, code)
+        self.assertTrue(out.startswith("Published semantic model support (SEM_SUPPORT): 1 views, 4 dimensions, 1 metrics"), out)
+
+    def test_a_multi_source_model_its_ai_proposal_its_refresh_and_the_list(self):
+        self.run_main("draft", "support.tickets", "--id", "support_tickets")
+        self.run_main("approve", "support_tickets")
+        code, out, err = self.run_main("model", "support_360", "--table", "support.tickets", "--dry-run", "--json")
+        found = json.loads(out)
+        self.assertEqual((0, "dry run", "SEM_SUPPORT_360"), (code, found["status"], found["published_schema"]))
+        self.assertNotIn("support_360", self.db.sv.models, "a dry run writes nothing")
+        answer = json.dumps({"model": "Support tickets by channel", "labels": {"opened_on": {"display": "Opened"}},
+                             "metrics": [{"view": "TICKETS", "name": "ticket_total", "expression": "tickets_count * 1"},
+                                         {"view": "TICKETS", "name": "bad", "expression": "SUM(body)"}]})
+        with mock.patch.object(svc, "_chat", return_value=answer), \
+                mock.patch.dict(os.environ, {"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "http://127.0.0.1:1"}):
+            code, out, err = self.run_main("model", "support_360", "--table", "SUPPORT.TICKETS", "--ai")
+        self.assertEqual(0, code, err)
+        self.assertIn("AI proposal refused: metric bad", out)
+        model = self.db.sv.models["support_360"]
+        self.assertTrue(model["description"].startswith("Support tickets by channel"))
+        self.assertIn("DISPLAY ''Opened''\n", next(s for s in self.db.sent if "ALTER SEMANTIC VIEW support_360.TICKETS" in s))
+        self.assertTrue(any("ADD OR REPLACE METRIC ticket_total" in d for d in model["definitions"]))
+        code, out, _ = self.run_main("refresh", "support_360")
+        self.assertEqual(0, code)
+        self.assertTrue(out.startswith("Refreshed semantic model support_360 (SEM_SUPPORT_360)"), out)
+        self.assertTrue(any("ticket_total" in d for d in self.db.sv.models["support_360"]["definitions"]),
+                        "a refresh keeps the AI's accepted metrics")
+        code, out, _ = self.run_main("models", "--json")
+        self.assertEqual({"support", "support_360"}, {m["model"] for m in json.loads(out)})
+        self.assertTrue(all(m["kit"] and m["refreshable"] for m in json.loads(out)))
+        self.assertEqual(3, self.run_main("refresh", "never_built")[0])
 
     def test_set_gives_a_column_a_role_and_a_bad_one_is_exit_2(self):
         self.run_main("draft", "support.tickets")
@@ -235,7 +265,7 @@ class Service(unittest.TestCase):
             d.show()
             ds = d.approve(conn=self.db)
         self.assertIn("slots: key=TICKET_ID; time=OPENED_ON; text=BODY; target=ESCALATED", out.getvalue())
-        self.assertIn("Published as EXAKIT_SEMANTIC.SUPPORT__TICKETS", out.getvalue())
+        self.assertIn("Published in Exasol Semantic Views as semantic model support (SEM_SUPPORT)", out.getvalue())
         self.assertEqual((ds.status, ds.version, ds.col("label"), ds.text_cols()), ("approved", 1, "ESCALATED", ["BODY"]))
         self.assertEqual("identifier", d.column_roles["CHANNEL"])
         again = nb_describe.describe("SUPPORT.TICKETS", conn=self.db)

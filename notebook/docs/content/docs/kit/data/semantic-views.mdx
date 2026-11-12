@@ -1,0 +1,103 @@
+---
+title: Semantic views
+description: The kit's semantic layer is Exasol Semantic Views - one model per schema from your approved column maps, or one model across any number of sources, kept current.
+---
+
+The kit's semantic layer is **Exasol Semantic Views**, the database's own semantic layer. A model says what your data means in business terms: its entities (tables), the relationships between them, the dimensions you group by and the metrics you ask for. AI clients read it over MCP and answer from its metrics; notebooks ask it with Semantic SQL.
+
+You do not write a model by hand. The kit builds it from what you approved:
+
+| You approved | It becomes |
+|---|---|
+| A table's column map | An entity, with its key and grain |
+| A link between two tables | A relationship (many-to-one) |
+| A `time`, `category` or `flag` column | A dimension (a time column also gives `<column>_month`) |
+| A `measure` column | A fact, and the metrics `total_<column>` and `average_<column>` |
+| Every table | A row count, `<table>_count` |
+
+A column marked **sensitive** is never a dimension and never a public fact.
+
+## Installed when it is needed
+
+Semantic Views is a marketplace add-on (`semantic-views`). The first approval installs it into the database, as this would:
+
+```bash
+exakit marketplace semantic-views
+```
+
+If that install fails, the approval still stands and says which command to run.
+
+## One model per schema
+
+Approving a column map rebuilds its schema's model:
+
+```bash
+exakit describe AMAZON.ORDER_LINES --approve --role target=CANCELLED
+```
+
+The model is named after the schema (`amazon`) and its views are published in `SEM_<SCHEMA>` (`SEM_AMAZON.ORDER_LINES`). Approving a schema's links (`exakit describe --schema AMAZON --approve`) rebuilds it with the links as relationships.
+
+## One model across sources
+
+A question often needs more than one schema: a sample dataset, your own files and one or more external sources. Build one model over all of them:
+
+```bash
+exakit describe --model sales_360 \
+  --table AMAZON.ORDER_LINES --table MY_DATA.TARGETS --table VS_LOGISTICS.COURIER_DAILY \
+  --link AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE \
+  --ai --dry-run
+```
+
+- Every table needs an approved column map first.
+- `--link SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY` joins tables of different schemas. The key side must be unique. The approved links of each schema are used too.
+- An external source (a virtual schema, `VS_<NAME>`) is read live: nothing is copied.
+- `--dry-run` prints what would be built and writes nothing. Run it again without `--dry-run` to publish.
+
+### Let the AI propose the fields
+
+With `--ai`, the model you set up for the kit (`EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL`) proposes business names, comments and synonyms for every field, and the metrics people will ask for: filtered totals (completed revenue), differences and ratios.
+
+It is sent names, types, grains, column notes and a category's most frequent values. It is never sent a row, and never a sensitive column.
+
+Every proposed metric is checked before it is used: it may only add up a fact of its view, combine that view's metrics, and filter on a dimension with one of its known values. The product validates it again when it is applied. A refused one is skipped, and the output names it and says why.
+
+## Keep it current
+
+A model is built from what was approved at the time.
+
+- Approving a column map rebuilds its schema's model and every multi-source model the table is in.
+- After a new link or a new table, rebuild a model yourself:
+
+```bash
+exakit describe --model sales_360 --refresh
+exakit describe --models                         # every model, and which the kit can refresh
+```
+
+The kit only rebuilds models it built. A model of the same name that someone else made is left alone. The kit's former semantic layer, a schema of views of its own, is dropped the first time a model is published.
+
+## Ask a model
+
+A published view is queried with Semantic SQL: its metrics, grouped by its dimensions.
+
+```sql
+EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL();
+SELECT ship_state, total_amount, orders_count
+FROM SEM_SALES_360.ORDER_LINES
+GROUP BY ship_state;
+```
+
+An AI client sets the preprocessor through the Exasol MCP server (`set_exasol_preprocessor`) and runs the same query. To see what a model holds, read `SEMANTIC_CATALOG.MODELS`, `ENTITIES`, `DIMENSIONS`, `METRICS` and `RELATIONSHIPS`.
+
+## From a notebook
+
+```python
+semantic = nb.semantic_model(connection, "sales_360",
+                             tables=["AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"],
+                             links=["AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE"],
+                             preview=True)
+semantic = semantic.publish()
+nb.semantic_sql(connection, "SELECT ship_state, total_amount FROM SEM_SALES_360.ORDER_LINES GROUP BY ship_state")
+nb.refresh_semantic(connection, "sales_360")
+```
+
+In the guided view, the **Semantic views** card in Understand does the same: pick the tables, let the AI propose the fields, preview, publish, refresh.

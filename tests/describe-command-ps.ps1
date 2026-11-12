@@ -170,6 +170,13 @@ try {
     Check "every schema approve option, in the service's order" "schema-approve TPCH --owner lee --no-comments --link ORDERS.O_CLERK=CLERKS.ID --link A.B=C.D --unlink LINEITEM.L_PARTKEY" (Asked "args")
     $env:STUB_EXIT = "3"
     Run @("--schema", "NOPE");                   Check "3: no such schema" 3 $CODE
+    Write-Host "the semantic model half passes through the same way:"
+    Run @("--model", "sales_360", "--table", "A.ORDERS", "--table", "VS_X.DAILY", "--link", "A.ORDERS.STATE=VS_X.STATES.STATE", "--ai", "--dry-run", "-j")
+    Check "every model option, in the service's order" "model sales_360 --ai --dry-run --table A.ORDERS --table VS_X.DAILY --link A.ORDERS.STATE=VS_X.STATES.STATE --json" (Asked "args")
+    Run @("--model", "sales_360", "--refresh");  Check "refresh" "refresh sales_360" (Asked "args")
+    Run @("--models", "--json");                 Check "models" "models --json" (Asked "args")
+    Run @("--model", "m");                       Check "--model without tables" 2 $CODE
+    Run @("--model", "m", "--table", "A.B", "--link", "A.B=C.D"); Check "a two-part --link with --model" 2 $CODE
     $env:STUB_EXIT = "2"
     Run @("readings", "--approve", "--role", "entity=NOPE"); Check "the service's 2 (a bad role) is the command's" 2 $CODE
     $env:STUB_EXIT = "3"
@@ -197,16 +204,16 @@ try {
     Check "the help document has the command" 1 @($help.commands | Where-Object { $_.command -eq "describe" }).Count
     Check "in the personas and notebooks group" $true ((@($help.groups | Where-Object { $_.title -eq "Personas and notebooks" })[0].commands) -contains "describe")
     $page = @($help.commands | Where-Object { $_.command -eq "describe" })[0]
-    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments", "--schema", "--link", "--unlink")) {
+    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments", "--schema", "--link", "--unlink", "--model", "--table", "--ai", "--dry-run", "--refresh", "--models")) {
         Contains "the options list $opt" $opt $page.options
     }
     Contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" $page.description
     Contains "and the comment it writes" "the user's own table is never commented" $page.description
-    Contains "and the view for a virtual table" "EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>" $page.description
+    Contains "and the semantic model it publishes" "Exasol Semantic Views" $page.description
     Contains "and exit 5" "5 when another approve" $page.description
     Contains "with an approve example" "exakit describe orders --approve" ($page.examples -join "`n")
     Contains "the page says where a schema map is kept" "descriptors/<SCHEMA>/" $page.description
-    Contains "and the view its links are published as" "EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS" $page.description
+    Contains "and where its links go" "SEMANTIC_CATALOG.RELATIONSHIPS" $page.description
     Contains "with a schema example" "exakit describe --schema" ($page.examples -join "`n")
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

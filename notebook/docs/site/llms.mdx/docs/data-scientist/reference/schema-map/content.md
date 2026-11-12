@@ -16,7 +16,7 @@ dataset = joined.create(connection)                         # approves the map, 
 ```
 
 Nothing is written before create(): the proposal shows every join and the exact SQL. Then the schema map is approved
-(its links published as EXAKIT_SEMANTIC.\<SCHEMA>\_\_RELATIONS for agents), the view goes into EXAKIT_PREPARED and gets
+(its links become relationships of the schema's Exasol Semantic Views model, for agents), the view goes into EXAKIT_PREPARED and gets
 its own approved column map - the main table's roles carried over - so every later step reads the joined data.
 
 ## nb.describe_schema [#describe_schema]
@@ -61,14 +61,14 @@ class nb.SchemaMap
 
 The schema as found (a draft) or as approved: `doc` holds its tables and links.
 
-| Member                                        | What it is                                                                             |
-| --------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `doc`                                         | \`dict\[str, Any]                                                                      | None\` |
-| `approved_version`                            | \`int                                                                                  | None\` |
-| `note`                                        | \`str                                                                                  | None\` |
-| `schema`                                      |                                                                                        |
-| `links`                                       |                                                                                        |
-| `link(source: str, target: str) -> SchemaMap` | Add a link the search missed: `link("ORDERS.CUSTOMER_REF", "CUSTOMERS.ID")`.           |
-| `unlink(source: str) -> SchemaMap`            | Remove a link that is wrong, by the column it starts from: `unlink("ORDERS.O_CLERK")`. |
-| `approve(connection) -> SchemaMap`            | Approve this map (the next version in the store; the links published for agents).      |
-| `joined_view(main: Any) -> JoinedView`        | The proposal: `main` (a dataset, or a table name) with every table its links reach.    |
+| Member                                        | What it is                                                                                            |
+| --------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `doc`                                         | \`dict\[str, Any]                                                                                     | None\` |
+| `approved_version`                            | \`int                                                                                                 | None\` |
+| `note`                                        | \`str                                                                                                 | None\` |
+| `schema`                                      |                                                                                                       |
+| `links`                                       |                                                                                                       |
+| `link(source: str, target: str) -> SchemaMap` | Add a link the search missed: `link("ORDERS.CUSTOMER_REF", "CUSTOMERS.ID")`.                          |
+| `unlink(source: str) -> SchemaMap`            | Remove a link that is wrong, by the column it starts from: `unlink("ORDERS.O_CLERK")`.                |
+| `approve(connection) -> SchemaMap`            | Approve this map (the next version in the store; the schema's semantic model rebuilt with its links). |
+| `joined_view(main: Any) -> JoinedView`        | The proposal: `main` (a dataset, or a table name) with every table its links reach.                   |

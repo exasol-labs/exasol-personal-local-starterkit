@@ -122,6 +122,16 @@ run --schema LAB --link A.B=C.D;   check "--link without --approve" "2" "$CODE";
 run --schema LAB --approve --link A.B; check "--link without the key" "2" "$CODE"; contains "says the shape" "TABLE.COLUMN=TABLE.KEY" "$OUT"
 run --schema LAB --approve --unlink A; check "--unlink without the column" "2" "$CODE"; contains "says the shape" "the TABLE.COLUMN a link starts from" "$OUT"
 run readings --approve --link A.B=C.D; check "--link without --schema" "2" "$CODE"; contains "says it goes with --schema" "go with --schema" "$OUT"
+run --schema LAB --approve --link S.A.B=S.C.D; check "a three-part --link with --schema" "2" "$CODE"; contains "says the shape" "--link with --schema takes TABLE.COLUMN=TABLE.KEY" "$OUT"
+run --model;                       check "--model without a name" "2" "$CODE"
+run --model 1x --table A.B;        check "--model with a name that is no identifier" "2" "$CODE"; contains "says the shape" "--model takes a model name" "$OUT"
+run --model m;                     check "--model without tables" "2" "$CODE"; contains "asks for the tables" "Name the tables of the model" "$OUT"
+run --model m --table A;           check "--table without the schema" "2" "$CODE"; contains "says the shape" "--table takes SCHEMA.TABLE" "$OUT"
+run --model m --table A.B --link A.B=C.D; check "a two-part --link with --model" "2" "$CODE"; contains "says the shape" "--link with --model takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY" "$OUT"
+run --model m --table A.B --approve; check "--model with --approve" "2" "$CODE"
+run --model m --refresh --table A.B; check "--refresh with --table" "2" "$CODE"; contains "says what it takes" "--refresh rebuilds a model" "$OUT"
+run --models --model m;            check "--models with --model" "2" "$CODE"
+run LAB.READINGS --ai;             check "--ai without --model" "2" "$CODE"; contains "says where it goes" "go with --model" "$OUT"
 OUT="$( (cmd_describe LAB.READINGS --json --bogus) 2>/dev/null )"; CODE=$?
 check "with --json the refusal is one object" "2" "$CODE"
 check "and it says rejected" "yes" "$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d.get("rejected") and d.get("ok") is False else "no")')"
@@ -167,6 +177,11 @@ run --schema TPCH -j;              check "schema with --json" "schema TPCH --jso
 run --schema TPCH --approve --link ORDERS.O_CLERK=CLERKS.ID --unlink LINEITEM.L_PARTKEY --link A.B=C.D --owner lee --no-comments
 check "every schema approve option, in the service's order" "schema-approve TPCH --owner lee --no-comments --link ORDERS.O_CLERK=CLERKS.ID --link A.B=C.D --unlink LINEITEM.L_PARTKEY" "$(asked args)"
 STUB_EXIT=3 run --schema NOPE;     check "3: no such schema" "3" "$CODE"
+echo "the semantic model half passes through the same way:"
+run --model sales_360 --table A.ORDERS --table VS_X.DAILY --link A.ORDERS.STATE=VS_X.STATES.STATE --ai --dry-run --description 'Sales and deliveries' -j
+check "every model option, in the service's order" "model sales_360 --ai --dry-run --json --description Sales and deliveries --table A.ORDERS --table VS_X.DAILY --link A.ORDERS.STATE=VS_X.STATES.STATE" "$(asked args)"
+run --model sales_360 --refresh;   check "refresh" "refresh sales_360" "$(asked args)"
+run --models --json;               check "models" "models --json" "$(asked args)"
 STUB_EXIT=2 run readings --approve --role entity=NOPE; check "the service's 2 (a bad role) is the command's" "2" "$CODE"
 STUB_EXIT=3 run nowhere --versions; check "3: no such id" "3" "$CODE"
 STUB_EXIT=5 run readings --approve; check "5: a version conflict" "5" "$CODE"
@@ -188,16 +203,18 @@ check "the help document has the command" "describe" "$(python3 -c 'import json,
 check "in the personas and notebooks group" "yes" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if any("describe" in g["commands"] for g in d["groups"] if g["title"]=="Personas and notebooks") else "no")' "$ROOT/setup/help/exakit.json")"
 _cd_page="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=[c for c in d["commands"] if c["command"]=="describe"][0]; print(c["options"]); print(c["description"]); print("\n".join(c["examples"]))' "$ROOT/setup/help/exakit.json")"
 contains "and its page names the add-on" "exakit marketplace notebook" "$_cd_page"
-for _opt in --approve --role --owner --no-comments --show --version --versions --comments --schema --link --unlink; do
+for _opt in --approve --role --owner --no-comments --show --version --versions --comments --schema --link --unlink --model --table --ai --dry-run --refresh --models; do
     contains "the options list $_opt" "$_opt" "$(printf '%s' "$_cd_page" | sed -n 1p)"
 done
 contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" "$_cd_page"
 contains "and the comment it writes" "the user's own table is never commented" "$_cd_page"
-contains "and the view for a virtual table" "EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>" "$_cd_page"
+contains "and the semantic model it publishes" "Exasol Semantic Views" "$_cd_page"
+contains "installed first when missing" "exakit marketplace semantic-views" "$_cd_page"
 contains "and exit 5" "5 when another approve" "$_cd_page"
 contains "with an approve example" "exakit describe orders --approve" "$_cd_page"
 contains "the page says where a schema map is kept" "descriptors/<SCHEMA>/" "$_cd_page"
-contains "and the view its links are published as" "EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS" "$_cd_page"
+contains "and where its links go" "SEMANTIC_CATALOG.RELATIONSHIPS" "$_cd_page"
+contains "with a multi-source model example" "exakit describe --model sales_360" "$_cd_page"
 contains "with a schema example" "exakit describe --schema" "$_cd_page"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"

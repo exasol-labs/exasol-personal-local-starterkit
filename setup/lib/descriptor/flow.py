@@ -14,7 +14,8 @@ approve() runs these in order and stops at the first failure:
        result's "warnings" and the log (a live source is not queried: every count would be a round trip to it);
     4. v(n+1).yaml with status approved, the owner (the OS user unless given) and approved_at; v(n) is untouched;
     5. current.yaml replaced through a temp file and os.replace;
-    6. published (publish.py) and read back;
+    6. published (publish.py): the schema's Exasol Semantic Views model rebuilt with it (the add-on installed first
+       when the database does not have it);
     7. one line for the workflow log: table, version, what was published, the warnings.
 A publish that fails leaves the approval standing: the result says "approved, not published" and why. Approving
 what the current version already says writes nothing.
@@ -137,14 +138,8 @@ def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
 
 
 def _published_view(run: Callable[[str], list[dict[str, Any]]], table: str) -> str | None:
-    """EXAKIT_SEMANTIC.<view> when an earlier approval published it and it is still there; None otherwise."""
-    name = publishing.view_name(table)
-    try:
-        rows = run(f"SELECT VIEW_NAME FROM EXA_ALL_VIEWS WHERE VIEW_SCHEMA = {publishing.literal(publishing.SCHEMA)} "
-                   f"AND VIEW_NAME = {publishing.literal(name)}")
-    except Exception:                                   # the answer is a courtesy; the approval stands without it
-        return None
-    return f"{publishing.SCHEMA}.{name}" if rows else None
+    """The semantic model an earlier approval published the table in, when it is still there; None otherwise."""
+    return publishing.model_of(run, table)
 
 
 def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str], Any], doc: dict[str, Any], *,
@@ -163,14 +158,14 @@ def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str],
     if approved_text and _same(load(approved_text), doc):
         current = load(approved_text)
         # Where the approval this run is using lives: nothing new was written, so the reader would otherwise have
-        # no path to open, nor the view an agent reads the roles from.
+        # no path to open, nor the semantic model an agent reads the roles from.
         path = store.folder(table, home) / f"v{current['version']}.yaml"
         view = _published_view(run, table)
         unchanged: dict[str, Any] = {"status": "unchanged", "version": current["version"], "table": table,
                                      "path": str(path)}
         if view is None and publish:
             # Approved but never published: a shipped dataset's descriptor the store adopted, or an approval whose
-            # publish failed. Publish it now, so an agent finds its roles in EXAKIT_SEMANTIC.
+            # publish failed. Publish it now, so an agent finds its roles in the schema's semantic model.
             try:
                 view = publishing.publish(execute, run, current, reader)["view"]
             except Exception as err:                   # the approval stands; say why it is not published
