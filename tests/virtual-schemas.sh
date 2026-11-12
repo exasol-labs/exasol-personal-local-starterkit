@@ -1973,7 +1973,7 @@ check "a bare key id as the secret: refused as input, exit 2" "2" "$RC"
 OUT="$(printf '{"AccessKey": {"AccessKeyId": "AKIAZZZZZZZZZZZZZZZZ", "SecretAccessKey": "%s"}}' "$SECRET-0123456789abcdefghijklmnop" \
     | eng connect lakehouse --name lakebad $LK_SET --secret-stdin 2>&1)"; RC=$?
 check "a key AWS does not know: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_LAKEBAD" in d["connections"]' | tr A-Z a-z)"
-has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
+has "...filed as a rejected credential, naming the key and its flag" "AWS refused the secret access key; nothing was kept - correct the file given with --password-file" "$OUT"
 
 python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["glue.ap-south-1.amazonaws.com"]["key_id"]="AKIANEWNEWNEWNEWNEW1"; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
 OUT="$(eng reauth lake --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
@@ -2274,13 +2274,82 @@ check "...every route's adapter script loads that one file" "1" \
 # Failures, classified, nothing kept.
 run_secret "wrong-token" connect lakehouse --name restbad $IR_SET --secret-stdin
 check "a token the catalog refuses: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_RESTBAD" in d["connections"]' | tr A-Z a-z)"
-has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
+has "...filed as a rejected credential: the catalog's token, on --password-file" "the catalog refused the catalog token; nothing was kept - correct the file given with --password-file" "$OUT"
 run_secret "wrong-token" connect lakehouse --name ucbad $UC_SET --secret-stdin
 check "a Unity token refused: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCBAD" in d["connections"]' | tr A-Z a-z)"
-has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
+has "...filed as a rejected credential: the Databricks token, on --password-file" "the catalog refused the Databricks token; nothing was kept - correct the file given with --password-file" "$OUT"
 run_secret "$IR_TOKEN" connect lakehouse --name restno --set catalog=iceberg-rest --set catalog_url=https://rest.example.com/api/catalog --set warehouse=s3://wh/ --set namespace=nope --secret-stdin
 check "a namespace the catalog does not have: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_RESTNO" in d["connections"]' | tr A-Z a-z)"
 has "...named as a missing namespace" "the catalog has no such namespace that this credential can see" "$OUT"
+# The lakehouse engine's refusals, in its own words (measured live 12 Nov 2026,
+# lakehouse-engine-rs 0.57.3): each is auth or denied with the secret named,
+# never "error" with "see the log".
+lhjson() { python3 -c 'import json,sys; d=json.load(sys.stdin); print("%s|%s" % (d.get("kind"), d.get("remedy")))'; }
+OUT="$(printf '%s' wrong-token | eng --json connect lakehouse --name restbad $IR_SET --secret-stdin 2>/dev/null | lhjson)"
+check "Polaris' empty 401 under the catalog config (measured): kind auth, not catalog" "auth" "${OUT%%|*}"
+has "...the catalog's token named, with its flag" "the catalog refused the catalog token; nothing was kept - correct the file given with --password-file (or what --password-stdin read)" "$OUT"
+OUT="$(printf '%s' wrong-token | eng --json connect lakehouse --name ucbad $UC_SET --secret-stdin 2>/dev/null | lhjson)"
+check "Databricks' Unity 401 (Invalid access token): kind auth" "auth" "${OUT%%|*}"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["uc-oss.example.com"]={"catalog": "unity", "oss": True, "token": "right", "namespaces": {"main.sales": ["orders"]}, "region": "us-east-2"}; d["sources"]["rest-locked.example.com"]=dict(d["sources"]["rest.example.com"], fail="forbidden"); json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+OUT="$(printf '%s' wrong-token | eng --json connect lakehouse --name ucoss --set catalog=unity --set workspace_url=https://uc-oss.example.com --set namespace=main.sales --set region=us-east-2 --secret-stdin 2>/dev/null | lhjson)"
+check "open-source Unity Catalog's 401 UNAUTHENTICATED (measured): kind auth" "auth" "${OUT%%|*}"
+has "...the token named, on --password-file" "the catalog refused the Databricks token; nothing was kept - correct the file given with --password-file" "$OUT"
+check "...nothing kept" "false" "$(dbq '"EXAKIT_SRC_UCOSS" in d["connections"]' | tr A-Z a-z)"
+OUT="$(printf '%s' "$IR_TOKEN" | eng --json connect lakehouse --name restlocked --set catalog=iceberg-rest --set catalog_url=https://rest-locked.example.com/api/catalog --set warehouse=s3://wh/ --set namespace=sales --secret-stdin 2>/dev/null | lhjson)"
+check "an Iceberg REST catalog's 403 ForbiddenException: kind denied" "denied" "${OUT%%|*}"
+has "...with what the account needs" "the account signs in but may not read this data; nothing was kept - grant it what the message names" "$OUT"
+OUT="$(pair "$IR_TOKEN" "wrong-$MINIO_SECRET" | eng --json connect lakehouse --name minio3 $MINIO_SET --set region=us-east-1 --secret-pair-base64 2>/dev/null | lhjson)"
+check "a wrong static S3 secret beside a catalog token (PermissionDenied ... S3Error SignatureDoesNotMatch, measured): kind auth" "auth" "${OUT%%|*}"
+has "...the storage secret named, on --storage-secret-file" "the store refused the secret access key; nothing was kept - correct the file given with --storage-secret-file and run the same exakit connect again" "$OUT"
+lacks "...not the log" "see the log" "$OUT"
+lacks "...the secret is not echoed" "$MINIO_SECRET" "$OUT"
+OUT="$(pair "$IR_TOKEN" "wrong-$MINIO_SECRET" | eng connect lakehouse --name minio3 $MINIO_SET --set region=us-east-1 --secret-pair-base64 2>&1)"
+has "...the error shows S3's own code, lifted past the 1 KB context" "PermissionDenied (persistent) at read - caused by S3 SignatureDoesNotMatch: The request signature we calculated does not match" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["192.168.64.1"]["storage_fail"]="denied"; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+OUT="$(pair "$IR_TOKEN" "$MINIO_SECRET" | eng --json connect lakehouse --name minio3 $MINIO_SET --set region=us-east-1 --secret-pair-base64 2>/dev/null | lhjson)"
+check "a storage key that may not read the files (S3 AccessDenied): kind denied" "denied" "${OUT%%|*}"
+has "...with the S3 grants to give" "s3:ListBucket and s3:GetObject" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["192.168.64.1"].pop("storage_fail"); d["sources"]["192.168.64.1"]["secret_key"]="rotated"; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+OUT="$(eng --json check minio 2>/dev/null | lhjson)"
+check "a saved source whose S3 secret was rotated: check says auth" "auth" "${OUT%%|*}"
+has "...and the reauth names both flags, the refused one as the right one" "the store refused the secret access key: exakit source reauth minio --password-file <catalog token file> --storage-secret-file <file with the right secret access key> (a reauth writes both)" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["192.168.64.1"]["secret_key"]=sys.argv[2]; d["sources"].pop("uc-oss.example.com"); d["sources"].pop("rest-locked.example.com"); json.dump(d, open(sys.argv[1],"w"))' "$STATE" "$MINIO_SECRET"
+run check minio
+check "...and reads again once the store takes the key" "0" "$RC"
+LHW="$(cd "$ROOT/setup/virtual-schemas/engine" && python3 - <<'PYLW'
+import sql
+for text in (
+    # Databricks (SQL warehouse connector): the Lua adapter and the JDBC driver - kept as they were.
+    "E-VSDAB-5: the REST API answered HTTP 403: Invalid access token.",
+    "DatabricksSQLException: HTTP 403: Invalid access token.",
+    "E-VSDAB-5: the REST API answered HTTP 401 UNAUTHENTICATED: Credential was not sent",
+    # The lakehouse engine against each catalog.
+    "UDF error: failed to read the catalog config for warehouse 'exakit_polaris': catalog request failed with HTTP 401: ",
+    'UDF error: OAuth2 token request failed with HTTP 401: {"error":"unauthorized_client","error_description":"The client is not authorized","error_uri":null}',
+    'UDF error: OAuth2 token request failed with HTTP 400: {"error":"invalid_client"}',
+    'UDF error: Unity Catalog list tables request failed with HTTP 401: {"error_code":"UNAUTHENTICATED","message":"missing or wrong bearer token"}',
+    'UDF error: Unity Catalog temporary-credentials request failed with HTTP 401: {"error_code":"UNAUTHENTICATED"}',
+    "UDF error: Iceberg REST catalog request failed: NotAuthorizedException: Not authorized to make this request (HTTP 401)",
+    "UDF error: the Lakekeeper batch-check at https://lk.example.com/management/v1/permissions/check answered HTTP 401: {}.",
+    'UDF error: catalog request failed with HTTP 403: {"error":{"type":"ForbiddenException","code":403}}',
+    "UDF error: the Lakekeeper batch-check at https://lk.example.com/management/v1/permissions/check answered HTTP 403: {}.",
+    'UDF error: Unity Catalog list tables request failed with HTTP 403: {"error_code":"PERMISSION_DENIED","message":"User does not have USE SCHEMA"}',
+    "UDF error: ... source: PermissionDenied (persistent) at read - caused by S3 SignatureDoesNotMatch: The request signature we calculated does not match (HTTP 403)",
+    "UDF error: ... source: PermissionDenied (persistent) at read - caused by S3 InvalidAccessKeyId: The AWS Access Key Id you provided does not exist in our records. (HTTP 403)",
+    "UDF error: ... source: PermissionDenied (persistent) at read - caused by S3 AccessDenied: Access Denied (HTTP 403)",
+    "UDF error: ... source: PermissionDenied (persistent) at read, context: { uri: https://b.s3.amazonaws.com/k",
+    "UDF error: ... source: PermissionDenied (persistent) at read - caused by S3 RequestTimeTooSkewed: The difference between the request time and the current time is too large. (HTTP 403)",
+    "UDF error: failed to read the catalog config for warehouse 'https://x/api': catalog request failed with HTTP 400",
+    # Words near these that are not a refusal stay what they were.
+    "UDF error: catalog request failed with HTTP 4010",
+    "UDF error: PermissionDenied for table auth_log",
+):
+    print(sql.classify(text))
+PYLW
+)"
+check "the classifier: Databricks' words, each catalog's 401 and 403, the store's codes - one kind each" \
+    "auth auth auth auth auth auth auth auth auth auth denied denied denied auth auth denied denied clock catalog error error" \
+    "$(printf '%s' "$LHW" | tr '\n' ' ')"
 run_secret "$UC_TOKEN" connect lakehouse --name ucno --set catalog=unity --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.nope --set region=us-east-2 --secret-stdin
 check "a Unity schema that does not exist: exit 1" "1" "$RC"; has "...named as a missing namespace" "no such namespace" "$OUT"
 run_secret "$UC_TOKEN" connect lakehouse --name ucclosed --set catalog=unity --set workspace_url=https://dbc-closed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin

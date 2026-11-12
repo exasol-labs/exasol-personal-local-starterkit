@@ -437,7 +437,9 @@ the kit never stores secrets, so a reauth gives all of them again:
 | kind `input`: the combination is not valid | The remedy names the `files` values for that catalog. Glue takes S3 only; no catalog takes `s3` or `azure`. |
 | Both a token and an OAuth client given | Pick `login=token` or `login=oauth`, not both. |
 | A `gs://` path, or `abfs://` / `wasbs://`, refused | GCS is not supported; Azure needs `abfss://...dfs.core.windows.net/...`. For Unity tables on GCS use `exakit connect databricks`. |
-| "NotAuthorizedException", "HTTP 401", "Invalid access token" | The catalog refused the token or client: make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). |
+| kind `auth`: "request failed with HTTP 401" (Polaris, Lakekeeper, open-source Unity Catalog, Databricks), "NotAuthorizedException", "Invalid access token", OAuth `unauthorized_client` | The catalog refused the token or client: make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). The remedy starts "the catalog refused the ...". |
+| kind `auth`: "PermissionDenied (persistent) at read - caused by S3 SignatureDoesNotMatch" or "InvalidAccessKeyId" | The store refused the S3 key, not the catalog: `exakit source reauth <name> --password-file F --storage-secret-file F2`, F2 holding the right secret access key (`catalog=none`: `--password-file` only). The remedy starts "the store refused the ...". |
+| kind `denied`: "caused by S3 AccessDenied", or "request failed with HTTP 403" from the catalog | The key or principal signs in but may not read: grant s3:ListBucket and s3:GetObject on the files, or the catalog's read grants. |
 | "Unity Catalog does not let engines outside Databricks read this schema's files" | Turn on External Data Access and grant `EXTERNAL USE SCHEMA`. A Default Storage schema never works: use `exakit connect databricks`. |
 | "catalog-managed table, which this adapter version cannot read yet" | Read it with `exakit connect databricks`. |
 | `PERMISSION_DENIED` (Unity) | Grant USE CATALOG, USE SCHEMA and SELECT. |
