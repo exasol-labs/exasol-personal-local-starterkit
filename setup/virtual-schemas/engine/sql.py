@@ -125,9 +125,32 @@ _KINDS = (
 )
 
 
+# A connection string a message quotes ('jdbc:postgresql://...', 's3://...'). What it holds is the source's
+# address and settings, never why it failed - and with a CA in it (sslfactoryarg=-----BEGIN CERTIFICATE-----...)
+# its own words read as a certificate fault.
+_STRING = re.compile(r"'(?:jdbc:|[a-z][a-z0-9+.\-]*://)[^']*(?:'|$)", re.I | re.S)
+_OPEN_STRING = re.compile(r"'(?:jdbc:|[a-z][a-z0-9+.\-]*://)[^']*$", re.I | re.S)
+
+# Said when the database's message ends inside the connection string it quotes. A database message holds some
+# 2,000 characters, and a string with a CA certificate in it is longer (a 4096-bit root alone is 2.1 KB once
+# encoded), so the reason that follows the string is cut away before it reaches the kit (measured live: PostgreSQL
+# with verify and ISRG Root X1; the kit then read the string's own "CERTIFICATE" and called it a certificate fault).
+CUT = ("the database could not connect to the source, and its message was cut before the reason: the connection "
+       "string, with the CA certificate in it, is longer than a database message. To read the reason, connect once "
+       "with --set tls=require (it encrypts without checking the certificate) - the string is short then - fix what "
+       "it names, and connect again with the CA")
+
+
+def cut_in_string(message):
+    """True when a database message ends inside the connection string it quotes: the reason was cut away."""
+    text = re.sub(r"(?:\.\.\.)?\s*\(Session: \d+\)\s*$", "", str(message or "")).rstrip()
+    return bool(_OPEN_STRING.search(text))
+
+
 def classify(message):
+    text = _STRING.sub("'<connection string>'", message or "")
     for kind, pattern in _KINDS:
-        if re.search(pattern, message or "", re.I):
+        if re.search(pattern, text, re.I):
             return kind
     return "error"
 
@@ -139,6 +162,9 @@ def classify_raw(summary, raw):
     the summary alone then reads as a generic failure. Only the cause lines
     are read - a whole stack names classes (SSL..., TLS...) that would
     misfile it."""
+    # No reason reached the kit: nothing in what is left names a class (its own advice mentions certificates).
+    if str(summary).startswith(CUT[:60]):
+        return "error"
     kind = classify(summary)
     if kind not in ("error", "unreachable"):
         return kind
@@ -266,6 +292,8 @@ def summarize(text):
     more = next((l.strip() for l in rest.splitlines() if l.strip()), "")
     if line.rstrip().endswith(":") and more and not re.match(r"\w+\s*=>|at [\w$.]+\(|\)$", more):
         line = "%s %s" % (line, more)
+    if cut_in_string(line):
+        return CUT
     return re.sub(r"\s+", " ", line).strip()
 
 

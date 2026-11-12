@@ -1083,6 +1083,9 @@ jobs:
       # site was built from these sources, and nb.docs() serves it from this computer only.
       - run: python3 tests/test_notebook_docs.py
         if: matrix.shard == 4
+      # How the source engine reads a database's error: never from the connection string it quotes.
+      - run: python3 tests/test_vs_error_class.py
+        if: matrix.shard == 4
       - run: python3 tests/test_model_provider.py
         if: matrix.shard == 4
       # The same helpers with the real Langfuse SDK 5 installed (the add-on pins
