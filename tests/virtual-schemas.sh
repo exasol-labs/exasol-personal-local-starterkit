@@ -2006,6 +2006,74 @@ OUT="$(eng connect lakehouse --name lakefirst --set region=ap-south-1 --set data
 check "a refused FIRST lakehouse source: exit 1, the three scripts it created dropped by name" "1 3" \
     "$RC $(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith("DROP SCRIPT \"EXAKIT_VS\".\"LAKEHOUSE_")])')"
 
+# The registry knows one kit home's sources; the database knows them all. A kit
+# home deleted, lost or reinstalled - or a second one - leaves virtual schemas
+# on the shared LAKEHOUSE_ADAPTER that no source record of this home names
+# (found live: a failed connect tried DROP SCHEMA EXAKIT_VS CASCADE, and a
+# remove stopped half way at the refused adapter drop, its CONNECTION left).
+# OTHER_K plays the home that made VS_ORPHAN; HOME_K here starts empty.
+printf '\n== shared objects the database still uses (a lost or other kit home) ==\n'
+OTHER_K="$WORK/kit-other"; LOST_K="$WORK/kit-lost"
+mkdir -p "$OTHER_K" "$LOST_K"; cp -R "$HOME_K/cache" "$OTHER_K/"; cp -R "$HOME_K/cache" "$LOST_K/"
+lkdb
+OUT="$(HOME_K="$OTHER_K" eng connect lakehouse --name orphan --set region=ap-south-1 --set database=other_lake --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+check "another kit home connects VS_ORPHAN on the shared adapter" "0 EXAKIT_VS.LAKEHOUSE_ADAPTER" \
+    "$RC $(dbq 'd["virtual"]["VS_ORPHAN"]["adapter"]')"
+LKN="$(dbq 'len(d["statements"])')"
+OUT="$(HOME_K="$LOST_K" eng connect lakehouse --name lostfail --set region=ap-south-1 --set database=locked --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+check "empty registry, a failed first connect: exit 1, nothing of its own kept" "1 false false" \
+    "$RC $(dbq '"EXAKIT_SRC_LOSTFAIL" in d["connections"]' | tr A-Z a-z) $(dbq '"VS_LOSTFAIL" in d["virtual"]' | tr A-Z a-z)"
+check "...no DROP SCHEMA (CASCADE or not), no shared script dropped" "0 0" \
+    "$(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith("DROP SCHEMA")])') $(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith(("DROP SCRIPT", "DROP ADAPTER SCRIPT"))])')"
+check "...VS_ORPHAN, EXAKIT_VS and the four shared scripts untouched" "true true 4" \
+    "$(dbq '"VS_ORPHAN" in d["virtual"]' | tr A-Z a-z) $(dbq '"EXAKIT_VS" in d["schemas"]' | tr A-Z a-z) $(dbq 'len([s for s in d["scripts"] if s.startswith("EXAKIT_VS.LAKEHOUSE_")])')"
+
+OUT="$(HOME_K="$LOST_K" eng connect lakehouse --name lostone $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+check "empty registry, a lakehouse source connects beside VS_ORPHAN: exit 0" "0" "$RC"
+OUT="$(HOME_K="$LOST_K" eng remove lostone --dry-run 2>&1)"; RC=$?
+lacks "...its remove plan does not drop the shared adapter" "adapter script EXAKIT_VS.LAKEHOUSE_ADAPTER (no other" "$OUT"
+lacks "...nor its scan script" "script EXAKIT_VS.LAKEHOUSE_SCAN (no other" "$OUT"
+has "...it names what it keeps, and why" "adapter script EXAKIT_VS.LAKEHOUSE_ADAPTER (virtual schema VS_ORPHAN still uses it)" "$OUT"
+LKN="$(dbq 'len(d["statements"])')"
+OUT="$(HOME_K="$LOST_K" eng remove lostone 2>&1)"; RC=$?
+check "remove: exit 0, its virtual schema, CONNECTION and record gone" "0 false false false" \
+    "$RC $(dbq '"VS_LOSTONE" in d["virtual"]' | tr A-Z a-z) $(dbq '"EXAKIT_SRC_LOSTONE" in d["connections"]' | tr A-Z a-z) $([ -d "$LOST_K/sources/lostone" ] && echo true || echo false)"
+check "...no shared script dropped, no DROP SCHEMA" "0 0" \
+    "$(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith(("DROP SCRIPT", "DROP ADAPTER SCRIPT"))])') $(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith("DROP SCHEMA")])')"
+check "...VS_ORPHAN still has its adapter, scripts, schema and engine" "true 4 true yes" \
+    "$(dbq '"VS_ORPHAN" in d["virtual"]' | tr A-Z a-z) $(dbq 'len([s for s in d["scripts"] if s.startswith("EXAKIT_VS.LAKEHOUSE_")])') $(dbq '"EXAKIT_VS" in d["schemas"]' | tr A-Z a-z) $([ -f "$LKSO" ] && echo yes || echo no)"
+has "...the kept adapter is a note, not a failure" "INFO Kept the shared adapter script EXAKIT_VS.LAKEHOUSE_ADAPTER (virtual schema VS_ORPHAN still uses it)" "$OUT"
+has "...and so is the kept schema" "INFO Kept the shared schema EXAKIT_VS (virtual schema VS_ORPHAN still uses it)" "$OUT"
+lacks "...nothing failed" "FAIL" "$OUT"
+has "...the result lists it under keep (both shells show it as keeps:)" '"keep": ["adapter script EXAKIT_VS.LAKEHOUSE_ADAPTER' "$OUT"
+
+# The database cannot say (the listing is refused): nothing shared is dropped.
+OUT="$(HOME_K="$LOST_K" eng connect lakehouse --name lostone $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["vs_list_fail"]=True; d["virtual"].pop("VS_ORPHAN"); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+LKN="$(dbq 'len(d["statements"])')"
+OUT="$(HOME_K="$LOST_K" eng remove lostone 2>&1)"; RC=$?
+check "the virtual schemas cannot be listed: remove still finishes, no shared drop" "0 false 0 true" \
+    "$RC $(dbq '"EXAKIT_SRC_LOSTONE" in d["connections"]' | tr A-Z a-z) $(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith(("DROP SCRIPT", "DROP ADAPTER SCRIPT", "DROP SCHEMA"))])') $(dbq '"EXAKIT_VS" in d["schemas"]' | tr A-Z a-z)"
+has "...said as a note" "could not list its virtual schemas, so it may still be in use" "$OUT"
+
+# Nothing else uses it, yet the database refuses a drop: the rest still goes.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("vs_list_fail"); d["drop_fail"]=["EXAKIT_VS.LAKEHOUSE_SCAN"]; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(HOME_K="$LOST_K" eng connect lakehouse --name lostone $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"
+OUT="$(HOME_K="$LOST_K" eng remove lostone 2>&1)"; RC=$?
+check "a refused shared drop: remove exits 0, its CONNECTION and record gone" "0 false false" \
+    "$RC $(dbq '"EXAKIT_SRC_LOSTONE" in d["connections"]' | tr A-Z a-z) $([ -d "$LOST_K/sources/lostone" ] && echo true || echo false)"
+check "...the other shared scripts dropped, the refused one kept with EXAKIT_VS" '["EXAKIT_VS.LAKEHOUSE_SCAN"] true' \
+    "$(dbq 'sorted(s for s in d["scripts"] if s.startswith("EXAKIT_VS.LAKEHOUSE_"))') $(dbq '"EXAKIT_VS" in d["schemas"]' | tr A-Z a-z)"
+has "...a note naming the refusal" "INFO Kept the shared script EXAKIT_VS.LAKEHOUSE_SCAN (the database refused the drop:" "$OUT"
+lacks "...not a failure" "FAIL" "$OUT"
+# The other home leaves as well (its virtual schema already gone): the last
+# source anywhere, so the scripts, EXAKIT_VS and the engine it staged go.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("drop_fail"); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(HOME_K="$OTHER_K" eng remove orphan 2>&1)"; RC=$?
+check "...then the other home's last source out: EXAKIT_VS, its scripts and the engine gone" "0 false [] no" \
+    "$RC $(dbq '"EXAKIT_VS" in d["schemas"]' | tr A-Z a-z) $(dbq 'd["scripts"]') $([ -f "$LKSO" ] && echo yes || echo no)"
+lacks "...one script at a time, never CASCADE" "DROP SCHEMA EXAKIT_VS CASCADE" "$(dbq '" | ".join(d["statements"])')"
+
 ART="$(python3 - "$ROOT" "$WORK" <<'PYA'
 import hashlib, io, os, sys, tarfile
 sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
