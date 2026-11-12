@@ -174,6 +174,49 @@ def no_region_remedy(message, name, first, connector_id="lakehouse"):
             % (said, name, connector_id, name, find_region(bucket)))
 
 
+# An object store refusing the key it was given (S3: a wrong secret, an
+# unknown key id; Azure: a wrong key or SAS) - against a catalog's login.
+STORAGE_REFUSED = (r"SignatureDoesNotMatch|signature we calculated does not match|InvalidAccessKeyId|"
+                   r"Access Key Id you provided does not exist|AuthenticationFailed|"
+                   r"Server failed to authenticate the request")
+
+
+def refused_secret(connector, message):
+    """For a lakehouse source's auth failure, the secret its words name and
+    the flag that gives it: (who, label, "--storage-secret-file", other) when
+    the store refused its key and the combination has a storage secret of
+    its own, else (who, label, "--password-file", other) for the one secret
+    on --password-file (the catalog's login; with no catalog or with Glue,
+    the storage key too). other is the second secret's (label, flag) of a
+    two-secret combination, since a reauth writes both. None for any other connector, or when the
+    combination is not known (the whole document, not one combination)."""
+    if connector.get("auth") != "lakehouse" or connector.get("settings"):
+        return None
+    main = next((s for s in connector.get("inputs", []) if s["name"] == "secret"), None)
+    storage = planner.storage_secret_input(connector)
+    if main is None:
+        return None
+    if re.search(STORAGE_REFUSED, str(message or ""), re.I):
+        if storage:
+            return "store", plain_label(storage["label"]), "--storage-secret-file", \
+                (plain_label(main["label"]), "--password-file")
+        if main.get("role") in ("storage", "aws"):
+            return ("store" if main["role"] == "storage" else "AWS"), plain_label(main["label"]), "--password-file", None
+        return None
+    return ("AWS" if main.get("role") == "aws" else "catalog"), plain_label(main["label"]), "--password-file", \
+        (plain_label(storage["label"]), "--storage-secret-file") if storage else None
+
+
+def plain_label(label):
+    """An input's label inside a sentence: 'secret access key', 'Databricks token'."""
+    return label if label.split(" ", 1)[0] in ("Databricks", "SAS") else label[:1].lower() + label[1:]
+
+
+def refused_words(refused):
+    """'the store refused the secret access key', or the catalog's login."""
+    return "%s refused the %s" % (refused[0] if refused[0] == "AWS" else "the " + refused[0], refused[1])
+
+
 def remedy_for(kind, name, connector, message=None):
     """The fix for a failure class, in the words of the connector's store.
     An error_hint given as {"match", "text"} is said only for a message it
@@ -183,7 +226,16 @@ def remedy_for(kind, name, connector, message=None):
     text = remedy_text(kind).format(
         name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"),
         warehouse=catalog_warehouse(message))
-    if kind == "auth" and connector.get("auth_hint"):
+    refused = refused_secret(connector, message) if kind == "auth" else None
+    if refused:
+        args = {refused[2]: "<file with the right %s>" % refused[1]}
+        if refused[3]:
+            args[refused[3][1]] = "<%s file>" % refused[3][0]
+        text = "%s: exakit source reauth %s %s%s" % (
+            refused_words(refused), name,
+            " ".join("%s %s" % (flag, args[flag]) for flag in ("--password-file", "--storage-secret-file") if flag in args),
+            " (a reauth writes both)" if refused[3] else "")
+    elif kind == "auth" and connector.get("auth_hint"):
         text += "; %s" % connector["auth_hint"]
     hint = connector.get("error_hint")
     if isinstance(hint, dict):
@@ -1436,6 +1488,11 @@ class Engine(object):
                               "catalog": "the catalog does not know warehouse %s; nothing was kept - give the catalog's name (e.g. exakit_uc for Databricks, the catalog name for Polaris), not a URL, then connect again" % catalog_warehouse(error),
                               "sandbox": "the database's Java sandbox stopped the driver before it reached the source - not the network or the credentials; nothing was kept - update the kit (exakit update), or connect with tls=verify and --set ca=<PEM file>, then connect again",
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
+                refused = refused_secret(connector, error) if kind == "auth" and not reconnect else None
+                if refused:
+                    remedy = ("%s; nothing was kept - correct the file given with %s%s and run the same exakit "
+                              "connect again" % (refused_words(refused), refused[2],
+                                                 " (or what --password-stdin read)" if refused[2] == "--password-file" else ""))
                 if kind == "region" and no_region_bucket(error) and not reconnect:
                     remedy = no_region_remedy(error, name, first=True)
                 if kind in ADDRESS_KINDS:
