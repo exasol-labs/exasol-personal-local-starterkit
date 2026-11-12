@@ -553,3 +553,9 @@
 .guide-choice-panel { container-type: inline-size; }
 @container (max-width: 470px) { .guide-formgrid-2 { grid-template-columns: minmax(0, 1fr); } }
 .guide-formgrid .guide-field > span:first-child { min-height: 18px; }
+.guide-col-role .guide-dd { width: 260px; max-width: 100%; }
+.guide-col-role .guide-dd-nowhint { display: none; }
+.guide-version-restore .guide-dd { width: 240px; }
+.guide-inline-field .guide-dd { min-width: 260px; }
+.guide-slot .guide-dd, .guide-slotgrid .guide-dd { max-width: none; }
+.guide-col-role .guide-dd-btn, .guide-version-restore .guide-dd-btn { height: 34px; font-size: 13.5px; }

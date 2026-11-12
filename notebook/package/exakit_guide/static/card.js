@@ -478,10 +478,8 @@ function render({ model, el }) {
     inline_form(b) {
       const fields = b.fields.map((f) => {
         if (st.fields[f.id] === undefined) st.fields[f.id] = f.value ?? "";
-        const sel = h("select", { class: "guide-select", disabled: !!ui.busy,
-          onChange: (e) => { st.fields[f.id] = e.target.value; if (b.live) send(b.action.id, collect()); } },
-          (f.options || []).map((o) => h("option", { value: o.value, selected: st.fields[f.id] === o.value ? "selected" : null }, o.label)));
-        return h("label", { class: "guide-inline-field" }, h("span", {}, f.label), sel);
+        const sel = dropdown(f, () => { if (b.live) send(b.action.id, collect()); else draw(); });
+        return h("div", { class: "guide-inline-field" }, h("span", {}, f.label), sel);
       });
       return h("div", { class: "guide-inline-form" }, fields,
         b.live ? (ui.busy === b.action.id ? h("span", { class: "guide-spinner" }) : null) : button(b.action.label, b.action.id, { values: collect }));
@@ -548,9 +546,8 @@ function render({ model, el }) {
         d,
         b.restore ? h("div", { class: "guide-version-restore" },
           h("span", {}, "Restore"),
-          h("select", { class: "guide-select", "aria-label": "Version to restore", disabled: !!ui.busy,
-            onChange: (e) => { st.fields.restore_to = e.target.value; } },
-            b.restore.options.map((o) => h("option", { value: o.value, selected: st.fields.restore_to === o.value ? "selected" : null }, o.label))),
+          pickList({ key: "restore_to", label: "Version to restore", value: st.fields.restore_to, options: b.restore.options,
+            onPick: (value) => { st.fields.restore_to = value; draw(); } }),
           button("Restore", b.restore.id, { busyLabel: "Restoring…", values: collect }),
           h("span", { class: "guide-muted guide-small" }, "Saves that version's choices as a new version.")) : null);
     },
@@ -570,9 +567,8 @@ function render({ model, el }) {
         if (st.slots.target === col && val !== "flag") st.slots.target = "";
         draw();
       };
-      const roleSelect = (r) => h("select", { class: "guide-select", "aria-label": `Meaning of ${r.column}`, disabled: !!ui.busy,
-        onChange: (e) => setRole(r.column, e.target.value) },
-        b.roles.map((o) => h("option", { value: o.value, selected: st.roles[r.column] === o.value ? "selected" : null }, o.label)));
+      const roleSelect = (r) => pickList({ key: `role:${r.column}`, label: `Meaning of ${r.column}`, value: st.roles[r.column],
+        options: b.roles.map((o) => ({ value: o.value, label: o.label, hint: o.meaning })), onPick: (value) => setRole(r.column, value) });
       const warnFor = (r) => (r.avoid || {})[st.roles[r.column]];
 
       // 1 · What do you want to predict?
@@ -647,11 +643,10 @@ function render({ model, el }) {
         const options = Object.keys(st.roles).filter((c) => fits(x, c) || c === col);
         const emptyText = options.filter((c) => c !== col).length || col ? "None"
           : (x.required ? `None (no column is marked ${x.required_label})` : "None");
-        return h("label", { class: "guide-slot" },
+        return h("div", { class: "guide-slot" },
           h("span", { class: "guide-slot-label" }, x.label), h("span", { class: "guide-slot-hint" }, x.hint),
-          h("select", { class: "guide-select", disabled: !!ui.busy, onChange: (e) => { st.slots[x.id] = e.target.value; draw(); } },
-            h("option", { value: "" }, emptyText),
-            options.map((c) => h("option", { value: c, selected: col === c ? "selected" : null }, c))),
+          pickList({ key: `slot:${x.id}`, label: x.label, value: col || "", options: [{ value: "", label: emptyText }, ...options.map((c) => ({ value: c, label: c }))],
+            onPick: (value) => { st.slots[x.id] = value; draw(); } }),
           problem ? h("span", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, problem, " ",
             fixes.map(([label, fn]) => h("button", { type: "button", class: "guide-fixlink", onClick: (e) => { e.preventDefault(); fn(); } }, label)))) : null,
           !col && x.suggest ? h("span", { class: "guide-suggest" }, icon("info"), h("span", {}, `${x.suggest} is different in almost every row. `,
@@ -719,9 +714,10 @@ function render({ model, el }) {
           h("label", { class: "guide-field" }, h("span", {}, `Learn from ${pct}% · test on ${100 - pct}%`),
             h("input", { class: "guide-range", type: "range", min: "50", max: "90", step: "5", value: String(pct), disabled: !!ui.busy,
               "aria-label": "Share of rows to learn from", onInput: (e) => { F.train_pct = Number(e.target.value); draw(); } })),
-          h("label", { class: "guide-field" }, h("span", {}, "Practice rounds (cross-validation)"),
-            h("select", { class: "guide-select", disabled: !!ui.busy, onChange: (e) => { F.folds = e.target.value; draw(); } },
-              ["3", "5", "10"].map((k) => h("option", { value: k, selected: F.folds === k ? "selected" : null }, `${k} rounds${k === "5" ? " (recommended)" : ""}`))))),
+          h("div", { class: "guide-field" }, h("span", {}, "Practice rounds (cross-validation)"),
+            pickList({ key: "split:folds", label: "Practice rounds", value: F.folds,
+              options: ["3", "5", "10"].map((k) => ({ value: k, label: `${k} rounds${k === "5" ? " (recommended)" : ""}` })),
+              onPick: (value) => { F.folds = value; draw(); } }))),
         h("p", { class: "guide-muted guide-small" }, `Before the final test, each model practises ${F.folds} times on the learning rows: they are cut into ${F.folds} slices, `
           + `it learns from ${Number(F.folds) - 1} and is scored on the one left out, a different slice each round. The average of those ${F.folds} scores picks the best model, `
           + "so the test rows stay untouched until the end. More rounds: a steadier score, but slower."),
@@ -738,8 +734,8 @@ function render({ model, el }) {
             h("div", { class: "guide-choice-head" }, h("span", { class: "guide-radio" }), h("strong", {}, title)),
             h("div", { class: "guide-choice-text" }, text),
             on && v === "group" ? h("div", { class: "guide-choice-fields", onClick: (e) => e.stopPropagation() },
-              h("select", { class: "guide-select", "aria-label": "Column to keep apart", onChange: (e) => { F.split_group = e.target.value; } },
-                b.groups.map((g) => h("option", { value: g, selected: F.split_group === g ? "selected" : null }, g)))) : null);
+              pickList({ key: "split:group", label: "Column to keep apart", value: F.split_group, options: b.groups.map((g) => ({ value: g, label: g })),
+                onPick: (value) => { F.split_group = value; draw(); } })) : null);
         })),
         warn ? h("div", { class: "guide-inline-warn" }, icon("warn"), warn) : null);
     },
@@ -772,14 +768,21 @@ function render({ model, el }) {
   // card, pushing what follows down, so it never covers the screen or is cut off by the cell. A long list has a
   // box to narrow it; an option can carry a second line (hint) and sit under a group heading.
   function dropdown(f, onPick) {
-    const options = f.options || [];
-    const now = options.find((o) => String(o.value) === String(st.fields[f.id]));
-    const open = ui.openDrop === f.id && !ui.busy;
-    const toggle = (e) => { e.preventDefault(); ui.openDrop = open ? null : f.id; draw(); };
+    return pickList({ key: f.id, label: f.label, value: st.fields[f.id], options: f.options, placeholder: f.placeholder,
+      onPick: (value) => { st.fields[f.id] = value; onPick(value); } });
+  }
+
+  // The list itself, for any value the card keeps: {key (which one is open), label, value, options, placeholder,
+  // onPick(value)}. Every dropdown of every card is this one.
+  function pickList(d) {
+    const options = d.options || [];
+    const now = options.find((o) => String(o.value) === String(d.value ?? ""));
+    const open = ui.openDrop === d.key && !ui.busy;
+    const toggle = (e) => { e.preventDefault(); ui.openDrop = open ? null : d.key; draw(); };
     const head = h("button", { type: "button", class: `guide-dd-btn${open ? " is-open" : ""}${now ? "" : " is-empty"}`, disabled: !!ui.busy,
-      "aria-haspopup": "listbox", "aria-expanded": open ? "true" : "false", "aria-label": f.label || null, onClick: toggle,
+      "aria-haspopup": "listbox", "aria-expanded": open ? "true" : "false", "aria-label": d.label || null, onClick: toggle,
       onKeydown: (e) => { if (e.key === "Escape" && open) { ui.openDrop = null; draw(); } } },
-      h("span", { class: "guide-dd-now" }, now ? now.label : (f.placeholder || "Choose…")),
+      h("span", { class: "guide-dd-now" }, now ? now.label : (d.placeholder || "Choose…")),
       now && now.hint ? h("span", { class: "guide-dd-nowhint" }, now.hint) : null, icon("chevron"));
     if (!open) return h("div", { class: "guide-dd" }, head);
     const rows = [];
@@ -789,11 +792,11 @@ function render({ model, el }) {
       group = o.group || null;
       const on = now === o;
       rows.push(h("button", { type: "button", role: "option", "aria-selected": on ? "true" : "false", disabled: o.disabled ? true : null,
-        class: `guide-dd-opt${on ? " is-on" : ""}${o.depth ? " guide-dd-depth-" + o.depth : ""}`, "data-find": `${o.label} ${o.hint || ""}`.toLowerCase(),
-        onClick: (e) => { e.preventDefault(); ui.openDrop = null; st.fields[f.id] = o.value; onPick(o.value); } },
+        class: `guide-dd-opt${on ? " is-on" : ""}`, "data-find": `${o.label} ${o.hint || ""}`.toLowerCase(),
+        onClick: (e) => { e.preventDefault(); ui.openDrop = null; d.onPick(o.value); } },
         h("span", { class: "guide-dd-label" }, o.label), o.hint ? h("span", { class: "guide-dd-hint" }, o.hint) : null));
     });
-    const list = h("div", { class: "guide-dd-list", role: "listbox", "aria-label": f.label || null }, rows);
+    const list = h("div", { class: "guide-dd-list", role: "listbox", "aria-label": d.label || null }, rows);
     // The box narrows the list in place (no redraw: the box keeps its cursor).
     const find = options.length > 8 ? h("input", { class: "guide-input guide-dd-find", type: "text", placeholder: "Type to narrow the list", spellcheck: "false",
       "aria-label": "Narrow the list", onInput: (e) => {
