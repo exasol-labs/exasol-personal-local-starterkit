@@ -95,6 +95,11 @@ ACTIONS: dict[str, Action] = {
     "data.switch": Action("00_quickstart", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
     "data.map": Action("00_quickstart", "data_map = nb.data_map(connection)", "data_map", False),
     "data.connectors": Action("00_quickstart", "connectors = nb.connectors()", "connectors", False),
+    "semantic.fusion_doc": Action("01_explore", "fusion_document = nb.fusion_document(connection, {model}, {table}, {other}, "
+                                  "key={key}, wins={wins})", "fusion_document", False),
+    "semantic.fuse_check": Action("01_explore", "fusion_check = nb.fuse(connection, {model}, fusion_document)", "fusion_check", False),
+    "semantic.fuse_apply": Action("01_explore", "fusion_applied = nb.fuse(connection, {model}, fusion_document, dry_run=False)",
+                                  "fusion_applied"),
     "sources.list": Action("01_explore", "sources = nb.sources()", "sources", False),
     "semantic.models": Action("01_explore", "semantic_models = nb.semantic_models(connection)", "semantic_models", False),
     "semantic.preview": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "

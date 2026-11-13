@@ -934,6 +934,78 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
     return result
 
 
+def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None,
+                    wins: str = "model") -> dict[str, Any]:
+    """The fusion document for "``other`` holds the same thing as ``table``": ``table`` is an entity of the published
+    ``model``, ``other`` (SCHEMA.TABLE, any source) another copy of it at the same grain - a CRM extract beside the
+    warehouse's customers, the same orders in a lakehouse.
+
+    - ``other`` becomes a second representation of the entity (VIRTUAL_SCHEMA when it is read live, else RELATION).
+    - Its key is ``key`` (default: the column of the entity's key name). When the names differ, both sides are bound to
+      one semantic identity (F5, DIRECT): the values must be the same keys.
+    - Every dimension and fact of the entity is bound on ``other``: to its column of the same name, else to a typed
+      NULL (FALLBACK), so a request still compiles there.
+    - ``wins``: "model" keeps ``table`` authoritative, "other" makes ``other`` the one that wins. An attribute both hold
+      is RECONCILEd (the authoritative value wins, conflicts are reported as warnings).
+
+    Nothing is written: check it with fuse(..., dry_run=True) - the product validates it against the data."""
+    from descriptor import semantic_model as sm
+
+    kept = publishing.kept(sm.model_name(model))
+    if not kept:
+        raise NotFound(f"The kit has not published a model named {sm.model_name(model)} here: publish it first.")
+    spec = kept["spec"]
+    schema, name = split_table(table)
+    entity = next((e for e in spec["entities"] if (e["schema"], e["table"]) == (schema.upper(), name.upper())), None)
+    if entity is None:
+        raise Refused(f"{schema}.{name} is not in the model {spec['model']}: add it to the model first.")
+    if not entity["key"]:
+        raise Refused(f"{schema}.{name} has no key in its column map: the same thing in two places is matched by its key.")
+    other_schema, other_name = split_table(other)
+    if (other_schema, other_name) == (schema, name):
+        raise Refused("Pick a table of another source: this is the model's own copy.")
+    columns, virtual = _columns(conn, other_schema, other_name)
+    types = {c["column"].upper(): c["type"] for c in columns}
+    own_key = entity["key"][0]
+    other_key = (key or own_key).upper()
+    if other_key not in types:
+        raise Refused(f"{other_schema}.{other_name} has no column {other_key}: name its key (key=...).")
+    alias = entity["alias"]
+    representation = {"name": sm.identifier(f"{other_schema}_{other_name}".lower(), "copy")[:60],
+                      "source_kind": "VIRTUAL_SCHEMA" if virtual else "RELATION",
+                      "source_schema": other_schema, "source_object": other_name, "priority": 20,
+                      "authority": "AUTHORITATIVE" if wins == "other" else "SUPPLEMENTAL"}
+    seen: set[tuple[str, str]] = set()
+    bindings, policies = [], []
+    for obj in spec["objects"]:
+        for kind, items in (("DIMENSION", obj["dimensions"]), ("FACT", obj["facts"])):
+            for item in items:
+                if item["entity"] != entity["name"] or item.get("row") or (kind, item["name"]) in seen:
+                    continue
+                seen.add((kind, item["name"]))
+                column = str(item.get("column") or "").upper()
+                if column and column in types:
+                    expression = item["expression"]          # the same alias, the same column name: the same SQL
+                    policies.append({"attribute_type": kind, "attribute_name": item["name"], "strategy": "RECONCILE"})
+                else:
+                    expression = f"CAST(NULL AS {item['type']})"
+                bindings.append({"attribute_type": kind, "attribute_name": item["name"], "source_expression": expression,
+                                 "binding_role": "FALLBACK", "binding_priority": 2})
+    representation["attribute_bindings"] = bindings
+    # exactly one representation is authoritative: the model's own copy, or the other one when it wins
+    primary = {"name": "primary", "authority": "SUPPLEMENTAL" if wins == "other" else "AUTHORITATIVE"}
+    document: dict[str, Any] = {}
+    if other_key != own_key.upper():
+        document["identity"] = {"name": sm.identifier(f"{entity['name']}_id", "id"), "kind": "GLOBAL",
+                                "data_type": sm.sql_type(types[other_key])}
+        primary["identity_binding"] = {"source_expression": sm.column_sql(alias, own_key), "binding_kind": "DIRECT"}
+        representation["identity_binding"] = {"source_expression": sm.column_sql(alias, other_key), "binding_kind": "DIRECT"}
+    document["representations"] = [primary, representation]
+    if policies:
+        document["attribute_policies"] = policies
+    return {"entities": {entity["name"]: document}}
+
+
 def fusion(conn, model: str) -> dict[str, Any] | None:
     """The model's whole fusion layer as one document (SEMANTIC_ADMIN.EXPORT_FUSION_DECLARATION): re-applying it
     changes nothing. None when the model has none."""

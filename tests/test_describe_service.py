@@ -411,6 +411,32 @@ class SemanticSurfaces(unittest.TestCase):
         conn.answers["APPLY_FUSION_DECLARATION"] = [{"STATUS": "ERROR", "MESSAGE": "SEMANTIC_FUSION_011 unknown key"}]
         self.assertEqual("error", svc.fuse(conn, "crm", doc, dry_run=False)["status"])
 
+    def test_a_fusion_document_binds_every_field_on_the_other_copy_and_names_one_winner(self):
+        from descriptor import publish
+        spec = {"model": "crm", "entities": [{"name": "customers", "schema": "SHOP", "table": "CUSTOMERS", "alias": "t1",
+                                              "key": ["ID"]}],
+                "objects": [{"name": "CUSTOMERS", "root": "customers",
+                             "dimensions": [{"name": "region", "entity": "customers", "expression": 't1."REGION"',
+                                             "type": "VARCHAR(20)", "column": "REGION"},
+                                            {"name": "tier", "entity": "customers", "expression": 't1."TIER"',
+                                             "type": "VARCHAR(10)", "column": "TIER"}],
+                             "facts": [{"name": "customers_row", "entity": "customers", "row": True, "expression": "1", "type": "DECIMAL(1,0)"}]}]}
+        publish.keep(spec, {"tables": ["SHOP.CUSTOMERS"]})
+        conn = self.Conn({"EXA_ALL_COLUMNS": [{"COLUMN_NAME": "CUST_ID", "COLUMN_TYPE": "DECIMAL(18,0)", "COLUMN_ORDINAL_POSITION": 1, "IS_VIRTUAL": 1},
+                                              {"COLUMN_NAME": "REGION", "COLUMN_TYPE": "VARCHAR(20) UTF8", "COLUMN_ORDINAL_POSITION": 2, "IS_VIRTUAL": 1}]})
+        doc = svc.fusion_document(conn, "crm", "shop.customers", "VS_CRM.CUSTOMERS", key="cust_id", wins="other")
+        customers = doc["entities"]["customers"]
+        primary, other = customers["representations"]
+        self.assertEqual(("primary", "SUPPLEMENTAL"), (primary["name"], primary["authority"]))
+        self.assertEqual(("VIRTUAL_SCHEMA", "VS_CRM", "CUSTOMERS", "AUTHORITATIVE"),
+                         (other["source_kind"], other["source_schema"], other["source_object"], other["authority"]))
+        self.assertEqual("DIRECT", other["identity_binding"]["binding_kind"], "keys named differently: one identity")
+        self.assertEqual('t1.CUST_ID', other["identity_binding"]["source_expression"])
+        bound = {b["attribute_name"]: b["source_expression"] for b in other["attribute_bindings"]}
+        self.assertEqual({"region": 't1."REGION"', "tier": "CAST(NULL AS VARCHAR(10))"}, bound)
+        self.assertEqual([("region", "RECONCILE")], [(p["attribute_name"], p["strategy"]) for p in customers["attribute_policies"]])
+        with self.assertRaises(svc.Refused):
+            svc.fusion_document(conn, "crm", "SHOP.ORDERS", "VS_CRM.CUSTOMERS")
 
 if __name__ == "__main__":
     unittest.main()

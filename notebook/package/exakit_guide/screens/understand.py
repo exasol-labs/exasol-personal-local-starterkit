@@ -1536,6 +1536,7 @@ class SemanticViews(Screen):
             blocks += [{"t": "subhead", "v": "Preview"}, {"t": "pre", "v": self.preview_text}]
         if self.result_text:
             blocks += [{"t": "msg", "kind": "ok", "keep": True, "v": self.result_text}]
+        blocks += self._fusion_blocks()
         example = usable[:3] or ["MY_DATA.ORDERS", "VS_SALES.CUSTOMERS"]
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
                        "v": "\n".join([actions.code("semantic.links_tables", tables=example, ai=True),
@@ -1547,6 +1548,74 @@ class SemanticViews(Screen):
     def on_sv_reload(self, _v: dict) -> None:
         self.loading = True
         self._load()
+
+    # -- 4 · the same thing in two sources (fusion) ------------------------------------------------------------------
+    fusion_doc: dict | None = None      # the document as drawn up (nb.fusion_document)
+    fusion_said: dict | None = None     # the last check or apply: {status, message, dry_run}
+    fusion_for: tuple = ()              # (model, table, other, key, wins) the document was drawn up for
+
+    def _fusion_blocks(self) -> list[dict]:
+        """4 · The same thing in two sources: a published model's table and its copy in another source - customers in
+        the warehouse and in a CRM, orders here and in a lakehouse - declared one entity with two sources (Exasol
+        Semantic Views fusion). Checked against the data first; applied only after the check passes."""
+        kit_models = [m["model"] for m in self.models if m.get("refreshable")]
+        if not kit_models:
+            return []
+        every = [{"value": t["table"], "label": t["table"]} for t in self.tables]
+        approved = [{"value": t["table"], "label": t["table"]} for t in self.tables if t["approved"]]
+        by_table = {t["table"]: [{"value": "", "label": "(the same name as the key)"}]
+                    + [{"value": c, "label": c} for c in self.columns.get(t["table"], [])] for t in self.tables}
+        blocks = [{"t": "subhead", "v": "4 · The same thing in two sources",
+                   "tip": "When another source holds the same rows as a table of the model (customers in the warehouse "
+                          "and in a CRM), declare them one thing with two sources. Requests are answered from either; the "
+                          "one that wins gives a value both hold. It is checked against the data before anything changes."},
+                  {"t": "fields", "items": [{"id": "sv_fuse", "type": "group", "fields": [
+                      {"id": "sv_fuse_model", "type": "select", "label": "Model", "value": kit_models[0],
+                       "options": [{"value": m, "label": m} for m in kit_models]},
+                      {"id": "sv_fuse_table", "type": "select", "label": "Its table", "value": approved[0]["value"] if approved else "",
+                       "options": approved},
+                      {"id": "sv_fuse_other", "type": "select", "label": "The same rows in", "value": "", "options": every,
+                       "placeholder": "Pick the other source's table…"},
+                      {"id": "sv_fuse_key", "type": "select", "label": "Its key column",
+                       "options_from": {"field": "sv_fuse_other", "map": by_table}, "empty": "Pick the table first."},
+                      {"id": "sv_fuse_wins", "type": "select", "label": "When both hold a value", "value": "model",
+                       "options": [{"value": "model", "label": "the model's table wins"}, {"value": "other", "label": "the other source wins"}]}]}]},
+                  {"t": "actions", "items": [{"id": "sv_fuse_check", "label": "Check against the data", "busy": "Checking (nothing changes)…"}]
+                   + ([{"id": "sv_fuse_apply", "label": "Apply", "primary": True, "busy": "Applying…"}]
+                      if self.fusion_said and self.fusion_said.get("dry_run") and self.fusion_said.get("status") != "error" else [])}]
+        if self.fusion_said:
+            ok = self.fusion_said.get("status") != "error"
+            blocks.append({"t": "msg", "kind": "ok" if ok else "error", "keep": True,
+                           "v": ("Checked: the data backs it, nothing was changed. Apply makes it part of the model."
+                                 if ok and self.fusion_said.get("dry_run") else
+                                 "Applied: the model answers from both sources now; the document is kept beside it."
+                                 if ok else "The model refused it")
+                                + (f" ({self.fusion_said['message']})" if self.fusion_said.get("message") else "")})
+        if self.fusion_doc:
+            import json
+
+            blocks.append({"t": "details", "title": "The fusion document", "blocks": [{"t": "pre", "v": json.dumps(self.fusion_doc, indent=2)}]})
+        return blocks
+
+    def _fusion_inputs(self, v: dict) -> tuple:
+        model, table, other = (str(v.get(k) or "").strip() for k in ("sv_fuse_model", "sv_fuse_table", "sv_fuse_other"))
+        if not (model and table and other):
+            raise ValueError("Pick the model, its table and the table of the other source.")
+        return model, table, other, str(v.get("sv_fuse_key") or "").strip() or None, str(v.get("sv_fuse_wins") or "model")
+
+    def on_sv_fuse_check(self, v: dict) -> None:
+        """Draw up the document (nb.fusion_document) and have the product check it against the data (nb.fuse, a dry
+        run: nothing changes)."""
+        model, table, other, key, wins = self._fusion_inputs(v)
+        self.fusion_doc = actions.run("semantic.fusion_doc", model=model, table=table, other=other, key=key, wins=wins)
+        self.fusion_for = (model, table, other, key, wins)
+        self.fusion_said = dict(actions.run("semantic.fuse_check", model=model))
+
+    def on_sv_fuse_apply(self, v: dict) -> None:
+        """Apply the document that was checked - the same one: a change to the picks needs a new check."""
+        if self._fusion_inputs(v) != self.fusion_for or not self.fusion_doc:
+            raise ValueError("The picks changed since the check: check again first.")
+        self.fusion_said = dict(actions.run("semantic.fuse_apply", model=self.fusion_for[0]))
 
     def on_sv_find(self, v: dict) -> None:
         picked = self._picked(v)

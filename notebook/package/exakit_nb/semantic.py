@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "compile_request", "find_links", "fuse", "fusion", "model_fields", "model_notes",
+__all__ = ["SemanticModel", "compile_request", "find_links", "fuse", "fusion", "fusion_document", "model_fields", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -275,6 +275,17 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
     print(("Checked (nothing changed): " if dry_run else "Applied: ") + (found["status"] or "")
           + (f" - {found['message']}" if found["message"] else ""))
     return found
+
+
+def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None, wins: str = "model") -> dict[str, Any]:
+    """The fusion document saying ``other`` (a table of another source) holds the same thing as ``table`` (an entity
+    of the published ``model``), at the same grain: a second copy of the entity, matched by its key (``key``: its
+    column in ``other`` when it is named differently), every field bound there (a column of the same name, else
+    empty), and the values of a field both hold reconciled - ``wins="model"`` keeps the model's copy authoritative,
+    ``wins="other"`` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document)."""
+    if wins not in ("model", "other"):
+        raise ValueError('wins is "model" (the model\'s own copy wins) or "other".')
+    return _service().fusion_document(conn, model, table, other, key=key, wins=wins)
 
 
 def fusion(conn, model: str) -> dict[str, Any] | None:

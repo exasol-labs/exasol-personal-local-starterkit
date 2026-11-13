@@ -205,3 +205,19 @@ semantic_models = nb.semantic_models(connection)       # every model in the data
 if PUBLISH_SEMANTIC:
     refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
 semantic_models
+
+# %% [markdown] tags=["review"]
+# ### The same thing in two sources
+#
+# When another source holds the same rows as a table of the model - customers in the warehouse and in a CRM, orders here and in a lakehouse - declare them one thing with two sources (Exasol Semantic Views **fusion**). Requests are then answered from either, and for a value both hold the side you pick wins. `nb.fuse` checks it against the data first and changes nothing; `APPLY_FUSION = True` applies it, and the document is kept beside the model so a rebuild puts it back.
+
+# %% tags=["review"]
+FUSE_TABLE = ""          # a table of the model, such as "MY_DATA.CUSTOMERS"
+FUSE_OTHER = ""          # the same rows in another source, such as "VS_CRM.CUSTOMERS"
+FUSE_KEY = None          # its key column, when it is not named like the model's key
+APPLY_FUSION = False
+if FUSE_TABLE and FUSE_OTHER:
+    fusion_document = nb.fusion_document(connection, SEMANTIC_NAME, FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model")
+    fusion_check = nb.fuse(connection, SEMANTIC_NAME, fusion_document)                 # a dry run: nothing changes
+    if APPLY_FUSION and fusion_check["status"] != "error":
+        fusion_applied = nb.fuse(connection, SEMANTIC_NAME, fusion_document, dry_run=False)
