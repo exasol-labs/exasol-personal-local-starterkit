@@ -243,6 +243,27 @@ exakit describe --model sales_360 --refresh
 
 Your AI clients read the same model through the Exasol MCP server. The notebook and the clients answer from one meaning.
 
+## One semantic layer for all your sources [#one-semantic-layer-for-all-your-sources]
+
+Every approval updates two models: the table's schema model, and **`all_data`**. `all_data` is one model over every table with an approved column map, from every source: sample data, your own tables and files, and every connected external source. It carries the links between sources you confirmed, the fusion and the verified questions. Each approval changes it in place, so it is always current. AI clients, Ask and the dashboard start from it. The **Semantic views** card publishes under that name by default; another name builds a model of only the tables you tick. `EXAKIT_ALL_DATA_MODEL=0` turns it off.
+
+### What the model says about every column and every source [#what-the-model-says-about-every-column-and-every-source]
+
+| What                                                  | Where it is in the model                                                                                                                                                        |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| What a table is, its grain, and where it lives        | The entity's description, for example *"Daily deliveries per courier. Source: Snowflake, source logistics (schema VS_LOGISTICS), read live where it lives; nothing is copied."* |
+| Every key, identifier, date, category and flag column | A dimension. Its comment says what it holds and why it is used that way: *"Used as the key: it identifies one row, and joins and counts use it (120 distinct, no nulls)."*      |
+| Every measure                                         | A fact, with `total_` and `average_` metrics, and the same kind of comment                                                                                                      |
+| Free-text and other columns                           | An instruction on the table (`DEFINITION`): what the column holds, and that it is read, never grouped                                                                           |
+| A personal-data column                                | An instruction (`SAFETY`): never select, group, filter or show its values. It is no field.                                                                                      |
+| A table read live from another system                 | An instruction (`PRECONDITION`): every query reaches that system; ask for aggregates                                                                                            |
+| How tables connect                                    | A relationship, with its evidence and your sentence on why                                                                                                                      |
+| The same rows in two sources                          | Fusion: one entity with two representations                                                                                                                                     |
+| The approved column map                               | On the entity, one per version                                                                                                                                                  |
+| Reviewed questions                                    | Verified queries                                                                                                                                                                |
+
+An AI client reads all of this over MCP: `SEMANTIC_AGENT.FIELDS_FOR_AGENT` for the fields and `SEMANTIC_AGENT.INSTRUCTIONS_FOR_AGENT` for the instructions. Ask passes the instructions to your model with the fields.
+
 ### Column maps are in the model too [#column-maps-are-in-the-model-too]
 
 Every model the kit publishes keeps each table's approved column map on that table's entity: the approved text, under `column_map_v<version>`. A new approval adds the next version, so the model holds the history as well. The kit's store is the version control: drafts, approvals, who approved and when. The two are kept together, and either one restores the other:
