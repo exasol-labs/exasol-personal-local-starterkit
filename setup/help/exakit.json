@@ -11,7 +11,6 @@
     {
       "title": "Everyday",
       "commands": [
-        "tui",
         "status",
         "info",
         "start",
@@ -102,17 +101,6 @@
       "description": "Re-runs the machine-requirement checks the installer runs first - RAM, free disk, the container engine or the macOS runtime, and the ports the database needs - against an installed kit, and changes nothing. The same checks run before an install with EXAKIT_PREFLIGHT=1.",
       "examples": [
         "exakit preflight"
-      ]
-    },
-    {
-      "command": "tui",
-      "options": "[--tab status|marketplace|clients|sources|personas] [--persona <id>]",
-      "summary": "The whole kit on five tabs, in your terminal.",
-      "description": "A terminal view of the kit: Status (the database, every component and add-on service, versions and updates), Marketplace (install, update, start, stop and remove each add-on), AI clients (the clients the kit can connect and the MCP servers it set up in them), External sources (every source connected with exakit connect, its state, check, refresh, new password, disconnect and remove, and a new connection) and Personas (every persona in a sidebar; one opens with its recommended datasets, add-ons, AI clients and notebooks, what is here and what is missing). A bare `exakit` typed at a terminal opens it, and `exakit <persona-id>` (exakit data-scientist) opens that persona's page. Every fact is the kit's own --json answer and every button runs the exakit command it names, in the same terminal. Without a terminal, in CI, or with EXAKIT_NO_TUI=1 a bare `exakit` prints the help and `exakit <persona-id>` prints the persona as exakit persona show does. It runs on the kit's own Textual, the version marketplace/defaults.env pins, through the kit's uv, as the persona and marketplace questions do.",
-      "examples": [
-        "exakit",
-        "exakit tui --tab marketplace",
-        "exakit data-scientist"
       ]
     },
     {
@@ -1649,10 +1637,6 @@
     {
       "name": "EXAKIT_UDF_CONTAINERS_MIRROR",
       "effect": "A folder, file:// or https:// base URL holding the prebuilt container assets by file name, used instead of the GitHub release (offline or internal copies). Size and sha256 are verified all the same."
-    },
-    {
-      "name": "EXAKIT_NO_TUI",
-      "effect": "1: a bare `exakit` prints the help instead of opening the terminal view, and `exakit <persona-id>` prints the persona."
     }
   ],
   "troubleshooting": [

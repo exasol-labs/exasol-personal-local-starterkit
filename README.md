@@ -113,12 +113,7 @@ Try it: *"Which product category generated the most revenue? Show me the SQL bef
 
 ## Everyday commands
 
-Type `exakit` on its own for the whole kit on five tabs in your terminal: **Status**, **Marketplace**, **AI clients**,
-**External sources** and **Personas**. Every button runs the `exakit` command it names; `exakit data-scientist` opens
-that persona's page. Scripts and agents get the commands below exactly as before.
-
 ```bash
-exakit                 # the terminal view (exakit tui --tab marketplace opens a tab)
 exakit status          # is everything running?
 exakit info            # connection details
 exakit start           # start the database

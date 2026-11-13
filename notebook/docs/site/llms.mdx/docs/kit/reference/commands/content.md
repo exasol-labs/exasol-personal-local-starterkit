@@ -9,17 +9,16 @@ searches them.
 
 ## Everyday [#everyday]
 
-| Command            | Takes                                                                      | What it does                                                                    |
-| ------------------ | -------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `exakit tui`       | `[--tab status\|marketplace\|clients\|sources\|personas] [--persona <id>]` | The whole kit on five tabs, in your terminal.                                   |
-| `exakit status`    | `[--json]`                                                                 | Is the database up and healthy?                                                 |
-| `exakit info`      | `[--json]`                                                                 | Your connection details.                                                        |
-| `exakit start`     | `[<service>]`                                                              | Start the database and every add-on service, or one of them.                    |
-| `exakit stop`      | `[<service>]`                                                              | Stop the add-on services and the database, or one of them.                      |
-| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]`    | Run one SQL statement, with the error translated.                               |
-| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                                  | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
-| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                            | Every log the kit can show.                                                     |
-| `exakit autostart` |                                                                            | Come back automatically after a restart?                                        |
+| Command            | Takes                                                                   | What it does                                                                    |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `exakit status`    | `[--json]`                                                              | Is the database up and healthy?                                                 |
+| `exakit info`      | `[--json]`                                                              | Your connection details.                                                        |
+| `exakit start`     | `[<service>]`                                                           | Start the database and every add-on service, or one of them.                    |
+| `exakit stop`      | `[<service>]`                                                           | Stop the add-on services and the database, or one of them.                      |
+| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]` | Run one SQL statement, with the error translated.                               |
+| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                               | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
+| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                         | Every log the kit can show.                                                     |
+| `exakit autostart` |                                                                         | Come back automatically after a restart?                                        |
 
 ## AI clients (MCP) [#ai-clients-mcp]
 

@@ -16,11 +16,6 @@
 #   info [--json]         print the connection details panel; --json prints the
 #                         install record (manifest.json) plus the state keys
 #                         installed / status / remedy / skills, nothing else
-#   tui [--tab T] [--persona ID]
-#                         the terminal view: Status, Marketplace, AI clients,
-#                         External sources and Personas on tabs; a bare `exakit`
-#                         in a console opens it, and `exakit <persona-id>` opens
-#                         that persona's page (EXAKIT_NO_TUI=1: the help instead)
 #   guide                 friendly walkthrough: connect AI clients (MCP), SQL
 #                         clients (DBeaver, DbVisualizer), and Python (pyexasol)
 #   start [<service>]     start the local database and every add-on service,
@@ -160,7 +155,6 @@ if (Test-Path (Join-Path $libDir "core-setup.ps1")) { . (Join-Path $libDir "core
 # `exakit connect` and `exakit source`: external sources as virtual schemas.
 if (Test-Path (Join-Path $libDir "virtual-schemas.ps1")) { . (Join-Path $libDir "virtual-schemas.ps1") }
 if (Test-Path (Join-Path $libDir "persona.ps1")) { . (Join-Path $libDir "persona.ps1") }
-if (Test-Path (Join-Path $libDir "tui.ps1")) { . (Join-Path $libDir "tui.ps1") }
 # Load add-on hooks from the Python catalog. The fallback Notebook child rows
 # use the metadata adapter in exakit-common.ps1.
 if (Test-Path (Join-Path $libDir "describe.ps1")) { . (Join-Path $libDir "describe.ps1") }
@@ -5138,12 +5132,6 @@ try {
             }
         }
     }
-    # A bare `exakit` typed by a person at a console opens the terminal view (tui.ps1): the whole kit on five tabs.
-    # Scripts, agents, CI and EXAKIT_NO_TUI=1 get the help as before. Twin of the same check in setup/exakit.
-    if (-not $PSBoundParameters.ContainsKey('Command') -and @($RestArgs).Count -eq 0 -and
-        (Get-Command Test-ExakitTuiWanted -ErrorAction SilentlyContinue) -and (Test-ExakitTuiWanted)) {
-        Invoke-CmdTui
-    }
     switch ($Command) {
         "preflight"    {
             Assert-ExakitKnownOptions -CommandName "preflight" -Allowed @() -Arguments $RestArgs
@@ -5485,15 +5473,7 @@ try {
                 -All:($RestArgs -contains "--all" -or $RestArgs -contains "-a") `
                 -Json:($RestArgs -contains "--json" -or $RestArgs -contains "-j")
         }
-        "tui"          { Invoke-CmdTui -CmdArgs $RestArgs }
         default {
-            # A persona's name (exakit data-scientist): its page in the terminal view, or its description.
-            if (@($RestArgs).Count -eq 0 -and (Get-Command Test-ExakitTuiIsPersona -ErrorAction SilentlyContinue) -and
-                (Test-ExakitTuiIsPersona $Command)) {
-                if (Test-ExakitTuiWanted) { Invoke-ExakitTuiPersona -Id $Command }
-                else { Invoke-CmdPersona -CmdArgs @("show", $Command) }
-                return
-            }
             # One object on stdout for a machine, and the whole usage screen
             # NOT dumped into the middle of it.
             if ($script:ExakitRefusalJson) {
