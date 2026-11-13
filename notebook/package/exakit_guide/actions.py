@@ -106,6 +106,7 @@ ACTIONS: dict[str, Action] = {
     "semantic.refresh": Action("00_quickstart", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
     "map.review": Action("00_quickstart", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
     "map.approve": Action("00_quickstart", "role_review.approve({choices}, {slots})\ndataset = role_review.dataset()", "dataset"),
+    "map.ai_check": Action("00_quickstart", "ai_suggestions = nb.check_roles(role_review)", "ai_suggestions", False),
     "map.keep": Action("00_quickstart", "dataset = role_review.dataset()", "dataset", False),
     "map.draft": Action("00_quickstart", "draft_dataset = role_review.dataset(draft_ok=True)", "draft_dataset", False),
     "map.leakage": Action("00_quickstart", "leaking = nb.leakage_check(connection, {data})", "leaking", False),

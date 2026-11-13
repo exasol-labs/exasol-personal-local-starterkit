@@ -9,6 +9,7 @@
   "check_container": "/data-scientist/development/reference/checks#check_container",
   "check_mlflow": "/data-scientist/development/reference/checks#check_mlflow",
   "check_model_compatibility": "/data-scientist/development/reference/checks#check_model_compatibility",
+  "check_roles": "/data-scientist/development/reference/role-check#check_roles",
   "chosen_dataset": "/data-scientist/development/reference/dataset#chosen_dataset",
   "clean_path": "/data-scientist/development/reference/sources#clean_path",
   "column_map_versions": "/data-scientist/development/reference/descriptor-store#column_map_versions",

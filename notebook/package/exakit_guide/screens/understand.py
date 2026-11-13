@@ -757,8 +757,11 @@ class ColumnMap(Screen):
         self.kit_said = ""
         self.first: dict | None = None
         self.leaks: list[str] = []
+        self.ai: dict | None = None        # the AI's second look at this table's draft: {"items": [...]} or {"error"}
         SESSION.listen(self)
         self.refresh()
+
+    ai: dict | None = None
 
     # -- loading the proposal ---------------------------------------------------------
     def on_session(self, what: str) -> None:
@@ -769,7 +772,7 @@ class ColumnMap(Screen):
     def _review(self) -> None:
         from ..actions import Var
 
-        self.first, self.leaks = None, []
+        self.first, self.leaks, self.ai = None, [], None
         actions.run("map.review")
         self.kit_said = SESSION.said
         try:
@@ -788,27 +791,78 @@ class ColumnMap(Screen):
 
     # -- view ---------------------------------------------------------------------------
     def build(self) -> list[dict]:
-        """The card, with the table picker on top when several tables were chosen: each has its own column map."""
+        """The card, top to bottom: the tables chosen (when there are several: one tab each, saying which are
+        approved; this card works on the one picked), the AI's second look at the kit's guesses, then the three
+        questions and Approve - and, once this table is approved, the way on to the next one."""
         blocks = self._blocks()
-        if len(SESSION.chosen) > 1 and SESSION.source is not None:
-            try:
-                approved = {a["table"].upper() for a in actions.run("kit.approved")}
-            except Exception:
-                approved = set()
-            now = str(SESSION.source.fact_table)
-            options = [{"value": e["table"], "label": e["table"],
-                        "hint": "column map approved" if e["table"].upper() in approved else "not approved yet"}
-                       for e in SESSION.chosen]
-            left = sum(1 for e in SESSION.chosen if e["table"].upper() not in approved)
-            blocks[1:1] = [{"t": "fields", "items": [{"id": f"map_table_{SESSION.chosen_n}", "type": "select",
-                                                      "label": f"Table ({len(SESSION.chosen)} chosen"
-                                                               + (f", {left} to approve)" if left else ", all approved)"),
-                                                      "value": now, "options": options, "send_on_change": "map_switch"}]}]
+        rv = SESSION.review
+        if rv is None or SESSION.source is None:
+            return blocks
+        top: list[dict] = []
+        now = str(SESSION.source.fact_table)
+        several = len(SESSION.chosen) > 1
+        approved = self._approved_tables() if several else set()
+        if several:
+            left = [e["table"] for e in SESSION.chosen if e["table"].upper() not in approved]
+            top.append({"t": "tablepick", "field": "map_table_pick", "action": "map_switch", "value": now,
+                        "label": f"{len(SESSION.chosen)} tables · {len(SESSION.chosen) - len(left)} approved",
+                        "items": [{"value": e["table"], "label": e["table"],
+                                   "state": "approved" if e["table"].upper() in approved else "todo"}
+                                  for e in SESSION.chosen]})
+        top.append(self._ai_block(rv))
+        blocks[1:1] = top
+        if several and now.upper() in approved:
+            # This table is done: the way on, right under Approve.
+            left = [e["table"] for e in SESSION.chosen if e["table"].upper() not in approved]
+            at = next((i for i, b in enumerate(blocks) if b.get("t") == "actions"
+                       and any(a.get("id") == "approve" for a in b.get("items", []))), len(blocks) - 1)
+            done = len(SESSION.chosen) - len(left)
+            blocks.insert(at + 1, {"t": "linkcard", "kind": "ok", "title": f"{now} is approved",
+                                   "text": f"{done} of {len(SESSION.chosen)} tables approved. Next: {left[0]}.",
+                                   "button": {"label": f"Review {left[0]}", "id": "map_next"}} if left else
+                          {"t": "linkcard", "kind": "ok", "title": f"All {len(SESSION.chosen)} tables are approved",
+                           "text": "Link them and publish one model over them under Semantic views, below."})
         return blocks
 
-    def on_map_switch(self, v: dict) -> None:
-        """Another of the chosen tables: its column map opens here (the cell: chosen_data = chosen_tables[...])."""
-        table = next((str(value) for key, value in v.items() if str(key).startswith("map_table_")), "")
+    @staticmethod
+    def _approved_tables() -> set[str]:
+        try:
+            return {a["table"].upper() for a in actions.run("kit.approved")}
+        except Exception:
+            return set()
+
+    def _ai_block(self, rv) -> dict:
+        """The AI's second look, at the top of the card: one button asks the model set up for the kit which of the
+        kit's guesses it would change; each suggestion says why and is used with one click (it changes the choice
+        below, nothing is saved until Approve). Without a model: where to set one up."""
+        try:
+            model = actions.run("kit.model") or {}
+        except Exception:
+            model = {}
+        labels = dict(ROLE_LABELS)
+        items = None
+        if self.ai and "items" in self.ai:
+            items = [{"column": i["column"], "to": i["role"], "from_label": labels.get(i["kit_role"], i["kit_role"]),
+                      "to_label": labels.get(i["role"], i["role"]), "why": i["why"]} for i in self.ai["items"]]
+        sensitive = sum(1 for e in (rv.draft.doc.get("columns") or {}).values() if e.get("sensitive"))
+        return {"t": "aicheck", "configured": bool(model.get("configured")), "model": model.get("model_id") or "",
+                "items": items, "error": (self.ai or {}).get("error") or "",
+                "sees": "It is shown column names, types and what the kit measured. Never a row"
+                        + (f", and not the {sensitive} personal-data column{'s' if sensitive != 1 else ''}." if sensitive else ".")}
+
+    def on_ai_check(self, _v: dict) -> None:
+        """Check with AI: nb.check_roles on this table's draft. Suggestions only - nothing is saved here."""
+        if SESSION.review is None:
+            raise ValueError("Choose your data above first.")
+        try:
+            self.ai = {"items": list(actions.run("map.ai_check") or [])}
+        except ValueError:
+            raise
+        except Exception as exc:        # the provider refused, the network, an answer that is not JSON
+            self.ai = {"error": (str(exc).splitlines() or [type(exc).__name__])[0][:300]}
+        self.kit_said = SESSION.said or self.kit_said
+
+    def _switch_to(self, table: str) -> None:
         entry = next((e for e in SESSION.chosen if e["table"] == table), None)
         if entry is None or (SESSION.source is not None and str(SESSION.source.fact_table) == table):
             return
@@ -816,6 +870,17 @@ class ColumnMap(Screen):
         use_chosen(entry)
         self._review()
         SESSION.changed("source", self)
+
+    def on_map_switch(self, v: dict) -> None:
+        """Another of the chosen tables: its column map opens here (the cell: chosen_data = chosen_tables[...])."""
+        self._switch_to(next((str(value) for key, value in v.items() if str(key).startswith("map_table_")), ""))
+
+    def on_map_next(self, _v: dict) -> None:
+        """On to the next chosen table that has no approved column map yet."""
+        approved = self._approved_tables()
+        left = [e["table"] for e in SESSION.chosen if e["table"].upper() not in approved]
+        if left:
+            self._switch_to(left[0])
 
     def _blocks(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "What each column means",

@@ -1129,6 +1129,7 @@ jobs:
       - run: python3 tests/test_artifact_scan.py
         if: matrix.shard == 4
       - run: python3 tests/test_role_picker.py
+      - run: python3 tests/test_role_check.py
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_bundle.py
       - run: python3 tests/test_notebook_setup_env.py

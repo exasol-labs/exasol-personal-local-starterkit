@@ -1278,22 +1278,92 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertTrue(all(isinstance(f["value"], list) for f in ticks.values()))
         self.assertEqual(1, sum(1 for a in choice["actions"] if a["id"] == "use"))     # before a new connection's last step
 
-    def test_the_column_map_moves_between_the_chosen_tables(self):
-        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
+    def _map_card(self):
         card = self.understand.ColumnMap.__new__(self.understand.ColumnMap)
-        with mock.patch.object(card, "_blocks", return_value=[{"t": "head"}, {"t": "empty"}]):
-            picker = card.build()[1]["items"][0]
-        self.assertEqual(("AMAZON.ORDER_LINES", "map_switch"), (picker["value"], picker["send_on_change"]))
-        self.assertEqual(["column map approved", "not approved yet"], [o["hint"] for o in picker["options"]])
-        self.assertIn("1 to approve", picker["label"])
+        card.kit_said = ""
+        self.session._ns["role_review"] = mock.Mock(draft=mock.Mock(doc={"columns": {"A": {"sensitive": True}, "B": {}}}))
+        return card
+
+    def _built(self, card, inner=None):
+        inner = inner or [{"t": "head"}, {"t": "rolemap"}, {"t": "actions", "items": [{"id": "approve"}]}]
+        with mock.patch.object(card, "_blocks", return_value=[dict(b) for b in inner]):
+            return card.build()
+
+    def test_the_column_map_has_the_tables_as_tabs_and_moves_between_them(self):
+        """Several tables chosen: one tab each on top of the card, saying which are approved; a click opens another
+        (chosen_data = chosen_tables[...]); an approved one shows the way to the next, and the last one that all are."""
+        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
+        card = self._map_card()
+        blocks = self._built(card)
+        self.assertEqual(["head", "tablepick", "aicheck", "rolemap", "actions", "linkcard"], [b["t"] for b in blocks])
+        tabs = blocks[1]
+        self.assertEqual(("AMAZON.ORDER_LINES", "map_switch", "2 tables · 1 approved"), (tabs["value"], tabs["action"], tabs["label"]))
+        self.assertEqual([("AMAZON.ORDER_LINES", "approved"), ("MY_DATA.TARGETS", "todo")], [(i["value"], i["state"]) for i in tabs["items"]])
+        step = blocks[-1]                                    # this table is approved: on to the next, under Approve
+        self.assertEqual(("AMAZON.ORDER_LINES is approved", "map_next"), (step["title"], step["button"]["id"]))
+        self.assertIn("1 of 2 tables approved. Next: MY_DATA.TARGETS", step["text"])
         with mock.patch.object(card, "_review") as review, mock.patch.object(self.session, "changed"):
-            card.on_map_switch({picker["id"]: "MY_DATA.TARGETS"})
+            card.on_map_next({})
         review.assert_called_once()
         self.assertEqual("MY_DATA.TARGETS", self.session.source.fact_table)
-        self.assertEqual("tbl:MY_DATA.TARGETS"[4:] + " (MY_DATA.TARGETS)", self.session.source_label)
-        self.session.chosen = self.session.chosen[:1]                                 # one table: no picker
-        with mock.patch.object(card, "_blocks", return_value=[{"t": "head"}, {"t": "empty"}]):
-            self.assertEqual(["head", "empty"], [b["t"] for b in card.build()])
+        self.assertEqual("MY_DATA.TARGETS (MY_DATA.TARGETS)", self.session.source_label)
+        self.assertIsNone(self.session.review, "another table: its own review (the card's _review reads it)")
+        review = mock.Mock(draft=mock.Mock(doc={"columns": {}}))
+        self.session._ns["role_review"] = review
+        self.assertEqual(["head", "tablepick", "aicheck", "rolemap", "actions"], [b["t"] for b in self._built(card)])   # not approved: no way on
+        with mock.patch.object(card, "_review"), mock.patch.object(self.session, "changed"):
+            card.on_map_switch({tabs["field"]: "AMAZON.ORDER_LINES"})
+        self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table)
+        self.session._ns["role_review"] = review
+        with mock.patch.object(card, "_approved_tables", return_value={"AMAZON.ORDER_LINES", "MY_DATA.TARGETS"}):
+            built = self._built(card)
+        self.assertEqual("linkcard", built[-1]["t"], [b["t"] for b in built])
+        done = built[-1]
+        self.assertEqual(("All 2 tables are approved", None), (done["title"], done.get("button")))
+        self.assertIn("Semantic views", done["text"])
+        self.session.chosen = self.session.chosen[:1]                                 # one table: no tabs, no step
+        self.assertEqual(["head", "aicheck", "rolemap", "actions"], [b["t"] for b in self._built(card)])
+
+    def test_the_ai_check_is_on_top_and_only_suggests(self):
+        """Check with AI asks the model set up for the kit (nb.check_roles) and shows what it would change, with why;
+        nothing is saved. Without a model the bar says where to set one up; a provider's refusal is said in one line;
+        another table starts without the last one's suggestions."""
+        self.use({"kind": ["sample"], "sample": ["amazon"]})
+        card = self._map_card()
+        answers = {"kit.model": {"configured": False}}
+        real = self.understand.actions.run.side_effect
+
+        def run(action_id, session=None, **values):
+            if action_id in answers:
+                if isinstance(answers[action_id], Exception):
+                    raise answers[action_id]
+                self.ran.append((action_id, values))
+                return answers[action_id]
+            return real(action_id, session, **values)
+
+        self.understand.actions.run.side_effect = run
+        bar = self._built(card)[1]
+        self.assertEqual(("aicheck", False, None), (bar["t"], bar["configured"], bar["items"]))
+        self.assertIn("not the 1 personal-data column", bar["sees"])
+        answers["kit.model"] = {"configured": True, "model_id": "m1"}
+        answers["map.ai_check"] = [{"column": "B", "kit_role": "measure", "role": "identifier", "why": "An account number."}]
+        self.ran.clear()
+        card.on_ai_check({})
+        self.assertEqual(["map.ai_check"], [a for a, _v in self.ran if a.startswith("map.")])    # asked; nothing approved
+        bar = self._built(card)[1]
+        self.assertEqual((True, "m1"), (bar["configured"], bar["model"]))
+        self.assertEqual([{"column": "B", "to": "identifier", "from_label": self.understand.ROLE_LABELS["measure"],
+                           "to_label": self.understand.ROLE_LABELS["identifier"], "why": "An account number."}], bar["items"])
+        answers["map.ai_check"] = RuntimeError("401 the provider refused the key\nmore")
+        card.on_ai_check({})
+        bar = self._built(card)[1]
+        self.assertEqual(("401 the provider refused the key", None), (bar["error"], bar["items"]))
+        answers["map.review"] = None
+        answers["map.draft"] = None
+        answers["map.leakage"] = []
+        self.session._ns["role_review"].draft.status = "draft"
+        card._review()
+        self.assertIsNone(card.ai)
 
     def test_semantic_views_starts_with_the_chosen_schemas_ticked(self):
         views = self.understand.SemanticViews.__new__(self.understand.SemanticViews)

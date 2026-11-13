@@ -13,6 +13,30 @@ Approval makes a draft column map count. The kit checks it, saves it as a new ve
 ]"
 />
 
+## The card, top to bottom [#the-card-top-to-bottom]
+
+The **What each column means** card is laid out in the order you work:
+
+| Part                            | What it is for                                                                                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tables                          | Shown when you chose more than one table in **Choose your data**. One tab per table. A tick means its column map is approved, a ring means it is not. The card works on the tab you pick. |
+| Check the kit's guesses with AI | Optional. One button asks your AI model which guesses it would change.                                                                                                                    |
+| The three questions             | What to predict, the guesses the kit was unsure of, and the other choices.                                                                                                                |
+| Approve column map              | Saves this table's map as a new version.                                                                                                                                                  |
+| Next table                      | Shown after an approval when other tables are left. It says how many are approved and opens the next one. After the last one it points to **Semantic views**.                             |
+
+Each table is approved on its own. Switching tabs with changes you have not approved asks once before leaving them.
+
+### A second look by AI [#a-second-look-by-ai]
+
+The kit drafts each role from measurements: how many distinct values a column has, its type, how many rows are empty. A number that is really a code, such as an account number, can look like an amount to add up. A model reads the name the way a person does.
+
+**Check with AI** runs `nb.check_roles(role_review)`. The model set up for the kit is shown the table's name and, for each column, its name, type, the drafted role with its confidence, the kit's measured evidence and the column's note. It is not shown a row. A column the map marks as personal data is left out entirely.
+
+The answer is a list of suggestions: the column, the kit's role, the role the model would use, and one sentence of why. The kit keeps a suggestion only when it names a real column and one of the eight roles and differs from the draft. **Use** changes that one choice in the card, and **Use all** changes every one. Nothing is saved until you press **Approve column map**.
+
+Without a model the bar says where to set one up, and the rest of the card works as before. In a notebook cell, set `AI_CHECK = True` in the cell under the review.
+
 ## What approval checks and writes [#what-approval-checks-and-writes]
 
 * Every column has a role, and no column sits in two slots.

@@ -443,6 +443,64 @@ function render({ model, el }) {
       return h("div", { class: "guide-choice-wrap" }, boxes,
         fields.length || acts ? h("div", { class: "guide-choice-panel guide-choice-fields" }, fields, acts) : null);
     },
+    // The tables chosen in step 1, as tabs: which one this card works on, and which are approved already. A click
+    // opens another one; with choices here not approved yet it asks once before leaving them.
+    tablepick(b) {
+      const go = (value) => {
+        if (value === b.value || ui.busy) return;
+        if (mapDirty() && ui.leaveFor !== value) { ui.leaveFor = value; draw(); return; }
+        ui.leaveFor = null;
+        send(b.action, { [b.field]: value }, { noSecret: true });
+      };
+      return h("div", { class: "guide-tablepick" },
+        h("div", { class: "guide-tablepick-label" }, b.label),
+        h("div", { class: "guide-tablepick-tabs", role: "tablist", "aria-label": "Tables" }, b.items.map((i) => {
+          const on = i.value === b.value;
+          return h("button", { type: "button", role: "tab", "aria-selected": on ? "true" : "false", disabled: !!ui.busy,
+            class: `guide-tablepill guide-tablepill-${i.state}${on ? " is-on" : ""}`, onClick: () => go(i.value),
+            "data-tip": i.state === "approved" ? "Column map approved" : "Not approved yet" },
+            i.state === "approved" ? icon("check") : h("span", { class: "guide-tablepill-dot", "aria-hidden": "true" }),
+            h("span", {}, i.label));
+        })),
+        ui.leaveFor && b.items.some((i) => i.value === ui.leaveFor)
+          ? h("div", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, "Your changes to this table are not approved yet. ",
+              h("button", { type: "button", class: "guide-fixlink", onClick: () => go(ui.leaveFor) }, `Leave them and open ${ui.leaveFor}`), " ",
+              h("button", { type: "button", class: "guide-fixlink", onClick: () => { ui.leaveFor = null; draw(); } }, "Stay")))
+          : null);
+    },
+    // The AI's second look at the kit's guesses: one button asks; each suggestion says what it would change and why,
+    // and "Use" changes that choice below (nothing is saved until Approve).
+    aicheck(b) {
+      const roles = st.roles || {};
+      const use = (it) => { if (!st.roles) return; st.roles[it.column] = it.to; if (st.slots && st.slots.target === it.column && it.to !== "flag") st.slots.target = ""; draw(); };
+      const items = b.items || [];
+      const open = items.filter((it) => roles[it.column] !== it.to);
+      const head = h("div", { class: "guide-ai-head" },
+        h("div", { class: "guide-ai-text" },
+          h("div", { class: "guide-ai-title" }, h("span", { class: "guide-ai-mark", "aria-hidden": "true" }, "AI"), "Check the kit's guesses with AI"),
+          h("div", { class: "guide-muted guide-small" }, b.configured
+            ? `${b.model ? b.model + " reads the names the way a person would. " : ""}${b.sees}`
+            : "No AI model is set up yet. Set one up on the Home notebook (AI model, Set up); this step works without it.")),
+        b.configured ? button(b.items ? "Check again" : "Check with AI", "ai_check", { primary: !b.items, busyLabel: "Asking the model…" }) : null);
+      const body = [];
+      if (b.error) body.push(h("div", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, `The model did not answer: ${b.error}`)));
+      if (b.items && !items.length && !b.error) body.push(h("div", { class: "guide-ai-ok" }, icon("check"), "It agrees with every guess."));
+      if (items.length) {
+        body.push(h("div", { class: "guide-ai-list" }, items.map((it) => {
+          const done = roles[it.column] === it.to;
+          return h("div", { class: `guide-ai-item${done ? " is-done" : ""}` },
+            h("div", { class: "guide-ai-what" },
+              h("strong", {}, it.column), h("span", { class: "guide-ai-change" }, h("span", { class: "guide-muted" }, it.from_label), icon("arrow"), h("span", { class: "guide-ai-to" }, it.to_label)),
+              it.why ? h("div", { class: "guide-muted guide-small" }, it.why) : null),
+            done ? h("span", { class: "guide-chip guide-chip-ok-soft" }, "Used")
+                 : h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy, onClick: () => use(it) }, "Use"));
+        })));
+        body.push(h("div", { class: "guide-ai-foot" },
+          open.length > 1 ? h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy, onClick: () => { open.forEach(use); } }, `Use all ${open.length}`) : null,
+          h("span", { class: "guide-muted guide-small" }, "Using one changes the choice below. Nothing is saved until you approve.")));
+      }
+      return h("div", { class: "guide-ai" }, head, body);
+    },
     fields(b) { return h("div", { class: "guide-fieldrow" }, b.items.map(field)); },
     checks(b) {
       return h("div", { class: "guide-checks" }, b.items.map((c) => {
