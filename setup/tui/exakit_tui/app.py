@@ -36,15 +36,16 @@ BAD = {"failed", "error", "broken", "stopped", "unreachable", "not installed", "
 
 
 def mark(state: Any) -> Text:
-    """A state as a word: what needs you in bold, the rest plain - no colour, the terminal's own text."""
+    """A state with its colour: green when it is well, red when it needs you, yellow in between."""
     text = str(state if state not in (None, "") else "-")
     low = text.lower()
-    bad = low in BAD or low.startswith(("fail", "error", "stopped", "broken")) or "update" in low
-    return Text(text, style="bold" if bad else "")
+    style = "green" if low in GOOD or low.startswith(("running", "ready", "connected")) else \
+        "red" if low in BAD or low.startswith(("fail", "error", "stopped", "broken")) else "yellow"
+    return Text(text, style=style)
 
 
 def yes(flag: Any) -> Text:
-    return Text("yes") if flag else Text("no", style="dim")
+    return Text("yes", style="green") if flag else Text("no", style="dim")
 
 
 class Confirm(ModalScreen[bool]):
@@ -52,7 +53,7 @@ class Confirm(ModalScreen[bool]):
 
     DEFAULT_CSS = """
     Confirm { align: center middle; }
-    #box { width: 72; height: auto; border: round ansi_default; background: ansi_default; padding: 1 2; }
+    #box { width: 72; height: auto; border: thick $error; background: $surface; padding: 1 2; }
     #box Horizontal { height: auto; margin-top: 1; }
     #box Button { margin-right: 2; }
     """
@@ -66,7 +67,7 @@ class Confirm(ModalScreen[bool]):
             yield Label(self.question)
             yield Static(Text("Runs: " + self.command, style="bold"))
             with Horizontal():
-                yield Button("Yes, run it", id="yes")
+                yield Button("Yes, run it", variant="error", id="yes")
                 yield Button("Cancel", id="no")
 
     @on(Button.Pressed)
@@ -83,44 +84,17 @@ class Panel(Static):
 class ExakitApp(App):
     TITLE = "exakit"
     SUB_TITLE = "Exasol Personal Local Starter Kit"
-    # The terminal's own colours, as the kit's other Textual screens draw (marketplace/ui.py): no background painted,
-    # no coloured buttons or states. Thin grey rules, bold for what needs you, dim for the detail, reverse for the
-    # row or button you are on.
     CSS = """
-    Screen { background: ansi_default; color: ansi_default; }
-    Header, Footer, Tabs, Tab, TabPane, TabbedContent, ContentSwitcher, Horizontal, Vertical, VerticalScroll,
-    Static, Label, ListView, ListItem { background: ansi_default; color: ansi_default; }
-    Header { text-style: bold; }
-    Tab { text-style: none; }
-    Tab.-active { text-style: bold; }
-    Underline > .underline--bar { background: ansi_default; color: ansi_bright_black; }
     TabPane { padding: 0 1; }
-    Button { background: ansi_default; color: ansi_default; border: round ansi_bright_black; text-style: none;
-             min-width: 12; height: 3; margin-right: 1; }
-    Button:hover, Button:focus { background: ansi_default; color: ansi_default; border: round ansi_default;
-                                 text-style: bold; }
-    Button.-active { background: ansi_default; text-style: reverse; }
-    Button:disabled { color: ansi_bright_black; border: round ansi_bright_black; text-style: none; }
-    DataTable { background: ansi_default; color: ansi_default; }
-    DataTable > .datatable--header { background: ansi_default; color: ansi_default; text-style: bold; }
-    DataTable > .datatable--cursor { background: ansi_default; color: ansi_default; text-style: reverse; }
-    DataTable > .datatable--hover { background: ansi_default; text-style: none; }
-    DataTable > .datatable--even-row, DataTable > .datatable--odd-row { background: ansi_default; }
-    ListView > ListItem.-highlight { background: ansi_default; color: ansi_default; text-style: reverse; }
-    ListView:focus > ListItem.-highlight { background: ansi_default; text-style: reverse bold; }
-    Select > SelectCurrent { background: ansi_default; color: ansi_default; border: round ansi_bright_black; }
-    Select:focus > SelectCurrent { border: round ansi_default; }
-    SelectOverlay { background: ansi_default; color: ansi_default; border: round ansi_bright_black; }
-    Footer .footer-key--key { background: ansi_default; color: ansi_default; text-style: bold; }
-    Footer .footer-key--description { background: ansi_default; color: ansi_bright_black; }
     .row { height: auto; margin: 1 0 0 0; }
-    .side { width: 34; border-right: solid ansi_bright_black; }
+    .row Button { margin-right: 1; min-width: 12; }
+    .side { width: 34; border-right: solid $primary; }
     .main { width: 1fr; }
     .split { height: 1fr; }
     .table { height: 1fr; min-height: 6; }
-    .detail { width: 46%; border-left: solid ansi_bright_black; padding-left: 1; }
-    .muted { color: ansi_bright_black; }
-    .hint { color: ansi_bright_black; height: auto; margin: 0 0 1 0; }
+    .detail { width: 46%; border-left: solid $primary; padding-left: 1; }
+    .muted { color: $text-muted; }
+    .hint { color: $text-muted; height: auto; margin: 0 0 1 0; }
     #persona-list { height: 1fr; }
     #summary { height: auto; margin-bottom: 1; }
     """
@@ -135,7 +109,7 @@ class ExakitApp(App):
     ]
 
     def __init__(self, kit: Kit, tab: str = "status", persona: str | None = None) -> None:
-        super().__init__(ansi_color=True)
+        super().__init__()
         self.kit = kit
         self.first_tab = "personas" if persona else (tab if tab in TABS else "status")
         self.persona_wanted = persona
@@ -149,12 +123,12 @@ class ExakitApp(App):
             with TabPane("Status", id="status"):
                 yield Static(id="summary")
                 with Horizontal(classes="split"):
-                    yield DataTable(id="components", classes="table main", cursor_type="row", zebra_stripes=False)
+                    yield DataTable(id="components", classes="table main", cursor_type="row", zebra_stripes=True)
                     yield Panel(id="component-detail", classes="detail")
                 with Horizontal(classes="row"):
-                    yield Button("Start", id="kit-start")
+                    yield Button("Start", id="kit-start", variant="success")
                     yield Button("Stop", id="kit-stop")
-                    yield Button("Update", id="kit-update")
+                    yield Button("Update", id="kit-update", variant="primary")
                     yield Button("Connection details", id="kit-info")
                     yield Button("Logs", id="kit-logs")
                     yield Button("Load data", id="kit-data-load")
@@ -162,45 +136,45 @@ class ExakitApp(App):
                 yield Static("Every add-on the kit offers. Pick one: what it is on the right, what you can do with it "
                              "under it.", classes="hint")
                 with Horizontal(classes="split"):
-                    yield DataTable(id="addons", classes="table main", cursor_type="row", zebra_stripes=False)
+                    yield DataTable(id="addons", classes="table main", cursor_type="row", zebra_stripes=True)
                     with VerticalScroll(classes="detail"):
                         yield Panel(id="addon-detail")
                         with Horizontal(classes="row"):
-                            yield Button("Install", id="addon-install")
-                            yield Button("Update", id="addon-update")
+                            yield Button("Install", id="addon-install", variant="success")
+                            yield Button("Update", id="addon-update", variant="primary")
                         with Horizontal(classes="row"):
                             yield Button("Start", id="addon-start")
                             yield Button("Stop", id="addon-stop")
-                            yield Button("Remove", id="addon-remove")
+                            yield Button("Remove", id="addon-remove", variant="error")
             with TabPane("AI clients", id="clients"):
                 yield Static("The AI clients the kit can connect to your database (MCP), and the MCP servers it set up "
                              "in them.", classes="hint")
                 with Horizontal(classes="split"):
-                    yield DataTable(id="clients-table", classes="table main", cursor_type="row", zebra_stripes=False)
+                    yield DataTable(id="clients-table", classes="table main", cursor_type="row", zebra_stripes=True)
                     with VerticalScroll(classes="detail"):
                         yield Panel(id="client-detail")
                         with Horizontal(classes="row"):
-                            yield Button("Remove from this client", id="client-remove")
+                            yield Button("Remove from this client", id="client-remove", variant="error")
                 with Horizontal(classes="row"):
-                    yield Button("Set up AI clients", id="mcp-setup")
-                    yield Button("Check and repair", id="mcp-doctor")
+                    yield Button("Set up AI clients", id="mcp-setup", variant="success")
+                    yield Button("Check and repair", id="mcp-doctor", variant="primary")
             with TabPane("External sources", id="sources"):
                 yield Static("Databases and lakes connected with exakit connect: the tables stay where they are and "
                              "are queried live as VS_<NAME>.", classes="hint")
                 with Horizontal(classes="split"):
-                    yield DataTable(id="sources-table", classes="table main", cursor_type="row", zebra_stripes=False)
+                    yield DataTable(id="sources-table", classes="table main", cursor_type="row", zebra_stripes=True)
                     with VerticalScroll(classes="detail"):
                         yield Panel(id="source-detail")
                         with Horizontal(classes="row"):
-                            yield Button("Check", id="source-check")
+                            yield Button("Check", id="source-check", variant="primary")
                             yield Button("Refresh tables", id="source-refresh")
                             yield Button("New password", id="source-reauth")
                         with Horizontal(classes="row"):
                             yield Button("Disconnect", id="source-disconnect")
-                            yield Button("Remove", id="source-remove")
+                            yield Button("Remove", id="source-remove", variant="error")
                 with Horizontal(classes="row"):
                     yield Select([], prompt="New connection: pick a source", id="connector", allow_blank=True)
-                    yield Button("Connect", id="source-connect")
+                    yield Button("Connect", id="source-connect", variant="success")
                     yield Button("Check all", id="source-check-all")
             with TabPane("Personas", id="personas"):
                 with Horizontal(classes="split"):
@@ -210,11 +184,11 @@ class ExakitApp(App):
                     with VerticalScroll(classes="main"):
                         yield Panel(id="persona-detail")
                         with Horizontal(classes="row"):
-                            yield Button("Add this persona", id="persona-add")
-                            yield Button("Bring in what is missing", id="persona-missing")
+                            yield Button("Add this persona", id="persona-add", variant="success")
+                            yield Button("Bring in what is missing", id="persona-missing", variant="primary")
                         with Horizontal(classes="row"):
                             yield Button("Open the notebooks", id="persona-notebook")
-                            yield Button("Remove this persona", id="persona-remove")
+                            yield Button("Remove this persona", id="persona-remove", variant="error")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -255,19 +229,19 @@ class ExakitApp(App):
         version = self.data["status"]["version"]
         lines = []
         if status.get("_error"):
-            lines.append(f"[b]The kit did not answer:[/] {escape(status['_error'])}")
+            lines.append(f"[red]The kit did not answer:[/] {escape(status['_error'])}")
         elif not status.get("installed", True):
-            lines.append(f"[b]Not installed[/] ({escape(str(status.get('reason') or status.get('status') or ''))}). "
+            lines.append(f"[red]Not installed[/] ({escape(str(status.get('reason') or status.get('status') or ''))}). "
                          f"Install: {escape(str(status.get('remedy') or ''))}")
         else:
             state = str(status.get("status") or ("running" if status.get("running") else "unknown"))
-            well = state.lower().startswith(("running", "healthy", "ok"))
-            lines.append(f"Database: {escape(state) if well else '[b]' + escape(state) + '[/b]'}"
+            colour = "green" if state.lower().startswith(("running", "healthy", "ok")) else "yellow"
+            lines.append(f"Database: [{colour}]{escape(state)}[/]"
                          + (f"   Platform: {escape(str(status['platform']))}" if status.get("platform") else ""))
             services = status.get("services") or {}
             if services:
-                lines.append("Services: " + "   ".join(f"{escape(k)} "
-                                                      f"{escape(str(v))}" for k, v in services.items()))
+                lines.append("Services: " + "   ".join(f"{escape(k)} [{('green' if str(v).startswith('running') else 'yellow')}]"
+                                                      f"{escape(str(v))}[/]" for k, v in services.items()))
             urls = status.get("urls") or {}
             if urls:
                 lines.append("Open: " + "   ".join(f"{escape(k)} {escape(str(v))}" for k, v in urls.items()))
@@ -275,7 +249,7 @@ class ExakitApp(App):
             if loaded:
                 lines.append("Datasets loaded: " + ", ".join(escape(str(d)) for d in loaded))
             if status.get("remedy"):
-                lines.append(f"[b]To do:[/] {escape(str(status['remedy']))}")
+                lines.append(f"[yellow]To do:[/] {escape(str(status['remedy']))}")
         self.query_one("#summary", Static).update("\n".join(lines))
         table = self.query_one("#components", DataTable)
         table.clear()
@@ -285,7 +259,7 @@ class ExakitApp(App):
                           str(row.get("installed_label") or row.get("installed") or "-"),
                           str(row.get("advertised") or "-"), mark(row.get("status")), key=name)
         if version.get("_error"):
-            self.query_one("#component-detail", Panel).update(f"[b]{escape(version['_error'])}[/]")
+            self.query_one("#component-detail", Panel).update(f"[red]{escape(version['_error'])}[/]")
 
     @on(DataTable.RowHighlighted, "#components")
     def component_picked(self, event: DataTable.RowHighlighted) -> None:
@@ -300,7 +274,7 @@ class ExakitApp(App):
         if row.get("ownership"):
             lines.append(f"Owned by: {escape(str(row['ownership']))}")
         if row.get("remedy"):
-            lines += ["", f"[b]To do:[/] {escape(str(row['remedy']))}"]
+            lines += ["", f"[yellow]To do:[/] {escape(str(row['remedy']))}"]
         self.query_one("#component-detail", Panel).update("\n".join(lines))
 
     # -- Marketplace ---------------------------------------------------------------------------------------------------
@@ -316,7 +290,7 @@ class ExakitApp(App):
         found = self.data["marketplace"]["list"]
         if found.get("_error") or found.get("error"):
             self.query_one("#addon-detail", Panel).update(
-                f"[b]{escape(str(found.get('_error') or found.get('error')))}[/]\n{escape(str(found.get('remedy') or ''))}")
+                f"[red]{escape(str(found.get('_error') or found.get('error')))}[/]\n{escape(str(found.get('remedy') or ''))}")
         elif not self._addons():
             self.query_one("#addon-detail", Panel).update("No add-ons listed.")
 
@@ -368,7 +342,7 @@ class ExakitApp(App):
         mcp = self.data["clients"]["mcp"]
         if mcp.get("_error") or mcp.get("error"):
             self.query_one("#client-detail", Panel).update(
-                f"[b]{escape(str(mcp.get('_error') or mcp.get('error')))}[/]\n{escape(str(mcp.get('remedy') or ''))}")
+                f"[red]{escape(str(mcp.get('_error') or mcp.get('error')))}[/]\n{escape(str(mcp.get('remedy') or ''))}")
 
     @on(DataTable.RowHighlighted, "#clients-table")
     def client_picked(self, event: DataTable.RowHighlighted) -> None:
@@ -404,7 +378,7 @@ class ExakitApp(App):
         found = self.data["sources"]["list"]
         detail = self.query_one("#source-detail", Panel)
         if found.get("_error") or found.get("error"):
-            detail.update(f"[b]{escape(str(found.get('_error') or found.get('error')))}[/]\n"
+            detail.update(f"[red]{escape(str(found.get('_error') or found.get('error')))}[/]\n"
                           f"{escape(str(found.get('remedy') or ''))}")
         elif not self._sources():
             detail.update("No external source connected yet.\n\nPick one below and press Connect: PostgreSQL, MySQL, "
@@ -429,7 +403,7 @@ class ExakitApp(App):
                  f"State: {escape(str(source.get('status') or '-'))}"
                  + (f"   last checked {escape(str(source['last_check']))}" if source.get("last_check") else "")]
         if source.get("needs_refresh"):
-            lines.append("[b]Its table list changed: Refresh tables reads it again.[/]")
+            lines.append("[yellow]Its table list changed: Refresh tables reads it again.[/]")
         lines += ["", f"[dim]Its tables and columns: exakit source describe {escape(name)}[/]"]
         self.query_one("#source-detail", Panel).update("\n".join(lines))
         for button in ("#source-check", "#source-refresh", "#source-reauth", "#source-disconnect", "#source-remove"):
@@ -446,16 +420,16 @@ class ExakitApp(App):
         personas = self._personas()
         for persona in personas:
             title = str(persona.get("title") or persona.get("id"))
-            here = "  [dim](this kit)[/]" if persona.get("recorded") else ""
+            here = "  [green]●[/]" if persona.get("recorded") else ""
             listing.append(ListItem(Label(title + here), id="p-" + str(persona.get("id"))))
         found = self.data["personas"]["list"]
         if found.get("_error"):
-            self.query_one("#persona-detail", Panel).update(f"[b]{escape(found['_error'])}[/]")
+            self.query_one("#persona-detail", Panel).update(f"[red]{escape(found['_error'])}[/]")
             return
         ids = [str(p.get("id")) for p in personas]
         if keep and keep not in ids and self.persona_wanted == keep:
             self.query_one("#persona-detail", Panel).update(
-                f"[b]No persona named {escape(keep)}.[/] The kit has: {escape(', '.join(ids))}")
+                f"[red]No persona named {escape(keep)}.[/] The kit has: {escape(', '.join(ids))}")
             return
         if ids:
             pick = ids.index(keep) if keep in ids else 0
@@ -493,19 +467,19 @@ class ExakitApp(App):
         unavailable = set(addons.get("unavailable") or [])
         lines = [f"[b]{escape(str(persona.get('title') or pid))}[/b]  [dim]{escape(pid)}[/]",
                  escape(str(persona.get("summary") or "")), ""]
-        lines.append("This kit is set up as this persona." if persona.get("recorded")
-                     else "[b]Not added to this kit yet: Add this persona brings everything below in.[/]")
+        lines.append("[green]This kit is set up as this persona.[/]" if persona.get("recorded")
+                     else "[yellow]Not added to this kit yet: Add this persona brings everything below in.[/]")
         if plan.get("_error"):
             lines.append(f"[dim]What is still missing could not be read: {escape(plan['_error'])}[/]")
         lines += ["", "[b]Recommended datasets[/b]"]
         for did in persona.get("datasets") or []:
             info = catalog.get(did, {})
-            state = "loaded " if did in loaded else "[b]to load[/]"
+            state = "[green]loaded[/]" if did in loaded else "[yellow]to load[/]"
             lines.append(f"  {state}  {escape(info.get('label') or did)}  [dim]{escape(did)}[/]")
         lines += ["", "[b]Add-ons[/b]"]
         for aid in persona.get("addons") or []:
-            state = ("installed " if aid in installed else "[b]not offered here[/]" if aid in unavailable
-                     else "[b]to install[/]")
+            state = ("[green]installed[/]" if aid in installed else "[red]not offered here[/]" if aid in unavailable
+                     else "[yellow]to install[/]")
             lines.append(f"  {state}  {escape(aid)}")
         clients = persona.get("mcp_clients")
         lines += ["", "[b]AI clients[/b]", "  " + escape("every AI client the kit supports" if clients == "all"
@@ -516,7 +490,7 @@ class ExakitApp(App):
             for n in notebooks:
                 lines.append(f"  {escape(str(n.get('title') or n.get('id')))}  [dim]{escape(str(n.get('jupyter') or ''))}[/]")
         if plan.get("nothing_pending"):
-            lines += ["", "Nothing is missing."]
+            lines += ["", "[green]Nothing is missing.[/]"]
         self.query_one("#persona-detail", Panel).update("\n".join(lines))
         missing = [d for d in persona.get("datasets") or [] if d not in loaded] + \
                   [a for a in persona.get("addons") or [] if a not in installed and a not in unavailable]
