@@ -107,19 +107,24 @@ class WorkingOn(Screen):
         if self.choices:
             current = ds.id if ds is not None else ""
             blocks.append({"t": "inline_form", "fields": [{"id": "pick", "type": "select", "label": "Switch to",
-                           "value": current, "options": self.choices}], "action": {"id": "switch", "label": "Use this"}})
+                           "value": current, "options": self.choices}], "action": {"id": "switch", "label": "Use this", "busy": "Opening…"}})
         if SESSION.code:
             blocks.append({"t": "code", "code_only": True, "title": "The code behind this step", "v": "\n".join(SESSION.code)})
         return blocks
 
     def on_switch(self, v: dict) -> None:
+        """Another dataset: opened, then every card below reads it again (the checks, the groups, the trend ...).
+        Each step and each statement is shown as it runs: on a source read live (a virtual schema) every statement
+        goes to that system, and the cards would otherwise look frozen."""
         ds_id = str(v.get("pick") or "")
-        actions.run("explore.open", dataset_id=ds_id)
-        SESSION.followed = SESSION.latest_approved() or SESSION.followed     # chosen here on purpose: not "behind"
-        self._count()
-        _state().clear()
+        print(f"Opening {ds_id}")
+        with SESSION.showing_queries():
+            actions.run("explore.open", dataset_id=ds_id)
+            SESSION.followed = SESSION.latest_approved() or SESSION.followed     # chosen here on purpose: not "behind"
+            self._count()
+            _state().clear()
+            SESSION.changed("dataset", self)
         self.flash = {"kind": "ok", "v": f"Now working on {ds_id}."}
-        SESSION.changed("dataset", self)
 
     def on_session(self, what: str) -> None:
         self.refresh()
@@ -145,6 +150,7 @@ class Prepare(Screen):
         self.refresh()
 
     def _check(self) -> None:
+        print("Checking the data: empty values, repeated rows, odd values in every column")
         self.findings = actions.run("explore.checks")
         said = SESSION.said
         try:
@@ -246,6 +252,7 @@ class Compare(Screen):
     def _groups(self) -> None:
         import exakit.nb as nb
 
+        print("Counting the groups")
         self.result = None
         if not self.group:
             return
@@ -275,6 +282,7 @@ class Compare(Screen):
     def _trend(self) -> None:
         import exakit.nb as nb
 
+        print("Reading the trend over time")
         self.trend = None
         ds = SESSION.dataset
         if not ds.has("date"):

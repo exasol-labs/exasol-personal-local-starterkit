@@ -664,8 +664,9 @@ function render({ model, el }) {
         const sel = dropdown(f, () => { if (b.live) send(b.action.id, collect()); else draw(); });
         return h("div", { class: "guide-inline-field" }, h("span", {}, f.label), sel);
       });
-      return h("div", { class: "guide-inline-form" }, fields,
-        b.live ? (ui.busy === b.action.id ? h("span", { class: "guide-spinner" }) : null) : button(b.action.label, b.action.id, { values: collect }));
+      return h("div", {}, h("div", { class: "guide-inline-form" }, fields,
+        b.live ? (ui.busy === b.action.id ? h("span", { class: "guide-spinner" }) : null) : button(b.action.label, b.action.id, { values: collect, busyLabel: b.action.busy })),
+        progressPanel(b.action.id));          // what it is doing, and each statement, while it runs
     },
     list(b) { return h("ul", { class: "guide-list" }, (b.items || []).map((x) => h("li", {}, x))); },
     findings(b) {
