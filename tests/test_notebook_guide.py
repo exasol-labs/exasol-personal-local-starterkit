@@ -1254,6 +1254,33 @@ class SeveralTablesTest(unittest.TestCase):
                  f("postgresql", "user"): "reader", f("postgresql", "how"): "manual", f("postgresql", "password"): "  s3cret \t"}
         self.assertEqual("s3cret", self.card._source_inputs(typed)[3])
 
+    def test_a_source_just_connected_opens_its_tables(self):
+        """A new connection has no table ticked yet. With a few tables all of them are opened (it was connected to be
+        used: no "set SOURCE" to stop on); with many it is connected and listed, and says to tick the ones to use."""
+        nb = importlib.import_module("exakit_nb")
+        self.card.forms, self.card.connectors, self.card.connector, self.card.sources = {"postgresql": nb.connector_inputs("postgresql")}, nb.connectors(), "postgresql", []
+
+        def listed(names):
+            def load():
+                self.card.source_tables = {"VS_LOGISTICS": [{"value": n, "label": n} for n in names]}
+            return load
+
+        with mock.patch.object(self.card, "_connect", return_value="VS_LOGISTICS"), \
+                mock.patch.object(self.card, "_load_options", side_effect=listed(["COURIER_DAILY", "STATE_LOGISTICS"])):
+            self.use({"kind": ["source"], "src_schema": ["__connect__"]})
+        self.assertEqual(["VS_LOGISTICS.COURIER_DAILY"], [e["table"] for e in self.session.chosen],
+                         "both were asked for; the stand-in source refuses the second")
+        self.assertEqual([("data.source", {"source": "VS_LOGISTICS.COURIER_DAILY"}), ("data.source", {"source": "VS_LOGISTICS.STATE_LOGISTICS"})],
+                         [(a, v) for a, v in self.ran if a == "data.source"])
+        self.ran.clear()
+        self.card.connector = "postgresql"
+        many = [f"T{i}" for i in range(self.card.MANY_TABLES + 1)]
+        with mock.patch.object(self.card, "_connect", return_value="VS_LOGISTICS"), \
+                mock.patch.object(self.card, "_load_options", side_effect=listed(many)):
+            self.use({"kind": ["source"], self.card._cf(): ["__connect__"]})
+        self.assertEqual([], [a for a, _v in self.ran if a == "data.source"])
+        self.assertIn("VS_LOGISTICS is connected and has 11 tables: tick the ones to use", self.card.failed[0])
+
     def test_the_card_always_has_a_button(self):
         """Before a data source is chosen for a new connection the plain button is there (the rest ticked is usable);
         once it is chosen, Connect does everything ticked."""

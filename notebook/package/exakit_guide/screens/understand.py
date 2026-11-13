@@ -299,7 +299,7 @@ class ChooseData(Screen):
             else:
                 blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
         if self.failed:
-            blocks.append({"t": "msg", "kind": "warn", "v": "Not loaded: " + "; ".join(self.failed)})
+            blocks.append({"t": "msg", "kind": "warn", "v": "; ".join(self.failed)})
         if self.kit_said:
             blocks.append({"t": "details", "title": "What the kit said", "blocks": [{"t": "pre", "v": self.kit_said}]})
         if SESSION.code:
@@ -344,13 +344,32 @@ class ChooseData(Screen):
                     # the next new connection starts from an empty form, and the list of connections from its top
                     self.conn_n, self.connector, self.preset, self.src_name = self.conn_n + 1, None, None, ""
                     connected = True
-                    tables = _listed(v.get("table")) or [""]
+                    tables = _listed(v.get("table")) or self._new_source_tables(schema)
+                    if not tables:
+                        continue
                 else:
                     tables = _listed(v.get(self._tid(schema))) or _listed(v.get("table")) or [""]
                 for table in tables:
                     source = f"{schema}.{table}" if table and "." not in table else (table or schema)
                     wanted.append(("data.source", "source_data", {"source": source}, source))
         return wanted, connected
+
+    MANY_TABLES = 10
+
+    def _new_source_tables(self, schema: str) -> list[str]:
+        """The tables to open of a source that was just connected: all of them when it has a few (it was connected
+        to be used), its one table, or none when it has many - then it is connected and listed, and its tables are
+        ticked under Connections. [""] leaves the choice to nb.load_source (a source whose tables could not be listed)."""
+        try:
+            self._load_options()                       # reads the database again: the new source and its tables
+        except Exception:
+            return [""]
+        names = [t["value"] for t in (self.source_tables or {}).get(schema, [])]
+        if len(names) > self.MANY_TABLES:
+            self.failed.append(f"{schema} is connected and has {len(names)} tables: tick the ones to use under Connections, "
+                               "then press Use this data")
+            return []
+        return names or [""]
 
     def on_use(self, v: dict) -> None:
         from ..actions import Var
@@ -361,6 +380,9 @@ class ChooseData(Screen):
             actions.run("data.workflow")
         wanted, connected = self._wanted(v)
         if not wanted:
+            if connected and self.failed:              # connected, with many tables: nothing to open yet, and said so
+                self.done = False
+                return
             raise ValueError("Tick at least one dataset, table or source.")
         several = len(wanted) > 1
         if several:

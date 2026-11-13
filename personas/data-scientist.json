@@ -8,6 +8,6 @@
   "order": 10,
   "datasets": ["amazon_sales", "fraud_transactions"],
   "mcp_clients": "all",
-  "addons": ["dash-server", "notebook"],
-  "addon_reasons": {"dash-server": "Share what you find as a live dashboard others open in a browser", "notebook": "The Data Scientist notebooks, already connected to your data"}
+  "addons": ["dash-server", "notebook", "json-tables", "semantic-views"],
+  "addon_reasons": {"dash-server": "Share what you find as a live dashboard others open in a browser", "notebook": "The Data Scientist notebooks, already connected to your data", "json-tables": "Load JSON files and folders as tables, nested data included", "semantic-views": "The semantic layer your column maps publish to, queried by notebooks and AI clients"}
 }
