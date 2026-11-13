@@ -4,6 +4,21 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **AI clients and the terminal do what the notebook does: `exakit semantic` and `exakit board`.** Every step of the semantic layer and the multi-page dashboard is a command now. Each runs the notebook's own functions and uses the same files, so a person in a terminal or an AI client with a shell gets the same model and the same dashboard.
+  - **`exakit semantic`:**
+    - `fields`: a model's metrics and dimensions, with what each holds and why it is used
+    - `compile`: a structured request to SQL; an ambiguous one comes back with its choices
+    - `verify` and `verified`: questions kept in the model
+    - `fuse`: the same rows kept in two sources, a dry run unless `--apply`
+    - `fusion`: the model's fusion layer, exported
+    - `column-maps`, and `restore-maps` (writes only with `--write`)
+    - `refresh` and `models`
+  - **`exakit board`:**
+    - `pin`: approved SQL onto a page; its shape is read once through the read-only service
+    - `show`, `move`, `remove` and `kind`: arrange the tiles
+    - `preview`: a health-checked Dash Server preview
+    - `publish`: only with `--figures-checked`, and refused when the dashboard changed since its preview
+  - **Both:** every command answers `--json`; refusals exit 2. Bash and PowerShell only pass the arguments on (`setup/lib/semantic_cli.py` checks them), with help pages in `exakit help`. The `exakit` skill tells AI clients to use these, never SQL of their own against `SEMANTIC_ADMIN`, and to show each write and wait for the user's yes. skills 1.24.34.
 - **Exasol Semantic Views is the one semantic layer for all your sources.**
   - **One model over everything.** Every approval also updates **`all_data`**, one model over every table with an approved column map from every source: sample data, your own tables and files, and every external source. It is changed in place, carries the links between sources you confirmed, the fusion and the verified questions, and is the default name in the Semantic views card. `EXAKIT_ALL_DATA_MODEL=0` turns it off.
   - **Where each table lives.** A table's description says what it is and where it lives. An external source names its connector and source, read from the kit's own record of `exakit connect`, names only (*Source: Snowflake, source logistics (schema VS_LOGISTICS), read live where it lives; nothing is copied.*).

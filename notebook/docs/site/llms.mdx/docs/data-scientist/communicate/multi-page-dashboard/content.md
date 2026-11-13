@@ -51,6 +51,21 @@ The app holds the following files, and no credentials:
 
 If a tile's SQL no longer matches its digest, the preview is refused.
 
+## From the command line, or an AI client [#from-the-command-line-or-an-ai-client]
+
+The same dashboard, built with `exakit board`. Pinning SQL is your approval of it, so an AI client shows you each query first.
+
+```bash
+exakit board pin sales-overview --page Revenue --question "Revenue by state?" \
+  --sql "SELECT STATE, SUM(AMOUNT) AS REVENUE FROM SHOP.ORDERS GROUP BY 1"
+exakit board show sales-overview
+exakit board move sales-overview a1b2c3d4 Delivery
+exakit board preview sales-overview                    # a health-checked preview, and its address
+exakit board publish sales-overview --figures-checked  # only after you checked the preview's figures
+```
+
+`pin` runs the query once through the read-only service to see its shape: a KPI, bars, a line or a table, and the columns a page can be filtered by. `--kind` sets the shape yourself. `publish` refuses a dashboard that changed since its preview.
+
 ## Why it does not hang [#why-it-does-not-hang]
 
 * **Only the open tab is queried.** A page's tiles run in parallel, at most four at a time.

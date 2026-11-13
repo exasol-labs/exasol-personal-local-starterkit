@@ -219,6 +219,20 @@ try {
     Contains "the page says where a schema map is kept" "descriptors/<SCHEMA>/" $page.description
     Contains "and where its links go" "SEMANTIC_CATALOG.RELATIONSHIPS" $page.description
     Contains "with a schema example" "exakit describe --schema" ($page.examples -join "`n")
+
+    Write-Host "exakit semantic and exakit board pass everything to semantic_cli.py in the same Python:"
+    Copy-Item (Join-Path $repo "test_data/describe/stub_service.py") (Join-Path $script:StubRoot "setup\lib\semantic_cli.py") -Force
+    Remove-Item "Env:STUB_EXIT" -ErrorAction SilentlyContinue
+    $script:PendingExitCode = 0
+    $script:OUT = (@(Invoke-CmdSemantic -CmdArgs @("fuse", "all_data", "--table", "MY_DATA.CUSTOMERS", "--same-as", "VS_CRM.CUSTOMERS", "--key", "CUST_ID", "--json")) | ForEach-Object { "$_" }) -join "`n"
+    Check "semantic: the group, the action and every argument, as given" "semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key CUST_ID --json" (Asked "args")
+    $script:OUT = (@(Invoke-CmdBoard -CmdArgs @("pin", "sales", "--page", "Revenue", "--question", "Revenue by state?", "--sql", "SELECT 1")) | ForEach-Object { "$_" }) -join "`n"
+    Check "board: a question with spaces stays one argument" "board pin sales --page Revenue --question Revenue by state? --sql SELECT 1" (Asked "args")
+    $script:HelpAsked = ""; Invoke-CmdSemantic -CmdArgs @(); Check "semantic alone shows its help page" "semantic" $script:HelpAsked
+    $script:HelpAsked = ""; Invoke-CmdBoard -CmdArgs @("--help"); Check "board --help shows its help page" "board" $script:HelpAsked
+    $cli = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+    Contains "the CLI dispatches semantic" "Invoke-CmdSemantic -CmdArgs `$RestArgs" $cli
+    Contains "and board" "Invoke-CmdBoard -CmdArgs `$RestArgs" $cli
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

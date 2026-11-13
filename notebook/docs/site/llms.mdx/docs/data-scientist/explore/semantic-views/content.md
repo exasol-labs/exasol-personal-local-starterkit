@@ -264,6 +264,25 @@ Every approval updates two models: the table's schema model, and **`all_data`**.
 
 An AI client reads all of this over MCP: `SEMANTIC_AGENT.FIELDS_FOR_AGENT` for the fields and `SEMANTIC_AGENT.INSTRUCTIONS_FOR_AGENT` for the instructions. Ask passes the instructions to your model with the fields.
 
+### From the command line, or an AI client [#from-the-command-line-or-an-ai-client]
+
+Every step of the semantic layer is also an `exakit` command, so a person in a terminal or an AI client with a shell (Claude Code, Codex) does exactly what the notebook cards do, with the same functions and the same files. Reading changes nothing. A write runs only when you say so: `--apply`, `--write`.
+
+```bash
+exakit semantic fields all_data                    # every metric and dimension, with what it holds and why
+exakit semantic compile '{"model": "all_data", "object": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["state"]}'
+exakit semantic verified all_data                  # the reviewed questions
+exakit semantic verify all_data --object ORDER_LINES --name "Revenue by state" --question "What is revenue by state?" \
+  --request '{"metrics": ["total_amount"], "dimensions": ["state"]}'
+exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key CUST_ID    # a dry run
+exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key CUST_ID --apply
+exakit semantic column-maps all_data
+exakit semantic restore-maps all_data --write
+exakit semantic refresh all_data
+```
+
+The kit's `exakit` skill tells AI clients to read `all_data` first and to use these commands rather than their own SQL against the semantic layer. Before every write, the client shows you the request, the document or the SQL and waits for your yes.
+
 ### Column maps are in the model too [#column-maps-are-in-the-model-too]
 
 Every model the kit publishes keeps each table's approved column map on that table's entity: the approved text, under `column_map_v<version>`. A new approval adds the next version, so the model holds the history as well. The kit's store is the version control: drafts, approvals, who approved and when. The two are kept together, and either one restores the other:
