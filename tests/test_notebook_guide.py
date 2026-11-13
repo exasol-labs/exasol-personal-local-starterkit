@@ -1468,7 +1468,7 @@ class SeveralTablesTest(unittest.TestCase):
                           "VS_LOGISTICS.COURIER_DAILY": ("svt1:VS_LOGISTICS.COURIER_DAILY", False, True)}, ticks)
         picked = views._picked({"svt1:AMAZON.ORDER_LINES": True, "svt1:MY_DATA.DRAFTS": True, "svt:AMAZON.RETURNS": True,
                                 "svd:AMAZON.ORDER_LINES": "  One row per   order line. ", "sv_about": " Orders  and targets "})
-        self.assertEqual((["AMAZON.ORDER_LINES"], {"AMAZON.ORDER_LINES": "One row per order line."}, "Orders and targets", "my_data"),
+        self.assertEqual((["AMAZON.ORDER_LINES"], {"AMAZON.ORDER_LINES": "One row per order line."}, "Orders and targets", "all_data"),
                          (picked["tables"], picked["table_notes"], picked["description"], picked["name"]))
         # a link of your own is picked from lists: the tables with a column map, and each one's columns
         own = next(f for b in blocks if b["t"] == "fields" for f in b["items"] if f["id"] == "sv_own")["fields"]
