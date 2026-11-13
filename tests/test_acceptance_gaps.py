@@ -91,7 +91,8 @@ class MissingRolesTest(unittest.TestCase):
                 typed_view=mock.Mock(return_value=types.SimpleNamespace(needed=False)),
                 describe_schema=mock.Mock(return_value=types.SimpleNamespace(
                     joined_view=mock.Mock(return_value=types.SimpleNamespace(needed=False)))),
-                connect=mock.Mock(), review_roles=mock.Mock(return_value=types.SimpleNamespace(dataset=lambda **kw: ds)),
+                connect=mock.Mock(), open_chosen=mock.Mock(return_value={}),
+                review_roles=mock.Mock(return_value=types.SimpleNamespace(dataset=lambda **kw: ds)),
                 show_roles=mock.Mock(), sql=mock.Mock(return_value=Frame(DAYS=[30], N=[10], PCT=[5.0], TEXT_=["Synthetic description"])),
                 show_sql=mock.Mock(), model_client=mock.Mock(),
                 data_checks=mock.Mock(return_value=Frame()), leakage_check=mock.Mock(return_value=[]), confirm_send=mock.Mock(), themes=mock.Mock(), chosen_dataset=lambda name: name or "fixture",
@@ -106,7 +107,7 @@ class MissingRolesTest(unittest.TestCase):
             # its own guard is read, after the lines that set it up, and must admit it.
             model_runs = missing in ("entity", "category", "text", "date")
             cells = [c for c in self.cells if c.startswith(("DATASET = ", "import os\n", "findings = ", "schema_map = ", "joined_view_proposal = ", "typed_view_proposal = ", "ENTITY_COLUMN = ",
-                     "LEAKING_COLUMNS = ", "landscape = ",
+                     "LEAKING_COLUMNS = ", "landscape = ", "role_review = nb.review_roles", "loaded_dataset = ",
                      "over_time = ", "MODEL_ROW_LIMIT = ", "SAMPLE_TEXTS = ", "handoff_path = None"))
                      and not (model_runs and c.startswith("MODEL_ROW_LIMIT = "))]
             output = io.StringIO()
