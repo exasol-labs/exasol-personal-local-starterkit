@@ -361,6 +361,11 @@ def _register_kernel(ctx: KitContext) -> None:
     _run_helper(ctx, "register_kernel.py", env=env)
 
 
+# install() fetches files and builds under this add-on's own folders, and writes its receipt through the
+# locked manifest: apply.py may run it beside other parallel-safe add-ons (the steps after it stay serial).
+PARALLEL_INSTALL = True
+
+
 def install(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") in ("user", "unknown"):
         return

@@ -341,6 +341,11 @@ def _write_launchers(ctx: KitContext) -> None:
         launcher.chmod(0o755)
 
 
+# install() fetches files and builds under this add-on's own folders, and writes its receipt through the
+# locked manifest: apply.py may run it beside other parallel-safe add-ons (the steps after it stay serial).
+PARALLEL_INSTALL = True
+
+
 def install(ctx: KitContext) -> None:
     from model import load_addons
 

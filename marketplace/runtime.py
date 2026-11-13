@@ -117,6 +117,41 @@ def activity_sink(callback):
         _activity_local.callback = previous
 
 
+def current_activity_sink():
+    """The activity callback this thread routes to, or None when it shows activity itself."""
+    return getattr(_activity_local, "callback", None)
+
+
+@contextlib.contextmanager
+def log_sink(callback):
+    """Route one worker thread's marketplace.log records to ``callback``, one complete record per call (the
+    header line and everything the command printed together), instead of appending them to the file. An add-on
+    installed beside others holds its records this way until its turn, so the log reads add-on by add-on."""
+    previous = getattr(_activity_local, "log", None)
+    _activity_local.log = callback
+    try:
+        yield
+    finally:
+        _activity_local.log = previous
+
+
+_LOG_LOCK = threading.Lock()
+
+
+def append_log(home: Path, text: str) -> None:
+    """Append complete records to marketplace.log; one writer at a time, so records never interleave."""
+    log_dir = home / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "marketplace.log"
+    with _LOG_LOCK, log_path.open("a", encoding="utf-8") as log:
+        log_path.chmod(0o600)
+        log.write(text)
+
+
+def _stamp() -> str:
+    return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+
+
 def _lock_file(handle) -> None:
     if sys.platform == "win32":
         import msvcrt
@@ -158,6 +193,10 @@ class Manifest:
     def __init__(self, path: Path):
         self.path = path
 
+    # Add-ons installed side by side share one Manifest. The file lock keeps other processes out; this keeps
+    # this process's threads to one read-modify-write at a time, whatever the platform's lock does within a process.
+    _threads = threading.RLock()
+
     def read(self) -> dict:
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
@@ -191,7 +230,7 @@ class Manifest:
                 time.sleep(0.025)
         if lock is None:
             raise AddonFailure("The kit manifest is busy; retry this command")
-        with lock:
+        with Manifest._threads, lock:
             _lock_file(lock)
             try:
                 doc = self.read()
@@ -417,11 +456,10 @@ class KitContext:
         secrets = sorted({value for name, value in values.items() if value and
                           name.upper().endswith(("PASSWORD", "TOKEN", "_KEY", "SECRET"))},
                          key=len, reverse=True)
-        with log_path.open("a", encoding="utf-8") as log:
-            log_path.chmod(0o600)
-            log.write(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {label}\n")
-            log.flush()
-            # Filter private child diagnostics before appending them to the log.
+        sink = getattr(_activity_local, "log", None)
+        if sink is not None:
+            # Held for its turn (log_sink): the header and the output go as one record once the command ended.
+            header = f"[{_stamp()}] {label}\n"
             with tempfile.TemporaryFile() as output:
                 try:
                     result = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
@@ -430,26 +468,44 @@ class KitContext:
                     raise AddonFailure(f"{label} did not finish; see exakit logs setup") from error
                 finally:
                     output.seek(0)
-                    for line in output:
-                        text = line.decode("utf-8", errors="replace")
-                        for secret in secrets:
-                            text = text.replace(secret, "[redacted]")
-                        log.write(text)
+                    sink(header + "".join(_redacted(output, secrets)))
+        else:
+            with log_path.open("a", encoding="utf-8") as log:
+                log_path.chmod(0o600)
+                log.write(f"[{_stamp()}] {label}\n")
+                log.flush()
+                # Filter private child diagnostics before appending them to the log.
+                with tempfile.TemporaryFile() as output:
+                    try:
+                        result = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                                stdout=output, stderr=output, check=False, timeout=timeout)
+                    except (OSError, subprocess.TimeoutExpired) as error:
+                        raise AddonFailure(f"{label} did not finish; see exakit logs setup") from error
+                    finally:
+                        output.seek(0)
+                        for text in _redacted(output, secrets):
+                            log.write(text)
         if result.returncode != 0:
             raise AddonFailure(f"{label} failed (exit {result.returncode}); see exakit logs setup")
 
     def log_event(self, message: str) -> None:
-        log_dir = self.home / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
         safe = message.replace("\r", " ").replace("\n", " ")
-        with (log_dir / "marketplace.log").open("a", encoding="utf-8") as log:
-            log.write(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {safe}\n")
+        record = f"[{_stamp()}] {safe}\n"
+        sink = getattr(_activity_local, "log", None)
+        if sink is not None:
+            sink(record)
+        else:
+            append_log(self.home, record)
 
     def activity(self, label: str) -> None:
         callback = getattr(_activity_local, "callback", None)
         if callback is not None:
             callback(label)
             return
+        self.show_activity(label)
+
+    def show_activity(self, label: str) -> None:
+        """Show one activity line the way the platform asked: the progress table's side channel, else stdout."""
         activity_file = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_FILE")
         row = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_ROW", "")
         if activity_file and row.isdecimal() and int(row) > 0:
@@ -468,6 +524,15 @@ class KitContext:
                     os.unlink(name)
             return
         print(f"  • {label}", flush=True)
+
+
+def _redacted(output, secrets: list[str]) -> Iterator[str]:
+    """A child's output, line by line, with every secret it could have echoed replaced."""
+    for line in output:
+        text = line.decode("utf-8", errors="replace")
+        for secret in secrets:
+            text = text.replace(secret, "[redacted]")
+        yield text
 
 
 # How long a freshly installed package may take to answer its first import. The first import after `uv pip
