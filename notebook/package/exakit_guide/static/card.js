@@ -140,7 +140,7 @@ function lineChart(points, isPct) {
     s += `<text x="${X(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" class="guide-c-lbl">${esc(points[i].period)}</text>`;
   });
   s += `<path d="M${vals.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" L")}" class="guide-c-line"/>`;
-  vals.forEach((v, i) => { s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="7" class="guide-c-hit"><title>${esc(points[i].period)}: ${lab(v)} (${fmt(points[i].rows)} rows)</title></circle>`; });
+  vals.forEach((v, i) => { s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="7" class="guide-c-hit"><title>${esc(points[i].period)}: ${esc(points[i].display || lab(v))}${points[i].rows != null ? ` (${fmt(points[i].rows)} rows)` : ""}</title></circle>`; });
   return h("div", { html: s + "</svg>" });
 }
 
@@ -943,7 +943,9 @@ function render({ model, el }) {
       const isNum = b.columns.map((_, j) => b.rows.length > 0 && b.rows.every((r) => r[j] == null || typeof r[j] === "number"));
       return h("div", { class: "guide-tablewrap" }, h("table", { class: b.wrap_first ? "guide-table guide-table-wrapfirst" : "guide-table" },
         h("thead", {}, h("tr", {}, b.columns.map((c, j) => h("th", { class: isNum[j] ? "num" : "", title: c }, readable(c))))),
-        h("tbody", {}, b.rows.slice(0, 200).map((r) => h("tr", {}, r.map((v, j) => h("td", { class: isNum[j] ? "num" : "" }, typeof v === "number" ? fmt(v) : (v ?? ""))))))));
+        // display: each value written out by the kit (money in its currency, counts, shares); else the plain number
+        h("tbody", {}, b.rows.slice(0, 200).map((r, i) => h("tr", {}, r.map((v, j) => h("td", { class: isNum[j] ? "num" : "" },
+          b.display && b.display[i] ? b.display[i][j] : (typeof v === "number" ? fmt(v) : (v ?? "")))))))));
     },
   };
   const block = (b) => (B[b.t] ? B[b.t](b) : null);

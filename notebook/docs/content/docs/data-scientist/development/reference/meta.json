@@ -30,6 +30,7 @@
     "handoff",
     "ml-train",
     "checks",
+    "number-format",
     "providers",
     "role-check",
     "semantic"

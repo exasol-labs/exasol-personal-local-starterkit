@@ -121,7 +121,9 @@ if APPROVE_SQL:
 else:
     answer = None
     print("Not approved: no query ran. Review the proposal above, then set APPROVE_SQL = True and run this cell again.")
-answer
+# The answer to read: money in the data's own currency, counts with separators, shares as %. `answer` keeps the numbers.
+currency = nb.currency_of(connection, dataset)
+nb.formatted(answer, dataset, currency) if answer is not None else None
 
 # %% [markdown]
 # ## Next: steps 8 and 9

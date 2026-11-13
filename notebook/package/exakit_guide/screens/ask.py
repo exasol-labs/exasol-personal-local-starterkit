@@ -39,9 +39,21 @@ def _next_notebook() -> dict | None:
     return rows[here + 1] if here + 1 < len(rows) else None
 
 
-def _explain(frame) -> tuple[str, dict | None]:
-    """One line on what the answer shows, and a chart when the shape fits."""
+def _formats(frame, dataset=None, currency: str | None = None) -> dict:
+    """How each result column is written (exakit_nb.number_format): money in the data's currency, counts, shares."""
+    from exakit_nb.number_format import column_format
+
+    return {str(c): column_format(str(c), frame[c].tolist(), dataset, currency) for c in frame.columns}
+
+
+def _explain(frame, formats: dict | None = None) -> tuple[str, dict | None]:
+    """One line on what the answer shows, and a chart when the shape fits. ``formats`` (from _formats) writes every
+    number the way a reader expects: money in its currency, counts with separators, shares as %."""
     import pandas as pd
+
+    from exakit_nb.number_format import format_value
+
+    formats = formats or {}
 
     n = len(frame)
     if n == 0:
@@ -53,7 +65,7 @@ def _explain(frame) -> tuple[str, dict | None]:
     nums = [c for c in cols if pd.api.types.is_numeric_dtype(pd.to_numeric(frame[c], errors="coerce")) and frame[c].notna().all()
             and not isinstance(frame[c].iloc[0], str)]
     if n == 1 and len(cols) == 1:
-        return f"The answer is {frame.iloc[0, 0]}.", None
+        return f"The answer is {format_value(frame.iloc[0, 0], formats.get(str(cols[0]), {}))}.", None
     first = cols[0]
     if "RANK" in cols and len(cols) >= 3:
         # "top Y in each X": name the winner in each group
@@ -69,14 +81,16 @@ def _explain(frame) -> tuple[str, dict | None]:
     v = pd.to_numeric(frame[value], errors="coerce")
     is_pct = value.upper().endswith("PCT")
     label = _readable(value)
-    show = (lambda x: f"{x:.1f}%") if is_pct else (lambda x: f"{x:,.2f}".rstrip("0").rstrip("."))
+    fmt = formats.get(str(value)) or ({"kind": "percent", "decimals": 1} if is_pct else {"kind": "number", "decimals": 2})
+    show = lambda x: format_value(x, fmt)
     dates = pd.to_datetime(frame[first], errors="coerce")
     if dates.notna().all() and n >= 2:
         order = dates.argsort()
         a, b = order.iloc[0], order.iloc[-1]
         line = (f"From {dates.iloc[a]:%b %Y} to {dates.iloc[b]:%b %Y}, {label} went from {show(v.iloc[a])} to {show(v.iloc[b])}. "
                 f"Highest: {dates.iloc[v.idxmax()]:%b %Y} ({show(v.max())}).")
-        pts = [{"period": f"{dates.iloc[i]:%b %Y}", "value": float(v.iloc[i]) / (100 if is_pct else 1), "rows": None} for i in order]
+        pts = [{"period": f"{dates.iloc[i]:%b %Y}", "value": float(v.iloc[i]) / (100 if is_pct else 1), "rows": None,
+                "display": show(v.iloc[i])} for i in order]
         return line, {"t": "line", "title": f"{label} over time", "points": pts, "pct": is_pct}
     hi, lo = v.idxmax(), v.idxmin()
     textcols = [c for c in cols_wo_rank if c not in nums]
@@ -86,7 +100,8 @@ def _explain(frame) -> tuple[str, dict | None]:
         line += f" Lowest: {who(lo)} ({show(v.iloc[lo])})."
     if len(textcols) >= 2:
         return line, None     # combinations read better as a table than as bars
-    items = [{"label": str(frame[first].iloc[i]), "value": float(v.iloc[i]) / (100 if is_pct else 1), "rows": None} for i in range(min(n, 15))]
+    items = [{"label": str(frame[first].iloc[i]), "value": float(v.iloc[i]) / (100 if is_pct else 1), "rows": None,
+              "display": show(v.iloc[i])} for i in range(min(n, 15))]
     return line, {"t": "bars", "title": f"{label} by {_readable(first)}", "items": items, "pct": is_pct, "overall": None}
 
 
@@ -181,7 +196,12 @@ class Ask(Screen):
             blocks.append({"t": "answer", "v": line, "rows": len(frame), "ran_as": self.ran_as})
             if chart:
                 blocks.append(chart)
+            from exakit_nb.number_format import format_value
+
+            formats = getattr(self, "formats", None) or _formats(frame)
             blocks.append({"t": "table", "columns": [str(c) for c in frame.columns],
+                           "display": [[format_value(v, formats.get(str(c), {})) for c, v in zip(frame.columns, row)]
+                                       for row in frame.astype(object).values.tolist()[:200]],
                            "rows": [[(None if v is None else (float(v) if hasattr(v, "as_integer_ratio") and not isinstance(v, (bool, int)) else v))
                                      for v in row] for row in frame.astype(object).values.tolist()]})
         if self.box and self.history:
@@ -208,7 +228,12 @@ class Ask(Screen):
         # is not running the kit says so, with its fix (exakit mcp-doctor).
         frame = actions.run("ask.run")
         self.ran_as = "through the kit's read-only service"
-        line, chart = _explain(frame)
+        try:
+            currency = actions.run("ask.currency")       # the data's own currency, when its table names one
+        except Exception:
+            currency = None
+        self.formats = _formats(frame, self.ds, currency)
+        line, chart = _explain(frame, self.formats)
         self.answer = (frame, line, chart)
         self.history.append({"question": self.proposal.question, "rows": len(frame)})
         self.flash = {"kind": "ok", "v": "Ran after your approval. Logged in the kit's workflow, so the hand-off bundle includes it."}

@@ -165,6 +165,7 @@ ACTIONS: dict[str, Action] = {
     "ask.model": Action("02_ask_your_data", "proposal = nb.ask(dataset, {question}, conn=connection)", "proposal"),
     "ask.rules": Action("02_ask_your_data", "proposal = nb.draft_question(connection, dataset, {question})", "proposal"),
     "ask.edit": Action("02_ask_your_data", "proposal.edit({sql})", None),
+    "ask.currency": Action("02_ask_your_data", "currency = nb.currency_of(connection, dataset)", "currency", False),
     "ask.run": Action("02_ask_your_data", "proposal.approve()\nanswer = proposal.run()", "answer"),
     # -- step 4: share and hand off ---------------------------------------------------------------------------------
     "share.open": Action("03_share", 'nb.continue_workflow("share")\n'
