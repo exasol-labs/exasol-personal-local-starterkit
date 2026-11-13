@@ -2973,7 +2973,10 @@ PY
 
 # exakit_clear_soft_failure <component> — the component finished after all (a
 # re-run, a later retry), so its record goes: on disk, and from this run's
-# closing summary. ⇄ twin: Clear-ExakitSoftFailure in exakit-common.ps1.
+# closing summary — and a failure note that is about it ("<label> did not
+# finish ...") goes too, or `exakit status` kept a "Last failure" for a step
+# `exakit mcp-setup` had since finished. A note about anything else stays.
+# ⇄ twin: Clear-ExakitSoftFailure in exakit-common.ps1.
 exakit_clear_soft_failure() {
     [ -n "${1:-}" ] || return 0
     if [ -n "${EXAKIT_SOFT_FAILED:-}" ] && exakit_soft_failed "$1"; then
@@ -2988,7 +2991,15 @@ exakit_clear_soft_failure() {
     # Read first: a clean component (the common case) costs one read, no write.
     _csf_key="install.soft_failures.$(printf '%s' "$1" | tr -c 'A-Za-z0-9_' '_')"
     if [ -n "$(manifest_get "$_csf_key" 2>/dev/null || true)" ]; then
+        _csf_label="$(manifest_get "$_csf_key.label" 2>/dev/null || true)"
+        [ -n "$_csf_label" ] || _csf_label="$1"
         ( manifest_del "$_csf_key" ) >/dev/null 2>&1 || true
+        _csf_note="$(exakit_failure_note_file)"
+        if [ -f "$_csf_note" ]; then
+            case "$(head -n 1 "$_csf_note" 2>/dev/null)" in
+                "$_csf_label did not finish"*) rm -f "$_csf_note" 2>/dev/null ;;
+            esac
+        fi
     fi
     return 0
 }
@@ -12185,6 +12196,9 @@ EOF
         return "$_setup_status"
     fi
     exakit_print_mcp_ready_panel "permanent"
+    # The clients are written: an earlier install's "AI client (MCP) setup did
+    # not finish" is history. ⇄ twin: the same clear in Invoke-McpSetup.
+    exakit_clear_soft_failure mcp_clients
     # The panel above IS the guidance; announcing that it exists, directly
     # under it, told the reader nothing they had not just read.
     return 0

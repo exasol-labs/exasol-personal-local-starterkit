@@ -220,6 +220,32 @@ check "...and as the desired one" "$IMAGE_VERSION" "$(manifest_get desired.mcp)"
 check "run again: already current, nothing offered" 0 "$(mcp_update >/dev/null 2>&1; echo $?)"
 check "...and nothing reconciled again" 1 "$(grep -c '^start' "$STUB_CALLS")"
 
+echo "a serving sidecar retires the install's MCP record:"
+# The install step failed and booked "the MCP server did not finish"; a later
+# `exakit mcp-setup` got the server serving, and `exakit status` still showed
+# the step as unfinished and its note as the last failure. Twin of the same
+# block in tests/mcp-sidecar-ps.ps1.
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
+STUB_PORTS_TAKEN=""; STUB_STATUS="$SERVING"
+NOTE="$(exakit_failure_note_file)"
+( exakit_record_soft_failure mcp "exakit update" "the server did not start" "the MCP server" )
+printf 'the MCP server did not finish - the server did not start\n2026-11-13 14:34:12\n' > "$NOTE"
+check "...booked" "the server did not start" "$(manifest_get install.soft_failures.mcp.reason)"
+check "the sidecar applies" 0 "$(mcp_sidecar_apply >/dev/null 2>&1; echo $?)"
+check "...the record is gone" "" "$(manifest_get install.soft_failures.mcp 2>/dev/null)"
+check "...and so is its failure note" absent "$([ -f "$NOTE" ] && echo present || echo absent)"
+( exakit_record_soft_failure skills "exakit skills-install" "no network" "AI skills" )
+( exakit_record_soft_failure mcp "exakit update" "the server did not start" "the MCP server" )
+printf 'AI skills did not finish - no network\n2026-11-13 14:34:12\n' > "$NOTE"
+check "a note about another step" 0 "$(mcp_sidecar_apply >/dev/null 2>&1; echo $?)"
+check "...stays" present "$([ -f "$NOTE" ] && echo present || echo absent)"
+check "...and so does that step's record" "no network" "$(manifest_get install.soft_failures.skills.reason)"
+rm -f "$NOTE"
+has "exakit mcp-setup retires the client step's record when it finishes" "exakit_clear_soft_failure mcp_clients" \
+    "$(awk '/^exakit_mcp_setup\(\)/,/^}/' "$ROOT/setup/lib/common.sh")"
+has "...and so does its Windows twin" 'Clear-ExakitSoftFailure -Component "mcp_clients"' \
+    "$(awk '/^function Invoke-McpSetup \{/,/^}/' "$ROOT/setup/lib/mcp.ps1")"
+
 echo "the Windows definition writer (setup/lib/mcp.ps1), read as text:"
 # Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM that the
 # editor's json.loads refused; pwsh 7 does not, so only a 5.1 run shows it. The

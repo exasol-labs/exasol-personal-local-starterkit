@@ -1519,6 +1519,9 @@ function Invoke-McpSetup {
     # What the MCP server's apply could not heal, now that the table is done.
     Show-McpSidecarProblem
     if (-not $resultJson) { return $false }
+    # The clients are written: an earlier install's "AI client (MCP) setup did
+    # not finish" is history. Twin of the same clear in exakit_mcp_setup.
+    if (Get-Command Clear-ExakitSoftFailure -ErrorAction SilentlyContinue) { Clear-ExakitSoftFailure -Component "mcp_clients" }
     Show-McpReadyPanel "permanent"
     # The panel above IS the guidance; announcing that it exists, directly
     # under it, told the reader nothing they had not just read.
@@ -2042,6 +2045,11 @@ function Set-McpSidecar {
     if ($tag -match '^[0-9]') { Set-ExakitManifestValue "components.mcp_server.version" $tag }
     Set-ExakitManifestValue "components.mcp_server.validated" $true
     Write-ExakitLog "OK" "MCP: the launcher's MCP server answers at $url as $user"
+    # Serving now: the install step's "mcp did not finish" record (and its
+    # failure note) is history, whichever command healed it - `exakit status`
+    # kept both after an `exakit mcp-setup` that worked. Twin of the same
+    # clear in mcp_sidecar_apply.
+    if (Get-Command Clear-ExakitSoftFailure -ErrorAction SilentlyContinue) { Clear-ExakitSoftFailure -Component "mcp" }
     return $true
 }
 
