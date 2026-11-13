@@ -895,11 +895,21 @@ function render({ model, el }) {
       : f.type === "number"
       ? h("input", { class: "guide-input guide-input-num", type: "text", inputmode: "decimal", value: st.fields[f.id], placeholder: f.placeholder || "", disabled: !!ui.busy,
           onInput: (e) => { st.fields[f.id] = e.target.value; } })
-      : h("input", { class: "guide-input", type: f.type === "password" ? "password" : "text", value: st.fields[f.id],
-          placeholder: f.placeholder || "", spellcheck: "false", autocomplete: f.type === "password" ? "new-password" : null,
-          disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = e.target.value; },
+      : h("input", { class: "guide-input", type: f.type === "password" && !st.fields[`${f.id}:show`] ? "password" : "text", value: st.fields[f.id],
+          placeholder: f.placeholder || "", spellcheck: "false", disabled: !!ui.busy, onInput: (e) => { st.fields[f.id] = e.target.value; },
           onChange: f.send_on_change && f.type !== "password" ? later : null,
-          onPaste: f.send_on_change && f.type !== "password" ? later : null });
+          onPaste: f.send_on_change && f.type !== "password" ? later : null,
+          // A secret is typed or pasted, never filled in by the browser's password manager: a saved password of some
+          // other site went to the source instead of the one meant (a connect that failed in the notebook and worked
+          // on the terminal). Browsers skip a read-only box and these marks; it becomes writable when clicked.
+          ...(f.type === "password" ? { autocomplete: "off", name: `exakit-secret-${f.id}`, "data-lpignore": "true", "data-1p-ignore": "true",
+            "data-bwignore": "true", "data-form-type": "other", readonly: true, onFocus: (e) => e.target.removeAttribute("readonly") } : {}) });
+    // The eye beside a secret shows what is in the box, so a wrong or pasted-twice value is seen before it is sent.
+    const eye = f.type === "password"
+      ? h("button", { type: "button", class: "guide-pencil", disabled: !!ui.busy,
+          title: st.fields[`${f.id}:show`] ? "Hide" : "Show what is typed", "aria-label": st.fields[`${f.id}:show`] ? "Hide the password" : "Show the password",
+          onClick: (e) => { e.preventDefault(); st.fields[`${f.id}:show`] = !st.fields[`${f.id}:show`]; draw(); } }, st.fields[`${f.id}:show`] ? "Hide" : "Show")
+      : null;
     if (f.type === "password") st.secret.add(f.id);
     // help: links under the field - "How do I get this?" to the kit's own docs, the provider's page - each in a new tab.
     const help = (f.help || []).length
@@ -907,7 +917,7 @@ function render({ model, el }) {
       : null;
     // A dropdown is a group of buttons, not one control: no <label> around it (a click on a label presses its first button).
     return h(f.type === "select" && !typing ? "div" : "label", { class: `guide-field${f.wide ? " guide-field-wide" : ""}` }, h("span", {}, f.label),
-      pencil ? h("span", { class: "guide-field-edit" }, input, pencil) : input, help);
+      pencil || eye ? h("span", { class: "guide-field-edit" }, input, pencil || eye) : input, help);
   }
 
   // What the kit printed for a row's action: open by itself when the command failed, so the reason is read without a

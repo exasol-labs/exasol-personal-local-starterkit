@@ -5,11 +5,14 @@ JVM's public trust store does not hold, so tls=verify fails with "PKIX path
 building failed" although nothing is wrong. The fix is to trust that CA - not
 to stop verifying.
 
-The certificate travels inside the JDBC URL (pgJDBC's
-SingleCertValidatingFactory takes it as text), because the database's loader
-runs the driver in a Java sandbox that denies file reads: a CA *file* would
-work for the adapter and fail for every IMPORT. Measured live on Exasol
-Personal against RDS PostgreSQL 18.
+For PostgreSQL the certificate is a file the URL names (pgJDBC's
+SingleCertValidatingFactory with "file:<path>"), at a path RELATIVE to where
+the adapter and the loader start, a copy written for each (see
+lifecycle.stage_ca_file): the loader sees the bucket at /exa/bucketfs, not
+/buckets, so an absolute path fails there. The certificate used to travel
+inside the URL as text; that made the URL some 2,000 characters long, and a
+database message that quotes the URL was cut before its reason. A source
+connected that way keeps its URL until it is connected again.
 
 That factory trusts exactly one certificate, and a vendor's download is
 often a bundle (RDS: three roots per region, over a hundred globally). The

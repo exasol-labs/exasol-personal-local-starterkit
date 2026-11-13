@@ -769,13 +769,19 @@ def source_port(connector, values):
 
 def jdbc_url(connector, values, extra=None):
     """The source's JDBC URL. extra["ca_pem"] is the one certificate chosen
-    from the `ca` input (tlsca.choose); with it, verify trusts that CA."""
+    from the `ca` input (tlsca.choose); with it, verify trusts that CA.
+    extra["ca_file"] is the same certificate staged as a file (a connector with
+    tls_ca_file): the URL then names the file instead of holding it."""
     fields = dict(values)
     if ":" in fields.get("host", ""):
         fields["host"] = "[%s]" % fields["host"]
     fields.update(extra or {})
     if connector.get("tls"):
-        if fields.get("ca_pem") and connector.get("tls_ca"):
+        if fields.get("ca_file") and connector.get("tls_ca_file"):
+            # The CA as a file beside the driver (lifecycle.stage_ca_file): the URL stays short, so a database
+            # message that quotes it still ends with the reason.
+            fields["tls"] = connector["tls_ca_file"].format(**fields)
+        elif fields.get("ca_pem") and connector.get("tls_ca"):
             if connector.get("ca_encoding") == "base64-bundle":
                 # The whole bundle, base64: ojdbc 23 reads a PEM wallet from a
                 # data: URI (wallet_location=data:;base64,...), trust-only.

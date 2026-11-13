@@ -96,6 +96,7 @@
     "disable": "sslmode=disable"
   },
   "tls_ca": "sslmode=verify-full&sslfactory=org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg={ca_pem}",
+  "tls_ca_file": "sslmode=verify-full&sslfactory=org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg=file:{ca_file}",
   "ca_probe": "postgres",
   "access": "CONNECT on the database, USAGE on the schema and SELECT on its tables",
   "vs_properties": {
