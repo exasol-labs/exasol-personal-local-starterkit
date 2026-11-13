@@ -296,8 +296,11 @@ class Screen:
 
             from exakit_nb.kit_commands import watch_progress
 
+            from .session import SESSION
+
             self._live = Progress(lambda update: self._send_progress(action, update))
-            with watch_output(self._live.feed), watch_progress(self._live.kit):
+            # the whole button holds the notebook's one connection: a card reading in the background waits its turn
+            with SESSION.lock, watch_output(self._live.feed), watch_progress(self._live.kit):
                 handler(values)
         except Exception as exc:
             error = _plain(exc)

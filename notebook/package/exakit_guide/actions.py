@@ -242,6 +242,17 @@ def run_text(text: str, session=None) -> dict[str, Any]:
     kept. A cell that holds a query (SELECT or WITH) runs it with nb.sql on the notebook's connection. Returns
     {ok, text, value}: ``text`` is what it printed and the value's display, or the error in one line
     with the line it happened on. What ran is logged like every card action; an error does not raise."""
+    from .session import SESSION as _S
+
+    import contextlib
+
+    lock = getattr(session or _S, "lock", None)
+    with lock if hasattr(lock, "__enter__") else contextlib.nullcontext():     # one request at a time on the notebook's one connection
+        return _run_text(text, session)
+
+
+def _run_text(text: str, session=None) -> dict[str, Any]:
+
     import ast
     import textwrap
     import traceback
@@ -286,6 +297,17 @@ def run_text(text: str, session=None) -> dict[str, Any]:
 def run(action_id: str, session=None, **values: Any) -> Any:
     """Run the action's code in the notebook's namespace - that very text, nothing else - and log it. Returns the
     variable the code assigns (Action.result). A secret is a dict of keyword arguments ({"ask": ...})."""
+    from .session import SESSION as _S
+
+    import contextlib
+
+    lock = getattr(session or _S, "lock", None)
+    with lock if hasattr(lock, "__enter__") else contextlib.nullcontext():     # one request at a time on the notebook's one connection
+        return _run(action_id, session, **values)
+
+
+def _run(action_id: str, session=None, **values: Any) -> Any:
+
     from .session import SESSION, quiet
 
     session = session or SESSION

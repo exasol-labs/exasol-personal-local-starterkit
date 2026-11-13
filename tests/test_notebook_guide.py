@@ -1575,6 +1575,48 @@ class SeveralTablesTest(unittest.TestCase):
             card.on_ai_all({})
 
 
+class OneConnectionTest(unittest.TestCase):
+    """The cards share the notebook's one database connection, and a database session takes one request at a time
+    (pyexasol: "Connection cannot be shared between multiple threads sending requests simultaneously"). A button's
+    work and the cards' background reads take turns, and the connection is never closed under running work."""
+
+    def test_actions_from_two_threads_take_turns_and_release_waits(self):
+        import threading
+        import time
+
+        session_mod = importlib.import_module("exakit_guide.session")
+        actions = importlib.import_module("exakit_guide.actions")
+        session = session_mod.Session()
+        inside, most, order = [0], [0], []
+
+        class Conn:
+            closed = False
+
+            def execute(self, _sql):
+                inside[0] += 1
+                most[0] = max(most[0], inside[0])
+                time.sleep(0.05)
+                inside[0] -= 1
+                if self.closed:
+                    raise RuntimeError("used after close")
+
+            def close(self):
+                order.append("closed")
+                self.closed = True
+
+        session._ns = {"nb": None, "connection": Conn()}
+        work = lambda: actions.run_text("connection.execute('SELECT 1')", session)
+        threads = [threading.Thread(target=work) for _ in range(4)] + [threading.Thread(target=session.release)]
+        for t in threads[:4]:
+            t.start()
+        time.sleep(0.01)
+        threads[4].start()
+        for t in threads:
+            t.join(timeout=5)
+        self.assertEqual(1, most[0], "never two statements at once on the one connection")
+        self.assertEqual(["closed"], order)
+
+
 class MarimoShownCodeTest(unittest.TestCase):
     def test_guided_notebooks_open_in_marimo_with_their_code_shown(self):
         """In Marimo a guided notebook shows its code: the code cells open with their code visible, the guided cell

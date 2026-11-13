@@ -38,6 +38,10 @@ class Session:
         self._listeners: list[weakref.ref] = []
         self.followed: str | None = None   # the "approved last" dataset this kernel last loaded
         self._watching = False
+        # One database connection serves every card, and a database session takes one request at a time (pyexasol:
+        # "Connection cannot be shared between multiple threads"). A button's work and the cards' background reads
+        # take turns through this lock; it is re-entrant, so an action inside an action does not wait for itself.
+        self.lock = threading.RLock()
 
     # -- the notebook's namespace ----------------------------------------------------------
     def namespace(self) -> dict[str, Any]:
@@ -70,7 +74,12 @@ class Session:
 
     def release(self) -> None:
         """Give the database connection back while nothing is running (Exasol Personal has a small number of
-        connections; an idle notebook should not hold one). The next action opens it again."""
+        connections; an idle notebook should not hold one). The next action opens it again. Waits for the work in
+        progress: a connection is never closed under a running statement."""
+        with self.lock:
+            self._release()
+
+    def _release(self) -> None:
         conn = self.namespace().pop("connection", None)
         if conn is not None:
             try:
