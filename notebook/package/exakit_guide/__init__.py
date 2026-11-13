@@ -37,16 +37,18 @@ def __getattr__(name):
 
 
 def start():
-    """The quickstart's cards in one cell: Home (the kit), then step 1 (your data and its column map). Each run starts
-    a workflow (nb.workflow, a new id); every card action after it is logged under that id (nb.workflow_log)."""
+    """The quickstart's cards in one cell: Home (the kit), then step 1 - the one AI button, your data, its column
+    map, the map of all your data, and the semantic views over it, with the way on to the next notebook at the
+    bottom. Each run starts a workflow (nb.workflow, a new id); every card action after it is logged under that id
+    (nb.workflow_log)."""
     from . import actions
     from .card import show
 
     actions.run("data.workflow")
     from .screens.home import Home
-    from .screens.understand import ChooseData, ColumnMap, DataMap
+    from .screens.understand import AiHelp, ChooseData, ColumnMap, DataMap, SemanticViews
 
-    return show(Home(), ChooseData(), ColumnMap(), DataMap(), docs="get-the-data")
+    return show(Home(), AiHelp(), ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="get-the-data")
 
 
 def load_ipython_extension(ip) -> None:

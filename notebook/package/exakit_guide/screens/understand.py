@@ -1083,10 +1083,7 @@ class ColumnMap(Screen):
                     "note": "Dashed line: overall rate. Highlighted bars are above it." if f["pct"] else ""})
         if f.get("note"):
             out.append({"t": "note", "v": f["note"]})
-        nxt = _next_notebook()
-        if nxt:
-            out.append({"t": "next", "v": f"Next: {nxt['title']}", "path": nxt["file"]})
-        return out
+        return out              # the way on to the next notebook is at the bottom of the notebook (Semantic views)
 
     # -- approving ------------------------------------------------------------------------
     def _check(self, roles: dict, slots: dict) -> None:
@@ -1485,6 +1482,11 @@ class SemanticViews(Screen):
             blocks += [{"t": "subhead", "v": "Preview"}, {"t": "pre", "v": self.preview_text}]
         if self.result_text:
             blocks += [{"t": "msg", "kind": "ok", "keep": True, "v": self.result_text}]
+        if SESSION.dataset is not None:
+            # the bottom of the quickstart: once a column map is approved, the way on to the next notebook
+            nxt = _next_notebook()
+            if nxt:
+                blocks.append({"t": "next", "v": f"Next: {nxt['title']}", "path": nxt["file"]})
         example = usable[:3] or ["MY_DATA.ORDERS", "VS_SALES.CUSTOMERS"]
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
                        "v": "\n".join([actions.code("semantic.links_tables", tables=example, ai=True),
