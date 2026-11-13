@@ -1223,6 +1223,49 @@ class SeveralTablesTest(unittest.TestCase):
         ran = self.use({"kind": ["sample", "source"], "sample": ["amazon"], "src_schema": ["__connect__"]})
         self.assertEqual(["data.sample", "data.choose"], ran)
 
+    def test_a_file_and_a_new_connection_ticked_together_are_both_done_by_one_button(self):
+        """Load a new file and New connection ticked at once: the one button loads the file and connects the source.
+        A connection that fails is named with its reason and the file is still used; alone, its reason is the error.
+        A password is used as pasted, without a blank a copy picked up around it."""
+        nb = importlib.import_module("exakit_nb")
+        self.card.forms = {"postgresql": nb.connector_inputs("postgresql")}
+        self.card.connectors, self.card.connector, self.card.sources = nb.connectors(), "postgresql", []
+        self.assertTrue(self.card._ready())
+        values = {"kind": ["file", "source"], "own": ["tbl:MY_DATA.TARGETS"], "src_schema": ["__connect__"]}
+        with mock.patch.object(self.card, "_connect", return_value="VS_LOGISTICS") as connect, \
+                mock.patch.object(self.card, "_load_options"):
+            ran = self.use({**values, "table": "COURIER_DAILY"})
+        connect.assert_called_once()
+        self.assertEqual(["data.several", "data.table", "data.keep", "data.source", "data.keep", "data.switch"], ran)
+        self.assertEqual(["MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"], [e["table"] for e in self.session.chosen])
+        self.ran.clear()
+        self.card.connector = "postgresql"
+        box = self.card._cf()                              # the connections box starts afresh after a connect
+        self.assertNotEqual("src_schema", box)
+        values = {"kind": ["file", "source"], "own": ["tbl:MY_DATA.TARGETS"], box: ["__connect__"]}
+        with mock.patch.object(self.card, "_connect", side_effect=RuntimeError("the source refused the password\nmore")):
+            ran = self.use(values)
+            self.assertEqual(["data.table", "data.choose"], ran)                       # the file's table is used
+            self.assertEqual(["the new connection (the source refused the password)"], self.card.failed)
+            with self.assertRaisesRegex(RuntimeError, "refused the password"):         # alone: its reason is the error
+                self.use({"kind": ["source"], box: ["__connect__"]})
+        f = self.card._fid
+        typed = {"src_name": "sales", f("postgresql", "host"): "db.example.com", f("postgresql", "database"): "shop",
+                 f("postgresql", "user"): "reader", f("postgresql", "how"): "manual", f("postgresql", "password"): "  s3cret \t"}
+        self.assertEqual("s3cret", self.card._source_inputs(typed)[3])
+
+    def test_the_card_always_has_a_button(self):
+        """Before a data source is chosen for a new connection the plain button is there (the rest ticked is usable);
+        once it is chosen, Connect does everything ticked."""
+        self.card.__dict__.update(loading=False, own=[], source_tables={})
+        self.card.samples = [{"id": "amazon", "label": "Amazon sales", "loaded": True}]
+        actions_of = lambda: next(b for b in self.card.build() if b["t"] == "choice")["actions"]
+        self.assertEqual([("use", None)], [(a["id"], a.get("show_if")) for a in actions_of()])
+        nb = importlib.import_module("exakit_nb")
+        self.card.forms, self.card.connectors, self.card.connector = {"postgresql": nb.connector_inputs("postgresql")}, nb.connectors(), "postgresql"
+        self.assertEqual(["test_source", "use", "use"], [a["id"] for a in actions_of()])
+        self.assertEqual("Connect and use this data", actions_of()[1]["label"])
+
     def test_the_card_offers_ticks_and_one_use_button(self):
         self.card.__dict__.update(loading=False, own=[{"value": "tbl:MY_DATA.TARGETS", "label": "MY_DATA.TARGETS"}],
                                   source_tables={"VS_LOGISTICS": [{"value": "COURIER_DAILY", "label": "COURIER_DAILY"}]})

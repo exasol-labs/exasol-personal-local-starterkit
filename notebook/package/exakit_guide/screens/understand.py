@@ -278,9 +278,13 @@ class ChooseData(Screen):
         use = {"id": "use", "label": "Use this data", "primary": True, "busy": "Loading…"}
         items = []
         if self._ready():
+            # One button does everything ticked: it connects the new source, and loads the datasets, tables and
+            # file ticked beside it.
             items += [{"id": "test_source", "label": "Test connection", "busy": "Testing…", "show_if": connecting, "no_secret": True},
-                      {**use, "label": "Connect and use this data", "busy": "Connecting…", "show_if": connecting}]
-        items.append({**use, "show_if": plain})
+                      {**use, "label": "Connect and use this data", "busy": "Connecting…", "show_if": connecting},
+                      {**use, "show_if": plain}]
+        else:
+            items.append(use)      # no data source chosen for a new connection yet: the rest ticked is still usable
         blocks = [head, {"t": "choice", "id": "kind", "multi": True, "value": ["sample"] if samples else ["file"],
                          "options": options, "below": True,
                          "actions": items}]     # the buttons sit inside the panel under the ticked options
@@ -329,7 +333,14 @@ class ChooseData(Screen):
                 if schema == "__connect__":
                     if not self._ready() and (len(kinds) > 1 or len(_listed(v.get(self._cf()))) > 1):
                         continue              # a new connection with no data source chosen: the rest is loaded without it
-                    schema = self._connect(v)
+                    try:
+                        schema = self._connect(v)
+                    except Exception as exc:
+                        if len(kinds) == 1 and len(_listed(v.get(self._cf()))) == 1:
+                            raise                 # the connection is all that was asked for: its reason is the answer
+                        # other things are ticked too: they are loaded, and the connection's reason is said with them
+                        self.failed.append(f"the new connection ({str(exc).splitlines()[0] if str(exc) else type(exc).__name__})")
+                        continue
                     # the next new connection starts from an empty form, and the list of connections from its top
                     self.conn_n, self.connector, self.preset, self.src_name = self.conn_n + 1, None, None, ""
                     connected = True
@@ -684,7 +695,8 @@ class ChooseData(Screen):
                 if spec["name"] in required and not self.typed_storage and not needed_only:
                     missing.append(spec["label"].split(" - ")[0])
             elif spec["kind"] == "secret":
-                password = str(raw or "") or password
+                # as pasted, without the blank a copy picked up around it (never part of a password a person means)
+                password = str(raw or "").strip() or password
             elif spec["kind"] == "secret-file":
                 if value:
                     settings["password_file"] = value
