@@ -5,6 +5,7 @@ DS2.5, DS5.4)."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 import sys
 import tempfile
@@ -164,6 +165,35 @@ class FlowTest(unittest.TestCase):
         self.assertIn("DIMENSION channel", definition)
         self.assertNotIn("body", definition.lower().split("replace facts")[0])            # text is no dimension
         self.assertTrue((self.home / "semantic" / "support.json").is_file())
+
+    def test_a_changed_column_map_changes_the_model_in_place_and_a_rebuild_keeps_verified_questions(self):
+        """The second approval changes the published model with a few statements - no drop, so the product keeps what
+        people added to it - and a rebuild (forced by a key change) puts the kept verified questions back."""
+        doc = self.describe()["doc"]
+        self.approve(doc)
+        first = list(self.db.sv.scripts)
+        self.assertIn("CREATE_MODEL", first)
+        kept_file = self.home / "semantic" / "support.json"
+        kept = json.loads(kept_file.read_text(encoding="utf-8"))
+        kept["verified"] = [{"object": "TICKETS", "name": "Tickets by channel", "question": "How many tickets per channel?",
+                             "request": {"model": "support", "object": "TICKETS", "metrics": ["tickets_count"],
+                                         "dimensions": ["channel"]}}]
+        kept_file.write_text(json.dumps(kept), encoding="utf-8")
+        doc = self.describe(force=True)["doc"]
+        doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], note="Where the ticket came in")
+        self.db.sv.scripts.clear()
+        self.approve(doc)
+        self.assertEqual(["APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL"], self.db.sv.scripts,
+                         "only the changed view is replaced, then one publish")
+        self.assertEqual("Tickets by channel", json.loads(kept_file.read_text(encoding="utf-8"))["verified"][0]["name"],
+                         "what people added stays beside the model")
+        doc = self.describe(force=True)["doc"]
+        doc["columns"]["TICKET_ID"] = dict(doc["columns"]["TICKET_ID"], role="identifier")
+        doc["slots"]["key"] = None
+        self.db.sv.scripts.clear()
+        self.approve(doc)
+        self.assertIn("DROP_MODEL_IF_EXISTS", self.db.sv.scripts, "a key change needs a rebuild")
+        self.assertEqual("ADD_VERIFIED_QUERY", self.db.sv.scripts[-1], "and the verified question is put back")
 
     def test_describe_on_an_unchanged_approved_table_returns_it_without_profiling(self):
         self.approve(self.describe()["doc"])

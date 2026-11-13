@@ -284,7 +284,27 @@ def semantic_context(conn, table: str) -> dict[str, Any] | None:
         views = [v for v in views if MARK in str(v.get("DESCRIPTION") or "")]
         if not views:
             return None
-        # the model with the most to say first: a multi-source model has the joined tables' dimensions too
+        # the view with the most to say first: a multi-source model has the joined tables' dimensions too. One read of
+        # the product's agent surface (role-filtered) for every candidate model; the catalog tables only without it.
+        models = sorted({str(v["MODEL_NAME"]) for v in views})
+        try:
+            every = rows("SELECT MODEL_NAME, OBJECT_NAME, FIELD_KIND, FIELD_NAME, DISPLAY_NAME, DESCRIPTION "
+                         "FROM SEMANTIC_AGENT.FIELDS_FOR_AGENT WHERE MODEL_NAME IN (" + ", ".join(lit(m) for m in models) + ")")
+        except Exception:
+            every = None
+        if every is not None:
+            by_view: dict[tuple[str, str], list[dict[str, Any]]] = {}
+            for r in every:
+                by_view.setdefault((str(r["MODEL_NAME"]), str(r["OBJECT_NAME"]).upper()), []).append(r)
+            view = max(views, key=lambda v: len(by_view.get((str(v["MODEL_NAME"]), str(v["OBJECT_NAME"]).upper()), [])))
+            mine = by_view.get((str(view["MODEL_NAME"]), str(view["OBJECT_NAME"]).upper()), [])
+            item = lambda r: {"name": str(r["FIELD_NAME"]), "business_name": str(r.get("DISPLAY_NAME") or ""),
+                              "about": str(r.get("DESCRIPTION") or "")}
+            found = {"model": str(view["MODEL_NAME"]), "object": str(view["OBJECT_NAME"]),
+                     "view": f"{view['PUBLISHED_SCHEMA']}.{view['OBJECT_NAME']}",
+                     "dimensions": [item(r) for r in mine if str(r["FIELD_KIND"]).upper() == "DIMENSION"],
+                     "metrics": [item(r) for r in mine if str(r["FIELD_KIND"]).upper() == "METRIC"]}
+            return found if found["metrics"] else None
         best, fields = None, None
         for view in views:
             view_name = f"{view['PUBLISHED_SCHEMA']}.{view['OBJECT_NAME']}"
@@ -303,8 +323,8 @@ def semantic_context(conn, table: str) -> dict[str, Any] | None:
         return None
     pick = lambda items, key: [{"name": str(i[key]), "business_name": str(i.get("DISPLAY_NAME") or ""),
                                 "about": str(i.get("DESCRIPTION") or "")} for i in items if str(i[key]).lower() in fields]
-    found = {"model": str(view["MODEL_NAME"]), "view": view_name, "dimensions": pick(dims, "DIMENSION_NAME"),
-             "metrics": pick(metrics, "METRIC_NAME")}
+    found = {"model": str(view["MODEL_NAME"]), "object": str(view["OBJECT_NAME"]), "view": view_name,
+             "dimensions": pick(dims, "DIMENSION_NAME"), "metrics": pick(metrics, "METRIC_NAME")}
     return found if found["metrics"] else None
 
 

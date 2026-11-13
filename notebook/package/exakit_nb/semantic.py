@@ -35,7 +35,8 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "find_links", "model_notes", "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql"]
+__all__ = ["SemanticModel", "compile_request", "find_links", "fuse", "fusion", "model_fields", "model_notes",
+           "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
 
@@ -221,6 +222,64 @@ def refresh_semantic(conn, name: str) -> dict[str, Any]:
     for line in found.get("warnings") or []:
         print(f"Warning: {line}")
     return found
+
+
+def model_fields(conn, model: str):
+    """Every metric and dimension of a published model, in one read: object, kind, name, business name, what it is."""
+    rows = _service().model_fields(conn, model)
+    try:
+        import pandas as pd
+
+        return pd.DataFrame(rows)
+    except ImportError:
+        return rows
+
+
+def compile_request(conn, request: dict[str, Any], *, show: bool = True) -> dict[str, Any]:
+    """Compile a structured request - {"model", "object", "metrics": [...], "dimensions": [...], "filters": [{"field",
+    "op", "value"}], "order_by": [{"field", "direction"}], "limit"} - into the SQL the semantic layer stands behind
+    (COMPILE_REQUEST_JSON). Returns {status, sql, plan, clarification, request_id, error}; nothing of the data is read.
+    A question the model finds ambiguous comes back with ``clarification``: the choices to pick from."""
+    found = _service().compile_request(conn, request)
+    if show:
+        print(found["sql"] if found["status"] == "ok" else f"Refused: {found['error']}")
+    return found
+
+
+def verify_question(conn, model: str, object_name: str, name: str, question: str, request: dict[str, Any], *,
+                    onboarding: bool = False) -> dict[str, Any]:
+    """Keep an approved question in the model as a verified query: the next time anyone asks it - here, or an AI
+    client over MCP - the reviewed request is used, with no new draft. Compiled first; kept beside the model too."""
+    from .workflow import log_event
+
+    found = _service().verify_question(conn, model, object_name, name, question, request, onboarding=onboarding)
+    log_event("semantic.verified", model=model, name=name, question=question)
+    print(f"Kept as a verified question of {model}: {name}")
+    return found
+
+
+def verified_questions(conn, model: str):
+    """The model's verified questions: name, question, request and the SQL it compiles to."""
+    return _service().verified_questions(conn, model)
+
+
+def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True) -> dict[str, Any]:
+    """The same thing in several sources, declared once (APPLY_FUSION_DECLARATION): ``dry_run=True`` (the default)
+    checks it against the data and changes nothing; ``dry_run=False`` applies it and keeps the exported document
+    beside the model, so a rebuild puts it back. Build the document with nb.fusion_document(...)."""
+    from .workflow import log_event
+
+    found = _service().fuse(conn, model, declaration, dry_run=dry_run)
+    if not dry_run and found["status"] != "error":
+        log_event("semantic.fusion", model=model, entities=sorted(declaration.get("entities") or {}))
+    print(("Checked (nothing changed): " if dry_run else "Applied: ") + (found["status"] or "")
+          + (f" - {found['message']}" if found["message"] else ""))
+    return found
+
+
+def fusion(conn, model: str) -> dict[str, Any] | None:
+    """The model's whole fusion layer, exported as one document (None when it has none)."""
+    return _service().fusion(conn, model)
 
 
 def semantic_sql(conn, query: str):

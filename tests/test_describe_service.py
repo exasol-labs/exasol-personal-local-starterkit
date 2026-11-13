@@ -343,5 +343,74 @@ class Service(unittest.TestCase):
         self.assertIn("approve <dataset id", out)
 
 
+class SemanticSurfaces(unittest.TestCase):
+    """Structured requests, verified questions and fusion, through the product's own scripts (a stand-in answers)."""
+
+    class Conn:
+        def __init__(self, answers):
+            self.answers, self.sent = answers, []
+
+        def execute(self, sql):
+            self.sent.append(sql)
+            for marker, rows in self.answers.items():
+                if marker in sql:
+                    return FakeStatement(rows(sql) if callable(rows) else rows)
+            return FakeStatement([])
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        env = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.temp.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_a_request_compiles_to_sql_or_comes_back_with_the_products_reason(self):
+        ok = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT\n 1", "PLAN_JSON": '{"joins": []}',
+                                                  "CLARIFICATION_JSON": None, "AGENT_REQUEST_ID": 7}]})
+        found = svc.compile_request(ok, {"model": "sales", "object": "ORDERS", "metrics": ["total_amount"]})
+        self.assertEqual(("ok", "SELECT 1", {"joins": []}, 7), (found["status"], found["sql"], found["plan"], found["request_id"]))
+        self.assertIn('"client": "exakit-notebook"', ok.sent[0])
+        bad = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "ERROR", "ERROR_CODE": "SEMANTIC_REQUEST_020",
+                                                   "ERROR_MESSAGE": "unknown metric x", "CLARIFICATION_JSON": '{"choices": ["a"]}'}]})
+        found = svc.compile_request(bad, {"model": "sales", "metrics": ["x"]})
+        self.assertEqual(("error", {"choices": ["a"]}), (found["status"], found["clarification"]))
+        self.assertIn("SEMANTIC_REQUEST_020", found["error"])
+        with self.assertRaises(svc.Refused):
+            svc.compile_request(ok, {"model": "sales"})
+
+    def test_a_verified_question_is_compiled_first_and_kept_beside_the_model(self):
+        from descriptor import publish
+        publish.keep({"model": "sales"}, {"tables": []})
+        conn = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT 1"}]})
+        svc.verify_question(conn, "sales", "orders", "Revenue by state", "What is revenue per state?",
+                            {"metrics": ["total_amount"], "dimensions": ["state"]})
+        self.assertTrue(conn.sent[-1].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.ADD_VERIFIED_QUERY('sales', 'ORDERS', 'Revenue by state'"))
+        self.assertEqual("Revenue by state", publish.kept("sales")["verified"][0]["name"])
+        with self.assertRaises(svc.Refused):                         # a name is kept once
+            svc.verify_question(conn, "sales", "orders", "Revenue by state", "again?", {"metrics": ["total_amount"]})
+        refused = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "ERROR", "ERROR_MESSAGE": "no"}]})
+        with self.assertRaises(svc.Refused):
+            svc.verify_question(refused, "sales", "orders", "Other", "q?", {"metrics": ["x"]})
+        self.assertFalse(any("ADD_VERIFIED_QUERY" in s for s in refused.sent), "a refused request is never stored")
+
+    def test_fusion_is_dry_run_first_and_an_applied_document_is_kept(self):
+        from descriptor import publish
+        publish.keep({"model": "crm"}, {"tables": []})
+        doc = {"entities": {"customer": {"representations": [{"name": "mongo", "source_schema": "VS_MONGO",
+                                                               "source_object": "CUSTOMERS", "priority": 20}]}}}
+        conn = self.Conn({"APPLY_FUSION_DECLARATION": [{"STATUS": "DRY_RUN", "APPLIED_COUNT": 0}],
+                          "EXPORT_FUSION_DECLARATION": [{"DECLARATION_JSON": json.dumps(doc)}]})
+        found = svc.fuse(conn, "crm", doc)
+        self.assertEqual(("dry_run", True), (found["status"], found["dry_run"]))
+        self.assertEqual("ALTER SESSION SET QUERY_TIMEOUT=60", conn.sent[0])
+        self.assertTrue(conn.sent[1].endswith(", TRUE)"))
+        self.assertNotIn("fusion", publish.kept("crm"))
+        conn.answers["APPLY_FUSION_DECLARATION"] = [{"STATUS": "OK", "APPLIED_COUNT": 3}]
+        found = svc.fuse(conn, "crm", doc, dry_run=False)
+        self.assertEqual(doc, publish.kept("crm")["fusion"])
+        conn.answers["APPLY_FUSION_DECLARATION"] = [{"STATUS": "ERROR", "MESSAGE": "SEMANTIC_FUSION_011 unknown key"}]
+        self.assertEqual("error", svc.fuse(conn, "crm", doc, dry_run=False)["status"])
+
+
 if __name__ == "__main__":
     unittest.main()

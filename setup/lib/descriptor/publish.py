@@ -153,11 +153,19 @@ def kept(model: str, home: Path | None = None) -> dict[str, Any] | None:
         return None
 
 
-def keep(spec: dict[str, Any], inputs: dict[str, Any], home: Path | None = None) -> Path:
+def keep(spec: dict[str, Any], inputs: dict[str, Any], home: Path | None = None,
+         governance: dict[str, Any] | None = None) -> Path:
+    """Keep what a model was built from and published as, beside it: the spec (to change it in place next time),
+    the inputs (to rebuild it), and what people added to it - verified questions, instructions, the fusion document -
+    so a rebuild can put them back."""
     path = spec_path(spec["model"], home)
     path.parent.mkdir(parents=True, exist_ok=True)
+    if governance is None:
+        before = kept(spec["model"], home) or {}
+        governance = {k: before[k] for k in ("verified", "instructions", "fusion") if before.get(k)}
     temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps({"spec": spec, "inputs": inputs}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    temp.write_text(json.dumps({"spec": spec, "inputs": inputs, **{k: v for k, v in governance.items() if v}},
+                               indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     os.replace(temp, path)
     return path
 
@@ -195,9 +203,12 @@ def publish_model(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any]
                   progress: Callable[[str], None] | None = None) -> dict[str, Any]:
     """Install Semantic Views when needed, rebuild the model, keep its spec. The apply() result."""
     ensure_installed(rows)
-    previous = (kept(spec["model"], home) or {}).get("spec")
-    result = sm.apply(execute, rows, spec, reader=reader, previous=previous, extra=extra, progress=progress)
-    keep(spec, inputs, home)
+    before = kept(spec["model"], home) or {}
+    previous = before.get("spec")
+    governance = {k: before[k] for k in ("verified", "instructions", "fusion") if before.get(k)}
+    result = sm.apply(execute, rows, spec, reader=reader, previous=previous, extra=extra, progress=progress,
+                      kept=governance, previous_extra=(before.get("inputs") or {}).get("extra"))
+    keep(spec, inputs, home, governance)
     return result
 
 

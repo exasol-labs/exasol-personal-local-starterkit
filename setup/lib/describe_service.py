@@ -807,6 +807,147 @@ def list_models(conn) -> list[dict[str, Any]]:
     return found
 
 
+# --- the semantic layer's own surfaces: fields, structured requests, verified questions, fusion ----------------------
+
+def _script_row(conn, sql: str) -> dict[str, Any]:
+    """The one row an admin script answers with, its keys upper-cased; a refusal arrives as STATUS = 'ERROR'."""
+    found = _rows(conn, sql)
+    return {str(k).upper(): v for k, v in (found[0] if found else {}).items()}
+
+
+def model_fields(conn, model: str) -> list[dict[str, Any]]:
+    """Every field of a published model in one read (SEMANTIC_AGENT.FIELDS_FOR_AGENT, filtered by role by the
+    product): {object, kind, name, display, type, about, certified}."""
+    from descriptor import semantic_model as sm
+
+    found = _rows(conn, "SELECT OBJECT_NAME, FIELD_KIND, FIELD_NAME, DISPLAY_NAME, DATA_TYPE, DESCRIPTION, IS_CERTIFIED "
+                        f"FROM SEMANTIC_AGENT.FIELDS_FOR_AGENT WHERE UPPER(MODEL_NAME) = UPPER({sm.literal(model)}) "
+                        "ORDER BY OBJECT_NAME, FIELD_KIND, FIELD_NAME")
+    return [{"object": str(r["OBJECT_NAME"]), "kind": str(r["FIELD_KIND"]).upper(), "name": str(r["FIELD_NAME"]),
+             "display": str(r.get("DISPLAY_NAME") or ""), "type": str(r.get("DATA_TYPE") or ""),
+             "about": str(r.get("DESCRIPTION") or ""), "certified": bool(r.get("IS_CERTIFIED"))} for r in found]
+
+
+def compile_request(conn, request: dict[str, Any]) -> dict[str, Any]:
+    """A structured request ({model, object, metrics, dimensions, filters, having, order_by, limit}) compiled by the
+    semantic layer (SEMANTIC_ADMIN.COMPILE_REQUEST_JSON) into the SQL to run: {status, sql, plan, clarification,
+    request_id, error}. Nothing of the data is read; a refusal comes back with the product's code and reason."""
+    from descriptor import semantic_model as sm
+
+    if not isinstance(request, dict) or not request.get("model") or not request.get("metrics") and not request.get("dimensions"):
+        raise Refused("A request names its model and at least one metric or dimension.")
+    body = dict(request)
+    body.setdefault("client", "exakit-notebook")
+    row = _script_row(conn, "EXECUTE SCRIPT SEMANTIC_ADMIN.COMPILE_REQUEST_JSON("
+                            + sm.literal(json.dumps(body, ensure_ascii=False, sort_keys=True)) + ")")
+
+    def parsed(key: str) -> Any:
+        try:
+            return json.loads(row[key]) if row.get(key) else None
+        except (TypeError, ValueError):
+            return row.get(key)
+
+    ok = str(row.get("STATUS") or "").upper() == "OK" and row.get("GENERATED_SQL")
+    return {"status": "ok" if ok else "error", "sql": " ".join(str(row.get("GENERATED_SQL") or "").split()),
+            "plan": parsed("PLAN_JSON"), "clarification": parsed("CLARIFICATION_JSON"),
+            "request_id": row.get("AGENT_REQUEST_ID"), "request": body,
+            "error": None if ok else f"{row.get('ERROR_CODE') or 'refused'}: {row.get('ERROR_MESSAGE') or row.get('STATUS')}"}
+
+
+def verify_question(conn, model: str, object_name: str, name: str, question: str, request: dict[str, Any], *,
+                    shape: str | None = None, onboarding: bool = False) -> dict[str, Any]:
+    """Keep a question and its approved request as a verified query of the model (SEMANTIC_ADMIN.ADD_VERIFIED_QUERY):
+    agents over MCP and Ask prefer it to a new draft. The request is compiled first - one the model refuses is never
+    stored - and it is kept beside the model too, so a rebuild puts it back. Names are unique per model."""
+    from descriptor import semantic_model as sm
+
+    name = " ".join(str(name).split())[:120]
+    question = " ".join(str(question).split())[:500]
+    if not name or not question:
+        raise Refused("A verified question needs a name and the question in words.")
+    request = dict(request, model=sm.model_name(model), object=object_name.upper())
+    compiled = compile_request(conn, request)
+    if compiled["status"] != "ok":
+        raise Refused(f"The model refused the request, so it is not kept: {compiled['error']}")
+    entry = {"object": object_name.upper(), "name": name, "question": question,
+             "request": {k: v for k, v in request.items() if k != "client"}, "shape": shape, "onboarding": bool(onboarding)}
+    kept = publishing.kept(sm.model_name(model))
+    if any(q["name"] == name for q in (kept or {}).get("verified") or []):
+        raise Refused(f"A verified question named '{name}' is kept already; give this one another name.")
+    conn.execute(sm.governance(sm.model_name(model), {"verified": [entry]})[0])
+    if kept:
+        kept["verified"] = list(kept.get("verified") or []) + [entry]
+        publishing.keep(kept["spec"], kept["inputs"], governance={k: kept[k] for k in ("verified", "instructions", "fusion") if kept.get(k)})
+    return {"verified": entry, "sql": compiled["sql"]}
+
+
+def verified_questions(conn, model: str) -> list[dict[str, Any]]:
+    """The model's verified questions: {name, question, request, sql, object}. From the product's catalog view, else
+    (Semantic Views missing or not readable) from the copy kept beside the model."""
+    from descriptor import semantic_model as sm
+
+    try:
+        found = _rows(conn, "SELECT QUERY_NAME, NATURAL_LANGUAGE_TEXT, REQUEST_JSON, GENERATED_SQL "
+                            "FROM SEMANTIC_AGENT.VERIFIED_QUERIES_FOR_AGENT "
+                            f"WHERE UPPER(MODEL_NAME) = UPPER({sm.literal(model)}) ORDER BY QUERY_NAME")
+    except Exception:
+        found = None
+    if found is None:
+        return [dict(q, sql=None) for q in (publishing.kept(sm.model_name(model)) or {}).get("verified") or []]
+    out = []
+    for r in found:
+        try:
+            request = json.loads(r.get("REQUEST_JSON") or "{}")
+        except ValueError:
+            request = {}
+        out.append({"name": str(r["QUERY_NAME"]), "question": str(r.get("NATURAL_LANGUAGE_TEXT") or ""),
+                    "request": request, "object": str(request.get("object") or ""),
+                    "sql": " ".join(str(r.get("GENERATED_SQL") or "").split()) or None})
+    return out
+
+
+def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True) -> dict[str, Any]:
+    """Apply a fusion document to a model (SEMANTIC_ADMIN.APPLY_FUSION_DECLARATION): the same thing kept in several
+    sources - its representations, which side wins (authority, PREFER / FALLBACK) and how values agree (COALESCE,
+    RECONCILE). ``dry_run`` (the default) validates it against the data and changes nothing. Applied, the model's
+    whole fusion layer is exported and kept beside it, so a rebuild puts it back. {status, applied, message, document}."""
+    from descriptor import semantic_model as sm
+
+    if not isinstance(declaration, dict) or not isinstance(declaration.get("entities"), dict):
+        raise Refused('A fusion document is {"entities": {<entity>: {"representations": [...], ...}}}.')
+    name = sm.model_name(model)
+    conn.execute("ALTER SESSION SET QUERY_TIMEOUT=60")      # the product's key probes need a bound (SEMANTIC_MODEL_041)
+    row = _script_row(conn, sm._script("APPLY_FUSION_DECLARATION", name, json.dumps(declaration, ensure_ascii=False), bool(dry_run)))
+    status = str(row.get("STATUS") or "").upper()
+    result = {"status": status.lower() or "unknown", "dry_run": bool(dry_run),
+              "applied": row.get("APPLIED_COUNT"), "message": " ".join(str(row.get("MESSAGE") or row.get("ERROR_MESSAGE") or "").split()),
+              "document": None}
+    if status == "ERROR":
+        return result
+    if not dry_run:
+        exported = fusion(conn, name)
+        result["document"] = exported
+        kept = publishing.kept(name)
+        if kept and exported:
+            kept["fusion"] = exported
+            publishing.keep(kept["spec"], kept["inputs"], governance={k: kept[k] for k in ("verified", "instructions", "fusion") if kept.get(k)})
+    return result
+
+
+def fusion(conn, model: str) -> dict[str, Any] | None:
+    """The model's whole fusion layer as one document (SEMANTIC_ADMIN.EXPORT_FUSION_DECLARATION): re-applying it
+    changes nothing. None when the model has none."""
+    from descriptor import semantic_model as sm
+
+    row = _script_row(conn, sm._script("EXPORT_FUSION_DECLARATION", sm.model_name(model), None))
+    text = next((v for k, v in row.items() if ("DECLARATION" in k or "DOCUMENT" in k or k == "JSON") and v), None)
+    try:
+        found = json.loads(text) if text else None
+    except ValueError:
+        return None
+    return found if isinstance(found, dict) and found.get("entities") else None
+
+
 def with_notes(doc: dict[str, Any], notes: dict[str, str] | None) -> dict[str, Any]:
     for column, note in (notes or {}).items():
         doc["columns"][column] = dict(doc["columns"][column], note=note)

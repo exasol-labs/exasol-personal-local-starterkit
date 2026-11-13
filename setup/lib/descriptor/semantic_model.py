@@ -390,6 +390,89 @@ def statements(spec: dict[str, Any]) -> list[str]:
     return found
 
 
+def _entity_shape(e: dict[str, Any]) -> tuple:
+    return (e["schema"], e["table"], e["alias"], tuple(e["key"]), bool(e.get("virtual")))
+
+
+def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] | None:
+    """The statements that turn the published ``previous`` spec into ``spec`` in place - new tables, new unique keys,
+    new links, new or changed views - then one publish; [] when nothing changed. None when only a rebuild can do it: a
+    table, key, link or view taken away, an entity moved to another source, or another model name or description.
+
+    In-place is the product's own path for a published model (every published mutator validates before it returns
+    and restores the catalog when it fails), and it keeps what a rebuild loses: verified queries, feedback, the query
+    log and the model's history. A rebuild drops all of that with the model."""
+    if not previous or previous.get("model") != spec["model"] or previous.get("description") != spec["description"] \
+            or previous.get("published_schema") != spec["published_schema"]:
+        return None
+    model = spec["model"]
+    before = {e["name"]: e for e in previous.get("entities") or []}
+    after = {e["name"]: e for e in spec["entities"]}
+    if any(name not in after or _entity_shape(before[name]) != _entity_shape(after[name]) for name in before):
+        return None
+    old_links = {r["name"]: r for r in previous.get("relationships") or []}
+    new_links = {r["name"]: r for r in spec["relationships"]}
+    if any(name not in new_links or {k: v for k, v in old_links[name].items() if k != "evidence"}
+           != {k: v for k, v in new_links[name].items() if k != "evidence"} for name in old_links):
+        return None
+    old_objects = {o["name"]: o for o in previous.get("objects") or []}
+    new_objects = {o["name"]: o for o in spec["objects"]}
+    if any(name not in new_objects or old_objects[name]["root"] != new_objects[name]["root"] for name in old_objects):
+        return None
+    found: list[str] = []
+    for name, e in after.items():
+        if name not in before:
+            found.append(_script("ADD_ENTITY", model, e["name"], e["schema"], e["table"], e["alias"],
+                                 ", ".join(column_sql(e["alias"], k) for k in e["key"]) or None, e["grain"], e["description"]))
+            if e["key"]:
+                found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], f"{e['name']}_pk", "PRIMARY",
+                                     f"Key of {e['schema']}.{e['table']}", "NATIVE",
+                                     json.dumps([{"column_name": k, "ordinal_position": i} for i, k in enumerate(e["key"], 1)])))
+        had = set(before[name].get("unique") or []) if name in before else set()
+        for column in e.get("unique") or []:
+            if column not in had:
+                found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk"),
+                                     "UNIQUE", f"{column} is unique in {e['schema']}.{e['table']}: a link ends on it", "NATIVE",
+                                     json.dumps([{"column_name": column, "ordinal_position": 1}])))
+        if name in before and set(before[name].get("unique") or []) - set(e.get("unique") or []):
+            return None
+    for name, r in new_links.items():
+        if name in old_links:
+            continue
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], "MANY_TO_ONE", "LEFT", None))
+        found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
+        if r.get("evidence"):
+            found.append(_script("ADD_CUSTOM_EXTENSION", model, "RELATIONSHIP", r["name"], "exakit",
+                                 json.dumps(r["evidence"], ensure_ascii=False, default=str), "EXAKIT", "link_evidence"))
+    for name, obj in new_objects.items():
+        if name not in old_objects:
+            found.append(_script("ADD_SEMANTIC_OBJECT", model, obj["name"], obj["root"], obj["description"]))
+            found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
+        elif definition(previous, old_objects[name]) != definition(spec, obj):
+            found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
+    if found:
+        found.append(_script("PUBLISH_MODEL", model))
+    return found
+
+
+def governance(model: str, kept: dict[str, Any] | None) -> list[str]:
+    """What a person added to a model that a rebuild would lose, as the statements that put it back: the fusion
+    document (APPLY_FUSION_DECLARATION), the verified questions (ADD_VERIFIED_QUERY) and the agent instructions
+    (ADD_AGENT_INSTRUCTION) the kit keeps beside the model."""
+    found = []
+    for q in (kept or {}).get("verified") or []:
+        found.append(_script("ADD_VERIFIED_QUERY", model, q["object"], q["name"], q["question"],
+                             json.dumps(q["request"], ensure_ascii=False, sort_keys=True), q.get("shape"),
+                             bool(q.get("onboarding"))))
+    for i in (kept or {}).get("instructions") or []:
+        found.append(_script("ADD_AGENT_INSTRUCTION", model, i.get("scope_type") or "MODEL", i.get("scope_name"),
+                             i.get("kind") or "GENERAL", i["text"], None, int(i.get("priority") or 100)))
+    if (kept or {}).get("fusion"):
+        found.insert(0, "ALTER SESSION SET QUERY_TIMEOUT=60")
+        found.insert(1, _script("APPLY_FUSION_DECLARATION", model, json.dumps(kept["fusion"], ensure_ascii=False), False))
+    return found
+
+
 # --- the database ---------------------------------------------------------------------------------------------------------
 
 Run = Callable[[str], list[dict[str, Any]]]
@@ -431,36 +514,60 @@ def models(rows: Run) -> list[dict[str, Any]]:
 
 def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, reader: str | None = None,
           previous: dict[str, Any] | None = None, extra: list[tuple[str, str]] | None = None,
-          progress: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Rebuild the model in the database and publish it. A model of that name the kit did not build is refused
-    (ModelRefused). A statement that fails drops the half-built model and, when ``previous`` (the spec that was
-    published before) is given, puts that one back; the error is raised. ``extra`` is [(view, Semantic SQL)] tried
-    one at a time after the build (a refused one is skipped and named in the result's warnings: the product rolls it
-    back). The read-only user, when given, gets SEMANTIC_USER and SELECT on the published schema."""
+          progress: Callable[[str], None] | None = None, kept: dict[str, Any] | None = None,
+          previous_extra: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+    """Publish the model. A model of that name the kit did not build is refused (ModelRefused).
+
+    When the model is in the database and ``previous`` (the spec published before) differs only by additions and
+    changed views, the change is made in place (changes()): a few statements, and verified questions, feedback and the
+    query log stay. Otherwise - or when an in-place step is refused - the model is rebuilt: dropped and created again,
+    then what ``kept`` holds (verified questions, instructions: governance()) is put back. A rebuild that fails drops
+    the half-built model and puts ``previous`` back; the error is raised. ``extra`` is [(view, Semantic SQL)] tried
+    one at a time after the build (a refused one is skipped and named in the warnings: the product rolls it back).
+    The read-only user, when given, gets SEMANTIC_USER and SELECT on the published schema."""
     say = progress or (lambda _line: None)
     model = spec["model"]
     found = existing(rows, model)
     if found and not found["kit"]:
         raise ModelRefused(f"A semantic model named {found['name']} already exists and the kit did not build it; it is "
                            "left alone. Choose another name (name=...).")
-    if found:
-        say(f"Replacing semantic model {model}")
-        execute(_script("DROP_MODEL_IF_EXISTS", model))
-    sent = statements(spec)
-    try:
-        for index, sql in enumerate(sent, 1):
-            say(f"Semantic model {model}: step {index} of {len(sent)}")
-            execute(sql)
-    except Exception:
-        try:
-            execute(_script("DROP_MODEL_IF_EXISTS", model))
-            if previous:
-                for sql in statements(previous):
-                    execute(sql)
-        except Exception:
-            pass
-        raise
     warnings: list[str] = []
+    mode, sent = "rebuilt", []
+    step = changes(previous, spec) if found else None
+    if step is not None:
+        try:
+            for index, sql in enumerate(step, 1):
+                say(f"Semantic model {model}: change {index} of {len(step)}")
+                execute(sql)
+            mode, sent = ("unchanged" if not step else "changed in place"), step
+        except Exception as err:
+            warnings.append(f"changing the model in place was refused ({' '.join(str(err).split())[:200]}); it was rebuilt")
+            step = None
+    if step is None:
+        if found:
+            say(f"Replacing semantic model {model}")
+            execute(_script("DROP_MODEL_IF_EXISTS", model))
+        sent = statements(spec)
+        try:
+            for index, sql in enumerate(sent, 1):
+                say(f"Semantic model {model}: step {index} of {len(sent)}")
+                execute(sql)
+        except Exception:
+            try:
+                execute(_script("DROP_MODEL_IF_EXISTS", model))
+                if previous:
+                    for sql in statements(previous):
+                        execute(sql)
+            except Exception:
+                pass
+            raise
+        for sql in governance(model, kept):
+            try:
+                execute(sql)
+            except Exception as err:
+                warnings.append(f"put back after the rebuild: {' '.join(str(err).split())[:200]}")
+    if mode == "unchanged" and [tuple(x) for x in extra or []] == [tuple(x) for x in previous_extra or []]:
+        extra = []                                  # nothing changed: the extra definitions are in the model already
     for view, ddl in extra or []:
         try:
             execute(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False))
@@ -484,7 +591,7 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
               "metrics": sum(len(o["metrics"]) for o in spec["objects"])}
     return {"model": model, "published_schema": spec["published_schema"],
             "views": [f"{spec['published_schema']}.{o['name']}" for o in spec["objects"]], "counts": counts,
-            "statements": len(sent), "notes": list(spec.get("notes") or []), "warnings": warnings}
+            "statements": len(sent), "mode": mode, "notes": list(spec.get("notes") or []), "warnings": warnings}
 
 
 def summary(spec: dict[str, Any]) -> str:
