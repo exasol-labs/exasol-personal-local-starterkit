@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "find_links", "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql"]
+__all__ = ["SemanticModel", "find_links", "model_notes", "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql"]
 
 ADDON = "semantic-views"
 
@@ -230,3 +230,71 @@ def semantic_sql(conn, query: str):
 
     conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()")
     return sql(conn, query)
+
+
+NOTES_RULES = ("You document a data model for people who do not know these tables. From each table's name and its "
+               "columns (name, type and, where known, role), write: tables - one plain sentence of at most 20 words "
+               "saying what one row of the table is; links - for each link given, one plain sentence saying why the "
+               "two belong together; name - a short lower-case name for the model with underscores (letters, digits, "
+               "_), such as sales_360; about - one sentence saying what the whole model is about. Do not guess "
+               "numbers or values you were not shown. Answer as JSON only: {\"tables\": {\"SCHEMA.TABLE\": \"...\"}, "
+               "\"links\": {\"FROM=TO\": \"...\"}, \"name\": \"...\", \"about\": \"...\"}.")
+
+
+def model_notes(conn, tables: list[str], links: list | None = None, *, show: bool = True) -> dict[str, Any]:
+    """Ask the AI model set up for the kit to say what a model's parts are, in a sentence each: {"tables":
+    {SCHEMA.TABLE: text}, "links": {"FROM=TO": text}, "name": a name for the model, "about": what it is about}. It
+    is shown each table's name and its columns' names, types and roles - never a row - and the links as you give them
+    ("S.T.COL=S.T.KEY", or nb.find_links' own). Only an answer about a table or a link you named is kept. Nothing is
+    written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
+    is set up."""
+    import json
+    import re
+
+    from . import model_config, tracing
+    from .data_map import data_map
+    from .model_config import sampling
+
+    config = model_config.resolve()
+    if config is None:
+        raise ValueError("No AI model is set up: nb.model_setup() says how (the Home card's AI model row does it).")
+    wanted = [str(t).upper() for t in tables]
+    pairs = [f"{l['from']}={l['to']}".upper() if isinstance(l, dict) else str(l).upper() for l in links or []]
+    found = data_map(conn)
+    shown: dict[str, list[dict[str, str]]] = {t: [] for t in wanted}
+    for column in found.column_rows:
+        table = str(column["table"]).upper()
+        if table in shown:
+            shown[table].append({"column": column["column"], "type": column["type"], **({"role": column["role"]} if column.get("role") else {})})
+    client = model_config.create_client(config, traced=tracing())
+    try:
+        answer = client.chat.completions.create(model=config.model_id, messages=[
+            {"role": "system", "content": "Return only one JSON object. No Markdown."},
+            {"role": "user", "content": json.dumps({"rules": NOTES_RULES, "tables": shown, "links": pairs})}], **sampling())
+    finally:
+        try:
+            client.close()
+        except Exception:                                   # noqa: BLE001 - closing is a courtesy
+            pass
+    text = answer.choices[0].message.content or ""
+    match = re.search(r"\{.*\}", text, re.S)
+    try:
+        said = json.loads(match.group(0)) if match else {}
+    except ValueError:
+        said = {}
+    said = said if isinstance(said, dict) else {}
+    line = lambda value, limit: " ".join(str(value or "").split())[:limit]
+    by_upper = lambda value: {str(k).upper(): v for k, v in value.items()} if isinstance(value, dict) else {}
+    name = re.sub(r"[^a-z0-9_]+", "_", line(said.get("name"), 60).lower()).strip("_")
+    notes = {"tables": {t: line(by_upper(said.get("tables")).get(t), 300) for t in wanted if line(by_upper(said.get("tables")).get(t), 300)},
+             "links": {p: line(by_upper(said.get("links")).get(p), 300) for p in pairs if line(by_upper(said.get("links")).get(p), 300)},
+             "name": name if re.fullmatch(r"[a-z][a-z0-9_]{0,40}", name or "") else "", "about": line(said.get("about"), 300)}
+    if show:
+        print(f"Asked {config.model_id} about {len(wanted)} tables and {len(pairs)} links (names, types and roles; no rows).")
+        for table, about in notes["tables"].items():
+            print(f"  {table}: {about}")
+        for pair, why in notes["links"].items():
+            print(f"  {pair}: {why}")
+        if notes["name"] or notes["about"]:
+            print(f"  model {notes['name'] or '(no name)'}: {notes['about']}")
+    return notes

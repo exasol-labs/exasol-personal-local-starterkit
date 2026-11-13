@@ -104,7 +104,9 @@ class RoleCheckTest(unittest.TestCase):
             found = role_check.fill_column_map(review)
             only_roles = role_check.check_roles(review, show=False)
         self.assertEqual({"roles": [{"column": "ACCT_NO", "kit_role": "measure", "role": "identifier", "why": "A code."}],
-                          "slots": {"entity": "ACCT_NO", "time": "PLACED_ON"}, "notes": {"QTY": "How many were ordered."}}, found)
+                          "slots": {"entity": "ACCT_NO", "time": "PLACED_ON"}, "notes": {"QTY": "How many were ordered."},
+                          "same_as": []}, found)
+        self.assertNotIn("other_tables", json.loads(sent[0]["messages"][1]["content"]), "one table: nothing beside it")
         self.assertEqual(found["roles"], only_roles)
         self.assertEqual(before, json.dumps(review.draft.doc, sort_keys=True), "a suggestion is not an approval")
         self.assertEqual("m1", sent[0]["model"])
@@ -113,6 +115,24 @@ class RoleCheckTest(unittest.TestCase):
         self.assertIn("Nothing was changed", out.getvalue())
         self.assertIn("slot entity: ACCT_NO", out.getvalue())
         self.assertIn("1 column descriptions written", out.getvalue())
+        # several tables, from several sources, read together: the model sees the others' columns (no sensitive one)
+        # and says which of this table's columns mean the same thing as one there - a reading, to check against the data
+        other = Review()
+        other.draft = types.SimpleNamespace(table="VS_CRM.CLIENTS", doc={"columns": {
+            "CLIENT_ID": {"role": "key", "confidence": "high"}, "PHONE": {"role": "identifier", "sensitive": True}}})
+        other.suggestions = lambda: {"CLIENT_ID": "key", "PHONE": "identifier"}
+        other.labels = lambda: {"CLIENT_ID": ("DECIMAL(9,0), key (high confidence): 400 distinct", ""), "PHONE": ("VARCHAR(20)", "")}
+        reply.choices[0].message.content = json.dumps({"roles": [], "notes": {}, "same_as": [
+            {"column": "acct_no", "other": "vs_crm.clients.client_id"}, {"column": "ACCT_NO", "other": "VS_CRM.CLIENTS.PHONE"},
+            {"column": "NOPE", "other": "VS_CRM.CLIENTS.CLIENT_ID"}, {"column": "QTY", "other": "SHOP.ORDERS.ORDER_ID"}]})
+        sent.clear()
+        with mock.patch.object(model_config, "resolve", return_value=config), \
+                mock.patch.object(model_config, "create_client", return_value=client), redirect_stdout(io.StringIO()):
+            found = role_check.fill_column_map(review, together=[review, other])
+        asked = json.loads(sent[0]["messages"][1]["content"])
+        self.assertEqual({"VS_CRM.CLIENTS": [{"column": "CLIENT_ID", "type": "DECIMAL(9,0)", "role": "key"}]}, asked["other_tables"])
+        self.assertEqual([("SHOP.ORDERS.ACCT_NO", "VS_CRM.CLIENTS.CLIENT_ID")], found["same_as"],
+                         "only a column of this table and a column it was shown of another table")
         with mock.patch.object(model_config, "resolve", return_value=None), self.assertRaisesRegex(ValueError, "No AI model is set up"):
             role_check.fill_column_map(review)
 

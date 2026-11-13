@@ -57,6 +57,25 @@ pairs from names, types and notes; `check` is pairs you have in mind ("S.T.COL=S
 the data and comes back with its evidence or under "rejected". Returns \{links, partial, ...}; a link's
 `confidence` is "low" for plain numbers, which match by chance: confirm those before using them.
 
+## nb.model_notes [#model_notes]
+
+```python
+nb.model_notes(
+    conn,
+    tables: list[str],
+    links: list | None=None,
+    *,
+    show: bool=True,
+) -> dict[str, Any]
+```
+
+Ask the AI model set up for the kit to say what a model's parts are, in a sentence each: \{"tables":
+\{SCHEMA.TABLE: text}, "links": \{"FROM=TO": text}, "name": a name for the model, "about": what it is about}. It
+is shown each table's name and its columns' names, types and roles - never a row - and the links as you give them
+("S.T.COL=S.T.KEY", or nb.find_links' own). Only an answer about a table or a link you named is kept. Nothing is
+written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
+is set up.
+
 ## nb.refresh_semantic [#refresh_semantic]
 
 ```python

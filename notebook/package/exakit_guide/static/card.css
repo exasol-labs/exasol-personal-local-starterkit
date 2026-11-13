@@ -619,3 +619,6 @@
 .guide-join-ends { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13.5px; }
 .guide-join-end { overflow-wrap: anywhere; }
 .guide-join-ev { margin-left: 27px; overflow-wrap: anywhere; }
+.guide-title .guide-info, .guide-subhead .guide-info, .guide-q-title .guide-info, .guide-ai-title .guide-info, .guide-form-heading .guide-info, .guide-slot-label .guide-info { vertical-align: middle; font-weight: 400; }
+.guide-q-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.guide-q-title .guide-info, .guide-ai-title .guide-info { margin-left: 0; }

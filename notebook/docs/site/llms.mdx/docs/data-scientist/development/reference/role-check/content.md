@@ -35,7 +35,7 @@ Only the roles the AI model would change: \[\{"column", "kit_role", "role", "why
 ## nb.fill_column_map [#fill_column_map]
 
 ```python
-nb.fill_column_map(review, *, show: bool=True) -> dict[str, Any]
+nb.fill_column_map(review, *, together: list | dict | None=None, show: bool=True) -> dict[str, Any]
 ```
 
 Ask the AI model set up for the kit (nb.use_model, nb.model_setup) to complete the drafted column map, in one
@@ -44,4 +44,10 @@ COLUMN} (the group to compare, who a row is about, the date, the text - where it
 the kit's rules allow it), "notes": \{COLUMN: one sentence} (for a column with no description yet)}. It sees names,
 types and the kit's measured evidence - never a row, never a sensitive column. It never picks what to predict or
 what makes a row unique. Nothing is changed: review\.approve(roles, slots, notes=notes) with what you agree with.
+
+`together` is the reviews of the tables you are working on, from any sources (each from
+nb.review_roles; a list, or \{table: review}): the model reads their columns too - names, types and roles, no sensitive column - so it
+understands this table next to them, and answers with "same_as": \[(this table's SCHEMA.TABLE.COLUMN, another
+table's)] for columns that mean the same thing. Those are readings to check, not links: give them to
+nb.find_links(connection, tables=\[...], check=\["A=B", ...]), which keeps the ones the data backs.
 Raises ValueError when no model is set up.

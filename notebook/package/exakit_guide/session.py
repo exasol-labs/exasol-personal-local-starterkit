@@ -28,6 +28,11 @@ class Session:
         # every table chosen in step 1 ({label, table, rows, broken}); `chosen_data` is the one being worked on
         self.chosen: list[dict] = []
         self.chosen_n = 0                # counts the choices made, so a card's pickers start afresh
+        # what the AI filled in (the Understand step's one button): per table its column map answer, the links it
+        # found between the chosen tables, and what it said about the tables, the links and the model
+        self.ai_maps: dict[str, dict] = {}
+        self.ai_model: dict | None = None
+        self.ai_runs = 0
         self.code: list[str] = []        # the code every action ran, in order (Code mode, Copy as cell)
         self.said: str = ""              # what the last action printed
         self._listeners: list[weakref.ref] = []

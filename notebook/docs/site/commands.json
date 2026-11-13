@@ -73,6 +73,7 @@
   "model_client": "/data-scientist/development/reference/core#model_client",
   "model_lab": "/data-scientist/development/reference/lab#model_lab",
   "model_list": "/data-scientist/development/reference/checks#model_list",
+  "model_notes": "/data-scientist/development/reference/semantic#model_notes",
   "model_providers": "/data-scientist/development/reference/providers#model_providers",
   "model_settings": "/data-scientist/development/reference/core#model_settings",
   "model_setup": "/data-scientist/development/reference/setup-env#model_setup",

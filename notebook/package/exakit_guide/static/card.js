@@ -273,6 +273,9 @@ function render({ model, el }) {
     if (Object.keys(fill.notes || {}).length) ui.values["open:allcols"] = true;      // the descriptions are in that list
   }
 
+  // The (i) beside a title: what would otherwise be a line of text under it, shown on hover, focus or a tap.
+  const tipMark = (text) => (text ? h("span", { class: "guide-info", tabindex: "0", role: "button", "aria-label": text, "data-tip": text }, "i") : null);
+
   function button(label, id, opts = {}) {
     const busy = ui.busy === id;
     if (opts.href) {
@@ -388,7 +391,7 @@ function render({ model, el }) {
       const guided = getMode() === "guided";
       return h("div", { class: "guide-head" },
         h("div", {}, b.brand !== undefined ? brand(b.brand, b.docs) : null, b.kicker ? h("div", { class: "guide-kicker" }, b.kicker) : null,
-          h("h2", { class: "guide-title guide-title-sm" }, b.title), b.sub ? h("p", { class: "guide-sub" }, b.sub) : null,
+          h("h2", { class: "guide-title guide-title-sm" }, b.title, tipMark(b.sub)),
           helpLinks(b.help)),
         h("div", { class: "guide-switch", role: "group", "aria-label": "View" },
           h("button", { type: "button", class: guided ? "is-on" : "", onClick: () => setMode("guided") }, "Guided"),
@@ -397,7 +400,7 @@ function render({ model, el }) {
     p(b) { return h("p", { class: b.muted ? "guide-p guide-muted" : "guide-p" }, b.v); },
     empty(b) { return h("div", { class: "guide-empty" }, icon("info"), b.v); },
     divider() { return h("hr", { class: "guide-divider" }); },
-    subhead(b) { return h("h3", { class: "guide-subhead" }, b.v); },
+    subhead(b) { return h("h3", { class: "guide-subhead" }, b.v, tipMark(b.tip)); },
     note(b) { return h("div", { class: "guide-note" }, b.v); },
     pre(b) { return h("pre", { class: "guide-pre" }, b.v); },
     code(b) {
@@ -501,10 +504,11 @@ function render({ model, el }) {
       const nSlots = fill ? Object.keys(fill.slots).length : 0, nNotes = fill ? Object.keys(fill.notes).length : 0;
       const head = h("div", { class: "guide-ai-head" },
         h("div", { class: "guide-ai-text" },
-          h("div", { class: "guide-ai-title" }, h("span", { class: "guide-ai-mark", "aria-hidden": "true" }, "AI"), "Fill in with AI"),
-          h("div", { class: "guide-muted guide-small" }, b.configured
-            ? `${b.model ? b.model + " reads the names the way a person would: " : ""}it corrects the kit's guesses, sets the other choices and writes a description for every column. ${b.sees} It never picks what to predict.`
-            : "No AI model is set up yet. Set one up on the Home notebook (AI model, Set up); this step works without it.")),
+          h("div", { class: "guide-ai-title" }, h("span", { class: "guide-ai-mark", "aria-hidden": "true" }, "AI"), b.title || "Fill in with AI",
+            tipMark(b.configured
+              ? `${b.model ? b.model + " corrects" : "It corrects"} the kit's guesses, sets the other choices and writes a description for every column. ${b.sees} It never picks what to predict. Nothing is saved until you approve.`
+              : "No AI model is set up yet. Set one up on the Home notebook (AI model, Set up). This step works without it.")),
+          b.configured ? null : h("div", { class: "guide-muted guide-small" }, "No AI model set up")),
         b.configured ? button(b.items ? "Ask again" : "Fill in with AI", "ai_check", { primary: !b.items, busyLabel: "Asking the model…" }) : null);
       const body = [];
       if (b.error) body.push(h("div", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, `The model did not answer: ${b.error}`)));
@@ -533,7 +537,7 @@ function render({ model, el }) {
           ui.aiBefore ? h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy, onClick: () => {
             const was = JSON.parse(ui.aiBefore); st.roles = was.r; st.slots = was.s; st.notes = was.n; ui.aiBefore = null; draw();
           } }, "Undo") : null,
-          h("span", { class: "guide-muted guide-small" }, "Look them over below (the descriptions are under All columns), change what is wrong, then approve. Nothing is saved until you approve.")));
+          tipMark("Look them over below (the descriptions are under All columns), change what is wrong, then approve. Nothing is saved until you approve.")));
       }
       return h("div", { class: "guide-ai" }, head, body);
     },
@@ -541,7 +545,7 @@ function render({ model, el }) {
     // map), and say in a sentence what each ticked one is. A schema's own box ticks or clears all its tables.
     schematree(b) {
       return h("div", { class: "guide-tree" }, b.groups.map((g) => {
-        g.tables.forEach((t) => { if (st.fields[t.id] === undefined) st.fields[t.id] = !!t.value; if (st.fields[t.note_id] === undefined) st.fields[t.note_id] = ""; });
+        g.tables.forEach((t) => { if (st.fields[t.id] === undefined) st.fields[t.id] = !!t.value; if (st.fields[t.note_id] === undefined) st.fields[t.note_id] = t.note || ""; });
         const can = g.tables.filter((t) => t.approved);
         const on = can.filter((t) => st.fields[t.id]).length;
         const all = h("input", { type: "checkbox", checked: can.length && on === can.length ? true : null, disabled: !can.length || !!ui.busy,
@@ -549,7 +553,7 @@ function render({ model, el }) {
         all.indeterminate = on > 0 && on < can.length;
         return h("div", { class: "guide-tree-group" },
           h("label", { class: "guide-tree-head" }, all, h("strong", {}, g.schema), h("span", { class: "guide-chip" }, g.origin),
-            h("span", { class: "guide-muted guide-small" }, `${on} of ${g.tables.length} table${g.tables.length === 1 ? "" : "s"} in the model`)),
+            h("span", { class: "guide-muted guide-small" }, `${on} of ${g.tables.length}`)),
           h("div", { class: "guide-tree-tables" }, g.tables.map((t) => h("div", { class: `guide-tree-table${st.fields[t.id] ? " is-on" : ""}${t.approved ? "" : " is-off"}` },
             h("label", { class: "guide-checkrow" },
               h("input", { type: "checkbox", checked: st.fields[t.id] ? true : null, disabled: !t.approved || !!ui.busy,
@@ -581,9 +585,9 @@ function render({ model, el }) {
               h("span", { class: "guide-join-end" }, h("span", { class: "guide-muted" }, tt + "."), h("strong", {}, tc))),
             l.by === "you" ? h("span", { class: "guide-chip guide-chip-accent" }, "Yours, checked") : null,
             l.by === "ai" ? h("span", { class: "guide-chip" }, "AI proposal, checked") : null,
-            l.confidence === "high" ? h("span", { class: "guide-chip guide-chip-ok-soft" }, "The data backs it")
-              : h("span", { class: "guide-chip guide-chip-warn", "data-tip": "Both columns are plain numbers, and numbers in a sequence match by chance. Tick it only if you know they mean the same thing." }, "Confirm this one")),
-          l.evidence ? h("div", { class: "guide-muted guide-small guide-join-ev" }, l.evidence) : null,
+            l.confidence === "high" ? h("span", { class: "guide-chip guide-chip-ok-soft", "data-tip": l.evidence || null, tabindex: "0" }, "The data backs it")
+              : h("span", { class: "guide-chip guide-chip-warn", "data-tip": `${l.evidence ? l.evidence + " " : ""}Tick it only if you know the two columns mean the same thing.`, tabindex: "0" }, "Confirm this one")),
+
           used ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[l.note_id], spellcheck: "true", disabled: !!ui.busy,
             placeholder: "Why these two belong together, in a sentence (optional)", "aria-label": `Note on the link ${l.from} to ${l.to}`,
             onInput: (e) => { st.fields[l.note_id] = e.target.value; } }) : null);
@@ -595,7 +599,7 @@ function render({ model, el }) {
         if (st.fields[c.id] === undefined) st.fields[c.id] = !!c.value;     // value: ticked to start with
         return h("label", { class: "guide-checkrow" },
           h("input", { type: "checkbox", checked: st.fields[c.id] ? true : null, onChange: (e) => { st.fields[c.id] = e.target.checked; } }),
-          h("span", {}, c.label));
+          h("span", {}, c.label, tipMark(c.tip)));
       }));
     },
     linkcard(b) {
@@ -765,8 +769,7 @@ function render({ model, el }) {
       const none = { value: "", label: "Nothing, just explore", text: "Look at counts and trends without predicting anything.", verdict: "none" };
       const q1 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "1"), h("div", {},
-          h("div", { class: "guide-q-title" }, "What do you want to predict?"),
-          h("div", { class: "guide-q-sub" }, "Pick a yes-or-no column. Everything else helps explain it. The kit never picks this for you."))),
+          h("div", { class: "guide-q-title" }, "What do you want to predict?", tipMark("Pick a yes-or-no column. Everything else helps explain it. The kit never picks this for you.")))),
         b.no_target_reason && !targets.length ? h("div", { class: "guide-explain" }, icon("info"), b.no_target_reason) : null,
         h("div", { class: "guide-targets", role: "radiogroup" }, [...targets.map(tCard), tCard(none)]));
 
@@ -784,8 +787,9 @@ function render({ model, el }) {
       };
       const q2 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "2"), h("div", {},
-          h("div", { class: "guide-q-title" }, "Check the kit's guesses"),
-          h("div", { class: "guide-q-sub" }, guesses.length ? `The kit wasn't sure about ${guesses.length} column${guesses.length > 1 ? "s" : ""}. Keep its guess or pick another.` : "The kit is confident about every column. Nothing to check."))),
+          h("div", { class: "guide-q-title" }, "Check the kit's guesses",
+            h("span", { class: `guide-chip ${guesses.length ? "guide-chip-warn" : "guide-chip-ok-soft"}` }, guesses.length ? `${guesses.length} to check` : "Nothing to check"),
+            tipMark(guesses.length ? "The kit wasn't sure about these columns. Keep its guess or pick another." : "The kit is confident about every column.")))),
         guesses.length ? h("div", { class: "guide-guesses" }, guesses.map(guessRow)) : null);
 
       // 3 · The other choices
@@ -820,7 +824,7 @@ function render({ model, el }) {
         const emptyText = options.filter((c) => c !== col).length || col ? "None"
           : (x.required ? `None (no column is marked ${x.required_label})` : "None");
         return h("div", { class: "guide-slot" },
-          h("span", { class: "guide-slot-label" }, x.label), h("span", { class: "guide-slot-hint" }, x.hint),
+          h("span", { class: "guide-slot-label" }, x.label, tipMark(x.hint)),
           pickList({ key: `slot:${x.id}`, label: x.label, value: col || "", options: [{ value: "", label: emptyText }, ...options.map((c) => ({ value: c, label: c }))],
             onPick: (value) => { st.slots[x.id] = value; draw(); } }),
           problem ? h("span", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, problem, " ",
@@ -830,8 +834,7 @@ function render({ model, el }) {
       };
       const q3 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "3"), h("div", {},
-          h("div", { class: "guide-q-title" }, "The other choices"),
-          h("div", { class: "guide-q-sub" }, "The kit filled these in. Change them only if they look wrong."))),
+          h("div", { class: "guide-q-title" }, "The other choices", tipMark("The kit filled these in. Change them only if they look wrong.")))),
         h("div", { class: "guide-slotgrid" }, b.slots.map(slotRow)));
 
       // All columns, folded
@@ -995,7 +998,7 @@ function render({ model, el }) {
       const inner = (f.fields || []).map(field).filter(Boolean);
       return inner.length ? h("div", { class: `guide-formgrid guide-formgrid-${f.cols || 2}` }, inner) : null;
     }
-    if (f.type === "heading") return h("div", { class: "guide-form-heading" }, f.v, f.sub ? h("span", { class: "guide-muted guide-small" }, f.sub) : null);
+    if (f.type === "heading") return h("div", { class: "guide-form-heading" }, f.v, tipMark(f.sub));
     if (f.type === "note") return h("div", { class: "guide-field" }, h("p", { class: "guide-p guide-muted guide-field-note" }, f.v),
       (f.help || []).length ? h("span", { class: "guide-field-help" }, f.help.map((l) => h("a", { href: l.href, target: "_blank", rel: "noopener" }, l.label))) : null);
     // picks: a list of ticks; the field's value is the list of the ticked options' values.

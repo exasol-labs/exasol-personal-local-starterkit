@@ -141,6 +141,7 @@ role_review = nb.review_roles(connection, chosen_data)
 AI_CHECK = False
 AI_APPROVE = False
 if AI_CHECK:
+    # several tables from several sources: together=[the other tables' reviews] lets it read them next to this one
     ai_map = nb.fill_column_map(role_review)
     if AI_APPROVE:
         role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
@@ -192,6 +193,9 @@ SEMANTIC_SCHEMAS = []                         # or whole schemas: every approved
 found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
 # The links the model uses: yours, and the found ones the data backs. A found link carries its evidence into the model.
 model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
+if AI_CHECK:      # your AI model says what each table and link is, and names the model (names, types and roles only)
+    model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)
+    SEMANTIC_TABLE_NOTES = {**model_notes["tables"], **SEMANTIC_TABLE_NOTES}
 semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=model_links, table_notes=SEMANTIC_TABLE_NOTES,
                              schemas=SEMANTIC_SCHEMAS, find=bool(SEMANTIC_SCHEMAS), ai=None, preview=not PUBLISH_SEMANTIC)
 semantic

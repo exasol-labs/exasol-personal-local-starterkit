@@ -112,10 +112,18 @@ ACTIONS: dict[str, Action] = {
                                       "table_notes={table_notes}, description={description}, ai={ai}, preview=True)", "semantic", False),
     "semantic.publish_tables": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
                                       "table_notes={table_notes}, description={description}, ai={ai}, preview=False)", "semantic"),
+    "semantic.ai_notes": Action("00_quickstart", "model_notes = nb.model_notes(connection, {tables}, links={links})", "model_notes", False),
     "semantic.refresh": Action("00_quickstart", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
     "map.review": Action("00_quickstart", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
     "map.approve": Action("00_quickstart", "role_review.approve({choices}, {slots}, notes={notes})\ndataset = role_review.dataset()", "dataset"),
     "map.ai_check": Action("00_quickstart", "ai_map = nb.fill_column_map(role_review)", "ai_map", False),
+    # several tables, read together: each table's review is kept, and the model reads the others next to the one it fills
+    "map.reviews": Action("00_quickstart", "role_reviews = {{}}", "role_reviews", False),
+    "map.review_keep": Action("00_quickstart", "role_reviews[{table}] = nb.review_roles(connection, chosen_data)", "role_reviews", False),
+    "map.ai_together": Action("00_quickstart", "ai_map = nb.fill_column_map(role_reviews[{table}], together=role_reviews)",
+                              "ai_map", False),
+    "semantic.links_checked": Action("00_quickstart", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai})",
+                                     "found_links", False),
     "map.keep": Action("00_quickstart", "dataset = role_review.dataset()", "dataset", False),
     "map.draft": Action("00_quickstart", "draft_dataset = role_review.dataset(draft_ok=True)", "draft_dataset", False),
     "map.leakage": Action("00_quickstart", "leaking = nb.leakage_check(connection, {data})", "leaking", False),

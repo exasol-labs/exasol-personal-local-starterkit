@@ -42,10 +42,16 @@ RULES = ("Each column has a drafted role, one of: key (different in every row), 
          "entity (who or what a row is about: a customer, a product, a place), time (the date for trends; its role "
          "must be time), text (comments to read; its role must be text). Use null where no column fits. A column "
          "fills one slot. 3. notes: for every column, one plain sentence of at most 20 words saying what it holds, "
-         "for a reader who does not know the table. Do not guess numbers or values you were not shown. Answer as "
+         "for a reader who does not know the table. Do not guess numbers or values you were not shown. "
+         "4. same_as: when other_tables are listed, they are the other tables of the same work, from other sources: "
+         "read them to understand this table (the same thing often has another name there: a customer number here, a "
+         "client id there). Give a column the same kind of role as its counterpart, say in its note what it "
+         "corresponds to, and list each column of THIS table that means the same thing as a column of another table "
+         "under same_as, as {\"column\": \"NAME\", \"other\": \"SCHEMA.TABLE.COLUMN\"}. Describe only this table's columns. "
+         "Answer as "
          "JSON: {\"roles\": [{\"column\": \"NAME\", \"role\": \"one of the eight\", \"why\": \"one short sentence\"}], "
          "\"slots\": {\"category\": \"NAME or null\", \"entity\": ..., \"time\": ..., \"text\": ...}, "
-         "\"notes\": {\"NAME\": \"sentence\"}}.")
+         "\"notes\": {\"NAME\": \"sentence\"}, \"same_as\": [{\"column\": \"NAME\", \"other\": \"SCHEMA.TABLE.COLUMN\"}]}.")
 
 
 def facts(review) -> dict[str, Any]:
@@ -142,13 +148,37 @@ def accept_notes(answer: str, review) -> dict[str, str]:
     return out
 
 
-def fill_column_map(review, *, show: bool = True) -> dict[str, Any]:
+def accept_same(answer: str, review, others: dict[str, list[dict[str, Any]]]) -> list[tuple[str, str]]:
+    """The model's "means the same as" pairs, as (SCHEMA.TABLE.COLUMN of this table, SCHEMA.TABLE.COLUMN of another):
+    only a column this table has and a column the model was shown of another table. A reading of meaning, not a fact:
+    nb.find_links checks each against the data before it becomes a link."""
+    asked = _parsed(answer).get("same_as")
+    known = _open_columns(review)
+    real = {f"{table}.{c['column']}".upper() for table, cols in others.items() for c in cols}
+    here = str(review.draft.table).upper()
+    out: list[tuple[str, str]] = []
+    for item in asked if isinstance(asked, list) else []:
+        if not isinstance(item, dict):
+            continue
+        column, other = known.get(str(item.get("column") or "").strip().upper()), str(item.get("other") or "").strip().upper()
+        if column and other in real and (f"{here}.{column.upper()}", other) not in out:
+            out.append((f"{here}.{column.upper()}", other))
+    return out
+
+
+def fill_column_map(review, *, together: list | dict | None = None, show: bool = True) -> dict[str, Any]:
     """Ask the AI model set up for the kit (nb.use_model, nb.model_setup) to complete the drafted column map, in one
     call: {"roles": [{"column", "kit_role", "role", "why"}] (the drafted roles it would change), "slots": {slot:
     COLUMN} (the group to compare, who a row is about, the date, the text - where it would differ from the draft and
     the kit's rules allow it), "notes": {COLUMN: one sentence} (for a column with no description yet)}. It sees names,
     types and the kit's measured evidence - never a row, never a sensitive column. It never picks what to predict or
     what makes a row unique. Nothing is changed: review.approve(roles, slots, notes=notes) with what you agree with.
+
+    ``together`` is the reviews of the tables you are working on, from any sources (each from
+    nb.review_roles; a list, or {table: review}): the model reads their columns too - names, types and roles, no sensitive column - so it
+    understands this table next to them, and answers with "same_as": [(this table's SCHEMA.TABLE.COLUMN, another
+    table's)] for columns that mean the same thing. Those are readings to check, not links: give them to
+    nb.find_links(connection, tables=[...], check=["A=B", ...]), which keeps the ones the data backs.
     Raises ValueError when no model is set up."""
     from . import model_config
     from .model_config import sampling
@@ -158,14 +188,23 @@ def fill_column_map(review, *, show: bool = True) -> dict[str, Any]:
         raise ValueError("No AI model is set up: nb.model_setup() says how (the Home card's AI model row does it).")
     shown = facts(review)
     if not shown["columns"]:
-        return {"roles": [], "slots": {}, "notes": {}}
+        return {"roles": [], "slots": {}, "notes": {}, "same_as": []}
+    others: dict[str, list[dict[str, Any]]] = {}
+    for other in (together.values() if isinstance(together, dict) else together) or []:
+        if other is review:
+            continue
+        seen = facts(other)
+        if seen["table"].upper() != shown["table"].upper() and seen["columns"]:
+            others[seen["table"]] = [{"column": c["column"], "type": c["evidence"].split(f", {c['drafted_role']} (", 1)[0], "role": c["drafted_role"]}
+                                     for c in seen["columns"]]
     from . import tracing
 
     client = model_config.create_client(config, traced=tracing())
     try:
         answer = client.chat.completions.create(model=config.model_id, messages=[
             {"role": "system", "content": SYSTEM},
-            {"role": "user", "content": json.dumps({"rules": RULES, **shown})}], **sampling())
+            {"role": "user", "content": json.dumps({"rules": RULES, **shown, **({"other_tables": others} if others else {})})}],
+            **sampling())
     finally:
         try:
             client.close()
@@ -173,7 +212,8 @@ def fill_column_map(review, *, show: bool = True) -> dict[str, Any]:
             pass
     text = answer.choices[0].message.content or ""
     roles = accept(text, review)
-    filled = {"roles": roles, "slots": accept_slots(text, review, roles), "notes": accept_notes(text, review)}
+    filled = {"roles": roles, "slots": accept_slots(text, review, roles), "notes": accept_notes(text, review),
+              "same_as": accept_same(text, review, others)}
     if show:
         left_out = len(review.suggestions()) - len(shown["columns"])
         print(f"Asked {config.model_id} about {len(shown['columns'])} columns of {shown['table']} (names, types and the "
@@ -186,6 +226,8 @@ def fill_column_map(review, *, show: bool = True) -> dict[str, Any]:
             print(f"  slot {slot}: {column}")
         if filled["notes"]:
             print(f"  {len(filled['notes'])} column descriptions written.")
+        for here, other in filled["same_as"]:
+            print(f"  means the same as: {here} ~ {other} (to check against the data)")
         if roles or filled["slots"] or filled["notes"]:
             print("Nothing was changed. To use them: review.approve({COLUMN: role}, {slot: COLUMN}, notes={COLUMN: text}), "
                   "or the column map card.")

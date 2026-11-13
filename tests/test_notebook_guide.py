@@ -1324,6 +1324,9 @@ class SeveralTablesTest(unittest.TestCase):
         self.session.chosen = self.session.chosen[:1]                                 # one table: no tabs, no step
         self.assertEqual(["head", "aicheck", "rolemap", "actions"], [b["t"] for b in self._built(card)])
 
+    def tearDown(self):
+        self.session.ai_maps, self.session.ai_model, self.session.ai_runs = {}, None, 0
+
     def test_the_ai_check_is_on_top_and_only_suggests(self):
         """Check with AI asks the model set up for the kit (nb.check_roles) and shows what it would change, with why;
         nothing is saved. Without a model the bar says where to set one up; a provider's refusal is said in one line;
@@ -1367,11 +1370,14 @@ class SeveralTablesTest(unittest.TestCase):
         answers["map.leakage"] = []
         self.session._ns["role_review"].draft.status = "draft"
         card._review()
+        self.assertEqual(1, (card.ai or {}).get("id"), "a table keeps its answer: opening it again shows it")
+        self.session.ai_maps.clear()
+        card._review()
         self.assertIsNone(card.ai)
 
     def _views(self):
         views = self.understand.SemanticViews.__new__(self.understand.SemanticViews)
-        views.__dict__.update(ticked=set(), gen=0, link_gen=0, links=None, links_note="", loading=False, error=None, models=[],
+        views.__dict__.update(ticked=set(), gen=0, link_gen=0, fill=None, fill_n=0, links=None, links_note="", loading=False, error=None, models=[],
                               preview_text="", result_text="",
                               tables=[{"table": t, "schema": t.split(".")[0], "origin": o, "approved": ok, "rows": "10"}
                                       for t, o, ok in (("AMAZON.ORDER_LINES", "Kit dataset", True), ("AMAZON.RETURNS", "Kit dataset", True),
@@ -1462,6 +1468,84 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual("the preview", views.preview_text)
         with self.assertRaisesRegex(ValueError, "at least one table"):
             views.on_sv_preview({})
+
+
+    def test_one_button_fills_every_table_the_links_and_the_descriptions(self):
+        """Fill everything in with AI: for every chosen table its column map answer (kept per table, so each tab
+        shows its own), the links between the tables, and a sentence for each table, each link and the model. The
+        cards below are filled; nothing is approved or published. A part that fails is named, the rest stands."""
+        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
+        self.session.ai_maps, self.session.ai_model, self.session.ai_runs = {}, None, 0
+        self.addCleanup(lambda: self.session.__dict__.update(ai_maps={}, ai_model=None, ai_runs=0))
+        link = {"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "confidence": "high", "proposed_by": "values"}
+        real, ran, checked = self.understand.actions.run.side_effect, [], []
+
+        def run(action_id, session=None, **values):
+            ran.append(action_id)
+            table = str(self.session.source.fact_table)
+            if action_id == "kit.model":
+                return {"configured": True, "model_id": "m1"}
+            if action_id in ("map.reviews", "map.review_keep"):
+                return None
+            if action_id == "map.ai_together":                       # each table, with the others in view
+                if values["table"] == "MY_DATA.TARGETS":
+                    raise RuntimeError("429 too many requests\nmore")
+                return {"roles": [{"column": "B", "kit_role": "measure", "role": "identifier", "why": "A code."}],
+                        "slots": {"entity": "B"}, "notes": {"B": "x", "C": "y"},
+                        "same_as": [("AMAZON.ORDER_LINES.SHIP_STATE", "MY_DATA.TARGETS.STATE")]}
+            if action_id == "semantic.links_checked":
+                checked.append(values)
+                return {"links": [link], "checked": 3, "statements": 9, "ai": "the model proposed 1 pair(s)"}
+            if action_id == "semantic.ai_notes":
+                return {"tables": {"AMAZON.ORDER_LINES": "One row per order line."}, "links": {"AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE": "Same state."},
+                        "name": "sales_360", "about": "Orders and targets."}
+            return real(action_id, session, **values)
+
+        self.understand.actions.run.side_effect = run
+        card = self.understand.AiHelp.__new__(self.understand.AiHelp)
+        card.said, card.failed = [], []
+        heard = []
+        with mock.patch.object(self.session, "changed", side_effect=lambda what, source=None: heard.append(what)):
+            card.on_ai_all({})
+        self.assertEqual(["source", "ai"], heard)
+        self.assertEqual(["map.reviews", "map.review_keep", "map.review_keep", "map.ai_together", "map.ai_together"],
+                         [a for a in ran if a.startswith("map.")], "every table is read first, then each is filled with the others in view")
+        self.assertEqual([{"tables": ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS"], "ai": True,
+                           "check": ["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE", "MY_DATA.TARGETS.STATE=AMAZON.ORDER_LINES.SHIP_STATE"]}],
+                         checked, "what the AI read as the same thing across sources is checked against the data, both ways round")
+        self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table, "it ends on the table it started on")
+        self.assertEqual(["AMAZON.ORDER_LINES"], list(self.session.ai_maps))
+        self.assertEqual(({"B": "x", "C": "y"}, {"entity": "B"}), (self.session.ai_maps["AMAZON.ORDER_LINES"]["notes"], self.session.ai_maps["AMAZON.ORDER_LINES"]["slots"]))
+        self.assertEqual(["1 column map (1 meaning changed, 2 descriptions)", "1 link found", "1 table description"], card.said)
+        self.assertEqual(["MY_DATA.TARGETS (429 too many requests)"], card.failed)
+        self.assertFalse([a for a in ran if a in ("map.approve", "semantic.publish_tables", "semantic.publish")], "it fills in; it approves and publishes nothing")
+        blocks = card.build()
+        self.assertEqual(["head", "actions", "msg", "msg"], [b["t"] for b in blocks])
+        self.assertEqual("ai_all", blocks[1]["items"][0]["id"])
+        # the column map card shows this table's answer; semantic views its links and what was said
+        column_map = self._map_card()
+        with mock.patch.object(column_map, "refresh"):
+            column_map.on_session("ai")
+        self.assertEqual(self.session.ai_maps["AMAZON.ORDER_LINES"], column_map.ai)
+        views = self._views()
+        with mock.patch.object(views, "refresh"):
+            views.on_session("ai")
+        self.assertEqual(([link], 1, 1), (views.links, views.link_gen, views.fill_n))
+        with mock.patch.object(self.understand.actions, "code", return_value=""):
+            built = views.build()
+        tree = next(b for b in built if b["t"] == "schematree")
+        notes = {t["table"]: (t["note_id"], t["note"]) for g in tree["groups"] for t in g["tables"]}
+        self.assertEqual(("svd:AMAZON.ORDER_LINES#1", "One row per order line."), notes["AMAZON.ORDER_LINES"])
+        self.assertEqual("Same state.", next(b for b in built if b["t"] == "linklist")["items"][0]["note"])
+        model = next(f for b in built if b["t"] == "fields" for f in b["items"] if f["id"] == "sv_model")["fields"]
+        self.assertEqual([("sv_name#1", "sales_360"), ("sv_about#1", "Orders and targets.")], [(f["id"], f["value"]) for f in model])
+        picked = views._picked({"svt:AMAZON.ORDER_LINES": True, "sv_name#1": "sales_360", "svd:AMAZON.ORDER_LINES#1": "One row per order line."})
+        self.assertEqual(("sales_360", {"AMAZON.ORDER_LINES": "One row per order line."}), (picked["name"], picked["table_notes"]))
+        self.understand.actions.run.side_effect = lambda action_id, session=None, **values: {"configured": False}
+        self.assertEqual(["head", "msg"], [b["t"] for b in card.build()], "without a model: no button, one line saying so")
+        self.session._ns["chosen_data"] = None
+        with self.assertRaisesRegex(ValueError, "Choose your data"):
+            card.on_ai_all({})
 
 
 class MarimoShownCodeTest(unittest.TestCase):
