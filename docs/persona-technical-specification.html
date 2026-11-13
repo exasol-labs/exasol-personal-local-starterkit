@@ -297,7 +297,7 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <table>
 <tr><th>id</th><th>Repository</th><th>Pinned</th><th>Notes</th></tr>
 <tr><td>dash-server</td><td>exasol-labs/dash-server</td><td>0.2.1</td><td>Dash hosting with an MCP control plane; Data Scientist</td></tr>
-<tr><td>notebook</td><td>exasol/notebook-connector</td><td>3.1.0</td><td>choices jupyterlab, marimo, positron (hidden); frontends JupyterLab 4.6.4, Marimo 0.25.2; Data Scientist</td></tr>
+<tr><td>notebook</td><td>exasol/notebook-connector</td><td>3.1.0</td><td>choices jupyterlab, marimo, positron (hidden); frontends JupyterLab 4.6.4, Marimo 0.25.2; Data Scientist. The connector's <code>exasol-transformers-extension</code> (torch, transformers: about 0.7 GB) is left out through a uv override (<code>notebook/uv-overrides.txt</code>, receipt <code>components.notebook.transformers</code>); <code>EXAKIT_NOTEBOOK_TRANSFORMERS=1</code> on an install or update puts it back</td></tr>
 <tr><td>json-tables</td><td>exasol-labs/exasol-json-tables</td><td>v0.4.1</td><td>prebuilt ingest engine, no Rust needed; Data Scientist</td></tr>
 <tr><td>semantic-views</td><td>exasol-labs/exasol-semantic-views</td><td>v0.6.1</td><td>archive SHA-256 pinned; Data Scientist</td></tr>
 <tr><td>dbt-exasol</td><td>exasol/dbt-exasol</td><td>1.12.3</td><td></td></tr>
@@ -334,7 +334,7 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <tr><td>logs/</td><td>install-*.log, virtual-schemas-YYYYMMDD.log (14 days), notebook.log, notebook-marimo.log, guide.log, json-tables.log, dash-server.log</td></tr>
 <tr><td>kit/</td><td>the kit copy the command runs from</td></tr>
 <tr><td>pyexasol-venv/, notebook-venv/, json-tables-venv/, dash-server-venv/</td><td>Python environments</td></tr>
-<tr><td>notebook/</td><td>connection.scs, jupyter.pid, marimo.pid, jupyter_server_config.json, open-*.html</td></tr>
+<tr><td>notebook/</td><td>uv-overrides.txt, connection.scs, jupyter.pid, marimo.pid, jupyter_server_config.json, open-*.html</td></tr>
 <tr><td>notebooks/</td><td>starter-kit-notebooks/&lt;persona&gt;/ and marimo/&lt;persona&gt;/ (kept on uninstall)</td></tr>
 <tr><td>descriptors/</td><td>column maps per table and schema maps per schema</td></tr>
 <tr><td>semantic/</td><td>&lt;model&gt;.json: the spec and inputs of every model the kit built</td></tr>

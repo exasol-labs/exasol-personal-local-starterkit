@@ -98,6 +98,18 @@ exception nb.SourceProblem
 
 A source cell that cannot go on, said in one short message: no traceback in a notebook.
 
+## nb.sources [#sources]
+
+```python
+nb.sources() -> list[dict[str, Any]]
+```
+
+The external sources connected to this kit (`exakit connect`), as `exakit source list --json` lists them: one
+row a source with its name, connector_name, schema (VS\_\<NAME>, queried live, nothing copied), status, host and
+tls. Read from the kit's own record, so it needs no database connection; empty when none is connected.
+
+**Used in:** `data-scientist/00_quickstart`
+
 ## nb.SourceTest [#SourceTest]
 
 ```python

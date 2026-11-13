@@ -100,7 +100,7 @@ class AssetSourceTest(unittest.TestCase):
 
     PRIVATE = "ranjanm-chn/exasol-personal-local-starterkit-backup"
 
-    def _fetch(self, token: str | None, digest: str | None):
+    def _fetch(self, token: str | None, digest: str | None, public_down: bool = False):
         import hashlib
         import io
         from urllib.error import HTTPError
@@ -117,7 +117,8 @@ class AssetSourceTest(unittest.TestCase):
 
         def fake_open(request, timeout):
             seen.append((request.full_url, request.get_header("Authorization")))
-            if request.full_url.startswith(f"https://github.com/{self.PRIVATE}/"):
+            if request.full_url.startswith(f"https://github.com/{self.PRIVATE}/") or (
+                    public_down and request.full_url.startswith("https://github.com/exasol-labs/")):
                 raise HTTPError(request.full_url, 404, "Not Found", None, None)
             if request.full_url.endswith("/releases/tags/json-tables-v0.4.1"):
                 return Response(json.dumps({"assets": [{"name": "w.whl", "url":
@@ -140,8 +141,15 @@ class AssetSourceTest(unittest.TestCase):
                 error = str(failure)
             return seen, error
 
-    def test_a_private_repository_is_read_through_the_api_with_the_token(self):
+    def test_with_a_pin_the_public_copy_comes_first_even_with_a_token(self):
         seen, error = self._fetch("t0k", "real")
+        self.assertIsNone(error)
+        self.assertEqual(1, len(seen), "one plain download, no API lookup")
+        self.assertTrue(seen[0][0].startswith("https://github.com/exasol-labs/"), seen[0][0])
+        self.assertIsNone(seen[0][1], "the plain link never carries the token")
+
+    def test_a_private_repository_is_read_through_the_api_with_the_token(self):
+        seen, error = self._fetch("t0k", "real", public_down=True)
         self.assertIsNone(error)
         self.assertEqual(f"https://api.github.com/repos/{self.PRIVATE}/releases/assets/7", seen[-1][0])
         self.assertEqual("Bearer t0k", seen[-1][1])

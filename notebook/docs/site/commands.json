@@ -110,6 +110,7 @@
   "show_sql": "/data-scientist/development/reference/core#show_sql",
   "source_engine": "/data-scientist/development/reference/sources#source_engine",
   "SourceProblem": "/data-scientist/development/reference/sources#SourceProblem",
+  "sources": "/data-scientist/development/reference/sources#sources",
   "SourceTest": "/data-scientist/development/reference/sources#SourceTest",
   "sql": "/data-scientist/development/reference/core#sql",
   "test_source": "/data-scientist/development/reference/sources#test_source",

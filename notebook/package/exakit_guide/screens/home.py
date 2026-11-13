@@ -184,7 +184,7 @@ class Home(Screen):
             ("kit", "kit.check"), ("components", "kit.components"), ("addons", "kit.addons"),
             ("clients", "kit.ai_clients"), ("plan", "kit.persona_plan"), ("model", "kit.model"),
             ("tracing", "kit.tracing"), ("approved", "kit.approved"), ("workflows", "kit.workflows"),
-            ("files", "kit.loaded_files"))}
+            ("files", "kit.loaded_files"), ("sources", "kit.sources"))}
         # The persona whose notebook this is: its folder (starter-kit-notebooks/<persona>/), else the kit's own.
         persona = Path.cwd().name
         notebooks = _read("kit.notebooks", persona=persona)
@@ -240,6 +240,19 @@ class Home(Screen):
                                              {"id": "schema", "type": "text", "optional": True,
                                               "label": "Into the schema (a file or folder; empty: STARTER_KIT, the kit's default)",
                                               "placeholder": "STARTER_KIT"}], "submit": "Load it"}]})
+
+        # Federation: the external sources the kit has connected (exakit connect), queried where they live.
+        sources = [s for s in d.get("sources") or [] if isinstance(s, dict)]
+        ready = [s for s in sources if s.get("status") == "ready"]
+        shown = ", ".join(f"{s.get('schema')} ({s.get('connector_name') or s.get('connector')})" for s in sources[:6]) \
+            + (f" and {len(sources) - 6} more" if len(sources) > 6 else "")
+        rows.append({"id": "sources", "name": "External sources",
+                     "dot": "ok" if ready else "warn" if sources else "off",
+                     "text": f"{shown}: queried live, nothing copied" if sources
+                             else "None connected yet: query Postgres, MySQL, Snowflake and more where they live",
+                     "sub": ("A source's tables join your own in one SQL query, the AI and semantic views read them too. "
+                             "Pick or connect one in Choose your data below, or in a terminal: exakit connect"),
+                     "cmd": actions.code("kit.sources"), "actions": []})
 
         clients = [c for c in d.get("clients") or [] if isinstance(c, dict)]
         on = [c["name"] for c in clients if c.get("connected")]

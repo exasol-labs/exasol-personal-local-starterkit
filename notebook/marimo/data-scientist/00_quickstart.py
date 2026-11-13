@@ -89,6 +89,7 @@ def _(nb):
     ai_clients = nb.ai_clients()            # the AI clients the kit can connect, and which are connected
     sample_datasets = nb.sample_datasets()  # the kit's sample datasets, and which are loaded
     loaded_files = nb.loaded_files()        # the files you loaded with exakit data-load: table, rows, file
+    sources = nb.sources()                  # the external sources connected (exakit connect), read live: nothing copied
     notebooks = nb.notebooks("data-scientist")   # this persona's notebooks, in order
     persona_plan = nb.persona_plan()        # what this kit's personas bring that is still missing
     approved = nb.approved_datasets()       # the column maps approved so far
