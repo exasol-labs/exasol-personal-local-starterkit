@@ -241,7 +241,7 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <ul>
   <li>A draft is enough to explore. Ask your data and Share call <code>require_approved</code> and refuse a draft, saying how to approve it.</li>
   <li>Approving writes <code>v&lt;n&gt;.yaml</code> and <code>current.yaml</code> under <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code>; a version file is never rewritten.</li>
-  <li>The roles are published as a view, <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__&lt;TABLE&gt;</code>, whose column comments carry them; agents read the roles from there over MCP.</li>
+  <li>The roles are published in Exasol Semantic Views: the schema's semantic model (its views in <code>SEM_&lt;SCHEMA&gt;</code>) is rebuilt with the table as an entity, its time, category and flag columns as dimensions and its measures as facts and metrics; agents read it over MCP (<code>SEMANTIC_CATALOG</code>). Semantic Views is installed first when the database lacks it.</li>
   <li>Approving roles that the current version already has writes nothing and says where that version is stored (and the view, when it exists).</li>
   <li>Approving looks at the data first (<code>setup/lib/descriptor/review.py</code>, at most three <code>SELECT</code>s). <b>Refused</b>, with what to change: a key slot whose column repeats or has a gap now; a target that does not hold exactly two values. <b>Warned</b>, and approved: a column that gives the target away (the Explore notebook's leakage rule), and the low-confidence roles approved as drafted, by name - approving them is a decision the approver should know they made.</li>
 </ul>
@@ -329,7 +329,7 @@ exakit describe --schema SHOP --approve --link ORDERS.CUST_REF=CUSTOMERS.ID</cod
 <h3>Approve and publish</h3>
 <ul>
   <li>The draft is kept in <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA&gt;/draft.json</code>; approving writes <code>v&lt;n&gt;.json</code> (never rewritten) and <code>current.json</code>, with the owner and time. A link to a table or column the schema does not have is refused; approving what the current version says writes nothing and says where it is.</li>
-  <li>The links are published as a view any read-only client can query, <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__RELATIONS</code> (<code>FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN, KIND, EVIDENCE</code>), granted to the MCP user. The schema's own tables are never altered. A publish that fails leaves the approval standing and says why.</li>
+  <li>The links become relationships of the schema's semantic model (<code>SEMANTIC_CATALOG.RELATIONSHIPS</code>), granted to the MCP user. The schema's own tables are never altered. A publish that fails leaves the approval standing and says why.</li>
 </ul>
 <h3>One joined view, in Explore</h3>
 <pre><code>schema_map = nb.describe_schema(connection, loaded_dataset)      <span class="c"># the tables and links, as found now</span>
@@ -387,7 +387,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <section id="mcp">
 <h2><span class="n">14</span>AI agents through MCP</h2>
 <p>Every AI client the kit connects (Claude, Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, Continue) reaches the database through one MCP server: the official Exasol MCP server that the Exasol Personal launcher runs beside the database, at <code>http://127.0.0.1:4896/mcp</code>, connected as the dedicated read-only user. Client configs hold the URL and no password; Claude Desktop goes through <code>uvx mcp-proxy</code>.</p>
-<p>Agents read the approved roles from <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__&lt;TABLE&gt;</code> and the approved links from <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__RELATIONS</code>, so a question that needs two tables is answered from an approved join, not a guessed one.</p>
+<p>Agents read the approved roles and links from the Exasol Semantic Views models built from them (<code>SEMANTIC_CATALOG</code>), so a question that needs two tables - or two sources, through a multi-source model (<code>exakit describe --model</code>) - is answered from an approved join, not a guessed one.</p>
 <p>There is no fallback server. When it does not serve, <code>exakit mcp-setup</code> and <code>exakit mcp-doctor</code> heal it - from a notebook too: <code>nb.exakit("mcp-doctor")</code>, or <code>nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})</code> to name the clients, since the command has no terminal to ask on:</p>
 <div class="tbl"><table>
 <thead><tr><th>Case</th><th>What the kit does</th></tr></thead>
@@ -452,7 +452,7 @@ exakit notebook</code></pre>
 <tr><td>Leakage check</td><td>flags <code>STATUS</code> on <code>amazon_sales</code>; nothing on the other</td></tr>
 <tr><td>Prepare checks on <code>fraud_transactions</code></td><td>found all five planted problems (repeats, copies, gaps, placeholders, rare label)</td></tr>
 <tr><td>Typed view on <code>fraud_transactions</code></td><td>two placeholders become <code>NULL</code>, 885 copies dropped; a new approved column map with the same roles</td></tr>
-<tr><td>Schema map on TPC-H (no foreign keys declared)</td><td>8 tables, their 8 declared primary keys (two of them two columns), 9 links found from the values, all correct (e.g. <code>ORDERS.O_CUSTKEY → CUSTOMER.C_CUSTKEY</code>, <code>CUSTOMER.C_NATIONKEY → NATION.N_NATIONKEY</code>); approved and published as <code>EXAKIT_SEMANTIC.TPCH__RELATIONS</code></td></tr>
+<tr><td>Schema map on TPC-H (no foreign keys declared)</td><td>8 tables, their 8 declared primary keys (two of them two columns), 9 links found from the values, all correct (e.g. <code>ORDERS.O_CUSTKEY → CUSTOMER.C_CUSTKEY</code>, <code>CUSTOMER.C_NATIONKEY → NATION.N_NATIONKEY</code>); approved (measured when the links were published as the relations view the kit used before Exasol Semantic Views)</td></tr>
 <tr><td>Joined view of <code>ORDERS</code></td><td>adds CUSTOMER → NATION → REGION; 30,000 rows, the same as <code>ORDERS</code>; its column map approved as <code>orders_joined</code></td></tr>
 <tr><td>Descriptor benchmark (<code>tools/descriptor_benchmark.py</code>)</td><td>24 tables, 237 columns: every role, slot and sensitive mark right, every role a reviewer might change marked low (before this branch's rules: 76% of roles, 43% of the wrong ones marked low)</td></tr>
 <tr><td>Draft of <code>AMAZON.ORDER_LINES</code> on the database</td><td>profiled in 2.7 s with the value-shape patterns; <code>SKU</code>, <code>ASIN</code> identifiers, <code>QTY</code> a measure, <code>SHIP_POSTAL_CODE</code> sensitive; approving with <code>CANCELLED</code> as target warns "STATUS gives CANCELLED away" (review 0.6 s)</td></tr>
@@ -520,7 +520,7 @@ exakit notebook</code></pre>
 <tr><td>Describe service</td><td><code>setup/lib/descriptor/</code> (roles: <code>roles.py</code>; slots: <code>draft.py</code>; the approve step's look at the data: <code>review.py</code>; the schema map: <code>schema.py</code>), <code>setup/lib/describe_service.py</code></td></tr>
 <tr><td>Draft benchmark</td><td><code>tools/descriptor_benchmark.py</code> (<code>--check</code>), <code>tests/test_descriptor_benchmark.py</code></td></tr>
 <tr><td>Approved descriptors</td><td><code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code>; schema maps in <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA&gt;/</code></td></tr>
-<tr><td>Created views</td><td><code>EXAKIT_PREPARED</code> (joined and typed views), <code>EXAKIT_SEMANTIC</code> (roles and links for agents)</td></tr>
+<tr><td>Created views</td><td><code>EXAKIT_PREPARED</code> (joined and typed views), <code>SEM_&lt;MODEL&gt;</code> (the published semantic views, through Exasol Semantic Views)</td></tr>
 <tr><td>Workflow logs</td><td><code>~/.exasol-starter-kit/workflows/</code></td></tr>
 <tr><td>Hand-off bundles</td><td><code>~/.exasol-starter-kit/bundles/&lt;workflow id&gt;/</code> and <code>.zip</code></td></tr>
 <tr><td>MCP server definition</td><td><code>setup/lib/mcp.sh</code> / <code>mcp.ps1</code> (<code>mcp_sidecar_apply</code> / <code>Set-McpSidecar</code>)</td></tr>

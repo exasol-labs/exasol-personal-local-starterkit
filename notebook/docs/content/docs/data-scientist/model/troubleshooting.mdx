@@ -1,0 +1,54 @@
+---
+title: Troubleshooting
+description: The warnings and errors you can see while you model, what each one means, and what to do.
+---
+
+Each entry quotes the message the kit prints, or describes the step that stops.
+
+<Accordions type="multiple">
+
+<Accordion title="A model step is skipped">
+
+The dataset has no target, or no category or entity that is free of the answer, so the baseline cannot run. The step says so. Choose a target in the column map, approve it, and run the notebook again. `nb.model_settings()` shows whether the AI steps have a model. No model is needed for the baseline or the lab.
+
+</Accordion>
+
+<Accordion title="The model lab says nothing to predict was chosen">
+
+The lab was asked to predict yes or no, but the column map has no yes-or-no target. The error reads "Nothing to predict was chosen". Pick a 0 or 1 column as the target in the column map, or choose another task: predict a number, find natural groups or find unusual rows.
+
+</Accordion>
+
+<Accordion title="One side of the split has only one answer">
+
+The error reads "One side of the split has only one answer, so no score can be computed". A time split can put all the 1s on one side. Change the split to `split_method="random"`, which is stratified for yes or no. See [Hold-out](/data-scientist/evaluate/hold-out).
+
+</Accordion>
+
+<Accordion title="Only a few rows with a 1 are held out">
+
+The warning reads "Only N rows with a 1 are held out, so the held-out score is shaky". It appears when fewer than 30 rows with a 1 are held out. Lower `train_pct` (50 is the lowest it accepts), so more rows are held out.
+
+</Accordion>
+
+<Accordion title="No model could be trained on this data">
+
+The error reads "No model could be trained on this data", and lists the reason for each model that failed. The most common cause is a dataset with almost no rows on one side of the answer. Check the split first.
+
+</Accordion>
+
+<Accordion title="No AI model is set up">
+
+`nb.feature_ideas(lab, ai=True)` stops with "No AI model is set up". Run `nb.model_setup()`, or `nb.use_model(MODEL_ID, PROVIDER_BASE_URL)`. Or call `nb.feature_ideas(lab)` without `ai=True`, which needs no model.
+
+</Accordion>
+
+<Accordion title="The lab leaves out a column you expected it to use">
+
+Read `lab_data.left_out`. It gives the reason for each column left out: gives the answer away, personal data, a key or identifier, free text, or marked Leave out. A column marked sensitive, or flagged by the leakage check, is not used. Change the column map if the role is wrong, and approve it again.
+
+</Accordion>
+
+</Accordions>
+
+Back to [Model](/data-scientist/model).

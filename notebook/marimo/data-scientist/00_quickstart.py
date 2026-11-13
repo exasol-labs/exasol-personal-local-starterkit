@@ -13,8 +13,44 @@ def _():
 
 @app.cell(hide_code=True)
 def _(mo):
+    # Cell tags: exakit-guide-hint
     mo.md(r"""
-    # Start here: access and understand your data
+    <div class="guide-start-hint">
+
+    **Start here · Your kit and your data.** Click into the cell below and press **Shift + Enter** to open it: the kit's state, then your data and its column map. Its **Guided / Code** switch, top right, shows the code behind this page.
+
+    </div>
+    """)
+    return
+
+
+@app.cell
+def _():
+    # Cell tags: exakit-guide, skip-ci
+    # Your kit and your data: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+    import exakit.guide as guide
+
+    guide.start()
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: exakit-code-start
+    mo.md(r"""
+    # The code behind this page
+
+    <div class="guide-code-start"></div>
+
+    The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Start here: access and understand your data
 
     **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 
@@ -32,7 +68,7 @@ def _(mo):
 
     Shows what is installed and running: the database, each add-on and the loaded datasets. It changes nothing.
 
-    The next cell lists other kit commands. Each runs here, with its log in the cell.
+    The next cells read the rest of the kit live, change it from here (each with its log in the cell), and set up your AI model and Langfuse tracing. They are the calls the Home card's rows and buttons make.
     """)
     return
 
@@ -46,13 +82,72 @@ def _():
 
 
 @app.cell
-def _():
-    # Things you would otherwise do in a terminal - take the # off one line and run the cell; its log shows here.
-    # nb.exakit("update")                            # bring the kit and its add-ons up to date
-    # nb.exakit("marketplace", "dash-server")        # add an add-on (Share, step 8, needs this one)
-    # nb.exakit("data-load", "fraud_transactions")   # load another of the kit's datasets
-    # nb.exakit("logs")                              # every log the kit keeps
-    # nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})   # connect an AI client to the database
+def _(nb):
+    # What the kit has, read live: the same calls the Home card shows.
+    components = nb.components()            # the kit's parts, their versions and pending updates
+    addons = nb.addons()                    # the marketplace's add-ons and their state
+    ai_clients = nb.ai_clients()            # the AI clients the kit can connect, and which are connected
+    sample_datasets = nb.sample_datasets()  # the kit's sample datasets, and which are loaded
+    loaded_files = nb.loaded_files()        # the files you loaded with exakit data-load: table, rows, file
+    notebooks = nb.notebooks("data-scientist")   # this persona's notebooks, in order
+    persona_plan = nb.persona_plan()        # what this kit's personas bring that is still missing
+    approved = nb.approved_datasets()       # the column maps approved so far
+    workflows = nb.list_workflows()         # every workflow log; the last one's events:
+    workflow_events = nb.workflow_log(workflows[-1]["id"]) if workflows else []
+    model, tracing = nb.model_settings(), nb.tracing()
+    [(c["id"], c["installed"], c["status"]) for c in components]
+    return
+
+
+@app.cell
+def _(nb):
+    # Change the kit from here: set what you want, run the cell; each runs as `exakit` would, its log in the cell.
+    START_DATABASE = False   # start the database after a restart of this computer
+    ADD_ON = ""              # an add-on to install and start, e.g. one of [a["id"] for a in addons]
+    LOAD = ""                # a kit dataset (sample_datasets), a file or a folder, loaded with exakit data-load
+    LOAD_SCHEMA = ""         # where a file or folder lands (empty: STARTER_KIT, exakit's default)
+    SERVICE = ""             # a service to start (kit_state["services"]), then its log
+    CHECK_AI = False         # check the AI clients' connection to the database (mcp-doctor)
+    UPDATE_KIT = False       # bring the kit and its add-ons up to date
+    if START_DATABASE:
+        nb.exakit("start")
+    if ADD_ON:
+        nb.addon_ready(ADD_ON)
+    if LOAD:
+        nb.exakit("data-load", LOAD, env={"EXAKIT_SCHEMA": LOAD_SCHEMA.upper()} if LOAD_SCHEMA else None)
+    if SERVICE:
+        nb.exakit("start", SERVICE)
+        nb.exakit("logs", SERVICE)
+    if CHECK_AI:
+        nb.exakit("mcp-doctor")
+    if UPDATE_KIT:
+        nb.kit_update()
+    return
+
+
+@app.cell
+def _(nb):
+    # Your AI model and Langfuse tracing, remembered for every notebook of this kit (readable by you only). The keys are
+    # asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered. The Home card's AI model
+    # row does the same with menus: pick the provider, give the key, pick the model and its effort.
+    providers = {p["id"]: p for p in nb.model_providers()}   # the providers the kit knows, with their addresses
+    PROVIDER = ""            # one of providers, e.g. "anthropic", "openai", "gemini", "ollama"
+    SHOW_MODELS = False      # True: list the models your key may use (the key is asked in a hidden box)
+    MODEL_ID = ""            # one of those models
+    EFFORT = ""              # where the model takes one (nb.effort_levels(PROVIDER, MODEL_ID)): "low", "medium", "high"
+    PROVIDER_BASE_URL = ""   # empty: the provider's own address; or any Chat Completions address of your own
+    LANGFUSE_BASE_URL = ""   # e.g. "https://cloud.langfuse.com"
+    FORGET = False
+    if PROVIDER and not PROVIDER_BASE_URL:
+        PROVIDER_BASE_URL = providers[PROVIDER]["base_url"]
+    if PROVIDER and SHOW_MODELS:
+        print(nb.provider_models(PROVIDER, base_url=PROVIDER_BASE_URL))
+    if MODEL_ID:
+        nb.use_model(MODEL_ID, PROVIDER_BASE_URL, effort=EFFORT, remember=True)
+    if LANGFUSE_BASE_URL:
+        nb.use_model(langfuse_base_url=LANGFUSE_BASE_URL, remember=True)
+    if FORGET:
+        nb.forget_model(model=True, langfuse=True)
     return
 
 
@@ -148,9 +243,11 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data"
+    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
     MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
-    own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
+    MY_TABLE = ""    # or a table already in the database, e.g. "MY_DATA.ORDERS" (nb.data_map lists them)
+    own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
+                else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
     return (own_data,)
 
 
@@ -160,8 +257,10 @@ def _(mo):
     mo.md(r"""
     **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
 
-    1. Not connected yet? Fill in `CONNECTOR`, `SOURCE_NAME` and `SOURCE_URL` (the source's connection string). The password is asked in a hidden box. On a Mac, use `192.168.64.1` for a database on this computer.
-    2. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
+    1. Not connected yet? Pick `CONNECTOR` and paste its connection string into `SOURCE_URL`: the kit reads it as `exakit connect --url` does, and `source_reading["missing"]` says what it did not give. Put those (and any other input you want to change, by the names in `connector_forms[CONNECTOR]["inputs"]`) in `SOURCE_INPUTS`. No connection string? Leave it empty and give every input in `SOURCE_INPUTS`. On a Mac, use `192.168.64.1` for a database on this computer.
+    2. Test it: the kit checks the inputs and this computer tries the source's host and port. Nothing is changed and no password is needed.
+    3. Connect it: the password is asked in a hidden box and goes to the kit only.
+    4. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
     """)
     return
 
@@ -169,10 +268,32 @@ def _(mo):
 @app.cell
 def _(nb):
     # Cell tags: load
+    connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
+    connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
+    source_tips = nb.source_engine("catalog", "--public-ip")["events"]   # this computer's public IP, to allow at a cloud source
     CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
     SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
-    SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
-    connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL) if CONNECTOR else None
+    SOURCE_SETTINGS = {}   # a source with several kinds in one: {"catalog": "unity", "files": "s3"} for a Lakehouse (connector_forms["lakehouse"]["tree"] lists the picks)
+    if CONNECTOR and SOURCE_SETTINGS:
+        connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)   # what that combination asks
+    SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)
+    source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL, **SOURCE_SETTINGS) if CONNECTOR and SOURCE_URL else None
+    SOURCE_INPUTS = {}  # what the string did not give (source_reading["missing"]), e.g. {"user": "reader"}; no string: every input
+    SOURCE_INPUTS = {**SOURCE_SETTINGS, **({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
+    return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
+
+
+@app.cell
+def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
+    # Cell tags: load
+    source_test = nb.test_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
+    return
+
+
+@app.cell
+def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
+    # Cell tags: load
+    connected = nb.connect_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
     return (connected,)
 
 
@@ -275,9 +396,46 @@ def _(chosen_data, connection, nb):
 @app.cell
 def _(nb, role_review):
     # Cell tags: review
+    # Optional: let your AI model (set up on the Home card, or nb.model_setup) complete the draft. It is shown column
+    # names, types and the kit's measured evidence - never a row, never a sensitive column - and answers with the roles it
+    # would change and why, the column for each slot, and one sentence per column saying what it holds. It never picks
+    # what to predict or what makes a row unique. Nothing changes until you approve: AI_APPROVE approves with its answer.
+    AI_CHECK = False
+    AI_APPROVE = False
+    if AI_CHECK:
+        # several tables from several sources: together=[the other tables' reviews] lets it read them next to this one
+        ai_map = nb.fill_column_map(role_review)
+        if AI_APPROVE:
+            role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
+    return (AI_CHECK,)
+
+
+@app.cell
+def _(role_review):
+    # Cell tags: review
+    # Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
+    # slots, {"target": "COLUMN"}. Empty: the picker above (or an approval already saved) stands.
+    ROLE_CHANGES = {}
+    SLOT_CHANGES = {}
+    if ROLE_CHANGES or SLOT_CHANGES:
+        role_review.approve(ROLE_CHANGES or None, SLOT_CHANGES or None)
+    return
+
+
+@app.cell
+def _(nb, role_review):
+    # Cell tags: review
     dataset = role_review.dataset()
     nb.show_roles(dataset)
     return (dataset,)
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
+    versions = nb.column_map_versions(dataset.id)              # every saved version; approving one's roles again restores it
+    return
 
 
 @app.cell(hide_code=True)
@@ -286,7 +444,7 @@ def _(mo):
     mo.md(r"""
     ### Check the map again
 
-    The same map, read again after the approval. The table you approved now shows `approved vN, published` and every slot by name. `not published` means the roles are saved but agents cannot read them yet: approve again to publish.
+    The same map, read again after the approval. The table you approved now shows `approved vN, in semantic model <name>` and every slot by name. `not in a semantic model yet` means the roles are saved but agents cannot read them yet: approve again to publish.
     """)
     return
 
@@ -296,6 +454,55 @@ def _(connection, dataset, nb):
     # Cell tags: review
     dataset  # read after the approval above, so this map shows it
     nb.data_map(connection)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Semantic views: one model over all your data
+
+    Approving a column map published it in **Exasol Semantic Views**, the database's semantic layer: the schema's model, with the table as an entity, its time, category and flag columns as dimensions and its measures as `total_` and `average_` metrics. AI clients read it over MCP; a notebook asks it with `nb.semantic_sql`. The kit installs Semantic Views the first time it is needed.
+
+    A model can also span sources: sample data, your own files and any number of external sources at once. List the tables (each with an approved column map) and the links between them (`SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY`). With `ai=True` your model proposes business names, synonyms and the metrics people ask for, from names, types and notes only (never a row). `preview=True` shows the result and writes nothing.
+
+    **Do now:** put your tables into `SEMANTIC_TABLES`, run the cell, read the preview, then set `PUBLISH_SEMANTIC = True` and run it again.
+
+    A model is built from what was approved at the time. Approving a column map refreshes every model its table is in. After a link or a new table, run `nb.refresh_semantic(connection, "<name>")`.
+    """)
+    return
+
+
+@app.cell
+def _(AI_CHECK, connection, dataset, nb):
+    # Cell tags: review
+    SEMANTIC_NAME = "my_data"
+    SEMANTIC_TABLES = [dataset.fact_table]        # add tables of this or other schemas: "VS_LOGISTICS.COURIER_DAILY", "MY_DATA.TARGETS"
+    SEMANTIC_LINKS = []                           # your own: "MY_DATA.ORDERS.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE", or {"from": ..., "to": ..., "note": "why"}
+    SEMANTIC_TABLE_NOTES = {}                     # what each table is, in a sentence: {"MY_DATA.TARGETS": "The monthly target per state."}
+    PUBLISH_SEMANTIC = False
+    SEMANTIC_SCHEMAS = []                         # or whole schemas: every approved table of each, e.g. ["MY_DATA", "VS_LOGISTICS"]
+    # Links between the tables you listed, found from the values (two tables of one schema are compared too), each with its evidence.
+    found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
+    # The links the model uses: yours, and the found ones the data backs. A found link carries its evidence into the model.
+    model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
+    if AI_CHECK:      # your AI model says what each table and link is, and names the model (names, types and roles only)
+        model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)
+        SEMANTIC_TABLE_NOTES = {**model_notes["tables"], **SEMANTIC_TABLE_NOTES}
+    semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=model_links, table_notes=SEMANTIC_TABLE_NOTES,
+                                 schemas=SEMANTIC_SCHEMAS, find=bool(SEMANTIC_SCHEMAS), ai=None, preview=not PUBLISH_SEMANTIC)
+    semantic
+    return PUBLISH_SEMANTIC, SEMANTIC_NAME
+
+
+@app.cell
+def _(PUBLISH_SEMANTIC, SEMANTIC_NAME, connection, nb):
+    # Cell tags: review
+    semantic_models = nb.semantic_models(connection)       # every model in the database; "refreshable" ones the kit built
+    if PUBLISH_SEMANTIC:
+        refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
+    semantic_models
     return
 
 

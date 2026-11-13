@@ -1,0 +1,61 @@
+---
+title: Sample datasets
+description: The two datasets that come with the kit, what is in each, the numbers you should see, and how the first cell loads one.
+---
+
+The kit ships two sample datasets, so you can run every stage before you bring your own data. `amazon_sales` is a clean table of orders. `fraud_transactions` has repeats, gaps and placeholders on purpose, so the cleaning steps have something to find. Both load with the same cell.
+
+## Load one
+
+The first cell of `00_quickstart` picks the dataset:
+
+```python
+SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
+sample_data = nb.load_sample(connection, SAMPLE)
+```
+
+If the dataset is not in the database, the cell runs `exakit data-load amazon_sales` and waits for it. If it is already there, the cell says it is loaded and uses it. `nb.sample_datasets()` lists the kit's datasets and which are loaded.
+
+## How we used it: amazon_sales
+
+The table is `AMAZON.ORDER_LINES`. It holds order lines of one fashion seller. Each row is one line of an order, so the key is `ORDER_LINE_ID`, and the time column is `ORDER_DATE`. The target for the worked examples is `CANCELLED`, which is 1 when the line was cancelled.
+
+These numbers come from a real local database, read with read-only queries on 12 November 2026:
+
+```sh
+exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
+exakit sql 'SELECT COUNT(DISTINCT ORDER_ID) FROM AMAZON.ORDER_LINES'
+exakit sql 'SELECT MIN(ORDER_DATE), MAX(ORDER_DATE) FROM AMAZON.ORDER_LINES'
+exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES WHERE CANCELLED = 1'
+```
+
+| Query | Result |
+|---|---|
+| `COUNT(*)` | 128,975 rows |
+| `COUNT(DISTINCT ORDER_ID)` | 120,378 orders |
+| `MIN` and `MAX` of `ORDER_DATE` | 2022-03-31 to 2022-06-29 |
+| `CANCELLED = 1` | 18,332 rows, 14.2% of the lines |
+
+Two facts matter for the later stages:
+
+- **Many lines per order.** 128,975 lines belong to 120,378 orders, so an order can have more than one line. Count orders with `COUNT(DISTINCT ORDER_ID)` when you mean orders.
+- **STATUS gives the target away.** Every cancelled line has `STATUS = 'Cancelled'`, and no other line does. Run `SELECT COUNT(*) FROM AMAZON.ORDER_LINES WHERE STATUS = 'Cancelled'`: it returns 18,332, the same as `CANCELLED = 1`. A model that sees `STATUS` learns the answer from it, not from the order. [Prepare](/data-scientist/prepare) shows how the kit catches this.
+
+## How we used it: fraud_transactions
+
+```python
+SAMPLE = "fraud_transactions"
+sample_data = nb.load_sample(connection, SAMPLE)
+```
+
+The table is `FRAUD.TRANSACTIONS`: 51,000 card and bank transactions. Of these, 2,510 are fraud (4.9%).
+
+The table is messy on purpose. The dataset's README (`data/datasets/fraud_transactions/README.md`) records what is wrong with it:
+
+- **Repeated ids.** `TRANSACTION_ID` is not unique. 51,000 rows hold 50,000 distinct ids, so 1,000 ids appear twice. The README counts 881 exact copies and 119 copies that disagree. `ROW_ID` is the key for this table.
+- **Placeholders.** `DEVICE_USED` has 1,530 rows `Unknown Device`, and `PAYMENT_METHOD` has 1,530 rows `Invalid Method`. They look like categories, but they mean "not known".
+- **Gaps.** Some values are missing, and the README says about 5% of `DEVICE_USED` and `PAYMENT_METHOD` are NULL.
+
+The kit does not clean this table. The cleaning is part of the work, and it is covered in [Prepare](/data-scientist/prepare).
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [Your own file](/data-scientist/get-the-data/your-own-files).

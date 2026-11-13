@@ -127,6 +127,42 @@
         "SKILL.md": "68797c00a6bbb1170ff01e3465d0022d6ff3850a6688bdf8a7582ce37a4cf362",
         "pyexasol_skill.md": "ae693c64f91178d99cbf1849e69813dca8093912c1f0398d7a75c92e78a3c43d"
       }
+    },
+    "exasol-semantic-analyst": {
+      "repo": "exasol-labs/exasol-semantic-views",
+      "ref": "v0.6.1",
+      "commit": "8f1f76bdb1552821d609fb0ad1126d6661c8555d",
+      "path": "skills/exasol-semantic-analyst",
+      "addon": "semantic-views",
+      "files": {
+        "LICENSE": "38bc87b0e18593432acbeb48edddecc43ad0b055831c3d58aa64333fdfaca4e9",
+        "SKILL.md": "08bbcee45ca5d3a11f71c4271b131e2d99b1e709a3a42c37f7d21ccb6a79b1e4",
+        "references/query-workflows.md": "44468263cf24cb01b211f76fb87662046a27efcd692d786fccc3492e38b11f36"
+      }
+    },
+    "exasol-semantic-modeler": {
+      "repo": "exasol-labs/exasol-semantic-views",
+      "ref": "v0.6.1",
+      "commit": "8f1f76bdb1552821d609fb0ad1126d6661c8555d",
+      "path": "skills/exasol-semantic-modeler",
+      "addon": "semantic-views",
+      "files": {
+        "LICENSE": "38bc87b0e18593432acbeb48edddecc43ad0b055831c3d58aa64333fdfaca4e9",
+        "SKILL.md": "a9178951700a4520a128735b53ac33e3bbf7b26a0219c3df04f581b43be58a81",
+        "references/authoring-workflows.md": "1d3ca99d20c59e0081a8fbf4fd92cfaf19b61e718a33950af8ddb1e0939436ab"
+      }
+    },
+    "exasol-semantic-reviewer": {
+      "repo": "exasol-labs/exasol-semantic-views",
+      "ref": "v0.6.1",
+      "commit": "8f1f76bdb1552821d609fb0ad1126d6661c8555d",
+      "path": "skills/exasol-semantic-reviewer",
+      "addon": "semantic-views",
+      "files": {
+        "LICENSE": "38bc87b0e18593432acbeb48edddecc43ad0b055831c3d58aa64333fdfaca4e9",
+        "SKILL.md": "def7389fe4d54c7dee6acd841e8397514c16046f5e2bfb19b1fd5516bec79a2d",
+        "references/review-bundle-template.md": "f980eb2b89a8ac85d7ddb03d0e3bd641146512c5f086cd9c8f57ba200505a472"
+      }
     }
   }
 }

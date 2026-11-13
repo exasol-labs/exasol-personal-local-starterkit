@@ -1,0 +1,33 @@
+---
+title: Reading ROC AUC
+description: What the ROC AUC number means in plain words, and what the kit's note says for each range of the score.
+---
+
+ROC AUC is the score the lab uses for a yes-or-no prediction when the rarer answer is 5% or more. It is a number from 0 to 1.
+
+## Reading ROC AUC
+
+ROC AUC is the chance that the model gives a row with a 1 a higher score than a row with a 0. Pick one row that has a 1 and one that has a 0 at random. A score of 0.5 means the model ranks them correctly only half the time, which is guessing. A score of 1.0 means it always ranks the 1 higher.
+
+The readout note turns the number into words:
+
+| ROC AUC | What the note says |
+|---|---|
+| Below 0.6 | About as good as guessing |
+| 0.6 to below 0.7 | A weak signal |
+| 0.7 to below 0.85 | A useful signal |
+| 0.85 and above | A strong signal. Check that it is not too good to be true. |
+
+The note also says that 50% is guessing, and that accuracy is not the score when the answer is rare.
+
+## What the lab does with it
+
+- The lab's own `baseline` model always gives the same answer, so its ROC AUC is 0.5. Any real model should score above it.
+- The lab scores each model by cross-validated ROC AUC and picks from those scores (the rule is on [The models the lab tries](/data-scientist/model/the-models)). It reports the held-out ROC AUC beside each one.
+- On `amazon_sales`, the rarer answer is 14.2% of rows, so the metric is ROC AUC. On `fraud_transactions`, the rarer answer is 4.9%, so the metric is PR AUC instead. See [Rare answers](/data-scientist/evaluate/rare-answers).
+
+## Where the note comes from
+
+`nb.note_model` writes the note. Its wording is in `readout.py`, in the function of the same name. The ranges in the table above are the ones coded there. Nothing in the note is a statistical test.
+
+Back to [Evaluate](/data-scientist/evaluate). Next: [Rare answers](/data-scientist/evaluate/rare-answers).

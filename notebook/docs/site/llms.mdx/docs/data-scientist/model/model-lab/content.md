@@ -1,0 +1,104 @@
+# The model lab (/data-scientist/model/model-lab)
+
+
+
+`nb.model_lab` trains one task on your approved data. It trains every model of that task on the same rows, scores each one, and picks the best. It is the second half of the model stage, after the baseline. The lab uses the same approved column map as the notebook baseline, but it reads more columns and more rows.
+
+## The tasks [#the-tasks]
+
+| Task                | What it learns                         | Example                           |
+| ------------------- | -------------------------------------- | --------------------------------- |
+| Predict yes or no   | The 0/1 target                         | Will this order be cancelled?     |
+| Predict a number    | A number you name with `target_number` | What will this order's amount be? |
+| Find natural groups | Nothing: no outcome is needed          | Which orders look alike?          |
+| Find unusual rows   | Nothing: no outcome is needed          | Which rows sit far from the rest? |
+
+<Flow
+  caption="What the lab does with your approved data"
+  steps="[
+  { title: &#x22;Read the approved columns&#x22;, text: &#x22;Every column with a role, up to 50,000 rows&#x22;, code: &#x22;nb.lab_data(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Leave out what it must not read&#x22;, text: &#x22;Answer-givers, personal data, keys, identifiers and free text&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Split the rows&#x22;, text: &#x22;The newest rows by time, a random share, or whole groups&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/evaluate/hold-out&#x22; },
+  { title: &#x22;Train every model of the task&#x22;, text: &#x22;On the same training rows, with cross-validation&#x22;, code: 'nb.model_lab(connection, dataset, &#x22;predict_yes_no&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/model/the-models&#x22; },
+  { title: &#x22;Score on the held-out rows&#x22;, text: &#x22;The held-out rows are scored, not used to choose&#x22;, tone: &#x22;kit&#x22; },
+]"
+/>
+
+## What the lab reads [#what-the-lab-reads]
+
+The kit decides the inputs from the roles in the column map. You do not type column names. The table gives each role's treatment.
+
+| Role                | How the lab uses it                     | Left out when                                       |
+| ------------------- | --------------------------------------- | --------------------------------------------------- |
+| `measure`           | As a number                             | It gives the answer away, or is personal data       |
+| `category`, `flag`  | As groups: one 0 or 1 column per value  | It gives the answer away, or is personal data       |
+| `time`              | Only the month of the date              | Never left out, but the full date is not used       |
+| `key`, `identifier` | Not used as inputs                      | Almost every row is different                       |
+| `text`              | Not used, except through a feature idea | Always. Free text is not a column the lab can read. |
+| `other`             | Not used                                | Always: its role says leave it out                  |
+| target              | The answer the model learns             | It is never an input                                |
+
+The lab reads at most 50,000 rows (`ROW_LIMIT` in the code). When the table has a date, those are the newest rows. Otherwise the query sorts by its first column and keeps 50,000 rows.
+
+## What the lab leaves out, and why [#what-the-lab-leaves-out-and-why]
+
+`lab_data.left_out` lists every column the lab did not use, with its reason. Read it after every run. The reasons come from the code in `lab.py`:
+
+* **gives the answer away**: the column is in the list from `nb.leakage_check`. See [Leakage](/data-scientist/evaluate/leakage) on the Evaluate pages.
+* **personal data**: the column is marked sensitive in the column map. It is never used as an input.
+* **different for (almost) every row, so there is nothing general to learn**: a key or an identifier.
+* **free text: see the feature ideas**: a text column.
+* **marked Leave out**: the column's role is `other`.
+
+```python
+lab_data = nb.lab_data(connection, dataset)
+print(lab_data.left_out)   # every column left out, and why
+```
+
+## The metric and the split for amazon_sales [#the-metric-and-the-split-for-amazon_sales]
+
+* **The metric.** The rarer answer is 14.2% of rows, which is above 5%, so the lab scores with ROC AUC. Below 5%, it uses PR AUC instead. Both are explained on [Reading ROC AUC](/data-scientist/evaluate/roc-auc) and [Metrics](/data-scientist/evaluate/metrics).
+* **The rows.** `amazon_sales` has 128,975 rows, so the lab reads the newest 50,000 by `ORDER_DATE`.
+* **The split.** `ORDER_DATE` is a date, so the lab uses a time split. It learns from the oldest 75% of those rows and is tested on the newest 25%.
+* **The inputs.** Every measure, category and flag column the column map gives a role to, plus the month of the date. Keys, identifiers, text, personal data and the answer-givers are left out.
+
+<Callout>
+  Check `AMOUNT` before you trust the lab. The dataset README says `AMOUNT` and `QTY` change once an order is cancelled, so a model that reads them learns the answer it was given. The leakage check tests only columns with 2 to 50 distinct values (`GROUPABLE` in `data_checks.py`), so it may not flag `AMOUNT`. To see how many values it has, run `SELECT COUNT(DISTINCT "AMOUNT") FROM AMAZON.ORDER_LINES`. If `AMOUNT` tops `lab.importance`, leave it out yourself:
+
+  ```python
+  leaks = nb.leakage_check(connection, dataset) + ["AMOUNT"]
+  lab = nb.model_lab(connection, dataset, "predict_yes_no", leaks=leaks)
+  ```
+</Callout>
+
+## What the model leans on [#what-the-model-leans-on]
+
+`lab.importance` lists up to eight inputs, the strongest first. For each input, the kit scrambles its values on the held-out rows and measures how far the score drops. A large drop means the model relies on that input. Only inputs whose drop is above zero are listed.
+
+The list is a lead, not proof. A value with few rows can look strong by chance.
+
+## The messy dataset: fraud_transactions [#the-messy-dataset-fraud_transactions]
+
+The README of `fraud_transactions` gives 51,000 rows, with 4.9% of them fraud. Measured on the database, the table has 50,000 distinct `TRANSACTION_ID` values, so 1,000 ids appear twice. Three things change for the lab:
+
+* **A rare answer.** Under 5% of rows are 1s, so the lab scores with PR AUC, which focuses on finding the rare rows. The lab records the reason in `lab.run.notes`: "The 1s are rare, so the score is PR AUC, which focuses on finding them."
+* **No date.** The table has only the hour of the day. The lab splits at random, stratified so both sides keep the same share of fraud. With no date it sorts by the first column of its query and keeps 50,000 of the 51,000 rows. The notebook baseline reads the first 20,000 rows by `ROW_ID` and leaves the month out.
+* **Placeholder values.** The README lists 1,530 `Unknown Device` and 1,530 `Invalid Method` values. The lab does not clean them. Each placeholder becomes one more category value. To read the typed, cleaned view from [Prepare](/data-scientist/prepare) instead, set `USE_PREPARED = True` in `01_explore`.
+
+## Settings [#settings]
+
+Pass settings by name. An unknown name is an error.
+
+| Setting                                                     | What it does                                                                                     |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `train_pct`                                                 | The share of rows used for training, from 50 to 90. The default is 75.                           |
+| `split_method`                                              | `time`, `random` or `group`. See [Hold-out](/data-scientist/evaluate/hold-out).                  |
+| `split_group`                                               | The column whose whole groups are kept on one side, for `group`                                  |
+| `folds`                                                     | The number of cross-validation folds on the training rows. The default is 5.                     |
+| `effort`                                                    | `fast`, `balanced` (the default) or `thorough`. It sets the number of trees: 100, 200 or 400.    |
+| `max_depth`, `C`, `neighbours`, `learning_rate`, `clusters` | The settings of the models that use them                                                         |
+| `contamination`                                             | The share of rows to flag as unusual. The default is 2%. The code keeps it between 0.5% and 20%. |
+
+The full signatures are in the [model lab reference](/data-scientist/development/reference/lab).
+
+Back to [Model](/data-scientist/model). Next: [The models the lab tries](/data-scientist/model/the-models).

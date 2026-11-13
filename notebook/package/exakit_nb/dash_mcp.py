@@ -66,6 +66,17 @@ class DashTools:
             return pool.submit(lambda: asyncio.run(call())).result()
 
 
-def dash_tools() -> DashTools:
-    """The notebook's Dash Server tool adapter; each call is an MCP tool call."""
+def dash_tools(ready: bool = True) -> DashTools:
+    """The notebook's Dash Server tool adapter; each call is an MCP tool call. When Dash Server is not installed or
+    not running, it is installed and started first, the way nb.addon_ready("dash-server") does it (`exakit
+    marketplace dash-server`, `exakit start dash-server`), with its progress shown: a cell that previews a dashboard
+    works on its own, and nothing is asked. ``ready=False`` only reports: it raises when the server is not there."""
+    try:
+        return DashTools()
+    except RuntimeError:
+        if not ready:
+            raise
+    from .kit_commands import addon_ready
+
+    addon_ready("dash-server")
     return DashTools()

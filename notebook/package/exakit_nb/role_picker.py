@@ -6,8 +6,10 @@
 The picker is the descriptor itself: one dropdown per column with the eight roles (key, time, measure, category, flag,
 text, identifier, other), set to the role the rules drafted and labelled with the evidence that chose it; then one
 dropdown per slot - the columns the notebooks use (key, time, text, target, category, entity) - set to the drafted
-column; then an Approve button. In JupyterLab it is
-ipywidgets; in Marimo the review itself is a ``mo.ui.dictionary`` of ``mo.ui.dropdown`` with a ``mo.ui.run_button``, so
+column; then an Approve button. Each dropdown is the kit's own (``exakit_nb.picklist.PickList``, the guided cards'
+look: the list opens in place and says what each role is for). In JupyterLab the rest is ipywidgets; in Marimo the
+review itself is a ``mo.ui.dictionary`` of those dropdowns (through ``mo.ui.anywidget``; ``mo.ui.dropdown`` where it
+is missing) with a ``mo.ui.run_button``, so
 ``ds = review.dataset()`` runs again when the button is clicked and stops cleanly (``mo.stop``) until then; in a plain
 Python session ``review.approve({"COLUMN": "role", ...})`` is the same path.
 
@@ -37,6 +39,20 @@ from .describe import COLUMN_ROLES, SLOTS, Draft, ROLES, describe
 from .workflow import DESCRIBE_APPROVE, DESCRIBE_DRAFT, log_event
 
 __all__ = ["ApprovalNeeded", "RoleReview", "review_roles"]
+
+NOTE_LIMIT = 300            # a column's description: one sentence, not a document
+
+# What each role is for: the second line of each option in the kit's dropdown.
+ROLE_HINTS = {
+    "key": "Different in every row, like an order number",
+    "time": "A date or time: used for trends",
+    "measure": "An amount to add up or average",
+    "category": "A short list of repeated values: used to compare groups",
+    "flag": "Only two values: can be what you predict",
+    "text": "Sentences people wrote",
+    "identifier": "Names or codes that point at one thing",
+    "other": "Left out of everything",
+}
 
 AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"
 FORCE = "force"
@@ -218,13 +234,16 @@ class RoleReview:
 
     # --- approving -------------------------------------------------------------------------------------------------
 
-    def approve(self, choices: dict[str, str | None] | None = None, slots: dict[str, str | None] | None = None) -> Dataset:
+    def approve(self, choices: dict[str, str | None] | None = None, slots: dict[str, str | None] | None = None,
+                notes: dict[str, str | None] | None = None) -> Dataset:
         """Apply the reviewed roles ({COLUMN: role}, one of the eight; the proposal when None) and slots ({slot:
-        COLUMN or None}), then save and comment the approved descriptor. An earlier picker's ``date``, ``label`` and
-        ``entity`` are still taken: they put the column in the time, target and entity slot."""
+        COLUMN or None}), then save and comment the approved descriptor. ``notes`` ({COLUMN: text}) sets a column's
+        description - what the column holds, in a sentence; the semantic model shows it as the field's comment - and
+        an empty text removes one. An earlier picker's ``date``, ``label`` and ``entity`` are still taken: they put
+        the column in the time, target and entity slot."""
         roles = self.suggestions()
         chosen = self.slot_suggestions()
-        unknown = sorted(set(choices or {}) - set(roles))
+        unknown = sorted((set(choices or {}) | set(notes or {})) - set(roles))
         if unknown:
             raise ValueError(f"The table has no column: {', '.join(unknown)}")
         for column, role in (choices or {}).items():
@@ -252,6 +271,13 @@ class RoleReview:
             column, names = next(iter(twice.items()))
             raise ValueError(f"{column} sits in two slots ({' and '.join(names)}). A column fills one slot: pick one.")
         corrected = self._corrected(roles, chosen)
+        for column, text in (notes or {}).items():
+            entry = corrected.doc["columns"].setdefault(column, {})
+            text = " ".join(str(text or "").split())[:NOTE_LIMIT]
+            if text:
+                entry["note"] = text
+            else:
+                entry.pop("note", None)
         self.approved = corrected.approve(conn=self.conn)           # logs the approval to the active workflow
         self._save_beside(corrected)
         return self.approved
@@ -381,6 +407,15 @@ class RoleReview:
                 raise ImportError("no Jupyter kernel")
         except ImportError:
             return None
+        try:            # the kit's own dropdown (the guided cards' look), in place of ipywidgets.Dropdown
+            from types import SimpleNamespace
+
+            from .picklist import PickList
+
+            widgets = SimpleNamespace(Dropdown=PickList, HTML=widgets.HTML, VBox=widgets.VBox, Button=widgets.Button,
+                                      Output=widgets.Output)
+        except ImportError:
+            pass
         return self.build_jupyter_picker(widgets)
 
     def build_jupyter_picker(self, widgets):
@@ -397,7 +432,7 @@ class RoleReview:
             elif low and column == next(c for c in self.review_order() if c not in low):
                 rows.append(widgets.HTML("<b>The rest</b> - drafted at high confidence"))
             summary, runner = labels[column]
-            picker = widgets.Dropdown(options=[(r, r) for r in COLUMN_ROLES], value=role,
+            picker = widgets.Dropdown(options=[(r, r, ROLE_HINTS.get(r, "")) for r in COLUMN_ROLES], value=role,
                                       description=column, style={"description_width": "180px"})
             pickers[column] = picker
             note = " &middot; ".join(escape(part) for part in (summary, runner) if part)
@@ -437,6 +472,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
     class MarimoRoleReview(RoleReview, mo.ui.dictionary):
         def __init__(self, draft, conn, file):
             RoleReview.__init__(self, draft, conn, file)
+            kit_list = _kit_list(mo)
             labels, explanations, suggested = self.labels(), self.explanations(), self.suggestions()
             low = self.low_confidence()
             dropdowns = {}
@@ -447,12 +483,23 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
                          f"**{escape(column)}**<br>{escape(explanations[column])}" +
                          (f"<br>Technical evidence: {escape(summary)}" if summary else "") +
                          (f"<br>{escape(runner)}" if runner else ""))
-                dropdowns[column] = mo.ui.dropdown(options={r: r for r in COLUMN_ROLES}, value=role, label=label)
+                if kit_list:      # the kit's own dropdown: the column, its explanation and evidence under it
+                    note = " · ".join(part for part in (explanations[column], summary, runner) if part)
+                    dropdowns[column] = mo.ui.anywidget(kit_list(
+                        [(r, r, ROLE_HINTS.get(r, "")) for r in COLUMN_ROLES], value=role, note=note,
+                        description=("Check first: " if column in low else "") + column))
+                else:
+                    dropdowns[column] = mo.ui.dropdown(options={r: r for r in COLUMN_ROLES}, value=role, label=label)
             columns = list(self.suggestions())
-            slot_dropdowns = {slot: mo.ui.dropdown(options={NONE_LABEL: None, **{c: c for c in columns}},
-                                                   value=column or NONE_LABEL,
-                                                   label=f"**{slot}**: {escape(SLOT_PURPOSES[slot])}")
-                              for slot, column in self.slot_suggestions().items()}
+            if kit_list:
+                slot_dropdowns = {slot: mo.ui.anywidget(kit_list([(NONE_LABEL, None), *[(c, c) for c in columns]], value=column,
+                                                                 description=slot, note=SLOT_PURPOSES[slot]))
+                                  for slot, column in self.slot_suggestions().items()}
+            else:
+                slot_dropdowns = {slot: mo.ui.dropdown(options={NONE_LABEL: None, **{c: c for c in columns}},
+                                                       value=column or NONE_LABEL,
+                                                       label=f"**{slot}**: {escape(SLOT_PURPOSES[slot])}")
+                                  for slot, column in self.slot_suggestions().items()}
             mo.ui.dictionary.__init__(self, {"roles": mo.ui.dictionary(dropdowns),
                                              "slots": mo.ui.dictionary(slot_dropdowns),
                                              "approve": mo.ui.run_button(label="Approve column map")},
@@ -462,12 +509,12 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
         def choices(self) -> dict[str, str | None]:
             values = self.value or {}
             roles = values.get("roles") or {}
-            return {column: roles.get(column) for column in self.draft.columns()}
+            return {column: _picked(roles.get(column)) for column in self.draft.columns()}
 
         def slot_choices(self) -> dict[str, str | None]:
             values = self.value or {}
             slots = values.get("slots") or {}
-            return {slot: slots.get(slot) for slot in SLOTS}
+            return {slot: _picked(slots.get(slot)) for slot in SLOTS}
 
         def dataset(self, draft_ok: bool = False) -> Dataset:
             if (self.value or {}).get("approve"):                  # the button was clicked: compute the approval now
@@ -492,6 +539,23 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
             return self
 
     return MarimoRoleReview(draft, conn, file)
+
+
+def _kit_list(mo):
+    """The kit's dropdown widget when this marimo can show an anywidget (mo.ui.anywidget), else None: the plain
+    mo.ui.dropdown is used then."""
+    if not hasattr(getattr(mo, "ui", None), "anywidget"):
+        return None
+    try:
+        from .picklist import PickList
+    except ImportError:
+        return None
+    return PickList
+
+
+def _picked(value):
+    """A pick as the review reads it: mo.ui.anywidget's value is the widget's state ({"value": ...})."""
+    return value.get("value") if isinstance(value, dict) and "value" in value else value
 
 
 def _marimo():

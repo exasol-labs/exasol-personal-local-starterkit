@@ -1,0 +1,17 @@
+{
+  "title": "Data Scientist",
+  "description": "One workflow in eight stages, on your local database",
+  "root": true,
+  "pages": [
+    "index",
+    "set-up",
+    "get-the-data",
+    "explore",
+    "prepare",
+    "model",
+    "evaluate",
+    "communicate",
+    "monitor",
+    "development"
+  ]
+}

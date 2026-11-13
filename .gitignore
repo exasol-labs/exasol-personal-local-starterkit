@@ -16,3 +16,12 @@ __pycache__/
 dist/
 # Internal release evidence stays on this machine.
 /v0.3.0 Changes.docx
+
+# The notebooks' documentation site (notebook/docs): what Node installs and builds on a maintainer's machine.
+# notebook/docs/site, the built site the kit ships, is tracked.
+/notebook/docs/node_modules/
+/notebook/docs/.next/
+/notebook/docs/out/
+/notebook/docs/.source/
+/notebook/docs/next-env.d.ts
+/notebook/docs/*.tsbuildinfo

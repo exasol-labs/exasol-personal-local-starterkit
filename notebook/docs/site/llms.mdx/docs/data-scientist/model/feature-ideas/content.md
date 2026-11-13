@@ -1,0 +1,57 @@
+# Feature ideas (/data-scientist/model/feature-ideas)
+
+
+
+## Feature ideas [#feature-ideas]
+
+A feature idea is a new input for the model, made from columns you already have. The kit proposes them, writes the SQL that builds each one, and tests them. You decide which ones to keep. Nothing is kept by default.
+
+<Flow
+  caption="Trying one feature idea"
+  steps="[
+  { title: &#x22;The kit proposes ideas&#x22;, text: &#x22;Up to eight, each with the SQL that builds it&#x22;, code: &#x22;ideas = nb.feature_ideas(lab)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Retrain with the idea added&#x22;, text: &#x22;The picked model, on the same split, with the idea as one more input&#x22;, code: &#x22;tried = nb.try_feature(lab, ideas[0])&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Read the verdict&#x22;, text: &#x22;helps, same, hurts or suspicious, in plain words&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Keep it or leave it out&#x22;, text: &#x22;Keep an idea by passing its series to the next lab&#x22;, code: &#x22;features={idea.id: tried['series']}&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## The ideas the kit makes [#the-ideas-the-kit-makes]
+
+`nb.feature_ideas(lab)` makes these, when the data has the columns for them. It returns at most eight.
+
+* **How long ago the date was**, when the table has a date. Newer and older records can behave differently.
+* **A measure compared with its category's usual value**, for the first two measures and the first two categories.
+* **Two categories together**, such as a category with a certain state.
+* **A category column that holds numbers, read as a number**, when it has more than two values. The model can then learn that more is worse, or better.
+* **Whether a measure is missing**, when more than 0.5% of its rows are blank.
+* **Whether a long text mentions a problem**, for a text column with long values. The words are price, slow, crash, wrong, cancel and a few others in `NEGATIVE_WORDS`.
+
+Each idea shows its title, the reason it was proposed, and the SQL. Read the SQL before you keep it. It is the same expression the kit would run on your table.
+
+## Try an idea [#try-an-idea]
+
+`nb.try_feature(lab, idea)` retrains the picked model with the idea added. It uses the same split and the same cross-validation folds, so the two scores can be compared. It returns a verdict and the idea's values as a series.
+
+| Verdict      | When                                                                                             | What it means                                            |
+| ------------ | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `suspicious` | The held-out score is above 0.98 for yes or no, or above 0.995 for a number                      | The idea probably gives the answer away. Do not keep it. |
+| `helps`      | Cross-validation rises by 0.005 or more, and the held-out score does not fall by more than 0.002 | Keep it, if you can explain why it should work.          |
+| `hurts`      | Cross-validation falls by 0.005 or more                                                          | Leave it out.                                            |
+| `same`       | Anything else                                                                                    | Not worth the extra column.                              |
+
+These thresholds are the kit's rules of thumb. They are not statistical tests. A verdict of `helps` on a small held-out set can still be chance. Read the number of rows held out, and `cv_sd`, before you believe it.
+
+## Keep an idea [#keep-an-idea]
+
+To keep an idea, pass its series to the next lab with `features=`:
+
+```python
+kept_features = {}
+kept_features[ideas[0].id] = tried["series"]          # only when the verdict is "helps"
+lab = nb.model_lab(connection, dataset, "predict_yes_no", features=kept_features)
+```
+
+The notebook's `01_explore` does this for the first three ideas. It keeps the ones with the verdict `helps` and drops the others. A kept idea is used on the next run of the lab cell.
+
+Back to [Model](/data-scientist/model). The AI model's part in feature ideas is on [Your AI model in this stage](/data-scientist/model/ai-model).

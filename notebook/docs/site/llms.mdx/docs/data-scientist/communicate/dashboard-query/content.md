@@ -1,0 +1,37 @@
+# Build the dashboard query (/data-scientist/communicate/dashboard-query)
+
+
+
+A dashboard starts from one query. The notebook builds that query from the approved column map, so the group and the count follow the roles you approved and not a name you typed.
+
+## The code [#the-code]
+
+In `03_share`, the dataset's roles build the query. The group is the category, the count is named after the grain, and the title and name follow from both:
+
+```python
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()             # CATEGORY for amazon_sales
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
+dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
+dashboard_query = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
+dashboard_draft = nb.share(dataset, dashboard_query, dashboard_title, app_name, measure="count")
+```
+
+`dataset.group_by()` returns the category. When the dataset has no category, it uses the entity, and then the target. The notebook prints a line when that happens.
+
+## What it produces for amazon_sales [#what-it-produces-for-amazon_sales]
+
+* The query: `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`
+* The title: "amazon_sales by category"
+* The name: `amazon-sales-by-category`
+
+The count is called `ORDER_LINES` because the column map's grain says "one row per order line". The name comes from the grain, through `nb.count_name`.
+
+`TITLE` and `APP_NAME` at the top of the notebook replace the generated title and name. The name identifies the dashboard on Dash Server.
+
+## Before anything is sent [#before-anything-is-sent]
+
+The notebook prints the query and its digest first, so you can read the SQL before it goes anywhere. Nothing is sent to Dash Server until you run the next cell.
+
+## Next [#next]
+
+Build the preview and check it on [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Back to [Communicate and deploy](/data-scientist/communicate).

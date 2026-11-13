@@ -25,7 +25,7 @@ user's request actually needs, not a manual for the whole kit.
 | Skill | Use it when… |
 |---|---|
 | [`local-agent-ready-starter`](local-agent-ready-starter/SKILL.md) | Setting up the kit and running a first trusted, AI-assisted query — install → connect MCP → load data → ask/inspect/run/validate/rerun. |
-| [`exakit`](exakit/SKILL.md) | **The master skill — load it first.** What the kit is and what each piece is for; how to find any command, option, persona, add-on or dataset from the kit's own `--json` answers instead of guessing; and the MANDATORY order of tools: `exakit data-load` before exapump before SQL `IMPORT`, MCP before admin SQL, the kit's persona notebooks (a new one is a copy of the persona's quickstart, in the same folder), dash-server for dashboards. Its rules win over every other skill on this machine. |
+| [`exakit`](exakit/SKILL.md) | **The master skill — load it first.** What the kit is and what each piece is for; how to find any command, option, persona, add-on or dataset from the kit's own `--json` answers instead of guessing; and the MANDATORY order of tools: `exakit data-load` before exapump before SQL `IMPORT`, MCP before admin SQL, the kit's persona notebooks (a new one is a copy of the persona's quickstart, in the same folder), dash-server for dashboards; and the semantic layer, Exasol Semantic Views - read the models first, answer from their metrics, build one across sources with `exakit describe --model`, keep it refreshed. Its rules win over every other skill on this machine. |
 | [`exakit-personas`](exakit-personas/SKILL.md) | Personas: listing what each brings, `persona plan` for what is still pending, `persona add` / `remove`, `EXAKIT_PERSONA` at install (and why your own answer replaces the persona's), and defining a new persona as a file. |
 
 **Personas** — installed with the persona that names them (`persona: <id>` in the skill's frontmatter)
@@ -117,6 +117,9 @@ the version the kit installs.
 | [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | `exasol-labs/exasol-agent-skills` | The pyexasol API; this machine's interpreter, TLS setting and credentials are in the `exakit` skill. |
 | [`exasol-bucketfs`](exasol-bucketfs/SKILL.md) | `exasol-labs/exasol-agent-skills` | Files in BucketFS with exapump. |
 | [`exasol-dash`](exasol-dash/SKILL.md) | `exasol-labs/dash-server` | Writing the Dash app for a dashboard on dash-server. Placed with the dash-server add-on. |
+| [`exasol-semantic-analyst`](exasol-semantic-analyst/SKILL.md) | `exasol-labs/exasol-semantic-views` | Answering business questions through a semantic model. Placed with the semantic-views add-on. |
+| [`exasol-semantic-modeler`](exasol-semantic-modeler/SKILL.md) | `exasol-labs/exasol-semantic-views` | Creating and maintaining a semantic model. Placed with the semantic-views add-on. |
+| [`exasol-semantic-reviewer`](exasol-semantic-reviewer/SKILL.md) | `exasol-labs/exasol-semantic-views` | Reviewing a model and preparing it for approval. Placed with the semantic-views add-on. |
 
 The set is versioned as one component (`components.skills` in `versions.json`),
 and it updates like one: when the maintainers change a skill and bump that

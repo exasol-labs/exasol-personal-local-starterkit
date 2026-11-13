@@ -199,8 +199,11 @@ d.approve()                                       # check, write, publish
 or with `exakit describe MY_DATA.TICKETS` on the command line. Approving writes
 `~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/v<n>.yaml` (a version is never
 rewritten) and `current.yaml`, a copy of the approved one; `EXAKIT_HOME` moves the store.
-It then publishes the roles as a view, `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`, whose column
-comments carry them, so an AI client connected over MCP sees them.
+It then publishes the roles in Exasol Semantic Views (installed first when the database does
+not have it): the schema's semantic model, its views in `SEM_<SCHEMA>`, is rebuilt with the table
+as an entity, its time, category and flag columns as dimensions and its measures as metrics, so
+an AI client connected over MCP answers from them. `exakit describe --model <NAME> --table ...`
+builds one model across schemas (sample data, your files, external sources).
 The table must not have changed since it was profiled: the schema digest is checked again.
 Approving then looks at the data once more: a key slot whose column repeats or has a gap, or a
 target that does not hold exactly two values (a yes/no outcome), is refused with what to change;
@@ -214,7 +217,7 @@ and key, and every many-to-one link between them - a foreign key the database de
 column that names another table's key and whose every value is in it (a name alone never makes
 a link). Correct it with `--link TABLE.COLUMN=TABLE.KEY` / `--unlink TABLE.COLUMN` and approve
 with `--approve`: `~/.exasol-starter-kit/descriptors/<SCHEMA>/v<n>.json` and `current.json`, the
-links published as `EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS` for AI clients. In Explore,
+links becoming relationships of the schema's semantic model for AI clients. In Explore,
 `schema_map.joined_view(dataset).create(conn)` turns it into one view,
 `EXAKIT_PREPARED."<SCHEMA>__<TABLE>__JOINED"`, with its own approved column map.
 

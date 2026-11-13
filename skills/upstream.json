@@ -41,6 +41,17 @@
           "description": "Exasol's own guide (from the dash-server repository) to writing the Dash app itself for a dashboard hosted on dash-server — layout, callbacks, the queries behind each figure, and patching or reviewing an existing app. Use it with the dash-server skill, which covers installing, starting and registering the server."
         }
       ]
+    },
+    {
+      "repo": "exasol-labs/exasol-semantic-views",
+      "ref": "v0.6.1",
+      "follows": "components.semantic-views.version",
+      "why": "The semantic layer's own agent skills, at the release the kit installs into the database.",
+      "skills": [
+        {"name": "exasol-semantic-analyst", "path": "skills/exasol-semantic-analyst", "addon": "semantic-views"},
+        {"name": "exasol-semantic-modeler", "path": "skills/exasol-semantic-modeler", "addon": "semantic-views"},
+        {"name": "exasol-semantic-reviewer", "path": "skills/exasol-semantic-reviewer", "addon": "semantic-views"}
+      ]
     }
   ],
   "not_taken": {

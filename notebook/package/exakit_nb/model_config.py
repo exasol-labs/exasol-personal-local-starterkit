@@ -20,6 +20,8 @@ BASE_URL = "EXAKIT_PROVIDER_BASE_URL"
 API_KEY = "EXAKIT_PROVIDER_API_KEY"
 HEADERS = "EXAKIT_PROVIDER_HEADERS"
 TEMPERATURE = "EXAKIT_MODEL_TEMPERATURE"
+EFFORT = "EXAKIT_MODEL_EFFORT"
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _AUTH_HEADERS = {"authorization", "api-key", "x-api-key", "host"}
 
@@ -132,20 +134,27 @@ def resolve(environ: Mapping[str, str] | None = None) -> ModelConfig | None:
 
 
 def sampling(environ: Mapping[str, str] | None = None) -> dict:
-    """Sampling settings to send, only when asked for. Claude Opus 4.7 and later refuse `temperature` (HTTP 400),
+    """Sampling settings to send, only when asked for: EXAKIT_MODEL_EFFORT as reasoning_effort (the effort a
+    reasoning model spends; set where the provider documents it), and the temperature. Claude Opus 4.7 and later refuse `temperature` (HTTP 400),
     and on the newest API version every model does, so the default sends none; a local model that should answer
     the same way twice takes EXAKIT_MODEL_TEMPERATURE=0."""
     env = os.environ if environ is None else environ
+    found: dict = {}
+    effort = env.get(EFFORT, "").strip().lower()
+    if effort:
+        if effort not in EFFORTS:
+            raise ValueError(f"{EFFORT} must be one of {', '.join(EFFORTS)}, or unset to send none.")
+        found["reasoning_effort"] = effort           # the provider's own effort setting, only when one was chosen
     raw = env.get(TEMPERATURE, "").strip()
     if not raw:
-        return {}
+        return found
     try:
         value = float(raw)
     except ValueError:
         value = -1.0
     if not 0 <= value <= 2:
         raise ValueError(f"{TEMPERATURE} must be a number from 0 to 2, or unset to send none.")
-    return {"temperature": value}
+    return {**found, "temperature": value}
 
 
 def create_client(config: ModelConfig, *, traced: bool = False):

@@ -1,0 +1,19 @@
+# Comparing models (/data-scientist/evaluate/comparing-models)
+
+
+
+The kit does not compute a p-value, a confidence interval or a significance test. A p-value is a number that says how likely a gap this size would be by chance alone. A confidence interval is a range the true score probably falls in. The kit gives you the parts you need to judge a difference yourself.
+
+## What you have to judge a difference [#what-you-have-to-judge-a-difference]
+
+* **The spread across folds.** `cv_sd` on the board shows how much a model's score moves between folds. A gap between two models that is smaller than that spread is not a reliable difference.
+* **The model rule.** The lab picks the simpler model when two are within 0.01 of each other. That is a rule for choosing, not a test that the gap is real. See [The models the lab tries](/data-scientist/model/the-models).
+* **The feature rule.** A verdict of `helps` needs a rise of 0.005 in cross-validation and no fall of more than 0.002 on the held-out rows. That is a rule of thumb. See [Feature ideas](/data-scientist/model/feature-ideas).
+* **Small groups.** Groups with fewer than 30 rows are not compared. This applies to the group and trend notes. See [The readout notes](/data-scientist/evaluate/readout-notes).
+* **The held-out size.** The warnings for a small held-out set are on [Hold-out](/data-scientist/evaluate/hold-out).
+
+## If you need a p-value or an interval [#if-you-need-a-p-value-or-an-interval]
+
+Compute it in your own code, on the rows you have, and say in your write-up that the kit did not compute it. `cv` is the mean of the fold scores and `cv_sd` is their standard deviation, so the two are a starting point. They are not a full analysis.
+
+Back to [Evaluate](/data-scientist/evaluate). Next: [The readout notes](/data-scientist/evaluate/readout-notes).

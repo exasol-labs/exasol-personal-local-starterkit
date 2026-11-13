@@ -1,0 +1,12 @@
+{
+  "title": "All personas",
+  "description": "Personas, data, column maps and add-ons: the kit itself",
+  "root": true,
+  "pages": [
+    "index",
+    "personas",
+    "data",
+    "tools",
+    "reference"
+  ]
+}

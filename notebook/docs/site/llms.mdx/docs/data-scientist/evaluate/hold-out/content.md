@@ -1,0 +1,53 @@
+# Hold-out (/data-scientist/evaluate/hold-out)
+
+
+
+Every model in the lab is trained on the same training rows and scored on the same held-out rows. The held-out rows are the test. Keeping them apart is the only way to see how a model does on rows it has not seen.
+
+## Hold-out: how rows are kept apart [#hold-out-how-rows-are-kept-apart]
+
+<Flow
+  caption="Three ways to split, chosen from the column map and your settings"
+  steps="[
+  { title: &#x22;A date in the column map&#x22;, text: &#x22;The default split is by time: the oldest rows learn, the newest rows are tested&#x22;, code: 'split_method=&#x22;time&#x22;', tone: &#x22;kit&#x22; },
+  { title: &#x22;No date&#x22;, text: &#x22;The default split is random, with a fixed seed. Yes or no is stratified.&#x22;, code: 'split_method=&#x22;random&#x22;', tone: &#x22;kit&#x22; },
+  { title: &#x22;You name a group column&#x22;, text: &#x22;Whole groups go to one side. No group is on both sides.&#x22;, code: 'split_method=&#x22;group&#x22;, split_group=&#x22;...&#x22;', tone: &#x22;you&#x22; },
+]"
+/>
+
+| Split method | When the lab uses it                       | What the held-out rows are                                                                                                                                                |
+| ------------ | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `time`       | The default when the column map has a date | The newest rows. The model learns from the oldest and is tested on the newest, so it never sees the future. Cross-validation uses time-ordered folds (`TimeSeriesSplit`). |
+| `random`     | The default when there is no date          | A random share, with a fixed seed. For yes or no it is stratified, so both sides keep the same share of 1s.                                                               |
+| `group`      | You name a group column with `split_group` | Whole groups. No group appears on both sides.                                                                                                                             |
+
+Two settings shape the split. `train_pct` is the share used for training: 50 to 90, and 75 by default. `folds` is the number of cross-validation folds on the training side: 5 by default.
+
+The kit warns when the held-out set is too small to trust:
+
+* For yes or no: fewer than 30 rows with a 1 held out.
+* For a number to predict: fewer than 100 rows held out.
+
+## The baseline's score on amazon_sales [#the-baselines-score-on-amazon_sales]
+
+The notebook holds out a quarter of the rows, scores the model on them, and prints the note:
+
+```python
+roc_auc = roc_auc_score(test_labels, model.predict_proba(test_features)[:, 1])
+print(f"ROC AUC on the held-out quarter: {roc_auc:.3f}")
+nb.note_model(roc_auc, dataset, len(model_rows), label_values.mean())
+```
+
+The notebook's hold-out is a stratified random split with `random_state=0`. The same rows are held out on every rerun, as long as the table has not changed.
+
+The notebook baseline splits at random, even though `amazon_sales` has a date. The lab splits by time. The two scores are measured on different rows, so do not compare them as if they were one test.
+
+## The lab's hold-out on amazon_sales [#the-labs-hold-out-on-amazon_sales]
+
+The lab reads the newest 50,000 rows, since the table has 128,975. It learns from the oldest 75% of those and is tested on the newest 25%. The output line reads: "The oldest 75% by ORDER_DATE to learn from, the newest 25% to test on. The model never sees the future."
+
+## The hold-out on fraud_transactions [#the-hold-out-on-fraud_transactions]
+
+With no date, the lab holds out rows at random, stratified so both sides keep the same share of fraud. The table has 50,000 distinct `TRANSACTION_ID` values across 51,000 rows, so 1,000 ids repeat. A repeated row that lands on both sides of the split can make the score look better than it is. `nb.data_checks` reports repeated ids and exact copies. Read that report before you trust a score on this table.
+
+Back to [Evaluate](/data-scientist/evaluate). Next: [Metrics](/data-scientist/evaluate/metrics).

@@ -9,7 +9,11 @@ The certificate travels inside the JDBC URL (pgJDBC's
 SingleCertValidatingFactory takes it as text), because the database's loader
 runs the driver in a Java sandbox that denies file reads: a CA *file* would
 work for the adapter and fail for every IMPORT. Measured live on Exasol
-Personal against RDS PostgreSQL 18.
+Personal against RDS PostgreSQL 18. Measured again in November 2026 against a
+live PostgreSQL with sslfactoryarg=file:<relative path> and a copy staged for
+the adapter and the loader: "The SSLSocketFactory class provided
+org.postgresql.ssl.SingleCertValidatingFactory could not be instantiated" -
+do not try the file again.
 
 That factory trusts exactly one certificate, and a vendor's download is
 often a bundle (RDS: three roots per region, over a hundred globally). The

@@ -1,6 +1,6 @@
 ---
 name: exakit
-description: The master skill for the Exasol Personal Local Starter Kit — what the kit is, what is on this machine and what each piece is for, how to find any command, option, persona, add-on or dataset from the kit's own JSON answers instead of guessing, and the MANDATORY order of tools for every task (loading data with exakit data-load first, reading through MCP, notebooks from the kit's own persona notebooks, dashboards on dash-server). Load it before any other Exasol skill on a machine that has exakit; its rules win over every other skill, the components' own ones included. Triggers — "what is the starter kit", "what can this kit do", "which tool should I use", "load this file into the database", "import my data", "create a new notebook", "make me a notebook", "which notebook should I use", "which personas does this kit have", "what add-ons are available", "which datasets does the kit have", "what options does exakit X take", "how do I install/remove/update an add-on", "is there a command for", "what is installed on this machine", "what parameters does", "list everything the starter kit offers".
+description: The master skill for the Exasol Personal Local Starter Kit — what the kit is, what is on this machine and what each piece is for, how to find any command, option, persona, add-on or dataset from the kit's own JSON answers instead of guessing, and the MANDATORY order of tools for every task (loading data with exakit data-load first, reading through MCP, notebooks from the kit's own persona notebooks, dashboards on dash-server) and the semantic layer (Exasol Semantic Views - read the models first, answer from their metrics, build one model across sources, keep it refreshed). Load it before any other Exasol skill on a machine that has exakit; its rules win over every other skill, the components' own ones included. Triggers — "what is the starter kit", "what can this kit do", "which tool should I use", "load this file into the database", "import my data", "create a new notebook", "make me a notebook", "which notebook should I use", "which personas does this kit have", "what add-ons are available", "which datasets does the kit have", "what options does exakit X take", "how do I install/remove/update an add-on", "is there a command for", "what is installed on this machine", "what parameters does", "list everything the starter kit offers", "semantic view", "semantic model", "semantic layer", "create a semantic view across my sources", "refresh the semantic model", "what do my metrics mean", "link my sources", "how do my tables join", "insights across my sources".
 ---
 
 # exakit — the starter kit, and how to work on it
@@ -71,53 +71,113 @@ An add-on's skill is placed only when the add-on is installed. Before using
 one, check `exakit marketplace --list --json`; if it is not installed, say so
 and offer `exakit marketplace <id>` — install only when the user agrees.
 
-## 3. MANDATORY: read the column maps first (EXAKIT_SEMANTIC)
+## 3. MANDATORY: the semantic layer is Exasol Semantic Views
 
-Before you describe, query or chart any table, read its approved column map.
-It is the user's own statement of what each column means, and it wins over
-anything you infer from names, types or values.
+The kit's semantic layer is **Exasol Semantic Views** (the `semantic-views`
+add-on: `SEMANTIC_CATALOG`, `SEMANTIC_ADMIN`, `SEMANTIC_AGENT`). Approving a
+column map builds it: each approved table becomes an entity of its schema's
+semantic model, each approved link a relationship, its time, category and flag
+columns dimensions, its measures facts with `total_` and `average_` metrics,
+and every table a row count. The views are published in `SEM_<MODEL>`. There
+is no other semantic layer: never create or recommend views of your own as a
+semantic layer.
+
+**Before you describe, query or chart any table, read the models.** They are
+the user's own statement of what the data means, and they win over anything you
+infer from names, types or values (read-only, through MCP):
 
 ```sql
-SELECT V.VIEW_NAME, V.VIEW_COMMENT, C.COLUMN_NAME, C.COLUMN_COMMENT
-FROM SYS.EXA_ALL_VIEWS V
-JOIN SYS.EXA_ALL_COLUMNS C ON C.COLUMN_SCHEMA = V.VIEW_SCHEMA AND C.COLUMN_TABLE = V.VIEW_NAME
-WHERE V.VIEW_SCHEMA = 'EXAKIT_SEMANTIC'
-ORDER BY V.VIEW_NAME, C.COLUMN_ORDINAL_POSITION;
+SELECT MODEL_NAME, PUBLISHED_SCHEMA, DESCRIPTION FROM SEMANTIC_CATALOG.MODELS;
+SELECT MODEL_NAME, ENTITY_NAME, SOURCE_SCHEMA, SOURCE_OBJECT, GRAIN_DESCRIPTION
+FROM SEMANTIC_CATALOG.ENTITIES WHERE STATUS = 'ACTIVE';
+SELECT MODEL_NAME, ENTITY_NAME, DIMENSION_NAME, DISPLAY_NAME, DESCRIPTION
+FROM SEMANTIC_CATALOG.DIMENSIONS WHERE STATUS = 'ACTIVE';
+SELECT MODEL_NAME, METRIC_NAME, DISPLAY_NAME, DESCRIPTION, EXPRESSION
+FROM SEMANTIC_CATALOG.METRICS WHERE STATUS = 'ACTIVE';
+SELECT MODEL_NAME, FROM_ENTITY_NAME, TO_ENTITY_NAME, JOIN_CONDITION
+FROM SEMANTIC_CATALOG.RELATIONSHIPS WHERE STATUS = 'ACTIVE';
 ```
 
-- `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>` describes `<SCHEMA>.<TABLE>`. Each column
-  comment starts `role=<role>` (key, time, measure, category, flag, text,
-  identifier, other), may say `sensitive`, and names the version
-  (`descriptor=v<n>`). The view comment gives the grain and the source.
-- Use the roles: group by a `category`, sum a `measure`, order by the `time`
-  column, count rows by the `key`. Never chart, group or send to a model a
-  column marked `sensitive`.
-- `<SCHEMA>__RELATIONS` views list the approved links between tables: join on
-  those before any link you find yourself.
+- **Answer from the model's metrics and dimensions**, not from hand-written
+  aggregates over the raw tables. Through MCP: set the preprocessor
+  (`set_exasol_preprocessor` to `SEMANTIC_ADMIN.SEMANTIC_PREPROCESSOR`, then
+  verify), and query the published view:
+  `SELECT order_month, total_revenue FROM SEM_SALES_360.ORDER_LINES GROUP BY order_month`.
+  Without preprocessor control use `SEMANTIC_ADMIN.COMPILE_SQL` and run the SQL
+  it returns. Show the SQL before its result, as always. The
+  `exasol-semantic-analyst` skill (installed with the add-on) has the details.
+- Join along the model's relationships before any link you find yourself.
+- A column marked sensitive is never a dimension and never a public fact: never
+  chart, group or send it to a model.
 - The target (the outcome to predict) is chosen by the user. It is in the
-  descriptor, not the view: `exakit describe <id> --show --json` → `slots.target`.
-  Never guess it.
+  column map, not the model: `exakit describe <id> --show --json` →
+  `slots.target`. Never guess it.
+- **Semantic Views not installed** (`SEMANTIC_CATALOG` does not exist): the
+  first approval installs it; or the user runs `exakit marketplace semantic-views`.
 
-**A table with no column map: warn, then ask.** List every table you are
-about to use that has no view in `EXAKIT_SEMANTIC`, before your first finding:
+**A table that is in no model: warn, then ask.** List every table you are about
+to use that is no entity of any model, before your first finding:
 
-> ⚠ No approved column map: `VS_CATALOG.inventory_weekly`, `RETAIL_SIGNALS.CUSTOMER_REVIEWS`.
-> Its column meanings below are my reading of names and values, not yours.
-> Approve a map so every agent and notebook reads the same meaning:
+> ⚠ Not in a semantic model: `VS_CATALOG.inventory_weekly`, `RETAIL_SIGNALS.CUSTOMER_REVIEWS`.
+> Their meanings below are my reading of names and values, not yours.
+> Approve a column map so every agent and notebook reads the same meaning:
 >
 > ```bash
 > exakit describe VS_CATALOG.inventory_weekly          # proposes a role per column, writes nothing
-> exakit describe VS_CATALOG.inventory_weekly --approve --role target=<COLUMN>   # approves and publishes it
+> exakit describe VS_CATALOG.inventory_weekly --approve --role target=<COLUMN>   # approves; rebuilds the schema's model
 > ```
 >
-> In a notebook: `nb.review_roles(connection, "VS_CATALOG.inventory_weekly")`, then **Approve column map**.
+> To answer across sources (sample data, your files, any number of external
+> sources) in one model:
+>
+> ```bash
+> exakit describe --model sales_360 --table AMAZON_SALES.ORDER_LINES --table VS_LOGISTICS.COURIER_DAILY \
+>   --link AMAZON_SALES.ORDER_LINES.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE --ai --dry-run
+> ```
+>
+> (without `--dry-run` it publishes). In a notebook: `nb.review_roles(connection, "VS_CATALOG.inventory_weekly")`
+> and **Approve column map**, then the **Semantic views** card or `nb.semantic_model(connection, ...)`.
 > Should I go on with my reading, or will you approve the maps first?
 
-Wait for the answer. Approving writes to the database (the view in
-`EXAKIT_SEMANTIC`), so it is the user's command to run, never yours through
-MCP. `--role target=` only when the work predicts an outcome. A map whose
-table changed since approval is shown as a draft again by `exakit describe`:
-treat it as missing and say so.
+Wait for the answer. Approving and building a model write to the database, so
+they are the user's commands to run, never yours through MCP (the MCP user is
+read-only). `--ai` lets the user's own model propose business names, synonyms
+and metrics from metadata only; every proposal is checked before it is applied.
+
+**Asked for insights across several sources? Build the model first, then answer from it.** When a question
+needs tables of more than one schema (a sample dataset, the user's files, external sources) and no model covers
+them, do this in order. Steps 1 to 4 only read.
+
+1. See what exists: `exakit describe --models`, `exakit source list --json`, and the schemas through MCP.
+2. Find how the sources join: `exakit describe --links A,B,C`. It compares values, not names, and needs no
+   foreign key. Each link comes back with its evidence (how many rows match, which values do not).
+   - `[high]`: a text key the data backs. Use it.
+   - `[low]`: a link between plain numbers. Numbers in a sequence match by chance, so the data cannot prove it.
+     Use it only if the meaning of the two columns says so, and say that to the user.
+   - `[partial]`: values that only partly match (spellings). Not a link: report it as data to clean.
+3. Add what you understand from the meaning. You read the column names, notes and the question; the search does
+   not. Check each pair you believe in: `exakit describe --links A,B --link S.T.COL=S.T.KEY`. A pair the data
+   contradicts comes back `[rejected]`: drop it. Never join on a pair you did not check.
+4. Show the plan: `exakit describe --model <NAME> --schemas A,B,C --find-links --ai --dry-run` (add
+   `--link S.T.COL=S.T.KEY` for each number link the user should confirm). Give the user the views, the links
+   with their evidence, the tables left out for want of an approved column map, and ask for a yes.
+5. On the user's yes, publish: the same command without `--dry-run`. With a shell (Claude Code, Codex) you may run
+   it yourself after that yes; through MCP alone you cannot, so hand the command to the user. Each link's
+   evidence is stored in the model (`SEMANTIC_CATALOG.CUSTOM_EXTENSIONS`, vendor `exakit`), so the next agent
+   reads why a join is there.
+6. Answer from the model with Semantic SQL, and say which model and metrics you used.
+
+A table with no approved column map is not in a model. Name it and the command that approves it; never guess
+its meaning into a model.
+
+**Keep the models current.** A model is built from the column maps and links
+approved at that time. Approving a column map rebuilds its schema's model and
+every multi-source model the table is in. After a load that reshapes a table, a
+new source, or a link the user agreed to, say which model is stale and give the
+command: `exakit describe --model <NAME> --refresh` (`exakit describe --models`
+lists them; in a notebook `nb.refresh_semantic(connection, "<NAME>")`). A
+column map whose table changed since approval is shown as a draft again by
+`exakit describe`: treat its table as missing from the model and say so.
 
 ## 4. MANDATORY: the order of tools for each task
 
@@ -206,6 +266,12 @@ start from an empty notebook or write connection code by hand.
   (JupyterLab) and `~/.exasol-starter-kit/notebooks/marimo/<persona>/` (Marimo).
   The persona's `notebooks[]` in `persona show <id> --json` gives each path,
   relative to those folders (`data-scientist/00_quickstart.ipynb`).
+- **Their documentation** opens from any cell: `nb.docs()` (this persona's
+  section), `nb.docs("descriptor")` (search), `nb.docs(nb.describe)` (one
+  command's page). It covers every `exakit.nb` helper, the column map and who
+  approves it, workflows, sources and hand-off, and is served from this
+  computer by the kit, with no internet. The pages' sources are in the kit copy,
+  `notebook/docs/content/docs/` (`llms.txt` at the site's root lists them).
 - **Use first, in this order:** the persona's notebook for the task (see §5).
   Changing what it analyses is usually one assignment in its first cell
   (`DATASET = ...`, or a data file with a descriptor beside it).

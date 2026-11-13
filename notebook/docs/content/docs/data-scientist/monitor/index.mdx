@@ -1,0 +1,54 @@
+---
+title: Monitor and iterate
+description: What the kit records, what it notices when you run it again, and how you re-approve, refresh or rerun to get back to the right stage.
+---
+
+Monitoring means noticing that something has changed since you last looked, and deciding what to redo. A table gets a new column. A column map is approved again. A model is retrained on newer rows. In most data science work this loop never ends. The kit helps with the record and with the checks it can make when you run a step again. It does not watch your data in the background, it does not detect drift, and it does not retrain anything on its own. You do the iterating, and the kit tells you where to go back to.
+
+<Flow
+  caption="Something changed: the kit notices when you run a step, you act, and you go back to the right stage"
+  steps={[
+    { title: "The table changes", text: "A column is added, removed, renamed or retyped, or the rows change", tone: "db" },
+    { title: "The kit notices when you describe it", text: "The column names and types are compared with the approved version. A change returns a draft.", code: 'nb.describe("AMAZON.ORDER_LINES")', tone: "kit", href: "/data-scientist/monitor/what-changed" },
+    { title: "You approve a new version", text: "Changed columns are flagged low confidence. Review them, then approve.", code: "role_review.approve(choices, slots)", tone: "you", href: "/data-scientist/explore" },
+    { title: "The semantic model is rebuilt", text: "Every model the table is in is refreshed by the approval", tone: "db", href: "/kit/data/semantic-views" },
+    { title: "Back to the stage the change affects", text: "Prepare, Explore, Model or Evaluate, as the change dictates", tone: "you", href: "/data-scientist/prepare" },
+  ]}
+/>
+
+## Where you do it
+
+| Guided view | Notebook code | Terminal |
+|---|---|---|
+| The workflow list and log in the quickstart's cards. The column map card's **History** lists its versions, and **Restore** saves an older version's choices as a new one. A published model has a **Refresh** action. | `nb.list_workflows()`, `nb.workflow_log(id)`, `nb.continue_workflow(...)`, `nb.column_map_versions(id)`, `nb.refresh_semantic(conn, name)`, `nb.handoff_is_stale(...)`, `nb.tracing()`, `nb.trace(...)` | `exakit workflow list`, `exakit workflow show <id>`, `exakit describe <id> --versions`, `exakit describe <id> --show --version <n>`, `exakit describe --model <NAME> --refresh` |
+
+## How we used it
+
+Suppose someone adds a column to `AMAZON.ORDER_LINES`. The kit does not notice until you describe the table again. Here is how you find out and what you do, in four steps:
+
+```python
+workflow_id = nb.continue_workflow("explore")   # this kernel's workflow, or the last one on this computer
+events = nb.workflow_log(workflow_id)           # every line, in order
+draft = nb.describe("AMAZON.ORDER_LINES")       # a draft if the table changed since its approval
+versions = nb.column_map_versions("amazon_sales")
+```
+
+The workflow log shows what the last run did. The describe call returns a draft when the schema changed, and the changed columns say so. You review the draft, correct what is wrong, and approve. The approval writes the next version and rebuilds every semantic model the table is in. Then run the notebooks again, from the first cell. They read the newest approval.
+
+## In this stage
+
+<Cards>
+  <Card title="What changed, and where you go" href="/data-scientist/monitor/what-changed" description="Each kind of change, what the kit notices, and which stage to return to" />
+  <Card title="The workflow log" href="/data-scientist/monitor/the-workflow-log" description="The record each workflow keeps, and which workflow a notebook continues" />
+  <Card title="Versions and semantic models" href="/data-scientist/monitor/versions-and-semantic-models" description="Every saved column map version, restoring one, and refreshing a semantic model" />
+  <Card title="A training hand-off that went stale" href="/data-scientist/monitor/stale-hand-off" description="How the kit refuses an old training hand-off, and how to write a new one" />
+  <Card title="Tracing model calls" href="/data-scientist/monitor/tracing" description="Each model call as a trace in your Langfuse project" />
+  <Card title="Rerunning, and what the kit does not do" href="/data-scientist/monitor/rerunning-and-limits" description="What moves when you rerun, and the limits to know before you schedule anything" />
+  <Card title="When it goes wrong" href="/data-scientist/monitor/troubleshooting" description="Approval, staleness and log problems, and their fixes" />
+</Cards>
+
+## What you have at the end
+
+A record of what each run did, a column map whose versions you can read and restore, a semantic model that matches the approved roles, and a plain list of what needs redoing. The loop has no end. When something changes, go back to the stage in the table on [What changed, and where you go](/data-scientist/monitor/what-changed) and work forward from there.
+
+<StageNav n={8} />

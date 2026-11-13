@@ -1,0 +1,54 @@
+# The workflow log (/data-scientist/monitor/the-workflow-log)
+
+
+
+A workflow is the record of one piece of work across the notebooks. Its log is the file where each helper that does something writes a line. The [workflows reference](/kit/tools/workflows) describes the workflow as a kit feature. This page covers what the log holds.
+
+## The workflow log [#the-workflow-log]
+
+Every workflow has one log, `~/.exasol-starter-kit/workflows/<id>.jsonl`: one JSON object per line, append-only, readable by you only. While a workflow is active, each helper that does something adds a line. The kinds you will see are:
+
+| Kind                                 | Written when                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `start`                              | A workflow begins, with its name, the kit version, and the Python and platform             |
+| `step`                               | A later notebook continues the work                                                        |
+| `sql`                                | A statement runs, with its digest and row count                                            |
+| `describe.draft`, `describe.approve` | A column map is drafted, or approved as a new version                                      |
+| `model`                              | A model is trained and scored, with its row count and, where the note shows one, its score |
+| `trace`                              | A model call is traced to Langfuse, with the trace id                                      |
+| `handoff`                            | A training hand-off or a hand-off bundle is written                                        |
+| `dashboard.revision`                 | A dashboard is previewed or published                                                      |
+| `ask.approve`, `ask.answer`          | A question's SQL is approved, and its answer is read                                       |
+| `mlflow.run`                         | An MLflow run is recorded, on the in-database training path                                |
+
+Read it with the commands in the table on [Monitor and iterate](/data-scientist/monitor), or in a notebook:
+
+```python
+workflow_id = nb.continue_workflow("explore")   # this kernel's workflow, or the last one on this computer
+events = nb.workflow_log(workflow_id)           # every line, in order
+```
+
+```bash
+exakit workflow show wf-20261027-3f9a1c
+```
+
+## What the log never holds [#what-the-log-never-holds]
+
+The log never holds a credential. The helpers refuse any field named password, token, secret or api_key, and a connection string with a password in it. SQL that looks credential-bearing, such as a statement with a PASSWORD or API_KEY column, is logged with its text replaced and its digest kept, and a warning is shown.
+
+A log that cannot be written warns, and the cell goes on. Logging never fails the work it describes.
+
+## When nothing is written [#when-nothing-is-written]
+
+Without an active workflow nothing is written. There are no implicit workflows.
+
+## Which workflow a notebook continues [#which-workflow-a-notebook-continues]
+
+* `nb.continue_workflow(name)` continues this kernel's workflow. Failing that, it takes the one in `EXAKIT_WORKFLOW_ID`, then the last one started on this computer. It starts a new one only when none exists.
+* The quickstart's workflow cell resumes the workflow of this kernel, when there is one. In a new kernel, it starts a new workflow.
+* `nb.workflow(resume="wf-...")` continues a named workflow from another kernel.
+* `nb.list_workflows()` and `exakit workflow list` show every workflow on this computer.
+
+The helpers are in the [workflow reference](/data-scientist/development/reference/workflow).
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [Versions and semantic models](/data-scientist/monitor/versions-and-semantic-models).

@@ -13,9 +13,10 @@ personas; a maintainer can run it after the same install by hand.
               digest is the live proof that the declared types are the ones EXA_ALL_COLUMNS reports; on a mismatch the
               columns whose live type differs from the CREATE TABLE are named;
           (c) `exakit describe <id> --approve --role target=<the shipped target> --json` writes v1 and current.yaml,
-              publishes EXAKIT_SEMANTIC.<SCHEMA>__<TABLE> whose every column comment starts with role=<its role>,
-              leaves the dataset's own table without a role= comment, grants the view to the read-only MCP user, and
-              approving again writes nothing.
+              publishes the schema's Exasol Semantic Views model (<schema>, its views in SEM_<SCHEMA>) with the table as
+              an entity and its time, category and flag columns as dimensions, leaves the dataset's own table without a
+              role= comment, lets the read-only MCP user read the model in SEMANTIC_CATALOG, and approving again writes
+              nothing.
     <kit notebook python> tests/integration/reference_datasets_live.py own-file <path.csv>
         (d, first half) a synthetic CSV written to <path.csv>, loaded with exakit_nb.load_own_file into MY_DATA.TICKETS,
         described (an e-mail column identifier and sensitive, in no slot), its target set, approved and published; the
@@ -48,7 +49,7 @@ for folder in (ROOT / "tools", ROOT / "setup" / "lib"):
     if str(folder) not in sys.path:
         sys.path.insert(0, str(folder))
 
-SEMANTIC = "EXAKIT_SEMANTIC"
+MARK = "[built by exakit]"          # in the description of a semantic model the kit built
 OWN_TABLE = "MY_DATA.TICKETS"
 OWN_ID = "my_data_tickets"
 OWN_ROLES = {"TICKET_ID": "key", "OPENED_ON": "time", "CHANNEL": "category", "CUSTOMER_EMAIL": "identifier",
@@ -253,12 +254,13 @@ def check_approve(c: Checks, pump, dataset: str, shipped: dict[str, Any]) -> Non
         return
     result = first_json(out)
     schema, name = table.split(".", 1)
-    view = f"{SEMANTIC}.{schema}__{name}"
+    model = schema.lower()
+    published = f"semantic model {model} (SEM_{schema})"
     # The adopted v1 already says this, so nothing new is written - but it is published now if it was not yet.
     c.check(result.get("status") in ("approved", "unchanged") and result.get("version") == 1,
             f"{dataset}: v{result.get('version')} approved with target {target} ({result.get('status')})",
             f"status {result.get('status')}: {result.get('reason') or result.get('message') or ''}")
-    c.check(result.get("published") == view, f"{dataset}: published as {view}",
+    c.check(result.get("published") == published, f"{dataset}: published as {published}",
             f"published {result.get('published')!r}, reason {result.get('reason')!r}")
     store = home() / "descriptors" / table
     c.check(all((store / f).is_file() for f in ("v1.yaml", "current.yaml")) and not (store / "draft.yaml").exists(),
@@ -267,28 +269,35 @@ def check_approve(c: Checks, pump, dataset: str, shipped: dict[str, Any]) -> Non
     current = read_yaml(store / "current.yaml") if (store / "current.yaml").is_file() else {}
     c.check(current.get("status") == "approved" and (current.get("slots") or {}).get("target") == target,
             f"{dataset}: current.yaml is approved with target {target}")
-    rows = pump.rows("SELECT COLUMN_NAME, COLUMN_COMMENT FROM SYS.EXA_ALL_COLUMNS "
-                     f"WHERE COLUMN_SCHEMA = {literal(SEMANTIC)} AND COLUMN_TABLE = {literal(f'{schema}__{name}')} "
-                     "ORDER BY COLUMN_ORDINAL_POSITION", f"reading the comments of {view}")
-    roles = {n: e["role"] for n, e in (current.get("columns") or {}).items()}
-    wrong = [r["COLUMN_NAME"] for r in rows if not (r.get("COLUMN_COMMENT") or "").startswith(f"role={roles.get(r['COLUMN_NAME'])}")]
-    c.check(bool(rows) and [r["COLUMN_NAME"] for r in rows] == list(roles) and not wrong,
-            f"{dataset}: all {len(rows)} columns of {view} carry role=<their role> as their comment",
-            f"without it: {', '.join(wrong)}" if wrong else f"columns {[r['COLUMN_NAME'] for r in rows]}")
+    entity = pump.rows("SELECT E.ENTITY_NAME, M.DESCRIPTION FROM SEMANTIC_CATALOG.ENTITIES E "
+                       "JOIN SEMANTIC_CATALOG.MODELS M ON M.MODEL_ID = E.MODEL_ID "
+                       f"WHERE M.MODEL_NAME = {literal(model)} AND E.SOURCE_SCHEMA = {literal(schema)} "
+                       f"AND E.SOURCE_OBJECT = {literal(name)}", f"reading the semantic model {model}")
+    c.check(bool(entity) and MARK in str(entity[0].get("DESCRIPTION") or ""),
+            f"{dataset}: {table} is an entity of the semantic model {model} the kit built", f"rows {entity}")
+    wanted = [n for n, e in (current.get("columns") or {}).items()
+              if e.get("role") in ("time", "category", "flag") and not e.get("sensitive")]
+    dims = pump.rows("SELECT COUNT(*) AS N FROM SEMANTIC_CATALOG.DIMENSIONS "
+                     f"WHERE MODEL_NAME = {literal(model)} AND STATUS = 'ACTIVE'", f"reading the dimensions of {model}")
+    c.check(bool(dims) and int(dims[0]["N"]) >= len(wanted),
+            f"{dataset}: the model has a dimension for each of its {len(wanted)} time, category and flag columns",
+            f"dimensions {dims}")
     marked = pump.rows("SELECT COUNT(*) AS N FROM SYS.EXA_ALL_COLUMNS "
                        f"WHERE COLUMN_SCHEMA = {literal(schema)} AND COLUMN_TABLE = {literal(name)} "
                        "AND COLUMN_COMMENT LIKE 'role=%'", f"reading the comments of {table}")
     c.check(marked and marked[0]["N"] == "0", f"{dataset}: {table} itself carries no role= comment")
-    reader_count(c, dataset, view, int(shipped["source"]["profiled_rows"]))
+    reader_reads(c, dataset, f"SELECT COUNT(*) AS N FROM SEMANTIC_CATALOG.MODELS WHERE MODEL_NAME = {literal(model)}",
+                 1, f"the semantic model {model}")
     code, out, err = run_exakit("describe", dataset, "--approve", "--role", f"target={target}", "--json")
     again = first_json(out) if code == 0 and "{" in out else {}
     c.check(again.get("status") == "unchanged" and not (store / "v2.yaml").exists(),
             f"{dataset}: approving the same again writes nothing", f"exit {code}, status {again.get('status')}")
 
 
-def reader_count(c: Checks, dataset: str, view: str, rows: int) -> None:
-    """The view is granted to the read-only MCP user: it counts the rows as that user (an exapump profile in a
-    temporary HOME, the password copied from its file into a 0600 file there and never printed)."""
+def reader_reads(c: Checks, dataset: str, query: str, rows: int, what: str) -> None:
+    """The model is granted to the read-only MCP user: ``query`` (one COUNT) answers ``rows`` as that user (an exapump
+    profile in a temporary HOME, the password copied from its file into a 0600 file there and never printed)."""
+    view = what
     connection = (((manifest().get("components") or {}).get("mcp_server") or {}).get("connection") or {})
     user, pwfile = connection.get("user"), connection.get("password_file")
     dsn = (manifest().get("runtime") or {}).get("dsn") or "127.0.0.1:8563"
@@ -305,9 +314,8 @@ def reader_count(c: Checks, dataset: str, view: str, rows: int) -> None:
                           f'user = {json.dumps(user)}\npassword = {json.dumps(password)}\ntls = true\n'
                           'validate_certificate = false\n', encoding="utf-8")
         del password
-        schema, name = view.split(".", 1)
         done = subprocess.run([shutil.which("exapump") or str(Path.home() / ".local" / "bin" / "exapump"), "sql", "-p", "reader"],
-                              input=f'SELECT COUNT(*) AS N FROM {schema}."{name}";\n', capture_output=True, text=True,
+                              input=f'{query};\n', capture_output=True, text=True,
                               env={**os.environ, "HOME": folder, "EXAPUMP_CONFIG": str(config)}, timeout=600, check=False)
     lines = [line.strip().strip('"') for line in done.stdout.splitlines() if line.strip()]
     c.check(done.returncode == 0 and str(rows) in lines, f"{dataset}: {user} reads {view} ({rows:,} rows)",
@@ -391,13 +399,12 @@ def cmd_own_file(path: Path) -> int:
         ds = d.approve(conn=conn)
         c.check(d.status == "approved" and d.slots.get("target") == "ESCALATED" and ds.id == OWN_ID,
                 f"approved {OWN_TABLE} v{d.version} with target ESCALATED; the notebooks open it as {ds.id}")
-        view = OWN_TABLE.replace(".", "__")
-        comments = conn.execute("SELECT COLUMN_NAME, COLUMN_COMMENT FROM SYS.EXA_ALL_COLUMNS "
-                                f"WHERE COLUMN_SCHEMA = {literal(SEMANTIC)} AND COLUMN_TABLE = {literal(view)}").fetchall()
-        pairs = [tuple(r.values()) if isinstance(r, dict) else tuple(r) for r in comments]
-        wrong = [n for n, text in pairs if not str(text or "").startswith(f"role={OWN_ROLES.get(n)}")]
-        c.check(len(pairs) == len(OWN_ROLES) and not wrong, f"published as {SEMANTIC}.{view}, every column comment role=...",
-                f"{len(pairs)} columns, without the marker: {', '.join(wrong)}")
+        schema, name = OWN_TABLE.split(".", 1)
+        found = conn.execute("SELECT E.ENTITY_NAME FROM SEMANTIC_CATALOG.ENTITIES E "
+                             f"WHERE E.MODEL_NAME = {literal(schema.lower())} AND E.SOURCE_SCHEMA = {literal(schema)} "
+                             f"AND E.SOURCE_OBJECT = {literal(name)} AND E.STATUS = 'ACTIVE'").fetchall()
+        c.check(len(found) == 1, f"published in the semantic model {schema.lower()} (SEM_{schema})",
+                f"{len(found)} entities for {OWN_TABLE}")
     finally:
         conn.close()
     print(f"{'PASS' if not c.failed else 'FAIL'} own file: {c.failed} check(s) failed")

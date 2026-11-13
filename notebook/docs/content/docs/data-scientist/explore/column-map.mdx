@@ -1,0 +1,86 @@
+---
+title: The column map
+description: What a column map says about each column of a table, the roles and slots it uses, how the target is chosen, and how to draft one.
+---
+
+A **column map** says what each column of a table is for. Its technical name is the **descriptor**, the word you see in code and in some file names. Every later query is built from the column map, so no notebook types your column names. A notebook asks for "the time column" or "the target", and the column map gives the name.
+
+## The column map and approval
+
+The kit drafts the column map from the table itself. The draft is a proposal. You approve it before any other step reads it. Approval checks the map and saves it as a new version. The steps are on [Approve the column map](/data-scientist/explore/approve-the-column-map).
+
+### Roles: what a column is
+
+The kit profiles the table in SQL and gives every column one of eight roles. It also records the evidence that chose the role.
+
+| Role | Meaning |
+|---|---|
+| `key` | One value per row |
+| `time` | A date or timestamp |
+| `measure` | A number to add up or average |
+| `category` | A few repeated values |
+| `flag` | Yes or no |
+| `text` | Free text |
+| `identifier` | Names or codes |
+| `other` | None of the above |
+
+A **confidence** says how close the evidence is to the line the rule draws. It is not a probability that the business meaning is right. Low-confidence columns come first in the review. For `amazon_sales`, the card lists `SHIP_CITY` and `SHIP_STATE` first, both drafted at low confidence. The card shows the evidence beside each column. For `SHIP_STATE` that evidence is 47 distinct values.
+
+### Slots: which column each step uses
+
+A **slot** names the one column a step reads.
+
+| Slot | Used for |
+|---|---|
+| `key` | Counting rows without repeats |
+| `time` | Anything over time |
+| `text` | The text steps |
+| `target` | The outcome to predict |
+| `category` | The groups to compare |
+| `entity` | Who or what a row is about |
+
+A column fills one slot at most. A slot can be empty when no column fits. An empty slot says why.
+
+The kit's shipped datasets have these slots:
+
+| Dataset | `key` | `time` | `text` | `target` | `category` | `entity` |
+|---|---|---|---|---|---|---|
+| Amazon sales | `ORDER_LINE_ID` | `ORDER_DATE` | none | `CANCELLED` | `CATEGORY` | `SHIP_STATE` |
+| Fraud transactions | `ROW_ID` | none | none | `FRAUDULENT` | `TRANSACTION_TYPE` | `LOCATION` |
+
+In code, two slots keep their older names: `dataset.col("date")` is the `time` slot, and `dataset.col("label")` is the `target`.
+
+### The target is yours to choose
+
+The kit never chooses the **target**, the outcome a model predicts. You do. It must be a column of 0 and 1, or true and false. The card reads the target's values and says how common the outcome is. The rule is in `target_verdict` in `notebook/package/exakit_guide/screens/understand.py`:
+
+- A target that holds values other than 0 and 1 cannot be predicted. The card says the kit can't count or predict it.
+- A target that is 1 in under 1% of rows is too rare to learn from reliably.
+- A target that is 1 in under 5% of rows is rare but workable, as in fraud.
+- Anything else is a good balance to learn from.
+
+For `amazon_sales`, `CANCELLED` is 1 in 14.2% of rows (18,332 of 128,975, measured). By that rule it sits in the balanced band.
+
+Two 0/1 columns can answer different questions. Pick the one that is the outcome you want to predict.
+
+### Draft and approved
+
+A column map starts as a **draft**. A draft can be wrong, and nothing downstream uses it. Explore, Ask and Share open only an **approved** dataset. A step given a draft raises `DescriptorNotApproved`, and the message says how to approve it.
+
+A model never approves roles. The kit never chooses the target. You approve.
+
+## Draft a column map for a table
+
+To see the kit's proposal for one table, without the review card:
+
+```python
+draft = nb.describe("AMAZON.ORDER_LINES")
+```
+
+```bash
+exakit describe AMAZON.ORDER_LINES
+```
+
+A draft is not approved, and no later step reads it. Read the roles and slots, then approve them as described on [Approve the column map](/data-scientist/explore/approve-the-column-map).
+
+Back to [Explore and understand](/data-scientist/explore). Next: [Approve the column map](/data-scientist/explore/approve-the-column-map).

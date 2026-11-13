@@ -47,21 +47,39 @@ sample_data = nb.load_sample(connection, SAMPLE)
 # Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded.
 
 # %% tags=["load"]
-MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data"
+MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
 MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
-own_data = nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True)
+MY_TABLE = ""    # or a table already in the database, e.g. "MY_DATA.ORDERS" (nb.data_map lists them)
+own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
+            else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
 
 # %% [markdown] tags=["load"]
 # **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
 #
-# 1. Not connected yet? Fill in `CONNECTOR`, `SOURCE_NAME` and `SOURCE_URL` (the source's connection string). The password is asked in a hidden box. On a Mac, use `192.168.64.1` for a database on this computer.
-# 2. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
+# 1. Not connected yet? Pick `CONNECTOR` and paste its connection string into `SOURCE_URL`: the kit reads it as `exakit connect --url` does, and `source_reading["missing"]` says what it did not give. Put those (and any other input you want to change, by the names in `connector_forms[CONNECTOR]["inputs"]`) in `SOURCE_INPUTS`. No connection string? Leave it empty and give every input in `SOURCE_INPUTS`. On a Mac, use `192.168.64.1` for a database on this computer.
+# 2. Test it: the kit checks the inputs and this computer tries the source's host and port. Nothing is changed and no password is needed.
+# 3. Connect it: the password is asked in a hidden box and goes to the kit only.
+# 4. Set `SOURCE` to its table, `"VS_<NAME>.<TABLE>"`. `"VS_<NAME>"` alone lists the tables. `None` skips it.
 
 # %% tags=["load"]
+connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
+connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
+source_tips = nb.source_engine("catalog", "--public-ip")["events"]   # this computer's public IP, to allow at a cloud source
 CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
 SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
-SOURCE_URL = ""    # e.g. "postgres://reader@192.168.64.1:5432/shop"
-connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL) if CONNECTOR else None
+SOURCE_SETTINGS = {}   # a source with several kinds in one: {"catalog": "unity", "files": "s3"} for a Lakehouse (connector_forms["lakehouse"]["tree"] lists the picks)
+if CONNECTOR and SOURCE_SETTINGS:
+    connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)   # what that combination asks
+SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)
+source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL, **SOURCE_SETTINGS) if CONNECTOR and SOURCE_URL else None
+SOURCE_INPUTS = {}  # what the string did not give (source_reading["missing"]), e.g. {"user": "reader"}; no string: every input
+SOURCE_INPUTS = {**SOURCE_SETTINGS, **({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
+
+# %% tags=["load"]
+source_test = nb.test_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
+
+# %% tags=["load"]
+connected = nb.connect_source(CONNECTOR, SOURCE_NAME, **SOURCE_INPUTS) if CONNECTOR else None
 
 # %% tags=["load"]
 SOURCE = None   # e.g. "VS_SALES.ORDERS" (None after a connect above: the new source's tables)
@@ -116,14 +134,74 @@ nb.data_map(connection)
 role_review = nb.review_roles(connection, chosen_data)
 
 # %% tags=["review"]
+# Optional: let your AI model (set up on the Home card, or nb.model_setup) complete the draft. It is shown column
+# names, types and the kit's measured evidence - never a row, never a sensitive column - and answers with the roles it
+# would change and why, the column for each slot, and one sentence per column saying what it holds. It never picks
+# what to predict or what makes a row unique. Nothing changes until you approve: AI_APPROVE approves with its answer.
+AI_CHECK = False
+AI_APPROVE = False
+if AI_CHECK:
+    # several tables from several sources: together=[the other tables' reviews] lets it read them next to this one
+    ai_map = nb.fill_column_map(role_review)
+    if AI_APPROVE:
+        role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
+
+# %% tags=["review"]
+# Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
+# slots, {"target": "COLUMN"}. Empty: the picker above (or an approval already saved) stands.
+ROLE_CHANGES = {}
+SLOT_CHANGES = {}
+if ROLE_CHANGES or SLOT_CHANGES:
+    role_review.approve(ROLE_CHANGES or None, SLOT_CHANGES or None)
+
+# %% tags=["review"]
 dataset = role_review.dataset()
 nb.show_roles(dataset)
+
+# %% tags=["review"]
+leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
+versions = nb.column_map_versions(dataset.id)              # every saved version; approving one's roles again restores it
 
 # %% [markdown] tags=["review"]
 # ### Check the map again
 #
-# The same map, read again after the approval. The table you approved now shows `approved vN, published` and every slot by name. `not published` means the roles are saved but agents cannot read them yet: approve again to publish.
+# The same map, read again after the approval. The table you approved now shows `approved vN, in semantic model <name>` and every slot by name. `not in a semantic model yet` means the roles are saved but agents cannot read them yet: approve again to publish.
 
 # %% tags=["review"]
 dataset  # read after the approval above, so this map shows it
 nb.data_map(connection)
+
+# %% [markdown] tags=["review"]
+# ### Semantic views: one model over all your data
+#
+# Approving a column map published it in **Exasol Semantic Views**, the database's semantic layer: the schema's model, with the table as an entity, its time, category and flag columns as dimensions and its measures as `total_` and `average_` metrics. AI clients read it over MCP; a notebook asks it with `nb.semantic_sql`. The kit installs Semantic Views the first time it is needed.
+#
+# A model can also span sources: sample data, your own files and any number of external sources at once. List the tables (each with an approved column map) and the links between them (`SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY`). With `ai=True` your model proposes business names, synonyms and the metrics people ask for, from names, types and notes only (never a row). `preview=True` shows the result and writes nothing.
+#
+# **Do now:** put your tables into `SEMANTIC_TABLES`, run the cell, read the preview, then set `PUBLISH_SEMANTIC = True` and run it again.
+#
+# A model is built from what was approved at the time. Approving a column map refreshes every model its table is in. After a link or a new table, run `nb.refresh_semantic(connection, "<name>")`.
+
+# %% tags=["review"]
+SEMANTIC_NAME = "my_data"
+SEMANTIC_TABLES = [dataset.fact_table]        # add tables of this or other schemas: "VS_LOGISTICS.COURIER_DAILY", "MY_DATA.TARGETS"
+SEMANTIC_LINKS = []                           # your own: "MY_DATA.ORDERS.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE", or {"from": ..., "to": ..., "note": "why"}
+SEMANTIC_TABLE_NOTES = {}                     # what each table is, in a sentence: {"MY_DATA.TARGETS": "The monthly target per state."}
+PUBLISH_SEMANTIC = False
+SEMANTIC_SCHEMAS = []                         # or whole schemas: every approved table of each, e.g. ["MY_DATA", "VS_LOGISTICS"]
+# Links between the tables you listed, found from the values (two tables of one schema are compared too), each with its evidence.
+found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
+# The links the model uses: yours, and the found ones the data backs. A found link carries its evidence into the model.
+model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
+if AI_CHECK:      # your AI model says what each table and link is, and names the model (names, types and roles only)
+    model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)
+    SEMANTIC_TABLE_NOTES = {**model_notes["tables"], **SEMANTIC_TABLE_NOTES}
+semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=model_links, table_notes=SEMANTIC_TABLE_NOTES,
+                             schemas=SEMANTIC_SCHEMAS, find=bool(SEMANTIC_SCHEMAS), ai=None, preview=not PUBLISH_SEMANTIC)
+semantic
+
+# %% tags=["review"]
+semantic_models = nb.semantic_models(connection)       # every model in the database; "refreshable" ones the kit built
+if PUBLISH_SEMANTIC:
+    refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
+semantic_models

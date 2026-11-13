@@ -572,12 +572,62 @@ class NotebookPlanTest(unittest.TestCase):
             config = home / "jupyter_server_config.json"
             self.assertIn(f"--config={config}", jupyter_args)
             self.assertIn(f"--ServerApp.root_dir={directory}", jupyter_args)
-            self.assertIn("marimo", json.loads(config.read_text(encoding="utf-8"))["ContentsManager"]["hide_globs"])
+            written = json.loads(config.read_text(encoding="utf-8"))["ContentsManager"]
+            self.assertIn("marimo", written["hide_globs"])
+            # a guided card's output is not saved: the hook is named, and the server is told where to find it
+            self.assertEqual("exakit_save_hook.strip_guided", written["pre_save_hook"])
+            env = server_type.return_value.start.call_args.kwargs["env"]
+            self.assertIn(str(self.ctx.root / "notebook" / "kit"), env["PYTHONPATH"].split(os.pathsep))
+            self.assertTrue((self.ctx.root / "notebook" / "kit" / "exakit_save_hook.py").is_file())
             with redirect_stdout(StringIO()):
                 notebook_cli._start_frontend(self.ctx, "marimo", 2718, False, False)
             marimo_args = server_type.return_value.start.call_args.args[0]
             self.assertEqual("edit", marimo_args[4])
             self.assertEqual(str(directory / "marimo"), marimo_args[5])
+
+    def test_a_guided_cells_output_is_not_saved(self) -> None:
+        """Reopening a notebook showed "model not found" where the card was: a saved widget has no kernel behind it."""
+        sys.path.insert(0, str(ROOT / "notebook" / "kit"))
+        import exakit_save_hook
+
+        widget = {"output_type": "display_data", "data": {exakit_save_hook.WIDGET: {"model_id": "x"}, "text/plain": "Card()"}}
+        table = {"output_type": "execute_result", "data": {"text/html": "<table></table>"}}
+        model = {"type": "notebook", "content": {"cells": [
+            {"cell_type": "markdown", "source": "hint"},
+            {"cell_type": "code", "metadata": {"tags": ["exakit-guide"]}, "execution_count": 3, "outputs": [widget, table]},
+            {"cell_type": "code", "metadata": {}, "execution_count": 4, "outputs": [table, widget]},
+            {"cell_type": "code", "metadata": {}, "execution_count": 5, "outputs": [table]}]}}
+        exakit_save_hook.strip_guided(model, path="x.ipynb", contents_manager=None)
+        cells = model["content"]["cells"]
+        self.assertEqual(([], None), (cells[1]["outputs"], cells[1]["execution_count"]))     # the guided cell: ready to run
+        self.assertEqual(([table], 4), (cells[2]["outputs"], cells[2]["execution_count"]))   # a stray widget goes, the table stays
+        self.assertEqual([table], cells[3]["outputs"])
+        exakit_save_hook.strip_guided({"type": "file"})                  # anything else is left alone
+        exakit_save_hook.strip_guided({"type": "notebook", "content": None})      # a notebook it cannot read is saved untouched
+
+    def test_guided_notebooks_open_in_the_guided_view(self) -> None:
+        """The kit's JupyterLab loads custom.css from its own venv: the code section of a guided notebook stays hidden
+        until Code is chosen. Without that folder JupyterLab still starts, just without the stylesheet."""
+        venv, home, _ = notebook.paths(self.ctx)
+        home.mkdir(parents=True)
+        config = home / "jupyter_server_config.json"
+        static = venv / "lib" / "python3.12" / "site-packages" / "jupyter_server" / "static"
+        for present in (False, True):
+            with self.subTest(static_folder=present):
+                if present:
+                    static.mkdir(parents=True)
+                with patch.object(notebook_cli, "_ensure_frontend"), \
+                     patch.object(notebook_cli, "_find_jupyter", return_value=Path("/tools/jupyter-lab")), \
+                     patch.object(notebook_cli, "_choose_port", side_effect=lambda port, _: port), \
+                     patch.object(notebook_cli, "OnDemandServer") as server_type, \
+                     patch.object(notebook, "_copy"):
+                    server_type.return_value.state.return_value = "stopped"
+                    with redirect_stdout(StringIO()):
+                        notebook_cli._start_frontend(self.ctx, "jupyterlab", 28888, False, False)
+                self.assertIs(present, json.loads(config.read_text(encoding="utf-8"))["LabApp"]["custom_css"])
+                if present:
+                    css = (static / "custom" / "custom.css").read_text(encoding="utf-8")
+                    self.assertIn("body:not(.guide-allcode) .jp-Cell:has(.guide-code-start) ~ .jp-Cell", css)
 
     @unittest.skipIf(os.name == "nt", "native Windows process test is a separate release gate")
     def test_frontend_launch_keeps_token_out_of_argv_and_stops_owned_server(self) -> None:

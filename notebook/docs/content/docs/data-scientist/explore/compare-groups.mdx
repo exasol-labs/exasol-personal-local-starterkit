@@ -1,0 +1,39 @@
+---
+title: Compare groups and trends
+description: Count rows by group and over time with the SQL shown, and read the plain-language notes the kit writes under each result.
+---
+
+Comparing groups answers the first question about most tables: how many rows are in each group, and does the outcome differ between groups? Comparing over time answers whether the counts or the outcome rate move. The kit runs both on the approved dataset. It shows the SQL before each result, and writes a plain-language note under it, so a result is not read without its meaning.
+
+## Compare groups and trends
+
+`01_explore` runs two kinds of query on the approved dataset. Each query shows its SQL before its result, and a plain-language note under it.
+
+- **Compare groups.** The ten largest entities, with the row count of each category and the percentage where the target is 1.
+- **Over time.** Rows per period, and the percentage where the target is 1. The period is chosen by the span of the data: a day when the span is up to 62 days, a month up to three years, otherwise a year.
+
+```python
+rows = nb.sql(connection, f"""
+SELECT {dataset.col("category")} AS GROUP_, COUNT(*) AS N
+FROM {dataset.fact_table}
+GROUP BY 1 ORDER BY N DESC""")
+nb.show_sql()                              # the SQL the last query ran
+```
+
+`nb.note_groups` and `nb.note_trend` write the notes under each result. A note says what one row of the result is, in the data's own words, and what the overall figure is. It names the highest and lowest groups. It says which groups have too few rows to trust their percentage. It also says that a difference between groups is not a cause.
+
+Groups with fewer than 30 rows are not compared, because one row moves their percentage a lot.
+
+A step that needs a column the dataset does not have skips and says why. The Compare step needs a category, an entity and a target. The Over time step needs a time and a target.
+
+## The worked example
+
+The worked example uses `amazon_sales`. The dataset README records 128,975 order lines and 14.2% cancelled. Measured on the database, the table holds 128,975 rows, and 18,332 of them have `CANCELLED = 1`, which is 14.2%.
+
+The time span runs from 31 March to 29 June 2022, which is 90 days, so the over-time step groups by month. The first query above returns one row for each category, with its row count.
+
+Three of the category counts were measured through the semantic model, which counts the prepared view of the table (128,969 rows, not the table's 128,975). They are the order lines in each category: Set 50,281, kurta 49,874 and Western Dress 15,500. See [Semantic views](/data-scientist/explore/semantic-views). The repository does not record the output of the notebook's group query itself. To see it, run the cell in `01_explore`.
+
+A difference between groups is a pattern in the data, not a cause. Check a difference against the notes before you act on it.
+
+Back to [Explore and understand](/data-scientist/explore). Previous: [Linked tables](/data-scientist/explore/linked-tables). Next: [Ask questions in plain language](/data-scientist/explore/questions).

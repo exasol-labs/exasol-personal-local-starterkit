@@ -68,6 +68,17 @@ def _built_cells(py: Path) -> list[dict]:
     return json.loads(build_tool.build(py))["cells"]
 
 
+GUIDE_TAGS = {"exakit-guide", "exakit-guide-hint", build_tool.CODE_START_TAG}
+
+
+def _page_cells(py: Path) -> list[dict]:
+    """The notebook's own page: a Data Scientist notebook opens with its guided cards and the collapsed "code behind
+    this page" heading; its title, steps picture and cells follow that heading. Others have no guided cards."""
+    cells = _built_cells(py)
+    starts = [i for i, c in enumerate(cells) if build_tool.CODE_START_TAG in c["metadata"].get("tags", [])]
+    return cells[starts[0] + 1:] if starts else cells
+
+
 class CallsExistTest(unittest.TestCase):
     def test_helper_checks_ignore_temporary_wheel_build_copies(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -190,7 +201,7 @@ class NotebookShapeTest(unittest.TestCase):
                     "02_ask_your_data": {"7"}, "03_share": {"8", "9"}}
         for name, current in expected.items():
             with self.subTest(notebook=name):
-                first = "".join(_built_cells(SOURCES / "data-scientist" / f"{name}.py")[0]["source"])
+                first = "".join(_page_cells(SOURCES / "data-scientist" / f"{name}.py")[0]["source"])
                 self.assertNotIn("journey:", first, "the placeholder is replaced at build time")
                 match = re.search(r"!\[([^\]]+)\]\(data:image/svg\+xml;base64,([A-Za-z0-9+/=]+)\)", first)
                 self.assertIsNotNone(match, "the strip is an embedded SVG image")
@@ -205,14 +216,14 @@ class NotebookShapeTest(unittest.TestCase):
                                  "arrows: six down within the three stages, one across between each stage")
                 self.assertIn("This notebook", "".join(svg.itertext()))
                 built = json.loads((SOURCES / "data-scientist" / f"{name}.ipynb").read_text(encoding="utf-8"))
-                self.assertEqual(first, "".join(built["cells"][0]["source"]), "the shipped .ipynb carries it")
+                self.assertIn(first, ["".join(c["source"]) for c in built["cells"]], "the shipped .ipynb carries it")
 
     def test_the_first_cell_states_the_dataset_and_no_run_time(self):
         """The first cell says which dataset; a run-time estimate was dropped from the Data Scientist notebooks (it
         depends on the machine and the first download, and reads as a promise)."""
         for py in SOURCES.glob("*/*.py"):
             with self.subTest(notebook=py.relative_to(SOURCES).as_posix()):
-                first = "".join(_built_cells(py)[0]["source"])
+                first = "".join(_page_cells(py)[0]["source"])
                 self.assertIn("Dataset:", first)
                 if py.parent.name in ("data-scientist", "00_shared"):
                     self.assertNotIn("How long:", first)
@@ -223,7 +234,7 @@ class NotebookShapeTest(unittest.TestCase):
         for persona in ("data-scientist", "ml-engineer"):
             with self.subTest(persona=persona):
                 cells = [(c["cell_type"], c["source"]) for c in _built_cells(SOURCES / persona / "00_quickstart.py")
-                         if c["metadata"].get("tags")]
+                         if c["metadata"].get("tags") and not set(c["metadata"]["tags"]) & GUIDE_TAGS]
                 self.assertEqual(cells, shared)
 
     def test_role_review_follows_selection_and_precedes_queries(self):
@@ -373,12 +384,20 @@ class NotebookShapeTest(unittest.TestCase):
 
     def test_no_shipped_file_holds_a_connection_value(self):
         """AC-DS1.2 / AC-DS4.3: no notebook, kernel helper or helper output template holds a host, user or password."""
-        files = [p for p in (ROOT / "notebook").rglob("*") if p.is_file() and p.suffix in (".py", ".ipynb", ".json", ".md")]
+        # notebook/docs is the documentation site: its build project (a dependency lock file, node_modules on a
+        # maintainer's machine) and the built site. Its pages are checked by tests/test_notebook_docs.py.
+        files = [p for p in (ROOT / "notebook").rglob("*") if p.is_file() and p.suffix in (".py", ".ipynb", ".json", ".md")
+                 and p.relative_to(ROOT / "notebook").parts[0] != "docs"]
         for path in files:
             text = path.read_text(encoding="utf-8")
-            if path == ROOT / "notebook/MODEL-PROVIDERS.md":
+            if path == ROOT / "notebook/package/exakit_nb/docs.py":
+                # nb.docs() serves the documentation on the loopback address only: the address it binds and shows is
+                # a rule about who can reach it, not a connection value. Exactly that one line is exempt.
+                text = text.replace('BIND, SHOWN = "127.0.0.1", "localhost"   # served on the loopback address only: no other computer reaches it', "")
+            if path in (ROOT / "notebook/MODEL-PROVIDERS.md", ROOT / "notebook/package/exakit_nb/providers.py"):
                 # These exact model-server examples are public defaults, not database
-                # connection values. Keep all other hosts and every credential check.
+                # connection values (the provider list offers them for a server on this computer).
+                # Keep all other hosts and every credential check.
                 for endpoint in ("http://localhost:11434/v1/", "http://localhost:1234/v1/",
                                  "http://localhost:8000/v1/"):
                     text = text.replace(endpoint, "<documented-model-endpoint>")
@@ -404,7 +423,7 @@ class GuardTest(unittest.TestCase):
 
     def test_the_package_ships_both_names(self):
         text = (ROOT / "notebook" / "package" / "pyproject.toml").read_text(encoding="utf-8")
-        self.assertIn('packages = ["exakit_nb", "exakit", "exakit.nb"]', text)
+        self.assertIn('packages = ["exakit_nb", "exakit", "exakit.nb", "exakit_guide", "exakit_guide.screens", "exakit.guide"]', text)
 
     def test_no_build_output_is_tracked(self):
         done = subprocess.run(["git", "-C", str(ROOT), "ls-files"], capture_output=True, text=True, check=False)

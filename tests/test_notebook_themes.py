@@ -87,6 +87,26 @@ class Themes(unittest.TestCase):
         scores = {call.kwargs["name"]: call.kwargs["value"] for call in span.score_trace.call_args_list}
         self.assertEqual(0.5, scores["valid_json"])
 
+    def test_row_text_is_never_sent_when_marked_sensitive_or_over_clear_text(self):
+        """themes() is the one helper that sends the content of rows: it refuses a sensitive text column and a model
+        reached over plain http on another computer, and says what it sends before it sends it."""
+        import io, os
+        from contextlib import redirect_stdout
+        from unittest import mock
+
+        sensitive = types.SimpleNamespace(descriptor=types.SimpleNamespace(slots={"text": "NOTES"}, sensitive=("NOTES",)))
+        with self.assertRaisesRegex(ValueError, "NOTES is marked sensitive"):
+            module._may_send(sensitive)
+        plain = types.SimpleNamespace(descriptor=types.SimpleNamespace(slots={"text": "BODY"}, sensitive=()))
+        with mock.patch.dict(os.environ, {"EXAKIT_PROVIDER_BASE_URL": "http://models.example.com/v1/"}):
+            with self.assertRaisesRegex(ValueError, "clear text"):
+                module._may_send(plain)
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {"EXAKIT_PROVIDER_BASE_URL": "https://api.example.com/v1/"}), redirect_stdout(out):
+            module._may_send(plain)
+        self.assertIn("Sending the text of the sampled rows (BODY), up to 600 characters each", out.getvalue())
+        self.assertIn("https://api.example.com/v1/", out.getvalue())
+
     def test_untraced_calls_carry_no_langfuse_name(self):
         _, client, _, out = self.run_themes(['{"themes": [{"theme": "A", "texts": [1, 2]}]}',
                                              '{"themes": [{"theme": "B", "texts": [1]}]}'], traced=False)

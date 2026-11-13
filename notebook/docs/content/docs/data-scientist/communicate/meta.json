@@ -1,0 +1,13 @@
+{
+  "title": "Communicate and deploy",
+  "pages": [
+    "index",
+    "dashboard-query",
+    "preview-check-publish",
+    "what-a-reader-sees",
+    "hand-off-bundle",
+    "training-hand-off",
+    "deploying-a-model",
+    "troubleshooting"
+  ]
+}

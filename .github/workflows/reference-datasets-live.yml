@@ -11,8 +11,8 @@ name: Reference datasets live
 #       digest is the live proof that the declared types are the ones
 #       EXA_ALL_COLUMNS reports (TIMESTAMP against TIMESTAMP(3), say);
 #   (c) `exakit describe <id> --approve --role target=<shipped target>` writes
-#       v1 and publishes EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>, every column
-#       comment role=...;
+#       v1 and publishes the schema's Exasol Semantic Views model (SEM_<SCHEMA>),
+#       the table an entity of it;
 #   (d) the core notebooks run headless on the two datasets and on a
 #       synthetic CSV loaded with load_own_file and described/approved, the
 #       text step on the stub model;

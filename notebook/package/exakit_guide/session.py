@@ -1,0 +1,286 @@
+"""What the guided cards in one notebook share: the connection, the chosen data,
+the role review and the approved dataset.
+
+Cards register as listeners; when one card changes the session (data chosen,
+roles approved) the others redraw. `code` records the exakit.nb calls that
+actually ran, so Code mode can show them and anyone can copy them into a
+notebook of their own.
+"""
+
+from __future__ import annotations
+
+import threading
+import weakref
+from contextlib import contextmanager
+from typing import Any
+
+
+class Session:
+    """The notebook's state as its cells would hold it: a namespace with `nb`, `connection`, `chosen_data`,
+    `role_review`, `dataset`, `lab`, `proposal` ... - the very names the code section uses. Every card action runs its
+    code in this namespace (actions.run), so what a card did is what those cells would have done."""
+
+    def __init__(self) -> None:
+        self._ns: dict[str, Any] | None = None
+        self.source_label: str = ""
+        self.source_rows: int | None = None
+        self.broken: dict | None = None  # a saved column map the kit refuses to open, and why
+        # every table chosen in step 1 ({label, table, rows, broken}); `chosen_data` is the one being worked on
+        self.chosen: list[dict] = []
+        self.chosen_n = 0                # counts the choices made, so a card's pickers start afresh
+        # what the AI filled in (the Understand step's one button): per table its column map answer, the links it
+        # found between the chosen tables, and what it said about the tables, the links and the model
+        self.ai_maps: dict[str, dict] = {}
+        self.ai_model: dict | None = None
+        self.ai_runs = 0
+        self.code: list[str] = []        # the code every action ran, in order (Code mode, Copy as cell)
+        self.said: str = ""              # what the last action printed
+        self._listeners: list[weakref.ref] = []
+        self.followed: str | None = None   # the "approved last" dataset this kernel last loaded
+        self._watching = False
+        # One database connection serves every card, and a database session takes one request at a time (pyexasol:
+        # "Connection cannot be shared between multiple threads"). A button's work and the cards' background reads
+        # take turns through this lock; it is re-entrant, so an action inside an action does not wait for itself.
+        self.lock = threading.RLock()
+
+    # -- the notebook's namespace ----------------------------------------------------------
+    def namespace(self) -> dict[str, Any]:
+        if self._ns is None:
+            import exakit.nb as nb
+
+            self._ns = {"nb": nb}
+            self.log("import exakit.nb as nb")
+        return self._ns
+
+    def get(self, name: str) -> Any:
+        return self.namespace().get(name)
+
+    def set(self, name: str, value: Any) -> None:
+        self.namespace()[name] = value
+
+    # The cards' own words for what the cells call chosen_data, role_review and dataset.
+    source = property(lambda self: self.get("chosen_data"), lambda self, v: self.set("chosen_data", v))
+    review = property(lambda self: self.get("role_review"), lambda self, v: self.set("role_review", v))
+    dataset = property(lambda self: self.get("dataset"), lambda self, v: self.set("dataset", v))
+
+    # -- connection -------------------------------------------------------------------
+    def connection(self):
+        """The notebook's `connection`, opened the way its first cell opens it (nb.connect) when there is none."""
+        if self.get("connection") is None:
+            from . import actions
+
+            actions.run("data.connect", self)
+        return self.get("connection")
+
+    @contextmanager
+    def showing_queries(self):
+        """While inside, every statement sent on the notebook's connection is printed first ("Running: SELECT ...",
+        its first words), so a card that waits on many of them (a column map being drawn up) shows them as they go
+        instead of looking frozen. The statements are what they were; nothing else changes."""
+        import re as _re
+
+        conn = self.connection()
+        if conn is None or not hasattr(conn, "execute"):
+            yield                                # no database here (a stand-in): nothing to show
+            return
+        real = conn.execute
+
+        def execute(query, *args, **kwargs):
+            words = " ".join(str(query).split())
+            print("Running: " + (words[:110] + " ..." if len(words) > 110 else words))
+            return real(query, *args, **kwargs)
+
+        conn.execute = execute
+        try:
+            yield
+        finally:
+            try:
+                del conn.execute                 # the connection's own method again
+            except AttributeError:
+                conn.execute = real
+
+    def release(self) -> None:
+        """Give the database connection back while nothing is running (Exasol Personal has a small number of
+        connections; an idle notebook should not hold one). The next action opens it again. Waits for the work in
+        progress: a connection is never closed under a running statement."""
+        with self.lock:
+            self._release()
+
+    def _release(self) -> None:
+        conn = self.namespace().pop("connection", None)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def log(self, *lines: str) -> None:
+        for line in lines:
+            if line in self.code and line.startswith(("import ", "connection =")):
+                continue
+            if self.code and self.code[-1] == line:
+                continue
+            self.code.append(line)
+
+    # -- the dataset approved last (step 1 writes it; every step follows it) -------------------
+    @staticmethod
+    def latest_approved() -> str | None:
+        """The dataset approved last (the kit's own record, which nb.chosen_dataset() reads too)."""
+        from exakit_nb.dataset import _last_file
+
+        try:
+            return _last_file().read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
+
+    def open_latest(self, action: str = "explore.open") -> None:
+        """Open the dataset approved last with the step's own opening cells (explore.open, ask.open, share.open),
+        unless this kernel already follows it. Each step runs in its own kernel; without this a step would keep the
+        dataset it first opened."""
+        from . import actions
+
+        latest = self.latest_approved()
+        if self.dataset is None or (latest and latest != self.followed):
+            actions.run(action, self, dataset_id=None)
+            self.followed = latest
+        self._watch()
+
+    def newer_approved(self) -> str | None:
+        """A dataset approved in step 1 after this step opened its data (None when there is nothing newer)."""
+        latest = self.latest_approved()
+        ds_id = getattr(self.dataset, "id", None)
+        # Only a step that follows the approved-last dataset (open_latest) can fall behind it. Step 1 chooses its own
+        # data, and running its cell again would change nothing.
+        if self.followed is None or self.dataset is None or not latest or latest == self.followed or latest == ds_id:
+            return None
+        return latest
+
+    def _watch(self) -> None:
+        """Redraw open cards when step 1 approves another dataset, so they can say so."""
+        if self._watching:
+            return
+        self._watching = True
+        import threading
+        import time
+
+        def loop():
+            seen = self.latest_approved()
+            while True:
+                time.sleep(2)
+                now = self.latest_approved()
+                if now != seen:
+                    seen = now
+                    from .card import redraw_all
+
+                    redraw_all()
+
+        threading.Thread(target=loop, name="exakit-guide-watch", daemon=True).start()
+
+    # -- listeners ----------------------------------------------------------------------
+    def listen(self, screen) -> None:
+        self._listeners.append(weakref.ref(screen))
+
+    def changed(self, what: str, source=None) -> None:
+        alive = []
+        for ref in self._listeners:
+            screen = ref()
+            if screen is None:
+                continue
+            alive.append(ref)
+            if screen is not source and hasattr(screen, "on_session"):
+                screen.on_session(what)
+        self._listeners = alive
+
+
+SESSION = Session()
+
+
+class _ThreadOut:
+    """sys.stdout / sys.stderr stand-in: a thread inside quiet() writes to its own buffer, every other write goes to
+    the stream it wraps. Installed once and never swapped back and forth, so cards redrawing on a background thread
+    cannot leave the kernel's output captured (IPython's capture_output swaps a process-wide object and is not safe
+    across threads)."""
+
+    def __init__(self, stream, name: str) -> None:
+        self._stream = stream
+        self._name = name
+
+    def write(self, text):
+        buf = getattr(_LOCAL, self._name, None)
+        if buf is not None:
+            buf.append(text)
+            listener = getattr(_LOCAL, "listener", None)
+            if listener is not None:         # a card showing the command's progress as it runs
+                try:
+                    listener(text)
+                except Exception:
+                    pass
+            return len(text)
+        return self._stream.write(text)
+
+    def flush(self):
+        if getattr(_LOCAL, self._name, None) is None:
+            return self._stream.flush()
+
+    def __getattr__(self, attr):
+        return getattr(self._stream, attr)
+
+
+_LOCAL = threading.local()
+
+
+def _install() -> None:
+    import sys
+
+    for name in ("stdout", "stderr"):
+        stream = getattr(sys, name)
+        if not isinstance(stream, _ThreadOut):
+            setattr(sys, name, _ThreadOut(stream, name))
+    try:
+        from IPython import get_ipython
+
+        pub = getattr(get_ipython(), "display_pub", None)
+    except Exception:
+        pub = None
+    if pub is not None and not getattr(pub, "_exakit_quiet", False):
+        publish = pub.publish
+
+        def quiet_publish(*args, **kwargs):  # a display from a helper inside quiet() is dropped, the rest pass
+            if getattr(_LOCAL, "quiet", 0):
+                return None
+            return publish(*args, **kwargs)
+
+        pub.publish = quiet_publish
+        pub._exakit_quiet = True
+
+
+@contextmanager
+def quiet():
+    """Run kit helpers without their printed lines or displays landing in the notebook.
+    The lines are kept (yielded object .text) so a card can show them on request. Per thread and nestable."""
+
+    class Out:
+        text = ""
+
+    out = Out()
+    _install()
+    saved = (getattr(_LOCAL, "stdout", None), getattr(_LOCAL, "stderr", None), getattr(_LOCAL, "quiet", 0))
+    lines: list[str] = []
+    _LOCAL.stdout, _LOCAL.stderr, _LOCAL.quiet = lines, [], saved[2] + 1
+    try:
+        yield out
+    finally:
+        _LOCAL.stdout, _LOCAL.stderr, _LOCAL.quiet = saved
+        out.text = "".join(lines).strip()
+
+
+@contextmanager
+def watch_output(listener):
+    """While inside, every line a kit helper prints in this thread (held back by quiet()) is also handed to
+    listener(text): how a card shows a long command's progress while it runs. Per thread; the previous one comes back."""
+    saved = getattr(_LOCAL, "listener", None)
+    _LOCAL.listener = listener
+    try:
+        yield
+    finally:
+        _LOCAL.listener = saved

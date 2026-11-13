@@ -1,0 +1,88 @@
+---
+title: These docs
+description: How this documentation is written, built and shipped, and how to change a page.
+---
+
+## How it works
+
+- **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
+- **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
+- **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
+- **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
+
+Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
+
+## Change a page
+
+<Steps>
+
+<Step>
+
+### Edit
+
+Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
+
+```text
+---
+title: Page title
+description: One sentence that says what the page covers.
+---
+```
+
+`Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
+
+</Step>
+
+<Step>
+
+### Preview while you write
+
+```bash
+npm install
+```
+
+```bash
+npm run dev
+```
+
+Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
+
+</Step>
+
+<Step>
+
+### Build and publish
+
+```bash
+npm run build
+```
+
+```bash
+python3 tools/nb_docs.py --publish
+```
+
+The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
+
+</Step>
+
+<Step>
+
+### Check
+
+```bash
+python3 tools/nb_docs.py --check
+```
+
+It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
+
+</Step>
+
+</Steps>
+
+## Pages you do not edit
+
+Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
+
+## Links
+
+Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/development/reference/describe#describe`. A test fails on a link that leads nowhere.

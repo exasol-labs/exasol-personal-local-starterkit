@@ -267,6 +267,7 @@ class AddonSafetyTest(unittest.TestCase):
 
         with patch.object(exasol_vscode, "code_cli", return_value=cli), \
              patch.object(exasol_vscode, "live_version", return_value=None), \
+             patch.object(exasol_vscode, "folder_version", return_value=None), \
              patch.object(exasol_vscode, "expected_digest", return_value="0" * 64), \
              patch("addons.exasol_vscode.urllib.request.urlopen", return_value=Response(b"bad")), \
              patch.object(KitContext, "run_logged") as install:
@@ -292,6 +293,77 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertEqual(subprocess.DEVNULL, invoke.call_args.kwargs["stdin"])
         self.assertEqual([str(cli), "--extensions-dir", str(extension_dir),
                           "--list-extensions", "--show-versions"], invoke.call_args.args[0])
+
+    def test_no_add_on_touches_a_copy_the_user_owns(self) -> None:
+        """The rule every add-on keeps: one the user installed is seen (system_present) and never updated or removed
+        by the kit. Two cannot be had outside the kit and say why: the notebook add-on is the kit's own notebook
+        environment (it uses the user's JupyterLab when there is one), udf-devkit is built by the kit."""
+        import importlib
+
+        built_by_the_kit = {"notebook", "udf-devkit"}
+        catalog = json.loads((ROOT / "marketplace" / "catalog.json").read_text(encoding="utf-8"))["addons"]
+        for row in catalog:
+            module = importlib.import_module("addons." + row["id"].replace("-", "_"))
+            with self.subTest(addon=row["id"]):
+                if row["id"] not in built_by_the_kit:
+                    self.assertTrue(callable(getattr(module, "system_present", None)),
+                                    f"{row['id']} cannot tell a copy the user installed")
+                receipt = f"components.{row['id'].replace('-', '_')}"
+                self.manifest.set_many({f"{receipt}.ownership": "user", f"{receipt}.version": "1.0.0"})
+                with self.assertRaises(AddonFailure):
+                    module.update(self.ctx)
+                with self.assertRaises(AddonFailure):
+                    module.uninstall(self.ctx)
+
+    def test_a_dash_server_the_user_installed_is_managed_outside_the_kit(self) -> None:
+        own = self.home / "bin" / "dash-server"
+        theirs = Path(self.temp.name) / "user" / "dash-server"
+        theirs.parent.mkdir(parents=True)
+        theirs.write_text("", encoding="utf-8")
+        with patch.object(dash_server, "paths", return_value=(self.home / "venv", self.home, own)), \
+             patch("addons.dash_server.shutil.which", return_value=str(theirs)):
+            self.assertTrue(dash_server.system_present(self.ctx))
+            self.manifest.set_many({"components.dash_server.version": "0.2.1"})
+            self.assertFalse(dash_server.system_present(self.ctx))
+        with patch.object(dash_server, "paths", return_value=(self.home / "venv", self.home, own)), \
+             patch("addons.dash_server.shutil.which", return_value=None):
+            self.assertFalse(dash_server.system_present(self.ctx))
+
+    def test_vscode_extension_found_in_an_editor_folder_without_its_cli_is_managed_outside(self) -> None:
+        """No editor command on PATH (common on a Mac), but the extension in ~/.vscode/extensions: the user has it, so
+        it is listed as managed outside the kit - never offered for install, never "not available"."""
+        user_home = Path(self.temp.name) / "user"
+        folder = user_home / ".cursor" / "extensions"
+        (folder / "exasol.exasol-vscode-1.7.0").mkdir(parents=True)
+        (folder / "exasol.exasol-vscode-1.8.2-darwin-arm64").mkdir()
+        with patch.object(exasol_vscode, "code_cli", return_value=None), \
+             patch.object(exasol_vscode.Path, "home", return_value=user_home), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXAKIT_EXASOL_VSCODE_EXTDIR", None)
+            self.assertEqual("1.8.2", exasol_vscode.live_version(self.ctx))
+            self.assertTrue(exasol_vscode.system_present(self.ctx))
+            self.assertTrue(exasol_vscode.applicable(self.ctx))
+            # An editor that removed it lists the folder in .obsolete until it cleans up: not installed.
+            (folder / ".obsolete").write_text(json.dumps({"exasol.exasol-vscode-1.7.0": True,
+                                                         "exasol.exasol-vscode-1.8.2-darwin-arm64": True}), encoding="utf-8")
+            self.assertIsNone(exasol_vscode.live_version(self.ctx))
+            self.assertFalse(exasol_vscode.system_present(self.ctx))
+            self.assertFalse(exasol_vscode.applicable(self.ctx))
+
+    def test_vscode_slow_editor_still_finds_the_users_extension(self) -> None:
+        """The editor's tool timing out (a slow first start during an install) once made the install table offer the
+        extension the install then refused as the user's: the folder answers without starting the editor."""
+        user_home = Path(self.temp.name) / "user"
+        (user_home / ".vscode" / "extensions" / "exasol.exasol-vscode-1.7.0").mkdir(parents=True)
+        timeout = exasol_vscode.subprocess.TimeoutExpired("code", 20)
+        with patch.object(exasol_vscode, "code_cli", return_value=Path("/Applications/code")), \
+             patch.object(exasol_vscode.subprocess, "run", side_effect=timeout) as run, \
+             patch.object(exasol_vscode.Path, "home", return_value=user_home), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXAKIT_EXASOL_VSCODE_EXTDIR", None)
+            self.assertTrue(exasol_vscode.system_present(self.ctx))
+            run.assert_not_called()                       # the folder answered first
+            self.assertEqual("1.7.0", exasol_vscode.live_version(self.ctx))   # and after a timeout too
 
     def test_vscode_wsl_stages_extension_on_windows_drive(self) -> None:
         source = self.home / "extension.vsix"

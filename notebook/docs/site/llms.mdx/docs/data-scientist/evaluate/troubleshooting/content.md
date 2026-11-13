@@ -1,0 +1,33 @@
+# Troubleshooting (/data-scientist/evaluate/troubleshooting)
+
+
+
+Each entry quotes the warning or describes the score you see.
+
+<Accordions type="multiple">
+  <Accordion title="Only a few rows with a 1 are held out">
+    The warning reads "Only N rows with a 1 are held out, so the held-out score is shaky". It appears when fewer than 30 rows with a 1 are held out. Lower `train_pct` (50 is the lowest it accepts), so more rows are held out, or use more data. See [Hold-out](/data-scientist/evaluate/hold-out).
+  </Accordion>
+
+  <Accordion title="One side of the split has only one answer">
+    The error reads "One side of the split has only one answer, so no score can be computed". No score can be computed when one side has only 0s or only 1s. Change the split to `split_method="random"`, which is stratified for yes or no.
+  </Accordion>
+
+  <Accordion title="The score jumped almost to perfect">
+    The idea you tried scored above 0.98 on the held-out rows, and the verdict is `suspicious`. The kit says "The score jumped almost to perfect. That usually means the idea gives the answer away. Don't keep it." Do not keep it. For the whole model, run `nb.leakage_check` and read `lab_data.left_out`. See [Leakage](/data-scientist/evaluate/leakage).
+  </Accordion>
+
+  <Accordion title="A near-perfect score from the start">
+    Treat it as a leak until proved otherwise. Check the importance list, the leakage check and the column map. A score that is near perfect on the first run is almost never the model's real skill. The [leakage page](/data-scientist/evaluate/leakage) shows how a column like `STATUS` produces one.
+  </Accordion>
+
+  <Accordion title="The held-out score is worse than cross-validation">
+    A gap in either direction can be noise, especially with a small held-out set. Look at the number of rows held out, and at `cv_sd`, before you read anything into the gap. See [Comparing models](/data-scientist/evaluate/comparing-models).
+  </Accordion>
+
+  <Accordion title="The score looks good, but the table has repeated ids">
+    On `fraud_transactions`, 1,000 ids appear twice. A copy on both sides of the split can make the held-out score look better than it is. Run `nb.data_checks` and read the repeated-id finding. See [Rare answers](/data-scientist/evaluate/rare-answers).
+  </Accordion>
+</Accordions>
+
+Back to [Evaluate](/data-scientist/evaluate).

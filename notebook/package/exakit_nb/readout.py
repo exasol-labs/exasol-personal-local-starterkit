@@ -26,10 +26,14 @@ _STOP = ("in", "of", "for", "with", "by", "from", "at", "on", "per", "where", "w
 def name(column: str | None, suffix: str = "") -> str:
     """A result column named after a data column: ``CANCELLED`` + ``PCT`` -> ``CANCELLED_PCT``; quotes, dots and
     spaces become underscores, so the name works unquoted in SQL."""
+    from .sql_words import reserved
+
     base = re.sub(r"[^A-Z0-9]+", "_", str(column or "").split(".")[-1].upper()).strip("_") or "VALUE"
     if base[0].isdigit():
         base = "C_" + base
-    return f"{base}_{suffix}" if suffix else base
+    found = f"{base}_{suffix}" if suffix else base
+    # an SQL word (DATE, VALUE, CS, ROWS ...) is not a name unquoted: "SELECT x AS DATE" is a syntax error
+    return f"{found}_COL" if reserved(found) else found
 
 
 def noun(ds, one: bool = False) -> str:
@@ -58,9 +62,16 @@ def noun(ds, one: bool = False) -> str:
 
 def count_name(ds) -> str:
     """The count column, named after what is counted: ORDER_LINES, STORE_WEEKS; ROW_COUNT when the descriptor does
-    not say (ROWS is an SQL word)."""
-    found = name(noun(ds))
-    return "ROW_COUNT" if found == "ROWS" else found
+    not say (ROWS is an SQL word); <WORD>_COUNT when what is counted is another SQL word (CS, short for
+    CASESPECIFIC: "COUNT(*) AS CS" is a syntax error)."""
+    from .sql_words import reserved
+
+    found = re.sub(r"[^A-Z0-9]+", "_", noun(ds).upper()).strip("_") or "ROWS"
+    if found[0].isdigit():
+        found = "C_" + found
+    if found == "ROWS":
+        return "ROW_COUNT"
+    return f"{found}_COUNT" if reserved(found) else found
 
 
 def _label(ds) -> str | None:
@@ -146,10 +157,22 @@ def note_trend(frame, ds, period: str = "PERIOD", rows: str = "ROW_COUNT", pct: 
     return text
 
 
+def _model_event(ds, rows: int, score: float) -> None:
+    """One line in the active workflow's log: a model was trained and scored on this dataset."""
+    try:
+        import importlib
+
+        wf = importlib.import_module("exakit_nb.workflow")       # the module: exakit_nb.workflow is a function too
+        wf.log_event(wf.MODEL, dataset=getattr(ds, "id", None), rows=int(rows), score=round(float(score), 4))
+    except Exception:
+        pass                                                      # a note never fails over its log line
+
+
 def note_model(auc: float, ds, rows: int, share: float | None = None) -> str:
     """Print (and return) the note under the small model's score, in words."""
     things, label = noun(ds), _label(ds) or "the outcome"
     chance = round(100 * float(auc))
+    _model_event(ds, rows, auc)
     verdict = ("about as good as guessing" if auc < 0.6 else "a weak signal" if auc < 0.7
                else "a useful signal" if auc < 0.85 else "a strong signal - check it is not too good to be true")
     lines = [f"What this means: shown one {noun(ds, one=True)} where {label} is 1 and one where it is 0, the model gives "

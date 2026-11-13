@@ -1,0 +1,33 @@
+# Saving, MLflow and training in the database (/data-scientist/model/saving-and-mlflow)
+
+
+
+Three things sit beside the model lab and are easy to confuse: keeping a result, the optional MLflow record, and the training that runs inside the database. The Data Scientist notebooks use the first only. The other two belong to the ML Engineer's path.
+
+## Saving a model [#saving-a-model]
+
+Nothing in the Data Scientist notebooks saves a fitted model to disk or to the database. The lab's fitted model lives in your kernel until you stop it. To keep a result, keep the numbers: the board, the importance list and the notes.
+
+The workflow log records only that a model ran, with its task, its row count and, for the small model, its score. See [The workflow log](/data-scientist/monitor/the-workflow-log).
+
+## MLflow, when it is installed [#mlflow-when-it-is-installed]
+
+MLflow is an optional record of training runs. The Data Scientist notebooks do not start MLflow runs. The runs come from the in-database training that the ML Engineer's notebooks do, described below.
+
+* `nb.use_mlflow()` sets where runs are recorded for this kernel. An empty address means the kit's own MLflow server (`exakit mlflow start`), or whatever the shell set. `nb.use_mlflow(login=True)` asks for a username and a password in a hidden box.
+* `nb.check_mlflow()` checks the client and the server. If the client is missing, it says to run `exakit update notebook`.
+* `exakit mlflow start` installs the MLflow server into the notebook environment when it is missing.
+
+The settings are listed in [Model, Langfuse and MLflow settings](/data-scientist/development/reference/setup-env).
+
+## Training inside the database (the ML Engineer's path) [#training-inside-the-database-the-ml-engineers-path]
+
+This is not a Data Scientist step, but it is where the kit's trained models come from. `nb.prepare_training(conn, ds, handoff, container=..., seed=0)` prepares in-database training from a training hand-off:
+
+* It refuses a hand-off that is stale, and a random split that nobody asked for. See [The training hand-off](/data-scientist/communicate/training-hand-off) for what a hand-off holds.
+* It creates a feature view in `STARTER_KIT`, drops features that are constant, and writes a training function that fits a logistic regression with a fixed seed.
+* It returns a plan. The caller runs `plan.create_script`, then `plan.training_sql`.
+
+It needs a Python container inside the database: `PYTHON3_ML` (`exakit udf-use default`) or `PYTHON3` (`exakit udf-setup`). Both come from the udf-devkit add-on, `exakit marketplace udf-devkit`. The [add-ons page](/kit/tools/add-ons) explains how add-ons are installed.
+
+Back to [Model](/data-scientist/model).

@@ -1,0 +1,52 @@
+---
+title: Install the kit
+description: The install command for each system, the Data Scientist option, what the install puts on this computer, and how to wait for it to finish.
+---
+
+Run the command for your system in a terminal. The first install deploys the database. It is usually done in under 2 minutes.
+
+## The command
+
+macOS and Linux (and WSL):
+
+```sh
+curl https://www.exasol.com/install/starter-kit.sh | sh
+```
+
+Windows, in PowerShell:
+
+```powershell
+irm https://www.exasol.com/install/starter-kit.ps1 | iex
+```
+
+## Choose the Data Scientist set
+
+To install the Data Scientist set of parts without the menus, name the persona. On macOS and Linux:
+
+```sh
+curl https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh
+```
+
+On Windows, set `$env:EXAKIT_PERSONA = "data-scientist"` before the `irm` line.
+
+The Data Scientist persona loads two sample datasets, `amazon_sales` and `fraud_transactions`. It connects every AI client it finds on the machine, and it installs Dash Server and the notebook add-on.
+
+Without the variable, an interactive install asks which persona you want. Choose Data Scientist. A persona is a named set of answers: which datasets, AI clients and add-ons you get. See [the kit's personas](/kit/personas/what-is-a-persona).
+
+## What the install puts on this computer
+
+- **A local Exasol database.** It runs in a container. The kit uses Docker when Docker is running, and Podman otherwise. The kit never installs or starts Docker itself.
+- **exapump**, the command-line tool that loads data files and runs SQL.
+- **pyexasol**, the Python driver the notebooks use.
+- **A read-only AI connection.** The kit's MCP server gives AI clients read access to the database, as a database user that cannot write. Passwords stay in `~/.exasol-starter-kit/credentials/`. Connecting a client is covered in [the kit's AI page](/kit/tools/ai-clients-and-skills).
+- **The notebook add-on.** It holds the notebooks' Python, JupyterLab, Marimo and the kernel named **Exasol (Starter Kit)**. The Data Scientist persona installs it.
+- **Personas and sample data.** See the persona section above.
+- **Agent skills** for AI clients, placed where CLI agents look (`~/.claude/skills` and `~/.agents/skills`).
+
+## Wait for the install to finish
+
+While the install runs, `exakit status` answers `installing` and exits with code 3. Poll it until it reports running.
+
+Re-running the installer is safe. It skips the steps that finished and retries the ones that failed.
+
+Back to [Set up Exasol](/data-scientist/set-up). Next: [Open the notebooks](/data-scientist/set-up/open-the-notebooks).

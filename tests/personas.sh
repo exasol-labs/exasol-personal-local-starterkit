@@ -68,7 +68,7 @@ out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAK
 contains "ml-engineer: asking for it by name is refused, nothing answered" "Persona 'ml-engineer' is disabled" "$out"
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: the Amazon and fraud datasets" "amazon_sales,fraud_transactions" "$(exakit_persona_value data-scientist datasets)"
-check "data-scientist: Dash Server first, then the notebook" "dash-server,notebook" "$(exakit_persona_value data-scientist addons)"
+check "data-scientist: Dash Server, the notebook, JSON Tables, Semantic Views" "dash-server,notebook,json-tables,semantic-views" "$(exakit_persona_value data-scientist addons)"
 check "ml-engineer: the Amazon sales and fraud datasets" "amazon_sales,fraud_transactions" "$(exakit_persona_value ml-engineer datasets)"
 check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" "$(exakit_persona_value ml-engineer addons)"
 
@@ -89,7 +89,7 @@ check "the title names each" "Data Scientist + General" "$(_exakit_persona_servi
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,general; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook" "$out"
+check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook,json-tables,semantic-views" "$out"
 check "each dataset is named with the personas it is for (a hidden one is not named)" "amazon_sales|Data Scientist" \
     "$(exakit_persona_dataset_hints | grep '^amazon_sales|')"
 
@@ -133,11 +133,11 @@ echo "an explicit answer wins, per variable:"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "the persona answers everything left open" "amazon_sales,fraud_transactions|all|dash-server,notebook" "$out"
+check "the persona answers everything left open" "amazon_sales,fraud_transactions|all|dash-server,notebook,json-tables,semantic-views" "$out"
 out="$( (unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_DATASETS=amazon_sales EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|dash-server,notebook" "$out"
+check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|dash-server,notebook,json-tables,semantic-views" "$out"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS
         export EXAKIT_LOAD_SAMPLE=0 EXAKIT_MARKETPLACE_ADDONS=none EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS:-unset}" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
@@ -210,7 +210,7 @@ contains "naming a broken persona says what is wrong with its file" "personas/pi
 
 echo "a persona says what each of its add-ons does for it (NEW-10):"
 check "the personas' own lines, first persona first" \
-    "dash-server|Share what you find as a live dashboard others open in a browser;notebook|The Data Scientist notebooks, already connected to your data;udf-devkit|Train and score models inside the database, runs kept in MLflow" \
+    "dash-server|Share what you find as a live dashboard others open in a browser;notebook|The Data Scientist notebooks, already connected to your data;json-tables|Load JSON files and folders as tables, nested data included;semantic-views|The semantic layer your column maps publish to, queried by notebooks and AI clients;udf-devkit|Train and score models inside the database, runs kept in MLflow" \
     "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" addon-reasons data-scientist,ml-engineer | tr '\n' ';' | sed 's/;$//')"
 check "a persona without them gives none" "" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" addon-reasons general)"
 mkdir -p "$WORK/kit4/personas"; ln -s "$ROOT/data" "$WORK/kit4/data"; ln -s "$ROOT/setup" "$WORK/kit4/setup"

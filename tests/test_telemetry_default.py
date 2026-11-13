@@ -114,7 +114,7 @@ class MarketplaceImportTest(unittest.TestCase):
     """Every marketplace command imports runtime first; the variable is in place, and inherited, before it runs."""
 
     MODULES = ("runtime", "service", "notebook_cli", "mlflow_cli", "udf_cli", "rust_cli", "model_cli",
-               "workflow_cli", "apply", "persona_apply", "installer_flow", "launch")
+               "workflow_cli", "docs_cli", "apply", "persona_apply", "installer_flow", "launch")
     PROBE = ("import importlib, os, subprocess, sys\n"
              "importlib.import_module(sys.argv[1])\n"
              "code = 'import os; print(os.environ.get(' + repr(sys.argv[2]) + '))'\n"

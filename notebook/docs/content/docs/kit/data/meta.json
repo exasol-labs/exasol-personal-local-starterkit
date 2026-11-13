@@ -1,0 +1,12 @@
+{
+  "title": "Data",
+  "defaultOpen": true,
+  "pages": [
+    "datasets",
+    "load-data",
+    "column-maps",
+    "semantic-views",
+    "semantic-fusion",
+    "run-sql"
+  ]
+}

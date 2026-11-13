@@ -38,6 +38,9 @@ def _app_source(title: str, metadata: dict[str, str]) -> str:
 
 @dataclass
 class ShareDraft:
+    """A dashboard prepared from an approved dataset and one query. ``preview()`` puts it on Dash Server as a preview;
+    ``confirm(..., figures_checked=True)`` publishes it, and only after a person checked the preview's figures."""
+
     dataset: Any
     sql: str
     title: str
@@ -81,8 +84,14 @@ class ShareDraft:
             raise RuntimeError("The read-only identity is not validated. Run exakit mcp-doctor.")
         profile = _unwrap(tool("exasol_profile_validate", {"name": profile_name}))
         bound = profile.get("profile", {})
+        # The profile may hold the database's address with its TLS pin (HOST/<sha256>:PORT, after exakit start pins
+        # the certificate): the same database as the manifest's plain HOST:PORT, so both forms are the kit's.
+        plain = manifest.get("runtime", {}).get("dsn")
+        from ._kit import pinned_dsn, tls_fingerprint
+
+        kit_dsns = {plain, pinned_dsn(plain, tls_fingerprint())} if plain else set()
         if (not profile.get("is_valid") or bound.get("user", "").upper() != readonly["user"].upper()
-                or bound.get("dsn") != manifest.get("runtime", {}).get("dsn")):
+                or bound.get("dsn") not in kit_dsns):
             raise RuntimeError("Dash Server profile must validate as the kit's read-only user and database. Run exakit mcp-setup and restart dash-server.")
         if windows is None:
             windows = sys.platform == "win32"

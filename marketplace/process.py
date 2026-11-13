@@ -169,12 +169,29 @@ class ManagedProcess:
             if state == "running":
                 return
             if process.poll() is not None:
+                # Ours ended. Another starter may have brought the same service up at the same moment: the login
+                # service the kit registers starts it when it is (re)loaded, and the one that loses that race exits
+                # because the port or the workspace is taken (seen on a real install: Dash Server was running, and
+                # the add-on step said it did not start). The service asked for is up, whoever started it.
+                if self._another_started(port):
+                    return
                 state = f"exited with code {process.returncode}"
                 break
             time.sleep(1)
         self.stop(port)
         # The state, never a log line: a service log can hold an access token (Jupyter writes one).
         raise AddonFailure(f"Service did not start on port {port} ({state}); see {self.log}")
+
+    def _another_started(self, port: int, seconds: float = 10) -> bool:
+        """True when this service is listening on ``port`` within ``seconds``, though the process started here
+        ended: another starter's process of the same service (the marker in its command) holds the port."""
+        deadline = time.monotonic() + seconds
+        while True:
+            if self.owned_pids(port):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.5)
 
     def stop(self, port: int) -> None:
         pids = self.owned_pids(port)

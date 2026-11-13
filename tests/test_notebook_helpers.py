@@ -12,11 +12,13 @@ import hashlib
 import io
 import json
 import shutil
+import socket
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -1547,7 +1549,7 @@ class SourcesTest(unittest.TestCase):
         sources = importlib.import_module("exakit_nb.sources")
         done = subprocess.CompletedProcess([], 0, stdout='{"ok": true, "name": "sales"}\nLog: x\n', stderr="")
         with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
-                mock.patch.object(sources.subprocess, "run", return_value=done) as run, \
+                mock.patch.object(sources, "_run_live", return_value=done) as run, \
                 mock.patch.object(sources.sys, "platform", "darwin"), redirect_stdout(io.StringIO()) as out:
             schema = exakit_nb.connect_source("pg", "sales", url="postgres://u:topsecret@localhost:5432/shop")
         command, kwargs = run.call_args[0][0], run.call_args[1]
@@ -1557,6 +1559,154 @@ class SourcesTest(unittest.TestCase):
         self.assertIn("--password-stdin", command)
         self.assertIn("postgres://u@192.168.64.1:5432/shop", command)
         self.assertEqual(command[-2:], ["--yes", "--json"])
+        self.assertEqual(command[:3], ["exakit", "connect", "pg"])      # the kit's connect command, then the connector
+
+    def test_a_connects_steps_are_shown_as_they_happen(self):
+        """exakit connect says its steps on standard error while it works and answers once on standard output.
+        Each step reaches the notebook the moment it is written - a connect takes a while, and a silent one looks
+        stuck - in the kit's own words, without the level word; the password goes in on standard input."""
+        sources = importlib.import_module("exakit_nb.sources")
+        script = ("import sys, time\n"
+                  "secret = sys.stdin.read()\n"
+                  "sys.stderr.write('INFO Checking the inputs\\n'); sys.stderr.flush(); time.sleep(0.4)\n"
+                  "sys.stderr.write('WARN the certificate expires soon\\n'); sys.stderr.flush(); time.sleep(0.4)\n"
+                  "sys.stderr.write('OK   VS_SALES is ready\\n'); sys.stderr.flush()\n"
+                  "print('{\"ok\": true, \"schema\": \"VS_SALES\", \"got\": %d}' % len(secret))\n")
+        seen: list[tuple[float, str]] = []
+        started = time.monotonic()
+        done = sources._run_live([sys.executable, "-c", script], input="hunter2",
+                                 on_line=lambda line: seen.append((time.monotonic() - started, line)))
+        self.assertEqual(["INFO Checking the inputs", "WARN the certificate expires soon", "OK   VS_SALES is ready"],
+                         [line for _, line in seen])
+        self.assertGreater(seen[-1][0] - seen[0][0], 0.5, "the lines came as they were written, not all at the end")
+        self.assertEqual(0, done.returncode)
+        self.assertEqual({"ok": True, "schema": "VS_SALES", "got": 7}, json.loads(done.stdout))
+        self.assertNotIn("hunter2", done.stdout + done.stderr)
+        with redirect_stdout(io.StringIO()) as out:
+            for _, line in seen:
+                sources._say_step(line)
+            sources._say_step("a line with no level")
+            sources._say_step("")
+        self.assertEqual("Checking the inputs\nWarning: the certificate expires soon\nVS_SALES is ready\n", out.getvalue())
+        with self.assertRaises(subprocess.TimeoutExpired):
+            sources._run_live([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.3)
+
+    def test_a_connects_steps_are_read_from_the_kits_own_log(self):
+        """With --json the kit's engine says nothing on the terminal: every step goes to its day's log as it happens
+        (redacted there). The notebook shows those of this command and this source, from where the log stood when the
+        command began - not another source's, not an earlier run's, and no failure line (the answer carries that)."""
+        sources = importlib.import_module("exakit_nb.sources")
+        with tempfile.TemporaryDirectory() as home:
+            logs = Path(home) / "logs"
+            logs.mkdir()
+            today = __import__("datetime").date.today()
+            day = logs / f"virtual-schemas-{today.year:04d}{today.month:02d}{today.day:02d}.log"
+            day.write_text("2026-01-01 10:00:00 [1] connect sales OK     an earlier run\n", encoding="utf-8")
+            with mock.patch.dict(os.environ, {"EXAKIT_HOME": home}):
+                log = sources._EngineLog("connect", "sales")
+                self.assertEqual([], log.new())
+                with open(day, "a", encoding="utf-8") as out:
+                    out.write("2026-01-01 10:00:01 [2] connect sales START  connect postgresql --name=sales\n"
+                              "2026-01-01 10:00:02 [2] connect sales INFO   The adapter is in the database\n"
+                              "2026-01-01 10:00:02 [2] connect other INFO   another source\n"
+                              "2026-01-01 10:00:03 [2] connect sales SQL    CREATE CONNECTION \"EXAKIT_SRC_SALES\" TO 'x' USER 'r' IDENTIFIED BY '***'\n"
+                              "2026-01-01 10:00:03 [2] connect sales |      a second line of the statement\n"
+                              "2026-01-01 10:00:04 [2] source sales INFO   another command\n"
+                              "2026-01-01 10:00:05 [2] connect sales FAIL   the host name does not resolve\n"
+                              "2026-01-01 10:00:06 [2] connect sales OK     VS_SALES is ready\n")
+                self.assertEqual(["INFO The adapter is in the database",
+                                  'INFO Running: CREATE CONNECTION "EXAKIT_SRC_SALES" TO ...', "OK VS_SALES is ready"], log.new())
+                self.assertEqual([], log.new())
+                seen: list[str] = []
+                script = "import time; time.sleep(0.5); print('{}')"
+                with open(day, "a", encoding="utf-8") as out:
+                    out.write("2026-01-01 10:00:07 [3] connect sales INFO   Checking the route\n")
+                sources._run_live([sys.executable, "-c", script], on_line=seen.append, log=log)
+                self.assertEqual(["INFO Checking the route"], seen)
+            with mock.patch.dict(os.environ, {"EXAKIT_HOME": str(Path(home) / "none")}):
+                self.assertEqual([], sources._EngineLog("connect", "sales").new())       # no log: nothing, no error
+
+    def test_a_host_name_that_only_this_networks_dns_refuses_is_not_called_a_misspelling(self):
+        """The kit says a host name that does not resolve may be misspelt. When public DNS does resolve it, the name
+        is right and this network's DNS is what refuses it (a home router, a hotspot): say that, and what to do."""
+        sources = importlib.import_module("exakit_nb.sources")
+        # (IPv4 here, IPv6 here, public) -> what is said. The database asks this computer's DNS, over IPv4.
+        cases = {(False, False, True): "public DNS does",            # this network's DNS refuses the name
+                 (False, True, True): "IPv6 address only",           # it answers IPv6 and refuses IPv4
+                 (True, True, True): "resolves from this computer now",   # it failed a moment ago: try again
+                 (False, False, False): "", (True, True, False): ""}      # nobody knows the name: the kit's words stand
+        for (v4, v6, public), said in cases.items():
+            here = lambda host, family=0, v4=v4, v6=v6: v4 if family == socket.AF_INET else v6 if family == socket.AF_INET6 else (v4 or v6)
+            with self.subTest(v4=v4, v6=v6, public=public), mock.patch.object(sources, "_resolves_here", side_effect=here), \
+                    mock.patch.object(sources, "_resolves_publicly", return_value=public):
+                note = sources._dns_note("db.example.com")
+                self.assertEqual(bool(said), bool(note))
+                self.assertIn(said, note)
+        self.assertFalse(sources._resolves_publicly("bad..name"))
+        failed = subprocess.CompletedProcess([], 1, stderr="", stdout='{"ok": false, "error": "the host name db.example.com '
+                                             'does not resolve", "remedy": "nothing was kept - check the spelling"}')
+        for note, wanted, unwanted in (("This network's DNS does not answer", "This network's DNS", "check the spelling"),
+                                       ("", "check the spelling", "This network's DNS")):
+            with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
+                    mock.patch.object(sources, "_run_live", return_value=failed), \
+                    mock.patch.object(sources, "_dns_note", return_value=note) as asked, redirect_stdout(io.StringIO()):
+                with self.assertRaises(exakit_nb.SourceProblem) as err:
+                    exakit_nb.connect_source("postgresql", "sales", host="db.example.com", database="shop", user="r",
+                                             password="x")
+            asked.assert_called_once_with("db.example.com")
+            self.assertIn(wanted, str(err.exception))
+            self.assertNotIn(unwanted, str(err.exception))
+
+    def test_the_dashboard_tools_set_up_the_server_when_it_is_not_there(self):
+        """nb.dash_tools() in a cell of its own: a Dash Server that is not installed or not running is installed and
+        started first with the kit's addon_ready, then the tools come back. One that is there is not touched, and
+        ready=False only reports."""
+        dash_mcp = importlib.import_module("exakit_nb.dash_mcp")
+        kit_commands = importlib.import_module("exakit_nb.kit_commands")
+        tools = object()
+        with mock.patch.object(dash_mcp, "DashTools", side_effect=[RuntimeError("Dash Server is not running."), tools]), \
+                mock.patch.object(kit_commands, "addon_ready", return_value={"state": "running"}) as ready:
+            self.assertIs(exakit_nb.dash_tools(), tools)
+        ready.assert_called_once_with("dash-server")
+        with mock.patch.object(dash_mcp, "DashTools", return_value=tools), \
+                mock.patch.object(kit_commands, "addon_ready") as ready:
+            self.assertIs(exakit_nb.dash_tools(), tools)
+        ready.assert_not_called()
+        with mock.patch.object(dash_mcp, "DashTools", side_effect=RuntimeError("Dash Server is stopped.")), \
+                mock.patch.object(kit_commands, "addon_ready") as ready:
+            with self.assertRaisesRegex(RuntimeError, "stopped"):
+                exakit_nb.dash_tools(ready=False)
+        ready.assert_not_called()
+
+    def test_a_second_secret_reaches_the_kit_in_a_private_file_that_is_gone_afterwards(self):
+        """A Lakehouse with a catalog login and storage keys has two secrets: the login goes on standard input, the
+        storage secret in a file only this user can read (exakit connect --storage-secret-file), removed after the
+        run. Neither is in the command or in what is printed, and the settings go on as --set."""
+        sources = importlib.import_module("exakit_nb.sources")
+        seen = {}
+
+        def fake_run(command, **kwargs):
+            file = command[command.index("--storage-secret-file") + 1]
+            seen.update(file=file, text=Path(file).read_text(encoding="utf-8"), mode=os.stat(file).st_mode & 0o777)
+            return subprocess.CompletedProcess([], 0, stdout='{"ok": true, "schema": "VS_LAKE"}', stderr="")
+
+        with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
+                mock.patch.object(sources, "_run_live", side_effect=fake_run) as run, redirect_stdout(io.StringIO()) as out:
+            schema = exakit_nb.connect_source("lakehouse", "lake", catalog="unity", files="s3", password="catalogtoken",
+                                              storage_secret=lambda _question: "storagekey",
+                                              workspace_url="https://dbc.example.com")
+        command, kwargs = run.call_args[0][0], run.call_args[1]
+        self.assertEqual(schema, "VS_LAKE")
+        self.assertEqual(seen["text"], "storagekey")
+        if os.name != "nt":
+            self.assertEqual(seen["mode"], 0o600)
+        self.assertFalse(Path(seen["file"]).exists())
+        self.assertEqual(kwargs["input"], "catalogtoken")
+        shown = " ".join(command) + out.getvalue()
+        self.assertNotIn("storagekey", shown)
+        self.assertNotIn("catalogtoken", shown)
+        for pair in ("catalog=unity", "files=s3"):
+            self.assertEqual(command[command.index(pair) - 1], "--set")
 
     def test_connect_asks_the_password_hidden_and_reports_the_kits_reason(self):
         sources = importlib.import_module("exakit_nb.sources")
@@ -1564,7 +1714,7 @@ class SourcesTest(unittest.TestCase):
                                              '"remedy": "check the user"}', stderr="")
         asked = []
         with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
-                mock.patch.object(sources.subprocess, "run", return_value=failed) as run, redirect_stdout(io.StringIO()):
+                mock.patch.object(sources, "_run_live", return_value=failed) as run, redirect_stdout(io.StringIO()):
             with self.assertRaises(exakit_nb.SourceProblem) as err:
                 exakit_nb.connect_source("postgresql", "sales", host="db.example.com", database="shop", user="r",
                                          secret=lambda prompt: asked.append(prompt) or "pw")
@@ -1580,7 +1730,7 @@ class SourcesTest(unittest.TestCase):
         done = subprocess.CompletedProcess([], 0, stdout='{"ok": true}', stderr="")
         field = types.SimpleNamespace(value="from-the-field")
         with mock.patch.object(sources, "exakit_command", return_value=["exakit"]), \
-                mock.patch.object(sources.subprocess, "run", return_value=done) as run, \
+                mock.patch.object(sources, "_run_live", return_value=done) as run, \
                 mock.patch.object(sources, "_in_marimo", return_value=True), redirect_stdout(io.StringIO()):
             exakit_nb.connect_source("mysql", "shop", host="db.example.com", password=field)
             self.assertEqual(run.call_args[1]["input"], "from-the-field")
@@ -1599,7 +1749,7 @@ class DataMapTest(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def build(self, semantic=None, relations=None):
+    def build(self, semantic=None):
         tables = _Frame(TABLE_SCHEMA=["AMAZON", "STARTER_KIT", "PREPROC", "EXAKIT_PREPARED", "VS_SALES"],
                         TABLE_NAME=["ORDER_LINES", "EMPLOYEES", "CONFIG", "J", "ORDERS"],
                         TABLE_ROW_COUNT=[128975, 10, 2, 1, None], TABLE_COMMENT=[None] * 5,
@@ -1608,13 +1758,12 @@ class DataMapTest(unittest.TestCase):
                          COLUMN_TABLE=["ORDER_LINES", "ORDER_LINES", "EMPLOYEES", "ORDERS", "ORDERS", "ORDERS"],
                          COLUMN_NAME=["ORDER_LINE_ID", "SKU", "EMPLOYEE_ID", "ORDER_ID", "SKU", "EMPLOYEE_ID"],
                          COLUMN_TYPE=["DECIMAL(18,0)", "VARCHAR(40)", "DECIMAL(9,0)", "DECIMAL(9,0)", "VARCHAR(40)", "DECIMAL(9,0)"])
-        semantic = semantic or _Frame(VIEW_NAME=[], VIEW_COMMENT=[], COLUMN_NAME=[], COLUMN_COMMENT=[])
         module = importlib.import_module("exakit_nb.data_map")
 
         def answer(conn, statement):
-            if "__RELATIONS" in statement:
-                return relations
-            if "EXA_ALL_VIEWS" in statement:
+            if "SEMANTIC_CATALOG" in statement:
+                if semantic is None:                       # Semantic Views is not installed
+                    raise RuntimeError("object SEMANTIC_CATALOG.ENTITIES not found")
                 return semantic
             return columns if "COLUMN_OBJECT_TYPE" in statement else tables
         with mock.patch.object(module, "_sql", side_effect=answer):
@@ -1651,30 +1800,39 @@ class DataMapTest(unittest.TestCase):
         found = {(l["from_column"].upper(), l["kind"]) for l in links}
         self.assertEqual(found, {("CATEGORY", "shared dimension"), ("SHIP_STATE", "shared dimension")})
 
-    def test_an_approved_map_and_its_relations_win(self):
-        semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS", "VS_SALES__ORDERS", "VS_SALES__RELATIONS"],
-                          VIEW_COMMENT=["grain=x; source=VS_SALES.ORDERS; descriptor=v2"] * 2 + ["r"],
-                          COLUMN_NAME=["ORDER_ID", "EMPLOYEE_ID", "FROM_TABLE"],
-                          COLUMN_COMMENT=["role=key; descriptor=v2", "role=identifier; descriptor=v2", None])
-        relations = _Frame(FROM_TABLE=["VS_SALES.ORDERS"], FROM_COLUMN=["EMPLOYEE_ID"], TO_TABLE=["STARTER_KIT.EMPLOYEES"],
-                           TO_COLUMN=["EMPLOYEE_ID"], KIND=["found"])
-        found = self.build(semantic, relations)
-        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2, published")
-        self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"})
-        kinds = [l["kind"] for l in found.link_rows if "EMPLOYEE_ID" == l["from_column"]]
-        self.assertEqual(kinds, ["found"])                         # the declared one, not repeated as possible
+    def test_an_approved_map_its_semantic_model_and_its_approved_links_win(self):
+        import json
 
-    def test_a_newer_approval_than_the_view_shows_its_own_roles_and_every_slot(self):
         module = importlib.import_module("exakit_nb.data_map")
-        semantic = _Frame(VIEW_NAME=["VS_SALES__ORDERS"], VIEW_COMMENT=["source=VS_SALES.ORDERS; descriptor=v1"],
-                          COLUMN_NAME=["ORDER_ID"], COLUMN_COMMENT=["role=key; descriptor=v1"])
+        semantic = _Frame(SOURCE_SCHEMA=["VS_SALES"], SOURCE_OBJECT=["ORDERS"], MODEL_NAME=["vs_sales"],
+                          PUBLISHED_SCHEMA=["SEM_VS_SALES"], DESCRIPTION=["Model of VS_SALES [built by exakit]"])
+        folder = Path(self.home.name) / "descriptors" / "VS_SALES"
+        folder.mkdir(parents=True)
+        (folder / "current.json").write_text(json.dumps({"schema": "VS_SALES", "relations": [
+            {"from": "ORDERS.EMPLOYEE_ID", "to": "EMPLOYEES.EMPLOYEE_ID"}]}), encoding="utf-8")
+        (Path(self.home.name) / "semantic").mkdir()
+        (Path(self.home.name) / "semantic" / "sales_360.json").write_text(json.dumps({"inputs": {"links": [
+            {"from": "VS_SALES.ORDERS.SKU", "to": "AMAZON.ORDER_LINES.SKU"}]}}), encoding="utf-8")
+        stored = ("approved", {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"}, {"key": "ORDER_ID"}, 2)
+        none = (None, {}, {}, 0)
+        with mock.patch.object(module, "_store_map", side_effect=lambda t: stored if t == "VS_SALES.ORDERS" else none):
+            found = self.build(semantic)
+        self.assertEqual(found.table("VS_SALES.ORDERS")["map"], "approved v2, in semantic model vs_sales")
+        self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "identifier"})
+        kinds = {(l["from_table"], l["from_column"]): l["kind"] for l in found.link_rows}
+        self.assertEqual("approved", kinds[("VS_SALES.ORDERS", "EMPLOYEE_ID")])
+        self.assertEqual("in semantic model sales_360", kinds[("VS_SALES.ORDERS", "SKU")])
+        self.assertEqual(1, sum(1 for l in found.link_rows if l["from_column"] == "SKU"), "not repeated as possible")
+
+    def test_an_approval_not_yet_in_a_model_says_so_and_shows_every_slot(self):
+        module = importlib.import_module("exakit_nb.data_map")
         stored = ("approved", {"ORDER_ID": "key", "EMPLOYEE_ID": "category"},
                   {"key": "ORDER_ID", "category": "EMPLOYEE_ID", "entity": "EMPLOYEE_ID"}, 2)
         none = (None, {}, {}, 0)
         with mock.patch.object(module, "_store_map", side_effect=lambda t: stored if t == "VS_SALES.ORDERS" else none):
-            found = self.build(semantic)
+            found = self.build()                           # Semantic Views is not installed yet
         row = found.table("VS_SALES.ORDERS")
-        self.assertEqual(row["map"], "approved v2, not published (the view still says v1)")
+        self.assertEqual(row["map"], "approved v2, not in a semantic model yet")
         self.assertEqual(found.roles("VS_SALES.ORDERS"), {"ORDER_ID": "key", "EMPLOYEE_ID": "category"})
         self.assertEqual(row["named_roles"], [("key", "ORDER_ID"), ("category", "EMPLOYEE_ID"), ("entity", "EMPLOYEE_ID")])
         html = found._repr_html_()

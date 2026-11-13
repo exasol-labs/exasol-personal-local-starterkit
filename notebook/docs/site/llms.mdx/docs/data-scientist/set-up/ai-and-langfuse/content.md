@@ -1,0 +1,387 @@
+# Set up AI and Langfuse (/data-scientist/set-up/ai-and-langfuse)
+
+
+
+An AI model and tracing are both optional. A **model** is the text model the kit calls for two steps: drafting SQL from your question in `02_ask_your_data`, and sorting texts into themes in `01_explore`. **Tracing**, through Langfuse, records each model call as a trace you can inspect later: its input, its output and its token usage. Set them up here, once, so every notebook uses them. The kit runs fine without either.
+
+## The flow [#the-flow]
+
+<Flow
+  caption="A model: provider console to the notebooks"
+  steps="[
+  { title: &#x22;You create an API key&#x22;, text: &#x22;At your provider. Or install a local server.&#x22;, tone: &#x22;you&#x22;, href: &#x22;#get-a-model-provider&#x22; },
+  { title: &#x22;You type the key in a hidden prompt&#x22;, text: &#x22;In the terminal, or in a hidden box in the notebook. Never in a command or a cell.&#x22;, tone: &#x22;you&#x22;, href: &#x22;#give-them-to-the-kit&#x22; },
+  { title: &#x22;The notebooks start with the settings&#x22;, text: &#x22;Start them from the same terminal&#x22;, tone: &#x22;kit&#x22;, code: &#x22;exakit notebook&#x22; },
+  { title: &#x22;Each kernel calls the model&#x22;, text: &#x22;SQL drafts in Ask, themes in Explore&#x22;, tone: &#x22;ai&#x22; },
+]"
+/>
+
+<Flow
+  caption="Tracing: Langfuse project to traces"
+  steps="[
+  { title: &#x22;You create Langfuse keys&#x22;, text: &#x22;A public key and a secret key, in your project&#x22;, tone: &#x22;you&#x22;, href: &#x22;#get-langfuse&#x22; },
+  { title: &#x22;You give the keys and the address&#x22;, text: &#x22;The same way as the model's key&#x22;, tone: &#x22;you&#x22;, href: &#x22;#give-them-to-the-kit&#x22; },
+  { title: &#x22;The kit sends each call as a trace&#x22;, text: &#x22;Input, output and token usage&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The traces appear in Langfuse&#x22;, text: &#x22;In the project you chose&#x22;, tone: &#x22;db&#x22;, href: &#x22;#check-it-works&#x22; },
+]"
+/>
+
+## The settings [#the-settings]
+
+The kit reads these names. Set only what you use. A value you leave out switches its feature off. It breaks nothing.
+
+| Setting                    | What it is                                                                                                          | Secret |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------ |
+| `EXAKIT_MODEL_ID`          | The model's id, exactly as your provider or server names it                                                         | No     |
+| `EXAKIT_PROVIDER_BASE_URL` | The address of the model's API, including its version prefix, such as `/v1/`. Not a full request path.              | No     |
+| `EXAKIT_PROVIDER_API_KEY`  | The model's key. Leave it unset for a local server that asks for no key.                                            | Yes    |
+| `LANGFUSE_BASE_URL`        | Langfuse's address for your region, or your own Langfuse                                                            | No     |
+| `LANGFUSE_PUBLIC_KEY`      | The Langfuse public key, which starts `pk-lf-`                                                                      | Yes    |
+| `LANGFUSE_SECRET_KEY`      | The Langfuse secret key, which starts `sk-lf-`                                                                      | Yes    |
+| `EXAKIT_PROVIDER_HEADERS`  | Optional. A JSON object of extra routing headers, for example a Claude workspace. Omit unless a provider needs it.  | No     |
+| `EXAKIT_MODEL_TEMPERATURE` | Optional, from 0 to 2. Unset sends no temperature. Set `0` for a local model that should answer the same way twice. | No     |
+
+Rules the kit enforces:
+
+* A model needs an explicit base URL. With no model ID, the AI steps stay off.
+* A key is sent only to an `https://` address, or to a server on this computer or your own network, such as a local Ollama. A key is never sent across a network in clear text.
+* The same rule applies to `LANGFUSE_BASE_URL`. With plain `http://` to a host outside this machine and your network, tracing stays off.
+* Do not put a username, a password, a query or a request path such as `/chat/completions` in the base URL. Put authentication in the key setting, not in a custom `Authorization` or `api-key` header.
+* `LANGFUSE_HOST` is the name Langfuse's SDK 3 and 4 used for the address. The kit still accepts it when `LANGFUSE_BASE_URL` is unset.
+
+## The quickest way: the Home card [#the-quickest-way-the-home-card]
+
+The Home card of `00_quickstart` sets the model up from menus. You never type an address or a model name unless you want to.
+
+<Flow
+  caption="The AI model row on the Home card"
+  steps="[
+  { title: &#x22;Pick the provider&#x22;, text: &#x22;OpenAI, Anthropic, Gemini, Mistral, Groq, Ollama, LM Studio, vLLM, or another server&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;Paste the key&#x22;, text: &#x22;a hidden box; How do I get this? opens the provider's section below&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;Check&#x22;, text: &#x22;the kit asks the provider which models the key may use&#x22;, code: &#x22;nb.provider_models(...)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Pick the model and effort&#x22;, text: &#x22;the effort list follows the model&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;Use this model&#x22;, text: &#x22;kept for every notebook, readable only by you&#x22;, code: &#x22;nb.use_model(..., effort=...)&#x22;, tone: &#x22;kit&#x22; },
+]"
+/>
+
+1. Open `00_quickstart`. On the Home card, find the **AI model** row and click **Set up** (or **Change**).
+2. **Provider:** pick yours from the menu. Its address fills in by itself. To use another address (a proxy, a server on another port), click the pencil beside it and type it.
+3. **API key:** paste it into the hidden box. **How do I get this?** under the box opens this page at your provider's section; the second link opens the provider's own key page. A server on this computer (Ollama) needs no key.
+4. Click **Check and list the models**. The kit sends one request to the provider with the key and lists the chat models the key may use. A refused key says so here.
+5. **Model:** pick one. The pencil lets you type any model name instead.
+6. **Effort:** pick how hard the model thinks, where the model takes an effort setting (see [Choose the model and its effort](#choose-the-model-and-its-effort)). Otherwise the card says the model uses its own.
+7. Click **Use this model**. The row then reads *Using your-model · effort high*.
+
+The **Langfuse tracing** row works the same way: pick your region (the pencil types your own Langfuse's address), paste the public and secret keys, and click **Trace to Langfuse**. See [Get Langfuse](#get-langfuse) for where the keys come from.
+
+The code behind the card is one cell of `00_quickstart` (*Your AI model and Langfuse tracing*): set `PROVIDER`, `SHOW_MODELS = True` to list the models, then `MODEL_ID` and `EFFORT`.
+
+The provider list, each provider's address and its key rule are in `notebook/package/exakit_nb/providers.py` (`model_providers`). The model list call is `nb.provider_models`, in the same file.
+
+## Get a model provider [#get-a-model-provider]
+
+Each provider below needs one of two things: a key from its console, or a server you run yourself. The links go to the provider's own page. Check the model list on the provider's page, because model names change. The Home card lists the models your key may use, so you rarely need to look one up.
+
+### OpenAI [#openai]
+
+1. Sign in and open API keys: [platform.openai.com/api-keys](https://platform.openai.com/api-keys). Create a key and copy it: it is shown once.
+2. The address is `https://api.openai.com/v1/`.
+3. The Home card lists the models your key may use. Reasoning models (the `o` series, `gpt-5` and later) take an effort setting.
+
+### Mistral [#mistral]
+
+1. Sign in to [Mistral's console](https://console.mistral.ai/) and create an API key there.
+2. The address is `https://api.mistral.ai/v1/`.
+3. Mistral's reasoning models (Magistral) take an effort setting.
+
+### Claude (Anthropic) [#claude-anthropic]
+
+1. Sign in to the Claude Console and open API keys: [platform.claude.com/settings/keys](https://platform.claude.com/settings/keys). Create a key and copy it.
+2. Choose a model ID from the [models overview](https://platform.claude.com/docs/en/models/overview). Copy it exactly, for example `claude-opus-5-5`.
+3. Use this base URL: `https://api.anthropic.com/v1/`.
+
+If your key is a personal or service key that is not scoped to a workspace, the provider also needs a workspace header. A workspace-scoped key does not need it. Set the optional headers setting:
+
+```sh
+export EXAKIT_PROVIDER_HEADERS='{"anthropic-workspace-id":"<workspace-id>"}'
+```
+
+Leave `EXAKIT_MODEL_TEMPERATURE` unset. Claude Opus 4.7 and later refuse a temperature setting.
+
+The kit uses Anthropic's OpenAI-compatible layer, which has [known limits](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk). It is for text chat. The kit does not use the native Claude API.
+
+### Ollama (on this computer) [#ollama-on-this-computer]
+
+1. Install Ollama from [ollama.com/download](https://ollama.com/download). Choose your system.
+2. Pull a chat model. The names and sizes are on the [Ollama library](https://ollama.com/library). For example: `ollama pull <model-name>`.
+3. Check the exact name: `ollama list`. Use that name as the model ID.
+4. Use this base URL: `http://localhost:11434/v1/`. No key is needed.
+
+The kit's connection is [Ollama's OpenAI-compatible API](https://docs.ollama.com/api/openai-compatibility). Keep the key unset. Ollama's cloud models have their own sign-in, which is separate from this setup.
+
+### LM Studio (on this computer) [#lm-studio-on-this-computer]
+
+1. Download LM Studio from [lmstudio.ai](https://lmstudio.ai) and install it.
+2. Load a chat model, then start its local server in the **Developer** area.
+3. Use its base URL: `http://localhost:1234/v1/`, unless you changed the port. The model ID is the name the server shows for the loaded model.
+4. If you turn on server authentication, create a token and put it in the key setting. The docs say to turn on the toggle under **Developers > Server Settings**, then create a token under **Manage Tokens**. Copy the token when it appears, because it is not shown again. See [LM Studio authentication](https://lmstudio.ai/docs/developer/core/authentication).
+
+The compatibility details are on [LM Studio's OpenAI endpoints page](https://lmstudio.ai/docs/developer/openai-compat).
+
+### vLLM (on your own server) [#vllm-on-your-own-server]
+
+1. Install vLLM by following [its installation guide](https://docs.vllm.ai/en/latest/getting_started/installation/). The guide is organized by hardware, and NVIDIA CUDA is listed first.
+2. Start an OpenAI-compatible server with a chat model: `vllm serve <model>`. See [vLLM online serving](https://docs.vllm.ai/en/latest/serving/online_serving/).
+3. Use your server's base URL with the `/v1/` path, for example `http://localhost:8000/v1/`. The model ID is the name the server serves.
+4. If the server requires a key, use that key. The model needs a chat template for the kit to use it.
+
+Running the vLLM server is separate from connecting the kit to it.
+
+### Gemini (Google) [#gemini-google]
+
+1. Sign in to Google AI Studio and open [API keys](https://aistudio.google.com/apikey). Create a key and copy it.
+2. Choose a Gemini model ID that your key can call. Google's [OpenAI compatibility page](https://aistudio.google.com/docs/openai) explains how the endpoint is used.
+3. Use this base URL, and keep the full path: `https://generativelanguage.googleapis.com/v1beta/openai/`.
+
+### Groq [#groq]
+
+1. Sign in to the Groq console and open [API keys](https://console.groq.com/keys). Create a key and copy it.
+2. The address is `https://api.groq.com/openai/v1/`.
+3. The reasoning models (GPT-OSS, Qwen 3) take an effort setting; see [Groq's reasoning page](https://console.groq.com/docs/reasoning).
+
+### Another OpenAI-compatible server [#another-openai-compatible-server]
+
+Any server that speaks the OpenAI Chat Completions API works. Pick **Another OpenAI-compatible server**, type its address with the pencil (including the version path, such as `/v1/`), and give its key if it asks for one. The kit lists the models from `<address>models`. Offered no effort setting: the server decides.
+
+## Choose the model and its effort [#choose-the-model-and-its-effort]
+
+**The model.** A larger model drafts better questions and feature ideas, and costs more per call. A small or local model is fine to try the steps. The kit sends the model the column names, types, roles and notes for the step, never a row of your data (see [What the kit sends to a model](#what-the-kit-sends-to-a-model)).
+
+**The effort.** A reasoning model can think longer before it answers. The kit sends your choice as the provider's own `reasoning_effort` setting:
+
+| Effort              | What it changes                       |
+| ------------------- | ------------------------------------- |
+| The model's default | Nothing is sent: the provider decides |
+| Low                 | Quicker and cheaper answers           |
+| Medium              | A balance                             |
+| High                | Slower, more thorough answers         |
+
+The card offers an effort only where the provider documents one for that model:
+
+| Provider                        | Models with an effort setting                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| OpenAI                          | the `o` series, `gpt-5` and later ([OpenAI reasoning guide](https://developers.openai.com/api/docs/guides/reasoning))                                                    |
+| Gemini                          | Gemini 2.5 and later ([Gemini OpenAI compatibility](https://aistudio.google.com/docs/openai))                                                                            |
+| Groq                            | GPT-OSS and Qwen 3                                                                                                                                                       |
+| Mistral                         | Magistral                                                                                                                                                                |
+| Ollama                          | thinking models such as GPT-OSS, Qwen 3, DeepSeek-R1 ([Ollama compatibility](https://docs.ollama.com/api/openai-compatibility))                                          |
+| Anthropic                       | none: Claude's OpenAI-compatible API ignores the setting ([Anthropic's compatibility page](https://platform.claude.com/docs/en/cli-sdks-libraries/libraries/openai-sdk)) |
+| LM Studio, vLLM, another server | none                                                                                                                                                                     |
+
+In a terminal or a cell, the same setting is `EXAKIT_MODEL_EFFORT` (`low`, `medium` or `high`; unset sends nothing), or `nb.use_model(model, address, effort="high")`. The code that sends it is in `notebook/package/exakit_nb/model_config.py`, which passes the value as `reasoning_effort`.
+
+## Get Langfuse [#get-langfuse]
+
+Langfuse records the calls. You need a project in a Langfuse you can reach, and a key pair from that project.
+
+### Langfuse Cloud [#langfuse-cloud]
+
+1. Create an account at [cloud.langfuse.com/auth/sign-up](https://cloud.langfuse.com/auth/sign-up), or sign in if you have one. The [getting-started guide](https://langfuse.com/docs/observability/get-started) describes the same steps.
+2. Open the project you want the traces in. If you have none, create one in the Langfuse interface.
+3. Go to **Project > Settings**, then **API Keys**. Create new API credentials. You get a public key (`pk-lf-...`) and a secret key (`sk-lf-...`). Langfuse shows the secret key only once, so copy it then.
+4. Use the base URL of the region your project is in. The regions are separate, and each has its own base URL:
+
+| Region | Base URL                           | Where it runs |
+| ------ | ---------------------------------- | ------------- |
+| EU     | `https://cloud.langfuse.com`       | Ireland       |
+| US     | `https://us.cloud.langfuse.com`    | Oregon        |
+| Japan  | `https://jp.cloud.langfuse.com`    | Tokyo         |
+| HIPAA  | `https://hipaa.cloud.langfuse.com` | Oregon        |
+
+The regions are described on [Langfuse's data regions page](https://langfuse.com/security/data-regions).
+
+### Your own Langfuse [#your-own-langfuse]
+
+Langfuse can run on your own infrastructure. The [self-hosting page](https://langfuse.com/self-hosting) lists the options: Docker Compose for one machine, Kubernetes for production, and others. Then use your own address in `LANGFUSE_BASE_URL`. It must be `https://`, unless it is on this computer or your network. Create the keys in your own project the same way.
+
+## Give them to the kit [#give-them-to-the-kit]
+
+There are three ways. Use the one that fits how you work. You can combine them.
+
+### Set them once, before `exakit notebook` (recommended) [#set-them-once-before-exakit-notebook-recommended]
+
+The notebook server reads its environment from the terminal that starts it. Its kernels read theirs from the server. So set everything in one terminal, then start the notebooks from that terminal. Every notebook then has the model and Langfuse.
+
+Each key is typed into a hidden prompt. It is never part of a command, so it is not in the shell's history.
+
+Mac and Linux, bash or zsh, for Claude:
+
+```sh
+export EXAKIT_MODEL_ID="claude-opus-5-5"
+export EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"
+printf 'Model API key: '; read -rs EXAKIT_PROVIDER_API_KEY; echo; export EXAKIT_PROVIDER_API_KEY
+
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"      # or your own Langfuse's https:// address
+printf 'Langfuse public key: '; read -rs LANGFUSE_PUBLIC_KEY; echo; export LANGFUSE_PUBLIC_KEY
+printf 'Langfuse secret key: '; read -rs LANGFUSE_SECRET_KEY; echo; export LANGFUSE_SECRET_KEY
+
+exakit notebook
+```
+
+Windows PowerShell 5.1 or later, the same names:
+
+```powershell
+$env:EXAKIT_MODEL_ID = "claude-opus-5-5"
+$env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"
+$env:EXAKIT_PROVIDER_API_KEY = [Net.NetworkCredential]::new("", (Read-Host "Model API key" -AsSecureString)).Password
+
+$env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+$env:LANGFUSE_PUBLIC_KEY = [Net.NetworkCredential]::new("", (Read-Host "Langfuse public key" -AsSecureString)).Password
+$env:LANGFUSE_SECRET_KEY = [Net.NetworkCredential]::new("", (Read-Host "Langfuse secret key" -AsSecureString)).Password
+
+exakit notebook
+```
+
+A local Ollama needs no key and no Langfuse. After you load a chat model:
+
+```sh
+export EXAKIT_MODEL_ID="<exact-name-from-ollama-list>"
+export EXAKIT_PROVIDER_BASE_URL="http://localhost:11434/v1/"
+unset EXAKIT_PROVIDER_API_KEY EXAKIT_PROVIDER_HEADERS
+exakit notebook
+```
+
+Skip any value at its hidden prompt by pressing Enter. An empty key is the same as no key.
+
+Three rules for this way:
+
+* **Already running?** The server read its environment when it started. A kernel restart does not read it again. Run `exakit notebook stop`, then `exakit notebook`, in the terminal that has the variables. For Marimo, use `exakit notebook marimo` the same way.
+* **The plain values can live in the settings file.** `~/.exasol-starter-kit/exakit.env` takes the model's ID and address (`EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, and optionally `EXAKIT_PROVIDER_HEADERS` and `EXAKIT_MODEL_TEMPERATURE`). Remove the `# ` in front of a line and set it once. The file refuses any key, secret or token. It does not hold the Langfuse address or the Langfuse keys. Those stay in the terminal as shown above.
+* **Leave out what you do not use.** No model ID means the AI steps skip and say so. No Langfuse variables means tracing is off.
+
+### In a notebook cell [#in-a-notebook-cell]
+
+The quickstart has a cell called **Your AI model and Langfuse tracing**. Fill in the values at the top and run the cell:
+
+```python
+MODEL_ID = "claude-opus-5-5"                    # your model's id
+PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"
+LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+```
+
+The cell asks for each key in a hidden box. With `remember=True` it saves them in the kit's credentials folder, readable by you only, so every notebook of this kit has them. Run `FORGET = True` in that cell to delete what was saved.
+
+To set them for the current notebook only, call the helper directly:
+
+```python
+import exakit.nb as nb
+
+nb.use_model("claude-opus-5-5", "https://api.anthropic.com/v1/")        # the model, this kernel only
+nb.use_model(langfuse_base_url="https://cloud.langfuse.com")            # tracing, this kernel only
+```
+
+Those values disappear when the kernel stops. Add `remember=True` to keep them.
+
+To ask for whatever is missing, run:
+
+```python
+nb.model_setup()
+```
+
+It asks for the model ID and address, the Langfuse address, and then each key in a hidden box. It prints what is set. For anything still missing, it prints the terminal lines for your system, so you can set it once for every notebook.
+
+To delete what was remembered:
+
+```python
+nb.forget_model(model=True, langfuse=True)
+```
+
+### The kit's settings file [#the-kits-settings-file]
+
+Only the model's plain values go in `exakit.env`, as described in the first way. Keys and the Langfuse settings never go there.
+
+<Callout type="warn">
+  Never type a key into a cell. Use the hidden box or the hidden prompt. A key typed into a cell is saved in the notebook file.
+</Callout>
+
+## What the kit sends to a model [#what-the-kit-sends-to-a-model]
+
+The model sees only what each step needs. It never sees rows.
+
+| Step                               | What the model does                       | What is sent                                                          |
+| ---------------------------------- | ----------------------------------------- | --------------------------------------------------------------------- |
+| Ask your data (`02_ask_your_data`) | Drafts SQL for your question              | The approved column map and your question. No rows.                   |
+| Themes in text (`01_explore`)      | Sorts texts into themes                   | A sample of texts from each side of the target                        |
+| Column notes                       | Writes one line per column on a new draft | Each column's name, type, role, evidence and top values. Never a row. |
+
+A column marked sensitive is named with its role only, and the model is told never to select its values. A sensitive column is never grouped, charted or sent to a model as data.
+
+The model may never do three things:
+
+* **Approve roles.** Only you approve a column map.
+* **Run SQL.** A drafted query runs only after you approve that exact text. Editing the text removes the approval.
+* **Write to the database.** Approved questions run as the kit's read-only user.
+
+Where the model runs decides where the data goes. A model on your own machine keeps the model's work on this computer. With Langfuse Cloud on, the recorded inputs and outputs of each call are sent to Langfuse. With tracing off, nothing goes to Langfuse.
+
+The kit never writes a key into a cell, the code view or the workflow log.
+
+## Check it works [#check-it-works]
+
+Work through these checks in order. Each one proves a bit more.
+
+1. **What the kit has.** Run this in a notebook. It shows which settings are set, without their values. `nb.model_settings()` makes no network request (`notebook/package/exakit_nb/__init__.py`), so a configured result does not prove the key is valid. Check the key with the Home card's **Check and list the models**, or with step 2.
+
+   ```python
+   import exakit.nb as nb
+   nb.model_settings()     # the model ID, the address, whether a key is set
+   nb.tracing()            # is Langfuse tracing on?
+   ```
+
+2. **A real model call.** In `02_ask_your_data`, set `DRAFT_WITH_MODEL = True` and run the Ask cells. The model drafts SQL from your question and the column map. Read the SQL, and the model's assumptions and doubts, before you approve anything. A failed call says what went wrong.
+
+   Explore's themes step needs a text column. The reference datasets have none, so use Ask for this check.
+
+3. **The trace.** Open your Langfuse project and its traces. Each model call from the kit is one trace, with its input, its output and, when the provider returns them, its token counts. Themes in Explore make two calls, and both go into one trace named `explore-themes`.
+
+## When it goes wrong [#when-it-goes-wrong]
+
+<Accordions type="multiple">
+  <Accordion title="A model step is skipped">
+    Either no model is set, or the dataset has no column for that step. Run `nb.model_settings()` to see what is set. Set the model as shown above. The themes step also skips on a dataset with no text column, and says so. The reference datasets, `amazon_sales` and `fraud_transactions`, have no text column.
+  </Accordion>
+
+  <Accordion title="The message says the model is not usable">
+    The settings are refused before any call is made. The message names the setting. Common causes:
+
+    * The base URL is `http://` to a host outside this computer and your network. Use the provider's `https://` address.
+    * The base URL includes a path such as `/chat/completions`, a query, or a username and password. Remove them. Give only the API base, such as `/v1/`.
+    * `EXAKIT_PROVIDER_HEADERS` is not a JSON object of plain values, or it sets an authorization header. Put the key in `EXAKIT_PROVIDER_API_KEY` instead.
+  </Accordion>
+
+  <Accordion title="Langfuse says tracing is off">
+    The message names the missing setting. Tracing needs all three: the public key, the secret key and the base URL. A plain `http://` address to a host outside this computer and your network also turns tracing off. Use the `https://` address.
+  </Accordion>
+
+  <Accordion title="I changed a setting and nothing changed">
+    The notebook server read its environment when it started. Run `exakit notebook stop`, then `exakit notebook` from the terminal that has the variables. A kernel restart does not read them again, and a new terminal does not reach a server that is already running.
+  </Accordion>
+
+  <Accordion title="Do I need an AI model?">
+    No. Every step runs without one. A model is used only to draft SQL in Ask and to sort texts into themes in Explore. Both are off until you turn them on. Ask also has a drafter that needs no model: `nb.draft_question`.
+  </Accordion>
+
+  <Accordion title="Is my data sent anywhere?">
+    Not by default. The database and the notebooks run on this computer. With a model set up, Ask sends the column map and your question, never rows. The themes step sends a sample of texts. It asks first when the data is a live external source. With Langfuse Cloud on, the recorded inputs and outputs of each model call are sent to Langfuse.
+  </Accordion>
+
+  <Accordion title="Can an AI-drafted query change my data?">
+    No. Nothing runs until you approve the exact text. Approved questions run as the read-only user, and writes are rejected by the database.
+  </Accordion>
+</Accordions>
+
+## What you have at the end [#what-you-have-at-the-end]
+
+A model and a tracing setup you have checked, or a clear choice to leave them off. The notebooks use the same settings.
+
+Back to [Set up Exasol](/data-scientist/set-up). Next: [Troubleshooting](/data-scientist/set-up/troubleshooting).

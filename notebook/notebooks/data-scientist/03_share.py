@@ -6,8 +6,28 @@
 #     name: exasol-starter-kit
 # ---
 
+# %% [markdown] tags=["exakit-guide-hint"]
+# <div class="guide-start-hint">
+#
+# **Step 4 · Share and hand off.** Click into the cell below and press **Shift + Enter** to open it: a dashboard preview, its publication and the hand-off bundle. Its **Guided / Code** switch, top right, shows the code behind this page.
+#
+# </div>
+
+# %% tags=["exakit-guide", "skip-ci"]
+# Share and hand off: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+import exakit.guide as guide
+
+guide.share()
+
+# %% [markdown] tags=["exakit-code-start"]
+# # The code behind this page
+#
+# <div class="guide-code-start"></div>
+#
+# The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
+
 # %% [markdown]
-# # Share the insight and hand it off
+# ## Share the insight and hand it off
 #
 # **Dataset:** the one you approved last (else `amazon_sales`), `fraud_transactions` or your own approved descriptor.
 #
@@ -56,7 +76,7 @@ dash_server_state = nb.addon_ready("dash-server")
 # %% [markdown]
 # ### Preview
 #
-# Open the printed URL. Make sure that:
+# Dash Server is installed and started first when this cell runs on its own. Open the printed URL. Make sure that:
 #
 # - the categories and counts match your SQL;
 # - the filters update both charts and the table.

@@ -1,0 +1,57 @@
+---
+title: Troubleshooting
+description: Fixes for the approval, staleness, update and log problems you can meet when you run the work again.
+---
+
+Each entry quotes the message the kit shows, or describes the step that stops.
+
+<Accordions type="multiple">
+
+<Accordion title="Another dataset was approved while this notebook was open">
+
+You approved another dataset in the quickstart while this notebook was open. Run this notebook's first cell again. It switches to the newly approved dataset.
+
+</Accordion>
+
+<Accordion title="A step says the column map is not approved">
+
+The step raised `DescriptorNotApproved`. Explore, Ask and Share do not read a draft. Open `00_quickstart`, review the map and approve it. The roles and the approval are described on [Explore](/data-scientist/explore).
+
+</Accordion>
+
+<Accordion title="approve says the table changed since it was described">
+
+The table's columns or types changed after you described it. Run `nb.describe(...)` again, review the new draft, and approve it. See [What changed, and where you go](/data-scientist/monitor/what-changed).
+
+</Accordion>
+
+<Accordion title="Approved, but the semantic model was not published">
+
+The approval stands, but the semantic model could not be rebuilt. The message says why. Fix the cause, then run `exakit describe <id> --comments`. See [Versions and semantic models](/data-scientist/monitor/versions-and-semantic-models).
+
+</Accordion>
+
+<Accordion title="After an update, nothing changed">
+
+A running kernel keeps the helpers it loaded before the update. Restart it: in JupyterLab, **Kernel**, then **Restart Kernel**.
+
+</Accordion>
+
+<Accordion title="Find what a cell ran">
+
+```python
+nb.show_sql()                              # the SQL the last query ran
+nb.workflow_log(nb.current_workflow())     # everything this workflow did
+```
+
+</Accordion>
+
+<Accordion title="The training hand-off is refused as stale">
+
+`handoff_is_stale` named what changed. Write the hand-off again with `nb.write_handoff(conn, ds)`. Check the line first, so you know whether the change was to the column map or to the data. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+
+</Accordion>
+
+</Accordions>
+
+Back to [Monitor and iterate](/data-scientist/monitor).

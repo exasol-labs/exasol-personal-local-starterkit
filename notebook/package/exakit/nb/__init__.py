@@ -11,5 +11,8 @@ import sys
 import exakit_nb as _impl
 
 for _found in pkgutil.iter_modules(_impl.__path__):
-    sys.modules[f"{__name__}.{_found.name}"] = importlib.import_module(f"exakit_nb.{_found.name}")
+    try:
+        sys.modules[f"{__name__}.{_found.name}"] = importlib.import_module(f"exakit_nb.{_found.name}")
+    except ImportError:   # a module needing what this Python lacks (the model lab: numpy, scikit-learn) loads on use
+        continue
 sys.modules[__name__] = _impl

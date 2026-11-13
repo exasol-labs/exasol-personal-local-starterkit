@@ -1,0 +1,64 @@
+# What is sent to an AI model (/security/what-goes-to-a-model)
+
+
+
+The kit calls a model only when you set one. Set `EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL`, and the helpers below call that address. The request is Chat Completions. Every model client is built by `create_client()` in `notebook/package/exakit_nb/model_config.py`. The model is your choice, and the kit does not check the provider's data-retention terms.
+
+## Which helper sends what [#which-helper-sends-what]
+
+| Helper                       | Where it is                                                                                                     | What the model receives                                                                                                                                                                                                       | What it never receives                           |
+| ---------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------ |
+| `ask()`                      | `notebook/package/exakit_nb/ask.py`, `described()`                                                              | The table name, the descriptor version, the slots, and each column's role, evidence and note. The question. A sensitive column appears by name and role only, with the instruction "never select, group or filter its values" | Rows. Values of sensitive columns                |
+| Model notes                  | `setup/lib/describe_service.py`, `model_notes()`                                                                | For each non-sensitive column: its name, type, role, evidence and up to five of its most frequent values                                                                                                                      | Sensitive columns, which are skipped entirely    |
+| Semantic Views drafting      | `setup/lib/describe_service.py`, `semantic_ai()`, with `ai_facts()` in `setup/lib/descriptor/semantic_model.py` | Entity names and tables, grains, relationships, dimension and fact names and comments, metric expressions, and up to ten values of a category dimension                                                                       | Private facts. Sensitive columns carry no values |
+| Feature ideas with `ai=True` | `notebook/package/exakit_nb/lab.py`, `feature_ideas()`                                                          | Non-sensitive column names and roles, the target name, and model scores                                                                                                                                                       | Row values                                       |
+| `nb.themes()`                | `notebook/package/exakit_nb/themes.py`                                                                          | The text of the rows in the sample you pass in, up to 600 characters each, one call per side of the label                                                                                                                     | Nothing is filtered. See the warning below       |
+
+<Callout type="warn">
+  `nb.themes()` sends row text to your model. It is the only helper that sends the content of rows. The kit does not check whether that text column is sensitive. The SQL in the notebook cell chooses the rows, so the sensitive-column rule does not apply to them.
+</Callout>
+
+### A flag column gives its values [#a-flag-column-gives-its-values]
+
+A flag is a column with two values. For a flag, the evidence in the descriptor holds both values, and the evidence is sent to the model. `ask()`'s rules say so: "A flag's evidence gives its values." So a non-sensitive flag such as `CANCELLED` reaches the model with its two values, as do the values of a category.
+
+## How sensitive columns are found [#how-sensitive-columns-are-found]
+
+`setup/lib/descriptor/roles.py` decides sensitivity before the role, and keeps it whatever the role is. Its docstring gives the rules. A text column is sensitive when:
+
+* 90% or more of its values are e-mail addresses, phone numbers, IBANs or 5-digit postcodes, or
+* its name says postcode (ZIP, POSTAL, PLZ) and 90% of its values are shaped like one, or
+* its name says a person's name (`FIRST_NAME`, `SURNAME`, `CUSTOMER_NAME`, `DRIVER_NAME`), or
+* it is an address whose values are long and mostly distinct (`STREET_ADDRESS`, though not `ADDR_STATE`).
+
+A sensitive column gets the role `identifier`. `_finish()` in `setup/lib/descriptor/profile.py` keeps counts for it and drops its top values, minimum and maximum. The module docstring of `setup/lib/descriptor/store.py` says the profile file holds "no value of a sensitive column, because these files end up in bug reports."
+
+<Callout>
+  Detection is a set of patterns. It can miss personal data that does not match them, for example a free-text note that contains a name. Check a column map before you approve it, and mark a column yourself if it is wrong.
+</Callout>
+
+## Where a key may travel [#where-a-key-may-travel]
+
+`resolve()` in `notebook/package/exakit_nb/model_config.py` refuses to build a client with a key unless the address passes `clear_text_ok()`:
+
+* `https://` to any host, or
+* `http://` only to `localhost`, a `.local` or `.internal` name, or a loopback, private or link-local address.
+
+Anything else raises `... would send EXAKIT_PROVIDER_API_KEY in clear text`, before a request is made. `setup_env.use_model()` applies the same test before it asks for a key, and prints a note instead.
+
+Two gaps follow from the code, and they are stated here so they are not assumed away:
+
+* With no key set, `resolve()` accepts a plain `http://` address to any host. No key is sent, but the prompts and answers travel in clear text.
+* The `clear_text_ok()` test applies to the Langfuse address only inside `use_model()`. A Langfuse address set in your shell or in `exakit.env` is not checked.
+
+## Tracing is opt-in [#tracing-is-opt-in]
+
+`tracing()` in `notebook/package/exakit_nb/__init__.py` returns true only when `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` (or `LANGFUSE_HOST`) are all set. Without them, `create_client()` builds a plain OpenAI client, and nothing is sent to Langfuse. With them, `model_client()` returns Langfuse's wrapper for the same OpenAI call, and each call is recorded in your Langfuse project. The kit adds no filter to what the wrapper records beyond the rules in the table above.
+
+## Limits [#limits]
+
+* The kit sends what the table above lists. Your model provider handles that data under its own terms.
+* A model that sees column names and values can infer what a sensitive column holds. The kit keeps the values out, not the inference.
+* Plain `http://` to a public host, with no key, is not blocked.
+* The Langfuse address rule is not applied outside `use_model()`.
+* `nb.themes()` sends the text of the rows you choose.

@@ -12,11 +12,11 @@ from __future__ import annotations
 import importlib
 from typing import Any
 
-__all__ = ["nb"]
+__all__ = ["nb", "guide"]
 
 
 def __getattr__(name: str) -> Any:
-    """``import exakit; exakit.nb`` loads the helpers on first use."""
-    if name == "nb":
-        return importlib.import_module("exakit.nb")
+    """``import exakit; exakit.nb`` loads the helpers on first use; ``exakit.guide``, the guided view, likewise."""
+    if name in ("nb", "guide"):
+        return importlib.import_module(f"exakit.{name}")
     raise AttributeError(f"module 'exakit' has no attribute '{name}'")
