@@ -900,9 +900,12 @@ class ColumnMap(Screen):
         entry = next((e for e in SESSION.chosen if e["table"] == table), None)
         if entry is None or (SESSION.source is not None and str(SESSION.source.fact_table) == table):
             return
+        print(f"Opening {table}")
         actions.run("data.switch", table=table)
         use_chosen(entry)
-        self._review()
+        print(f"Reading {table}: each column's type, how many values and how they spread")
+        with SESSION.showing_queries():
+            self._review()
         SESSION.changed("source", self)
 
     def on_map_switch(self, v: dict) -> None:

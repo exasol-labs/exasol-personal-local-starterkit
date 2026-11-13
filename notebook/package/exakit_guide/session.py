@@ -72,6 +72,33 @@ class Session:
             actions.run("data.connect", self)
         return self.get("connection")
 
+    @contextmanager
+    def showing_queries(self):
+        """While inside, every statement sent on the notebook's connection is printed first ("Running: SELECT ...",
+        its first words), so a card that waits on many of them (a column map being drawn up) shows them as they go
+        instead of looking frozen. The statements are what they were; nothing else changes."""
+        import re as _re
+
+        conn = self.connection()
+        if conn is None or not hasattr(conn, "execute"):
+            yield                                # no database here (a stand-in): nothing to show
+            return
+        real = conn.execute
+
+        def execute(query, *args, **kwargs):
+            words = " ".join(str(query).split())
+            print("Running: " + (words[:110] + " ..." if len(words) > 110 else words))
+            return real(query, *args, **kwargs)
+
+        conn.execute = execute
+        try:
+            yield
+        finally:
+            try:
+                del conn.execute                 # the connection's own method again
+            except AttributeError:
+                conn.execute = real
+
     def release(self) -> None:
         """Give the database connection back while nothing is running (Exasol Personal has a small number of
         connections; an idle notebook should not hold one). The next action opens it again. Waits for the work in

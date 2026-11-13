@@ -472,8 +472,11 @@ function render({ model, el }) {
         if (value === b.value || ui.busy) return;
         if (mapDirty() && ui.leaveFor !== value) { ui.leaveFor = value; draw(); return; }
         ui.leaveFor = null;
+        ui.opening = value;                     // which tab is being opened: it shows a spinner while the kit works
         send(b.action, { [b.field]: value }, { noSecret: true });
       };
+      const busy = ui.busy === b.action || ui.busy === "map_next";      // a tab, or "Review <next table>"
+      if (!busy) ui.opening = null;
       return h("div", { class: "guide-tablepick" },
         h("div", { class: "guide-tablepick-label" }, b.label),
         h("div", { class: "guide-tablepick-tabs", role: "tablist", "aria-label": "Tables" }, b.items.map((i) => {
@@ -481,9 +484,13 @@ function render({ model, el }) {
           return h("button", { type: "button", role: "tab", "aria-selected": on ? "true" : "false", disabled: !!ui.busy,
             class: `guide-tablepill guide-tablepill-${i.state}${on ? " is-on" : ""}`, onClick: () => go(i.value),
             "data-tip": i.state === "approved" ? "Column map approved" : "Not approved yet" },
-            i.state === "approved" ? icon("check") : h("span", { class: "guide-tablepill-dot", "aria-hidden": "true" }),
+            busy && ui.opening === i.value ? h("span", { class: "guide-spinner" })
+              : i.state === "approved" ? icon("check") : h("span", { class: "guide-tablepill-dot", "aria-hidden": "true" }),
             h("span", {}, i.label));
         })),
+        busy ? (progressPanel(ui.busy) || h("div", { class: "guide-progress", role: "status", "aria-live": "polite" },
+          h("div", { class: "guide-progress-label" }, `Opening ${ui.opening || "the table"}…`),
+          h("div", { class: "guide-progress-bar guide-progress-bar-busy" }, h("span", {})))) : null,
         ui.leaveFor && b.items.some((i) => i.value === ui.leaveFor)
           ? h("div", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, "Your changes to this table are not approved yet. ",
               h("button", { type: "button", class: "guide-fixlink", onClick: () => go(ui.leaveFor) }, `Leave them and open ${ui.leaveFor}`), " ",

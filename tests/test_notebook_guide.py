@@ -1617,6 +1617,32 @@ class OneConnectionTest(unittest.TestCase):
         self.assertEqual(["closed"], order)
 
 
+class ShowingQueriesTest(unittest.TestCase):
+    def test_each_statement_is_said_while_a_card_waits_and_the_connection_is_left_as_it_was(self):
+        """Opening another table's column map runs many statements; each is printed ("Running: ...") so the card
+        shows them as they go, and afterwards the connection's own execute is back."""
+        session_mod = importlib.import_module("exakit_guide.session")
+        session = session_mod.Session()
+
+        class Conn:
+            def execute(self, query):
+                return f"ran {query}"
+
+        conn = Conn()
+        session._ns = {"nb": None, "connection": conn}
+        import io
+        from contextlib import redirect_stdout
+
+        out = io.StringIO()
+        with redirect_stdout(out), session.showing_queries():
+            self.assertEqual("ran SELECT  1", conn.execute("SELECT  1"))
+            conn.execute("SELECT " + "X, " * 80 + "Y FROM T")
+        lines = out.getvalue().splitlines()
+        self.assertEqual("Running: SELECT 1", lines[0])
+        self.assertTrue(lines[1].endswith(" ...") and len(lines[1]) < 130, lines[1])
+        self.assertNotIn("execute", vars(conn), "the connection's own method again")
+
+
 class MarimoShownCodeTest(unittest.TestCase):
     def test_guided_notebooks_open_in_marimo_with_their_code_shown(self):
         """In Marimo a guided notebook shows its code: the code cells open with their code visible, the guided cell
