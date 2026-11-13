@@ -496,10 +496,16 @@ class ValidatorService:
         desired = desired.for_client(adapter.describe_capabilities().supports_http)
         if desired is None:
             return None
-        if desired.name != entry_name:
+        server = str(artifact.metadata.get("server", entry_name))
+        if desired.name != server:
             # This artifact records a different server entry than the one the
             # desired definition describes; there is nothing to compare.
             return None
+        if desired.name != entry_name:
+            # The kit's entry for this server, written beside a user's entry of the server's name.
+            import dataclasses
+
+            desired = dataclasses.replace(desired, name=entry_name)
         try:
             rendered = adapter.render(desired, inspection)
         except (ValueError, NotImplementedError):

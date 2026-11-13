@@ -606,7 +606,7 @@ JS → Python   {type: "event", id: "&lt;handler suffix&gt;", values: {fields, c
 <ul>
 <li><b>Read-only user</b> <code>mcp_readonly</code> (password in <code>credentials/mcp_readonly_password</code>): CREATE SESSION, USE ANY SCHEMA, SELECT ANY TABLE only; <code>exakit mcp-doctor</code> fails when it holds anything else. A published semantic model also grants it SEMANTIC_USER and SELECT on <code>SEM_&lt;MODEL&gt;</code>.</li>
 <li><b>Server</b>: the launcher's MCP sidecar on 127.0.0.1:4896 (Streamable HTTP, write tools off), defined in <code>&lt;deployment&gt;/sidecars.yaml</code>.</li>
-<li><b>Clients</b>: Claude Desktop, Claude Code, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Continue (<code>exakit mcp-setup</code>, <code>EXAKIT_MCP_CLIENTS</code>).</li>
+<li><b>Clients</b>: Claude Desktop, Claude Code, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Continue (<code>exakit mcp-setup</code>, <code>EXAKIT_MCP_CLIENTS</code>). The kit's entry is <code>exasol</code> (and <code>dash-server</code>). When a client already has an entry of that name the kit did not write, it is kept and the kit's is added as <code>exasol-starter-kit</code> (<code>_kit_entry_name</code> in <code>mcp/service.py</code>); each record keeps the entry name and the server it is (<code>metadata.entry_name</code>, <code>metadata.server</code>), and uninstall removes only recorded entries.</li>
 <li><b>Skills</b>: <code>skills/&lt;name&gt;/SKILL.md</code> (frontmatter name, description ending with <code>Triggers —</code>, optional <code>addon:</code> or <code>persona:</code>), placed in <code>~/.claude/skills</code> and <code>~/.agents/skills</code>; the master skill is <code>exakit</code>; the persona skill is <code>exasol-data-scientist</code>; Semantic Views brings three. Bumping <code>components.skills.version</code> makes <code>exakit update</code> fetch the new set without a kit release.</li>
 </ul>
 
@@ -624,6 +624,7 @@ JS → Python   {type: "event", id: "&lt;handler suffix&gt;", values: {fields, c
 <tr><td>AI</td><td>never a row (except themes, guarded); never a sensitive column; plain http only to a local host; every proposal checked</td></tr>
 <tr><td>AI clients</td><td>a read-only database user; write tools off</td></tr>
 <tr><td>Downloads</td><td>every artifact SHA-256 checked against <code>versions.json</code> or a connector pin</td></tr>
+<tr><td>What you had before the kit</td><td>recorded as not the kit's and kept: a launcher (<code>components.personal.ownership_path</code>), exapump and its profiles (the kit's profile lives in <code>~/.exasol-starter-kit/exapump</code>, never <code>~/.exapump</code>), a reused database deployment, an add-on on PATH (never installed over, updated or removed), an AI-client MCP entry of the kit's name; a Dash Server of yours keeps its port (the kit's moves to the next free one)</td></tr>
 <tr><td>Telemetry</td><td>pyexasol, MLflow and dbt telemetry off in the kernel and helpers</td></tr>
 </table>
 

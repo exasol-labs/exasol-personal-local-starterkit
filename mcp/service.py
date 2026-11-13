@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from pathlib import Path
 from typing import Iterable
 
-from mcp.adapters.base import ClientAdapter, RenderResult
+from mcp.adapters.base import AdapterInspection, ClientAdapter, RenderResult
 from mcp.adapters.registry import AdapterRegistry
 from mcp.core.errors import BlockingOperationError, MCPSubsystemError
 from mcp.core.models import (
@@ -21,6 +23,7 @@ from mcp.core.models import (
     OperationResult,
     OperationStatus,
     OwnershipState,
+    ServerDefinition,
     Severity,
     VerificationEvidence,
 )
@@ -184,8 +187,9 @@ class MCPAccessSubsystem:
         # or unsupported config says nothing about the others.
         status_findings: list[Finding] = list(findings)
 
+        kit_records = self._active_artifacts(manifest_repository)
         for adapter in adapters:
-            rendered, config_path, client_findings = self._render_for_client(adapter, request)
+            rendered, config_path, client_findings = self._render_for_client(adapter, request, kit_records)
             findings.extend(client_findings)
             if rendered is None or config_path is None:
                 skipped_clients.append(self._skip_record(adapter, client_findings))
@@ -764,7 +768,8 @@ class MCPAccessSubsystem:
         return named or request.target_clients
 
     def _render_for_client(
-        self, adapter: ClientAdapter, request: OperationRequest
+        self, adapter: ClientAdapter, request: OperationRequest,
+        kit_records: list[ArtifactReference] | None = None,
     ) -> tuple[RenderResult | None, Path | None, list[Finding]]:
         """Locate, inspect and render ONE client.
 
@@ -843,6 +848,29 @@ class MCPAccessSubsystem:
             )
             return None, None, findings
         inspection = adapter.inspect(location.path, server_definition.name)
+        # An entry of this name the kit did not write is the user's own (their own Exasol MCP server, their own
+        # Dash Server): it is never replaced, and so never removed by an uninstall either. The kit's entry goes
+        # beside it under its own name, "<name>-starter-kit", and that name is recorded with it.
+        own_name = self._kit_entry_name(adapter, location.path, server_definition, inspection, kit_records or [])
+        if own_name != server_definition.name:
+            kept = server_definition.name
+            server_definition = dataclasses.replace(server_definition, name=own_name)
+            location = adapter.locate_for_server(self._environment, own_name)
+            if not location.available or location.path is None:  # pragma: no cover - same client, another name
+                return None, None, findings
+            inspection = adapter.inspect(location.path, own_name)
+            findings.append(
+                Finding(
+                    code="user_entry_kept",
+                    severity=Severity.INFO,
+                    message=(f"{adapter.display_name()} already has an MCP entry named '{kept}' that the kit did not "
+                             f"write: it is kept as it is, and the kit's is added as '{own_name}'."),
+                    scope={"client": adapter.adapter_id(), "server": kept, "entry": own_name},
+                    evidence=[f"Config: {location.path}"],
+                    recommended_action=(f"Nothing to do. Both entries work; '{kept}' stays yours and "
+                                        "exakit uninstall leaves it alone."),
+                )
+            )
         findings.extend(inspection.findings)
         if any(finding.blocking for finding in findings):
             return None, location.path, findings
@@ -851,6 +879,46 @@ class MCPAccessSubsystem:
         if any(finding.blocking for finding in findings):
             return None, location.path, findings
         return rendered, location.path, findings
+
+    KIT_SUFFIX = "-starter-kit"
+
+    def _kit_entry_name(
+        self,
+        adapter: ClientAdapter,
+        path: Path,
+        server_definition: ServerDefinition,
+        inspection: AdapterInspection,
+        kit_records: list[ArtifactReference],
+    ) -> str:
+        """The entry name the kit writes this server under in this client's file.
+
+        The server's own name, unless an entry of that name is there that the kit did not write. The kit's records
+        say what it wrote: an artifact for this client and file whose entry is the server's own name means the entry
+        is the kit's (written by this or an earlier run); one recorded under another name for the same server means
+        the kit already moved aside, and keeps using that name. An entry identical to what the kit would write is
+        taken as the kit's too (a re-install after the records were lost)."""
+        name = server_definition.name
+        mine = [
+            record for record in kit_records
+            if record.client == adapter.adapter_id() and Path(record.path) == Path(path)
+            and str(record.metadata.get("server", record.metadata.get("entry_name", "exasol"))) == name
+        ]
+        for record in mine:
+            recorded = str(record.metadata.get("entry_name", "exasol"))
+            if recorded != name:
+                return recorded                     # moved aside on an earlier run
+        if inspection.managed_entry is None or mine:
+            return name
+        try:
+            if adapter.render(server_definition, inspection).managed_hash == inspection.managed_hash:
+                return name                         # exactly what the kit would write: the kit's
+        except (ValueError, NotImplementedError):
+            pass
+        taken = set(inspection.other_server_names or [])
+        candidate, n = f"{name}{self.KIT_SUFFIX}", 2
+        while candidate in taken:
+            candidate, n = f"{name}{self.KIT_SUFFIX}-{n}", n + 1
+        return candidate
 
     @staticmethod
     def _skip_record(adapter: ClientAdapter, client_findings: list[Finding]) -> dict[str, str]:
@@ -934,6 +1002,8 @@ class MCPAccessSubsystem:
             source_adapter=adapter.adapter_id(),
             metadata={
                 "entry_name": rendered.entry_name,
+                # the server this entry is (exasol, dash-server), whatever name it has in the file
+                "server": request.server_definition.name if request.server_definition else rendered.entry_name,
                 "transport": request.deployment_mode.value,
             },
         )

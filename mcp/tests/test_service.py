@@ -127,6 +127,41 @@ class MCPSubsystemLifecycleTests(unittest.TestCase):
             self.assertIn("filesystem", remaining["mcpServers"])
             self.assertNotIn("exasol", remaining["mcpServers"])
 
+    def test_a_users_own_entry_of_the_same_name_is_kept_and_survives_uninstall(self) -> None:
+        """The user had an "exasol" entry of their own before the kit (their own Exasol MCP server). It is never
+        replaced: the kit's goes beside it as "exasol-starter-kit", a repair and a second configure keep that name,
+        and uninstall removes only the kit's - the user's entry is exactly as it was."""
+        own = {"command": "uvx", "args": ["exasol-mcp-server@1.0"], "env": {"EXA_DSN": "my-db:8563"}}
+        self.config_path.parent.mkdir(parents=True, exist_ok=True)
+        self.config_path.write_text(json.dumps({"mcpServers": {"exasol": own}}, indent=2) + "\n", encoding="utf-8")
+        with self._mock_connectivity():
+            configure = self.subsystem.execute(self._base_request("configure"))
+            self.assertEqual(configure.status, OperationStatus.SUCCESS)
+            doc = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual(own, doc["exasol"], "the user's entry is not touched")
+            self.assertTrue(doc["exasol-starter-kit"]["command"].endswith("exasol-mcp-server"))
+            self.assertIn("user_entry_kept", [f.code for f in configure.findings])
+            self.assertEqual(OperationStatus.SUCCESS, self.subsystem.execute(self._base_request("validate")).status)
+            again = self.subsystem.execute(self._base_request("configure"))
+            self.assertEqual(again.status, OperationStatus.SUCCESS)
+            doc = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual({"exasol", "exasol-starter-kit"}, set(doc), "a second run keeps the same name, no third entry")
+            status = self.subsystem.execute(self._base_request("status"))
+            self.assertEqual(1, len(status.artifacts))
+            uninstall = self.subsystem.execute(self._base_request("uninstall"))
+            self.assertEqual(uninstall.status, OperationStatus.SUCCESS)
+            remaining = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual({"exasol": own}, remaining)
+
+    def test_an_entry_the_kit_wrote_before_is_still_the_kits(self) -> None:
+        """A first configure writes "exasol"; a later one updates that same entry (it is the kit's by its record),
+        never moving aside from its own entry."""
+        with self._mock_connectivity():
+            self.subsystem.execute(self._base_request("configure"))
+            self.subsystem.execute(self._base_request("configure"))
+            doc = json.loads(self.config_path.read_text(encoding="utf-8"))["mcpServers"]
+            self.assertEqual({"exasol"}, set(doc))
+
     def test_install_is_explicitly_blocked(self) -> None:
         result = self.subsystem.execute(self._base_request("install"))
         self.assertEqual(result.status, OperationStatus.BLOCKED)
