@@ -43,6 +43,30 @@ def mark(state: Any) -> Text:
     return Text(text, style="bold" if bad else "")
 
 
+# The EXASOL wordmark, byte for byte the install banner's (setup/lib/ui.sh UI_WM_*): the X's left strokes in the
+# brand green (UI_GREEN, 256-colour 77), the rest in the terminal's own colour.
+WM_E = ("███████╗", "██╔════╝", "█████╗  ", "██╔══╝  ", "███████╗", "╚══════╝")
+WM_XL = ("██╗ ", "╚██╗", " ╚███", " ██╔", "██╔╝", "╚═╝ ")
+WM_XR = (" ██╗", "██╔╝", "╔╝ ", "██╗ ", " ██╗", " ╚═╝")
+WM_R = (" █████╗ ███████╗ ██████╗ ██╗",
+        "██╔══██╗██╔════╝██╔═══██╗██║",
+        "███████║███████╗██║   ██║██║",
+        "██╔══██║╚════██║██║   ██║██║",
+        "██║  ██║███████║╚██████╔╝███████╗",
+        "╚═╝  ╚═╝╚══════╝ ╚═════╝ ╚══════╝")
+LOGO_MIN_HEIGHT = 36            # below this the tables need the rows more than the logo does
+
+
+def logo() -> Text:
+    text = Text()
+    for i in range(6):
+        text.append(WM_E[i], style="bold")
+        text.append(WM_XL[i], style="bold #5fd75f")
+        text.append(WM_XR[i] + WM_R[i] + "\n", style="bold")
+    text.append("Personal Local Starter Kit", style="dim")
+    return text
+
+
 def yes(flag: Any) -> Text:
     return Text("yes") if flag else Text("no", style="dim")
 
@@ -85,7 +109,8 @@ class ExakitApp(App):
     SUB_TITLE = "Exasol Personal Local Starter Kit"
     # The terminal's own colours, as the kit's other Textual screens draw (marketplace/ui.py): no background painted,
     # no coloured buttons or states. Thin grey rules, bold for what needs you, dim for the detail, reverse for the
-    # row or button you are on.
+    # row or button you are on. The one colour is the kit's Exasol green accent (ui.sh UI_ACCENT, 256-colour 35 =
+    # #00af5f): the tab underline and the button outlines; a disabled button stays grey.
     CSS = """
     Screen { background: ansi_default; color: ansi_default; }
     Header, Footer, Tabs, Tab, TabPane, TabbedContent, ContentSwitcher, Horizontal, Vertical, VerticalScroll,
@@ -93,11 +118,11 @@ class ExakitApp(App):
     Header { text-style: bold; }
     Tab { text-style: none; }
     Tab.-active { text-style: bold; }
-    Underline > .underline--bar { background: ansi_default; color: ansi_bright_black; }
+    Underline > .underline--bar { background: ansi_default; color: #00af5f; }
     TabPane { padding: 0 1; }
-    Button { background: ansi_default; color: ansi_default; border: round ansi_bright_black; text-style: none;
+    Button { background: ansi_default; color: ansi_default; border: round #00af5f; text-style: none;
              min-width: 12; height: 3; margin-right: 1; }
-    Button:hover, Button:focus { background: ansi_default; color: ansi_default; border: round ansi_default;
+    Button:hover, Button:focus { background: ansi_default; color: ansi_default; border: heavy #00af5f;
                                  text-style: bold; }
     Button.-active { background: ansi_default; text-style: reverse; }
     Button:disabled { color: ansi_bright_black; border: round ansi_bright_black; text-style: none; }
@@ -123,6 +148,9 @@ class ExakitApp(App):
     .hint { color: ansi_bright_black; height: auto; margin: 0 0 1 0; }
     #persona-list { height: 1fr; }
     #summary { height: auto; margin-bottom: 1; }
+    #logo { height: auto; padding: 1 2 0 2; }
+    TabbedContent { height: 1fr; }
+    ContentSwitcher, TabPane { height: 1fr; }
     """
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -145,6 +173,7 @@ class ExakitApp(App):
     # -- layout -----------------------------------------------------------------------------------------------------
     def compose(self) -> ComposeResult:
         yield Header()
+        yield Static(logo(), id="logo")
         with TabbedContent(initial=self.first_tab):
             with TabPane("Status", id="status"):
                 yield Static(id="summary")
@@ -217,7 +246,11 @@ class ExakitApp(App):
                             yield Button("Remove this persona", id="persona-remove")
         yield Footer()
 
+    def on_resize(self, event) -> None:
+        self.query_one("#logo").display = event.size.height >= LOGO_MIN_HEIGHT
+
     def on_mount(self) -> None:
+        self.query_one("#logo").display = self.size.height >= LOGO_MIN_HEIGHT
         self.query_one("#components", DataTable).add_columns("Component", "Installed", "Available", "State")
         self.query_one("#addons", DataTable).add_columns("Add-on", "Version", "Installed", "State")
         self.query_one("#clients-table", DataTable).add_columns("AI client", "Connected", "MCP servers")
