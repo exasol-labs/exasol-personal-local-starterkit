@@ -91,5 +91,26 @@ class Notes(unittest.TestCase):
         self.assertIn("too good to be true", quiet(readout.note_model, 0.97, dataset(), 20000))
 
 
+
+class SqlWordTest(unittest.TestCase):
+    """A name the kit makes up for a result column is never an Exasol reserved word: "SELECT COUNT(*) AS CS" was a
+    syntax error (CS is CASESPECIFIC) on a table whose grain read "one row per c"."""
+
+    def test_made_up_names_avoid_reserved_words(self):
+        import types
+
+        from exakit_nb import readout, sql_words
+
+        ds = lambda grain: types.SimpleNamespace(descriptor=types.SimpleNamespace(grain=grain))
+        self.assertEqual("CS_COUNT", readout.count_name(ds("one row per c")))
+        self.assertEqual("VALUES_COUNT", readout.count_name(ds("one row per value")))
+        self.assertEqual("ROW_COUNT", readout.count_name(ds("")))
+        self.assertEqual("ORDER_LINES", readout.count_name(ds("one row per order line")))
+        self.assertEqual(("DATE_COL", "VALUE_COL", "C_MKTSEGMENT", "CANCELLED_PCT"),
+                         (readout.name("DATE"), readout.name("value"), readout.name("C_MKTSEGMENT"), readout.name("CANCELLED", "PCT")))
+        self.assertTrue(all(sql_words.reserved(w) for w in ("CS", "ROWS", "DATE", "VALUE", "PATH", "select")))
+        self.assertFalse(sql_words.reserved("CUSTOMERS"))
+        self.assertGreater(len(sql_words.RESERVED), 400)
+
 if __name__ == "__main__":
     unittest.main()

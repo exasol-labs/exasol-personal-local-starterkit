@@ -26,10 +26,14 @@ _STOP = ("in", "of", "for", "with", "by", "from", "at", "on", "per", "where", "w
 def name(column: str | None, suffix: str = "") -> str:
     """A result column named after a data column: ``CANCELLED`` + ``PCT`` -> ``CANCELLED_PCT``; quotes, dots and
     spaces become underscores, so the name works unquoted in SQL."""
+    from .sql_words import reserved
+
     base = re.sub(r"[^A-Z0-9]+", "_", str(column or "").split(".")[-1].upper()).strip("_") or "VALUE"
     if base[0].isdigit():
         base = "C_" + base
-    return f"{base}_{suffix}" if suffix else base
+    found = f"{base}_{suffix}" if suffix else base
+    # an SQL word (DATE, VALUE, CS, ROWS ...) is not a name unquoted: "SELECT x AS DATE" is a syntax error
+    return f"{found}_COL" if reserved(found) else found
 
 
 def noun(ds, one: bool = False) -> str:
@@ -58,9 +62,16 @@ def noun(ds, one: bool = False) -> str:
 
 def count_name(ds) -> str:
     """The count column, named after what is counted: ORDER_LINES, STORE_WEEKS; ROW_COUNT when the descriptor does
-    not say (ROWS is an SQL word)."""
-    found = name(noun(ds))
-    return "ROW_COUNT" if found == "ROWS" else found
+    not say (ROWS is an SQL word); <WORD>_COUNT when what is counted is another SQL word (CS, short for
+    CASESPECIFIC: "COUNT(*) AS CS" is a syntax error)."""
+    from .sql_words import reserved
+
+    found = re.sub(r"[^A-Z0-9]+", "_", noun(ds).upper()).strip("_") or "ROWS"
+    if found[0].isdigit():
+        found = "C_" + found
+    if found == "ROWS":
+        return "ROW_COUNT"
+    return f"{found}_COUNT" if reserved(found) else found
 
 
 def _label(ds) -> str | None:
