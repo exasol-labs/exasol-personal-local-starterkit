@@ -1592,7 +1592,8 @@ class AiHelp(Screen):
         tip = ("One click, for every table you chose: it corrects the kit's guesses, sets the other choices, writes a "
                "description for every column, finds the links between your tables and says what each table and link is. "
                "It is shown names, types and what the kit measured, never a row, and not a personal-data column. It "
-               "never picks what to predict. It fills the cards below: you still approve and publish."
+               "never picks what to predict. Choose your data below first. It fills the cards below: you still approve "
+               "and publish."
                if ready else "No AI model is set up yet. Set one up on the Home notebook (AI model, Set up).")
         blocks: list[dict] = [{"t": "head", "kicker": KICKER, "title": "Fill in with AI", "sub": tip}]
         if not ready:
@@ -1686,7 +1687,7 @@ def understand():
     query."""
     from ..card import show
 
-    return show(ChooseData(), AiHelp(), ColumnMap(), DataMap(), SemanticViews(), docs="explore")
+    return show(AiHelp(), ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="explore")
 
 
 def _publish_note(said: str) -> str:

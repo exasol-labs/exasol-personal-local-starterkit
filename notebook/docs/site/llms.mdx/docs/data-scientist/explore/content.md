@@ -34,7 +34,7 @@ The notebooks keep their choices in their first cell. `DATASET = None` follows t
 
 ## One button: Fill everything in with AI [#one-button-fill-everything-in-with-ai]
 
-Under **Choose your data**, the **Fill in with AI** card has one button. It runs once for every table you chose, from all your sources together, and fills the cards below it.
+The **Fill in with AI** card is the first card of the step and has one button. Choose your data first, in the card under it; the button then runs once for every table you chose, from all your sources together, and fills the cards below it.
 
 | What it does                                                                                       | Where the answer goes                                                                                                         |
 | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
