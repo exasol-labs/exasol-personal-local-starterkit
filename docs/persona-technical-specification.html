@@ -1,0 +1,737 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Persona Technical Specification</title>
+<style>
+:root{--bg:#fbfbfa;--card:#fff;--ink:#16181a;--muted:#5d6670;--line:#e3e5e8;--accent:#0e7c86;--soft:rgba(14,124,134,.08);--warn:#a8630a;--warnbg:rgba(168,99,10,.08);--code:#f3f4f2;--you:#2a78d6;--kit:#0e7c86;--db:#6b4fbb;--ai:#b5476b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#121416;--card:#1a1d20;--ink:#e9ecef;--muted:#9aa4ae;--line:#2c3136;--accent:#3fb6c0;--soft:rgba(63,182,192,.12);--warn:#e6a547;--warnbg:rgba(230,165,71,.1);--code:#20242a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+.wrap{display:grid;grid-template-columns:270px minmax(0,1fr);max-width:1400px;margin:0 auto}
+nav{position:sticky;top:0;height:100vh;overflow:auto;padding:24px 16px 40px 20px;border-right:1px solid var(--line);font-size:13px}
+nav a{display:block;color:var(--muted);text-decoration:none;padding:3px 6px;border-radius:6px}
+nav a:hover{background:var(--soft);color:var(--ink)}
+nav .grp{margin:14px 0 4px;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600}
+main{padding:32px 48px 120px;min-width:0}
+h1{font-size:30px;line-height:1.2;margin:0 0 6px}
+h2{font-size:23px;margin:56px 0 12px;padding-top:16px;border-top:1px solid var(--line)}
+h3{font-size:17px;margin:28px 0 8px}
+h4{font-size:15px;margin:18px 0 6px}
+p,li{max-width:900px}
+code{font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:var(--code);padding:12px 14px;border-radius:8px;overflow:auto;max-width:100%}
+pre code{background:none;padding:0}
+table{border-collapse:collapse;width:100%;margin:10px 0 16px;font-size:13.5px;display:block;overflow-x:auto}
+th,td{border:1px solid var(--line);padding:6px 9px;text-align:left;vertical-align:top}
+th{background:var(--soft);font-weight:600}
+.meta{color:var(--muted);font-size:13px}
+.note{border-left:3px solid var(--accent);background:var(--soft);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0;max-width:900px}
+.warn{border-left:3px solid var(--warn);background:var(--warnbg);padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0;max-width:900px}
+.flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:6px;margin:12px 0 18px}
+.flow .s{flex:1 1 150px;max-width:230px;background:var(--card);border:1px solid var(--line);border-top:3px solid var(--kit);border-radius:8px;padding:8px 10px;font-size:12.5px;line-height:1.4}
+.flow .s b{display:block;font-size:13px;margin-bottom:2px}
+.flow .s.you{border-top-color:var(--you)} .flow .s.db{border-top-color:var(--db)} .flow .s.ai{border-top-color:var(--ai)}
+.flow .ar{align-self:center;color:var(--muted);font-size:16px}
+.legend{font-size:12px;color:var(--muted);margin-top:-8px}
+.legend span{display:inline-block;width:10px;height:10px;border-radius:2px;margin:0 4px 0 12px;vertical-align:middle}
+.layers{display:grid;gap:6px;margin:14px 0}
+.layers div{border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--card);font-size:13.5px}
+.layers div b{color:var(--accent)}
+.kv{display:grid;grid-template-columns:220px 1fr;gap:4px 14px;font-size:13.5px;max-width:1000px}
+.kv div:nth-child(odd){color:var(--muted)}
+@media (max-width:900px){.wrap{grid-template-columns:1fr}nav{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}main{padding:20px 16px 80px}.kv{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav>
+<div class="grp">Start</div>
+<a href="#read">How to read this</a>
+<a href="#glance">At a glance</a>
+<a href="#glossary">Glossary</a>
+<a href="#arch">Architecture</a>
+<a href="#repo">Repository map</a>
+<div class="grp">Building a persona</div>
+<a href="#install">Install flow</a>
+<a href="#vars">Install answers</a>
+<a href="#personas">Personas</a>
+<a href="#market">Marketplace and add-ons</a>
+<a href="#home">Kit home and manifest</a>
+<div class="grp">Data</div>
+<a href="#data">Datasets and loading</a>
+<a href="#sources">External sources</a>
+<a href="#maps">Column maps</a>
+<a href="#semantic">Semantic layer</a>
+<a href="#links">Link discovery</a>
+<div class="grp">Notebooks</div>
+<a href="#nbaddon">Notebook add-on</a>
+<a href="#notebooks">The four notebooks</a>
+<a href="#nbpkg">exakit.nb package</a>
+<a href="#cards">Guided cards</a>
+<a href="#sequences">Event sequences</a>
+<div class="grp">Around it</div>
+<a href="#ai">AI in the persona</a>
+<a href="#mcp">MCP, AI clients, skills</a>
+<a href="#docs">Docs site</a>
+<a href="#security">Security model</a>
+<a href="#lifecycle">Update and uninstall</a>
+<a href="#tests">Tests and CI</a>
+<a href="#measured">Measured and known limits</a>
+<a href="#trouble">Troubleshooting</a>
+<a href="#change">How to change things</a>
+<div class="grp">Appendix</div>
+<a href="#envindex">Environment variables</a>
+<a href="#exits">Exit codes</a>
+<a href="#cmds">Commands</a>
+</nav>
+<main>
+
+<h1>Persona Technical Specification</h1>
+<p class="meta">Exasol Personal Local Starter Kit · kit 0.3.0 · skills 1.24.29 · branch <code>staging-vs-preproc-persona-rc-build</code> · written against commit <code>95e32e66</code> on 13 November 2026.</p>
+<p>How a persona is built, end to end: from the install one-liner to the guided cards a Data Scientist clicks, and everything in between. Every statement names the file, function or variable it comes from, so it can be checked against the code. Where something could not be confirmed from the code, it says so.</p>
+
+<h2 id="read">How to read this</h2>
+<ul>
+<li><b>New to the kit:</b> read <a href="#glance">At a glance</a>, <a href="#glossary">Glossary</a> and <a href="#arch">Architecture</a>, then the <a href="#install">Install flow</a>.</li>
+<li><b>Answering a question:</b> use the navigation on the left; each section starts with what the part is for, then the mechanics, then where it lives.</li>
+<li><b>Changing something:</b> go to <a href="#change">How to change things</a>; it lists the files to touch and the tests that will fail if a rule is broken.</li>
+</ul>
+<p>Paths are relative to the repository root. <code>~/.exasol-starter-kit</code> is the kit home (<code>$EXAKIT_HOME</code>). In flow diagrams the top colour says who acts:</p>
+<div class="flow"><div class="s you"><b>You</b>a person, a click or an answer</div><div class="s"><b>The kit</b>scripts, Python services, add-ons</div><div class="s db"><b>The database</b>local Exasol, BucketFS, virtual schemas</div><div class="s ai"><b>An AI model</b>your provider or a local server</div></div>
+
+<h2 id="glance">At a glance</h2>
+<p>A <b>persona</b> is a named set of answers the installer already accepts: which datasets to load, which AI clients to connect, which marketplace add-ons to install, which services to start. It is a JSON file in <code>personas/</code>. Choosing one at install time (or later with <code>exakit persona add</code>) turns those answers into a ready workspace. The <b>Data Scientist</b> persona is the one with the deepest build: four add-ons, four notebooks with guided cards, a column-map workflow and a semantic layer.</p>
+<div class="flow">
+<div class="s you"><b>1 · Install</b>curl … | sh, answer the persona question (or EXAKIT_PERSONA)</div><div class="ar">→</div>
+<div class="s"><b>2 · Core</b>launcher, database, exapump, preprocessor, MCP + skills, pyexasol</div><div class="ar">→</div>
+<div class="s"><b>3 · Persona answers</b>datasets, AI clients, add-ons, services</div><div class="ar">→</div>
+<div class="s"><b>4 · Add-ons</b>dash-server, notebook, json-tables, semantic-views</div><div class="ar">→</div>
+<div class="s you"><b>5 · Notebooks</b>exakit notebook → 00_quickstart … 03_share</div><div class="ar">→</div>
+<div class="s db"><b>6 · Semantic layer</b>approved column maps → Exasol Semantic Views → AI clients over MCP</div>
+</div>
+<table>
+<tr><th>Persona</th><th>Datasets</th><th>Add-ons</th><th>Notebooks</th><th>Shown</th></tr>
+<tr><td><code>data-scientist</code></td><td>amazon_sales, fraud_transactions</td><td>dash-server, notebook, json-tables, semantic-views</td><td>00_quickstart, 01_explore, 02_ask_your_data, 03_share</td><td>picker, order 10</td></tr>
+<tr><td><code>general</code></td><td>tpch, energy, weather</td><td>none</td><td>none</td><td>picker, order 90, default</td></tr>
+<tr><td><code>ml-engineer</code></td><td>amazon_sales, fraud_transactions</td><td>notebook, udf-devkit; service mlflow; udf_language python</td><td>00_quickstart, 01_train, 02_rust_score, 03_score_external_model</td><td>hidden (visible:false), order 20</td></tr>
+</table>
+
+<h2 id="glossary">Glossary</h2>
+<table>
+<tr><th>Term</th><th>Meaning</th></tr>
+<tr><td>Kit home</td><td><code>~/.exasol-starter-kit</code> (<code>EXAKIT_HOME</code>): manifest, credentials, logs, venvs, the kit copy, descriptors, workflows.</td></tr>
+<tr><td>Kit copy</td><td><code>~/.exasol-starter-kit/kit/</code>: the parts of the repository the installed <code>exakit</code> command runs from (copied in step 7).</td></tr>
+<tr><td>Manifest</td><td><code>manifest.json</code> in the kit home: what is installed, versions, receipts, the recorded persona.</td></tr>
+<tr><td>Receipt</td><td><code>components.&lt;id&gt;</code> in the manifest: an add-on's ownership (<code>kit</code> or not), version, venv and paths.</td></tr>
+<tr><td>Add-on</td><td>An optional tool installed by the marketplace: <code>marketplace/addons/&lt;id&gt;.py</code>, listed in <code>marketplace/catalog.json</code>.</td></tr>
+<tr><td>Column map (descriptor)</td><td>A versioned YAML document saying what each column of a table means: its role, the slots, evidence, sensitivity, notes. Approved per table.</td></tr>
+<tr><td>Role</td><td>One of eight: key, time, measure, category, flag, text, identifier, other.</td></tr>
+<tr><td>Slot</td><td>One of six columns the notebooks use by name: key, time, text, target, category, entity.</td></tr>
+<tr><td>Virtual schema</td><td><code>VS_&lt;NAME&gt;</code>: tables of an external system read live through an adapter; nothing is copied.</td></tr>
+<tr><td>Semantic model</td><td>An Exasol Semantic Views model the kit builds from approved column maps: entities, relationships, dimensions, facts, metrics; published as <code>SEM_&lt;MODEL&gt;</code>.</td></tr>
+<tr><td>Guided card</td><td>An anywidget in a notebook cell (<code>exakit_guide</code>) that runs the same code the notebook cells hold.</td></tr>
+<tr><td>Action</td><td>A named cell template in <code>exakit_guide/actions.py</code>; a card button runs actions, never anything else.</td></tr>
+<tr><td>Workflow</td><td>An id <code>wf-YYYYMMDD-&lt;6hex&gt;</code> and its JSONL log in <code>workflows/</code>: every approval, query, model run and card action.</td></tr>
+<tr><td>MCP reader</td><td><code>mcp_readonly</code>: the read-only database user the AI clients query as.</td></tr>
+</table>
+
+<h2 id="arch">Architecture</h2>
+<div class="layers">
+<div><b>Entry</b> · <code>install.sh</code> / <code>install.ps1</code> → <code>setup/setup-macos.sh</code> (or <code>-linux.sh</code>, <code>-windows.ps1</code>) → <code>setup/lib/common.sh</code> + <code>persona.sh</code> + twins in <code>*.ps1</code></div>
+<div><b>Command</b> · <code>exakit</code> (<code>setup/exakit</code>, <code>setup/exakit.ps1</code>): every user-facing command; Python services under <code>setup/lib/*_service.py</code> and <code>marketplace/*.py</code></div>
+<div><b>Database</b> · Exasol Personal from the launcher (<code>exasol</code>), on 127.0.0.1:8563, TLS pinned; BucketFS; sidecar MCP server on 127.0.0.1:4896</div>
+<div><b>Add-ons</b> · <code>marketplace/addons/*.py</code> driven by <code>marketplace/service.py</code> and <code>apply.py</code>; versions pinned in <code>versions.json</code></div>
+<div><b>Data layer</b> · <code>exakit data-load</code> (exapump), <code>exakit connect</code> (virtual-schemas engine), <code>exakit describe</code> (<code>describe_service.py</code> + <code>setup/lib/descriptor/</code>)</div>
+<div><b>Notebooks</b> · notebook venv with <code>exakit_nb</code> (alias <code>exakit.nb</code>) and <code>exakit_guide</code> (alias <code>exakit.guide</code>); JupyterLab and Marimo as on-demand services</div>
+<div><b>AI</b> · AI clients over MCP (read-only); the notebook model via an OpenAI-compatible endpoint the user configures; optional Langfuse tracing</div>
+</div>
+<p>Two rules shape the whole build:</p>
+<ol>
+<li><b>One code path.</b> A guided card runs the exact cell text of its notebook (<code>actions.py</code>), and the notebook cell calls the same <code>exakit.nb</code> function the terminal command uses through the kit's service. <code>ParityTest</code> in <code>tests/test_notebook_guide.py</code> fails when a card calls something no cell calls.</li>
+<li><b>No secret in sight.</b> No host, user or password is ever in a notebook (<code>test_no_shipped_file_holds_a_connection_value</code>); passwords travel in files or on standard input, never as an argument; AI models are never shown a row.</li>
+</ol>
+
+<h2 id="repo">Repository map</h2>
+<table>
+<tr><th>Path</th><th>What it holds</th></tr>
+<tr><td><code>install.sh</code>, <code>install.ps1</code></td><td>Bootstrap: download the kit archive (<code>EXAKIT_REPO</code>@<code>EXAKIT_REF</code>), unpack to <code>$EXAKIT_HOME/kit</code>, start setup.</td></tr>
+<tr><td><code>setup/setup-*.sh|ps1</code></td><td>The step-by-step installer per platform.</td></tr>
+<tr><td><code>setup/lib/</code></td><td>Shell and PowerShell libraries (<code>common.sh</code>, <code>persona.sh</code>, <code>virtual-schemas.sh</code>, <code>describe.sh</code>, <code>mcp.sh</code>, <code>exapump.sh</code> …) and Python services (<code>persona_service.py</code>, <code>describe_service.py</code>, <code>descriptor/</code>).</td></tr>
+<tr><td><code>setup/exakit</code>, <code>setup/exakit.ps1</code></td><td>The <code>exakit</code> command.</td></tr>
+<tr><td><code>setup/help/</code></td><td><code>exakit.json</code> (every command, groups, environment) and one JSON page per component.</td></tr>
+<tr><td><code>setup/virtual-schemas/</code></td><td><code>catalog.json</code>, <code>connectors/&lt;id&gt;/connector.json</code>, <code>profiles/</code>, <code>engine/</code> (cli.py, lifecycle.py, plan.py, sql.py, tlsca.py …).</td></tr>
+<tr><td><code>personas/</code></td><td><code>data-scientist.json</code>, <code>general.json</code>, <code>ml-engineer.json</code>, <code>README.md</code>, <code>examples/</code>.</td></tr>
+<tr><td><code>marketplace/</code></td><td><code>catalog.json</code>, <code>service.py</code>, <code>apply.py</code>, <code>installer_flow.py</code>, <code>persona_apply.py</code>, <code>persona_membership.py</code>, <code>notebook_cli.py</code>, <code>docs_cli.py</code>, <code>addons/*.py</code>.</td></tr>
+<tr><td><code>data/datasets/&lt;id&gt;/</code></td><td>Bundled datasets: <code>dataset.conf</code>, SQL, CSVs or a release-asset manifest, a shipped <code>descriptor.yaml</code> for reference sets.</td></tr>
+<tr><td><code>notebook/</code></td><td><code>package/</code> (exakit_nb, exakit_guide), <code>notebooks/</code> (percent-format sources), <code>marimo/</code>, <code>kit/</code> (kernel, store, wrappers, save hook), <code>docs/</code> (the docs site), <code>catalog.json</code>.</td></tr>
+<tr><td><code>skills/</code></td><td>Agent skills (<code>&lt;name&gt;/SKILL.md</code>), <code>upstream.json</code> and lock.</td></tr>
+<tr><td><code>versions.json</code></td><td>Pinned component versions, digests, skills version.</td></tr>
+<tr><td><code>tools/</code></td><td><code>notebooks.py</code>, <code>nb_docs.py</code>, <code>addon_github.py</code>, <code>sync_upstream_skills.py</code>, <code>try_persona.sh</code>, <code>dataset_check.py</code>.</td></tr>
+<tr><td><code>tests/</code>, <code>.github/workflows/</code></td><td>Shell, PowerShell and Python suites; CI wiring.</td></tr>
+</table>
+
+<h2 id="install">Install flow</h2>
+<h3>The one-liner</h3>
+<pre><code>curl -fsSL https://www.exasol.com/install/starter-kit.sh | sh          # macOS, Linux
+irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windows</code></pre>
+<p><code>install.sh</code> takes <code>EXAKIT_REPO</code> (default <code>exasol-labs/exasol-personal-local-starterkit</code>) and <code>EXAKIT_REF</code> (default <code>main</code>), downloads <code>https://github.com/$EXAKIT_REPO/archive/refs/heads/$EXAKIT_REF.tar.gz</code> (falling back to <code>refs/tags/</code>), sends a <code>GITHUB_TOKEN</code> header through <code>curl -K -</code> on standard input for a private repository, unpacks into <code>$EXAKIT_HOME/kit</code>, and records <code>EXAKIT_KIT_SOURCE</code> (<code>REPO@REF</code>, or <code>local:&lt;path&gt;</code> with <code>EXAKIT_LOCAL_KIT</code>). <code>EXAKIT_KIT_SHA256</code> pins the archive digest.</p>
+<p><code>EXAKIT_VERSION_POLICY</code>: <code>manifest</code> (default: the tested set in <code>versions.json</code>), <code>latest</code> (resolve each component upstream), anything else = <code>pinned</code> (built-in fallbacks, no network). A single component can be pinned with <code>EXAKIT_&lt;COMPONENT&gt;_VERSION</code>.</p>
+
+<h3>Steps (setup/setup-macos.sh; Linux and Windows have the same shape)</h3>
+<div class="flow">
+<div class="s"><b>Preamble</b>validate answers (bad → exit 2), logging, manifest, exakit.env, early helper, resolve versions</div><div class="ar">→</div>
+<div class="s you"><b>Persona from env</b>exakit_persona_apply_env when EXAKIT_PERSONA is set</div><div class="ar">→</div>
+<div class="s"><b>Step 1/7</b>Exasol launcher (personal_install_launcher)</div><div class="ar">→</div>
+<div class="s db"><b>Step 2/7</b>Local database deployment (personal_deploy_local); TLS cert pinned</div><div class="ar">→</div>
+<div class="s"><b>Step 3/7</b>exapump + profile [starter-kit]</div><div class="ar">→</div>
+<div class="s db"><b>Step 4/7</b>Database features: core tasks (SQL preprocessor)</div>
+</div>
+<div class="flow">
+<div class="s"><b>Step 5/7</b>AI bridge: MCP server, mcp_readonly user, AI clients, skills</div><div class="ar">→</div>
+<div class="s"><b>Step 6/7</b>pyexasol venv</div><div class="ar">→</div>
+<div class="s you"><b>Persona question</b>exakit_persona_flow → datasets preselect, add-ons preselect, data table</div><div class="ar">→</div>
+<div class="s"><b>Step 7/7</b>exakit helper: copy kit parts to kit/</div><div class="ar">→</div>
+<div class="s you"><b>Add-ons for your personas</b>exakit_marketplace_offer (preselected, with reasons)</div><div class="ar">→</div>
+<div class="s"><b>Services + summary</b>installer_flow --phase services; connection summary; ready line</div>
+</div>
+<table>
+<tr><th>Step</th><th>Function</th><th>Writes</th></tr>
+<tr><td>Preamble</td><td><code>exakit_validate_env_answers</code>, <code>exakit_init_logging</code>, <code>manifest_init</code>, <code>exakit_env_file_install</code>, <code>exakit_install_helper_early</code>, <code>exakit_resolve_install_versions</code></td><td><code>logs/install-&lt;stamp&gt;.log</code>, <code>manifest.json</code> (os, arch, kit.source, kit.version), <code>exakit.env</code> (template copied once)</td></tr>
+<tr><td>Persona from env</td><td><code>exakit_persona_apply_env</code> (skipped when <code>exakit_core_rerun_active</code>)</td><td>exports the persona's answers for anything not set</td></tr>
+<tr><td>0</td><td><code>legacy_crossing_before</code>, <code>personal_check_requirements</code></td><td>compatibility check (OS, arch, RAM, disk)</td></tr>
+<tr><td>1/7</td><td><code>personal_install_launcher</code></td><td><code>~/.local/bin/exasol</code></td></tr>
+<tr><td>2/7</td><td><code>personal_deploy_local</code></td><td>deployment under <code>~/.exasol/personal/deployments/default</code>; <code>credentials/personal_sys_password</code>; pinned TLS fingerprint. A failure is soft-recorded as <code>runtime</code> and later steps that need a database are skipped with one message.</td></tr>
+<tr><td>3/7</td><td><code>_exakit_install_exapump</code> (in <code>kit_shared_steps 3 7</code>, <code>common.sh</code>)</td><td><code>~/.local/bin/exapump</code>, <code>exapump/config.toml</code> profile <code>[starter-kit]</code></td></tr>
+<tr><td>4/7</td><td><code>exakit_core_database_step</code> (tasks in <code>setup/core/tasks.json</code>)</td><td>SQL preprocessor framework from <code>setup/preprocessor</code>, installed, tested, activated</td></tr>
+<tr><td>5/7</td><td><code>_exakit_install_mcp</code>, <code>exakit_maybe_offer_mcp_setup</code>, <code>exakit_maybe_offer_skills_install</code></td><td>MCP sidecar, <code>credentials/mcp_readonly_password</code>, AI client configs, skills in <code>~/.claude/skills</code> and <code>~/.agents/skills</code></td></tr>
+<tr><td>6/7</td><td>pyexasol step</td><td><code>pyexasol-venv/</code></td></tr>
+<tr><td>Persona</td><td><code>exakit_persona_flow "$KIT_ROOT"</code> then <code>exakit_install_persona_skills</code></td><td>manifest <code>persona.*</code>; datasets loaded; skills with <code>persona:</code> frontmatter</td></tr>
+<tr><td>7/7</td><td><code>kit_helper_step</code></td><td><code>~/.local/bin/exakit</code>; <code>kit/</code> gets setup/lib, setup/core, setup/preprocessor, setup/virtual-schemas, setup/help, whats-new.json, load-data.sh, versions.json, mcp/, sql/, data/, skills/, marketplace/, docs/virtual-schemas</td></tr>
+<tr><td>Close</td><td><code>exakit_marketplace_offer</code>, <code>installer_flow --phase services</code>, <code>exakit_persona_marketplace_note</code>, <code>connection_summary</code>, <code>exakit_print_ready_line</code></td><td>add-on receipts; services started (e.g. mlflow for ml-engineer)</td></tr>
+</table>
+<p>Windows twin: <code>setup/setup-windows.ps1</code> with <code>Set-ExakitPersonaEnv</code>, <code>Invoke-ExakitPersonaFlow</code>, <code>Install-ExakitPersonaSkills</code>, <code>Request-ExakitMarketplaceOffer</code>, <code>Invoke-ExakitMarketplaceCli -Script installer_flow --phase services</code>, <code>Show-ExakitConnectionSummary</code>. The command shim is <code>%USERPROFILE%\.local\bin\exakit.cmd</code>. Shell stays bash 3.2 compatible and PowerShell 5.1 compatible (no ternary, no <code>??</code>, ASCII-only <code>.ps1</code>).</p>
+<div class="note">Re-running the installer is safe: it resumes. <code>exakit update</code> may re-run it once for pending core tasks; that re-run asks nothing and applies no persona (<code>exakit_core_rerun_active</code>).</div>
+
+<h2 id="vars">Install answers</h2>
+<p>Every question has a variable; an answer given in the environment is never asked (AGENTS.md has the full table). Names, not menu numbers.</p>
+<table>
+<tr><th>Variable</th><th>Values</th></tr>
+<tr><td><code>EXAKIT_PERSONA</code></td><td>comma-joined persona ids, e.g. <code>data-scientist,general</code></td></tr>
+<tr><td><code>EXAKIT_DATASETS</code></td><td>ids from <code>data/datasets/*</code> (tpch, energy, weather, amazon_sales, fraud_transactions) plus <code>external</code></td></tr>
+<tr><td><code>EXAKIT_LOAD_SAMPLE</code></td><td><code>0</code> or <code>1</code>; blocks the persona's datasets answer</td></tr>
+<tr><td><code>EXAKIT_MCP_CLIENTS</code></td><td>claude, claude_desktop, claude_code, codex, cursor, vscode_copilot (copilot), gemini_cli (gemini), opencode, continue, all (detected only), skip</td></tr>
+<tr><td><code>EXAKIT_SKIP_MCP</code></td><td><code>1</code> blocks the clients answer</td></tr>
+<tr><td><code>EXAKIT_MARKETPLACE_ADDONS</code></td><td>add-on ids, <code>all</code> or <code>none</code></td></tr>
+<tr><td><code>EXAKIT_NOTEBOOK_FRONTENDS</code></td><td>jupyterlab, marimo, positron (default jupyterlab,marimo)</td></tr>
+<tr><td><code>EXAKIT_NOTEBOOK_SCHEMA</code></td><td>the notebook connection's default schema (default <code>STARTER_KIT</code>)</td></tr>
+<tr><td><code>EXAKIT_DATA_FILE</code>, <code>EXAKIT_DATA_TABLE</code>, <code>EXAKIT_ON_EXISTING</code></td><td>a file to load, its table, <code>skip|replace|append</code></td></tr>
+<tr><td><code>EXAKIT_UDF_LANGUAGE</code>, <code>EXAKIT_UDF_ARCH</code></td><td><code>python|rust</code> (ml-engineer)</td></tr>
+<tr><td><code>EXAKIT_REUSE_DB</code>, <code>EXAKIT_REPLACE_DB</code>, <code>EXAKIT_DB_PORT</code></td><td>what to do with an existing database</td></tr>
+<tr><td><code>EXAKIT_HOME</code>, <code>EXAKIT_ENV_FILE</code>, <code>EXAKIT_BIN_DIR</code></td><td>overrides of the kit home, settings file, binary folder</td></tr>
+</table>
+<p>Internal (set by the flow, not by a user): <code>EXAKIT_PERSONA_ACTIVE</code>, <code>EXAKIT_DATASETS_PRESELECT</code>, <code>EXAKIT_MARKETPLACE_PRESELECT</code>, <code>EXAKIT_MCP_PRESELECT</code>, <code>EXAKIT_PERSONA_SOURCE</code> (install|add), <code>EXAKIT_PERSONA_RECORDED</code>, <code>EXAKIT_MARKETPLACE_REASONS</code>.</p>
+
+<h2 id="personas">Personas</h2>
+<h3>The file</h3>
+<pre><code>{
+  "schema_version": 1,
+  "id": "data-scientist",
+  "title": "Data Scientist",
+  "summary": "Explore data in notebooks, ask it questions, share dashboards.",
+  "picker": true, "visible": true, "order": 10,
+  "datasets": ["amazon_sales", "fraud_transactions"],
+  "mcp_clients": "all",
+  "addons": ["dash-server", "notebook", "json-tables", "semantic-views"],
+  "addon_reasons": {"dash-server": "...", "notebook": "...", "json-tables": "...", "semantic-views": "..."}
+}</code></pre>
+<p>Validation is <code>problems()</code> in <code>setup/lib/persona_service.py</code>:</p>
+<table>
+<tr><th>Key</th><th>Rule</th></tr>
+<tr><td>schema_version</td><td>must be 1</td></tr>
+<tr><td>id</td><td>equals the file stem; <code>^[a-z0-9][a-z0-9_-]*$</code></td></tr>
+<tr><td>title, summary, first_prompt</td><td>one line, no <code>|</code> (first_prompt optional)</td></tr>
+<tr><td>order</td><td>integer, default 100</td></tr>
+<tr><td>picker, default, visible</td><td>booleans</td></tr>
+<tr><td>datasets</td><td>list, or <code>all</code> / <code>none</code></td></tr>
+<tr><td>mcp_clients</td><td>list, or <code>all</code> / <code>skip</code></td></tr>
+<tr><td>addons</td><td>list, or <code>all</code> / <code>none</code></td></tr>
+<tr><td>notebook_tools</td><td>list, or <code>none</code></td></tr>
+<tr><td>services</td><td>subset of <code>("mlflow",)</code></td></tr>
+<tr><td>udf_language</td><td><code>python</code> or <code>rust</code></td></tr>
+<tr><td>addon_reasons</td><td>dict; each value one line, at most 90 characters, no <code>|</code>; each key must be in <code>addons</code></td></tr>
+</table>
+<p>An empty list means the "nothing" word for that key. An invalid file is skipped and named on stderr; dotfiles are ignored; a UTF-8 BOM is fine.</p>
+
+<h3>Combining several personas</h3>
+<p><code>combined()</code>: <code>all</code> wins; the nothing-word applies only when every persona says it; otherwise lists are unioned in kit order. <code>answers()</code> emits a variable only when the user left it unset (datasets → <code>EXAKIT_DATASETS</code>, mcp_clients → <code>EXAKIT_MCP_CLIENTS</code>, addons → <code>EXAKIT_MARKETPLACE_ADDONS</code>, notebook_tools, udf_language). Datasets <code>all</code> becomes the bundled ids, <code>none</code> becomes <code>EXAKIT_LOAD_SAMPLE=0</code>; <code>udf_language</code> comes from the first persona that has one; the output ends with <code>EXAKIT_PERSONA=&lt;ordered ids&gt;</code>. For <code>addon_reasons</code> the first persona with a reason wins. <code>selectable()</code> refuses a hidden persona unless it is already recorded.</p>
+
+<h3>The question and the flow</h3>
+<div class="flow">
+<div class="s you"><b>Picker</b>Textual UI (marketplace/launch.py persona) or ui_checkbox_menu fallback; recorded ids ticked first, else default ones</div><div class="ar">→</div>
+<div class="s"><b>installer_flow.plan</b>phase begin|selected|services; returns question/set/notice/warning/data lines</div><div class="ar">→</div>
+<div class="s"><b>Phase selected</b>EXAKIT_DATASETS_PRESELECT, EXAKIT_MARKETPLACE_PRESELECT; persona_membership.record; EXAKIT_PERSONA_ACTIVE=1</div><div class="ar">→</div>
+<div class="s"><b>Data</b>exakit_persona_data → exakit_maybe_offer_data_load (table preselected)</div><div class="ar">→</div>
+<div class="s"><b>Add-ons</b>"Add-ons for your personas" with reasons</div><div class="ar">→</div>
+<div class="s"><b>Services</b>phase services (e.g. mlflow)</div>
+</div>
+<p>The question is asked only when interactive and not already answered. Headless with no persona: the datasets marked <code>default=yes</code> in <code>dataset.conf</code> (tpch, energy, weather) and nothing recorded.</p>
+
+<h3>Commands</h3>
+<table>
+<tr><th>Command</th><th>What it does</th></tr>
+<tr><td><code>exakit persona list [--json]</code></td><td>every persona with whether it is recorded</td></tr>
+<tr><td><code>exakit persona show &lt;id&gt; [--json]</code></td><td>its keys, notebooks and "start here"</td></tr>
+<tr><td><code>exakit persona plan [&lt;id&gt;] [--json]</code></td><td><code>{persona, datasets{loaded,pending}, addons{installed,pending,unavailable}, nothing_pending}</code></td></tr>
+<tr><td><code>exakit persona add [&lt;id&gt;[,&lt;id&gt;]] [--yes]</code></td><td><code>marketplace/persona_apply.py apply()</code>: records the union (source <code>add</code>), Step 1/3 sample data (pending only), 2/3 AI clients, 3/3 add-ons (pending only), then notebook sync, persona skills, services. Exit 1 on a partial failure with retry commands. Bare <code>add</code> on a terminal opens a menu; without one it exits 2. <code>apply</code> is an alias.</td></tr>
+<tr><td><code>exakit persona remove &lt;id&gt;</code></td><td>changes the record only; datasets, notebooks and add-ons stay; warns about services still autostarting</td></tr>
+</table>
+<p>Manifest keys: <code>persona.id</code> (csv), <code>persona.source</code>, <code>persona.requested_at</code>, <code>persona.updated_at</code> (<code>marketplace/persona_membership.py</code>). Shell entry points live in <code>setup/lib/persona.sh</code> (<code>exakit_persona_value</code>, <code>exakit_persona_flow</code>, <code>exakit_persona_plan</code>, <code>exakit_persona_add</code> …), PowerShell twins in <code>persona.ps1</code> (<code>Get-ExakitPersonaValue</code>, <code>Invoke-ExakitPersonaFlow</code> …). <code>tools/try_persona.sh &lt;file&gt; [--ask]</code> previews a persona file.</p>
+
+<h3>Persona to notebooks</h3>
+<p><code>notebook/catalog.json</code> lists notebooks by persona; <code>persona_service.notebooks()</code> returns <code>&lt;persona&gt;/&lt;file&gt;</code>. The notebook add-on copies them into the kit home (see <a href="#nbaddon">Notebook add-on</a>). "Start here" defaults to <code>exakit notebook; open &lt;id&gt;/00_quickstart.ipynb</code>.</p>
+
+<h2 id="market">Marketplace and add-ons</h2>
+<h3>Catalog and versions</h3>
+<table>
+<tr><th>id</th><th>Repository</th><th>Pinned</th><th>Notes</th></tr>
+<tr><td>dash-server</td><td>exasol-labs/dash-server</td><td>0.2.1</td><td>Dash hosting with an MCP control plane; Data Scientist</td></tr>
+<tr><td>notebook</td><td>exasol/notebook-connector</td><td>3.1.0</td><td>choices jupyterlab, marimo, positron (hidden); frontends JupyterLab 4.6.4, Marimo 0.25.2; Data Scientist</td></tr>
+<tr><td>json-tables</td><td>exasol-labs/exasol-json-tables</td><td>v0.4.1</td><td>prebuilt ingest engine, no Rust needed; Data Scientist</td></tr>
+<tr><td>semantic-views</td><td>exasol-labs/exasol-semantic-views</td><td>v0.6.1</td><td>archive SHA-256 pinned; Data Scientist</td></tr>
+<tr><td>dbt-exasol</td><td>exasol/dbt-exasol</td><td>1.12.3</td><td></td></tr>
+<tr><td>exasol-scheduler</td><td>exasol-labs</td><td>0.4.1</td><td></td></tr>
+<tr><td>exasol-vscode</td><td>exasol-labs</td><td>1.9.1</td><td>offered only when VS Code is present</td></tr>
+<tr><td>udf-devkit</td><td>exasol/script-languages-release</td><td>0.1.0</td><td>hidden; ML Engineer</td></tr>
+</table>
+<p><code>marketplace/catalog.json</code> rows: <code>id</code>, <code>github{repo,url,name,about}</code>, <code>backend: "python"</code>, <code>visible</code>, <code>default_version</code> (offline fallback), optional <code>choices</code>, <code>kit_about</code>. The add-on's name, link and description come from GitHub, cached (<code>tools/addon_github.py</code>), never typed into the repo. <code>versions.json</code> components carry <code>version</code>, <code>severity</code> (normal|recommended|critical), and optionally <code>repo</code>, <code>package</code>, <code>release</code>, <code>asset</code>, <code>sha256</code>, <code>min_kit_version</code>, <code>frontends</code>.</p>
+
+<h3>Lifecycle</h3>
+<p>Each add-on is one Python module <code>marketplace/addons/&lt;id&gt;.py</code> (there are no per-add-on shell scripts any more). <code>marketplace/service.py invoke()</code> accepts the operations install, installed-version, system-present, applicable, applicable-reason, validate, update, uninstall, summary, status, start, stop, url, log-path, autostart-command, autostart-kind, latest, tool-outcomes. It refuses a hidden add-on and any receipt whose ownership is not <code>kit</code>.</p>
+<div class="flow">
+<div class="s you"><b>Selection</b>model.parse_ids; disabled add-on refused; validate_selection</div><div class="ar">→</div>
+<div class="s"><b>_apply_one</b>skip if the kit already installed it (unless EXAKIT_FORCE_COMPONENT_INSTALL=1), else install</div><div class="ar">→</div>
+<div class="s"><b>_after_install</b>validate → install_addon_skills → register_autostart → start</div><div class="ar">→</div>
+<div class="s"><b>Receipt</b>components.&lt;id&gt; in the manifest</div>
+</div>
+<p>Skills arrive with add-ons: <code>integration.install_addon_skills</code> places every <code>skills/*/SKILL.md</code> whose <code>addon:</code> frontmatter matches (semantic-views brings exasol-semantic-analyst, -modeler, -reviewer; dash-server brings dash-server and exasol-dash). A user's own skill of the same name is never replaced.</p>
+
+<h3>The Data Scientist's add-ons</h3>
+<h4>semantic-views (<code>marketplace/addons/semantic_views.py</code>)</h4>
+<p>Downloads the pinned archive, refuses a digest mismatch, unpacks under <code>semantic-views/&lt;version&gt;</code>, runs the release's <code>tools/install.py --skip-package</code> with the kit's pyexasol as the admin user over the TLS pin (password in the environment only, redacted; timeout 900 s). Creates SYS_SEMANTIC, SEMANTIC_CATALOG, SEMANTIC_ADMIN, SEMANTIC_AGENT, SEMANTIC_SOURCE and role SEMANTIC_USER. Update re-runs the installer and keeps models; uninstall refuses while any model exists.</p>
+<h4>json-tables (<code>marketplace/addons/json_tables.py</code>)</h4>
+<p>A wheel in <code>json-tables-venv</code> plus a prebuilt ingest engine (macOS arm64, Linux x86_64/aarch64, Windows x86_64; Intel Mac and Windows ARM refused). A kit-local <code>cargo</code> shim intercepts only <code>cargo run ... json_tables_ingest</code>. Launcher <code>exasol-json-tables</code>.</p>
+<h4>notebook</h4><p>See <a href="#nbaddon">Notebook add-on</a>.</p>
+<h4>dash-server</h4><p>Runs on port 5100; the Share step publishes a dashboard there, querying as the read-only user.</p>
+
+<h2 id="home">Kit home and manifest</h2>
+<table>
+<tr><th>Path under ~/.exasol-starter-kit</th><th>Content</th></tr>
+<tr><td>manifest.json (+ .lock)</td><td>installed components, receipts, runtime (dsn, user, password_file, deployment_dir), persona record</td></tr>
+<tr><td>exakit.env</td><td>the user's settings file (model, effort, docs port …), copied once</td></tr>
+<tr><td>credentials/</td><td>personal_sys_password, mcp_readonly_password, notebook_store_master_password, notebook_jupyter_token, notebook_marimo_token, notebook_model_* (remembered model settings), all 0600</td></tr>
+<tr><td>logs/</td><td>install-*.log, virtual-schemas-YYYYMMDD.log (14 days), notebook.log, notebook-marimo.log, guide.log, json-tables.log, dash-server.log</td></tr>
+<tr><td>kit/</td><td>the kit copy the command runs from</td></tr>
+<tr><td>pyexasol-venv/, notebook-venv/, json-tables-venv/, dash-server-venv/</td><td>Python environments</td></tr>
+<tr><td>notebook/</td><td>connection.scs, jupyter.pid, marimo.pid, jupyter_server_config.json, open-*.html</td></tr>
+<tr><td>notebooks/</td><td>starter-kit-notebooks/&lt;persona&gt;/ and marimo/&lt;persona&gt;/ (kept on uninstall)</td></tr>
+<tr><td>descriptors/</td><td>column maps per table and schema maps per schema</td></tr>
+<tr><td>semantic/</td><td>&lt;model&gt;.json: the spec and inputs of every model the kit built</td></tr>
+<tr><td>workflows/</td><td>&lt;id&gt;.jsonl logs; last-workflow</td></tr>
+<tr><td>cache/</td><td>datasets, adapters and drivers, containers (SHA-256 checked)</td></tr>
+<tr><td>bundles/</td><td>hand-off bundles per workflow</td></tr>
+</table>
+
+<h2 id="data">Datasets and loading</h2>
+<table>
+<tr><th>id</th><th>Schema</th><th>Tables</th><th>Default</th></tr>
+<tr><td>tpch</td><td>TPCH</td><td>REGION 5, NATION 25, CUSTOMER 3,000, SUPPLIER 200, PART 4,000, PARTSUPP 16,000, ORDERS 30,000, LINEITEM ~120k (SF 0.02)</td><td>yes</td></tr>
+<tr><td>energy</td><td>ENERGY</td><td>ENERGY_METERS, ENERGY_READINGS (108,000 generated in SQL)</td><td>yes</td></tr>
+<tr><td>weather</td><td>WEATHER</td><td>WEATHER_CITIES, WEATHER_DAILY (~11k)</td><td>yes</td></tr>
+<tr><td>amazon_sales</td><td>AMAZON</td><td>ORDER_LINES 128,975 (release asset, shipped descriptor)</td><td>no (Data Scientist)</td></tr>
+<tr><td>fraud_transactions</td><td>FRAUD</td><td>TRANSACTIONS 51,000 (release asset, shipped descriptor)</td><td>no (Data Scientist)</td></tr>
+</table>
+<p>A dataset folder holds <code>dataset.conf</code>, <code>01_create_schema.sql</code>, data, an optional <code>02_load_data.sql</code> and <code>03_verify_setup.sql</code> (a FAIL row blocks "loaded"). "Loaded" is checked against the <code>markers=</code> tables. Reference CSVs come from the kit copy (SHA-256 checked), then <code>cache/datasets/&lt;id&gt;/&lt;sha256&gt;/</code>, then the release asset (<code>EXAKIT_DATASETS_MIRROR</code>, <code>EXAKIT_DATASETS_REPO</code>).</p>
+<h3>exakit data-load</h3>
+<p><code>cmd_data_load()</code> in <code>setup/exakit</code>, engine <code>setup/lib/exapump.sh</code> (<code>exapump upload &lt;file&gt; --table &lt;schema.table&gt;</code>).</p>
+<ul>
+<li>A file loads into <code>${EXAKIT_SCHEMA:-STARTER_KIT}.&lt;TABLE&gt;</code>; the table name is the upper-cased file name (<code>exakit_table_name_from_path</code>), or <code>EXAKIT_DATA_TABLE</code>. A folder loads one table per file.</li>
+<li>Kinds: csv (.csv; .tsv/.txt refused by name), parquet (.parquet/.pq), json (.json/.geojson/.ndjson/.jsonl); compressed (.gz/.bz2/.zst/.xz) resolve to the inner kind. <code>exakit_csv_inspect</code> finds the delimiter and flags BOM and CRLF.</li>
+<li>JSON goes through the json-tables add-on: normalised to NDJSON, shredded to Parquet, loaded the same way.</li>
+<li>Excel is handled by the notebook path only: <code>exakit_nb/spreadsheet.py</code> writes one sheet to CSV beside the file, converts Excel day numbers, and writes a UTF-8 copy of a non-UTF-8 CSV.</li>
+</ul>
+
+<h2 id="sources">External sources (virtual schemas)</h2>
+<p>A source is read live: nothing is copied. Each is one virtual schema <code>VS_&lt;NAME&gt;</code> with a CONNECTION <code>EXAKIT_SRC_&lt;NAME&gt;</code> holding the credential inside the database.</p>
+<table>
+<tr><th>Connector</th><th>Profile</th></tr>
+<tr><td>postgresql, mysql, sqlserver, oracle, snowflake, bigquery</td><td>java-jdbc</td></tr>
+<tr><td>s3, azure-blob</td><td>java-document-files</td></tr>
+<tr><td>databricks</td><td>lua-jdbc</td></tr>
+<tr><td>lakehouse (Iceberg REST, Unity, Glue, Parquet folder × vended/S3/Azure), mongodb</td><td>rust-native</td></tr>
+</table>
+<p><code>connectors/&lt;id&gt;/connector.json</code> holds the adapter and driver pins (url, size, sha256, license), the loader (<code>etl</code>), the inputs (name, label, kind, required, default, choices), the paste forms, the URL template, TLS templates (<code>tls</code> verify/require/disable, <code>tls_ca</code> for PostgreSQL and Oracle, <code>tls_truststore</code> for MySQL, <code>tls_class</code> for SQL Server), <code>access</code> (grants the reader needs), <code>vs_properties</code>, <code>schema_check</code>, tips. The lakehouse has <code>settings</code> (catalog, files, login) and variants. Nothing in the notebook names a source: the card reads all of this through <code>nb.connectors()</code> and <code>nb.connector_inputs()</code>.</p>
+<h3>Connect sequence (engine/lifecycle.py Engine.connect)</h3>
+<div class="flow">
+<div class="s"><b>Check</b>gate, name conflict, credential, optional EDML draft, clock</div><div class="ar">→</div>
+<div class="s db"><b>Language</b>Java container (installed with one restart, asked), or Rust</div><div class="ar">→</div>
+<div class="s db"><b>Route</b>EXAKIT_DNS_PROBE_V2: resolves and answers from inside the database</div><div class="ar">→</div>
+<div class="s"><b>CA</b>choose_ca: one signing certificate from a bundle (verified handshake), or the whole bundle for truststore/class connectors</div><div class="ar">→</div>
+<div class="s db"><b>Stage</b>verified adapter + driver jars to BucketFS; loader driver + settings.cfg</div>
+</div>
+<div class="flow">
+<div class="s db"><b>CONNECTION</b>CREATE CONNECTION EXAKIT_SRC_&lt;NAME&gt;</div><div class="ar">→</div>
+<div class="s db"><b>Scope</b>IMPORT FROM JDBC … schema_check: ok / denied / case</div><div class="ar">→</div>
+<div class="s db"><b>Schema</b>adapter script, CREATE VIRTUAL SCHEMA VS_&lt;NAME&gt;</div><div class="ar">→</div>
+<div class="s db"><b>Verify</b>bounded read: SELECT * … LIMIT 1 on the first table</div>
+</div>
+<p>Undo is journaled: a failure removes only what this attempt created. Secrets reach the engine only on standard input (<code>--secret-stdin</code>, <code>--secret-stdin-base64</code>, <code>--secret-pair-base64</code>); the shell takes <code>--password-stdin</code>, <code>--password-file</code> or a hidden prompt, and refuses a secret as an argument. Every statement goes to <code>logs/virtual-schemas-YYYYMMDD.log</code>, redacted.</p>
+<h3>Errors</h3>
+<p><code>engine/sql.py classify()</code> masks connection strings first, then sorts a failure into a kind: nojava, auth, catalog, clock, denied, dns, missing_or_denied, nobucket, privilege, region, sandbox, schema_missing, tls, unreachable, external, managed, error. <code>cut_in_string()</code> recognises a database message cut before its reason: with a CA certificate inside the PostgreSQL URL (about 2,000 characters) the database message is cut, and the kit says to connect once with <code>tls=require</code> to read it.</p>
+<div class="warn">Measured: putting the PostgreSQL CA into a file the URL names (<code>sslfactoryarg=file:</code>) fails on Exasol Personal ("SingleCertValidatingFactory could not be instantiated"); the certificate stays inside the URL. Recorded in <code>engine/tlsca.py</code>.</div>
+<h3>Commands</h3>
+<p><code>exakit connect &lt;connector&gt; --name N --set K=V … [--url …] [--password-file F|--password-stdin] [--storage-secret-file F] [--dry-run] [--yes] [--json]</code> and <code>exakit source list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove</code>. In a notebook: <code>nb.connect_source</code>, <code>nb.test_source</code>, <code>nb.read_connection_string</code>, <code>nb.load_source</code>.</p>
+
+<h2 id="maps">Column maps</h2>
+<p>A column map says what each column means, so every later step can use the data without guessing. The kit drafts it from measurements; a person approves it; the approval is versioned and published to the semantic layer.</p>
+<h3>Roles and sensitivity</h3>
+<table>
+<tr><th>Role</th><th>Meaning</th></tr>
+<tr><td>key</td><td>different in every row</td></tr><tr><td>time</td><td>a date or time</td></tr><tr><td>measure</td><td>an amount to add up or average</td></tr>
+<tr><td>category</td><td>a short list of repeated values to group by</td></tr><tr><td>flag</td><td>exactly two values; can be the target</td></tr>
+<tr><td>text</td><td>sentences people wrote</td></tr><tr><td>identifier</td><td>a name or code pointing at one thing</td></tr><tr><td>other</td><td>left out</td></tr>
+</table>
+<p><code>descriptor/roles.py classify()</code> decides sensitivity first, then rules in order (first match wins). Thresholds: SENSITIVE_SHARE 0.90, DATE_SHARE 0.98, TEXT_AVG_LENGTH 40, CATEGORY_DISTINCT 50, CATEGORY_RATIO 0.02, IDENTIFIER_RATIO 0.9, NEAR 0.10. Confidence is high or low (low within 10% of a threshold, or decided by name only). A column is <b>sensitive</b> when ≥90% of values are email, phone, IBAN or postcode, or its name says postcode/ZIP, a person's name, or an address: it becomes an identifier, its profile keeps counts only, and it is never charted or sent to a model.</p>
+<h3>Profiling (descriptor/profile.py)</h3>
+<p>Shape from <code>EXA_ALL_COLUMNS</code> (<code>schema_digest</code> = SHA-256 of NAME:TYPE lines). A virtual table is read as its first 10,000 rows. Batches of 40 columns: COUNT, APPROXIMATE_COUNT_DISTINCT, MIN/MAX, AVG(LENGTH) and REGEXP_LIKE pattern counts (iso, dotted, slash, email, phone, iban, postcode, code, number, words, nodigit, postal); then top values for low-cardinality non-sensitive columns, exact distinct counts near the row count, and date ranges. Over 30 s is flagged slow.</p>
+<h3>Draft and slots (descriptor/draft.py)</h3>
+<p>Slots: key (a key-role column, identifier-named first), time (fewest nulls), text (named as text, then longest), <b>target (never drafted: the person's question)</b>, category (a 2–20 value string, grouping names first), entity (more than 20 distinct, at most one per two rows). <code>slot_evidence</code> says why a slot is empty. Document: <code>{descriptor, dataset, source{kind, object, schema_digest, profiled_rows}, version, status, grain, slots, slot_evidence, columns{role, confidence, evidence, sensitive, note}}</code>.</p>
+<h3>Approval (descriptor/flow.py approve, review.py)</h3>
+<ol>
+<li>Rules: key slot needs role key, time needs time, text needs text; no sensitive column in target, category, entity or text; every live column has a role.</li>
+<li>The live <code>schema_digest</code> must match.</li>
+<li>Data review: refused when the key has nulls or duplicates or the target is not exactly two values; a leakage warning for a column whose values give the target away (≥99% one way, covering ≥95% of rows); low-confidence roles nobody changed are warned. A virtual source skips the data checks.</li>
+<li>Writes <code>v&lt;n+1&gt;.yaml</code> (exclusive create), status approved, owner, approved_at; replaces <code>current.yaml</code> atomically.</li>
+<li>Publishes to the semantic layer (a failed publish leaves "approved, not published" with the retry command).</li>
+<li>Writes a <code>describe.approve</code> workflow line.</li>
+</ol>
+<p>Approving what the current version already says writes nothing. Store: <code>descriptors/&lt;SCHEMA&gt;.&lt;TABLE&gt;/{v&lt;n&gt;.yaml, current.yaml, draft.yaml, profile.json}</code>; schema maps in <code>descriptors/&lt;SCHEMA&gt;/</code>. Notes (<code>note</code>) are a column's description; <code>role_review.approve(..., notes={COLUMN: text})</code> saves them, at most 300 characters each.</p>
+<h3>Commands</h3>
+<p><code>exakit describe T [--approve|--show|--versions|--comments]</code>, <code>--schema S [--approve --link/--unlink]</code>, <code>--model N --table …|--schemas A,B [--find-links --ai --dry-run --description]</code>, <code>--model N --refresh</code>, <code>--links A,B,C [--ai] [--link S.T.C=S.T.K]</code>, <code>--models</code>. The wrapper runs the notebook venv Python with <code>EXAKIT_PYX_DSN</code> (TLS-pinned), <code>EXAKIT_PYX_USER</code>, <code>EXAKIT_PYX_PWFILE</code> (a file, never the password) and <code>EXAKIT_MCP_READER</code>.</p>
+
+<h2 id="semantic">Semantic layer</h2>
+<p>Exasol Semantic Views is the database's own semantic layer. The kit builds models from approved column maps so AI clients and notebooks query business names (<code>total_amount</code>, <code>order_date_month</code>) instead of guessing at columns.</p>
+<div class="flow">
+<div class="s you"><b>Approve</b>a column map (or publish from the Semantic views card)</div><div class="ar">→</div>
+<div class="s"><b>ensure_installed</b>SEMANTIC_CATALOG.PRODUCT_VERSION; else exakit marketplace semantic-views</div><div class="ar">→</div>
+<div class="s"><b>build()</b>entities, keys, relationships, dimensions, facts, metrics, views</div><div class="ar">→</div>
+<div class="s db"><b>apply()</b>DROP_MODEL_IF_EXISTS, statements, PUBLISH_MODEL; restore on failure</div><div class="ar">→</div>
+<div class="s db"><b>Grant</b>SEMANTIC_USER and SELECT ON SEM_&lt;MODEL&gt; to the MCP reader</div><div class="ar">→</div>
+<div class="s ai"><b>Query</b>AI clients over MCP; notebooks with nb.semantic_sql</div>
+</div>
+<h3>Build rules (descriptor/semantic_model.py)</h3>
+<ul>
+<li>Each table → an entity (aliases t1…; name is the table, or SCHEMA_TABLE on a clash). Names via <code>identifier()</code>: lower snake case, never an SQL keyword, at most 100 characters.</li>
+<li>The key → a PRIMARY unique key. A link target that is not the key gets a <code>&lt;entity&gt;_&lt;col&gt;_uk</code> UNIQUE key (Semantic Views requires a unique key on the "one" side).</li>
+<li>A link → a MANY_TO_ONE LEFT relationship <code>&lt;a&gt;_to_&lt;b&gt;</code> with its key mapping.</li>
+<li>time, category, flag (not sensitive) → dimensions; a DATE/TIMESTAMP also gives <code>&lt;col&gt;_month</code>.</li>
+<li>measure → fact (non-numeric cast to DOUBLE; sensitive → PRIVATE).</li>
+<li>Every entity gets a private row fact <code>&lt;entity&gt;_row</code> = 1 and the metric <code>&lt;root&gt;_count</code> = SUM(row) (COUNT(*) is not allowed). Each public fact gives <code>total_&lt;fact&gt;</code> (SUM) and <code>average_&lt;fact&gt;</code> (total / NULLIF(count,0)).</li>
+<li>One semantic view per root: tables with measures first, then uncovered tables; dimensions from entities reachable along exactly one many-to-one path (depth 3).</li>
+<li>The description ends with <code>[built by exakit]</code>; a model of the same name without it is never touched. Published as <code>SEM_&lt;MODEL&gt;</code>; a schema's own model is named after the schema.</li>
+</ul>
+<p>Statements: <code>EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL / ADD_ENTITY / ADD_UNIQUE_KEY_WITH_COLUMNS / ADD_RELATIONSHIP / ADD_RELATIONSHIP_KEY_MAPPING / ADD_CUSTOM_EXTENSION / ADD_SEMANTIC_OBJECT / APPLY_SEMANTIC_DEFINITION_OR_FAIL / PUBLISH_MODEL</code>.</p>
+<h3>What is stored with a model</h3>
+<ul>
+<li>Each link's evidence and a person's note: <code>ADD_CUSTOM_EXTENSION(model, 'RELATIONSHIP', rel, 'exakit', &lt;json&gt;, 'EXAKIT', 'link_evidence')</code>; keys proposed_by, found, checked, share, key_evidence, from_live, to_live, evidence_text, rows, confidence, note. Read back from <code>SEMANTIC_CATALOG.CUSTOM_EXTENSIONS</code>.</li>
+<li>The model's sources: a <code>sources</code> extension (each table, and whether it is read live).</li>
+<li>What a table is (<code>table_notes</code>): the entity's description, plus "(an external source, read live)"; also kept in <code>semantic/&lt;model&gt;.json</code> inputs so a refresh keeps it.</li>
+<li>Column notes: each field's comment.</li>
+</ul>
+<h3>AI proposals</h3>
+<p><code>describe_service.semantic_ai()</code> (needs <code>EXAKIT_MODEL_ID</code> and <code>EXAKIT_PROVIDER_BASE_URL</code>) sends one call with names, types, grains, notes and a category's top values only, never a row or a sensitive column. <code>sm.ai_accept()</code> keeps labels (display, comment, synonyms) and at most 8 metrics, each checked: ADDITIVE must be SUM of a public fact of that view; DERIVED/RATIO arithmetic over that view's metrics; a filter only on a known dimension value; type DOUBLE or DECIMAL. A refused metric is named with its reason; Semantic Views validates it again when applied.</p>
+<h3>Refresh</h3>
+<p>Every approval rebuilds the schema's model (<code>publish_schema</code>) and every multi-source model that lists the table (<code>refresh_including</code>). <code>exakit describe --model N --refresh</code> / <code>nb.refresh_semantic</code> rebuilds one from its kept inputs.</p>
+
+<h2 id="links">Link discovery</h2>
+<p>Tables from different sources rarely declare how they join, and the same thing is often named differently. <code>descriptor/links.py find()</code> finds links from the values, with bounded statements only, and never joins two sources while searching.</p>
+<ol>
+<li>Read the columns and declared keys; merge approved keys.</li>
+<li>One aggregate per table. Text longer than 200 characters is prose and excluded. A key is "measured" when every value is present and the approximate distinct count is ≥0.9 × rows (rows ≥ 20).</li>
+<li>Candidates (<code>fits</code>): same kind; never a measure, flag, time or text role; a number must sit inside the key's range, span ≥50% of it, and be backed by name similarity ≥0.5, an approved key/identifier role, or a proposal.</li>
+<li>Score by name similarity; AI or user proposals first. At most 400 pairs (<code>MAX_CHECKS</code>).</li>
+<li>Sample 500 distinct values and count how many are in the key.</li>
+<li>Text with ≥50% found is counted by rows: ≤0.1% unmatched rows → <b>high</b>, else <b>partial</b> (never joined). Numbers with ≥90% found → <b>low</b>: a sequence matches by chance, so only a person's tick uses it.</li>
+<li>One link per column; a measured key is confirmed unique exactly.</li>
+</ol>
+<p><code>only=[tables]</code> limits the search to a selection; with <code>same_schema=True</code> two tables of one schema are compared too (the card does this). <code>check=["A=B"]</code> tests a pair someone has in mind and returns it with its evidence or under <code>rejected</code>.</p>
+
+<h2 id="nbaddon">Notebook add-on</h2>
+<p>Pure Python: <code>marketplace/addons/notebook.py</code> (install, update, uninstall, store, kernel) and <code>marketplace/notebook_cli.py</code> (<code>exakit notebook</code>).</p>
+<table>
+<tr><th>Part</th><th>Detail</th></tr>
+<tr><td>venv</td><td><code>notebook-venv</code> (<code>EXAKIT_NOTEBOOK_VENV</code>) via uv: exasol-notebook-connector with extras, scikit-learn (pinned to the UDF container), ipykernel, langfuse 5, openai, mlflow-skinny, pandas, pyarrow, numpy, scipy, jupyterlab 4.6.4, marimo 0.25.2, and the local packages <code>notebook/package</code> (exakit-nb) and <code>packages/exasol-mlflow</code>. Not on Linux ARM or Intel Mac.</td></tr>
+<tr><td>Kernel</td><td><code>exasol-starter-kit</code>, "Exasol (Starter Kit)": env holds paths only (<code>EXAKIT_NB_STORE</code>, <code>EXAKIT_NB_MASTER_FILE</code>, <code>EXAKIT_NB_KIT</code>, <code>EXAKIT_NB_DATASETS</code>) and telemetry off.</td></tr>
+<tr><td>Connection store</td><td><code>notebook/connection.scs</code>, the connector's encrypted store; master password in <code>credentials/notebook_store_master_password</code>; schema <code>EXAKIT_NOTEBOOK_SCHEMA</code>. An unreadable store is moved aside and rewritten.</td></tr>
+<tr><td>JupyterLab</td><td>port 8888 (<code>EXAKIT_NOTEBOOK_PORT</code>, next free up to 20), 127.0.0.1, token file, <code>jupyter_server_config.json</code> with <code>pre_save_hook: exakit_save_hook.strip_guided</code></td></tr>
+<tr><td>Marimo</td><td>port 2718 (<code>EXAKIT_MARIMO_PORT</code>), <code>marimo edit &lt;notebooks&gt;/marimo --headless</code>, token password file</td></tr>
+<tr><td>Browser login</td><td><code>open-jupyter.html</code> / <code>open-marimo.html</code> (0600) redirect with the token, so it never appears on a command line</td></tr>
+<tr><td>Repairs before opening</td><td>import check (offer reinstall), database down (offer start), store rewrite, helpers re-sync when their digest changed, kernel re-registration, notebook copy</td></tr>
+<tr><td>Save hook</td><td><code>notebook/kit/exakit_save_hook.py strip_guided</code>: drops a guided cell's output and widget outputs when saving, so a reopened notebook never shows "model not found"</td></tr>
+<tr><td>Notebook copy</td><td><code>notebooks/starter-kit-notebooks/&lt;persona&gt;/</code> and <code>notebooks/marimo/&lt;persona&gt;/</code>; <code>.kit-copied</code> records digests: an unedited notebook is refreshed, an edited one kept</td></tr>
+</table>
+<p>Commands: <code>exakit notebook [jupyterlab|marimo|positron|check|setup|stop] [--no-browser] [--port]</code>.</p>
+
+<h2 id="notebooks">The four Data Scientist notebooks</h2>
+<p>Sources are jupytext percent-format <code>.py</code> in <code>notebook/notebooks/data-scientist/</code>; <code>tools/notebooks.py</code> builds the <code>.ipynb</code> beside them and, with <code>--marimo</code>, the Marimo versions (<code>marimo convert</code>). <code>--check</code> fails when a built file is stale. <code># %% [include] ../00_shared/data_paths.py &lt;tag&gt;</code> inlines the shared cells tagged connect, load, review. Every notebook opens with a guided cell (tag <code>exakit-guide</code>) and keeps its full code after the <code>exakit-code-start</code> marker.</p>
+<table>
+<tr><th>Notebook</th><th>Guided cell</th><th>Covers</th><th>Main cells and variables</th></tr>
+<tr><td>00_quickstart</td><td><code>guide.start()</code></td><td>Set up, get the data, understand it</td><td>kit state; model cell (PROVIDER, MODEL_ID, EFFORT, LANGFUSE_BASE_URL); <code>nb.workflow("data-scientist-quickstart")</code>; connect; load (SAMPLE, MY_DATA, CONNECTOR, SOURCE_URL, SOURCE); review (<code>role_review</code>, AI_CHECK, AI_APPROVE, ROLE_CHANGES, SLOT_CHANGES); semantic (SEMANTIC_NAME, SEMANTIC_TABLES, SEMANTIC_LINKS, SEMANTIC_TABLE_NOTES, PUBLISH_SEMANTIC); a first group query</td></tr>
+<tr><td>01_explore</td><td><code>guide.explore()</code></td><td>Prepare, explore, model, validate</td><td><code>nb.continue_workflow("explore")</code>; data_checks, describe_schema/joined_view, typed_view; note_groups, note_trend; leakage_check; a one-hot logistic model, ROC AUC on a held-out quarter; model lab and feature ideas; optional AI themes</td></tr>
+<tr><td>02_ask_your_data</td><td><code>guide.ask()</code></td><td>Questions in plain language</td><td>QUESTION; rules or model draft; EDITED_SQL; APPROVE_SQL → proposal.approve().run()</td></tr>
+<tr><td>03_share</td><td><code>guide.share()</code></td><td>Dashboard and hand-off</td><td><code>nb.share(...)</code> on Dash Server (preview first, then publish); <code>nb.handoff_bundle</code></td></tr>
+</table>
+
+<h2 id="nbpkg">The exakit.nb package</h2>
+<p><code>notebook/package/exakit_nb</code>, imported as <code>exakit.nb</code> (<code>exakit/nb/__init__.py</code> replaces itself with <code>exakit_nb</code>).</p>
+<table>
+<tr><th>Module</th><th>Purpose</th><th>Main names</th></tr>
+<tr><td>__init__</td><td>connect, SQL, tracing, model client</td><td>connect, sql, show_sql, tracing, trace, model_client, model_settings</td></tr>
+<tr><td>_kit</td><td>kit paths, telemetry off, TLS pin, remembered values</td><td>setting, pinned_dsn, remember/recall</td></tr>
+<tr><td>quickstart</td><td>shared quickstart steps</td><td>check_connection, list_schemas, load_sample, load_source, first, show_roles</td></tr>
+<tr><td>own_file, spreadsheet</td><td>a file or folder to a table; Excel to CSV</td><td>load_own_file, use_table, save_descriptor</td></tr>
+<tr><td>sources, kit_facts</td><td>external sources; live kit facts</td><td>connect_source, test_source, read_connection_string, source_engine, connectors, connector_inputs, sample_datasets, personas, persona_plan</td></tr>
+<tr><td>data_map</td><td>one map of samples, files and sources</td><td>data_map, DataMap</td></tr>
+<tr><td>describe, role_picker, role_check</td><td>draft, review and approve a column map; the AI fill</td><td>describe, review_roles, RoleReview, fill_column_map, check_roles</td></tr>
+<tr><td>descriptor_store, descriptor_rules, dataset</td><td>the store; rules (byte-identical twin of the kit's); a dataset with roles as SQL names</td><td>approved_datasets, column_map_versions, dataset, chosen_dataset</td></tr>
+<tr><td>semantic</td><td>Semantic Views models</td><td>semantic_model, find_links, model_notes, semantic_models, refresh_semantic, semantic_sql</td></tr>
+<tr><td>data_checks, prepare, schema_map</td><td>checks, leakage; typed cleaned view in EXAKIT_PREPARED; joined view</td><td>data_checks, leakage_check, typed_view, describe_schema</td></tr>
+<tr><td>readout, sql_words</td><td>plain-language notes; result names that avoid the 467 reserved words</td><td>name, count_name, note_groups, note_trend, note_model</td></tr>
+<tr><td>lab, themes</td><td>model lab; AI text themes</td><td>model_lab, lab_data, feature_ideas, try_feature, themes</td></tr>
+<tr><td>ask, question_rules</td><td>question → proposed SQL → approval → read-only run</td><td>ask, Proposal, draft_question, example_questions</td></tr>
+<tr><td>share, handoff_bundle, dash_mcp</td><td>governed dashboard; hand-off bundle</td><td>share, handoff_bundle, dash_tools</td></tr>
+<tr><td>model_config, providers, setup_env</td><td>model endpoint, providers, remembered settings</td><td>use_model, forget_model, model_setup, model_providers, provider_models, effort_levels</td></tr>
+<tr><td>workflow</td><td>workflow ids and the JSONL log</td><td>workflow, continue_workflow, log_event, workflow_log, list_workflows</td></tr>
+<tr><td>picklist</td><td>the kit's dropdown for JupyterLab and Marimo code paths</td><td>PickList</td></tr>
+<tr><td>docs</td><td>the docs server</td><td>docs</td></tr>
+</table>
+<h3>Connection, model, tracing, log</h3>
+<ul>
+<li><b>nb.connect()</b> reads <code>EXAKIT_NB_STORE</code> and <code>EXAKIT_NB_MASTER_FILE</code>, opens the encrypted store, and connects with the pinned TLS fingerprint. No host, user or password in a notebook.</li>
+<li><b>Model</b>: <code>EXAKIT_MODEL_ID</code>, <code>EXAKIT_PROVIDER_BASE_URL</code>, <code>EXAKIT_PROVIDER_API_KEY</code>, <code>EXAKIT_PROVIDER_HEADERS</code>, <code>EXAKIT_MODEL_TEMPERATURE</code>, <code>EXAKIT_MODEL_EFFORT</code> (sent as <code>reasoning_effort</code> only where the provider documents it). Plain http only to a local host. <code>use_model(..., remember=True)</code> saves 0600 files in <code>credentials/</code>, loaded on import.</li>
+<li><b>Langfuse</b>: <code>LANGFUSE_PUBLIC_KEY</code>, <code>LANGFUSE_SECRET_KEY</code>, <code>LANGFUSE_BASE_URL</code>; refused over plain http to a non-local host.</li>
+<li><b>Workflow log</b>: <code>workflows/&lt;id&gt;.jsonl</code> (0600, one append per line); kinds start, describe.draft, describe.approve, sql, trace, mlflow.run, handoff, dashboard.revision, model.put, ask.approve, ask.answer, step, model, guide_action. A key that looks like a secret is refused; credential-like SQL is stored redacted. <code>exakit workflow list|show</code>.</li>
+</ul>
+
+<h2 id="cards">Guided cards</h2>
+<p><code>notebook/package/exakit_guide</code> (<code>exakit.guide</code>). A card is a Python <code>Screen</code> that sends a list of blocks to a JavaScript renderer; a click comes back as an event that calls <code>on_&lt;id&gt;</code>, which runs actions.</p>
+<h3>Protocol</h3>
+<pre><code>Python → JS   widget.blocks = [{t: "head", ...}, {t: "choice", ...}, ...]
+              {type: "progress", id, label, pct, lines}      while a handler runs
+              {type: "done", id}                              when it ends
+JS → Python   {type: "event", id: "&lt;handler suffix&gt;", values: {fields, choice, roles, slots, notes}}</code></pre>
+<h3>Python side (card.py)</h3>
+<ul>
+<li><code>Card(anywidget.AnyWidget)</code>: <code>_esm = static/card.js</code>, <code>_css = static/card.css</code>; traitlets <code>kind</code> and <code>blocks</code>.</li>
+<li><code>Screen.refresh()</code>: <code>build()</code> → help links ("Guide:") → the flash placed under the block that holds the pressed button (with "What the kit said") → brand and Docs button → the card's own code (<code>ran</code>) and Code-view cells.</li>
+<li><code>_on_msg</code>: runs the handler inside <code>SESSION.lock</code>, <code>watch_output</code> and <code>watch_progress</code> (so prints and the kit's progress become the progress panel); on error the flash is the message plus what the kit said; finally logs a <code>guide_action</code> line, refreshes, releases the database connection, sends <code>done</code>.</li>
+<li><code>show(*screens)</code>: displays the cards (Marimo: <code>mo.vstack</code>).</li>
+</ul>
+<h3>JavaScript side (static/card.js)</h3>
+<p>Block handlers: home_head, tabs, section, skeleton, msg, setup, chips, journey, resume, foot, head, p, empty, divider, subhead, note, pre, code, details, next, actions, choice (single or multi), tablepick, aicheck, schematree, linklist, fields, checks, linkcard, askbox, question, proposal, answer, summary_row, inline_form, list, findings, plan, metrics, board, line, ideas, version, rolemap, bars, split, clusters, table. Field types: group, heading, note, picks, range, select (the kit's in-place dropdown <code>pickList</code>, a filter box above 8 options, optional pencil to type), number, password (eye toggle, read-only until clicked, password-manager-ignore marks), text; options <code>options_from</code>, <code>send_on_change</code>, <code>show_if</code>, <code>help</code>. Tooltips: any element with <code>data-tip</code> shows a bubble the card draws itself (hover, focus, tap); titles carry their explanation behind an (i). Theme follows JupyterLab, else the background, else the system. Each card has its own Guided/Code switch; Code shows editable cells that run in the notebook's namespace (<code>actions.run_text</code>).</p>
+<h3>Actions (actions.py)</h3>
+<p><code>Action(notebook, code, result=None, changes=True)</code>; <code>run(action_id, **values)</code> renders the template (<code>{secret}</code> never shown; passed as <code>**__secret__</code> at run time), executes it in the notebook's namespace under the lock, logs the shown code, and returns the result variable. Groups: <code>kit.*</code>, <code>model.*</code>, <code>data.*</code>, <code>map.*</code>, <code>semantic.*</code> (00_quickstart), <code>explore.*</code> (01_explore), <code>ask.*</code> (02_ask_your_data), <code>share.*</code> (03_share).</p>
+<h3>Session (session.py)</h3>
+<ul>
+<li>The notebook's namespace (<code>nb</code>, <code>connection</code>, <code>chosen_data</code>, <code>role_review</code>, <code>dataset</code> …) as the cells would hold it.</li>
+<li><code>lock</code> (RLock): one database connection serves every card and a database session takes one request at a time; button work and background reads take turns, and <code>release()</code> never closes a connection under running work.</li>
+<li><code>showing_queries()</code>: prints each statement ("Running: SELECT …") so long work shows in the progress panel.</li>
+<li><code>chosen</code> (the tables chosen in step 1), <code>ai_maps</code> (per table AI answer), <code>ai_model</code> (links and notes from the one AI button).</li>
+<li>Events through <code>changed(what)</code>: <code>source</code> (data chosen or switched), <code>dataset</code> (approved), <code>data</code> (loaded), <code>ai</code>, <code>model</code>, <code>code</code>.</li>
+</ul>
+<h3>The cards, notebook by notebook</h3>
+<table>
+<tr><th>Notebook</th><th>Cards (top to bottom)</th></tr>
+<tr><td>00_quickstart · <code>guide.start()</code></td><td>Home · Fill in with AI · Choose your data · What each column means · Data map · Semantic views · Next</td></tr>
+<tr><td>01_explore · <code>guide.explore()</code></td><td>Working on · Is the data clean? · Compare groups and trends · Predict · Feature ideas</td></tr>
+<tr><td>02_ask_your_data · <code>guide.ask()</code></td><td>Ask (question, proposal, answer)</td></tr>
+<tr><td>03_share · <code>guide.share()</code></td><td>Dashboard · Hand-off</td></tr>
+</table>
+<h4>Home</h4><p>Rows for the database, data, MCP, AI model (provider dropdown, key, list the models, model, effort), Langfuse (region, keys), add-ons; a journey over the persona's notebooks from workflow event kinds; a Marketplace tab.</p>
+<h4>Choose your data</h4><p>A multi choice: kit datasets, your own tables or a new file, external sources. Each is a list of ticks; any mix loads together. A new connection is one form read from the kit: data source (and the source's own settings as lists that follow each other), how to fill it in (details or a pasted string, read at once), the name and every detail in two columns, Test connection, Connect and use this data. A source just connected opens its tables (up to ten).</p>
+<h4>What each column means</h4><p>Tabs for the chosen tables (tick = approved), the AI bar, three questions (what to predict, the guesses to check, the other choices), all columns with a description box each, Approve, then the way to the next table. Switching tabs shows a spinner and the statements.</p>
+<h4>Semantic views</h4><p>1 · The tables: schemas with their tables, ticks, a description per table. 2 · How they connect: Use AI, Find links (between the ticked tables, one schema's too), each link with a tick and a note; a link of your own from four lists, checked against the data before it is added. 3 · The model: name, what it is about, Preview, Publish.</p>
+
+<h2 id="sequences">Event sequences</h2>
+<h3>A · Choose data → approve → publish</h3>
+<div class="flow">
+<div class="s you"><b>Use this data</b>event "use"</div><div class="ar">→</div>
+<div class="s"><b>on_use</b>loading cells per ticked table; data.several/keep/switch; SESSION.chosen</div><div class="ar">→</div>
+<div class="s"><b>changed("source")</b>column map: map.review, map.draft, map.leakage; data map and semantic views reload</div><div class="ar">→</div>
+<div class="s you"><b>Edit</b>roles, slots, notes in the browser only</div><div class="ar">→</div>
+<div class="s"><b>Approve</b>map.approve: role_review.approve(choices, slots, notes=…) → v&lt;n+1&gt;</div><div class="ar">→</div>
+<div class="s db"><b>Publish</b>schema model rebuilt; changed("dataset")</div>
+</div>
+<div class="flow">
+<div class="s you"><b>Semantic views</b>tick tables, Find links, add own links, notes</div><div class="ar">→</div>
+<div class="s"><b>semantic.links_tables / check_link</b>nb.find_links(tables=…, check=…)</div><div class="ar">→</div>
+<div class="s"><b>Preview</b>semantic.preview_tables (writes nothing)</div><div class="ar">→</div>
+<div class="s db"><b>Publish</b>semantic.publish_tables → nb.semantic_model(…, links=model_links, table_notes=…)</div>
+</div>
+<h3>B · Fill everything in with AI</h3>
+<div class="flow">
+<div class="s you"><b>One button</b>ai_all (needs chosen data and a model)</div><div class="ar">→</div>
+<div class="s"><b>Read</b>map.reviews, map.review_keep per table</div><div class="ar">→</div>
+<div class="s ai"><b>Fill each</b>map.ai_together: fill_column_map(review, together=all reviews) → roles, slots, notes, same_as</div><div class="ar">→</div>
+<div class="s db"><b>Check pairs</b>semantic.links_checked (same_as pairs both ways) or links_tables</div><div class="ar">→</div>
+<div class="s ai"><b>Describe</b>semantic.ai_notes: table, link and model sentences</div><div class="ar">→</div>
+<div class="s"><b>Fill the cards</b>changed("source"), changed("ai"); Undo kept; nothing approved or published</div>
+</div>
+
+<h2 id="ai">AI in the persona</h2>
+<table>
+<tr><th>Where</th><th>What the model is shown</th><th>What it can change</th></tr>
+<tr><td>Fill in with AI (<code>fill_column_map</code>)</td><td>table name; per column name, type, drafted role, confidence, measured evidence, note; other chosen tables' column names, types, roles</td><td>suggests roles (never key), slots (never target or key; only where the role fits), descriptions for empty notes, same-as pairs; the person approves</td></tr>
+<tr><td>Model notes (<code>model_notes</code>)</td><td>table and column names, types, roles; the links</td><td>sentences for tables, links, the model name and about</td></tr>
+<tr><td>Link proposals (<code>find_links ai=True</code>)</td><td>names, types, notes; never values</td><td>pairs, each checked against the data</td></tr>
+<tr><td>Semantic fields (<code>semantic_ai</code>)</td><td>names, types, grains, notes, a category's top values</td><td>labels, synonyms, up to 8 checked metrics</td></tr>
+<tr><td>Ask (<code>nb.ask</code>)</td><td>the semantic model's metrics and dimensions, or the column map</td><td>proposes SQL; the person approves the exact text; runs read-only</td></tr>
+<tr><td>Themes (<code>nb.themes</code>)</td><td>the only step that sends row text; refuses a sensitive text column and plain http to another computer; prints what leaves</td><td>theme names</td></tr>
+<tr><td>AI clients over MCP</td><td>whatever the read-only user may read, including the semantic models</td><td>nothing: read-only</td></tr>
+</table>
+<p>A sensitive column is never sent to a model. The model never picks what to predict and never what makes a row unique.</p>
+
+<h2 id="mcp">MCP, AI clients, skills</h2>
+<ul>
+<li><b>Read-only user</b> <code>mcp_readonly</code> (password in <code>credentials/mcp_readonly_password</code>): CREATE SESSION, USE ANY SCHEMA, SELECT ANY TABLE only; <code>exakit mcp-doctor</code> fails when it holds anything else. A published semantic model also grants it SEMANTIC_USER and SELECT on <code>SEM_&lt;MODEL&gt;</code>.</li>
+<li><b>Server</b>: the launcher's MCP sidecar on 127.0.0.1:4896 (Streamable HTTP, write tools off), defined in <code>&lt;deployment&gt;/sidecars.yaml</code>.</li>
+<li><b>Clients</b>: Claude Desktop, Claude Code, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Continue (<code>exakit mcp-setup</code>, <code>EXAKIT_MCP_CLIENTS</code>).</li>
+<li><b>Skills</b>: <code>skills/&lt;name&gt;/SKILL.md</code> (frontmatter name, description ending with <code>Triggers —</code>, optional <code>addon:</code> or <code>persona:</code>), placed in <code>~/.claude/skills</code> and <code>~/.agents/skills</code>; the master skill is <code>exakit</code>; the persona skill is <code>exasol-data-scientist</code>; Semantic Views brings three. Bumping <code>components.skills.version</code> makes <code>exakit update</code> fetch the new set without a kit release.</li>
+</ul>
+
+<h2 id="docs">Docs site</h2>
+<p><code>notebook/docs</code>: Next.js + Fumadocs static export (basePath <code>/docs</code>), Mermaid diagrams with clickable nodes. Sections: kit, data-scientist (set-up, get-the-data, explore, prepare, model, evaluate, communicate, monitor, development), security. <code>tools/nb_docs.py</code> generates the reference from docstrings and the command table from <code>setup/help/exakit.json</code>; then <code>npm run build</code>, <code>tools/nb_docs.py --publish</code> (to <code>site/</code>, stamped in <code>BUILD.json</code>), <code>--check</code>. <code>nb.docs()</code> serves it on 127.0.0.1, ports 8790–8809 (<code>EXAKIT_DOCS_PORT</code> first), reusing another kernel's server. <code>exakit docs [topic] [--print] [--json]</code> opens it from a terminal.</p>
+
+<h2 id="security">Security model</h2>
+<table>
+<tr><th>Concern</th><th>How it is handled</th></tr>
+<tr><td>Database passwords</td><td>files in <code>credentials/</code> (0600); read at run time; passed to processes in the environment or on standard input; never printed or logged</td></tr>
+<tr><td>Notebooks</td><td>no host, user, password, DSN, key in any shipped notebook file (guard test); the connection comes from the encrypted store</td></tr>
+<tr><td>Source credentials</td><td>never an argument (process list); standard input or a file; stored only in the database CONNECTION; logs redacted in every encoding</td></tr>
+<tr><td>Card password boxes</td><td>cleared after sending; never shown, saved or logged; resist browser autofill; Show button</td></tr>
+<tr><td>TLS</td><td>the local database's certificate pinned at install; sources with tls=verify and a CA, tls=require only as a person's choice</td></tr>
+<tr><td>AI</td><td>never a row (except themes, guarded); never a sensitive column; plain http only to a local host; every proposal checked</td></tr>
+<tr><td>AI clients</td><td>a read-only database user; write tools off</td></tr>
+<tr><td>Downloads</td><td>every artifact SHA-256 checked against <code>versions.json</code> or a connector pin</td></tr>
+<tr><td>Telemetry</td><td>pyexasol, MLflow and dbt telemetry off in the kernel and helpers</td></tr>
+</table>
+
+<h2 id="lifecycle">Update and uninstall</h2>
+<p><code>exakit update [&lt;component&gt;…] [--yes] [--json]</code> updates the kit scripts, exapump, MCP, pyexasol, skills and installed add-ons; a database or runtime change needs consent; pending core tasks re-run the installer once without questions. <code>exakit update exakit</code> picks up persona and catalog changes and re-syncs the notebook helpers.</p>
+<p><code>exakit uninstall [&lt;addon&gt;] [--dry-run] [--yes]</code>: a bare run opens a menu ending in a typed UNINSTALL gate. Order: boot entries, add-ons outside the kit home, the database and all data, managed MCP configs, skills the kit placed, exapump profiles, the kit home, CLI binaries. Kept: <code>notebooks/</code>, <code>mlflow/</code>, the dash-server instance (unless <code>EXAKIT_UNINSTALL_NOTEBOOKS=remove</code>), uv, the PATH line.</p>
+
+<h2 id="tests">Tests and CI</h2>
+<table>
+<tr><th>Suite</th><th>Guards</th></tr>
+<tr><td><code>tests/personas.sh</code>, <code>personas-ps.ps1</code></td><td>picker offers data-scientist and general; each persona's datasets and add-ons; combining; explicit answers win; invalid files named; addon_reasons; re-run ticks the recorded persona</td></tr>
+<tr><td><code>test_marketplace_persona_apply.py</code>, <code>test_persona_membership.py</code>, <code>test_marketplace_installer_flow.py</code></td><td>persona add/remove/flow</td></tr>
+<tr><td><code>test_marketplace_*.py</code>, <code>tests/marketplace.sh</code></td><td>catalog, selection, apply, service, semantic-views (models never dropped), json-tables, notebook</td></tr>
+<tr><td><code>tests/virtual-schemas.sh</code> (about 2,270 checks), <code>test_vs_error_class.py</code></td><td>connect engine against a fake database; error kinds; cut messages</td></tr>
+<tr><td><code>test_describe_service.py</code>, <code>test_descriptor_*.py</code>, <code>describe-command.sh</code></td><td>column maps, approval, semantic models, links</td></tr>
+<tr><td><code>test_notebook_guide.py</code> (76)</td><td>parity of card actions with notebook cells; every card; multi-table, AI button, one connection, query display</td></tr>
+<tr><td><code>test_notebook_contents.py</code></td><td>no connection values or dataset names in notebooks; catalog</td></tr>
+<tr><td><code>test_notebook_docs.py</code></td><td>reference current; site current; no secrets on a page; docs server</td></tr>
+<tr><td><code>test_role_picker.py</code>, <code>test_role_check.py</code>, <code>test_model_providers.py</code>, <code>test_notebook_readout.py</code></td><td>review and approval; AI fill rules; providers; reserved-word names</td></tr>
+<tr><td><code>tests/skills.sh</code>, <code>tests/ci-wiring.sh</code></td><td>skills frontmatter and pins; every test is run by a workflow</td></tr>
+</table>
+<p>Workflows: <code>versions.yml</code> (the main matrix), <code>windows-ps51.yml</code>, <code>acceptance-notebooks.yml</code>, <code>reference-datasets-live.yml</code>, <code>pkg-json-tables.yml</code> and others.</p>
+
+<h2 id="measured">Measured and known limits</h2>
+<table>
+<tr><th>What</th><th>Result</th></tr>
+<tr><td>Semantic SQL vs hand-written SQL on 10,002,745 rows</td><td>0.12–0.27 s vs 0.13–0.21 s, identical totals in 415 groups</td></tr>
+<tr><td>Link found across sources</td><td>AMAZON.ORDER_LINES.SHIP_STATE → VS_LOGISTICS.STATE_LOGISTICS.SHIP_STATE: 128,921 of 128,942 rows</td></tr>
+<tr><td>Snowflake virtual table, 150,000 rows</td><td>about 10 s a statement; data checks 30 s; cleaned view 59 s</td></tr>
+<tr><td>Dataset row counts</td><td>AMAZON.ORDER_LINES 128,975; FRAUD.TRANSACTIONS 51,000</td></tr>
+</table>
+<ul>
+<li>A source read live is as slow as that system: every card statement goes there. A local copy answers in under a second.</li>
+<li>The notebook add-on is not available on Linux ARM or Intel Mac; json-tables not on Intel Mac or Windows ARM.</li>
+<li>Integer links are never "high": a sequence matches by chance.</li>
+<li>The card tooltip and dropdown are the kit's own; Dash Server pages keep Dash's own controls.</li>
+</ul>
+
+<h2 id="trouble">Troubleshooting</h2>
+<table>
+<tr><th>Symptom</th><th>Cause and fix</th></tr>
+<tr><td>"Connection cannot be shared between multiple threads"</td><td>an older notebook package; reinstall (the card lock fixes it)</td></tr>
+<tr><td>"its message was cut before the reason"</td><td>a CA inside the PostgreSQL URL; connect once with TLS require and an empty CA to read the reason</td></tr>
+<tr><td>Snowflake "Network policy is required"</td><td>a programmatic access token needs a network policy on the user: <code>CREATE NETWORK POLICY … ALLOWED_IP_LIST=('&lt;ip&gt;'); ALTER USER … SET NETWORK_POLICY=…</code></td></tr>
+<tr><td>A connect fails in the notebook and works in the terminal</td><td>check the password box with Show; a browser could autofill another site's password (now refused)</td></tr>
+<tr><td>"syntax error, unexpected CASESPECIFIC_"</td><td>a made-up name was a reserved word (CS); fixed by <code>sql_words</code></td></tr>
+<tr><td>A card looks frozen</td><td>long work on a live source; the progress panel shows each statement</td></tr>
+<tr><td>"model not found" after reopening a notebook</td><td>an old saved widget output; the save hook removes it on the next save</td></tr>
+<tr><td>Host name does not resolve</td><td>network DNS; the notebook compares public DNS and says whether the name is right</td></tr>
+</table>
+<p>Logs: <code>exakit logs</code>; <code>logs/guide.log</code> for card errors; <code>logs/virtual-schemas-*.log</code> for sources.</p>
+
+<h2 id="change">How to change things</h2>
+<table>
+<tr><th>Change</th><th>Do this</th><th>Tests that check it</th></tr>
+<tr><td>A persona's datasets or add-ons</td><td>edit <code>personas/&lt;id&gt;.json</code> (reasons ≤ 90 characters); update <code>personas/README.md</code>, <code>setup/help/exakit.json</code>, the docs page <code>kit/personas/what-is-a-persona.mdx</code></td><td>personas.sh, personas-ps.ps1, persona apply tests</td></tr>
+<tr><td>A new persona</td><td>a new JSON file; notebooks in <code>notebook/catalog.json</code> with the persona; preview with <code>tools/try_persona.sh</code></td><td>the same</td></tr>
+<tr><td>A new add-on</td><td>follow <code>MARKETPLACE.md</code>: <code>marketplace/addons/&lt;id&gt;.py</code>, catalog row (GitHub block), <code>versions.json</code> component, <code>setup/help/&lt;id&gt;.json</code></td><td>marketplace tests, ci-wiring</td></tr>
+<tr><td>A card button</td><td>an Action in <code>actions.py</code> whose code is a cell of its notebook; a handler <code>on_&lt;id&gt;</code> that calls <code>actions.run</code></td><td>ParityTest, NoHardcodedFactsTest</td></tr>
+<tr><td>A notebook cell</td><td>edit the <code>.py</code> source, then <code>python3 tools/notebooks.py --marimo</code> and <code>--check --marimo</code></td><td>test_notebook_contents</td></tr>
+<tr><td>A docs page or a docstring</td><td><code>tools/nb_docs.py</code>, <code>npm run build</code> in notebook/docs, <code>--publish</code>, <code>--check</code></td><td>test_notebook_docs</td></tr>
+<tr><td>A skill</td><td><code>skills/&lt;name&gt;/SKILL.md</code>, a row in <code>skills/README.md</code>, bump <code>components.skills.version</code></td><td>skills.sh</td></tr>
+<tr><td>A connector</td><td><code>setup/virtual-schemas/connectors/&lt;id&gt;/connector.json</code> and the catalog; the card and notebook pick it up with no change</td><td>virtual-schemas.sh</td></tr>
+</table>
+
+<h2 id="envindex">Appendix · Environment variables</h2>
+<div class="kv">
+<div>EXAKIT_REPO, EXAKIT_REF</div><div>where the kit archive comes from</div>
+<div>EXAKIT_VERSION_POLICY</div><div>manifest | latest | pinned</div>
+<div>EXAKIT_HOME</div><div>the kit home</div>
+<div>EXAKIT_PERSONA</div><div>personas to apply</div>
+<div>EXAKIT_DATASETS, EXAKIT_LOAD_SAMPLE</div><div>datasets</div>
+<div>EXAKIT_MCP_CLIENTS, EXAKIT_SKIP_MCP</div><div>AI clients</div>
+<div>EXAKIT_MARKETPLACE_ADDONS</div><div>add-ons</div>
+<div>EXAKIT_NOTEBOOK_FRONTENDS, _PORT, _SCHEMA, _VENV, _HOME, _DIR</div><div>notebook add-on</div>
+<div>EXAKIT_MARIMO_PORT</div><div>Marimo port</div>
+<div>EXAKIT_MODEL_ID, EXAKIT_PROVIDER_BASE_URL, EXAKIT_PROVIDER_API_KEY, EXAKIT_MODEL_EFFORT</div><div>notebook AI model</div>
+<div>LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL</div><div>tracing</div>
+<div>EXAKIT_DOCS_PORT</div><div>docs server port</div>
+<div>EXAKIT_NB_AUTO_APPROVE</div><div>headless approval in notebook runs (1 or force)</div>
+<div>EXAKIT_UNINSTALL_NOTEBOOKS</div><div>remove to also delete notebooks on uninstall</div>
+<div>EXAKIT_DESCRIPTOR_OWNER</div><div>the owner recorded on an approval</div>
+</div>
+
+<h2 id="exits">Appendix · Exit codes</h2>
+<table>
+<tr><th>Area</th><th>Codes</th></tr>
+<tr><td>exakit describe</td><td>0 ok, 1 add-on missing or error, 2 refused, 3 not found, 4 unreachable, 5 version conflict</td></tr>
+<tr><td>exakit connect (engine)</td><td>0 ok, 1 failed, 2 input, 3 conflict, 4 missing, 5 gated, 20 dns, 21 nojava, 22 database unreachable, 23 norust</td></tr>
+<tr><td>Install answers</td><td>2 for a bad answer</td></tr>
+<tr><td>exakit status</td><td>3 while installing</td></tr>
+<tr><td>Confirmations</td><td>5 when a person declined</td></tr>
+</table>
+
+<h2 id="cmds">Appendix · Commands</h2>
+<table>
+<tr><th>Group</th><th>Commands</th></tr>
+<tr><td>Everyday</td><td>status, info, start, stop, sql, data-load, logs, autostart</td></tr>
+<tr><td>AI clients</td><td>mcp-setup, mcp-doctor, mcp-status</td></tr>
+<tr><td>External sources</td><td>connect, source</td></tr>
+<tr><td>Personas and notebooks</td><td>persona, notebook, describe, workflow</td></tr>
+<tr><td>Add-ons</td><td>marketplace [&lt;id&gt;…] | --list [--json]</td></tr>
+<tr><td>Up to date</td><td>version, update</td></tr>
+<tr><td>Repair and removal</td><td>preflight, repair-runtime, tls-pin, migrate, uninstall</td></tr>
+<tr><td>Reference</td><td>docs, guide, skills, help, catalog, whats-new</td></tr>
+</table>
+<p class="meta">Source of truth for every command, option and variable: <code>setup/help/exakit.json</code> (<code>exakit catalog</code>, <code>exakit help &lt;command&gt;</code>). This page replaces <code>docs/data-scientist-technical-specification.html</code> as the go-to reference; that older page predates the semantic layer and the guided-card changes.</p>
+</main>
+</div>
+</body>
+</html>
