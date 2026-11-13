@@ -16,7 +16,7 @@ and General, the kit's own samples, bundled with the kit and loaded offline:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `amazon_sales`, `fraud_transactions` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `amazon_sales`, `fraud_transactions` | all detected | `dash-server`, `notebook`, `json-tables`, `semantic-views` | `data-scientist/00_quickstart.ipynb` |
 | `ml-engineer` (ML Engineer) - **disabled for now** (`"visible": false`: kept, not offered) | `amazon_sales`, `fraud_transactions` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 | `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
 
@@ -25,11 +25,10 @@ tick all three to load every dataset and get every persona's add-ons.
 
 The Data Scientist gets Dash Server first, then the notebook: the notebooks' Share step
 publishes a dashboard there, querying as the kit's read-only user. The ML Engineer persona
-also starts local MLflow and installs the selected UDF runtime. JSON Tables stays available
-separately: `exakit marketplace json-tables` adds CLI JSON ingestion (the notebook own-file
-loader handles flat JSON without it). To select the extended bundle during install, set
-`EXAKIT_MARKETPLACE_ADDONS=dash-server,notebook,json-tables` for Data Scientist,
-or `EXAKIT_MARKETPLACE_ADDONS=notebook,json-tables,udf-devkit` for ML Engineer.
+also starts local MLflow and installs the selected UDF runtime. The Data Scientist persona brings JSON Tables (JSON files and
+folders as tables) and Exasol Semantic Views (the layer an approved column map publishes to). For ML
+Engineer, JSON Tables stays available separately: `exakit marketplace json-tables`. To select it during
+install, set `EXAKIT_MARKETPLACE_ADDONS=notebook,json-tables,udf-devkit` for ML Engineer.
 
 Pick one with `EXAKIT_PERSONA` on the install command:
 

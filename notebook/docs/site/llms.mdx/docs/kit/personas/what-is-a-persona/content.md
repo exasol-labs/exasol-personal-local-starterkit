@@ -8,11 +8,11 @@ A persona names things. It never holds a secret or a path on your machine.
 
 ## The personas in this kit [#the-personas-in-this-kit]
 
-| Persona                               | Datasets                             | Add-ons                   | First notebook                 |
-| ------------------------------------- | ------------------------------------ | ------------------------- | ------------------------------ |
-| **Data Scientist** (`data-scientist`) | `amazon_sales`, `fraud_transactions` | `dash-server`, `notebook` | `data-scientist/00_quickstart` |
-| **General** (`general`)               | `tpch`, `energy`, `weather`          | none                      | none                           |
-| **ML Engineer** (`ml-engineer`)       | `amazon_sales`, `fraud_transactions` | `notebook`, `udf-devkit`  | `ml-engineer/00_quickstart`    |
+| Persona                               | Datasets                             | Add-ons                                                    | First notebook                 |
+| ------------------------------------- | ------------------------------------ | ---------------------------------------------------------- | ------------------------------ |
+| **Data Scientist** (`data-scientist`) | `amazon_sales`, `fraud_transactions` | `dash-server`, `notebook`, `json-tables`, `semantic-views` | `data-scientist/00_quickstart` |
+| **General** (`general`)               | `tpch`, `energy`, `weather`          | none                                                       | none                           |
+| **ML Engineer** (`ml-engineer`)       | `amazon_sales`, `fraud_transactions` | `notebook`, `udf-devkit`                                   | `ml-engineer/00_quickstart`    |
 
 Every persona connects all the AI clients found on this computer.
 
