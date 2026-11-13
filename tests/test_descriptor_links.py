@@ -142,6 +142,26 @@ class LinksTest(unittest.TestCase):
         self.assertFalse(any(" JOIN " in s for s in self.db.sent), "no join between sources while searching")
         self.assertLess(found["statements"], 60)
 
+    def test_a_selection_of_tables_is_searched_and_one_schemas_tables_are_compared_too(self):
+        """only=[tables]: the search stays inside a person's selection (no statement reads another table). With
+        same_schema two tables of one schema are compared as well; a table is never linked to itself."""
+        found = self.find(only=["SHOP.ORDER_LINES", "VS_GEO.STATES"])
+        self.assertEqual([("SHOP.ORDER_LINES.SHIP_STATE", "VS_GEO.STATES.STATE_NAME")], [(l["from"], l["to"]) for l in found["links"]])
+        self.assertFalse([s for s in self.db.sent if 'FROM "CRM"' in s or 'FROM "IOT"' in s], "tables outside the selection are not read")
+        self.db = Database()
+        self.db.tables["SHOP.STATE_NAMES"] = (False, {"NAME": "VARCHAR(40) UTF8"}, [{"NAME": s} for s in STATES])
+        pick = ["SHOP.ORDER_LINES", "SHOP.STATE_NAMES"]
+        apart = links.find(self.db, ["SHOP"], only=pick)
+        self.assertEqual([], apart["links"], "one schema's tables are the schema map's job unless asked")
+        together = links.find(self.db, ["SHOP"], only=pick, same_schema=True)
+        self.assertEqual([("SHOP.ORDER_LINES.SHIP_STATE", "SHOP.STATE_NAMES.NAME")], [(l["from"], l["to"]) for l in together["links"]])
+        self.assertFalse(any(l["from"].rsplit(".", 1)[0] == l["to"].rsplit(".", 1)[0] for l in together["links"]))
+        cols, _v = links.columns(self.db, ["SHOP"])
+        pair = {"links": [{"from": "SHOP.ORDER_LINES.SHIP_STATE", "to": "SHOP.STATE_NAMES.NAME"},
+                          {"from": "SHOP.ORDER_LINES.QTY", "to": "SHOP.ORDER_LINES.ORDER_LINE_ID"}]}
+        self.assertEqual([], links.ai_pairs(pair, cols))
+        self.assertEqual([("SHOP.ORDER_LINES.SHIP_STATE", "SHOP.STATE_NAMES.NAME")], links.ai_pairs(pair, cols, same_schema=True))
+
     def test_ai_pairs_keep_only_real_columns_of_different_schemas(self):
         cols, _v = links.columns(Database(), self.SCHEMAS)
         pairs = links.ai_pairs({"links": [{"from": "shop.order_lines.acct_no", "to": "CRM.CUSTOMERS.CUSTOMER_ID"},

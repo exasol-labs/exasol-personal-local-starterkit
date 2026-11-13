@@ -537,6 +537,58 @@ function render({ model, el }) {
       }
       return h("div", { class: "guide-ai" }, head, body);
     },
+    // Every schema with its tables under it: tick the tables a model is about (a table needs an approved column
+    // map), and say in a sentence what each ticked one is. A schema's own box ticks or clears all its tables.
+    schematree(b) {
+      return h("div", { class: "guide-tree" }, b.groups.map((g) => {
+        g.tables.forEach((t) => { if (st.fields[t.id] === undefined) st.fields[t.id] = !!t.value; if (st.fields[t.note_id] === undefined) st.fields[t.note_id] = ""; });
+        const can = g.tables.filter((t) => t.approved);
+        const on = can.filter((t) => st.fields[t.id]).length;
+        const all = h("input", { type: "checkbox", checked: can.length && on === can.length ? true : null, disabled: !can.length || !!ui.busy,
+          "aria-label": `All tables of ${g.schema}`, onChange: (e) => { can.forEach((t) => { st.fields[t.id] = e.target.checked; }); draw(); } });
+        all.indeterminate = on > 0 && on < can.length;
+        return h("div", { class: "guide-tree-group" },
+          h("label", { class: "guide-tree-head" }, all, h("strong", {}, g.schema), h("span", { class: "guide-chip" }, g.origin),
+            h("span", { class: "guide-muted guide-small" }, `${on} of ${g.tables.length} table${g.tables.length === 1 ? "" : "s"} in the model`)),
+          h("div", { class: "guide-tree-tables" }, g.tables.map((t) => h("div", { class: `guide-tree-table${st.fields[t.id] ? " is-on" : ""}${t.approved ? "" : " is-off"}` },
+            h("label", { class: "guide-checkrow" },
+              h("input", { type: "checkbox", checked: st.fields[t.id] ? true : null, disabled: !t.approved || !!ui.busy,
+                onChange: (e) => { st.fields[t.id] = e.target.checked; draw(); } }),
+              h("span", { class: "guide-tree-name" }, t.name),
+              t.rows ? h("span", { class: "guide-muted guide-small" }, `${t.rows} rows`) : null,
+              t.approved ? null : h("span", { class: "guide-chip guide-chip-warn", "data-tip": "Approve its column map above (What each column means), then it can be ticked." }, "Column map not approved")),
+            st.fields[t.id] ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[t.note_id], spellcheck: "true", disabled: !!ui.busy,
+              placeholder: "What this table is, in a sentence (optional)", "aria-label": `Description of ${t.table}`,
+              onInput: (e) => { st.fields[t.note_id] = e.target.value; } }) : null))));
+      }));
+    },
+    // The links between the ticked tables: this column points at that one, what the data says about it, a tick to
+    // use it, and a sentence in your words saying why the two belong together.
+    linklist(b) {
+      const side = (full) => { const at = full.lastIndexOf("."); return [full.slice(0, at), full.slice(at + 1)]; };
+      return h("div", { class: "guide-joins" }, b.items.map((l) => {
+        if (st.fields[l.id] === undefined) st.fields[l.id] = !!l.value;
+        if (st.fields[l.note_id] === undefined) st.fields[l.note_id] = l.note || "";
+        const [ft, fc] = side(l.from), [tt, tc] = side(l.to);
+        const used = !!st.fields[l.id];
+        return h("div", { class: `guide-join${used ? " is-on" : ""}` },
+          h("label", { class: "guide-checkrow guide-join-head" },
+            h("input", { type: "checkbox", checked: used ? true : null, disabled: !!ui.busy, "aria-label": `Use the link ${l.from} to ${l.to}`,
+              onChange: (e) => { st.fields[l.id] = e.target.checked; draw(); } }),
+            h("span", { class: "guide-join-ends" },
+              h("span", { class: "guide-join-end" }, h("span", { class: "guide-muted" }, ft + "."), h("strong", {}, fc)),
+              icon("arrow"),
+              h("span", { class: "guide-join-end" }, h("span", { class: "guide-muted" }, tt + "."), h("strong", {}, tc))),
+            l.by === "you" ? h("span", { class: "guide-chip guide-chip-accent" }, "Yours, checked") : null,
+            l.by === "ai" ? h("span", { class: "guide-chip" }, "AI proposal, checked") : null,
+            l.confidence === "high" ? h("span", { class: "guide-chip guide-chip-ok-soft" }, "The data backs it")
+              : h("span", { class: "guide-chip guide-chip-warn", "data-tip": "Both columns are plain numbers, and numbers in a sequence match by chance. Tick it only if you know they mean the same thing." }, "Confirm this one")),
+          l.evidence ? h("div", { class: "guide-muted guide-small guide-join-ev" }, l.evidence) : null,
+          used ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[l.note_id], spellcheck: "true", disabled: !!ui.busy,
+            placeholder: "Why these two belong together, in a sentence (optional)", "aria-label": `Note on the link ${l.from} to ${l.to}`,
+            onInput: (e) => { st.fields[l.note_id] = e.target.value; } }) : null);
+      }));
+    },
     fields(b) { return h("div", { class: "guide-fieldrow" }, b.items.map(field)); },
     checks(b) {
       return h("div", { class: "guide-checks" }, b.items.map((c) => {

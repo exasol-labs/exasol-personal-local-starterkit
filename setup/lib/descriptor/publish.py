@@ -257,6 +257,10 @@ def refresh(execute: Callable[[str], Any], rows: Run, model: str, reader: str | 
         return publish_schema(execute, rows, inputs["schema"], reader, home=home)
     spec = build_model(rows, list(inputs["tables"]), list(inputs.get("links") or []), inputs.get("name") or model,
                        description=inputs.get("description"), home=home)
+    for entity in spec["entities"]:            # what a person said each table is, kept with the model
+        about = (inputs.get("table_notes") or {}).get(f"{entity['schema']}.{entity['table']}".upper())
+        if about:
+            entity["description"] = about + (" (an external source, read live)" if entity.get("virtual") else "")
     if inputs.get("labels"):
         apply_labels(spec, inputs["labels"])
     extra = [(view, ddl) for view, ddl in inputs.get("extra") or []]

@@ -579,12 +579,16 @@ def semantic_ai(spec: dict[str, Any], chat=None) -> dict[str, Any]:
     return {"labels": labels, "extra": extra, "refused": refused, "error": None}
 
 
-def semantic_model(conn, name: str, tables: list[str], links: list[str] | None = None, *, ai: bool = False,
+def semantic_model(conn, name: str, tables: list[str], links: list | None = None, *, ai: bool = False,
                    dry_run: bool = False, description: str | None = None, chat=None, progress=None,
-                   schemas: list[str] | None = None, discover: bool = False) -> dict[str, Any]:
+                   schemas: list[str] | None = None, discover: bool = False,
+                   table_notes: dict[str, str] | None = None) -> dict[str, Any]:
     """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
-    approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). With
-    ``ai`` the user's model proposes the fields first. ``dry_run`` builds the spec and says what it would publish."""
+    approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). A link
+    may also be a dict as find_links returns it ({"from", "to", ...its evidence}) with an optional "note" in a
+    person's words: its evidence and the note are stored in the model with it. ``table_notes`` ({SCHEMA.TABLE: text})
+    says what a table is; the model keeps it as that entity's description. With ``ai`` the user's model proposes the
+    fields first. ``dry_run`` builds the spec and says what it would publish."""
     from descriptor import semantic_model as sm
 
     names = []
@@ -605,6 +609,20 @@ def semantic_model(conn, name: str, tables: list[str], links: list[str] | None =
                       "approved column maps. Approve one with: exakit describe SCHEMA.TABLE --approve")
     joins = []
     for spec in links or []:
+        if isinstance(spec, dict):
+            source, target = str(spec.get("from") or "").strip().upper(), str(spec.get("to") or "").strip().upper()
+            if source.count(".") != 2 or target.count(".") != 2:
+                raise Refused(f"A link names SCHEMA.TABLE.COLUMN on both sides, not '{source}' and '{target}'.")
+            evidence = {k: spec[k] for k in ("proposed_by", "found", "checked", "share", "key_evidence", "from_live",
+                                             "to_live", "evidence_text", "rows", "confidence") if k in spec}
+            evidence.setdefault("proposed_by", "you")
+            note = " ".join(str(spec.get("note") or "").split())[:300]
+            if note:
+                evidence["note"] = note
+            elif "evidence_text" not in evidence:
+                evidence["note"] = "given by a person"
+            joins.append({"from": source, "to": target, "evidence": evidence})
+            continue
         source, sep, target = spec.partition("=")
         if not sep or source.count(".") != 2 or target.count(".") != 2:
             raise Refused(f"--link takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY, not '{spec}'.")
@@ -632,6 +650,11 @@ def semantic_model(conn, name: str, tables: list[str], links: list[str] | None =
         spec = publishing.build_model(rows, names, joins, name, description=description)
     except sm.ModelRefused as err:
         raise Refused(str(err)) from err
+    said = {str(t).upper(): " ".join(str(text or "").split())[:400] for t, text in (table_notes or {}).items()}
+    for entity in spec["entities"]:
+        about = said.get(f"{entity['schema']}.{entity['table']}".upper())
+        if about:
+            entity["description"] = about + (" (an external source, read live)" if entity.get("virtual") else "")
     proposal = semantic_ai(spec, chat) if ai else {"labels": {}, "extra": [], "refused": [], "error": None}
     if proposal["labels"]:
         publishing.apply_labels(spec, proposal["labels"])
@@ -650,7 +673,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list[str] | None =
     if dry_run:
         found["status"] = "dry run"
         return found
-    inputs = {"tables": names, "links": joins, "name": name, "description": description,
+    inputs = {"tables": names, "links": joins, "name": name, "description": description, "table_notes": said,
               "labels": proposal["labels"], "extra": proposal["extra"]}
     try:
         result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
@@ -679,21 +702,32 @@ def _approved_in(schemas: list[str]) -> tuple[dict[str, dict[str, Any]], dict[st
 
 
 def find_links(conn, schemas: list[str], *, ai: bool = False, chat=None, progress=None,
-               check: list[str] | None = None) -> dict[str, Any]:
+               check: list[str] | None = None, tables: list[str] | None = None) -> dict[str, Any]:
     """The links between tables of different schemas (sample data, loaded files, external sources), found from their
     values and each shown with its evidence (descriptor/links.py). With ``ai`` the user's model proposes more pairs
     from names, types and notes only; each is checked against the data like any other. ``check`` is pairs someone
     already has in mind (``S.T.COL=S.T.KEY``: an agent's reading of what the columns mean, or yours): they are checked
-    the same way and come back with their evidence, or under ``rejected`` with what the data showed. Nothing is written."""
+    the same way and come back with their evidence, or under ``rejected`` with what the data showed. ``tables``
+    (SCHEMA.TABLE) keeps the search to a selection of tables - and then two tables of one schema are compared too.
+    Nothing is written."""
     from descriptor import links as linking
 
+    selection = None
+    if tables:
+        selection = []
+        for table in tables:
+            schema, object_name = split_table(table)
+            selection.append(f"{schema}.{object_name}")
+        if len(set(selection)) < 2:
+            raise Refused("Name at least two tables to find the links between them.")
+        schemas = sorted({t.split(".", 1)[0] for t in selection})
     names = []
     for schema in schemas:
         try:
             names.append(schema_map.schema_name(schema))
         except ValueError as err:
             raise Refused(str(err)) from err
-    if len(names) < 2:
+    if len(names) < 2 and selection is None:
         raise Refused("Name at least two schemas to find the links between them: exakit describe --links A,B[,C...]")
     rows = lambda sql: _rows(conn, sql)
     _docs, keys, roles, notes = _approved_in(names)
@@ -710,14 +744,21 @@ def find_links(conn, schemas: list[str], *, ai: bool = False, chat=None, progres
             ai_note = "no model is configured, so only the values were used"
         else:
             try:
-                tables, _virtual = linking.columns(rows, names)
-                text = (chat or _chat)(linking.AI_INSTRUCTIONS + "\n\nTables: "
-                                       + json.dumps(linking.ai_facts(tables, notes), ensure_ascii=False)).strip()
-                proposals += linking.ai_pairs(json.loads(text[text.find("{"):text.rfind("}") + 1]), tables)
+                shown, _virtual = linking.columns(rows, names)
+                if selection is not None:
+                    shown = {t: cols for t, cols in shown.items() if t.upper() in {x.upper() for x in selection}}
+                asked_for = linking.AI_INSTRUCTIONS if selection is None else linking.AI_INSTRUCTIONS.replace(
+                    "in ANOTHER schema", "in ANOTHER table (of the same schema or of another one)").replace(
+                    "tables of different data sources", "tables, of one data source or of several,")
+                text = (chat or _chat)(asked_for + "\n\nTables: "
+                                       + json.dumps(linking.ai_facts(shown, notes), ensure_ascii=False)).strip()
+                proposals += linking.ai_pairs(json.loads(text[text.find("{"):text.rfind("}") + 1]), shown,
+                                              same_schema=selection is not None)
                 ai_note = f"the model proposed {len(proposals) - len(asked)} pair(s); each was checked against the data"
             except Exception as err:               # noqa: BLE001 - the search by values stands
                 ai_note = f"the model's proposal was not used ({type(err).__name__})"
-    found = linking.find(rows, names, approved_keys=keys, roles=roles, proposals=proposals, progress=progress)
+    found = linking.find(rows, names, approved_keys=keys, roles=roles, proposals=proposals, progress=progress,
+                         only=selection, same_schema=selection is not None)
     found["ai"] = ai_note
     for link in found["links"]:
         link["evidence_text"] = linking.evidence_text(link)

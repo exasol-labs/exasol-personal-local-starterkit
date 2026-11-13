@@ -106,14 +106,34 @@ Measured values are for this database and these tables. Your numbers differ if y
 
 ## One model across sources
 
-In the guided view, open **Understand** and scroll to **Semantic views**. Then:
+In the guided view, open **Understand** and scroll to **Semantic views**. The card builds the model by hand, in three parts.
 
-1. Tick the tables. They are listed with their origin: sample data, your data or an external source. Tick as many as the question needs.
-2. Give the model a name, for example `sales_360`.
-3. Add the links across schemas, one per line, in the form `SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY`. The approved links inside each schema are used on their own.
-4. Tick **Let the AI propose business names, synonyms and metrics**, if you have an AI model set up.
-5. Click **Preview**. Read the dimensions and metrics of each view, what the AI proposed, and what was refused and why. Nothing is written yet.
-6. Click **Publish the model**.
+| Part | What you do |
+|---|---|
+| The tables | Every schema is listed with its tables under it, and where it comes from: sample data, your data or an external source. Tick the tables the model is about. The tables you chose in **Choose your data** start ticked. A schema's own box ticks or clears all its tables. Under each ticked table, say in a sentence what the table is. |
+| How they connect | **Find links between the ticked tables** compares their values and lists each link with what the data says. Tick the ones to use, and say in a sentence why the two belong together. Add a link of your own from four lists: this table, by this column, points at that table, which holds the values in that column. |
+| The model | Give it a name, for example `sales_360`, and say what it is about. **Preview** shows the dimensions and metrics of each view and writes nothing. **Publish the model** builds it. |
+
+A table needs an approved column map to be ticked. One without is shown greyed, with where to approve it.
+
+The model takes the tables you ticked, not every table of their schemas. Two tables of the same schema are compared for links too.
+
+Tick **Let the AI help** to have your model propose links from what the columns mean, and business names, synonyms and metrics for the model. It is shown names, types and notes, never a row.
+
+### A link of your own is checked first
+
+**Check it against the data and add it** runs the same check a found link gets (`nb.find_links(connection, tables=[...], check=[...])`). When the data backs the pair, it is added to the list with its evidence, marked *Yours, checked*. When it does not, it is not added and the card says what the data showed: too few values match, the two columns are of different kinds, or the column on the right does not hold each value once.
+
+### The same in a cell
+
+```python
+tables = ["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "VS_LOGISTICS.STATE_LOGISTICS"]
+found_links = nb.find_links(connection, tables=tables)
+model_links = [link for link in found_links["links"] if link["confidence"] == "high"]
+model_links.append({"from": "AMAZON.RETURNS.ORDER_ID", "to": "AMAZON.ORDER_LINES.ORDER_ID", "note": "A return belongs to one order."})
+semantic = nb.semantic_model(connection, "sales_360", tables=tables, links=model_links,
+                             table_notes={"VS_LOGISTICS.STATE_LOGISTICS": "Average delivery days per state."}, preview=True)
+```
 
 **Models in the database** lists every model. **Refresh it** rebuilds a model the kit built, from the column maps and links approved since.
 
@@ -132,11 +152,14 @@ Tables of different sources rarely declare how they join, and the same thing is 
   ]}
 />
 
-In the **Semantic views** card, tick the schemas and click **Find links between them**. In a cell or a terminal:
+In the **Semantic views** card, tick the tables and click **Find links between the ticked tables**. In a cell, name the tables, or whole schemas:
 
 ```python
-found_links = nb.find_links(connection, ["AMAZON", "RETAIL_SIGNALS", "VS_LOGISTICS"])
+found_links = nb.find_links(connection, tables=["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "VS_LOGISTICS.STATE_LOGISTICS"])
+found_links = nb.find_links(connection, ["AMAZON", "RETAIL_SIGNALS", "VS_LOGISTICS"])     # every table of these schemas
 ```
+
+With `tables=`, two tables of one schema are compared too. With schemas, only tables of different schemas are.
 
 ```bash
 exakit describe --links AMAZON,RETAIL_SIGNALS,VS_LOGISTICS
@@ -176,7 +199,7 @@ A pair the data contradicts comes back as `[rejected]`.
 
 ### What is stored
 
-A link you publish becomes a relationship of the model. Its evidence is stored with it: who proposed it, how many rows matched, and which values did not. Read it back with:
+A link you publish becomes a relationship of the model. Its evidence is stored with it: who proposed it, how many rows matched, which values did not, and the sentence you wrote about it. What you said each table is becomes that table's description in the model. An AI client or a colleague who reads the model sees how the tables connect and why. Read the links back with:
 
 ```sql
 SELECT SCOPE_NAME, DATA_JSON FROM SEMANTIC_CATALOG.CUSTOM_EXTENSIONS

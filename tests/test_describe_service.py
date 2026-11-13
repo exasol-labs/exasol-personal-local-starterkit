@@ -262,6 +262,20 @@ class Service(unittest.TestCase):
         self.assertIn("[rejected] A.B.C -> D.E.F", text)
         self.assertEqual(2, self.run_main("links", "SUPPORT")[0])           # two schemas at least
 
+    def test_a_table_gets_a_description_and_a_link_given_as_a_dict_is_read(self):
+        """table_notes says what a table is: the model keeps it as that entity's description. A link may be a dict as
+        find_links returns it, with a note in a person's words; a link that does not name a column on both sides is
+        refused before anything is built."""
+        self.run_main("draft", "support.tickets", "--id", "support_tickets")
+        self.run_main("approve", "support_tickets")
+        result = svc.semantic_model(self.db, "desk", ["SUPPORT.TICKETS"], dry_run=True,
+                                    table_notes={"support.tickets": "  One row per   support ticket. "})
+        self.assertEqual(["One row per support ticket."], [e["description"] for e in result["spec"]["entities"]])
+        with self.assertRaisesRegex(svc.Refused, "names SCHEMA.TABLE.COLUMN on both sides"):
+            svc.semantic_model(self.db, "desk", ["SUPPORT.TICKETS"], [{"from": "SUPPORT.TICKETS", "to": "CRM.CHANNELS.NAME"}], dry_run=True)
+        with self.assertRaisesRegex(svc.Refused, "at least two tables"):
+            svc.find_links(self.db, [], tables=["SUPPORT.TICKETS"])
+
     def test_set_gives_a_column_a_role_and_a_bad_one_is_exit_2(self):
         self.run_main("draft", "support.tickets")
         code, out, _ = self.run_main("approve", "SUPPORT.TICKETS", "--set", "CHANNEL=identifier", "--role", "category=-", "--json")

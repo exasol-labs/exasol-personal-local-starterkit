@@ -196,8 +196,12 @@ def unique_exactly(run: Run, key: str) -> bool:
 def find(run: Run, schemas: Iterable[str], *, approved_keys: dict[str, str] | None = None,
          roles: dict[str, str] | None = None,
          proposals: list[tuple[str, str]] | None = None, max_checks: int = MAX_CHECKS,
-         progress: Callable[[str], None] | None = None) -> dict[str, Any]:
+         progress: Callable[[str], None] | None = None, only: Iterable[str] | None = None,
+         same_schema: bool = False) -> dict[str, Any]:
     """The links between tables of different schemas among ``schemas``, each with its evidence.
+
+    ``only`` (SCHEMA.TABLE names) keeps the search to those tables - a person's selection, not every table of the
+    schemas; with ``same_schema`` two tables of one schema are compared too (a table is never linked to itself).
 
     ``approved_keys`` ({SCHEMA.TABLE.COLUMN: why}) are keys a person approved; ``roles`` ({SCHEMA.TABLE.COLUMN: role})
     the approved column maps' roles (a measure is never a pointer; a key or identifier may be one); ``proposals`` are (from, to) pairs an AI
@@ -213,6 +217,9 @@ def find(run: Run, schemas: Iterable[str], *, approved_keys: dict[str, str] | No
 
     schemas = [str(s).upper() for s in schemas]
     tables, virtual = columns(counted, schemas)
+    if only is not None:
+        wanted = {str(t).upper() for t in only}
+        tables = {t: cols for t, cols in tables.items() if t.upper() in wanted}
     keys: dict[str, str] = dict(declared_keys(counted, schemas))
     keys.update({k.upper(): v for k, v in (approved_keys or {}).items()})
     stats: dict[str, dict[str, Any]] = {}
@@ -262,7 +269,7 @@ def find(run: Run, schemas: Iterable[str], *, approved_keys: dict[str, str] | No
                 continue
             for key, why in keys.items():
                 ktable, _, kname = key.rpartition(".")
-                if ktable.split(".")[0] == table.split(".")[0]:
+                if ktable == table or (not same_schema and ktable.split(".")[0] == table.split(".")[0]):
                     continue                                 # the same schema: the schema map's job (schema.py)
                 kst = stats.get(ktable, {}).get("columns", {}).get(kname)
                 if kst is None or full == key or not fits(full, name, c, key, kname, kst):
@@ -364,14 +371,16 @@ def ai_facts(tables: dict[str, list[dict[str, Any]]], notes: dict[str, str] | No
                 for c in cols] for t, cols in tables.items()}
 
 
-def ai_pairs(answer: dict[str, Any], tables: dict[str, list[dict[str, Any]]]) -> list[tuple[str, str]]:
-    """The pairs of a model's answer that name real columns of different schemas."""
+def ai_pairs(answer: dict[str, Any], tables: dict[str, list[dict[str, Any]]], same_schema: bool = False) -> list[tuple[str, str]]:
+    """The pairs of a model's answer that name real columns of different schemas (with ``same_schema``: of
+    different tables)."""
     real = {f"{t}.{c['name']}".upper() for t, cols in tables.items() for c in cols}
     found = []
     for item in (answer.get("links") or [])[:20] if isinstance(answer, dict) else []:
         if not isinstance(item, dict):
             continue
         a, b = str(item.get("from") or "").upper(), str(item.get("to") or "").upper()
-        if a in real and b in real and a.split(".")[0] != b.split(".")[0]:
+        apart = a.rsplit(".", 1)[0] != b.rsplit(".", 1)[0] if same_schema else a.split(".")[0] != b.split(".")[0]
+        if a in real and b in real and apart:
             found.append((a, b))
     return found

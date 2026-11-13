@@ -6,6 +6,9 @@
                               preview=True)            # what it would build, and what the AI proposes; nothing written
     model = model.publish()                             # build it in the database (Semantic Views installed if needed)
     nb.find_links(connection, ["AMAZON", "VS_LOGISTICS", "MY_DATA"])     # links across sources, from the values
+    found = nb.find_links(connection, tables=["AMAZON_SALES.ORDER_LINES", "AMAZON_SALES.RETURNS", "MY_DATA.TARGETS"])
+    nb.semantic_model(connection, "sales_360", tables=[...], links=found["links"],        # links with their evidence
+                      table_notes={"MY_DATA.TARGETS": "The monthly sales target per state."})
     nb.semantic_model(connection, "all_data", schemas=["AMAZON", "VS_LOGISTICS", "MY_DATA"], find=True)
     nb.semantic_models(connection)                      # every model in the database
     nb.refresh_semantic(connection, "sales_360")        # rebuild it after a column map or a link changed
@@ -76,13 +79,14 @@ class SemanticModel:
 
     name: str
     tables: list[str]
-    links: list[str]
+    links: list
     description: str | None
     ai: bool
     found: dict[str, Any] = field(default_factory=dict)
     conn: Any = None
     schemas: list[str] = field(default_factory=list)
     find: bool = False
+    table_notes: dict[str, str] = field(default_factory=dict)
 
     @property
     def status(self) -> str:
@@ -116,7 +120,8 @@ class SemanticModel:
     def publish(self, conn=None) -> "SemanticModel":
         """Build the previewed model in the database (the AI's proposal is asked again only if none was kept)."""
         return semantic_model(conn or self.conn, self.name, self.tables, self.links, ai=self.ai,
-                              description=self.description, schemas=self.schemas, find=self.find)
+                              description=self.description, schemas=self.schemas, find=self.find,
+                              table_notes=self.table_notes)
 
     def __str__(self) -> str:
         found = self.found
@@ -146,30 +151,37 @@ class SemanticModel:
         return f'<div style="font:13px/1.5 system-ui,sans-serif;white-space:pre-wrap">{body}</div>'
 
 
-def find_links(conn, schemas: list[str], *, ai: bool | None = None, check: list[str] | None = None,
-               show: bool = True) -> dict[str, Any]:
+def find_links(conn, schemas: list[str] | None = None, *, tables: list[str] | None = None, ai: bool | None = None,
+               check: list[str] | None = None, show: bool = True) -> dict[str, Any]:
     """The links between tables of different schemas - sample data, your files, external sources - where no foreign
     key says so and the names differ, found from the values, each with its evidence (``exakit describe --links``).
+    ``tables`` (SCHEMA.TABLE) searches a selection of tables instead of whole schemas, and then two tables of the
+    same schema are compared too.
     Bounded reads only; nothing is written. ``ai`` (default: when a model is configured) lets your model propose more
     pairs from names, types and notes; ``check`` is pairs you have in mind ("S.T.COL=S.T.KEY"); each is checked against
     the data and comes back with its evidence or under "rejected". Returns {links, partial, ...}; a link's
     ``confidence`` is "low" for plain numbers, which match by chance: confirm those before using them."""
     service = _service()
     use_ai = _model_configured() if ai is None else bool(ai)
-    found = service.find_links(conn, list(schemas), ai=use_ai, check=list(check or []))
+    if not schemas and not tables:
+        raise ValueError("Name the schemas, or tables=[...], to find the links between.")
+    found = service.find_links(conn, list(schemas or []), ai=use_ai, check=list(check or []), tables=list(tables or []) or None)
     if show:
         print(service.links_text(found))
     return found
 
 
-def semantic_model(conn, name: str, tables: list[str] | None = None, links: list[str] | None = None, *,
+def semantic_model(conn, name: str, tables: list[str] | None = None, links: list | None = None, *,
                    schemas: list[str] | None = None, find: bool = False, ai: bool | None = None,
-                   description: str | None = None, preview: bool = False) -> SemanticModel:
+                   description: str | None = None, preview: bool = False,
+                   table_notes: dict[str, str] | None = None) -> SemanticModel:
     """Build (or with ``preview=True`` only show) an Exasol Semantic Views model over ``tables`` - SCHEMA.TABLE of any
     schemas, each with an approved column map - joined along each schema's approved links and ``links``
     (SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY). ``schemas`` takes every table of those schemas that has an approved column
     map; ``find=True`` finds the links between the schemas from their values (nb.find_links) and uses the ones the
-    data backs. ``ai`` (default: when a model is configured) lets your model propose the
+    data backs. A link may also be one of nb.find_links' own ({"from", "to", ...}): its evidence is stored in the
+    model with it, and a "note" you add says in your words why the two belong together. ``table_notes`` ({SCHEMA.TABLE:
+    text}) says what each table is. ``ai`` (default: when a model is configured) lets your model propose the
     fields' business names, synonyms and extra metrics. Publishing installs Semantic Views when the database does not
     have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user."""
     from .workflow import log_event
@@ -180,9 +192,10 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
         ensure_semantic_views(conn)
     tables = list(tables or [])
     found = service.semantic_model(conn, name, tables, list(links or []), ai=use_ai, dry_run=preview,
-                                   description=description, schemas=list(schemas or []), discover=bool(find))
+                                   description=description, schemas=list(schemas or []), discover=bool(find),
+                                   table_notes=dict(table_notes or {}))
     model = SemanticModel(name, tables, list(links or []), description, use_ai, found, conn,
-                          schemas=list(schemas or []), find=bool(find))
+                          schemas=list(schemas or []), find=bool(find), table_notes=dict(table_notes or {}))
     if not preview:
         log_event("semantic.model", model=found.get("model"), views=found.get("views"), tables=list(tables))
     return model

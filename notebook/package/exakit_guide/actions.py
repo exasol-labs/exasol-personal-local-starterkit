@@ -103,6 +103,15 @@ ACTIONS: dict[str, Action] = {
                                        "links={links}, ai={ai}, preview=True)", "semantic", False),
     "semantic.publish_schemas": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
                                        "links={links}, ai={ai}, preview=False)", "semantic"),
+    # the tables a person ticked (not whole schemas), the links between them - one schema's tables too - and one pair checked
+    "semantic.links_tables": Action("00_quickstart", "found_links = nb.find_links(connection, tables={tables}, ai={ai})", "found_links", False),
+    "semantic.check_link": Action("00_quickstart", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False)",
+                                  "link_check", False),
+    # model_links: the links to use, each as nb.find_links returns it (its evidence with it) and a note in your words
+    "semantic.preview_tables": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
+                                      "table_notes={table_notes}, description={description}, ai={ai}, preview=True)", "semantic", False),
+    "semantic.publish_tables": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
+                                      "table_notes={table_notes}, description={description}, ai={ai}, preview=False)", "semantic"),
     "semantic.refresh": Action("00_quickstart", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
     "map.review": Action("00_quickstart", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
     "map.approve": Action("00_quickstart", "role_review.approve({choices}, {slots}, notes={notes})\ndataset = role_review.dataset()", "dataset"),
