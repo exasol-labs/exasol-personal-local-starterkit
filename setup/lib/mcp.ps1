@@ -668,6 +668,12 @@ function Invoke-McpModule {
     $previousPythonPath = $env:PYTHONPATH
     $previousErrorActionPreference = $ErrorActionPreference
     try {
+        # A stderr line comes back as an ErrorRecord, which Out-String renders
+        # on 5.1 as a PowerShell error block ("+ CategoryInfo ...
+        # RemoteException"), and a blank one as the bare text
+        # "System.Management.Automation.RemoteException". The line itself, as
+        # the module printed it, is what the log and the caller need.
+        $plain = { process { if ($_ -is [System.Management.Automation.ErrorRecord]) { "" + $_.Exception.Message } else { $_ } } }
         $env:PYTHONPATH = if ($previousPythonPath) { "$repoRoot;$previousPythonPath" } else { $repoRoot }
         # Under the module-global $ErrorActionPreference = 'Stop', 2>&1 turns
         # the module's FIRST stderr write into a terminating error that tears
@@ -678,13 +684,13 @@ function Invoke-McpModule {
         # code through. Same fix as Invoke-Exapump / Invoke-ExapumpAdminSql.
         $ErrorActionPreference = "Continue"
         if (Test-ExakitSystemPythonForMcp) {
-            $out = & python -m mcp @ModuleArgs 2>&1 | Out-String -Width 4096
+            $out = & python -m mcp @ModuleArgs 2>&1 | & $plain | Out-String -Width 4096
         } else {
             # Fall back to the managed uv Python (pinned to 3.12), which is
             # guaranteed to satisfy the 3.11+ requirement. uv is already a
             # hard dependency here (the MCP server itself runs via uvx).
             $uv = Install-ExakitUv
-            $out = & $uv run --python $script:ManagedPythonVersion --no-project python -m mcp @ModuleArgs 2>&1 | Out-String -Width 4096
+            $out = & $uv run --python $script:ManagedPythonVersion --no-project python -m mcp @ModuleArgs 2>&1 | & $plain | Out-String -Width 4096
         }
         return @{ Output = $out; ExitCode = $LASTEXITCODE }
     } catch {
@@ -722,7 +728,7 @@ function Invoke-McpSetupCli {
         # screen before anyone could read it. Fail() stops the animation for the
         # same reason.
         Stop-ExakitAnimation
-        Warn2 "Could not write the MCP entry for this AI client. What failed: exakit logs setup. Retry with: exakit mcp-setup"
+        Warn2 "Could not write the MCP entry for this AI client. See why with: exakit logs setup. Retry with: exakit mcp-setup"
         return $null
     }
     return $result.Output
@@ -1513,6 +1519,9 @@ function Invoke-McpSetup {
     # What the MCP server's apply could not heal, now that the table is done.
     Show-McpSidecarProblem
     if (-not $resultJson) { return $false }
+    # The clients are written: an earlier install's "AI client (MCP) setup did
+    # not finish" is history. Twin of the same clear in exakit_mcp_setup.
+    if (Get-Command Clear-ExakitSoftFailure -ErrorAction SilentlyContinue) { Clear-ExakitSoftFailure -Component "mcp_clients" }
     Show-McpReadyPanel "permanent"
     # The panel above IS the guidance; announcing that it exists, directly
     # under it, told the reader nothing they had not just read.
@@ -1829,14 +1838,40 @@ function Get-McpSidecarDefinitionJson([string]$User, [string]$PasswordFile, [int
 # or $null when it could not be written. Twin of _mcp_sidecar_put.
 function Write-McpSidecarDefinition([string]$User, [string]$PasswordFile, [int]$Port, [string]$Uv, [string]$Root) {
     $defFile = [System.IO.Path]::GetTempFileName()
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
-        Set-Content -LiteralPath $defFile -Encoding UTF8 -Value (Get-McpSidecarDefinitionJson $User $PasswordFile $Port)
-        $changed = ("" + (& $Uv run --no-project --quiet --with $script:SidecarPyYaml python `
+        # BOM-less UTF-8, NOT `Set-Content -Encoding UTF8`: on Windows
+        # PowerShell 5.1 that prepends a BOM (pwsh 7 does not), and the editor's
+        # json.loads refused the file - no sidecar, so no MCP entry for any
+        # client. Same writer as Write-ExakitSettingsJson.
+        [System.IO.File]::WriteAllText($defFile, (Get-McpSidecarDefinitionJson $User $PasswordFile $Port),
+            (New-Object System.Text.UTF8Encoding($false)))
+        # 'Continue', not the module-global 'Stop': under 5.1 the editor's first
+        # stderr line became a terminating NativeCommandError that escaped past
+        # the exit-code check, and the caller logged only "Traceback (most
+        # recent call last):". Stderr is captured and logged whole instead; the
+        # editor prints no value (only paths and error kinds), and uv's own
+        # notices carry none either. Same fix as Invoke-McpModule.
+        $ErrorActionPreference = "Continue"
+        $raw = @(& $Uv run --no-project --quiet --with $script:SidecarPyYaml python `
             (Join-Path $Root "setup/lib/sidecar_definition.py") put `
-            (Join-Path $script:PersonalDeployDir "sidecars.yaml") $script:McpSidecarName $defFile 2>$null)).Trim()
-        if ($LASTEXITCODE -ne 0) { return $null }
-        return $changed
-    } finally { Remove-Item -LiteralPath $defFile -Force -ErrorAction SilentlyContinue }
+            (Join-Path $script:PersonalDeployDir "sidecars.yaml") $script:McpSidecarName $defFile 2>&1)
+        $code = $LASTEXITCODE
+        $ErrorActionPreference = $previousErrorActionPreference
+        $out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+        $err = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } |
+            ForEach-Object { ("" + $_.Exception.Message).Trim() } | Where-Object { $_ })
+        if ($code -ne 0) {
+            $why = $err -join " | "
+            if (-not $why) { $why = "no message" }
+            Write-ExakitLog "WARN" "MCP sidecar: the definition editor exited $code ($why)"
+            return $null
+        }
+        return ("" + ($out -join " ")).Trim()
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        Remove-Item -LiteralPath $defFile -Force -ErrorAction SilentlyContinue
+    }
 }
 
 # Wait-McpSidecarServing <budget> - poll `exasol mcp status` every 3s until it
@@ -2010,6 +2045,11 @@ function Set-McpSidecar {
     if ($tag -match '^[0-9]') { Set-ExakitManifestValue "components.mcp_server.version" $tag }
     Set-ExakitManifestValue "components.mcp_server.validated" $true
     Write-ExakitLog "OK" "MCP: the launcher's MCP server answers at $url as $user"
+    # Serving now: the install step's "mcp did not finish" record (and its
+    # failure note) is history, whichever command healed it - `exakit status`
+    # kept both after an `exakit mcp-setup` that worked. Twin of the same
+    # clear in mcp_sidecar_apply.
+    if (Get-Command Clear-ExakitSoftFailure -ErrorAction SilentlyContinue) { Clear-ExakitSoftFailure -Component "mcp" }
     return $true
 }
 

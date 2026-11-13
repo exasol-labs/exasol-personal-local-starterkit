@@ -17,7 +17,12 @@ deployment with what is saved. The kit edits it for the sidecars it runs:
         Remove <name>. Prints "changed" or "unchanged".
 
 Needs PyYAML: the kit runs this as `uv run --no-project --with PyYAML==<pin>`.
-No value is ever printed.
+No value is ever printed: a failure is one stderr line naming the error's
+kind and where it is, never the text around it (sidecars.yaml holds the
+password as a literal value, and PyYAML's own messages quote the document).
+
+The JSON and the value files are read as utf-8-sig: Windows PowerShell 5.1
+writes UTF-8 with a BOM, and json.loads refuses one.
 """
 
 from __future__ import annotations
@@ -65,7 +70,7 @@ def literal_env(path: Path, name: str, assignments: list[str]) -> bool:
     changed = False
     for assignment in assignments:
         variable, _, raw = assignment.partition("=")
-        value = Path(raw[1:]).read_text(encoding="utf-8").strip() if raw.startswith("@") else raw
+        value = Path(raw[1:]).read_text(encoding="utf-8-sig").strip() if raw.startswith("@") else raw
         wanted = {"name": variable, "value": value}
         for index, entry in enumerate(env):
             if isinstance(entry, dict) and entry.get("name") == variable:
@@ -84,7 +89,7 @@ def literal_env(path: Path, name: str, assignments: list[str]) -> bool:
 def put(path: Path, name: str, definition: dict) -> bool:
     for entry in (definition.get("container") or {}).get("env") or []:
         if isinstance(entry, dict) and "valueFile" in entry:
-            entry["value"] = Path(entry.pop("valueFile")).read_text(encoding="utf-8").strip()
+            entry["value"] = Path(entry.pop("valueFile")).read_text(encoding="utf-8-sig").strip()
     document = _load(path)
     if document["sidecars"].get(name) == definition:
         return False
@@ -102,6 +107,20 @@ def drop(path: Path, name: str) -> bool:
     return True
 
 
+def _describe(error: Exception) -> str:
+    """The error's kind and position, without the text it was reading: a YAML
+    error's str() carries a snippet of sidecars.yaml, which holds a password."""
+    kind = type(error).__name__
+    if isinstance(error, json.JSONDecodeError):
+        return f"{kind}: {error.msg} (line {error.lineno}, column {error.colno})"
+    if isinstance(error, yaml.MarkedYAMLError) and error.problem_mark is not None:
+        mark = error.problem_mark
+        return f"{kind} at line {mark.line + 1}, column {mark.column + 1}"
+    if isinstance(error, OSError):
+        return f"{kind}: {error.strerror} ({error.filename})"
+    return kind
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 3:
         print(__doc__, file=sys.stderr)
@@ -111,7 +130,7 @@ def main(argv: list[str]) -> int:
         if command == "literal-env":
             changed = literal_env(path, name, argv[3:])
         elif command == "put" and len(argv) == 4:
-            changed = put(path, name, json.loads(Path(argv[3]).read_text(encoding="utf-8")))
+            changed = put(path, name, json.loads(Path(argv[3]).read_text(encoding="utf-8-sig")))
         elif command == "drop":
             changed = drop(path, name)
         else:
@@ -120,6 +139,9 @@ def main(argv: list[str]) -> int:
     except LookupError:
         print(f"sidecar '{name}' is not saved in {path}", file=sys.stderr)
         return 2
+    except Exception as error:  # noqa: BLE001 - one safe line instead of a traceback
+        print(f"sidecar_definition.py {command} failed: {_describe(error)}", file=sys.stderr)
+        return 1
     print("changed" if changed else "unchanged")
     return 0
 
