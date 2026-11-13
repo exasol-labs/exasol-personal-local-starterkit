@@ -1446,7 +1446,7 @@ class SemanticViews(Screen):
             note = " ".join(str(v.get(self._fid(f"svn:{link['from']}={link['to']}")) or "").split())
             links.append({**{k: w for k, w in link.items() if k != "note"}, **({"note": note} if note else {})})
         return {"tables": tables, "table_notes": {t: text for t, text in notes.items() if text}, "links": links,
-                "name": str(v.get(self._fid("sv_name")) or "").strip() or "my_data",
+                "name": str(v.get(self._fid("sv_name")) or "").strip() or "all_data",
                 "description": " ".join(str(v.get(self._fid("sv_about")) or "").split()) or None, "ai": bool(v.get("sv_ai"))}
 
     def build(self) -> list[dict]:
@@ -1525,7 +1525,8 @@ class SemanticViews(Screen):
         # 3 · the model
         blocks += [{"t": "subhead", "v": "3 · The model"},
                    {"t": "fields", "items": [{"id": "sv_model", "type": "group", "fields": [
-                       {"id": self._fid("sv_name"), "label": "Model name", "value": (self.fill or {}).get("name") or "my_data",
+                       {"id": self._fid("sv_name"), "label": "Model name (all_data: every approved table of every source)",
+                        "value": (self.fill or {}).get("name") or "all_data",
                         "placeholder": "sales_360", "type": "text"},
                        {"id": self._fid("sv_about"), "label": "What it is about (optional)", "value": (self.fill or {}).get("about") or "", "type": "text",
                         "placeholder": "Orders with their delivery times and targets, by state"}]}]},

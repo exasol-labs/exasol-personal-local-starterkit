@@ -169,6 +169,9 @@ class FlowTest(unittest.TestCase):
     def test_a_changed_column_map_changes_the_model_in_place_and_a_rebuild_keeps_verified_questions(self):
         """The second approval changes the published model with a few statements - no drop, so the product keeps what
         people added to it - and a rebuild (forced by a key change) puts the kept verified questions back."""
+        off = mock.patch.dict("os.environ", {"EXAKIT_ALL_DATA_MODEL": "0"})     # one model here: the schema's
+        off.start()
+        self.addCleanup(off.stop)
         doc = self.describe()["doc"]
         self.approve(doc)
         first = list(self.db.sv.scripts)
@@ -198,6 +201,14 @@ class FlowTest(unittest.TestCase):
         self.approve(doc)
         self.assertIn("DROP_MODEL_IF_EXISTS", self.db.sv.scripts, "a key change needs a rebuild")
         self.assertEqual("ADD_VERIFIED_QUERY", self.db.sv.scripts[-1], "and the verified question is put back")
+
+    def test_every_approval_also_updates_the_one_model_of_all_your_data(self):
+        doc = self.describe()["doc"]
+        result = self.approve(doc)
+        self.assertIn("all_data", self.db.sv.models, "the model of all your data is built with the first approval")
+        self.assertEqual([("SUPPORT", "TICKETS")], self.db.sv.models["all_data"]["entities"])
+        self.assertTrue(json.loads((self.home / "semantic" / "all_data.json").read_text(encoding="utf-8"))["inputs"]["all"])
+        self.assertFalse(any("all_data" in w for w in result.get("warnings") or []), result.get("warnings"))
 
     def test_describe_on_an_unchanged_approved_table_returns_it_without_profiling(self):
         self.approve(self.describe()["doc"])
@@ -366,7 +377,9 @@ class SemanticModelTest(unittest.TestCase):
         self.assertEqual(["ORDERS", "COURIER_DAILY"], [o["name"] for o in spec["objects"]])   # the tables with measures
         orders = spec["objects"][0]
         names = [d["name"] for d in orders["dimensions"]]
-        self.assertEqual(["o_orderdate", "o_orderdate_month", "o_orderstatus", "c_mktsegment"], names)
+        self.assertEqual(["o_orderkey", "o_custkey", "o_orderdate", "o_orderdate_month", "o_orderstatus", "c_custkey",
+                          "c_mktsegment"], names, "keys and identifiers are dimensions too: filter and join on them")
+        self.assertIn("Used as the key", next(d for d in orders["dimensions"] if d["name"] == "o_orderkey")["comment"])
         self.assertNotIn("c_phone", " ".join(names))                       # a sensitive column is never a dimension
         self.assertEqual(["orders_count", "total_o_totalprice", "average_o_totalprice"], [m["name"] for m in orders["metrics"]])
         self.assertTrue(next(f for f in orders["facts"] if f.get("column") == "O_SECRET")["private"])
@@ -374,15 +387,20 @@ class SemanticModelTest(unittest.TestCase):
         self.assertEqual("CAST(t3.DELIVERIES AS DOUBLE)", courier["facts"][1]["expression"])   # a number sent as text
         self.assertEqual(["courier_daily_state", "courier_daily_day", "day_month"], [d["name"] for d in courier["dimensions"]])
         self.assertTrue(spec["entities"][2]["virtual"])
+        self.assertIn("read live where it lives", spec["entities"][2]["description"])
+        kinds = {(i["entity"], i["kind"]) for i in spec["instructions"]}
+        self.assertIn(("courier_daily", "PRECONDITION"), kinds, "a table read live says so to an agent")
+        self.assertTrue(any(k == "SAFETY" for _e, k in kinds), "a personal-data column is a safety rule")
 
     def test_the_statements_create_the_model_then_publish_it(self):
         sent = semantic_model.statements(self.spec())
         self.assertTrue(sent[0].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('sales_360', 'SEM_SALES_360', "))
         self.assertIn("EXECUTE SCRIPT SEMANTIC_ADMIN.ADD_RELATIONSHIP('sales_360', 'orders_to_customer', 'orders', "
                       "'customer', 't1.O_CUSTKEY = t2.C_CUSTKEY', 'MANY_TO_ONE', 'LEFT', NULL)", sent)
-        self.assertEqual("EXECUTE SCRIPT SEMANTIC_ADMIN.PUBLISH_MODEL('sales_360')", sent[-1])
+        published = sent.index("EXECUTE SCRIPT SEMANTIC_ADMIN.PUBLISH_MODEL('sales_360')")
+        self.assertTrue(all("ADD_AGENT_INSTRUCTION" in x for x in sent[published + 1:]), "instructions follow the publish")
         definition = next(s for s in sent if "ALTER SEMANTIC VIEW sales_360.ORDERS" in s)
-        self.assertIn("COMMENT ''Order value incl. tax''", definition)        # a column note is the field's comment
+        self.assertIn("COMMENT ''Order value incl. tax. Used as a number: add it up or average it", definition)   # note + why
         self.assertIn("AS total_o_totalprice / NULLIF(orders_count, 0)", definition)
 
     def test_a_link_found_from_the_values_is_declared_unique_and_keeps_its_evidence(self):

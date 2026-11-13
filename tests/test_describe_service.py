@@ -205,7 +205,7 @@ class Service(unittest.TestCase):
         self.assertTrue(out.startswith("descriptor: 1"))
         code, out, _ = self.run_main("comments", "support_tickets")
         self.assertEqual(0, code)
-        self.assertTrue(out.startswith("Published semantic model support (SEM_SUPPORT): 1 views, 4 dimensions, 1 metrics"), out)
+        self.assertTrue(out.startswith("Published semantic model support (SEM_SUPPORT): 1 views, 5 dimensions, 1 metrics"), out)
 
     def test_a_multi_source_model_its_ai_proposal_its_refresh_and_the_list(self):
         self.run_main("draft", "support.tickets", "--id", "support_tickets")
@@ -232,7 +232,7 @@ class Service(unittest.TestCase):
         self.assertTrue(any("ticket_total" in d for d in self.db.sv.models["support_360"]["definitions"]),
                         "a refresh keeps the AI's accepted metrics")
         code, out, _ = self.run_main("models", "--json")
-        self.assertEqual({"support", "support_360"}, {m["model"] for m in json.loads(out)})
+        self.assertEqual({"support", "support_360", "all_data"}, {m["model"] for m in json.loads(out)})
         self.assertTrue(all(m["kit"] and m["refreshable"] for m in json.loads(out)))
         self.assertEqual(3, self.run_main("refresh", "never_built")[0])
 

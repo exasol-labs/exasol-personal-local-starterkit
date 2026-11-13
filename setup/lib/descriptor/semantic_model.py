@@ -39,7 +39,19 @@ MAX_DEPTH = 3
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PLAIN_COLUMN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _NUMERIC = ("DECIMAL", "DOUBLE", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "FLOAT", "NUMBER", "NUMERIC", "REAL")
-DIMENSION_ROLES = ("time", "category", "flag")
+DIMENSION_ROLES = ("time", "category", "flag", "key", "identifier")
+# What each role is for: the second half of every field's comment, so a person or an AI reading the model knows
+# why a column is used the way it is, not only what it holds.
+ROLE_WHY = {
+    "key": "the key: it identifies one row, and joins and counts use it",
+    "identifier": "an identifier of something else: filter or join on it, never add it up",
+    "time": "when the row happened: group by it for a trend",
+    "category": "one of a small set of groups: compare the groups",
+    "flag": "a yes or no: filter by it, or take its rate",
+    "measure": "a number: add it up or average it",
+    "text": "free text: read or search it, never group by it",
+    "other": "kept for reference: not grouped or added up",
+}
 # SQL words a name may not be (Exasol reserves many more; these are the ones a column is commonly called).
 RESERVED = frozenset("""absolute action add all alter and any are as asc at authorization avg begin between bit both by
 call cascade case cast char character check close collate column commit connect connection constraint continue count
@@ -124,7 +136,7 @@ def _words(name: str) -> str:
 # --- the spec: no database ------------------------------------------------------------------------------------------------
 
 def table_input(table: str, doc: dict[str, Any], types: dict[str, str], *, virtual: bool = False,
-                profile: dict[str, Any] | None = None) -> dict[str, Any]:
+                profile: dict[str, Any] | None = None, origin: dict[str, Any] | None = None) -> dict[str, Any]:
     """One table for build(): its approved column map (doc), its column types ({COLUMN: TYPE}) and, when kept, the
     profile the map came from (a category's most frequent values, for an AI's filters; never a sensitive column's)."""
     top = {str(c.get("column")): [str(t[0]) for t in c.get("top") or [] if t and t[0] is not None][:10]
@@ -135,12 +147,31 @@ def table_input(table: str, doc: dict[str, Any], types: dict[str, str], *, virtu
         columns.append({"name": str(name), "type": types.get(str(name), "VARCHAR(2000000)"),
                         "role": str(entry.get("role") or "other"), "sensitive": sensitive,
                         "note": str(entry.get("note") or "").strip(),
+                        "evidence": str(entry.get("evidence") or "").strip(),
                         "values": [] if sensitive else top.get(str(name), [])})
     slots = doc.get("slots") or {}
     key = [slots["key"]] if slots.get("key") else [c["name"] for c in columns if c["role"] == "key"][:1]
     return {"table": table, "columns": columns, "key": key, "grain": str(doc.get("grain") or "").strip(),
             "virtual": virtual or (doc.get("source") or {}).get("kind") == "virtual",
-            "version": doc.get("version")}
+            "version": doc.get("version"), "origin": dict(origin or {})}
+
+
+def comment(column: dict[str, Any], schema: str, table: str) -> str:
+    """A field's comment: what the column holds (the approved note, else its name and table), then why it is used
+    that way - its role and what the kit measured that gave it."""
+    what = column.get("note") or f"{column['name']} of {schema}.{table}"
+    why = ROLE_WHY.get(column.get("role") or "other", "")
+    measured = f" ({column['evidence']})" if column.get("evidence") else ""
+    return f"{what.rstrip('.')}. Used as {why}{measured}." if why else what
+
+
+def where_from(origin: dict[str, Any], schema: str, virtual: bool) -> str:
+    """Where a table's rows live, in a sentence: the connector and source for an external one, else this database."""
+    if virtual or origin.get("connector"):
+        kind = origin.get("connector_name") or origin.get("connector") or "an external source"
+        named = f", source {origin['source']}" if origin.get("source") else ""
+        return f"Source: {kind}{named} (schema {schema}), read live where it lives; nothing is copied."
+    return f"Source: a table in this Exasol database (schema {schema})."
 
 
 def _paths(root: str, edges: dict[str, list[tuple[str, str]]]) -> dict[str, list[list[str]]]:
@@ -181,12 +212,13 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         while entity in used:
             entity = f"{entity}_{index}"
         used.add(entity)
+        origin = dict(table.get("origin") or {})
         record = {"name": entity, "schema": schema.upper(), "table": object_name.upper(), "alias": f"t{index}",
                   "key": [k for k in table.get("key") or [] if k], "virtual": bool(table.get("virtual")),
                   "grain": table.get("grain") or f"one row of {schema}.{object_name}",
-                  "description": table.get("description") or f"{schema}.{object_name}"
-                  + (" (an external source, read live)" if table.get("virtual") else ""),
-                  "columns": table["columns"]}
+                  "description": (table.get("description") or f"{schema}.{object_name}").rstrip(".") + ". "
+                  + where_from(origin, schema.upper(), bool(table.get("virtual"))),
+                  "origin": origin, "columns": table["columns"]}
         entities.append(record)
         by_table[f"{schema}.{object_name}".upper()] = record
 
@@ -243,7 +275,7 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             facts.append({"name": free(column["name"], e["name"]), "entity": e["name"], "expression": expression,
                           "type": kind, "private": column["sensitive"], "column": column["name"],
                           "display": _words(column["name"].lower()),
-                          "comment": column["note"] or f"{column['name']} of {e['schema']}.{e['table']}"})
+                          "comment": comment(column, e["schema"], e["table"])})
         facts_of[e["name"]] = facts
 
     def dimensions_of(e: dict[str, Any], owner: str) -> list[dict[str, Any]]:
@@ -252,9 +284,9 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             if column["role"] not in DIMENSION_ROLES or column["sensitive"]:
                 continue
             expression, kind = column_sql(e["alias"], column["name"]), sql_type(column["type"])
-            comment = column["note"] or f"{column['name']} of {e['schema']}.{e['table']}"
             found.append({"name": free(column["name"], e["name"], owner), "entity": e["name"], "expression": expression,
-                          "type": kind, "display": _words(column["name"].lower()), "comment": comment,
+                          "type": kind, "display": _words(column["name"].lower()),
+                          "comment": comment(column, e["schema"], e["table"]),
                           "column": column["name"], "role": column["role"],
                           "values": column.get("values") or [] if column["role"] in ("category", "flag") else []})
             if column["role"] == "time" and kind.startswith(("DATE", "TIMESTAMP")):
@@ -312,11 +344,31 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
     schemas = sorted({e["schema"] for e in entities})
     about = description or f"{'Multi-source model over ' if len(schemas) > 1 else 'Model of '}{', '.join(schemas)}"
     sources = [{"table": f"{e['schema']}.{e['table']}", "entity": e["name"],
-                "origin": "external source, read live" if e["virtual"] else "table in this database"} for e in entities]
+                "origin": "external source, read live" if e["virtual"] else "table in this database",
+                **{k: e["origin"][k] for k in ("connector", "connector_name", "source") if e["origin"].get(k)}}
+               for e in entities]
+    # Every column has its meaning in the model: a field's comment for the ones that are fields; an instruction on its
+    # table for the rest (free text, other) and a safety rule for personal data; and a table read live says so.
+    instructions = []
+    for e in entities:
+        for column in e["columns"]:
+            if column["sensitive"]:
+                instructions.append({"entity": e["name"], "kind": "SAFETY", "priority": 10,
+                                     "text": f"{column['name']} of {e['schema']}.{e['table']} holds personal data: never "
+                                             "select, group, filter or show its values."})
+            elif column["role"] in ("text", "other"):
+                instructions.append({"entity": e["name"], "kind": "DEFINITION", "priority": 100,
+                                     "text": f"{e['schema']}.{e['table']}.{column['name']}: {comment(column, e['schema'], e['table'])}"})
+        if e["virtual"]:
+            instructions.append({"entity": e["name"], "kind": "PRECONDITION", "priority": 50,
+                                 "text": f"{e['schema']}.{e['table']} is read live from "
+                                         f"{e['origin'].get('connector_name') or 'an external source'}: every query reaches "
+                                         "that system. Ask for aggregates with filters, not every row."})
     return {"model": model, "published_schema": published_schema(model), "description": f"{about} {MARK}",
             "sources": sources,
             "entities": [{k: v for k, v in e.items() if k != "columns"} for e in entities],
-            "relationships": relationships, "objects": objects, "notes": notes, "schemas": schemas}
+            "relationships": relationships, "objects": objects, "notes": notes, "schemas": schemas,
+            "instructions": instructions}
 
 
 # --- the statements -------------------------------------------------------------------------------------------------------
@@ -388,7 +440,17 @@ def statements(spec: dict[str, Any]) -> list[str]:
         found.append(_script("ADD_SEMANTIC_OBJECT", model, obj["name"], obj["root"], obj["description"]))
         found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
     found.append(_script("PUBLISH_MODEL", model))
+    found += instruction_statements(model, spec.get("instructions") or [])
     return found
+
+
+def instruction_statements(model: str, instructions: list[dict[str, Any]], before: list[dict[str, Any]] | None = None) -> list[str]:
+    """The model's own instructions for agents (ADD_AGENT_INSTRUCTION on each table's entity): a column's meaning when
+    it is no field, a personal-data rule, a source read live. Added after the publish, as the product asks; on a
+    change, only the ones that are new."""
+    had = {(i["entity"], i["kind"], i["text"]) for i in before or []}
+    return [_script("ADD_AGENT_INSTRUCTION", model, "ENTITY", i["entity"], i["kind"], i["text"], None, int(i["priority"]))
+            for i in instructions if (i["entity"], i["kind"], i["text"]) not in had]
 
 
 def column_map_statements(model: str, e: dict[str, Any], before: dict[str, Any] | None = None) -> list[str]:
@@ -468,6 +530,7 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
             found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
     if found:
         found.append(_script("PUBLISH_MODEL", model))
+    found += instruction_statements(model, spec.get("instructions") or [], previous.get("instructions") or [])
     return found
 
 

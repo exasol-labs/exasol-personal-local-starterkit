@@ -97,15 +97,16 @@ def _load(text: str) -> dict[str, Any]:
     return flow.load(text)
 
 
-def approved_tables(schema: str, home: Path | None = None) -> dict[str, dict[str, Any]]:
-    """{SCHEMA.TABLE: approved column map} for every table of ``schema`` the store has an approval for."""
+def approved_tables(schema: str | None, home: Path | None = None) -> dict[str, dict[str, Any]]:
+    """{SCHEMA.TABLE: approved column map} for every table of ``schema`` (None: of every schema) the store has an
+    approval for."""
     root = (home or store.kit_home()) / store.FOLDER
     found: dict[str, dict[str, Any]] = {}
     if not root.is_dir():
         return found
     for folder in sorted(root.iterdir()):
         name = folder.name
-        if not folder.is_dir() or "." not in name or name.split(".", 1)[0].upper() != schema.upper():
+        if not folder.is_dir() or "." not in name or (schema is not None and name.split(".", 1)[0].upper() != schema.upper()):
             continue
         text = store.current(name, home)
         if text:
@@ -129,6 +130,31 @@ def column_types(rows: Run, tables: list[str]) -> tuple[dict[str, dict[str, str]
     virtual = {str(r["SCHEMA_NAME"]) for r in rows(
         f"SELECT SCHEMA_NAME FROM SYS.EXA_SCHEMAS WHERE SCHEMA_IS_VIRTUAL AND SCHEMA_NAME IN ({where})")}
     return types, virtual
+
+
+def source_origins(home: Path | None = None) -> dict[str, dict[str, str]]:
+    """{VS_<NAME>: {connector, connector_name, source}} for every source `exakit connect` keeps on this computer (its
+    config.json under sources/), the connector's name from the kit's connector catalog. Names only: a source's
+    settings and secrets are never read into a model."""
+    root = (home or store.kit_home()) / "sources"
+    names: dict[str, str] = {}
+    try:
+        catalog = json.loads((Path(__file__).resolve().parents[2] / "virtual-schemas" / "catalog.json").read_text(encoding="utf-8"))
+        names = {str(c.get("id")): str(c.get("name") or c.get("id")) for c in catalog.get("connectors") or []}
+    except (OSError, ValueError):
+        pass
+    found: dict[str, dict[str, str]] = {}
+    for config in sorted(root.glob("*/config.json")) if root.is_dir() else []:
+        try:
+            doc = json.loads(config.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        schema = str((doc.get("objects") or {}).get("schema") or "").upper()
+        connector = str(doc.get("connector") or "")
+        if schema and connector:
+            found[schema] = {"connector": connector, "connector_name": names.get(connector, connector),
+                             "source": str(doc.get("id") or config.parent.name)}
+    return found
 
 
 def schema_links(schema: str, home: Path | None = None) -> list[dict[str, str]]:
@@ -190,11 +216,14 @@ def build_model(rows: Run, tables: list[str], links: list[dict[str, str]], name:
         raise sm.ModelRefused(f"No approved column map for {', '.join(missing)}: approve each first "
                               "(exakit describe SCHEMA.TABLE, then exakit describe SCHEMA.TABLE --approve).")
     types, virtual = column_types(rows, tables)
+    origins = source_origins(home)
     inputs = []
     for t in tables:
         version = docs[t].get("version")
         profile = store.read_profile(t, int(version), home) if isinstance(version, int) else None
-        inputs.append(sm.table_input(t, docs[t], types.get(t, {}), virtual=t.split(".", 1)[0] in virtual, profile=profile))
+        schema = t.split(".", 1)[0]
+        inputs.append(sm.table_input(t, docs[t], types.get(t, {}), virtual=schema in virtual, profile=profile,
+                                     origin=origins.get(schema.upper())))
     spec = sm.build(inputs, links, name, description=description)
     # Each table's approved column map goes into the model with it (sm.column_map_statements): the text as the store
     # holds that version, so the model alone is enough to put the store back.
@@ -245,6 +274,75 @@ def publish(execute: Callable[[str], Any], rows: Run, doc: dict[str, Any], reade
     table = doc["source"]["object"]
     result = publish_schema(execute, rows, table.split(".", 1)[0], reader, docs={table: doc}, home=home)
     result["refreshed"] = refresh_including(execute, rows, table, reader, home=home, warnings=result.setdefault("warnings", []))
+    try:
+        everything = publish_all(execute, rows, reader, home=home)
+        if everything:
+            result["refreshed"].append(everything["model"])
+    except Exception as err:                       # the approval and its schema's model stand
+        result["warnings"].append(f"the model of all your data ({ALL_MODEL}) was not updated: {' '.join(str(err).split())[:200]} "
+                                  f"(again: exakit describe --model {ALL_MODEL} --refresh)")
+    return result
+
+
+ALL_MODEL = "all_data"
+ALL_ABOUT = ("Every table with an approved column map, from every source: sample data, your own tables and files, "
+             "and every external source, read live where it lives.")
+
+
+def all_tables(rows: Run, home: Path | None = None) -> list[str]:
+    """Every table the store has an approved column map for that the database still has (a table dropped, or a source
+    disconnected, since it was approved is left out)."""
+    approved = sorted(approved_tables(None, home))
+    if not approved:
+        return []
+    types, _virtual = column_types(rows, approved)
+    present = {t.upper() for t in types}
+    return [t for t in approved if t.upper() in present]
+
+
+def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *, home: Path | None = None,
+                tables: list[str] | None = None, links: list[dict[str, Any]] | None = None,
+                table_notes: dict[str, str] | None = None, description: str | None = None,
+                labels: dict[str, Any] | None = None, extra: list | None = None,
+                progress: Callable[[str], None] | None = None) -> dict[str, Any] | None:
+    """The one model over all your data (ALL_MODEL): every approved table of every source, each schema's approved
+    links, and the links across sources you confirmed for it (kept beside it), its fusion and verified questions with
+    it. Built or changed in place on every approval; EXAKIT_ALL_DATA_MODEL=0 turns it off. None when nothing is
+    approved. ``tables`` and the rest add to what is kept (the Semantic views card publishing under this name)."""
+    if os.environ.get("EXAKIT_ALL_DATA_MODEL", "1").strip() == "0":
+        return None
+    kept_inputs = (kept(ALL_MODEL, home) or {}).get("inputs") or {}
+    every = all_tables(rows, home)
+    every += [t for t in tables or [] if t not in every]
+    if not every:
+        return None
+    joins: list[dict[str, Any]] = []
+    for link in list(links or []) + list(kept_inputs.get("links") or []):
+        if not any(j["from"] == link["from"] for j in joins):
+            joins.append(link)
+    for schema in sorted({t.split(".", 1)[0] for t in every}):
+        for link in schema_links(schema, home):
+            if not any(j["from"] == link["from"] for j in joins):
+                joins.append(link)
+    joins = [j for j in joins if j["from"].rsplit(".", 1)[0] in every and j["to"].rsplit(".", 1)[0] in every]
+    notes = {**(kept_inputs.get("table_notes") or {}), **{k.upper(): v for k, v in (table_notes or {}).items()}}
+    about = description or kept_inputs.get("description") or ALL_ABOUT
+    spec = build_model(rows, every, joins, ALL_MODEL, description=about, home=home)
+    for entity in spec["entities"]:
+        said = notes.get(f"{entity['schema']}.{entity['table']}".upper())
+        if said:
+            entity["description"] = said.rstrip(".") + ". " + sm.where_from(entity.get("origin") or {}, entity["schema"],
+                                                                           bool(entity.get("virtual")))
+    labels = {**(kept_inputs.get("labels") or {}), **(labels or {})}
+    if labels:
+        apply_labels(spec, labels)
+    extra = [tuple(x) for x in (extra if extra is not None else kept_inputs.get("extra") or [])]
+    cross = [j for j in joins if j["from"].split(".", 1)[0] != j["to"].split(".", 1)[0] or j.get("evidence")]
+    result = publish_model(execute, rows, spec, {"tables": every, "links": cross, "name": ALL_MODEL, "all": True,
+                                                 "description": about if about != ALL_ABOUT else None, "table_notes": notes,
+                                                 "labels": labels, "extra": [list(x) for x in extra]},
+                           reader=reader, home=home, extra=extra, progress=progress)
+    result["view"] = f"semantic model {result['model']} ({result['published_schema']})"
     return result
 
 
@@ -259,8 +357,8 @@ def refresh_including(execute: Callable[[str], Any], rows: Run, table: str, read
             inputs = json.loads(path.read_text(encoding="utf-8"))["inputs"]
         except (OSError, ValueError, KeyError):
             continue
-        if inputs.get("schema") or table not in (inputs.get("tables") or []):
-            continue
+        if inputs.get("schema") or inputs.get("all") or table not in (inputs.get("tables") or []):
+            continue                                # (the model of all your data is updated by publish_all)
         try:
             refresh(execute, rows, path.stem, reader, home=home)
             done.append(path.stem)
@@ -275,11 +373,18 @@ def refresh(execute: Callable[[str], Any], rows: Run, model: str, reader: str | 
             home: Path | None = None) -> dict[str, Any]:
     """Rebuild a model the kit published before, from what it was built on and the column maps approved since."""
     found = kept(model, home)
+    if not found and sm.model_name(model) == ALL_MODEL:
+        result = publish_all(execute, rows, reader, home=home)
+        if result is None:
+            raise sm.ModelRefused("No table has an approved column map yet, so there is no model of all your data.")
+        return result
     if not found:
         raise sm.ModelRefused(f"The kit has not published a model named {sm.model_name(model)} on this computer.")
     inputs = found["inputs"]
     if inputs.get("schema"):
         return publish_schema(execute, rows, inputs["schema"], reader, home=home)
+    if inputs.get("all"):
+        return publish_all(execute, rows, reader, home=home)
     spec = build_model(rows, list(inputs["tables"]), list(inputs.get("links") or []), inputs.get("name") or model,
                        description=inputs.get("description"), home=home)
     for entity in spec["entities"]:            # what a person said each table is, kept with the model

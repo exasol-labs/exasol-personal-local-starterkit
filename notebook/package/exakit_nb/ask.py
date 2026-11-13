@@ -256,7 +256,7 @@ def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], q
     """(Semantic SQL, the plain SQL it compiles to, assumptions, doubts) for a question, or None when the model says
     the question cannot be answered from these metrics and dimensions."""
     prompt = {"semantic_view": semantic["view"], "dimensions": semantic["dimensions"], "metrics": semantic["metrics"],
-              "question": question,
+              "instructions": semantic.get("instructions") or [], "question": question,
               "rules": "Answer with Semantic SQL over the semantic view: SELECT <dimension names>, <metric names> FROM "
                        "<semantic_view> [WHERE <dimension> = '<value>'] GROUP BY <the dimension names>. Use only the "
                        "names listed. No joins, no aggregate functions, no other tables: the metrics already aggregate. "
@@ -308,6 +308,22 @@ def _verified_answer(conn, semantic: dict[str, Any], question: str, dataset: Any
     return None
 
 
+def _instructions(rows, model: str, lit) -> list[str]:
+    """The model's instructions for agents (SEMANTIC_AGENT.INSTRUCTIONS_FOR_AGENT): what a column means when it is
+    no field, which columns are personal data, which tables are read live. [] when the view cannot be read."""
+    try:
+        found = rows(f"SELECT * FROM SEMANTIC_AGENT.INSTRUCTIONS_FOR_AGENT WHERE MODEL_NAME = {lit(model)}")
+    except Exception:
+        return []
+    out = []
+    for r in found:
+        text = next((str(v) for k, v in r.items() if "TEXT" in str(k).upper() and v), "")
+        kind = next((str(v) for k, v in r.items() if "KIND" in str(k).upper() and v), "")
+        if text:
+            out.append(f"{kind}: {text}" if kind else text)
+    return out[:60]
+
+
 def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], question: str):
     """(the structured request, the SQL the semantic layer compiles it to, assumptions, doubts), or None when the
     model says the question is outside the model. The model only picks metric and dimension names, filters and an
@@ -316,10 +332,11 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     from .semantic import _service
 
     prompt = {"model": semantic["model"], "object": semantic["object"], "dimensions": semantic["dimensions"],
-              "metrics": semantic["metrics"], "question": question,
+              "metrics": semantic["metrics"], "instructions": semantic.get("instructions") or [], "question": question,
               "rules": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
                        "to group by), filters [{field, op, value}] on dimensions (op one of = != > >= < <= LIKE IN BETWEEN), "
-                       "order_by [{field, direction}], limit. Use only the names listed. If the question cannot be "
+                       "order_by [{field, direction}], limit. Use only the names listed, and follow the model's instructions "
+                       "(a SAFETY one is never broken). If the question cannot be "
                        "answered from them, return an empty metrics list and say why in doubts."}
     answer = client.chat.completions.create(
         model=model,
@@ -385,7 +402,8 @@ def semantic_context(conn, table: str) -> dict[str, Any] | None:
             found = {"model": str(view["MODEL_NAME"]), "object": str(view["OBJECT_NAME"]),
                      "view": f"{view['PUBLISHED_SCHEMA']}.{view['OBJECT_NAME']}",
                      "dimensions": [item(r) for r in mine if str(r["FIELD_KIND"]).upper() == "DIMENSION"],
-                     "metrics": [item(r) for r in mine if str(r["FIELD_KIND"]).upper() == "METRIC"]}
+                     "metrics": [item(r) for r in mine if str(r["FIELD_KIND"]).upper() == "METRIC"],
+                     "instructions": _instructions(rows, str(view["MODEL_NAME"]), lit)}
             return found if found["metrics"] else None
         best, fields = None, None
         for view in views:

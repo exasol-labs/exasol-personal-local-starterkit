@@ -75,12 +75,21 @@ and offer `exakit marketplace <id>` — install only when the user agrees.
 
 The kit's semantic layer is **Exasol Semantic Views** (the `semantic-views`
 add-on: `SEMANTIC_CATALOG`, `SEMANTIC_ADMIN`, `SEMANTIC_AGENT`). Approving a
-column map builds it: each approved table becomes an entity of its schema's
-semantic model, each approved link a relationship, its time, category and flag
-columns dimensions, its measures facts with `total_` and `average_` metrics,
-and every table a row count. The views are published in `SEM_<MODEL>`. There
-is no other semantic layer: never create or recommend views of your own as a
-semantic layer.
+column map builds it, in two models: its schema's, and **`all_data`** - one
+model over every approved table of every source (sample data, files, every
+external source), kept current by each approval. Each table is an entity whose
+description says what it is and where it lives (an external source names its
+connector and is read live); each approved link a relationship with its
+evidence and why; key, identifier, time, category and flag columns dimensions,
+measures facts with `total_` and `average_` metrics, every table a row count.
+Each field's comment says what the column holds and why it is used that way;
+free-text columns are described in agent instructions, a personal-data column
+is a SAFETY instruction (never select, group, filter or show it), and the same
+rows kept in two sources are one entity (fusion). Approved questions are
+verified queries: prefer them. The approved column map is kept on the entity,
+one per version. The views are published in `SEM_<MODEL>`. There is no other
+semantic layer: never create or recommend views of your own as a semantic
+layer. Start from `all_data`.
 
 **Before you describe, query or chart any table, read the models.** They are
 the user's own statement of what the data means, and they win over anything you
@@ -96,6 +105,14 @@ SELECT MODEL_NAME, METRIC_NAME, DISPLAY_NAME, DESCRIPTION, EXPRESSION
 FROM SEMANTIC_CATALOG.METRICS WHERE STATUS = 'ACTIVE';
 SELECT MODEL_NAME, FROM_ENTITY_NAME, TO_ENTITY_NAME, JOIN_CONDITION
 FROM SEMANTIC_CATALOG.RELATIONSHIPS WHERE STATUS = 'ACTIVE';
+```
+
+Then read what the model says to agents, and its reviewed questions:
+
+```sql
+SELECT * FROM SEMANTIC_AGENT.INSTRUCTIONS_FOR_AGENT WHERE MODEL_NAME = 'all_data';
+SELECT QUERY_NAME, NATURAL_LANGUAGE_TEXT, REQUEST_JSON FROM SEMANTIC_AGENT.VERIFIED_QUERIES_FOR_AGENT
+WHERE MODEL_NAME = 'all_data';
 ```
 
 - **Answer from the model's metrics and dimensions**, not from hand-written

@@ -676,8 +676,14 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     inputs = {"tables": names, "links": joins, "name": name, "description": description, "table_notes": said,
               "labels": proposal["labels"], "extra": proposal["extra"]}
     try:
-        result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
-                                          extra=proposal["extra"], progress=progress)
+        if spec["model"] == publishing.ALL_MODEL:
+            # the model of all your data: what is given here joins every approved table and what was confirmed before
+            result = publishing.publish_all(conn.execute, rows, os.environ.get(READER_VARIABLE), tables=names, links=joins,
+                                            table_notes=said, description=description, labels=proposal["labels"],
+                                            extra=proposal["extra"] or None, progress=progress)
+        else:
+            result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
+                                              extra=proposal["extra"], progress=progress)
     except sm.ModelRefused as err:
         raise Refused(str(err)) from err
     found.update(result, status="published")
