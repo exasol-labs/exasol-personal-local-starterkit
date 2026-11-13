@@ -20,6 +20,11 @@
 #   info [--json]       print the connection details panel; --json prints the
 #                       install record (manifest.json) plus the state keys
 #                       installed / status / remedy / skills, nothing else
+#   tui [--tab T] [--persona ID]
+#                       the terminal view: Status, Marketplace, AI clients,
+#                       External sources and Personas on tabs; a bare `exakit`
+#                       in a terminal opens it, and `exakit <persona-id>` opens
+#                       that persona's page (EXAKIT_NO_TUI=1: the help instead)
 #   guide               friendly walkthrough: connect AI clients (MCP), SQL
 #                       clients (DBeaver, DbVisualizer), and Python (pyexasol)
 #   start [<service>]   start the local database and every add-on service,
@@ -207,6 +212,7 @@ command -v exakit_env_file_note >/dev/null 2>&1 && exakit_env_file_note
 [ -f "$_lib_dir/core-setup.sh" ] && . "$_lib_dir/core-setup.sh"
 [ -f "$_lib_dir/virtual-schemas.sh" ] && . "$_lib_dir/virtual-schemas.sh"
 [ -f "$_lib_dir/persona.sh" ] && . "$_lib_dir/persona.sh"
+[ -f "$_lib_dir/tui.sh" ] && . "$_lib_dir/tui.sh"
 # Load add-on hooks from the Python catalog. The fallback Notebook child rows
 # use the small metadata adapter in common.sh.
 [ -f "$_lib_dir/describe.sh" ] && . "$_lib_dir/describe.sh"
@@ -3255,6 +3261,13 @@ case "${1:-}" in
         ;;
 esac
 
+# A bare `exakit` typed by a person at a terminal opens the terminal view (tui.sh): the whole kit on five tabs.
+# Scripts, agents, CI and EXAKIT_NO_TUI=1 get the help as before.
+if [ $# -eq 0 ] && command -v exakit_tui_wanted >/dev/null 2>&1 && exakit_tui_wanted; then
+    cmd_tui
+    exit $?
+fi
+
 # State QUERIES are read-only by contract: no probe they run - however it
 # fails - may write the .last-failure note that status --json then reports as
 # an install failure forever. exakit_note_failure honours the flag, and every
@@ -3368,10 +3381,14 @@ case "${1:-help}" in
     # the help command on purpose), so --help/-h are options here and name
     # the help command's own page, like every other command's --help does.
     help|-h|--help) shift; _exakit_refuse_unknown_options help "--json,-j,--all,-a,--help,-h" "$@"; usage "$@" ;;
+    tui) shift; cmd_tui "$@" ;;
     *) # A component name on its own is a reasonable thing to type, and the
        # answer is its page - not "unknown command" followed by the whole menu.
        if exakit_help_is_id "${1}"; then
            exakit_help_render component "${1}"
+       elif [ $# -eq 1 ] && command -v exakit_tui_is_persona >/dev/null 2>&1 && exakit_tui_is_persona "${1}"; then
+           # A persona's name (exakit data-scientist): its page in the terminal view, or its description.
+           if exakit_tui_wanted; then exakit_tui_persona "${1}"; else cmd_persona show "${1}"; fi
        elif [ "${EXAKIT_REFUSAL_JSON:-0}" = "1" ]; then
            # One object on stdout, and the whole usage screen NOT dumped into
            # the middle of it.

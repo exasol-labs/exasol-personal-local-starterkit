@@ -39,6 +39,9 @@ jobs:
       - name: Persona and marketplace Python contracts
         shell: bash
         run: python -m unittest discover -s tests -p 'test_marketplace_*.py'
+      - name: The terminal view (Textual, the kit's pin)
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_tui.py'
 
   changes:
     name: detect versions.json changes
@@ -1218,6 +1221,9 @@ jobs:
       # by the installer before anything is installed.
       - run: bash tests/personas.sh
         if: matrix.shard == 4
+      # exakit's terminal view: launched only for a person at a terminal, a persona's page, its twin.
+      - run: bash tests/tui.sh
+        if: matrix.shard == 4
       # The settings file (~/.exasol-starter-kit/exakit.env): read as written,
       # the environment wins, and setup/exakit.env lists every setting.
       - run: bash tests/env-file.sh
@@ -1354,6 +1360,7 @@ jobs:
             pwsh -NoProfile -File tests/addon-help-ps.ps1
             pwsh -NoProfile -File tests/mlflow-command-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1
+            pwsh -NoProfile -File tests/tui-ps.ps1
             pwsh -NoProfile -File tests/env-file-ps.ps1
             pwsh -NoProfile -File tests/menu-mouse-ps.ps1
             pwsh -NoProfile -File tests/sql-quoting-ps.ps1
