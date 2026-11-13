@@ -727,34 +727,6 @@ class Engine(object):
                       % (values["ca"], values["host"], len(certs)))
         return pem
 
-    def stage_ca_file(self, connector, name, ca_pem, created):
-        """For a driver that takes the CA as a file name (pgJDBC's
-        SingleCertValidatingFactory with "file:"): the chosen certificate as a
-        PEM file, written where the adapter and the loader both find it at one
-        RELATIVE path, as stage_truststore does. The certificate inside the URL
-        made it some 2,000 characters long, and a database message that quotes
-        the URL was cut before its reason; with the file the URL stays short."""
-        if not ca_pem or not connector.get("tls_ca_file"):
-            return None
-        return self._stage_tls_file(connector, name, ".pem", ca_pem.strip().encode("ascii") + b"\n", created)
-
-    def _stage_tls_file(self, connector, name, ext, data, created):
-        """Write one TLS file for a source to the bucket (the adapter's copy) and
-        to the loader's driver folder at the same relative path; return that path."""
-        relative = self.runtime.bucket_sql("tls", name + ext).lstrip("/")
-        targets = [self.runtime.bucket_dir("tls", name + ext)]
-        if connector.get("etl"):
-            targets.append(os.path.join(self.runtime.loader_dir(connector["etl"]["drivername"]), *relative.split("/")))
-        digest = hashlib.sha256(data).hexdigest()
-        for path in targets:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "wb") as handle:
-                handle.write(data)
-            self.store.add_consumer(path, digest, name, True)
-            if path not in created["files"]:
-                created["files"].append(path)
-        return relative
-
     def stage_truststore(self, connector, name, ca_pem, created):
         """For drivers that read trust only from a file (Connector/J,
         mssql-jdbc): one JKS per source, written twice, and the RELATIVE path
@@ -768,7 +740,20 @@ class Engine(object):
         copy sits under its own driver folder at that same relative path."""
         if not ca_pem or not connector.get("tls_truststore"):
             return None
-        return self._stage_tls_file(connector, name, ".jks", tlsca.jks(tlsca.certificates_from_text(ca_pem)), created)
+        data = tlsca.jks(tlsca.certificates_from_text(ca_pem))
+        relative = self.runtime.bucket_sql("tls", name + ".jks").lstrip("/")
+        targets = [self.runtime.bucket_dir("tls", name + ".jks")]
+        if connector.get("etl"):
+            targets.append(os.path.join(self.runtime.loader_dir(connector["etl"]["drivername"]), *relative.split("/")))
+        digest = hashlib.sha256(data).hexdigest()
+        for path in targets:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as handle:
+                handle.write(data)
+            self.store.add_consumer(path, digest, name, True)
+            if path not in created["files"]:
+                created["files"].append(path)
+        return relative
 
     def key_file(self, name):
         return self.runtime.bucket_dir("keys", name + ".json")
@@ -1405,7 +1390,6 @@ class Engine(object):
                 ca_pem = self.choose_ca(connector, values)
                 jars = self.stage(connector, name, created)
                 truststore = self.stage_truststore(connector, name, ca_pem, created)
-                ca_file = self.stage_ca_file(connector, name, ca_pem, created)
                 mapping_path = None
                 if values.get("mapping") and not reconnect:
                     mapping_path = self.stage_mapping(values, name, created)
@@ -1417,7 +1401,7 @@ class Engine(object):
                     self.emit("OK", "Key file staged for %s (owner-only on this computer)" % name)
                 self.await_staged(jars + ([key_path] if key_path else []), created["files"], profile)
                 if url is None:
-                    url = planner.jdbc_url(connector, values, {"ca_pem": ca_pem, "truststore": truststore, "ca_file": ca_file,
+                    url = planner.jdbc_url(connector, values, {"ca_pem": ca_pem, "truststore": truststore,
                                                                "key_path": key_path, "sa_email": sa_email})
                 self.create_connection(names, url, user, conn_secret, replace=reconnect, hidden=hidden)
                 if not reconnect:
@@ -1537,8 +1521,6 @@ class Engine(object):
                 record["tls_ca"] = ca_pem
             if truststore:
                 record["tls_truststore"] = truststore
-            if ca_file:
-                record["tls_ca_file"] = ca_file
             if key_path:
                 record["key_file"] = key_path
                 record["sa_email"] = sa_email
@@ -1605,7 +1587,7 @@ class Engine(object):
     def repoint_extra(config, connector, runtime, name):
         """What the source's URL and properties were built with besides its
         inputs: the CA and truststore it trusts, its key file, its mapping."""
-        extra = {"ca_pem": config.get("tls_ca"), "truststore": config.get("tls_truststore"), "ca_file": config.get("tls_ca_file"),
+        extra = {"ca_pem": config.get("tls_ca"), "truststore": config.get("tls_truststore"),
                  "key_path": config.get("key_file"), "sa_email": config.get("sa_email")}
         if any(spec["kind"] == "edml" for spec in connector["inputs"]):
             extra["mapping_path"] = runtime.bucket_sql("mappings", name)[len("/buckets"):]
@@ -2179,8 +2161,7 @@ class Engine(object):
         url, user, secret, hidden, notes = self.credential(connector, inputs, secret)
         if url is None:
             url = planner.jdbc_url(connector, inputs, {"ca_pem": config.get("tls_ca"),
-                                                       "truststore": config.get("tls_truststore"),
-                                                       "ca_file": config.get("tls_ca_file")})
+                                                       "truststore": config.get("tls_truststore")})
         with self.store.lock():
             # Tried before it replaces anything: a typo here must not break a
             # source that still works. The new credential goes into a pending

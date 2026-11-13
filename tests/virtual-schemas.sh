@@ -1239,13 +1239,7 @@ has "the plan says which CA is trusted, and how one is chosen from a bundle" "tr
 run_secret "$SECRET" connect pg --name rds $RDS_SET --set ca="$CA/TestRootA.pem" --secret-stdin
 check "connect with a CA: exit 0" "0" "$RC"
 URL="$(dbq 'd["connections"]["EXAKIT_SRC_RDS"]["url"]')"
-has "...the URL verifies host and chain against that CA, named as a file" "?sslmode=verify-full&sslfactory=org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg=file:" "$URL"
-lacks "...and the certificate is not inside the URL (a message quoting it was cut before its reason)" "BEGIN" "$URL"
-check "...so the URL stays short" "yes" "$([ ${#URL} -lt 400 ] && echo yes || echo "no: ${#URL} characters")"
-CAREL="${URL##*sslfactoryarg=file:}"
-check "...at a path relative to where the adapter and the loader start" "relative" "$([ "${CAREL#/}" = "$CAREL" ] && echo relative || echo absolute)"
-check "...the certificate file is staged once for the adapter and once for the loader" "2" \
-    "$(grep -rl "BEGIN CERTIFICATE" "$HOME_K" "$DEPLOY" 2>/dev/null | grep -c "/${CAREL##*/}\$" | tr -d ' ')"
+has "...the URL verifies host and chain against that CA" "?sslmode=verify-full&sslfactory=org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg=-----BEGIN%20CERTIFICATE-----%0A" "$URL"
 lacks "...and never falls back to the JVM's public CAs" "DefaultJavaSSLFactory" "$URL"
 check "...the certificate is kept with the source" "yes" \
     "$(python3 -c 'import json,sys; print("yes" if "BEGIN CERTIFICATE" in json.load(open(sys.argv[1])).get("tls_ca", "") else "no")' "$HOME_K/sources/rds/config.json")"

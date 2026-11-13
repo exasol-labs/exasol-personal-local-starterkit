@@ -111,11 +111,9 @@ change is at the source: show it, run it only after a yes.
   the root CA its TLS documentation names; a public CA, its root (Let's Encrypt:
   ISRG Root X1); a company CA, its root. A download: ask first.
 - From a bundle the kit picks the one certificate that signs the server (a
-  verified handshake from this computer, host name checked) and stages it as a
-  file the adapter and the loader both read; the JDBC URL names that file
-  (`SingleCertValidatingFactory`, `sslfactoryarg=file:`), so it stays short and a
-  failed connect's message keeps its reason. A source connected by an older kit
-  carries the certificate inside its URL until it is connected again.
+  verified handshake from this computer, host name checked) and sends it inside
+  the JDBC URL (`SingleCertValidatingFactory`), because the loader's Java sandbox
+  cannot read a file.
 - `require` encrypts without checking the certificate: no PEM, but weaker - only
   when the user accepts that. `disable` sends the password in clear. `ca` with a
   level other than `verify` is refused.
