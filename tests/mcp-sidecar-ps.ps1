@@ -72,6 +72,7 @@ function Invoke-ExakitLogged {
 function fake-uv {
     $script:calls.Add("editor " + ($args[7..9] -join " "))
     $script:definition = Get-Content -Raw -LiteralPath $args[10]
+    $script:definitionBytes = [System.IO.File]::ReadAllBytes($args[10])
     $global:LASTEXITCODE = 0          # what the real uv leaves after a clean run
     "changed"
 }
@@ -98,6 +99,10 @@ $doc = $script:definition | ConvertFrom-Json
 $envByName = @{}; foreach ($e in $doc.container.env) { $envByName[$e.name] = $e }
 Check "the read-only user, not SYS" "mcp_readonly" $envByName["EXA_USER"].value
 Check "the password is a file reference" $pwFile $envByName["EXA_PASSWORD"].valueFile
+# Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM (pwsh 7
+# does not), and the editor's json.loads refused it: no sidecar, no MCP entry.
+$bom = ($script:definitionBytes.Length -ge 3 -and $script:definitionBytes[0] -eq 0xEF -and $script:definitionBytes[1] -eq 0xBB -and $script:definitionBytes[2] -eq 0xBF)
+Check "the definition file handed to the editor has no UTF-8 BOM" $false $bom
 Check "...never the password itself" $false ($script:definition -like "*readonly-secret*")
 Check "the image is pinned by digest" (Get-ExakitVersionsValue "components.mcp.sidecar_image") $doc.container.image
 Check "loopback only" "127.0.0.1" $doc.container.ports[0].hostIP
@@ -168,6 +173,33 @@ Check "...and on a kit from before (no backend recorded) too" $imageVersion (Get
 $script:VersionPolicy = $savedPolicy
 $updater = Get-Content -Raw -LiteralPath (Join-Path $repo "setup/exakit.ps1")
 Check "exakit update refuses a version with no pinned image" $true ($updater -match '\(Get-McpSidecarImageVersion\) -ne \$available')
+
+Write-Host "the definition editor fails:"
+# A real process writing stderr and exiting 1, as the editor's traceback did.
+# Under 5.1's 'Stop' its first stderr line used to escape as a terminating
+# error, so only "Traceback (most recent call last):" reached the log.
+$python = Get-Command python3 -ErrorAction SilentlyContinue
+if (-not $python) { $python = Get-Command python -ErrorAction SilentlyContinue }
+if ($python) {
+    $script:failPython = $python.Source
+    function fail-uv {
+        & $script:failPython -c "import sys; sys.stderr.write('Traceback (most recent call last):\n'); sys.stderr.write('ValueError: editor-boom\n'); sys.exit(1)"
+    }
+    $script:LogFile = Join-Path $work "editor-fail.log"
+    Set-Content -LiteralPath $script:LogFile -Value "" -Encoding Ascii
+    $threw = $false
+    $got = "unset"
+    try { $got = Write-McpSidecarDefinition "mcp_readonly" $pwFile 4896 "fail-uv" $repo } catch { $threw = $true }
+    Check "a failed editor is no exception" $false $threw
+    Check "...and no definition" $true ($null -eq $got)
+    $logText = Get-Content -Raw -LiteralPath $script:LogFile
+    Check "...the log has its exit code" $true ($logText -like "*definition editor exited 1*")
+    Check "...and its last line, not only the traceback header" $true ($logText -like "*ValueError: editor-boom*")
+    Check "...never the password" $false ($logText -like "*readonly-secret*")
+    $script:LogFile = $null
+} else {
+    Write-Host "  skip no Python for the failing editor"
+}
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""

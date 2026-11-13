@@ -220,6 +220,16 @@ check "...and as the desired one" "$IMAGE_VERSION" "$(manifest_get desired.mcp)"
 check "run again: already current, nothing offered" 0 "$(mcp_update >/dev/null 2>&1; echo $?)"
 check "...and nothing reconciled again" 1 "$(grep -c '^start' "$STUB_CALLS")"
 
+echo "the Windows definition writer (setup/lib/mcp.ps1), read as text:"
+# Windows PowerShell 5.1's `Set-Content -Encoding UTF8` writes a BOM that the
+# editor's json.loads refused; pwsh 7 does not, so only a 5.1 run shows it. The
+# writer must use a BOM-less encoder, and the editor's stderr must be captured
+# rather than left to 5.1's 'Stop' (which threw away all but its first line).
+_PS_WRITER="$(awk '/^function Write-McpSidecarDefinition/,/^}/' "$ROOT/setup/lib/mcp.ps1" | grep -v '^[[:space:]]*#')"
+lacks "no Set-Content for the definition" "Set-Content" "$_PS_WRITER"
+has "...a BOM-less UTF-8 encoder" 'UTF8Encoding($false)' "$_PS_WRITER"
+lacks "...and the editor's stderr is not discarded" '2>$null' "$_PS_WRITER"
+
 echo ""
 echo "mcp-sidecar.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

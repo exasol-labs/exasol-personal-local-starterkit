@@ -11070,7 +11070,7 @@ exakit_run_mcp_setup_cli() {
         # screen before anyone could read it. die() stops the animation for the
         # same reason.
         command -v ui_animation_stop >/dev/null 2>&1 && ui_animation_stop
-        warn "Could not write the MCP entry for this AI client. What failed: exakit logs setup. Retry with: exakit mcp-setup"
+        warn "Could not write the MCP entry for this AI client. See why with: exakit logs setup. Retry with: exakit mcp-setup"
         return 1
     fi
     return 0
