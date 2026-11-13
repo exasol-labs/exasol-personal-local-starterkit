@@ -622,3 +622,20 @@
 .guide-title .guide-info, .guide-subhead .guide-info, .guide-q-title .guide-info, .guide-ai-title .guide-info, .guide-form-heading .guide-info, .guide-slot-label .guide-info { vertical-align: middle; font-weight: 400; }
 .guide-q-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .guide-q-title .guide-info, .guide-ai-title .guide-info { margin-left: 0; }
+
+/* the fusion flow: sources -> one semantic model -> the steps after it */
+.guide-flow { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 6px 0 14px; }
+.guide-flow-sources { display: flex; flex-direction: column; gap: 6px; min-width: 180px; }
+.guide-flow-steps { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; flex: 1; }
+.guide-flow-node { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; padding: 6px 10px; border: 1px solid var(--guide-border); border-radius: 8px; background: transparent; color: var(--guide-text); font: inherit; text-align: left; }
+button.guide-flow-node { cursor: pointer; }
+button.guide-flow-node:hover:not(:disabled) { border-color: var(--guide-accent); }
+.guide-flow-kind { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--guide-muted); }
+.guide-flow-name { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; font-size: 13px; }
+.guide-flow-name .guide-icon { color: var(--guide-ok); }
+.guide-flow-sub { font-size: 12px; color: var(--guide-muted); }
+.guide-flow-done { border-color: var(--guide-ok); }
+.guide-flow-now { border-color: var(--guide-accent); background: var(--guide-accent-soft); }
+.guide-flow-add { border-style: dashed; color: var(--guide-muted); }
+.guide-flow-arrow { color: var(--guide-muted); font-size: 18px; }
+.guide-flow-arrow-sm { font-size: 14px; }

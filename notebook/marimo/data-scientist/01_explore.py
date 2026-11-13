@@ -115,7 +115,7 @@ def _(DATASET, nb):
         chosen_data = nb.chosen_dataset(DATASET)  # the tables the quickstart chose, by name (nb.chosen_tables() lists them)
     else:
         chosen_data = next(iter(chosen_tables.values()))  # a name: the review below opens it (a file of your own is drafted there)  # another one: chosen_data = chosen_tables["SCHEMA.TABLE"]
-    return chosen_data, connection
+    return chosen_data, chosen_tables, connection
 
 
 @app.cell(hide_code=True)
@@ -272,6 +272,28 @@ def _(PUBLISH_SEMANTIC, SEMANTIC_NAME, connection, nb):
     if PUBLISH_SEMANTIC:
         refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
     semantic_models
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Add another source
+
+    Fusion: data from several places in one model. Every source connected with `exakit connect` (S3, Snowflake, MongoDB, PostgreSQL and the rest) is listed here, read live where it lives. Name a table of one in `ADD_SOURCE` to add it to the tables above; the card's **Add a source or table** does the same and connects a new source too.
+    """)
+    return
+
+
+@app.cell
+def _(chosen_tables, connection, nb):
+    sources = nb.sources()                          # every connected source: its schema (VS_<NAME>) and its connector
+    ADD_SOURCE = ""                                 # a table of a connected source, such as "VS_SALES.ORDERS"
+    if ADD_SOURCE:
+        source_data = nb.load_source(connection, ADD_SOURCE)
+        chosen_tables[str(source_data.fact_table)] = source_data
+        remembered = nb.remember_chosen(chosen_tables)
+    print("Sources: " + (", ".join(f"{s['schema']} ({s.get('connector_name') or s.get('connector')})" for s in sources) or "none connected yet"))
     return
 
 

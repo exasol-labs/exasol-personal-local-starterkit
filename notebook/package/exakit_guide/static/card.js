@@ -370,6 +370,22 @@ function render({ model, el }) {
       return h("div", { class: "guide-chips" }, b.label ? h("span", { class: "guide-chips-label" }, b.label) : null,
         b.items.map((c) => h("span", { class: `guide-chip guide-chip-${c.kind || "muted"}`, "data-tip": c.title || null }, c.kind === "ok" ? icon("check") : null, c.label)));
     },
+    // The fusion flow: every source (its kind, its tables, how many column maps are approved) feeding one semantic
+    // model, then the steps after it. A source or a step with an action is a button.
+    flow(b) {
+      const node = (n) => h(n.action ? "button" : "div", {
+          class: `guide-flow-node guide-flow-${n.state || "todo"}`, "data-tip": n.tip || null, type: n.action ? "button" : null,
+          disabled: n.action ? !!ui.busy : null, onClick: n.action ? () => send(n.action) : null },
+        h("span", { class: "guide-flow-kind" }, n.kind || ""),
+        h("span", { class: "guide-flow-name" }, n.state === "done" ? icon("check") : null, n.label),
+        n.sub ? h("span", { class: "guide-flow-sub" }, n.sub) : null);
+      return h("div", { class: "guide-flow" },
+        h("div", { class: "guide-flow-sources" }, (b.sources || []).map(node),
+          b.add ? h("button", { type: "button", class: "guide-flow-node guide-flow-add", disabled: !!ui.busy, onClick: () => send(b.add.action) },
+            h("span", { class: "guide-flow-name" }, "+ " + b.add.label)) : null),
+        h("div", { class: "guide-flow-arrow", "aria-hidden": "true" }, "→"),
+        h("div", { class: "guide-flow-steps" }, (b.steps || []).map((n, i) => [i ? h("span", { class: "guide-flow-arrow guide-flow-arrow-sm", "aria-hidden": "true" }, "→") : null, node(n)])));
+    },
     journey(b) {
       return h("div", { class: `guide-journey${b.compact ? " guide-journey-compact" : ""}` }, b.items.map((j) => h("a", { class: `guide-step guide-step-${j.state}`, href: labUrl(j.path),
           "aria-current": j.state === "here" ? "step" : null, onClick: (e) => { if (j.state === "here") { e.preventDefault(); return; } openInLab(j.path, e); } },

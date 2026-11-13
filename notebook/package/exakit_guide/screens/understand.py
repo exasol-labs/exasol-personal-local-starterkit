@@ -180,6 +180,9 @@ class ChooseData(Screen):
             ('Connect an external source', 'get-the-data/external-sources#step-by-step-a-new-external-source'),)
 
     kind = "card"
+    # True when the card adds to the tables already chosen (the sources part of 01_explore's Understand card): a pick
+    # joins them instead of replacing them, and the quickstart's way on is not shown.
+    ADDING = False
     connector, src_name, conn_n, tip = None, "", 0, ""
     failed: list[str] = []          # what was ticked and could not be loaded, with the kit's reason
     preset, typed_storage = None, ""     # the settings chosen for a source that has some (the kit says which)
@@ -288,7 +291,7 @@ class ChooseData(Screen):
         blocks = [head, {"t": "choice", "id": "kind", "multi": True, "value": ["sample"] if samples else ["file"],
                          "options": options, "below": True,
                          "actions": items}]     # the buttons sit inside the panel under the ticked options
-        if self.done and SESSION.source is not None:
+        if self.done and SESSION.source is not None and not self.ADDING:
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
             what = (f"{len(SESSION.chosen)} tables: {', '.join(e['table'] for e in SESSION.chosen)}"
                     if len(SESSION.chosen) > 1 else f"{SESSION.source_label}{rows}")
@@ -384,10 +387,11 @@ class ChooseData(Screen):
                 self.done = False
                 return
             raise ValueError("Tick at least one dataset, table or source.")
-        several = len(wanted) > 1
-        if several:
+        several = len(wanted) > 1 or self.ADDING     # adding: every table is kept by name beside the ones there
+        if several and not self.ADDING:
             actions.run("data.several")
-        chosen: list[dict] = []
+        chosen: list[dict] = list(SESSION.chosen) if self.ADDING else []
+        before = len(chosen)
         for action_id, variable, values, label in wanted:
             SESSION.broken = None
             try:
@@ -407,9 +411,12 @@ class ChooseData(Screen):
                 actions.run("data.keep", table=table, data=Var(variable))
             chosen.append({"label": f"{label} ({table})", "table": table, "variable": variable,
                            "rows": self.rows.get(table.upper()), "broken": SESSION.broken})
-        if not chosen:
+        if len(chosen) == before:
             SESSION.broken = None
-            raise ValueError("Nothing was loaded. The kit's note is under 'What the kit said'.")
+            raise ValueError("Nothing new was loaded. The kit's note is under 'What the kit said'." if self.ADDING else
+                             "Nothing was loaded. The kit's note is under 'What the kit said'.")
+        if self.ADDING:                     # the first table added is the one worked on next
+            chosen = chosen[before:] + chosen[:before]
         if several:
             actions.run("data.switch", table=chosen[0]["table"])
         else:
@@ -1402,8 +1409,28 @@ class SemanticViews(Screen):
         except Exception as exc:
             self.error = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
         self.loading = False
+        self._auto_links()
         self.refresh()
         SESSION.release()
+
+    auto_for: frozenset = frozenset()
+
+    def _auto_links(self) -> None:
+        """Once two of the chosen tables have approved column maps, look for the links between them by itself - one
+        nb.find_links over those tables, bounded reads, no AI - so the links are there to tick, not to ask for. Not
+        again for the same set of tables; a link already found or added is kept."""
+        tables = sorted(t["table"] for t in self.tables if t["approved"] and t["table"].upper() in self.ticked)
+        if len(tables) < 2 or frozenset(tables) == self.auto_for or self.links:
+            return
+        self.auto_for = frozenset(tables)
+        try:
+            found = actions.run("semantic.links_tables", tables=tables, ai=False)
+        except Exception as exc:
+            self.links_note = f"Looking for links did not finish: {str(exc).splitlines()[0][:160]}. Press Find links to try again."
+            return
+        self.links, self.link_gen = list(found.get("links") or []), self.link_gen + 1
+        self.links_note = (f"Looked for links between {len(tables)} approved tables by themselves: {found['checked']} pairs "
+                           f"checked with {found['statements']} bounded statements. Tick the ones that are right.")
 
     def _picked(self, v: dict) -> dict:
         """What the card holds when a button is pressed: the ticked tables (with an approved column map), what was
@@ -1751,6 +1778,17 @@ class _MapPart(ColumnMap):
             self.owner.refresh()
 
 
+class _SourcesPart(ChooseData):
+    """Add a source or a table from inside the Understand card: the quickstart's Choose your data, adding to the
+    tables already chosen. A new connection's tables join the column maps below."""
+    owner: "Understand | None" = None
+    ADDING = True
+
+    def refresh(self) -> None:
+        if self.owner is not None:
+            self.owner.refresh()
+
+
 class _ViewsPart(SemanticViews):
     """The semantic views as the bottom of the Understand card."""
     owner: "Understand | None" = None
@@ -1776,12 +1814,16 @@ class Understand(Screen):
     kind = "card"
 
     def __init__(self) -> None:
-        self.map = self.views = None
+        self.map = self.views = self.sources = None
+        self.adding = False                  # the "add a source or table" part is open
+        self.kinds: dict[str, str] = {}      # VS_<NAME> -> its connector's name (nb.sources), for the flow
+        self.approved: set[str] = set()      # tables with an approved column map
         self.loading, self.error = True, None
         SESSION.understanding = True
         if not SESSION.chosen:
             SESSION.opened.clear()
         super().__init__()
+        SESSION.listen(self)
         self.map = _part(_MapPart, self)
         self.views = _part(_ViewsPart, self)
         self.refresh()
@@ -1802,6 +1844,9 @@ class Understand(Screen):
                     else:
                         actions.run("understand.default")
                         tables = [str(SESSION.source.fact_table)]
+                        from ..actions import Var
+
+                        actions.run("data.keep", table=tables[0], data=Var("chosen_data"))
                     SESSION.chosen = [{"label": table, "table": table, "variable": None, "rows": None, "broken": None}
                                       for table in tables]
                     SESSION.chosen_n += 1
@@ -1813,13 +1858,95 @@ class Understand(Screen):
             self.error = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
         self.loading = False
         SESSION.opened.set()
+        self._read_flow()
         self.refresh()
         SESSION.release()
 
+    def _read_flow(self) -> None:
+        """What the flow strip shows, from the kit's own records: each connected source's kind (nb.sources, no
+        database) and which tables have an approved column map (the kit's store)."""
+        try:
+            self.kinds = {str(r.get("schema") or "").upper(): str(r.get("connector_name") or r.get("connector") or "external")
+                          for r in actions.run("sources.list") or []}
+        except Exception:
+            self.kinds = {}
+        try:
+            self.approved = {str(a["table"]).upper() for a in actions.run("kit.approved") or []}
+        except Exception:
+            pass
+
+    def on_session(self, what: str) -> None:
+        if what in ("dataset", "source"):
+            self._read_flow()
+            self.refresh()
+
+    def on_src_add(self, _v: dict) -> None:
+        """Open the part that adds a source or a table (made the first time: it reads the connectors then)."""
+        if self.sources is None:
+            self.sources = _part(_SourcesPart, self)
+        self.adding = True
+
+    def on_src_close(self, _v: dict) -> None:
+        self.adding = False
+
+    def on_use(self, v: dict) -> None:
+        """Add what was ticked (the sources part's Use this data), then close the part: the new tables are in the
+        flow above and in the column maps below."""
+        if self.sources is None:
+            raise ValueError("Open Add a source or table first.")
+        self.sources.flash = None
+        ChooseData.on_use(self.sources, v)
+        if self.sources.flash:
+            self.flash, self.sources.flash = self.sources.flash, None
+        if not self.sources.failed:
+            self.adding = False
+        self._read_flow()
+        added = SESSION.chosen[0]["table"] if SESSION.chosen else ""
+        self.flash = self.flash or {"kind": "ok", "v": f"Added. {added} is open below: approve its column map, then link it."}
+
+    def _flow(self) -> dict:
+        """The fusion flow: each source with its tables -> column maps -> links -> one semantic model -> clean ->
+        ask -> dashboard, each marked done, now or to do."""
+        groups: dict[str, list[str]] = {}
+        for e in SESSION.chosen:
+            groups.setdefault(e["table"].split(".", 1)[0].upper(), []).append(e["table"].upper())
+        sources = []
+        for schema, tables in groups.items():
+            kind = self.kinds.get(schema) or ("external source" if schema.startswith("VS_") else "this database")
+            done = sum(1 for t in tables if t in self.approved)
+            sources.append({"kind": kind, "label": schema, "state": "done" if done == len(tables) else "now",
+                            "sub": f"{len(tables)} table{'s' if len(tables) != 1 else ''} · {done} approved",
+                            "tip": ", ".join(t.split(".", 1)[1] for t in tables)})
+        every = [t for ts in groups.values() for t in ts]
+        approved = sum(1 for t in every if t in self.approved)
+        views = self.views
+        links = [l for l in (views.links or [])] if views is not None else []
+        published = [m for m in (views.models or [])] if views is not None else []
+        mine = [m for m in published if m.get("kit")]
+        steps = [
+            {"kind": "1", "label": "Column maps", "sub": f"{approved} of {len(every)} approved",
+             "state": "done" if every and approved == len(every) else "now",
+             "tip": "What each column means, per table. Approving one publishes it in Exasol Semantic Views."},
+            {"kind": "2", "label": "Links", "sub": f"{len(links)} found" if links else "found when 2 maps are approved",
+             "state": "done" if links else ("now" if approved >= 2 else "todo"),
+             "tip": "How the tables of different sources connect, from their values. Tick the ones that are right: "
+                    "they become the model's relationships, with their evidence."},
+            {"kind": "3", "label": "Semantic model", "sub": mine[0]["model"] if mine else "not published yet",
+             "state": "done" if mine else ("now" if approved else "todo"),
+             "tip": "One Exasol Semantic Views model over every source: the same metrics for Ask, the dashboard and AI clients."},
+            {"kind": "4", "label": "Clean", "sub": "below", "state": "todo", "tip": "Checks and a cleaned view, in the cards below."},
+            {"kind": "5", "label": "Ask", "sub": "02_ask_your_data", "state": "todo",
+             "tip": "Ask in words or SQL; approve it; table, chart, insights or JSON."},
+            {"kind": "6", "label": "Dashboard", "sub": "03_share", "state": "todo",
+             "tip": "Pin answers to pages; a multi-page dashboard on Dash Server."},
+        ]
+        return {"t": "flow", "sources": sources, "steps": steps,
+                "add": None if self.adding else {"label": "Add a source or table", "action": "src_add"}}
+
     def __getattr__(self, name: str):
-        """A button of either part: its handler runs on that part, and what it says shows on this card."""
+        """A button of any part: its handler runs on that part, and what it says shows on this card."""
         if name.startswith("on_") and name != "on_session":
-            for part in (self.__dict__.get("map"), self.__dict__.get("views")):
+            for part in (self.__dict__.get("map"), self.__dict__.get("views"), self.__dict__.get("sources")):
                 handler = getattr(type(part), name, None) if part is not None else None
                 if handler is not None:
                     def run(values, part=part, handler=handler):
@@ -1841,6 +1968,7 @@ class Understand(Screen):
         if self.error:
             top = top[:1] + [{"t": "msg", "kind": "warn", "v": f"The chosen tables could not be opened: {self.error}. "
                                                                "Choose your data in the quickstart again."}]
+        top = top[:1] + [self._flow()] + self._adding_blocks() + top[1:]
         bottom = self.views.build()
         head = bottom[0] if bottom and bottom[0].get("t") == "head" else None
         rest = bottom[1:] if head else bottom
@@ -1848,6 +1976,16 @@ class Understand(Screen):
             if part.flash:                    # said by a part's background read: shown with its part
                 blocks.insert(1 if blocks is top else 0, {"t": "msg", **{k: v for k, v in part.flash.items() if k != "said"}})
         return top + [{"t": "subhead", "v": "Semantic views", "tip": (head or {}).get("sub")}] + rest
+
+    def _adding_blocks(self) -> list[dict]:
+        """The add-a-source part, under the flow while it is open: the quickstart's choice of data, without its title."""
+        if not self.adding or self.sources is None:
+            return []
+        blocks = [b for b in self.sources.build() if b.get("t") not in ("head", "next", "code")]
+        return ([{"t": "subhead", "v": "Add a source or table",
+                  "tip": "Kit datasets, your own tables or files, and external sources (S3, Snowflake, MongoDB, PostgreSQL "
+                         "and the rest `exakit connect` knows). What you add joins the tables above; nothing is replaced."}]
+                + blocks + [{"t": "actions", "items": [{"id": "src_close", "label": "Close"}]}])
 
 
 def _publish_note(said: str) -> str:

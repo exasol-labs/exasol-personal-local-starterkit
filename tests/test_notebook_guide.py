@@ -1218,6 +1218,33 @@ class SeveralTablesTest(unittest.TestCase):
         # one that could not be read is named with the reason's first line; the others are used
         self.assertEqual(["VS_LOGISTICS.STATE_LOGISTICS (the source refused the read)"], self.card.failed)
 
+    def test_adding_in_explore_keeps_the_tables_there_and_works_on_the_new_one(self):
+        """01_explore's Add a source or table: what is ticked joins the tables already chosen (each kept by name, no
+        new dict), the first one added is worked on next, and the quickstart's way on is not shown."""
+        self.session._ns["chosen_tables"] = {"AMAZON.ORDER_LINES": mock.Mock(fact_table="AMAZON.ORDER_LINES")}
+        self.session.chosen = [{"label": "Amazon", "table": "AMAZON.ORDER_LINES", "variable": None, "rows": None, "broken": None}]
+        self.card.ADDING = True
+        ran = self.use({"kind": ["source"], "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY"]})
+        self.assertEqual(["data.source", "data.keep", "data.switch"], ran, "the tables there stay: no data.several")
+        self.assertEqual(["VS_LOGISTICS.COURIER_DAILY", "AMAZON.ORDER_LINES"], [e["table"] for e in self.session.chosen])
+        self.assertEqual({"AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"}, set(self.session._ns["chosen_tables"]))
+        with self.assertRaisesRegex(ValueError, "Nothing new"):
+            self.use({"kind": ["source"], "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY"]})
+
+    def test_the_flow_shows_each_source_its_approved_maps_and_the_steps(self):
+        card = self.understand.Understand.__new__(self.understand.Understand)
+        card.__dict__.update(map=None, views=mock.Mock(links=[{"from": "A", "to": "B"}], models=[{"model": "sales_360", "kit": True}]),
+                             sources=None, adding=False, kinds={"VS_LOGISTICS": "Snowflake"}, approved={"AMAZON.ORDER_LINES"})
+        self.session.chosen = [{"table": t} for t in ("AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY", "VS_LOGISTICS.STATE_LOGISTICS")]
+        flow = card._flow()
+        self.assertEqual([("this database", "AMAZON", "done", "1 table · 1 approved"), ("Snowflake", "VS_LOGISTICS", "now", "2 tables · 0 approved")],
+                         [(s["kind"], s["label"], s["state"], s["sub"]) for s in flow["sources"]])
+        steps = {s["label"]: (s["state"], s["sub"]) for s in flow["steps"]}
+        self.assertEqual(("now", "1 of 3 approved"), steps["Column maps"])
+        self.assertEqual(("done", "1 found"), steps["Links"])
+        self.assertEqual(("done", "sales_360"), steps["Semantic model"])
+        self.assertEqual("src_add", flow["add"]["action"])
+
     def test_nothing_ticked_and_nothing_loaded_are_said(self):
         with self.assertRaisesRegex(ValueError, "Tick at least one"):
             self.use({"kind": ["sample"], "sample": []})

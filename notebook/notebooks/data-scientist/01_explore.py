@@ -79,6 +79,20 @@ else:
 
 
 # %% [markdown]
+# ### Add another source
+#
+# Fusion: data from several places in one model. Every source connected with `exakit connect` (S3, Snowflake, MongoDB, PostgreSQL and the rest) is listed here, read live where it lives. Name a table of one in `ADD_SOURCE` to add it to the tables above; the card's **Add a source or table** does the same and connects a new source too.
+
+# %%
+sources = nb.sources()                          # every connected source: its schema (VS_<NAME>) and its connector
+ADD_SOURCE = ""                                 # a table of a connected source, such as "VS_SALES.ORDERS"
+if ADD_SOURCE:
+    source_data = nb.load_source(connection, ADD_SOURCE)
+    chosen_tables[str(source_data.fact_table)] = source_data
+    remembered = nb.remember_chosen(chosen_tables)
+print("Sources: " + (", ".join(f"{s['schema']} ({s.get('connector_name') or s.get('connector')})" for s in sources) or "none connected yet"))
+
+# %% [markdown]
 # ### A first result
 #
 # Rows per group, and the % where the target is 1 when the map has a target. Each query shows its SQL before the result.
