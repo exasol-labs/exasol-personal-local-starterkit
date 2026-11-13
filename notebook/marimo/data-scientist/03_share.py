@@ -160,6 +160,42 @@ def _(dash_server, dashboard_draft):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### A dashboard of several pages
+
+    The answers you pinned in `02_ask_your_data` (**Pin to dashboard**, or `nb.pin`) make one dashboard: a tab per page, a tile per answer, its SQL exactly as approved. The filters on a page are the columns all its tiles return. Only the open tab is queried, its tiles in parallel, and each result is kept for five minutes, so moving between tabs and filtering does not query again. `board.move(tile, page)` and `board.remove(tile)` change it before it is shared; a preview comes first, and it goes live only after you check the figures.
+    """)
+    return
+
+
+@app.cell
+def _(nb):
+    BOARD_NAME = None  # None: the dashboard pinned to last; or a name, such as "sales-overview"
+    BOARD_FIGURES_CHECKED = False
+    MOVE_TILE = None  # a tile to another page: ("a1b2c3d4", "Delivery")
+    REMOVE_TILE = None  # a tile to take off: "a1b2c3d4"
+    boards = nb.boards()
+    if boards:
+        board = nb.board(BOARD_NAME or boards[0]['name'])
+        if MOVE_TILE:
+            board.move(MOVE_TILE[0], MOVE_TILE[1]).save()
+        if REMOVE_TILE:
+            board.remove(REMOVE_TILE).save()
+        print(board)
+        board_draft = nb.board(board.name).share()
+        dash_server_1 = nb.dash_tools()
+        board_preview = board_draft.preview(dash_server_1)
+        print('Preview:', dash_server_1.url + board_preview)
+        if BOARD_FIGURES_CHECKED:
+            board_live = board_draft.confirm(dash_server_1, figures_checked=True)
+            print('Live dashboard:', dash_server_1.url + board_live)
+    else:
+        print('No answer is pinned yet: pin one in 02_ask_your_data (Pin to dashboard).')
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Step 9 · Hand off
 
     Packs the work into one folder and a zip: the approved column map, the schema map if there is one, every query with its digest and row count, the dashboards, the workflow log and a README. It contains no passwords. It does not need Dash Server.

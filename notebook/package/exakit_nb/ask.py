@@ -151,6 +151,7 @@ class Proposal:
     sql: str
     assumptions: list[str] = field(default_factory=list)
     doubts: list[str] = field(default_factory=list)
+    request: dict[str, Any] | None = None     # the structured request the SQL was compiled from (semantic model only)
     _approved_digest: str | None = field(default=None, init=False, repr=False)
 
     def _sections(self) -> list[tuple[str, list[str]]]:
@@ -183,7 +184,22 @@ class Proposal:
     def edit(self, sql: str) -> "Proposal":
         self.sql = _read_sql(sql)
         self._approved_digest = None
+        self.request = None                  # your own SQL: it no longer is what the request compiles to
         return self
+
+    def verify(self, conn, name: str | None = None) -> dict[str, Any]:
+        """Keep this approved question in the semantic model as a verified question (nb.verify_question): the next
+        time it is asked - here or by an AI client over MCP - its request is used, with no new draft. Only a question
+        answered from the model can be kept: SQL written or edited by hand has no request to keep."""
+        if not self._approved_digest:
+            raise RuntimeError("Approve the SQL first: only an approved question can be kept.")
+        if not self.request:
+            raise RuntimeError("Only a question answered from the semantic model can be kept as a verified question "
+                               "(this SQL was written or edited by hand, or drafted from the column map).")
+        from .semantic import verify_question
+
+        return verify_question(conn, self.request["model"], self.request["object"], name or self.question[:120],
+                               self.question, {k: v for k, v in self.request.items() if k not in ("model", "object", "client")})
 
     def approve(self) -> "Proposal":
         self.dataset.require_approved("ask")
@@ -261,6 +277,72 @@ def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], q
         raise ValueError("the draft does not query the semantic view")
     plain = compile_semantic(semantic["conn"], semantic_sql)
     return semantic_sql, plain, [str(v) for v in parsed.get("assumptions") or []], [str(v) for v in parsed.get("doubts") or []]
+
+
+def _words(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", str(text).lower())
+
+
+def _verified_answer(conn, semantic: dict[str, Any], question: str, dataset: Any) -> "Proposal | None":
+    """The model's verified question that is this question (the same words, in any order and case), compiled now:
+    a reviewed request answers it with no model call. None when there is none, or it no longer compiles."""
+    from .semantic import _service
+
+    try:
+        service = _service()
+        asked = sorted(set(_words(question)))
+        for known in service.verified_questions(conn, semantic["model"]):
+            if sorted(set(_words(known.get("question") or ""))) != asked:
+                continue
+            request = dict(known.get("request") or {}, model=semantic["model"],
+                           object=known.get("object") or (known.get("request") or {}).get("object") or semantic["object"])
+            compiled = service.compile_request(conn, request)
+            if compiled["status"] != "ok":
+                return None
+            return Proposal(dataset, question.strip(), _read_sql(compiled["sql"]),
+                            [f"A verified question of the semantic model {semantic['model']}: \"{known['name']}\", "
+                             "reviewed before. Its request is used as it was approved; no model was asked."],
+                            [], request=request)
+    except Exception:                       # noqa: BLE001 - no verified questions: drafted as usual
+        return None
+    return None
+
+
+def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], question: str):
+    """(the structured request, the SQL the semantic layer compiles it to, assumptions, doubts), or None when the
+    model says the question is outside the model. The model only picks metric and dimension names, filters and an
+    order; Exasol Semantic Views (COMPILE_REQUEST_JSON) writes the SQL. An ambiguous request comes back with the
+    product's choices, named in the doubts."""
+    from .semantic import _service
+
+    prompt = {"model": semantic["model"], "object": semantic["object"], "dimensions": semantic["dimensions"],
+              "metrics": semantic["metrics"], "question": question,
+              "rules": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
+                       "to group by), filters [{field, op, value}] on dimensions (op one of = != > >= < <= LIKE IN BETWEEN), "
+                       "order_by [{field, direction}], limit. Use only the names listed. If the question cannot be "
+                       "answered from them, return an empty metrics list and say why in doubts."}
+    answer = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "system", "content": "Return only one JSON object with metrics, dimensions, filters, order_by, "
+                                                "limit, assumptions (array) and doubts (array). No Markdown."},
+                  {"role": "user", "content": json.dumps(prompt)}], **options)
+    raw = answer.choices[0].message.content or ""
+    fences = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.S | re.I)
+    parsed = json.loads(fences[0] if len(fences) == 1 else raw)
+    if not isinstance(parsed, dict) or not parsed.get("metrics"):
+        raise ValueError("; ".join(str(d) for d in (parsed or {}).get("doubts") or []) or "the question is outside the model")
+    request = {"model": semantic["model"], "object": semantic["object"]}
+    for key in ("metrics", "dimensions", "filters", "having", "order_by"):
+        if isinstance(parsed.get(key), list) and parsed[key]:
+            request[key] = parsed[key]
+    if isinstance(parsed.get("limit"), int) and parsed["limit"] > 0:
+        request["limit"] = min(int(parsed["limit"]), 1000)
+    compiled = _service().compile_request(semantic["conn"], request)
+    doubts = [str(v) for v in parsed.get("doubts") or []]
+    if compiled["status"] != "ok":
+        choices = compiled.get("clarification")
+        raise ValueError(compiled["error"] + (f"; the model asks which is meant: {json.dumps(choices)[:300]}" if choices else ""))
+    return request, compiled["sql"], [str(v) for v in parsed.get("assumptions") or []], doubts
 
 
 def semantic_context(conn, table: str) -> dict[str, Any] | None:
@@ -361,6 +443,12 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
         raise ValueError("Ask a non-empty question.")
     assumptions: list[str] = []
     doubts: list[str] = []
+    semantic = None
+    if proposed_sql is None and conn is not None:
+        semantic = semantic_context(conn, dataset.fact_table)
+        known = _verified_answer(conn, semantic, question, dataset) if semantic else None
+        if known:                          # asked before and reviewed: its request, compiled now - no model call
+            return known
     if proposed_sql is None:
         from . import model_client
 
@@ -375,9 +463,21 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
         options = dict(sampling())  # no temperature unless EXAKIT_MODEL_TEMPERATURE asks for one
         if max_output_tokens is not None:
             options["max_tokens"] = max_output_tokens
-        semantic = semantic_context(conn, dataset.fact_table) if conn is not None else None
         if semantic:
             semantic["conn"] = conn
+            try:
+                asked = _ask_request(client, model, options, semantic, question)
+            except Exception as error:       # noqa: BLE001 - Semantic SQL, then the column map, still answer
+                asked = None
+                doubts.append(f"The structured request was not used ({str(error).splitlines()[0][:160] if str(error) else type(error).__name__}).")
+            if asked:
+                client.close()
+                request, plain, said, unsure = asked
+                return Proposal(dataset, question.strip(), _read_sql(plain),
+                                [f"Answered from the semantic model {semantic['model']} (view {semantic['view']}): the "
+                                 "same metrics and dimensions an AI client reads over MCP.",
+                                 "Request: " + json.dumps({k: v for k, v in request.items() if k not in ("model", "object", "client")}),
+                                 *said], unsure, request=request)
             try:
                 drafted = _ask_semantic(client, model, options, semantic, question)
             except Exception as error:       # noqa: BLE001 - the column map still answers; the proposal says why

@@ -41,11 +41,43 @@ The rules drafter needs no model. `nb.ask` needs one, which you set up with `nb.
 
 ### Answers come from the semantic model
 
-When a semantic model covers your data, your AI model answers from it. It is shown the model's metrics and dimensions, writes Semantic SQL over the published view, and Exasol Semantic Views compiles that into the plain SQL you read and approve. An AI client over MCP uses the same definitions, so the notebook and the client give the same number for the same question.
+When a semantic model covers your data, a question is answered from it, in this order:
+
+1. **A verified question.** If the model holds this question (the same words, in any order), its reviewed request is compiled and shown. No model is asked.
+2. **A structured request.** Your AI model picks metric and dimension names, filters and an order from the model's list. Exasol Semantic Views writes the SQL (`COMPILE_REQUEST_JSON`). When the request is ambiguous, the product's choices are named under *Check before you approve*.
+3. **Semantic SQL.** Your AI model writes Semantic SQL over the published view.
+
+In each case, Exasol Semantic Views compiles it into the plain SQL you read and approve. An AI client over MCP uses the same definitions, so the notebook and the client give the same number for the same question.
 
 Measured: for *revenue by region*, the draft `SELECT region, total_amount FROM SEM_XSRC_TEST.ORDER_LINES GROUP BY region` compiled to a `SUM(AMOUNT)` over `AMAZON.ORDER_LINES` with a `LEFT JOIN` to the state table, the join the model defines. A draft naming a metric the model does not have was refused (`SEMANTIC_QUERY_020`).
 
 The proposal says which model answered and shows the Semantic SQL under *What the model assumed*. If no model covers the data, or the question cannot be put in the model's terms, the SQL is drafted from the approved column map and the proposal says so under *Check before you approve*.
+
+## What an answer gives you
+
+An approved answer opens on four tabs:
+
+| Tab | What it shows |
+|---|---|
+| **Table** | The rows, with money in the data's currency, counts and shares written out |
+| **Chart** | Bars per group, or a line over time, when the answer has that shape |
+| **Insights** | Sentences worked out from the answer by fixed rules: the largest and smallest, the top one's share, the change over time, values far from the rest. No model is used and no new query is run (`nb.insights(answer)`). |
+| **JSON** | The rows as JSON |
+
+**Download** saves the answer as CSV or JSON, and the chart as PNG. The files are made in your browser.
+
+Under **Keep this answer**:
+
+- **Pin to dashboard** puts the answer on a page of a dashboard (`nb.pin`). Its SQL is kept exactly as you approved it. `03_share` publishes the pages as one dashboard, as described in [A dashboard of several pages](/data-scientist/communicate/multi-page-dashboard).
+- **Save as a verified question** appears when the answer came from the semantic model. It keeps the question in the model, so the next time anyone asks it, here or in an AI client, the reviewed request is used.
+
+SQL you edited by hand has no request, so it can be pinned but not kept as a verified question.
+
+```python
+insights = nb.insights(answer)
+pinned = nb.pin(proposal, answer, board="sales-overview", page="Revenue")
+verified = proposal.verify(connection)
+```
 
 ## Read, edit and approve
 

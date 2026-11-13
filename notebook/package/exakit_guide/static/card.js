@@ -955,6 +955,38 @@ function render({ model, el }) {
           `${b.outcome || "Outcome"} is 1 for ${pct(g.rate)}`, h("span", { class: "guide-muted" }, ` (all rows: ${pct(b.overall)})`)) : null,
         h("ul", { class: "guide-list guide-small" }, (g.traits && g.traits.length ? g.traits : ["Nothing stands out: these are the typical rows."]).map((t) => h("li", {}, t))))));
     },
+    // Save an answer: each item a file made here, in the browser (nothing is sent); "png" draws the card's chart.
+    downloads(b) {
+      const save = (blob, name) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      };
+      const png = (e, name) => {
+        const card = e.currentTarget.closest(".guide-root");
+        const svg = card && card.querySelector("svg.guide-chart, .guide-bars svg, .guide-line svg, svg");
+        if (!svg) return;
+        const box = svg.getBoundingClientRect();
+        const clone = svg.cloneNode(true);
+        clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+        const style = getComputedStyle(card);
+        clone.setAttribute("style", `font-family:${style.fontFamily};color:${style.color};background:${style.backgroundColor || "#fff"}`);
+        const img = new Image();
+        img.onload = () => {
+          const scale = 2, canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, box.width) * scale; canvas.height = Math.max(1, box.height) * scale;
+          const g = canvas.getContext("2d");
+          g.fillStyle = "#ffffff"; g.fillRect(0, 0, canvas.width, canvas.height);
+          g.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((blob) => blob && save(blob, name));
+        };
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+      };
+      return h("div", { class: "guide-downloads" }, b.label ? h("span", { class: "guide-chips-label" }, b.label) : null,
+        b.items.map((d) => h("button", { type: "button", class: "guide-btn guide-btn-quiet", "data-tip": d.tip || null,
+          onClick: (e) => d.png ? png(e, d.filename) : save(new Blob([d.text], { type: d.mime || "text/plain" }), d.filename) }, d.label)));
+    },
     table(b) {
       const isNum = b.columns.map((_, j) => b.rows.length > 0 && b.rows.every((r) => r[j] == null || typeof r[j] === "number"));
       return h("div", { class: "guide-tablewrap" }, h("table", { class: b.wrap_first ? "guide-table guide-table-wrapfirst" : "guide-table" },

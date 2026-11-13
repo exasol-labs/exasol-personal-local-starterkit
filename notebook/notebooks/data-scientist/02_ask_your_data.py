@@ -126,6 +126,22 @@ currency = nb.currency_of(connection, dataset)
 nb.formatted(answer, dataset, currency) if answer is not None else None
 
 # %% [markdown]
+# ### What the answer says, and keeping it
+#
+# `nb.insights` writes the answer out in sentences by fixed rules (the largest and smallest, shares, the change over time, values far from the rest): no model and no new query. Pin the answer to a page of a dashboard (`nb.pin`): `03_share` publishes the pages as one dashboard with tabs and filters. When it was answered from the semantic model, `proposal.verify(connection)` keeps it in the model as a verified question: asked again, here or in an AI client, it is answered with this reviewed request.
+
+# %%
+PIN_TO = None                     # a dashboard and a page, such as ("sales-overview", "Revenue")
+KEEP_AS_VERIFIED = False
+if answer is not None:
+    insights = nb.insights(answer)
+    print("\n".join(insights))
+    if PIN_TO:
+        pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1])
+    if KEEP_AS_VERIFIED:
+        verified = proposal.verify(connection)
+
+# %% [markdown]
 # ## Next: steps 8 and 9
 #
 # Open `03_share` to publish a dashboard and hand off the work.

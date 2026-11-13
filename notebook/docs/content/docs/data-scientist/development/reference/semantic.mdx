@@ -36,6 +36,18 @@ The work is the kit's describe service (the one `exakit describe --model` runs),
 the kit builds is marked as such; one of the same name somebody else made is never touched.
 
 
+## nb.compile_request [#compile_request]
+
+```python
+nb.compile_request(conn, request: dict[str, Any], *, show: bool=True) -> dict[str, Any]
+```
+
+Compile a structured request - \{"model", "object", "metrics": [...], "dimensions": [...], "filters": [\{"field",
+"op", "value"\}], "order_by": [\{"field", "direction"\}], "limit"\} - into the SQL the semantic layer stands behind
+(COMPILE_REQUEST_JSON). Returns \{status, sql, plan, clarification, request_id, error\}; nothing of the data is read.
+A question the model finds ambiguous comes back with `clarification`: the choices to pick from.
+
+
 ## nb.find_links [#find_links]
 
 ```python
@@ -58,6 +70,56 @@ Bounded reads only; nothing is written. `ai` (default: when a model is configure
 pairs from names, types and notes; `check` is pairs you have in mind ("S.T.COL=S.T.KEY"); each is checked against
 the data and comes back with its evidence or under "rejected". Returns \{links, partial, ...\}; a link's
 `confidence` is "low" for plain numbers, which match by chance: confirm those before using them.
+
+
+## nb.fuse [#fuse]
+
+```python
+nb.fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool=True) -> dict[str, Any]
+```
+
+The same thing in several sources, declared once (APPLY_FUSION_DECLARATION): `dry_run=True` (the default)
+checks it against the data and changes nothing; `dry_run=False` applies it and keeps the exported document
+beside the model, so a rebuild puts it back. Build the document with nb.fusion_document(...).
+
+
+## nb.fusion [#fusion]
+
+```python
+nb.fusion(conn, model: str) -> dict[str, Any] | None
+```
+
+The model's whole fusion layer, exported as one document (None when it has none).
+
+
+## nb.fusion_document [#fusion_document]
+
+```python
+nb.fusion_document(
+    conn,
+    model: str,
+    table: str,
+    other: str,
+    *,
+    key: str | None=None,
+    wins: str='model',
+) -> dict[str, Any]
+```
+
+The fusion document saying `other` (a table of another source) holds the same thing as `table` (an entity
+of the published `model`), at the same grain: a second copy of the entity, matched by its key (`key`: its
+column in `other` when it is named differently), every field bound there (a column of the same name, else
+empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative,
+`wins="other"` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document).
+
+
+## nb.model_fields [#model_fields]
+
+```python
+nb.model_fields(conn, model: str)
+```
+
+Every metric and dimension of a published model, in one read: object, kind, name, business name, what it is.
 
 
 ## nb.model_notes [#model_notes]
@@ -163,3 +225,31 @@ A semantic model: what it holds (`spec`), what the AI proposed, and - once publi
 | `spec` |  |
 | `fields` | One row per dimension and metric: view, kind, name, display name, what it is. |
 | `publish(conn=None) -> SemanticModel` | Build the previewed model in the database (the AI's proposal is asked again only if none was kept). |
+
+
+## nb.verified_questions [#verified_questions]
+
+```python
+nb.verified_questions(conn, model: str)
+```
+
+The model's verified questions: name, question, request and the SQL it compiles to.
+
+
+## nb.verify_question [#verify_question]
+
+```python
+nb.verify_question(
+    conn,
+    model: str,
+    object_name: str,
+    name: str,
+    question: str,
+    request: dict[str, Any],
+    *,
+    onboarding: bool=False,
+) -> dict[str, Any]
+```
+
+Keep an approved question in the model as a verified query: the next time anyone asks it - here, or an AI
+client over MCP - the reviewed request is used, with no new draft. Compiled first; kept beside the model too.

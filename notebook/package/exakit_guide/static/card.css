@@ -639,3 +639,5 @@ button.guide-flow-node:hover:not(:disabled) { border-color: var(--guide-accent);
 .guide-flow-add { border-style: dashed; color: var(--guide-muted); }
 .guide-flow-arrow { color: var(--guide-muted); font-size: 18px; }
 .guide-flow-arrow-sm { font-size: 14px; }
+
+.guide-downloads { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }

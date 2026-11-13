@@ -1,0 +1,62 @@
+# A dashboard of several pages (/data-scientist/communicate/multi-page-dashboard)
+
+
+
+The answers you approve in Ask can make one dashboard: a tab per page, a tile per answer, and filters on each page. Each tile's SQL is exactly as you approved it, and runs as the read-only user.
+
+## Pin answers to pages [#pin-answers-to-pages]
+
+In `02_ask_your_data`, after an answer runs, **Pin to dashboard** puts it on a page. Name the dashboard and the page. A new page name makes a new page. The same SQL pinned to a page again replaces its tile there.
+
+A tile is shown the way the answer looks:
+
+| Answer                               | Tile  |
+| ------------------------------------ | ----- |
+| One number                           | KPI   |
+| A date and a number                  | Line  |
+| A label and a number (up to 50 rows) | Bars  |
+| Anything else                        | Table |
+
+```python
+nb.pin(proposal, answer, board="sales-overview", page="Revenue")
+board = nb.board("sales-overview")
+print(board)                                  # its pages and tiles, each tile by its id
+board.move("a1b2c3d4", "Delivery").save()     # to another page (a new name makes a new page)
+board.remove("a1b2c3d4").save()
+board.show_as("a1b2c3d4", "table").save()
+nb.boards()                                   # every dashboard being put together, the last one changed first
+```
+
+The board is kept in `~/.exasol-starter-kit/boards/<name>.json`.
+
+## Preview, check, publish [#preview-check-publish]
+
+In `03_share`, **Make a dashboard** offers **A dashboard of several pages**. Pick the dashboard. Its pages and tiles are listed, and a tile can be moved to another page or taken off. **Make a preview** builds it on Dash Server and runs its health check. Open the preview, check the figures against the queries shown, tick both boxes, and **Publish**. These are the same steps as for one query, described in [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
+
+```python
+board_draft = nb.board("sales-overview").share()     # every tile's SQL is printed first
+dash_server = nb.dash_tools()
+board_preview = board_draft.preview(dash_server)
+board_live = board_draft.confirm(dash_server, figures_checked=True)
+```
+
+The app holds the following files, and no credentials:
+
+| File                 | What it is                                                        |
+| -------------------- | ----------------------------------------------------------------- |
+| `app.py`             | The dashboard                                                     |
+| `BOARD.json`         | Its pages, tiles and filters                                      |
+| `queries/<tile>.sql` | One file per tile: the approved SQL, unchanged                    |
+| `REVISION.json`      | The lineage: the board, the workflow, and every tile's SQL digest |
+
+If a tile's SQL no longer matches its digest, the preview is refused.
+
+## Why it does not hang [#why-it-does-not-hang]
+
+* **Only the open tab is queried.** A page's tiles run in parallel, at most four at a time.
+* **A result is kept for five minutes.** Moving between tabs, and back, does not query again. **Refresh** queries the open tab again.
+* **Filters narrow the kept rows.** A page's filters are the columns every tile on it returns, such as a state or a category. Picking values filters each tile's rows without a new query. A tile without that column is left as it is.
+* **A slow query does not hold the page.** After 25 seconds its tile says it is still running. The answer is kept when it comes, so it shows on the next refresh. The query is not sent twice.
+* **Each result is capped** at 5,000 rows, and a table tile shows 1,000.
+
+Back to [Communicate and deploy](/data-scientist/communicate). Previous: [Preview, check, publish](/data-scientist/communicate/preview-check-publish).

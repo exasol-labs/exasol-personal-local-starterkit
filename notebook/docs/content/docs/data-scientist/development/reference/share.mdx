@@ -10,6 +10,22 @@ use the kit-managed MCP endpoint through `dash_tools()`.
 The dashboard itself queries Exasol through Dash Server's server-side profile.
 
 
+## nb.BoardDraft [#BoardDraft]
+
+```python
+class nb.BoardDraft
+```
+
+A multi-page dashboard made from a board (nb.board): one Dash app, a tab per page, a tile per approved answer.
+Previewed and published like a one-query dashboard: a health-checked preview first, live only after a person
+checked the figures. Its lineage names the board and every tile's approved SQL digest.
+
+| Member | What it is |
+|---|---|
+| `board` | `Any` |
+| `description() -> str` |  |
+
+
 ## nb.share [#share]
 
 ```python

@@ -135,6 +135,8 @@ class Ask(Screen):
         self.answer = None
         self.ran_as = ""
         self.history: list[dict] = []
+        self.view = "table"                  # the answer as: table, chart, insights or json
+        self.board, self.page = "my-dashboard", "Overview"
         self.error = None
         try:
             self.ds = _dataset()
@@ -194,16 +196,7 @@ class Ask(Screen):
         if self.answer is not None:
             frame, line, chart = self.answer
             blocks.append({"t": "answer", "v": line, "rows": len(frame), "ran_as": self.ran_as})
-            if chart:
-                blocks.append(chart)
-            from exakit_nb.number_format import format_value
-
-            formats = getattr(self, "formats", None) or _formats(frame)
-            blocks.append({"t": "table", "columns": [str(c) for c in frame.columns],
-                           "display": [[format_value(v, formats.get(str(c), {})) for c, v in zip(frame.columns, row)]
-                                       for row in frame.astype(object).values.tolist()[:200]],
-                           "rows": [[(None if v is None else (float(v) if hasattr(v, "as_integer_ratio") and not isinstance(v, (bool, int)) else v))
-                                     for v in row] for row in frame.astype(object).values.tolist()]})
+            blocks += self._outputs(frame, chart)
         if self.box and self.history:
             blocks.append({"t": "details", "title": f"Asked so far ({len(self.history)})", "blocks": [
                 {"t": "list", "items": [f"{h['question']} · {h['rows']} rows" for h in self.history]}]})
@@ -212,7 +205,89 @@ class Ask(Screen):
             blocks.append({"t": "next", "v": f"Next: {after['title']}", "path": after["file"]})
         return blocks
 
+    def _outputs(self, frame, chart: dict | None) -> list[dict]:
+        """The answer four ways - a table, a chart, insights (sentences from fixed rules: nb.insights) and JSON - with
+        downloads made in the browser, then the two ways to keep it: on a dashboard page (nb.pin), and as a verified
+        question of the semantic model (proposal.verify) when it was answered from the model."""
+        import json
+
+        from exakit_nb.number_format import format_value
+
+        formats = getattr(self, "formats", None) or _formats(frame)
+        plain = [[(None if v is None else (float(v) if hasattr(v, "as_integer_ratio") and not isinstance(v, (bool, int)) else v))
+                  for v in row] for row in frame.astype(object).values.tolist()]
+        columns = [str(c) for c in frame.columns]
+        records = [dict(zip(columns, row)) for row in plain]
+        views = [{"id": "table", "label": "Table"}] + ([{"id": "chart", "label": "Chart"}] if chart else []) \
+            + [{"id": "insights", "label": "Insights"}, {"id": "json", "label": "JSON"}]
+        view = self.view if any(v["id"] == self.view for v in views) else "table"
+        blocks: list[dict] = [{"t": "tabs", "value": view, "items": views}]
+        if view == "chart" and chart:
+            blocks.append(chart)
+        elif view == "insights":
+            said = actions.run("ask.insights") or []
+            blocks.append({"t": "list", "items": said})
+            blocks.append({"t": "p", "muted": True, "v": "Worked out from the answer by fixed rules: no model, no new query."})
+        elif view == "json":
+            blocks.append({"t": "pre", "v": json.dumps(records[:50], indent=2, default=str)
+                           + ("\n…" if len(records) > 50 else "")})
+        else:
+            blocks.append({"t": "table", "columns": columns, "rows": plain,
+                           "display": [[format_value(v, formats.get(str(c), {})) for c, v in zip(frame.columns, row)]
+                                       for row in frame.astype(object).values.tolist()[:200]]})
+        import csv
+        import io
+
+        out = io.StringIO()
+        writer = csv.writer(out)
+        writer.writerow(columns)
+        writer.writerows(plain)
+        items = [{"label": "CSV", "filename": "answer.csv", "mime": "text/csv", "text": out.getvalue()},
+                 {"label": "JSON", "filename": "answer.json", "mime": "application/json",
+                  "text": json.dumps(records, indent=2, default=str)}]
+        if chart and view == "chart":
+            items.append({"label": "PNG", "filename": "answer.png", "png": True})
+        blocks.append({"t": "downloads", "label": "Download", "items": items})
+        # keep it: on a dashboard page, and in the model as a verified question
+        p = self.proposal
+        blocks += [{"t": "subhead", "v": "Keep this answer",
+                    "tip": "Pin it to a page of a dashboard: the next notebook (03_share) publishes the pages as one "
+                           "dashboard on Dash Server, with tabs and filters. A question answered from the semantic model "
+                           "can also be kept in the model: anyone who asks it again, here or in an AI client, gets this "
+                           "reviewed request."},
+                   {"t": "fields", "items": [{"id": "ask_keep", "type": "group", "fields": [
+                       {"id": "board", "type": "text", "label": "Dashboard", "value": self.board, "placeholder": "sales-overview"},
+                       {"id": "page", "type": "text", "label": "Page", "value": self.page, "placeholder": "Overview"}]}]},
+                   {"t": "actions", "items": [{"id": "pin", "label": "Pin to dashboard", "busy": "Pinning…"}]
+                    + ([{"id": "verify", "label": "Save as a verified question", "busy": "Saving in the model…"}]
+                       if p is not None and getattr(p, "request", None) else [])}]
+        return blocks
+
     # -- actions ---------------------------------------------------------------------------
+    def on_tab_table(self, _v: dict) -> None:
+        self.view = "table"
+
+    def on_tab_chart(self, _v: dict) -> None:
+        self.view = "chart"
+
+    def on_tab_insights(self, _v: dict) -> None:
+        self.view = "insights"
+
+    def on_tab_json(self, _v: dict) -> None:
+        self.view = "json"
+
+    def on_pin(self, v: dict) -> None:
+        """Pin the approved answer to a page of a dashboard (nb.pin): its SQL exactly as approved."""
+        self.board = str(v.get("board") or self.board).strip().lower() or "my-dashboard"
+        self.page = " ".join(str(v.get("page") or self.page).split()) or "Overview"
+        tile = actions.run("ask.pin", board=self.board, page=self.page)
+        self.flash = {"kind": "ok", "v": f"Pinned to {self.board} / {self.page} as a {tile['kind']}. 03_share publishes it."}
+
+    def on_verify(self, _v: dict) -> None:
+        """Keep the question in the semantic model as a verified question (proposal.verify)."""
+        found = actions.run("ask.verify")
+        self.flash = {"kind": "ok", "v": f"Kept in the model as a verified question: {found['verified']['name']}."}
+
     def on_draft(self, v: dict) -> None:
         self._draft(str(v.get("question") or ""))
 
@@ -234,7 +309,7 @@ class Ask(Screen):
             currency = None
         self.formats = _formats(frame, self.ds, currency)
         line, chart = _explain(frame, self.formats)
-        self.answer = (frame, line, chart)
+        self.answer, self.view = (frame, line, chart), "table"
         self.history.append({"question": self.proposal.question, "rows": len(frame)})
         self.flash = {"kind": "ok", "v": "Ran after your approval. Logged in the kit's workflow, so the hand-off bundle includes it."}
 

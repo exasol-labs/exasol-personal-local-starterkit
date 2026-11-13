@@ -453,7 +453,18 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <h3>AI proposals</h3>
 <p><code>describe_service.semantic_ai()</code> (needs <code>EXAKIT_MODEL_ID</code> and <code>EXAKIT_PROVIDER_BASE_URL</code>) sends one call with names, types, grains, notes and a category's top values only, never a row or a sensitive column. <code>sm.ai_accept()</code> keeps labels (display, comment, synonyms) and at most 8 metrics, each checked: ADDITIVE must be SUM of a public fact of that view; DERIVED/RATIO arithmetic over that view's metrics; a filter only on a known dimension value; type DOUBLE or DECIMAL. A refused metric is named with its reason; Semantic Views validates it again when applied.</p>
 <h3>Refresh</h3>
-<p>Every approval rebuilds the schema's model (<code>publish_schema</code>) and every multi-source model that lists the table (<code>refresh_including</code>). <code>exakit describe --model N --refresh</code> / <code>nb.refresh_semantic</code> rebuilds one from its kept inputs.</p>
+<p>Every approval updates the schema's model (<code>publish_schema</code>) and every multi-source model that lists the table (<code>refresh_including</code>). <code>exakit describe --model N --refresh</code> / <code>nb.refresh_semantic</code> does it for one from its kept inputs.</p>
+<h3>In place, not rebuilt (sm.changes / sm.apply)</h3>
+<p><code>semantic/&lt;model&gt;.json</code> keeps the spec last published. <code>sm.changes(previous, spec)</code> returns the statements that turn one into the other: <code>ADD_ENTITY</code> + key for a new table, <code>ADD_UNIQUE_KEY_WITH_COLUMNS</code> for a new link target, <code>ADD_RELATIONSHIP</code> + key mapping + evidence for a new link, <code>APPLY_SEMANTIC_DEFINITION_OR_FAIL</code> for a new or changed view, then one <code>PUBLISH_MODEL</code>; <code>[]</code> when nothing changed; <code>None</code> (rebuild) when anything is taken away, a key or source moves, or the name or description differs. A refused in-place step falls back to the rebuild. A rebuild (<code>DROP_MODEL_IF_EXISTS</code> deletes verified queries, feedback and the query log) is followed by <code>sm.governance(kept)</code>: <code>APPLY_FUSION_DECLARATION</code> (after <code>QUERY_TIMEOUT=60</code>), <code>ADD_VERIFIED_QUERY</code>, <code>ADD_AGENT_INSTRUCTION</code>, from the <code>verified</code>, <code>instructions</code> and <code>fusion</code> keys kept beside the spec.</p>
+<h3>Product surfaces the kit uses</h3>
+<table><tr><th>nb</th><th>Semantic Views</th><th>Notes</th></tr>
+<tr><td>compile_request</td><td>COMPILE_REQUEST_JSON</td><td>{status, sql, plan, clarification, request_id, error}; a refusal is a row, never raised</td></tr>
+<tr><td>verify_question / Proposal.verify</td><td>ADD_VERIFIED_QUERY</td><td>compiled first; names unique per model; kept beside the model</td></tr>
+<tr><td>verified_questions</td><td>SEMANTIC_AGENT.VERIFIED_QUERIES_FOR_AGENT</td><td>falls back to the kept copy</td></tr>
+<tr><td>fusion_document / fuse / fusion</td><td>APPLY_FUSION_DECLARATION (dry run first), EXPORT_FUSION_DECLARATION</td><td>a second representation, F5 DIRECT identity when keys are named differently, FALLBACK bindings (typed NULL when a column is missing), RECONCILE toward the one AUTHORITATIVE side</td></tr>
+<tr><td>model_fields, ask.semantic_context</td><td>SEMANTIC_AGENT.FIELDS_FOR_AGENT</td><td>one read for every candidate model (was 2 + one per view)</td></tr>
+</table>
+<p>Ask's order (<code>nb.ask</code> with <code>conn</code>): a verified question with the same words (no model call) → the model picks names, the product compiles the request → Semantic SQL via <code>COMPILE_SQL</code> → the column map.</p>
 
 <h2 id="links">Link discovery</h2>
 <p>Tables from different sources rarely declare how they join, and the same thing is often named differently. <code>descriptor/links.py find()</code> finds links from the values, with bounded statements only, and never joins two sources while searching.</p>
@@ -506,7 +517,9 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <tr><td>data_map</td><td>one map of samples, files and sources</td><td>data_map, DataMap</td></tr>
 <tr><td>describe, role_picker, role_check</td><td>draft, review and approve a column map; the AI fill</td><td>describe, review_roles, RoleReview, fill_column_map, check_roles</td></tr>
 <tr><td>descriptor_store, descriptor_rules, dataset</td><td>the store; rules (byte-identical twin of the kit's); a dataset with roles as SQL names</td><td>approved_datasets, column_map_versions, dataset, chosen_dataset</td></tr>
-<tr><td>semantic</td><td>Semantic Views models</td><td>semantic_model, find_links, model_notes, semantic_models, refresh_semantic, semantic_sql</td></tr>
+<tr><td>semantic</td><td>Semantic Views models</td><td>semantic_model, find_links, model_notes, semantic_models, refresh_semantic, semantic_sql, compile_request, verify_question, verified_questions, fusion_document, fuse, fusion, model_fields</td></tr>
+<tr><td>board</td><td>Multi-page dashboards</td><td>pin, board, boards, Board (move, remove, show_as, filters, spec, share → share.BoardDraft); board_template.BOARD_APP: a tab per page from BOARD.json, lazy per tab, 4-way parallel, 300 s cache, 25 s wait, 5,000-row cap</td></tr>
+<tr><td>insights</td><td>Sentences from an answer</td><td>insights: fixed rules, no model, no query</td></tr>
 <tr><td>data_checks, prepare, schema_map</td><td>checks, leakage; typed cleaned view in EXAKIT_PREPARED; joined view</td><td>data_checks, leakage_check, typed_view, describe_schema</td></tr>
 <tr><td>readout, sql_words</td><td>plain-language notes; result names that avoid the 467 reserved words</td><td>name, count_name, note_groups, note_trend, note_model</td></tr>
 <tr><td>lab, themes</td><td>model lab; AI text themes</td><td>model_lab, lab_data, feature_ideas, try_feature, themes</td></tr>

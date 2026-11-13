@@ -43,13 +43,15 @@ class nb.Proposal
 A question with the SQL proposed for it. Nothing runs until `approve()` accepts that exact text; `edit()` replaces
 the SQL and removes the approval; `run()` runs the approved text through the kit's read-only service.
 
-| Member                       | What it is  |
-| ---------------------------- | ----------- |
-| `dataset`                    | `Any`       |
-| `question`                   | `str`       |
-| `sql`                        | `str`       |
-| `assumptions`                | `list[str]` |
-| `doubts`                     | `list[str]` |
-| `edit(sql: str) -> Proposal` |             |
-| `approve() -> Proposal`      |             |
-| `run()`                      |             |
+| Member                                                   | What it is                                                                                                                                                                                            |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset`                                                | `Any`                                                                                                                                                                                                 |
+| `question`                                               | `str`                                                                                                                                                                                                 |
+| `sql`                                                    | `str`                                                                                                                                                                                                 |
+| `assumptions`                                            | `list[str]`                                                                                                                                                                                           |
+| `doubts`                                                 | `list[str]`                                                                                                                                                                                           |
+| `request`                                                | \`dict\[str, Any]                                                                                                                                                                                     | None\` |
+| `edit(sql: str) -> Proposal`                             |                                                                                                                                                                                                       |
+| `verify(conn, name: str \| None=None) -> dict[str, Any]` | Keep this approved question in the semantic model as a verified question (nb.verify_question): the next time it is asked - here or by an AI client over MCP - its request is used, with no new draft. |
+| `approve() -> Proposal`                                  |                                                                                                                                                                                                       |
+| `run()`                                                  |                                                                                                                                                                                                       |

@@ -135,6 +135,26 @@ nb.semantic_model(conn, "all_data", schemas=["AMAZON", "MY_DATA", "VS_LOGISTICS"
 
 The guided view's Understand step has the same as the **Semantic views** card.
 
+A published model is changed in place on the next approval or refresh - only what changed is sent - and a
+rebuild puts back what the kit keeps beside it (`~/.exasol-starter-kit/semantic/<model>.json`): verified
+questions, agent instructions, the fusion document. Use the product's surfaces, never a hand-made view:
+
+```python
+nb.compile_request(conn, {"model": "sales_360", "object": "ORDER_LINES", "metrics": ["total_amount"],
+                          "dimensions": ["state"], "filters": [{"field": "state", "op": "=", "value": "CA"}]})   # SQL + plan
+proposal.verify(conn)                            # an approved answer from the model -> a verified question
+nb.verified_questions(conn, "sales_360")         # preferred over a new draft, here and by MCP clients
+doc = nb.fusion_document(conn, "sales_360", "MY_DATA.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID", wins="model")
+nb.fuse(conn, "sales_360", doc)                  # the same rows in two sources: dry run first, then dry_run=False
+```
+
+Ask answers from the model in this order: a verified question (no model call), a structured request the
+semantic layer compiles, Semantic SQL, the column map. An answer has `nb.insights(answer)` (fixed rules, no
+model, no query); `nb.pin(proposal, answer, board="sales-overview", page="Revenue")` puts it on a page, and
+`nb.board(name).share()` makes one Dash Server dashboard of all pages (a tab per page, filters on the columns
+every tile returns; `.preview(nb.dash_tools())`, then `.confirm(..., figures_checked=True)`). A dashboard is
+still only ever built on Dash Server.
+
 `data-scientist/01_explore` starts with the two checks a result should pass before anyone trusts it,
 both built from the descriptor so they run on any dataset: `nb.data_checks(conn, ds)` (Prepare:
 repeated keys and ids, exact copies, empty cells, placeholder values such as `Unknown Device`, a rare

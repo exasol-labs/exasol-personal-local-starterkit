@@ -108,7 +108,7 @@ The external sources connected to this kit (`exakit connect`), as `exakit source
 row a source with its name, connector_name, schema (VS\_\<NAME>, queried live, nothing copied), status, host and
 tls. Read from the kit's own record, so it needs no database connection; empty when none is connected.
 
-**Used in:** `data-scientist/00_quickstart`
+**Used in:** `data-scientist/00_quickstart`, `data-scientist/01_explore`
 
 ## nb.SourceTest [#SourceTest]
 

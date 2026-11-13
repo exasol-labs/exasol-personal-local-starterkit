@@ -81,6 +81,9 @@ def _first_notebook() -> dict | None:
 class Dashboard(Screen):
     help = (('Make a dashboard', 'communicate/preview-check-publish'),)
     kind = "card"
+    of_board = False             # the preview is of a dashboard of several pages (nb.board), not one query
+    boards: list = []
+    board = None
 
     def __init__(self) -> None:
         super().__init__()
@@ -90,6 +93,8 @@ class Dashboard(Screen):
         self.preview_url = None
         self.live_url = None
         self.dash = None
+        self.boards: list[dict] = []        # dashboards being put together from pinned answers (nb.boards)
+        self.board = None                   # the one shown (nb.board): its pages and tiles
         SESSION.release()   # `exakit status` can stall while this process holds a database connection (kit issue)
         try:
             self.dash = actions.run("share.server")     # installs and starts it the kit's way when needed
@@ -106,8 +111,42 @@ class Dashboard(Screen):
             self.answers = _answers(self.ds.id)
         except Exception as exc:
             self.error = str(exc).splitlines()[0]
+        self._read_boards()
         self.refresh()
         SESSION.release()
+
+    def _read_boards(self, name: str | None = None) -> None:
+        try:
+            self.boards = list(actions.run("share.boards") or [])
+            pick = name or (self.board.name if self.board is not None else None) or (self.boards[0]["name"] if self.boards else None)
+            self.board = actions.run("share.board", board=pick) if pick else None
+        except Exception:
+            self.boards, self.board = [], None
+
+    def _board_blocks(self) -> list[dict]:
+        """The dashboard of pinned answers: its pages and tiles, and moving or taking off a tile."""
+        b = self.board
+        if b is None or not b.tiles:
+            return []
+        tiles = [{"value": t["id"], "label": f"{t['title']} ({t['kind']})"} for t in b.tiles]
+        return [{"t": "pre", "v": str(b)},
+                {"t": "fields", "items": [{"id": "board_edit", "type": "group", "fields": [
+                    {"id": "tile", "type": "select", "label": "Tile", "value": tiles[0]["value"], "options": tiles},
+                    {"id": "to_page", "type": "text", "label": "Move it to page", "placeholder": b.pages[0]["title"]}]}]},
+                {"t": "actions", "items": [{"id": "board_move", "label": "Move"}, {"id": "board_remove", "label": "Take it off"}]}]
+
+    def on_board_move(self, v: dict) -> None:
+        page = " ".join(str(v.get("to_page") or "").split())
+        if not page:
+            raise ValueError("Type the page to move it to (a new name makes a new page).")
+        actions.run("share.board_move", tile=str(v.get("tile") or ""), page=page)
+        self._read_boards(self.board.name)
+        self.preview_url = self.live_url = None
+
+    def on_board_remove(self, v: dict) -> None:
+        actions.run("share.board_remove", tile=str(v.get("tile") or ""))
+        self._read_boards(self.board.name)
+        self.preview_url = self.live_url = None
 
     # -- what goes on the dashboard ------------------------------------------------------------
     def _sql_for(self, v: dict) -> tuple[str, str, str]:
@@ -148,16 +187,24 @@ class Dashboard(Screen):
                     "disabled": not self.answers, "disabled_reason": "Ask and run a question in step 3 first.",
                     "fields": [{"id": "answer", "type": "select", "label": "Answer", "value": self.answers[0]["value"] if self.answers else "",
                                 "options": [{"value": a["value"], "label": a["label"]} for a in self.answers]}]}]
-        blocks += [{"t": "choice", "id": "what", "value": "compare" if self.groups else "answer", "options": options},
+        boards = [{"value": x["name"], "label": f"{x['title']} · {x['pages']} pages · {x['tiles']} answers"} for x in self.boards]
+        options.append({"value": "board", "title": "A dashboard of several pages", "text": "The answers you pinned in step 3, a tab per page, with filters.",
+                        "disabled": not boards, "disabled_reason": "Pin an answer in step 3 first (Pin to dashboard).",
+                        "fields": [{"id": "board", "type": "select", "label": "Dashboard", "value": boards[0]["value"] if boards else "",
+                                    "options": boards}]})
+        blocks += [{"t": "choice", "id": "what", "value": "board" if boards else ("compare" if self.groups else "answer"), "options": options},
                    {"t": "fields", "items": [{"id": "title", "type": "text", "label": "Title (optional)", "placeholder": "Named after the data if empty"}]},
                    {"t": "actions", "items": [{"id": "preview", "label": "Make a preview" if not self.preview_url else "Make a new preview",
                                                "primary": not self.preview_url,
                                                "busy": "Building and checking the preview…" if self._server_up()
                                                        else "Setting up the dashboard server, then building the preview…"}]}]
+        blocks += self._board_blocks()
         if self.draft is not None and self.preview_url:
             blocks += [{"t": "linkcard", "title": "Preview ready and healthy", "text": f"“{self.draft.title}” · not visible to anyone else yet.",
                         "href": self.dash["url"] + self.preview_url, "label": "Open the preview"},
-                       {"t": "code", "code_only": True, "title": "The dashboard's query", "v": self.draft.sql},
+                       {"t": "code", "code_only": True, "title": "The dashboard's queries" if self.of_board else "The dashboard's query",
+                        "v": "\n\n".join(f"-- {t['title']}\n{t['sql']}" for t in self.draft.board.tiles)
+                             if self.of_board else self.draft.sql},
                        {"t": "checks", "items": [{"id": "checked", "label": "I opened the preview and the figures look right."},
                                                  {"id": "ok_to_share", "label": "This data is OK to share with the people who will see it."}]},
                        {"t": "actions", "items": [{"id": "publish", "label": "Publish", "primary": True, "busy": "Publishing…"}]}]
@@ -184,18 +231,26 @@ class Dashboard(Screen):
 
     # -- actions ---------------------------------------------------------------------------
     def on_preview(self, v: dict) -> None:
-        sql, title, measure = self._sql_for(v)
+        board = str(v.get("board") or "") if v.get("what") == "board" else ""
+        if not board:
+            sql, title, measure = self._sql_for(v)
         self._server_ready()
         SESSION.release()   # the preview reads `exakit status`, which waits while a connection is held
-        title = str(v.get("title") or "").strip() or title
-        self.draft = actions.run("share.draft", sql=sql, title=title, name=_slug(f"{self.ds.id}-{title}"), measure=measure)
+        self.of_board = bool(board)
+        if board:
+            self.draft = actions.run("share.board_draft", board=board)
+            step = "share.board_preview"
+        else:
+            title = str(v.get("title") or "").strip() or title
+            self.draft = actions.run("share.draft", sql=sql, title=title, name=_slug(f"{self.ds.id}-{title}"), measure=measure)
+            step = "share.preview"
         try:
-            self.preview_url = actions.run("share.preview")
+            self.preview_url = actions.run(step)
         except Exception:
             if self._gone():
                 # It was removed or stopped since this card opened: set it up again and build the preview once more.
                 self._server_ready(again=True)
-                self.preview_url = actions.run("share.preview")
+                self.preview_url = actions.run(step)
             else:
                 raise
         self.live_url = None
@@ -217,7 +272,7 @@ class Dashboard(Screen):
             raise ValueError("Tick both boxes before you publish.")
         self._server_ready()
         SESSION.release()
-        self.live_url = actions.run("share.publish")
+        self.live_url = actions.run("share.board_publish" if self.of_board else "share.publish")
         self.flash = {"kind": "ok", "v": "Published. The dashboard is live and passed its health check."}
 
 

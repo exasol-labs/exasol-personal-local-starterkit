@@ -232,7 +232,7 @@ To set up the AI model, see [Set up Exasol](/data-scientist/set-up/ai-and-langfu
 
 ## Keep the model current
 
-Approving a column map rebuilds every model its table is in. After you add a link or a table, refresh the model yourself:
+Approving a column map updates every model its table is in. After you add a link or a table, refresh the model yourself:
 
 ```python
 nb.refresh_semantic(connection, "sales_360")
@@ -243,5 +243,67 @@ exakit describe --model sales_360 --refresh
 ```
 
 Your AI clients read the same model through the Exasol MCP server. The notebook and the clients answer from one meaning.
+
+### Changed in place, not rebuilt
+
+The kit keeps the model it published beside it (`~/.exasol-starter-kit/semantic/<model>.json`). On the next approval or refresh it compares that with the new model and sends only the difference, the product's own way to change a published model:
+
+| What changed | What the kit sends |
+|---|---|
+| Nothing | Nothing |
+| A note, a role or a name in one table's column map | That view's definition, then one publish (2 statements) |
+| A new table | Its entity, its key and its view, then one publish |
+| A new link | The relationship, its key mapping and its evidence, then one publish |
+| A table, a key, a link or a view taken away | A rebuild |
+
+Each change is validated by Exasol Semantic Views before it returns, and undone when it is refused. A refused change makes the kit rebuild instead. A rebuild deletes everything the product keeps with a model: verified questions, feedback, the query log. So after a rebuild the kit puts back what it kept beside the model: the verified questions, the agent instructions and the fusion document.
+
+## The flow, from many sources to one model
+
+The top of the **Understand** card in `01_explore` shows every source you work on, by its kind (S3, Snowflake, MongoDB, PostgreSQL, tables in this database, your files), with its tables and how many column maps are approved. They feed the column maps, the links, the one semantic model, then cleaning, asking and the dashboard. Each step is marked as done or next.
+
+**+ Add a source or table** opens the quickstart's choice of data inside the card. A new connection, a connected source's tables, a dataset or a file join the tables already there, and nothing is replaced. The first table added opens in the column map.
+
+Once two tables have approved column maps, the links between them are looked for by themselves: one `nb.find_links` call, with bounded reads and no AI. They wait for you to tick them.
+
+```python
+sources = nb.sources()                                 # every connected source: VS_<NAME> and its connector
+source_data = nb.load_source(connection, "VS_SALES.ORDERS")
+chosen_tables[str(source_data.fact_table)] = source_data
+```
+
+## The same thing in two sources
+
+Customers in the warehouse and in a CRM, or orders here and in a lakehouse, are the same rows kept in two places. Declare them one entity with two sources, using Exasol Semantic Views *fusion*. Requests are then answered from either copy. For a value both copies hold, the side you pick wins.
+
+In the card, **4 · The same thing in two sources** takes four picks:
+
+- a table of a published model
+- its copy in another source
+- the copy's key column, when it is named differently
+- which side wins
+
+**Check against the data** is a dry run: the product validates the document against both sources and changes nothing. **Apply** appears only after a check passes, and it applies that same document.
+
+```python
+fusion_document = nb.fusion_document(connection, "sales_360", "MY_DATA.CUSTOMERS", "VS_CRM.CUSTOMERS",
+                                     key="CUST_ID", wins="model")
+nb.fuse(connection, "sales_360", fusion_document)                  # a dry run: nothing changes
+nb.fuse(connection, "sales_360", fusion_document, dry_run=False)   # apply; the document is kept beside the model
+nb.fusion(connection, "sales_360")                                 # the model's whole fusion layer, exported
+```
+
+The document makes the copy a second representation of the entity. A copy in an external source is read live. Keys named differently are bound to one identity. Every field is bound on the copy: to its column of the same name, else to an empty value of the field's type. A value both copies hold is reconciled, and the winner's value comes first.
+
+## Verified questions
+
+An answer you approved in [Ask](/data-scientist/explore/questions) can be kept in the model as a *verified question*: the question in words and the structured request it was answered with. The next time anyone asks it, here or in an AI client over MCP, the reviewed request is used and no model is asked. A request is compiled before it is kept, so one the model refuses is never stored.
+
+```python
+proposal.verify(connection)                       # after proposal.approve() and run()
+nb.verified_questions(connection, "sales_360")    # name, question, request and the SQL it compiles to
+nb.compile_request(connection, {"model": "sales_360", "object": "ORDER_LINES", "metrics": ["total_amount"],
+                                "dimensions": ["state"], "order_by": [{"field": "total_amount", "direction": "desc"}]})
+```
 
 Back to [Explore and understand](/data-scientist/explore). Previous: [Approve the column map](/data-scientist/explore/approve-the-column-map). Next: [Linked tables](/data-scientist/explore/linked-tables).

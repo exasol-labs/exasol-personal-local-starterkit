@@ -182,6 +182,9 @@ ACTIONS: dict[str, Action] = {
     "ask.edit": Action("02_ask_your_data", "proposal.edit({sql})", None),
     "ask.currency": Action("02_ask_your_data", "currency = nb.currency_of(connection, dataset)", "currency", False),
     "ask.run": Action("02_ask_your_data", "proposal.approve()\nanswer = proposal.run()", "answer"),
+    "ask.insights": Action("02_ask_your_data", "insights = nb.insights(answer)", "insights", False),
+    "ask.pin": Action("02_ask_your_data", "pinned = nb.pin(proposal, answer, board={board}, page={page})", "pinned"),
+    "ask.verify": Action("02_ask_your_data", "verified = proposal.verify(connection)", "verified"),
     # -- step 4: share and hand off ---------------------------------------------------------------------------------
     "share.open": Action("03_share", 'nb.continue_workflow("share")\n'
                                       "dataset = nb.dataset(connection, nb.chosen_dataset({dataset_id}))\n"
@@ -192,6 +195,14 @@ ACTIONS: dict[str, Action] = {
     "share.preview": Action("03_share", "dash_server = nb.dash_tools()\npreview_path = dashboard_draft.preview(dash_server)",
                             "preview_path"),
     "share.publish": Action("03_share", "live_path = dashboard_draft.confirm(dash_server, figures_checked=True)", "live_path"),
+    "share.boards": Action("03_share", "boards = nb.boards()", "boards", False),
+    "share.board": Action("03_share", "board = nb.board({board})", "board", False),
+    "share.board_move": Action("03_share", "board.move({tile}, {page}).save()", None),
+    "share.board_remove": Action("03_share", "board.remove({tile}).save()", None),
+    "share.board_draft": Action("03_share", "board_draft = nb.board({board}).share()", "board_draft"),
+    "share.board_preview": Action("03_share", "dash_server = nb.dash_tools()\nboard_preview = board_draft.preview(dash_server)",
+                                  "board_preview"),
+    "share.board_publish": Action("03_share", "board_live = board_draft.confirm(dash_server, figures_checked=True)", "board_live"),
     "share.handoff": Action("03_share", "handoff = nb.handoff_bundle(connection, dataset)", "handoff"),
 }
 

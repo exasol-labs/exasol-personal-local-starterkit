@@ -64,6 +64,15 @@ class ShareDraft:
             ("app_run_healthcheck", {"name": self.name, "target": "preview"}),
         ]
 
+    def _owns(self, lineage: dict[str, Any]) -> bool:
+        """An app already on Dash Server under this name is this notebook's to replace: its lineage is this data's."""
+        return (lineage.get("descriptor_id") == self.dataset.id
+                and all(lineage.get(key) for key in ("workflow_id", "descriptor_version", "query_digest")))
+
+    def _logged(self) -> dict[str, Any]:
+        return {"descriptor_id": self.dataset.id, "descriptor_version": self.dataset.version,
+                "query_digest": self.query_digest, "sql": self.sql, "source_table": getattr(self.dataset, "fact_table", None)}
+
     def description(self) -> str:
         """The catalog's line under the title: the approved data it answers from. Without one Dash Server writes
         "Live Exasol dashboard backed by profile <name>", which says nothing about the dashboard."""
@@ -109,8 +118,7 @@ class ShareDraft:
                 lineage = json.loads(saved["content"])
             except (KeyError, TypeError, ValueError, RuntimeError) as error:
                 raise RuntimeError(f"Dashboard {self.name} already exists without readable starter-kit lineage; choose another APP_NAME.") from error
-            if (not isinstance(lineage, dict) or lineage.get("descriptor_id") != self.dataset.id
-                    or not all(lineage.get(key) for key in ("workflow_id", "descriptor_version", "query_digest"))):
+            if not isinstance(lineage, dict) or not self._owns(lineage):
                 raise RuntimeError(f"Dashboard {self.name} belongs to a different dataset or has incomplete lineage; choose another APP_NAME.")
         _unwrap(tool(*requests[1]))
         if windows:
@@ -138,10 +146,7 @@ class ShareDraft:
         self.healthy = True
         app = deployed.get("app", {})
         self.preview_url = app.get("preview_path") or f"/preview/{self.name}/{self.revision_number}"
-        log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number,
-                  descriptor_id=self.dataset.id, descriptor_version=self.dataset.version,
-                  query_digest=self.query_digest, sql=self.sql,
-                  source_table=getattr(self.dataset, "fact_table", None),
+        log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number, **self._logged(),
                   preview_path=self.preview_url, state="preview")
         return self.preview_url
 
@@ -158,10 +163,7 @@ class ShareDraft:
         checked = _unwrap(tool("app_run_healthcheck", {"name": self.name, "target": "live"}))
         if checked.get("health", {}).get("status") != "healthy":
             raise RuntimeError("The live dashboard failed its health check; use app_rollback in Dash Server.")
-        log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number,
-                  descriptor_id=self.dataset.id, descriptor_version=self.dataset.version,
-                  query_digest=self.query_digest, sql=self.sql,
-                  source_table=getattr(self.dataset, "fact_table", None), state="live")
+        log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number, **self._logged(), state="live")
         return promoted.get("app", {}).get("route") or f"/apps/{self.name}"
 
 
@@ -190,3 +192,56 @@ def share(dataset: Any, sql: str, title: str, name: str, *, measure: str = "valu
         {"path": "REVISION.json", "content": json.dumps(lineage, indent=2) + "\n"},
     ]
     return ShareDraft(dataset, statement, title.strip(), name, digest, workflow_id, files)
+
+
+@dataclass
+class BoardDraft(ShareDraft):
+    """A multi-page dashboard made from a board (nb.board): one Dash app, a tab per page, a tile per approved answer.
+    Previewed and published like a one-query dashboard: a health-checked preview first, live only after a person
+    checked the figures. Its lineage names the board and every tile's approved SQL digest."""
+
+    board: Any = None
+
+    def description(self) -> str:
+        pages = self.board.pages
+        return (f"{len(pages)} page{'s' if len(pages) != 1 else ''}, {len(self.board.tiles)} approved answers "
+                f"({', '.join(p['title'] for p in pages)[:200]}).")
+
+    def _owns(self, lineage: dict[str, Any]) -> bool:
+        return lineage.get("board") == self.board.name and bool(lineage.get("workflow_id"))
+
+    def _logged(self) -> dict[str, Any]:
+        return {"board": self.board.name, "query_digest": self.query_digest,
+                "tiles": [{"id": t["id"], "sql_digest": t["sql_digest"], "dataset": t.get("dataset")} for t in self.board.tiles]}
+
+
+def board_draft(board: Any, name: str) -> BoardDraft:
+    """The Dash app of a board: app.py (the tabbed dashboard), BOARD.json (its pages, tiles and filters), one SQL file
+    per tile (the approved SQL, unchanged) and REVISION.json (the lineage). Every tile's SQL is shown here first."""
+    workflow_id = current_workflow()
+    if workflow_id is None:
+        raise RuntimeError("Start a workflow with nb.workflow(name) before preparing a dashboard.")
+    if not _NAME.fullmatch(name):
+        raise ValueError("Dashboard name must use lowercase letters, numbers and hyphens, starting with a letter.")
+    if not board.tiles:
+        raise ValueError(f"{board.name} has no tiles yet: pin an approved answer to it first (nb.pin).")
+    spec = board.spec()
+    digest = hashlib.sha256(json.dumps([t["sql_digest"] for t in board.tiles]).encode("utf-8")).hexdigest()
+    lineage = {"workflow_id": workflow_id, "board": board.name, "query_digest": digest,
+               "tiles": {t["id"]: {"sql_digest": t["sql_digest"], "dataset": t.get("dataset"),
+                                   "descriptor_version": t.get("descriptor_version")} for t in board.tiles}}
+    from .board_template import BOARD_APP, BOARD_CSS
+    from .share_template import APP_CSS
+
+    files = [{"path": "app.py", "content": BOARD_APP},
+             {"path": "assets/share.css", "content": APP_CSS + BOARD_CSS},
+             {"path": "BOARD.json", "content": json.dumps(spec, indent=2) + "\n"},
+             {"path": "REVISION.json", "content": json.dumps(lineage, indent=2) + "\n"}]
+    for tile in board.tiles:
+        statement = _read_sql(tile["sql"])
+        if hashlib.sha256(statement.encode("utf-8")).hexdigest() != tile["sql_digest"]:
+            raise RuntimeError(f"Tile {tile['id']} ({tile['title']}) no longer matches the SQL that was approved; pin it again.")
+        files.append({"path": f"queries/{tile['id']}.sql", "content": statement + "\n"})
+        print(f"[{tile['id']}] {tile['title']}\n{statement}\n")
+    return BoardDraft(dataset=None, sql="", title=spec["title"], name=name, query_digest=digest, workflow_id=workflow_id,
+                      files=files, board=board)
