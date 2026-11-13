@@ -1,5 +1,6 @@
 /* The guided view for the Exasol starter kit. One accent colour, light and dark. */
 .guide-root {
+  position: relative;
   --guide-bg: #ffffff;
   --guide-card: #ffffff;
   --guide-surface: #f7f7f5;
@@ -559,3 +560,10 @@
 .guide-inline-field .guide-dd { min-width: 260px; }
 .guide-slot .guide-dd, .guide-slotgrid .guide-dd { max-width: none; }
 .guide-col-role .guide-dd-btn, .guide-version-restore .guide-dd-btn { height: 34px; font-size: 13.5px; }
+
+/* the card's own tooltip (data-tip), drawn under the element it explains */
+.guide-tip { position: absolute; z-index: 30; padding: 8px 11px; font-size: 13px; line-height: 1.45; font-weight: 400;
+  color: var(--guide-card); background: var(--guide-text); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .18);
+  pointer-events: none; white-space: normal; }
+.guide-tip[hidden] { display: none; }
+.guide-info { cursor: help; }

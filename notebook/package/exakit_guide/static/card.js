@@ -192,6 +192,32 @@ function render({ model, el }) {
   };
   ["keydown", "keypress", "keyup"].forEach((type) => root.addEventListener(type, keepKeys));
   el.appendChild(root);
+  // Tooltips the card draws itself (JupyterLab and Marimo do not reliably show a browser's title tooltip): any element
+  // with data-tip shows its text in a bubble under it on hover or keyboard focus, and on a tap on a touch screen.
+  // The bubble lives on the card's root, outside the redrawn content, and is placed from the element's position.
+  const tip = h("div", { class: "guide-tip", role: "tooltip", hidden: true });
+  let tipFor = null;
+  const hideTip = () => { tip.hidden = true; tipFor = null; };
+  const showTip = (target) => {
+    if (!target || !target.dataset.tip) return;
+    if (!tip.isConnected || tip.parentNode !== root) root.appendChild(tip);
+    tip.textContent = target.dataset.tip;
+    tip.hidden = false;
+    tipFor = target;
+    const box = root.getBoundingClientRect(), at = target.getBoundingClientRect();
+    const width = Math.min(340, box.width - 24);
+    tip.style.maxWidth = `${width}px`;
+    const left = Math.max(12, Math.min(at.left - box.left - 12, box.width - tip.offsetWidth - 12));
+    tip.style.left = `${left}px`;
+    tip.style.top = `${at.bottom - box.top + 8}px`;
+  };
+  const tipTarget = (e) => (e.target && e.target.closest ? e.target.closest("[data-tip]") : null);
+  root.addEventListener("mouseover", (e) => { const t = tipTarget(e); if (t && t !== tipFor) showTip(t); });
+  root.addEventListener("mouseout", (e) => { const t = tipTarget(e); if (t && !t.contains(e.relatedTarget)) hideTip(); });
+  root.addEventListener("focusin", (e) => showTip(tipTarget(e)));
+  root.addEventListener("focusout", (e) => { if (tipTarget(e)) hideTip(); });
+  root.addEventListener("click", (e) => { const t = tipTarget(e); if (t) { if (tipFor === t) hideTip(); else showTip(t); } });
+  root.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
   const ui = { busy: null, openForm: null, values: {}, fading: new Set(), dismissed: new Set(), mode: defaultMode() };
   // This card's own view: Guided draws its controls; Code draws, in this very place, the code behind them. The
   // session (data, connection, approvals) is the kernel's and does not change with the view.
@@ -297,9 +323,9 @@ function render({ model, el }) {
           h("span", { class: `guide-dot guide-dot-${r.dot}`, "aria-hidden": "true" }),
           h("div", { class: "guide-row-main" },
             // the row's description is a tooltip (on the name and on its (i) mark), not a second line of text
-            h("div", { class: "guide-row-line", title: r.sub || null },
+            h("div", { class: "guide-row-line" },
               h("span", { class: "guide-row-name" }, r.name,
-                r.sub ? h("span", { class: "guide-info", tabindex: "0", role: "note", "aria-label": r.sub, title: r.sub }, "i") : null),
+                r.sub ? h("span", { class: "guide-info", tabindex: "0", role: "button", "aria-label": r.sub, "data-tip": r.sub }, "i") : null),
               h("span", { class: "guide-row-text" }, r.text)),
             r.cmd ? h("code", { class: "guide-code-only guide-cmd", title: "Click to copy as a cell", onClick: (e) => copyCode(r.cmd, e.currentTarget) }, r.cmd) : null,
             confirming ? h("div", { class: "guide-confirm" }, h("span", {}, confirming.confirm),
@@ -320,7 +346,7 @@ function render({ model, el }) {
     chips(b) {
       if (!b.items || !b.items.length) return null;
       return h("div", { class: "guide-chips" }, b.label ? h("span", { class: "guide-chips-label" }, b.label) : null,
-        b.items.map((c) => h("span", { class: `guide-chip guide-chip-${c.kind || "muted"}`, title: c.title || "" }, c.kind === "ok" ? icon("check") : null, c.label)));
+        b.items.map((c) => h("span", { class: `guide-chip guide-chip-${c.kind || "muted"}`, "data-tip": c.title || null }, c.kind === "ok" ? icon("check") : null, c.label)));
     },
     journey(b) {
       return h("div", { class: `guide-journey${b.compact ? " guide-journey-compact" : ""}` }, b.items.map((j) => h("a", { class: `guide-step guide-step-${j.state}`, href: labUrl(j.path),
@@ -667,8 +693,8 @@ function render({ model, el }) {
             w ? h("span", { class: "guide-inline-warn" }, icon("warn"), w) : null),
           h("div", { class: "guide-col-role" }, roleSelect(r),
             changed ? h("span", { class: "guide-chip guide-chip-accent" }, "Changed") : null,
-            r.sensitive ? h("span", { class: "guide-chip", title: "Never charted, grouped or sent to an AI model." }, "Personal data") : null,
-            r.leak ? h("span", { class: "guide-chip guide-chip-warn", title: "Filled in after the outcome. The model leaves it out." }, "Gives the answer away") : null));
+            r.sensitive ? h("span", { class: "guide-chip", "data-tip": "Never charted, grouped or sent to an AI model." }, "Personal data") : null,
+            r.leak ? h("span", { class: "guide-chip guide-chip-warn", "data-tip": "Filled in after the outcome. The model leaves it out." }, "Gives the answer away") : null));
       };
       const changedCount = b.rows.filter((r) => st.roles[r.column] !== r.role).length;
       const allOpen = !!ui.values["open:allcols"];
