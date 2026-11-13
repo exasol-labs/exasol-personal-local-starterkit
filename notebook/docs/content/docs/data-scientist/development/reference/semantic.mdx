@@ -36,6 +36,16 @@ The work is the kit's describe service (the one `exakit describe --model` runs),
 the kit builds is marked as such; one of the same name somebody else made is never touched.
 
 
+## nb.column_maps_in_model [#column_maps_in_model]
+
+```python
+nb.column_maps_in_model(conn, model: str) -> dict[str, dict[str, Any]]
+```
+
+The approved column maps the model carries, the newest version of each table: \{SCHEMA.TABLE: \{version, text\}\}.
+Every model the kit publishes keeps each table's approved column map on its entity, one per version.
+
+
 ## nb.compile_request [#compile_request]
 
 ```python
@@ -148,8 +158,21 @@ is set up.
 nb.refresh_semantic(conn, name: str) -> dict[str, Any]
 ```
 
-Rebuild a model the kit published, with the column maps and links approved since (``exakit describe --model
-NAME --refresh``). Approving a column map refreshes every model it is in by itself.
+Bring a model the kit published up to date with the column maps and links approved since (``exakit describe
+--model NAME --refresh``): changed in place, or built again from the kit's store when the model is gone from the
+database - with its verified questions and fusion put back. Approving a column map refreshes every model it is
+in by itself.
+
+
+## nb.restore_column_maps [#restore_column_maps]
+
+```python
+nb.restore_column_maps(conn, model: str, *, write: bool=False) -> list[dict[str, Any]]
+```
+
+Put the kit's store back from the model (a computer replaced, the store deleted): each table whose store has
+no column map, or an older one, gets the model's. `write=False` (the default) only says what it would write.
+The other way round - the model lost, the store kept - is nb.refresh_semantic(connection, model).
 
 
 ## nb.semantic_model [#semantic_model]

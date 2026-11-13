@@ -372,6 +372,7 @@ def statements(spec: dict[str, Any]) -> list[str]:
             found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk"),
                                  "UNIQUE", f"{column} is unique in {e['schema']}.{e['table']}: a link ends on it", "NATIVE",
                                  json.dumps([{"column_name": column, "ordinal_position": 1}])))
+        found += column_map_statements(model, e)
     for r in spec["relationships"]:
         found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], "MANY_TO_ONE", "LEFT", None))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
@@ -388,6 +389,20 @@ def statements(spec: dict[str, Any]) -> list[str]:
         found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
     found.append(_script("PUBLISH_MODEL", model))
     return found
+
+
+def column_map_statements(model: str, e: dict[str, Any], before: dict[str, Any] | None = None) -> list[str]:
+    """The table's approved column map, kept in the model on its entity (a custom extension under the key
+    column_map_v<version>, the approved text as the kit's store holds it): the model carries its own column maps, and
+    a store that is lost is put back from it (restore_column_maps). One extension per approved version - a new
+    approval adds the next, so the model holds the history too. Nothing when the version is already there."""
+    found = e.get("map") or {}
+    if not found.get("text") or not isinstance(found.get("version"), int):
+        return []
+    if before and (before.get("map") or {}).get("version") == found["version"]:
+        return []
+    return [_script("ADD_CUSTOM_EXTENSION", model, "ENTITY", e["name"], "exakit",
+                    json.dumps(found, ensure_ascii=False), "EXAKIT", f"column_map_v{found['version']}")]
 
 
 def _entity_shape(e: dict[str, Any]) -> tuple:
@@ -428,6 +443,7 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
                 found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], f"{e['name']}_pk", "PRIMARY",
                                      f"Key of {e['schema']}.{e['table']}", "NATIVE",
                                      json.dumps([{"column_name": k, "ordinal_position": i} for i, k in enumerate(e["key"], 1)])))
+        found += column_map_statements(model, e, before.get(name))
         had = set(before[name].get("unique") or []) if name in before else set()
         for column in e.get("unique") or []:
             if column not in had:

@@ -146,6 +146,7 @@ proposal.verify(conn)                            # an approved answer from the m
 nb.verified_questions(conn, "sales_360")         # preferred over a new draft, here and by MCP clients
 doc = nb.fusion_document(conn, "sales_360", "MY_DATA.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID", wins="model")
 nb.fuse(conn, "sales_360", doc)                  # the same rows in two sources: dry run first, then dry_run=False
+nb.restore_column_maps(conn, "sales_360", write=True)   # the model keeps every approved column map: a lost store comes back
 ```
 
 Ask answers from the model in this order: a verified question (no model call), a structured request the

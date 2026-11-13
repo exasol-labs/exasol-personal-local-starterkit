@@ -243,6 +243,20 @@ exakit describe --model sales_360 --refresh
 
 Your AI clients read the same model through the Exasol MCP server. The notebook and the clients answer from one meaning.
 
+### Column maps are in the model too [#column-maps-are-in-the-model-too]
+
+Every model the kit publishes keeps each table's approved column map on that table's entity: the approved text, under `column_map_v<version>`. A new approval adds the next version, so the model holds the history as well. The kit's store is the version control: drafts, approvals, who approved and when. The two are kept together, and either one restores the other:
+
+| Lost                                         | How it comes back                                                                                                                     |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| The model (dropped, a new database)          | `nb.refresh_semantic(connection, "sales_360")` builds it again from the store, and puts back its verified questions and fusion        |
+| The store (a new computer, a deleted folder) | `nb.restore_column_maps(connection, "sales_360", write=True)` writes the model's column maps back into the store, each as its version |
+
+```python
+nb.column_maps_in_model(connection, "sales_360")      # {SCHEMA.TABLE: {version, text}}: the newest of each table
+nb.restore_column_maps(connection, "sales_360")       # what it would write; write=True writes it
+```
+
 ### Changed in place, not rebuilt [#changed-in-place-not-rebuilt]
 
 The kit keeps the model it published beside it (`~/.exasol-starter-kit/semantic/<model>.json`). On the next approval or refresh it compares that with the new model and sends only the difference, the product's own way to change a published model:

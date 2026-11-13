@@ -906,6 +906,52 @@ def verified_questions(conn, model: str) -> list[dict[str, Any]]:
     return out
 
 
+def column_maps_in_model(conn, model: str) -> dict[str, dict[str, Any]]:
+    """The approved column maps the model carries, the newest version of each table: {SCHEMA.TABLE: {version, text}}.
+    Read from SEMANTIC_CATALOG.CUSTOM_EXTENSIONS (the kit's column_map_v<N> extensions on each entity)."""
+    from descriptor import semantic_model as sm
+
+    try:
+        rows = _rows(conn, "SELECT * FROM SEMANTIC_CATALOG.CUSTOM_EXTENSIONS")
+    except Exception as err:
+        raise Unreachable(f"The model's extensions cannot be read ({' '.join(str(err).split())[:160]}).") from err
+    wanted = sm.model_name(model).upper()
+    found: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        values = [v for v in row.values() if isinstance(v, str)]
+        if not any(v.upper() == wanted for v in values) or not any(re.fullmatch(r"column_map_v\d+", v) for v in values):
+            continue
+        for value in values:
+            try:
+                kept = json.loads(value)
+            except ValueError:
+                continue
+            if isinstance(kept, dict) and kept.get("text") and isinstance(kept.get("version"), int) and kept.get("table"):
+                table = str(kept["table"])
+                if kept["version"] > (found.get(table) or {}).get("version", 0):
+                    found[table] = {"version": kept["version"], "text": kept["text"]}
+    return found
+
+
+def restore_column_maps(conn, model: str, *, write: bool = False) -> list[dict[str, Any]]:
+    """Put the kit's store back from the model: each table whose store has no column map, or an older version than
+    the model holds, gets the model's (written as that version and made current) - only with ``write``; without it,
+    the list of what would be written. {table, version, store_version, action}."""
+    out = []
+    for table, kept in sorted(column_maps_in_model(conn, model).items()):
+        have = store.versions(table)
+        newest = max(have) if have else None
+        if newest is not None and newest >= kept["version"]:
+            out.append({"table": table, "version": kept["version"], "store_version": newest, "action": "the store is current"})
+            continue
+        if write:
+            store.write_version(table, kept["version"], kept["text"])
+            store.replace_current(table, kept["text"])
+        out.append({"table": table, "version": kept["version"], "store_version": newest,
+                    "action": "written to the store" if write else "would be written to the store"})
+    return out
+
+
 def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True) -> dict[str, Any]:
     """Apply a fusion document to a model (SEMANTIC_ADMIN.APPLY_FUSION_DECLARATION): the same thing kept in several
     sources - its representations, which side wins (authority, PREFER / FALLBACK) and how values agree (COALESCE,

@@ -195,7 +195,21 @@ def build_model(rows: Run, tables: list[str], links: list[dict[str, str]], name:
         version = docs[t].get("version")
         profile = store.read_profile(t, int(version), home) if isinstance(version, int) else None
         inputs.append(sm.table_input(t, docs[t], types.get(t, {}), virtual=t.split(".", 1)[0] in virtual, profile=profile))
-    return sm.build(inputs, links, name, description=description)
+    spec = sm.build(inputs, links, name, description=description)
+    # Each table's approved column map goes into the model with it (sm.column_map_statements): the text as the store
+    # holds that version, so the model alone is enough to put the store back.
+    for entity in spec["entities"]:
+        table = f"{entity['schema']}.{entity['table']}"
+        doc = docs.get(table) or next((d for t, d in docs.items() if t.upper() == table.upper()), None)
+        version = (doc or {}).get("version")
+        if isinstance(version, int):
+            try:
+                text = store.read(table, version, home)
+            except (OSError, ValueError):
+                text = None
+            if text:
+                entity["map"] = {"table": table, "version": version, "text": text}
+    return spec
 
 
 def publish_model(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], inputs: dict[str, Any], *,

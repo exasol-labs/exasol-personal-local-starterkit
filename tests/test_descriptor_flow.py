@@ -173,6 +173,7 @@ class FlowTest(unittest.TestCase):
         self.approve(doc)
         first = list(self.db.sv.scripts)
         self.assertIn("CREATE_MODEL", first)
+        self.assertTrue(any("'column_map_v1'" in x for x in self.db.sent), "the approved column map is in the model")
         kept_file = self.home / "semantic" / "support.json"
         kept = json.loads(kept_file.read_text(encoding="utf-8"))
         kept["verified"] = [{"object": "TICKETS", "name": "Tickets by channel", "question": "How many tickets per channel?",
@@ -183,8 +184,11 @@ class FlowTest(unittest.TestCase):
         doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], note="Where the ticket came in")
         self.db.sv.scripts.clear()
         self.approve(doc)
-        self.assertEqual(["APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL"], self.db.sv.scripts,
-                         "only the changed view is replaced, then one publish")
+        self.assertEqual(["ADD_CUSTOM_EXTENSION", "APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL"], self.db.sv.scripts,
+                         "the new column map version goes into the model, the changed view is replaced, then one publish")
+        version_2 = [x for x in self.db.sent if "ADD_CUSTOM_EXTENSION" in x and "'ENTITY'" in x][-1]
+        self.assertIn("'column_map_v2'", version_2)
+        self.assertIn("Where the ticket came in", version_2, "the approved text itself, as the store holds it")
         self.assertEqual("Tickets by channel", json.loads(kept_file.read_text(encoding="utf-8"))["verified"][0]["name"],
                          "what people added stays beside the model")
         doc = self.describe(force=True)["doc"]

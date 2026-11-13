@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "compile_request", "find_links", "fuse", "fusion", "fusion_document", "model_fields", "model_notes",
+__all__ = ["SemanticModel", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -214,8 +214,10 @@ def semantic_models(conn):
 
 
 def refresh_semantic(conn, name: str) -> dict[str, Any]:
-    """Rebuild a model the kit published, with the column maps and links approved since (``exakit describe --model
-    NAME --refresh``). Approving a column map refreshes every model it is in by itself."""
+    """Bring a model the kit published up to date with the column maps and links approved since (``exakit describe
+    --model NAME --refresh``): changed in place, or built again from the kit's store when the model is gone from the
+    database - with its verified questions and fusion put back. Approving a column map refreshes every model it is
+    in by itself."""
     ensure_semantic_views(conn)
     found = _service().refresh_model(conn, name)
     print(f"Refreshed {found.get('view')}")
@@ -286,6 +288,23 @@ def fusion_document(conn, model: str, table: str, other: str, *, key: str | None
     if wins not in ("model", "other"):
         raise ValueError('wins is "model" (the model\'s own copy wins) or "other".')
     return _service().fusion_document(conn, model, table, other, key=key, wins=wins)
+
+
+def column_maps_in_model(conn, model: str) -> dict[str, dict[str, Any]]:
+    """The approved column maps the model carries, the newest version of each table: {SCHEMA.TABLE: {version, text}}.
+    Every model the kit publishes keeps each table's approved column map on its entity, one per version."""
+    return _service().column_maps_in_model(conn, model)
+
+
+def restore_column_maps(conn, model: str, *, write: bool = False) -> list[dict[str, Any]]:
+    """Put the kit's store back from the model (a computer replaced, the store deleted): each table whose store has
+    no column map, or an older one, gets the model's. ``write=False`` (the default) only says what it would write.
+    The other way round - the model lost, the store kept - is nb.refresh_semantic(connection, model)."""
+    found = _service().restore_column_maps(conn, model, write=write)
+    for row in found:
+        print(f"{row['table']}: v{row['version']} in the model, "
+              f"{'v' + str(row['store_version']) if row['store_version'] else 'none'} in the store - {row['action']}")
+    return found
 
 
 def fusion(conn, model: str) -> dict[str, Any] | None:

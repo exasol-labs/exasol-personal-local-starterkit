@@ -411,6 +411,22 @@ class SemanticSurfaces(unittest.TestCase):
         conn.answers["APPLY_FUSION_DECLARATION"] = [{"STATUS": "ERROR", "MESSAGE": "SEMANTIC_FUSION_011 unknown key"}]
         self.assertEqual("error", svc.fuse(conn, "crm", doc, dry_run=False)["status"])
 
+    def test_a_lost_store_is_put_back_from_the_column_maps_the_model_carries(self):
+        from descriptor import store
+        older = {"table": "SHOP.ORDERS", "version": 1, "text": "version: 1\n"}
+        newer = {"table": "SHOP.ORDERS", "version": 2, "text": "version: 2\n"}
+        rows = [{"MODEL_NAME": "sales", "OBJECT_NAME": "orders", "EXTENSION_KEY": f"column_map_v{d['version']}",
+                 "EXTENSION_VALUE": json.dumps(d)} for d in (older, newer)]
+        rows.append({"MODEL_NAME": "other", "EXTENSION_KEY": "column_map_v9", "EXTENSION_VALUE": json.dumps(dict(newer, version=9))})
+        conn = self.Conn({"CUSTOM_EXTENSIONS": rows})
+        self.assertEqual({"SHOP.ORDERS": {"version": 2, "text": "version: 2\n"}}, svc.column_maps_in_model(conn, "sales"))
+        said = svc.restore_column_maps(conn, "sales")
+        self.assertEqual("would be written to the store", said[0]["action"])
+        self.assertEqual([], store.versions("SHOP.ORDERS"), "nothing written without write=True")
+        svc.restore_column_maps(conn, "sales", write=True)
+        self.assertEqual(([2], "version: 2\n"), (store.versions("SHOP.ORDERS"), store.current("SHOP.ORDERS")))
+        self.assertEqual("the store is current", svc.restore_column_maps(conn, "sales", write=True)[0]["action"])
+
     def test_a_fusion_document_binds_every_field_on_the_other_copy_and_names_one_winner(self):
         from descriptor import publish
         spec = {"model": "crm", "entities": [{"name": "customers", "schema": "SHOP", "table": "CUSTOMERS", "alias": "t1",
