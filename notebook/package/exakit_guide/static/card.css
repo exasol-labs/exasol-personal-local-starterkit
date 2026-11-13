@@ -598,7 +598,7 @@
 .guide-ai-to { font-weight: 600; color: var(--guide-accent); }
 .guide-ai-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .guide-ai-ok { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--guide-ok); }
-.guide-note { width: 100%; max-width: 520px; height: 30px; font-size: 13px; margin-top: 4px; }
+.guide-notebox { width: 100%; max-width: 520px; height: 30px; font-size: 13px; margin-top: 4px; }
 
 /* semantic views: schemas with their tables, and the links between tables */
 .guide-tree { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 6px; }
@@ -611,7 +611,7 @@
 .guide-tree-table.is-off .guide-tree-name { color: var(--guide-muted); }
 .guide-tree-table .guide-checkrow { flex-wrap: wrap; }
 .guide-tree-name { font-weight: 600; font-size: 14px; }
-.guide-tree-table .guide-note, .guide-join .guide-note { max-width: 640px; margin-left: 27px; width: calc(100% - 27px); }
+.guide-tree-table .guide-notebox, .guide-join .guide-notebox { max-width: 640px; margin-left: 27px; width: calc(100% - 27px); }
 .guide-joins { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
 .guide-join { display: flex; flex-direction: column; gap: 5px; padding: 10px 12px; border: 1px solid var(--guide-border); border-radius: 10px; }
 .guide-join.is-on { border-color: var(--guide-accent); background: var(--guide-accent-soft); }

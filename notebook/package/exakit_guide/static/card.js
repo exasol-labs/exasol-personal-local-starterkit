@@ -568,7 +568,7 @@ function render({ model, el }) {
               h("span", { class: "guide-tree-name" }, t.name),
               t.rows ? h("span", { class: "guide-muted guide-small" }, `${t.rows} rows`) : null,
               t.approved ? null : h("span", { class: "guide-chip guide-chip-warn", "data-tip": "Approve its column map above (What each column means), then it can be ticked." }, "Column map not approved")),
-            st.fields[t.id] ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[t.note_id], spellcheck: "true", disabled: !!ui.busy,
+            st.fields[t.id] ? h("input", { class: "guide-input guide-notebox", type: "text", value: st.fields[t.note_id], spellcheck: "true", disabled: !!ui.busy,
               placeholder: "What this table is, in a sentence (optional)", "aria-label": `Description of ${t.table}`,
               onInput: (e) => { st.fields[t.note_id] = e.target.value; } }) : null))));
       }));
@@ -595,7 +595,7 @@ function render({ model, el }) {
             l.confidence === "high" ? h("span", { class: "guide-chip guide-chip-ok-soft", "data-tip": l.evidence || null, tabindex: "0" }, "The data backs it")
               : h("span", { class: "guide-chip guide-chip-warn", "data-tip": `${l.evidence ? l.evidence + " " : ""}Tick it only if you know the two columns mean the same thing.`, tabindex: "0" }, "Confirm this one")),
 
-          used ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[l.note_id], spellcheck: "true", disabled: !!ui.busy,
+          used ? h("input", { class: "guide-input guide-notebox", type: "text", value: st.fields[l.note_id], spellcheck: "true", disabled: !!ui.busy,
             placeholder: "Why these two belong together, in a sentence (optional)", "aria-label": `Note on the link ${l.from} to ${l.to}`,
             onInput: (e) => { st.fields[l.note_id] = e.target.value; } }) : null);
       }));
@@ -852,7 +852,7 @@ function render({ model, el }) {
         return h("div", { class: `guide-col${r.low ? " is-low" : ""}` },
           h("div", { class: "guide-col-name" }, h("strong", {}, r.column), h("span", { class: "guide-col-ev" }, r.evidence),
             // the column's description: a sentence saying what it holds (the semantic model shows it as the field's comment)
-            h("input", { class: "guide-input guide-note", type: "text", value: st.notes[r.column] || "", spellcheck: "true", disabled: !!ui.busy,
+            h("input", { class: "guide-input guide-notebox", type: "text", value: st.notes[r.column] || "", spellcheck: "true", disabled: !!ui.busy,
               placeholder: "What this column holds, in a sentence", "aria-label": `Description of ${r.column}`,
               onInput: (e) => { st.notes[r.column] = e.target.value; } }),
             w ? h("span", { class: "guide-inline-warn" }, icon("warn"), w) : null),
