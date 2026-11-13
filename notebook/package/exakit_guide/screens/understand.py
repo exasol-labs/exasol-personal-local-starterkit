@@ -832,30 +832,40 @@ class ColumnMap(Screen):
             return set()
 
     def _ai_block(self, rv) -> dict:
-        """The AI's second look, at the top of the card: one button asks the model set up for the kit which of the
-        kit's guesses it would change; each suggestion says why and is used with one click (it changes the choice
-        below, nothing is saved until Approve). Without a model: where to set one up."""
+        """The AI, at the top of the card: one button has the model set up for the kit complete the draft - the
+        meanings it would change (each with why), the other choices (the group to compare, who a row is about, the
+        date, the text) and a description for every column. Its answer is filled into the card at once, where every
+        field can still be changed and one Undo puts the kit's own draft back; nothing is saved until Approve. It
+        never picks what to predict or what makes a row unique. Without a model: where to set one up."""
         try:
             model = actions.run("kit.model") or {}
         except Exception:
             model = {}
         labels = dict(ROLE_LABELS)
-        items = None
+        items = fill = None
         if self.ai and "items" in self.ai:
             items = [{"column": i["column"], "to": i["role"], "from_label": labels.get(i["kit_role"], i["kit_role"]),
                       "to_label": labels.get(i["role"], i["role"]), "why": i["why"]} for i in self.ai["items"]]
+            fill = {"id": self.ai["id"], "roles": {i["column"]: i["role"] for i in self.ai["items"]},
+                    "slots": dict(self.ai.get("slots") or {}), "notes": dict(self.ai.get("notes") or {}),
+                    "slot_labels": {slot: SLOT_LABELS[slot][0] for slot in (self.ai.get("slots") or {}) if slot in SLOT_LABELS}}
         sensitive = sum(1 for e in (rv.draft.doc.get("columns") or {}).values() if e.get("sensitive"))
         return {"t": "aicheck", "configured": bool(model.get("configured")), "model": model.get("model_id") or "",
-                "items": items, "error": (self.ai or {}).get("error") or "",
+                "items": items, "fill": fill, "error": (self.ai or {}).get("error") or "",
                 "sees": "It is shown column names, types and what the kit measured. Never a row"
                         + (f", and not the {sensitive} personal-data column{'s' if sensitive != 1 else ''}." if sensitive else ".")}
 
+    ai_runs = 0
+
     def on_ai_check(self, _v: dict) -> None:
-        """Check with AI: nb.check_roles on this table's draft. Suggestions only - nothing is saved here."""
+        """Fill in with AI: nb.fill_column_map on this table's draft. The card fills its answer in; nothing is saved."""
         if SESSION.review is None:
             raise ValueError("Choose your data above first.")
         try:
-            self.ai = {"items": list(actions.run("map.ai_check") or [])}
+            found = dict(actions.run("map.ai_check") or {})
+            self.ai_runs += 1
+            self.ai = {"id": self.ai_runs, "items": list(found.get("roles") or []), "slots": dict(found.get("slots") or {}),
+                       "notes": dict(found.get("notes") or {})}
         except ValueError:
             raise
         except Exception as exc:        # the provider refused, the network, an answer that is not JSON
@@ -906,7 +916,8 @@ class ColumnMap(Screen):
             e = cols.get(c) or {}
             rows.append({"column": c, "role": sugg.get(c, "other"), "evidence": ev,
                          "low": e.get("confidence") == "low", "sensitive": bool(e.get("sensitive")),
-                         "leak": c in self.leaks, "avoid": _avoid(raw), "plain": bool(PLAIN_NAME.match(c)), "raw": raw})
+                         "leak": c in self.leaks, "avoid": _avoid(raw), "plain": bool(PLAIN_NAME.match(c)), "raw": raw,
+                         "note": str(e.get("note") or "")})
         targets = []
         for c in sugg:
             if sugg[c] == "flag" or c == slots.get("target"):
@@ -1090,13 +1101,18 @@ class ColumnMap(Screen):
         sugg, drafted = base_roles, base_slots
         role_changes = {c: r for c, r in roles.items() if r != base_roles.get(c)}
         slot_changes = {s: c for s, c in slots.items() if c != base_slots.get(s)}
-        if rv.draft.status == "approved" and not role_changes and not slot_changes and not SESSION.broken:
+        # A column's description, as typed or as the AI wrote it: only the ones that differ from what is saved.
+        saved = rv.draft.doc.get("columns") or {}
+        note_changes = {c: " ".join(str(t or "").split()) for c, t in (v.get("notes") or {}).items()
+                        if c in saved and " ".join(str(t or "").split()) != str((saved.get(c) or {}).get("note") or "").strip()}
+        if rv.draft.status == "approved" and not role_changes and not slot_changes and not note_changes and not SESSION.broken:
             actions.run("map.keep")
             self.flash = {"kind": "ok", "v": f"Kept the approved choices (version {SESSION.dataset.version})."}
         else:
             self._check({**sugg, **roles}, {**drafted, **slots})
             kit_sugg = rv.suggestions()
-            self._save({c: r for c, r in {**sugg, **roles}.items() if r != kit_sugg.get(c)} or None, {**drafted, **slots})
+            self._save({c: r for c, r in {**sugg, **roles}.items() if r != kit_sugg.get(c)} or None, {**drafted, **slots},
+                       note_changes or None)
             self.flash = {"kind": "ok", "v": f"Approved. Saved as version {SESSION.dataset.version}; the next steps use it. "
                                              + _publish_note(self.kit_said)}
             t = slots.get("target")
@@ -1109,9 +1125,9 @@ class ColumnMap(Screen):
         self.flash = flash
         SESSION.changed("dataset", self)
 
-    def _save(self, choices: dict | None, slots: dict) -> None:
+    def _save(self, choices: dict | None, slots: dict, notes: dict | None = None) -> None:
         try:
-            actions.run("map.approve", choices=choices, slots=slots)
+            actions.run("map.approve", choices=choices, slots=slots, notes=notes)
         except ValueError as exc:
             raise ValueError(_plain_kit_error(str(exc))) from exc
         self.kit_said = SESSION.said      # this approval's own lines: _publish_note reads them

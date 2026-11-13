@@ -6,17 +6,22 @@
 
 ```python
 review = nb.review_roles(connection, chosen_data)
-suggestions = nb.check_roles(review)      # [{"column", "kit_role", "role", "why"}]; nothing is changed
-review.approve({s["column"]: s["role"] for s in suggestions})     # only if you agree
+filled = nb.fill_column_map(review)       # {"roles": [...], "slots": {...}, "notes": {...}}; nothing is changed
+review.approve({r["column"]: r["role"] for r in filled["roles"]}, filled["slots"], notes=filled["notes"])   # if you agree
+suggestions = nb.check_roles(review)      # only the roles it would change: [{"column", "kit_role", "role", "why"}]
 ```
 
 The kit drafts each column's role from measurements (how many distinct values, the type, the share of empty rows).
 A model reads names the way a person does: `ACCT_NO` is an account number, not an amount, whatever its type. This
-asks the model which drafted roles it would change, and why. It is shown the table's name and, for each column, its
+asks the model three things in one call: which drafted roles it would change and why, which column fits each slot
+the notebooks use (the group to compare, who a row is about, the date, the text), and one sentence saying what each
+column holds. It is shown the table's name and, for each column, its
 name, its type, the drafted role with its confidence, and the kit's measured evidence (counts and shares) with the
 column's note. It is never shown a row, and a column the map marks sensitive is left out entirely. An answer is kept
-only when it names a real column and one of the eight roles and differs from the draft: the model suggests, the
-approval stays yours.
+only when it names a real column and one of the eight roles and differs from the draft; a slot only when its column
+has the role the kit requires there; a role is never changed to key and the key slot never moved to another column,
+because "different in every row" is measured, not read from a name; and what to predict is never picked for you. The
+model suggests, the approval stays yours.
 
 ## nb.check_roles [#check_roles]
 
@@ -24,7 +29,19 @@ approval stays yours.
 nb.check_roles(review, *, show: bool=True) -> list[dict[str, str]]
 ```
 
-Ask the AI model set up for the kit (nb.use_model, nb.model_setup) which drafted roles it would change:
-\[\{"column", "kit_role", "role", "why"}], empty when it agrees. It sees names, types and the kit's measured
-evidence - never a row, never a sensitive column - and nothing is changed: approve what you agree with
-(review\.approve(\{"COLUMN": "role"})). Raises ValueError when no model is set up.
+Only the roles the AI model would change: \[\{"column", "kit_role", "role", "why"}], empty when it agrees
+(nb.fill_column_map's "roles"; the same call, the same rules). Nothing is changed.
+
+## nb.fill_column_map [#fill_column_map]
+
+```python
+nb.fill_column_map(review, *, show: bool=True) -> dict[str, Any]
+```
+
+Ask the AI model set up for the kit (nb.use_model, nb.model_setup) to complete the drafted column map, in one
+call: \{"roles": \[\{"column", "kit_role", "role", "why"}] (the drafted roles it would change), "slots": \{slot:
+COLUMN} (the group to compare, who a row is about, the date, the text - where it would differ from the draft and
+the kit's rules allow it), "notes": \{COLUMN: one sentence} (for a column with no description yet)}. It sees names,
+types and the kit's measured evidence - never a row, never a sensitive column. It never picks what to predict or
+what makes a row unique. Nothing is changed: review\.approve(roles, slots, notes=notes) with what you agree with.
+Raises ValueError when no model is set up.

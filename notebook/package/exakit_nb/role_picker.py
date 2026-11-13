@@ -40,6 +40,8 @@ from .workflow import DESCRIBE_APPROVE, DESCRIBE_DRAFT, log_event
 
 __all__ = ["ApprovalNeeded", "RoleReview", "review_roles"]
 
+NOTE_LIMIT = 300            # a column's description: one sentence, not a document
+
 # What each role is for: the second line of each option in the kit's dropdown.
 ROLE_HINTS = {
     "key": "Different in every row, like an order number",
@@ -232,13 +234,16 @@ class RoleReview:
 
     # --- approving -------------------------------------------------------------------------------------------------
 
-    def approve(self, choices: dict[str, str | None] | None = None, slots: dict[str, str | None] | None = None) -> Dataset:
+    def approve(self, choices: dict[str, str | None] | None = None, slots: dict[str, str | None] | None = None,
+                notes: dict[str, str | None] | None = None) -> Dataset:
         """Apply the reviewed roles ({COLUMN: role}, one of the eight; the proposal when None) and slots ({slot:
-        COLUMN or None}), then save and comment the approved descriptor. An earlier picker's ``date``, ``label`` and
-        ``entity`` are still taken: they put the column in the time, target and entity slot."""
+        COLUMN or None}), then save and comment the approved descriptor. ``notes`` ({COLUMN: text}) sets a column's
+        description - what the column holds, in a sentence; the semantic model shows it as the field's comment - and
+        an empty text removes one. An earlier picker's ``date``, ``label`` and ``entity`` are still taken: they put
+        the column in the time, target and entity slot."""
         roles = self.suggestions()
         chosen = self.slot_suggestions()
-        unknown = sorted(set(choices or {}) - set(roles))
+        unknown = sorted((set(choices or {}) | set(notes or {})) - set(roles))
         if unknown:
             raise ValueError(f"The table has no column: {', '.join(unknown)}")
         for column, role in (choices or {}).items():
@@ -266,6 +271,13 @@ class RoleReview:
             column, names = next(iter(twice.items()))
             raise ValueError(f"{column} sits in two slots ({' and '.join(names)}). A column fills one slot: pick one.")
         corrected = self._corrected(roles, chosen)
+        for column, text in (notes or {}).items():
+            entry = corrected.doc["columns"].setdefault(column, {})
+            text = " ".join(str(text or "").split())[:NOTE_LIMIT]
+            if text:
+                entry["note"] = text
+            else:
+                entry.pop("note", None)
         self.approved = corrected.approve(conn=self.conn)           # logs the approval to the active workflow
         self._save_beside(corrected)
         return self.approved

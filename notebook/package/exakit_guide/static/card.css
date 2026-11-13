@@ -598,3 +598,4 @@
 .guide-ai-to { font-weight: 600; color: var(--guide-accent); }
 .guide-ai-foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .guide-ai-ok { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--guide-ok); }
+.guide-note { width: 100%; max-width: 520px; height: 30px; font-size: 13px; margin-top: 4px; }

@@ -134,12 +134,16 @@ nb.data_map(connection)
 role_review = nb.review_roles(connection, chosen_data)
 
 # %% tags=["review"]
-# Optional: a second look by your AI model (set up on the Home card, or nb.model_setup). It is shown column names,
-# types and the kit's measured evidence - never a row, never a sensitive column - and says which drafted roles it
-# would change, and why. Nothing changes: put the ones you agree with into ROLE_CHANGES below.
+# Optional: let your AI model (set up on the Home card, or nb.model_setup) complete the draft. It is shown column
+# names, types and the kit's measured evidence - never a row, never a sensitive column - and answers with the roles it
+# would change and why, the column for each slot, and one sentence per column saying what it holds. It never picks
+# what to predict or what makes a row unique. Nothing changes until you approve: AI_APPROVE approves with its answer.
 AI_CHECK = False
+AI_APPROVE = False
 if AI_CHECK:
-    ai_suggestions = nb.check_roles(role_review)
+    ai_map = nb.fill_column_map(role_review)
+    if AI_APPROVE:
+        role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
 
 # %% tags=["review"]
 # Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the

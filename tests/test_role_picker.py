@@ -106,6 +106,18 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual("left empty during review", result["slot_evidence"]["category"])
         self.assertIs(review.dataset(), result)
 
+    def test_an_approval_saves_each_columns_description(self):
+        """notes={COLUMN: text}: a column's description, one line, saved with the approval (the semantic model shows it
+        as the field's comment); an empty text removes one; a column the table does not have is named."""
+        review = RoleReview(draft(), object())
+        with mock.patch.object(Draft, "approve", lambda self, **_kw: self.doc):
+            result = review.approve(notes={"A": "  Where the order\nwas shipped.  ", "B": "", "D": "x" * 900})
+        self.assertEqual("Where the order was shipped.", result["columns"]["A"]["note"])
+        self.assertNotIn("note", result["columns"]["B"], "an empty description removes the one that was there")
+        self.assertEqual(role_picker.NOTE_LIMIT, len(result["columns"]["D"]["note"]))
+        with self.assertRaisesRegex(ValueError, "The table has no column: NOPE"):
+            review.approve(notes={"NOPE": "x"})
+
     def test_a_review_opened_on_an_approved_version_needs_no_click(self):
         approved = draft()
         approved.doc.update(status="approved", version=3)

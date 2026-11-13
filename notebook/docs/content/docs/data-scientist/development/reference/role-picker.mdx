@@ -64,7 +64,7 @@ path. dataset() stops the next cell until approval happened (a headless run hand
 | `labels() -> dict[str, tuple[str, str]]` | \{column: (summary, note)\}: the column's type, role and confidence with the evidence that chose the role, and its model note when there is one. |
 | `guide() -> str` | Explain what is measured and what the user must decide, in every front end. |
 | `explanations() -> dict[str, str]` | Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied. |
-| `approve( choices: dict[str, str \| None] \| None=None, slots: dict[str, str \| None] \| None=None) -> Dataset` | Apply the reviewed roles (\{COLUMN: role\}, one of the eight; the proposal when None) and slots (\{slot: COLUMN or None\}), then save and comment the approved descriptor. |
+| `approve( choices: dict[str, str \| None] \| None=None, slots: dict[str, str \| None] \| None=None, notes: dict[str, str \| None] \| None=None) -> Dataset` | Apply the reviewed roles (\{COLUMN: role\}, one of the eight; the proposal when None) and slots (\{slot: COLUMN or None\}), then save and comment the approved descriptor. |
 | `auto_approve(mode: str) -> str` | The headless decision for EXAKIT_NB_AUTO_APPROVE=`mode`: `force` approves the proposal; `1` approves only a proposal whose roles equal the current approved version's - then nothing is written (`unchanged`); a proposal that differs stays a `draft` and the reason is printed. |
 | `dataset(draft_ok: bool=False) -> Dataset` | The approved dataset: the one approved here, else the approved version the review opened on. |
 | `show()` | Print the proposal with its evidence, then the picker the front end has (or the headless decision). |

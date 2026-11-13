@@ -224,8 +224,8 @@ function render({ model, el }) {
   const getMode = () => ui.mode;
   const setMode = (mode) => { ui.mode = mode; rememberMode(mode); draw(); };
   const st = { choice: {}, fields: {}, roles: null, slots: null, mapKey: null, mapInit: null, secret: new Set(), cells: {} };
-  const collect = () => ({ ...st.fields, ...st.choice, roles: { ...(st.roles || {}) }, slots: { ...(st.slots || {}) } });
-  const mapDirty = () => !!st.mapInit && JSON.stringify({ r: st.roles, s: st.slots }) !== st.mapInit;
+  const collect = () => ({ ...st.fields, ...st.choice, roles: { ...(st.roles || {}) }, slots: { ...(st.slots || {}) }, notes: { ...(st.notes || {}) } });
+  const mapDirty = () => !!st.mapInit && JSON.stringify({ r: st.roles, s: st.slots, n: st.notes }) !== st.mapInit;
 
   // A field's or a button's condition: one {field, equals}, or a list that must all hold (a choice or a field).
   // {field, in: [...]} holds when the field is one of them.
@@ -253,6 +253,25 @@ function render({ model, el }) {
     // A password goes to Python once and is not kept in the card (nor drawn back into its box).
     if (!opts.noSecret) st.secret.forEach((k) => { st.fields[k] = ""; });
   };
+
+  // Fill the AI's answer into this table's choices: the meanings, the other choices where the column's meaning then
+  // fits, and a description for a column that has none. What was there is kept for Undo.
+  function applyAi(fill) {
+    if (!st.roles) return;
+    ui.aiBefore = JSON.stringify({ r: st.roles, s: st.slots, n: st.notes });
+    Object.entries(fill.roles || {}).forEach(([col, role]) => {
+      if (!(col in st.roles)) return;
+      st.roles[col] = role;
+      if (st.slots.target === col && role !== "flag") st.slots.target = "";
+    });
+    Object.entries(fill.slots || {}).forEach(([slot, col]) => {
+      if (!(col in st.roles)) return;
+      Object.keys(st.slots).forEach((other) => { if (other !== slot && st.slots[other] === col) st.slots[other] = ""; });
+      st.slots[slot] = col;
+    });
+    Object.entries(fill.notes || {}).forEach(([col, text]) => { if (col in st.notes && !String(st.notes[col] || "").trim()) st.notes[col] = text; });
+    if (Object.keys(fill.notes || {}).length) ui.values["open:allcols"] = true;      // the descriptions are in that list
+  }
 
   function button(label, id, opts = {}) {
     const busy = ui.busy === id;
@@ -468,36 +487,53 @@ function render({ model, el }) {
               h("button", { type: "button", class: "guide-fixlink", onClick: () => { ui.leaveFor = null; draw(); } }, "Stay")))
           : null);
     },
-    // The AI's second look at the kit's guesses: one button asks; each suggestion says what it would change and why,
-    // and "Use" changes that choice below (nothing is saved until Approve).
+    // The AI completes the draft: one button asks, and its answer is filled into the card at once - the meanings it
+    // would change (each listed with why), the other choices, a description per column. Every field can still be
+    // changed, Undo puts back what was there, and nothing is saved until Approve.
     aicheck(b) {
+      const fill = b.fill;
+      if (fill && ui.aiApplied !== fill.id) {
+        ui.aiApplied = fill.id;
+        if (st.roles) applyAi(fill); else ui.aiPending = fill;      // this table's choices are set up by rolemap, below
+      }
       const roles = st.roles || {};
-      const use = (it) => { if (!st.roles) return; st.roles[it.column] = it.to; if (st.slots && st.slots.target === it.column && it.to !== "flag") st.slots.target = ""; draw(); };
       const items = b.items || [];
-      const open = items.filter((it) => roles[it.column] !== it.to);
+      const nSlots = fill ? Object.keys(fill.slots).length : 0, nNotes = fill ? Object.keys(fill.notes).length : 0;
       const head = h("div", { class: "guide-ai-head" },
         h("div", { class: "guide-ai-text" },
-          h("div", { class: "guide-ai-title" }, h("span", { class: "guide-ai-mark", "aria-hidden": "true" }, "AI"), "Check the kit's guesses with AI"),
+          h("div", { class: "guide-ai-title" }, h("span", { class: "guide-ai-mark", "aria-hidden": "true" }, "AI"), "Fill in with AI"),
           h("div", { class: "guide-muted guide-small" }, b.configured
-            ? `${b.model ? b.model + " reads the names the way a person would. " : ""}${b.sees}`
+            ? `${b.model ? b.model + " reads the names the way a person would: " : ""}it corrects the kit's guesses, sets the other choices and writes a description for every column. ${b.sees} It never picks what to predict.`
             : "No AI model is set up yet. Set one up on the Home notebook (AI model, Set up); this step works without it.")),
-        b.configured ? button(b.items ? "Check again" : "Check with AI", "ai_check", { primary: !b.items, busyLabel: "Asking the model…" }) : null);
+        b.configured ? button(b.items ? "Ask again" : "Fill in with AI", "ai_check", { primary: !b.items, busyLabel: "Asking the model…" }) : null);
       const body = [];
       if (b.error) body.push(h("div", { class: "guide-inline-warn" }, icon("warn"), h("span", {}, `The model did not answer: ${b.error}`)));
-      if (b.items && !items.length && !b.error) body.push(h("div", { class: "guide-ai-ok" }, icon("check"), "It agrees with every guess."));
+      if (fill && !b.error) {
+        const said = [];
+        if (items.length) said.push(`${items.length} meaning${items.length === 1 ? "" : "s"} changed`);
+        if (nSlots) said.push(`${nSlots} choice${nSlots === 1 ? "" : "s"} set (${Object.keys(fill.slots).map((k) => fill.slot_labels[k] || k).join(", ")})`);
+        if (nNotes) said.push(`${nNotes} description${nNotes === 1 ? "" : "s"} written`);
+        body.push(h("div", { class: "guide-ai-ok" }, icon("check"),
+          h("span", {}, said.length ? `Filled in: ${said.join(" · ")}.` : "It agrees with the kit's draft: nothing to fill in.")));
+      }
       if (items.length) {
         body.push(h("div", { class: "guide-ai-list" }, items.map((it) => {
           const done = roles[it.column] === it.to;
-          return h("div", { class: `guide-ai-item${done ? " is-done" : ""}` },
+          return h("div", { class: "guide-ai-item" },
             h("div", { class: "guide-ai-what" },
               h("strong", {}, it.column), h("span", { class: "guide-ai-change" }, h("span", { class: "guide-muted" }, it.from_label), icon("arrow"), h("span", { class: "guide-ai-to" }, it.to_label)),
               it.why ? h("div", { class: "guide-muted guide-small" }, it.why) : null),
-            done ? h("span", { class: "guide-chip guide-chip-ok-soft" }, "Used")
-                 : h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy, onClick: () => use(it) }, "Use"));
+            done ? h("span", { class: "guide-chip guide-chip-ok-soft" }, "Filled in")
+                 : h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy,
+                     onClick: () => { st.roles[it.column] = it.to; if (st.slots.target === it.column && it.to !== "flag") st.slots.target = ""; draw(); } }, "Use"));
         })));
+      }
+      if (fill && !b.error && (items.length || nSlots || nNotes)) {
         body.push(h("div", { class: "guide-ai-foot" },
-          open.length > 1 ? h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy, onClick: () => { open.forEach(use); } }, `Use all ${open.length}`) : null,
-          h("span", { class: "guide-muted guide-small" }, "Using one changes the choice below. Nothing is saved until you approve.")));
+          ui.aiBefore ? h("button", { type: "button", class: "guide-btn guide-btn-quiet", disabled: !!ui.busy, onClick: () => {
+            const was = JSON.parse(ui.aiBefore); st.roles = was.r; st.slots = was.s; st.notes = was.n; ui.aiBefore = null; draw();
+          } }, "Undo") : null,
+          h("span", { class: "guide-muted guide-small" }, "Look them over below (the descriptions are under All columns), change what is wrong, then approve. Nothing is saved until you approve.")));
       }
       return h("div", { class: "guide-ai" }, head, body);
     },
@@ -636,13 +672,17 @@ function render({ model, el }) {
           h("span", { class: "guide-muted guide-small" }, "Saves that version's choices as a new version.")) : null);
     },
     rolemap(b) {
-      const key = JSON.stringify([b.rows.map((r) => [r.column, r.role]), b.target, b.slots.map((x) => [x.id, x.value])]);
+      const key = JSON.stringify([b.rows.map((r) => [r.column, r.role, r.note || ""]), b.target, b.slots.map((x) => [x.id, x.value])]);
       if (st.mapKey !== key) {
         st.mapKey = key;
         st.roles = Object.fromEntries(b.rows.map((r) => [r.column, r.role]));
         st.slots = Object.fromEntries([["target", b.target || ""], ...b.slots.map((x) => [x.id, x.value || ""])]);
-        st.mapInit = JSON.stringify({ r: st.roles, s: st.slots });
+        st.notes = Object.fromEntries(b.rows.map((r) => [r.column, r.note || ""]));     // each column's description
+        st.mapInit = JSON.stringify({ r: st.roles, s: st.slots, n: st.notes });
+        ui.aiBefore = null;
       }
+      // The AI's answer, filled in once when it arrives (aicheck drew before this table's choices were set up).
+      if (ui.aiPending) { const fill = ui.aiPending; ui.aiPending = null; applyAi(fill); setTimeout(draw, 0); }   // the AI bar, above, shows it
       const roleLabel = Object.fromEntries(b.roles.map((r) => [r.value, r.label]));
       const roleMeaning = Object.fromEntries(b.roles.map((r) => [r.value, r.meaning]));
       const rowBy = Object.fromEntries(b.rows.map((r) => [r.column, r]));
@@ -748,6 +788,10 @@ function render({ model, el }) {
         const w = warnFor(r);
         return h("div", { class: `guide-col${r.low ? " is-low" : ""}` },
           h("div", { class: "guide-col-name" }, h("strong", {}, r.column), h("span", { class: "guide-col-ev" }, r.evidence),
+            // the column's description: a sentence saying what it holds (the semantic model shows it as the field's comment)
+            h("input", { class: "guide-input guide-note", type: "text", value: st.notes[r.column] || "", spellcheck: "true", disabled: !!ui.busy,
+              placeholder: "What this column holds, in a sentence", "aria-label": `Description of ${r.column}`,
+              onInput: (e) => { st.notes[r.column] = e.target.value; } }),
             w ? h("span", { class: "guide-inline-warn" }, icon("warn"), w) : null),
           h("div", { class: "guide-col-role" }, roleSelect(r),
             changed ? h("span", { class: "guide-chip guide-chip-accent" }, "Changed") : null,

@@ -1346,7 +1346,8 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual(("aicheck", False, None), (bar["t"], bar["configured"], bar["items"]))
         self.assertIn("not the 1 personal-data column", bar["sees"])
         answers["kit.model"] = {"configured": True, "model_id": "m1"}
-        answers["map.ai_check"] = [{"column": "B", "kit_role": "measure", "role": "identifier", "why": "An account number."}]
+        answers["map.ai_check"] = {"roles": [{"column": "B", "kit_role": "measure", "role": "identifier", "why": "An account number."}],
+                                   "slots": {"entity": "B"}, "notes": {"B": "The customer's account."}}
         self.ran.clear()
         card.on_ai_check({})
         self.assertEqual(["map.ai_check"], [a for a, _v in self.ran if a.startswith("map.")])    # asked; nothing approved
@@ -1354,10 +1355,13 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual((True, "m1"), (bar["configured"], bar["model"]))
         self.assertEqual([{"column": "B", "to": "identifier", "from_label": self.understand.ROLE_LABELS["measure"],
                            "to_label": self.understand.ROLE_LABELS["identifier"], "why": "An account number."}], bar["items"])
+        # ...and the whole answer, for the card to fill in at once: the meanings, the other choices, the descriptions
+        self.assertEqual({"id": 1, "roles": {"B": "identifier"}, "slots": {"entity": "B"}, "notes": {"B": "The customer's account."},
+                          "slot_labels": {"entity": self.understand.SLOT_LABELS["entity"][0]}}, bar["fill"])
         answers["map.ai_check"] = RuntimeError("401 the provider refused the key\nmore")
         card.on_ai_check({})
         bar = self._built(card)[1]
-        self.assertEqual(("401 the provider refused the key", None), (bar["error"], bar["items"]))
+        self.assertEqual(("401 the provider refused the key", None, None), (bar["error"], bar["items"], bar["fill"]))
         answers["map.review"] = None
         answers["map.draft"] = None
         answers["map.leakage"] = []
