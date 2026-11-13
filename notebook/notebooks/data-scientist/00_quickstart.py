@@ -9,7 +9,7 @@
 # %% [markdown] tags=["exakit-guide-hint"]
 # <div class="guide-start-hint">
 #
-# **Start here · Your kit and your data.** Click into the cell below and press **Shift + Enter** to open it: the kit's state, then your data and its column map. Its **Guided / Code** switch, top right, shows the code behind this page.
+# **Start here · Your kit and your data.** Click into the cell below and press **Shift + Enter** to open it: the kit's state, then your data: datasets, your own files and tables, and external sources. Its **Guided / Code** switch, top right, shows the code behind this page.
 #
 # </div>
 
@@ -27,13 +27,13 @@ guide.start()
 # The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
 
 # %% [markdown]
-# ## Start here: access and understand your data
+# ## Start here: your kit and your data
 #
 # **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 #
-# ![Steps 0 Check the kit, 1 Access and 2 Understand. All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:0,1,2)
+# ![Steps 0 Check the kit and 1 Access. All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:0,1)
 #
-# At the end you have a connection, an approved column map and a first result. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
+# At the end you have a connection and your data, from as many sources as you like. `01_explore` opens it to understand it: the column map and the semantic views. No AI model is needed. Kit commands run from these cells, so you do not need a terminal.
 
 # %% [markdown]
 # ## Step 0 · Check the kit
@@ -131,41 +131,19 @@ print(f"Workflow {workflow_id}: every step below is recorded under it.")
 # %% [include] ../00_shared/data_paths.py load
 
 # %% [markdown]
-# ## Step 2 · Understand the data
+# ### Carry the choice to the next notebook
 #
-# You approve the column map: the key, the date, the groups and the outcome. The kit proposes it and shows the least certain columns first. Every later step reads this map, so the same notebooks run on any table.
-
-# %% [include] ../00_shared/data_paths.py review
-
-# %% [markdown]
-# ### A first result
-#
-# Rows per group, and the % where the target is 1 when the map has a target. Each query shows its SQL before the result.
+# `01_explore` opens the tables chosen here: their column maps and semantic views are its first step. Several tables? Put them all in: `nb.remember_chosen(chosen_tables)`.
 
 # %%
-missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
-GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
-if GROUP_ROLE != "category":
-    print(f"No category ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
-if "label" in missing_roles:
-    print(f"No target ({missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
-GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
-LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None   # CANCELLED_PCT
-LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
-first_rows = nb.sql(connection, f"""
-SELECT {GROUP_COLUMN} AS {GROUP_HEADER},
-       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}
-FROM {dataset.fact_table}
-GROUP BY {GROUP_COLUMN}
-ORDER BY {COUNT_HEADER} DESC
-LIMIT 10""")
-nb.show_sql()
-overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset.col('label')}), 1) AS PCT FROM {dataset.fact_table}") if LABEL_PCT_HEADER else None
-nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]) if LABEL_PCT_HEADER else None)
-first_rows
+OPEN_APPROVED = ""   # or a dataset approved before, by its id, e.g. "amazon_sales" (nb.approved_datasets() lists them)
+if OPEN_APPROVED:
+    chosen_data = nb.dataset(connection, OPEN_APPROVED)
+remembered = nb.remember_chosen(chosen_data)
+print("01_explore opens: " + ", ".join(remembered))
 
 # %% [markdown]
 # ## Next
 #
-# Open `01_explore` to prepare, explore, model and validate (steps 3 to 6). Then open `02_ask_your_data` (step 7) and `03_share` (steps 8 and 9). Each one continues this workflow.
+# Open `01_explore` to understand your data - the column map and the semantic views - then prepare, explore, model and validate (steps 2 to 6). Then open `02_ask_your_data` (step 7) and `03_share` (steps 8 and 9). Each one continues this workflow.
 

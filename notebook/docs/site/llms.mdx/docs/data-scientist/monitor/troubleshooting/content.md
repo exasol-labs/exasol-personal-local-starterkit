@@ -6,11 +6,11 @@ Each entry quotes the message the kit shows, or describes the step that stops.
 
 <Accordions type="multiple">
   <Accordion title="Another dataset was approved while this notebook was open">
-    You approved another dataset in the quickstart while this notebook was open. Run this notebook's first cell again. It switches to the newly approved dataset.
+    You approved another dataset in another notebook while this one was open. Run this notebook's first cell again. It switches to the newly approved dataset.
   </Accordion>
 
   <Accordion title="A step says the column map is not approved">
-    The step raised `DescriptorNotApproved`. Explore, Ask and Share do not read a draft. Open `00_quickstart`, review the map and approve it. The roles and the approval are described on [Explore](/data-scientist/explore).
+    The step raised `DescriptorNotApproved`. Explore, Ask and Share do not read a draft. Open `01_explore`, review the map and approve it. The roles and the approval are described on [Explore](/data-scientist/explore).
   </Accordion>
 
   <Accordion title="approve says the table changed since it was described">

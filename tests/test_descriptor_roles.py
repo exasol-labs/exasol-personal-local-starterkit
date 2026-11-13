@@ -316,17 +316,23 @@ class SqlTest(unittest.TestCase):
         self.assertIn("REGEXP_LIKE '\\d{4}-\\d{2}-\\d{2}.*'", batches[0])
         self.assertEqual(len(sent), len(found["statements"]))
 
-    def test_a_virtual_table_is_read_as_a_prefix(self):
+    def test_a_virtual_table_is_read_once_as_a_prefix(self):
         sent = []
 
         def run(sql):
             sent.append(sql)
             if "EXA_ALL_COLUMNS" in sql:
-                return [{"COLUMN_NAME": "A", "COLUMN_TYPE": "DECIMAL(9,0)", "IS_VIRTUAL": 1}]
-            return [] if "GROUPING SETS" in sql else [{"N": 0}]
+                return [{"COLUMN_NAME": "A", "COLUMN_TYPE": "DECIMAL(9,0)", "IS_VIRTUAL": 1},
+                        {"COLUMN_NAME": "B", "COLUMN_TYPE": "VARCHAR(20) UTF8", "IS_VIRTUAL": 1}]
+            return [{"A": i, "B": "x" if i % 2 else "y"} for i in range(50)]
 
-        profile.profile(None, "VS.T", run=run)
-        self.assertTrue(all('(SELECT * FROM "VS"."T" LIMIT 10000)' in s for s in sent[1:]))
+        found = profile.profile(None, "VS.T", run=run)
+        self.assertEqual(['SELECT "A", "B" FROM "VS"."T" LIMIT 10000'], sent[1:], "the source answers one query")
+        self.assertEqual(2, len(found["statements"]))
+        self.assertEqual("first 10,000 rows", found["source"]["prefix"])
+        a, b = found["columns"]
+        self.assertEqual((50, 50, "0", "49"), (a["rows"], a["approx_distinct"], a["min"], a["max"]))
+        self.assertEqual([["x", 25], ["y", 25]], b["top"])
 
 
 if __name__ == "__main__":

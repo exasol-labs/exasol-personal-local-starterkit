@@ -89,7 +89,7 @@ th{background:var(--soft);font-weight:600}
 <main>
 
 <h1>Persona Technical Specification</h1>
-<p class="meta">Exasol Personal Local Starter Kit · kit 0.3.0 · skills 1.24.29 · branch <code>staging-vs-preproc-persona-rc-build</code> · written against commit <code>95e32e66</code> on 13 November 2026.</p>
+<p class="meta">Exasol Personal Local Starter Kit · kit 0.3.0 · skills 1.24.30 · branch <code>staging-vs-preproc-persona-rc-build</code> · written against commit <code>95e32e66</code> on 13 November 2026.</p>
 <p>How a persona is built, end to end: from the install one-liner to the guided cards a Data Scientist clicks, and everything in between. Every statement names the file, function or variable it comes from, so it can be checked against the code. Where something could not be confirmed from the code, it says so.</p>
 
 <h2 id="read">How to read this</h2>
@@ -404,7 +404,7 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 </table>
 <p><code>descriptor/roles.py classify()</code> decides sensitivity first, then rules in order (first match wins). Thresholds: SENSITIVE_SHARE 0.90, DATE_SHARE 0.98, TEXT_AVG_LENGTH 40, CATEGORY_DISTINCT 50, CATEGORY_RATIO 0.02, IDENTIFIER_RATIO 0.9, NEAR 0.10. Confidence is high or low (low within 10% of a threshold, or decided by name only). A column is <b>sensitive</b> when ≥90% of values are email, phone, IBAN or postcode, or its name says postcode/ZIP, a person's name, or an address: it becomes an identifier, its profile keeps counts only, and it is never charted or sent to a model.</p>
 <h3>Profiling (descriptor/profile.py)</h3>
-<p>Shape from <code>EXA_ALL_COLUMNS</code> (<code>schema_digest</code> = SHA-256 of NAME:TYPE lines). A virtual table is read as its first 10,000 rows. Batches of 40 columns: COUNT, APPROXIMATE_COUNT_DISTINCT, MIN/MAX, AVG(LENGTH) and REGEXP_LIKE pattern counts (iso, dotted, slash, email, phone, iban, postcode, code, number, words, nodigit, postal); then top values for low-cardinality non-sensitive columns, exact distinct counts near the row count, and date ranges. Over 30 s is flagged slow.</p>
+<p>Shape from <code>EXA_ALL_COLUMNS</code> (<code>schema_digest</code> = SHA-256 of NAME:TYPE lines). A virtual table (an external source) is read once, its first 10,000 rows in one statement, and profiled in Python with <code>profile_rows</code> (the same numbers a file gets), so the remote system answers one query. A local table: batches of 40 columns: COUNT, APPROXIMATE_COUNT_DISTINCT, MIN/MAX, AVG(LENGTH) and REGEXP_LIKE pattern counts (iso, dotted, slash, email, phone, iban, postcode, code, number, words, nodigit, postal); then top values for low-cardinality non-sensitive columns, exact distinct counts near the row count, and date ranges. Over 30 s is flagged slow.</p>
 <h3>Draft and slots (descriptor/draft.py)</h3>
 <p>Slots: key (a key-role column, identifier-named first), time (fewest nulls), text (named as text, then longest), <b>target (never drafted: the person's question)</b>, category (a 2–20 value string, grouping names first), entity (more than 20 distinct, at most one per two rows). <code>slot_evidence</code> says why a slot is empty. Document: <code>{descriptor, dataset, source{kind, object, schema_digest, profiled_rows}, version, status, grain, slots, slot_evidence, columns{role, confidence, evidence, sensitive, note}}</code>.</p>
 <h3>Approval (descriptor/flow.py approve, review.py)</h3>
@@ -487,8 +487,8 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <p>Sources are jupytext percent-format <code>.py</code> in <code>notebook/notebooks/data-scientist/</code>; <code>tools/notebooks.py</code> builds the <code>.ipynb</code> beside them and, with <code>--marimo</code>, the Marimo versions (<code>marimo convert</code>). <code>--check</code> fails when a built file is stale. <code># %% [include] ../00_shared/data_paths.py &lt;tag&gt;</code> inlines the shared cells tagged connect, load, review. Every notebook opens with a guided cell (tag <code>exakit-guide</code>) and keeps its full code after the <code>exakit-code-start</code> marker.</p>
 <table>
 <tr><th>Notebook</th><th>Guided cell</th><th>Covers</th><th>Main cells and variables</th></tr>
-<tr><td>00_quickstart</td><td><code>guide.start()</code></td><td>Set up, get the data, understand it</td><td>kit state; model cell (PROVIDER, MODEL_ID, EFFORT, LANGFUSE_BASE_URL); <code>nb.workflow("data-scientist-quickstart")</code>; connect; load (SAMPLE, MY_DATA, CONNECTOR, SOURCE_URL, SOURCE); review (<code>role_review</code>, AI_CHECK, AI_APPROVE, ROLE_CHANGES, SLOT_CHANGES); semantic (SEMANTIC_NAME, SEMANTIC_TABLES, SEMANTIC_LINKS, SEMANTIC_TABLE_NOTES, PUBLISH_SEMANTIC); a first group query</td></tr>
-<tr><td>01_explore</td><td><code>guide.explore()</code></td><td>Prepare, explore, model, validate</td><td><code>nb.continue_workflow("explore")</code>; data_checks, describe_schema/joined_view, typed_view; note_groups, note_trend; leakage_check; a one-hot logistic model, ROC AUC on a held-out quarter; model lab and feature ideas; optional AI themes</td></tr>
+<tr><td>00_quickstart</td><td><code>guide.start()</code></td><td>Set up, get the data</td><td>kit state; model cell (PROVIDER, MODEL_ID, EFFORT, LANGFUSE_BASE_URL); <code>nb.workflow("data-scientist-quickstart")</code>; connect; load (SAMPLE, MY_DATA, CONNECTOR, SOURCE_URL, SOURCE); <code>nb.remember_chosen</code> notes the tables for 01_explore (<code>~/.exasol-starter-kit/chosen-tables.json</code>, names only)</td></tr>
+<tr><td>01_explore</td><td><code>guide.explore()</code></td><td>Understand, prepare, explore, model, validate</td><td><code>nb.continue_workflow("explore")</code>; <code>chosen_tables = nb.open_chosen(connection)</code>; review (<code>role_review</code>, AI_CHECK, AI_APPROVE, ROLE_CHANGES, SLOT_CHANGES); semantic (SEMANTIC_NAME, SEMANTIC_TABLES, SEMANTIC_LINKS, SEMANTIC_TABLE_NOTES, PUBLISH_SEMANTIC); a first group query; data_checks, describe_schema/joined_view, typed_view; note_groups, note_trend; leakage_check; a one-hot logistic model, ROC AUC on a held-out quarter; model lab and feature ideas; optional AI themes</td></tr>
 <tr><td>02_ask_your_data</td><td><code>guide.ask()</code></td><td>Questions in plain language</td><td>QUESTION; rules or model draft; EDITED_SQL; APPROVE_SQL → proposal.approve().run()</td></tr>
 <tr><td>03_share</td><td><code>guide.share()</code></td><td>Dashboard and hand-off</td><td><code>nb.share(...)</code> on Dash Server (preview first, then publish); <code>nb.handoff_bundle</code></td></tr>
 </table>
@@ -553,8 +553,8 @@ JS → Python   {type: "event", id: "&lt;handler suffix&gt;", values: {fields, c
 <h3>The cards, notebook by notebook</h3>
 <table>
 <tr><th>Notebook</th><th>Cards (top to bottom)</th></tr>
-<tr><td>00_quickstart · <code>guide.start()</code></td><td>Home · Fill in with AI · Choose your data · What each column means · Data map · Semantic views · Next</td></tr>
-<tr><td>01_explore · <code>guide.explore()</code></td><td>Working on · Is the data clean? · Compare groups and trends · Predict · Feature ideas</td></tr>
+<tr><td>00_quickstart · <code>guide.start()</code></td><td>Home · Choose your data (Next at its foot)</td></tr>
+<tr><td>01_explore · <code>guide.explore()</code></td><td>Fill in with AI · Understand (one card: What each column means, then Semantic views) · Working on · Is the data clean? · Compare groups and trends · Predict · Feature ideas</td></tr>
 <tr><td>02_ask_your_data · <code>guide.ask()</code></td><td>Ask (question, proposal, answer)</td></tr>
 <tr><td>03_share · <code>guide.share()</code></td><td>Dashboard · Hand-off</td></tr>
 </table>

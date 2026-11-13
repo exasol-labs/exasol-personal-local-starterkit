@@ -331,7 +331,7 @@ class CopyTest(unittest.TestCase):
             ran = json.loads((base / "00_quickstart.ipynb").read_text(encoding="utf-8"))
             ran["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": ["ran\n"]}]
             (base / "00_quickstart.ipynb").write_text(json.dumps(ran), encoding="utf-8")      # run, not edited
-            self._rewrite_markdown(base / "01_explore.ipynb", "# Prepare, explore", "# Prepare (my notes), explore")  # edited
+            self._rewrite_markdown(base / "01_explore.ipynb", "# Understand, prepare, explore", "# Understand (my notes), prepare, explore")  # edited
             for name in ("00_quickstart.ipynb", "01_explore.ipynb"):
                 self._rewrite_markdown(kit / "notebook" / "notebooks" / "data-scientist" / name, "## ", "## New: ")
             added, problems = kit_notebooks.copy("jupyter", kit, home, {"data-scientist"})
@@ -348,7 +348,7 @@ class CopyTest(unittest.TestCase):
             base = home / "starter-kit-notebooks"
             names = [line.split("\t")[0] for line in (base / ".kit-copied").read_text(encoding="utf-8").splitlines()]
             (base / ".kit-copied").write_text("".join(f"{n}\n" for n in names), encoding="utf-8")   # names only
-            self._rewrite_markdown(base / "data-scientist" / "01_explore.ipynb", "# Prepare, explore", "# Prepare (older), explore")
+            self._rewrite_markdown(base / "data-scientist" / "01_explore.ipynb", "# Understand, prepare, explore", "# Understand (older), prepare, explore")
             self.assertEqual(kit_notebooks.copy("jupyter", kit, home, {"data-scientist"}), ([], []))
             record = dict(line.partition("\t")[::2] for line in (base / ".kit-copied").read_text(encoding="utf-8").splitlines())
             self.assertTrue(record["data-scientist/00_quickstart.ipynb"], "the kit's own copy: adopted, refreshed later")
@@ -645,11 +645,14 @@ columns:
                 lines = (NOTEBOOKS / name).read_text(encoding="utf-8").splitlines()
                 self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")],
                                  ["DATASET = None"], "one assignment picks the data")
-                # None is the dataset approved last, resolved into a name of its own (never a second DATASET =).
-                self.assertIn("dataset_id = nb.chosen_dataset(DATASET)", "\n".join(lines))
-                # train opens the descriptor; explore opens it through the review, so a file with no roles beside it
-                # is loaded and drafted right there instead of stopping (T8b)
-                opened = ("nb.review_roles(connection, dataset_id)" if name.startswith("data-scientist")
+                # None is the dataset approved last (explore: the quickstart's tables first), resolved into a name of
+                # its own (never a second DATASET =).
+                resolved = ("chosen_data = nb.chosen_dataset(DATASET)" if name.startswith("data-scientist")
+                            else "dataset_id = nb.chosen_dataset(DATASET)")
+                self.assertIn(resolved, "\n".join(lines))
+                # train opens the descriptor; explore opens it through the review (step 2, the shared review cells),
+                # so a file with no roles beside it is loaded and drafted right there instead of stopping (T8b)
+                opened = ("[include] ../00_shared/data_paths.py review" if name.startswith("data-scientist")
                           else "nb.dataset(connection, dataset_id)")
                 self.assertIn(opened, "\n".join(lines))
 
@@ -1430,14 +1433,21 @@ class NotebookWorkflowTest(unittest.TestCase):
                      if 'nb.continue_workflow("explore")' in c)
         self.assertNotIn("WORKFLOW_ID =", first, "no id to paste: the notebook continues the workflow on its own")
         self.assertLess(first.index("nb.continue_workflow("), first.index("nb.connect()"))
-        ds = exakit_nb.dataset(FakeConn(AMAZON), "amazon_sales")
-        review = mock.Mock(**{"dataset.return_value": ds})
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
-                mock.patch.object(exakit_nb, "review_roles", return_value=review) as reviewed:
+                mock.patch.object(exakit_nb, "open_chosen", return_value={}) as opened:
             namespace, out = self.run_cell(first, {"DATASET": "amazon_sales"})
         self.assertEqual([e["kind"] for e in self.log(namespace["workflow_id"])], ["start"])
-        reviewed.assert_called_once_with(mock.ANY, "amazon_sales")
-        review.dataset.assert_called_once_with(draft_ok=True)
+        opened.assert_called_once()                       # the quickstart's tables, opened by name
+        self.assertEqual("amazon_sales", namespace["chosen_data"], "DATASET set: that one, opened by the review")
+        ds = exakit_nb.dataset(FakeConn(AMAZON), "amazon_sales")
+        namespace["loaded_dataset"] = ds                  # what the review cells give: role_review.dataset(draft_ok=True)
+        review = mock.Mock(**{"dataset.return_value": ds})
+        # Step 2 reviews the chosen table, then the steps read it as loaded (a draft is enough here).
+        cells = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")
+        review_at = next(i for i, c in enumerate(cells) if c.startswith("role_review = nb.review_roles(connection, chosen_data)"))
+        loaded_at = next(i for i, c in enumerate(cells) if c.startswith("loaded_dataset = role_review.dataset(draft_ok=True)"))
+        self.assertLess(cells.index(first), review_at)
+        self.assertLess(review_at, loaded_at)
         # The joined view, then the typed view, decide the dataset the steps read (the table as loaded unless
         # USE_JOINED / USE_PREPARED), then the roles are read from it in a cell of their own.
         cells = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")
@@ -1488,8 +1498,8 @@ class MissingRoleTest(unittest.TestCase):
         return Dataset(parsed.id, Path("d"), "0" * 64, parsed)
 
     def query_cell(self) -> str:
-        cells = ["".join(c["source"]) for c in json.loads(build_tool.build(NOTEBOOKS / "data-scientist" / "00_quickstart.py"))["cells"]]
-        return next(c for c in cells if "first_rows = nb.sql(" in c)
+        cells = ["".join(c["source"]) for c in json.loads(build_tool.build(NOTEBOOKS / "data-scientist" / "01_explore.py"))["cells"]]
+        return next(c for c in cells if "first_rows = nb.sql(" in c)       # step 2's first result, in 01_explore
 
     def run_query(self, ds) -> tuple[str, str]:
         statements = []

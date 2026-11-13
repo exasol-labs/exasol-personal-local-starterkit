@@ -9,12 +9,12 @@
 # %% [markdown] tags=["exakit-guide-hint"]
 # <div class="guide-start-hint">
 #
-# **Step 2 · Explore and predict.** Click into the cell below and press **Shift + Enter** to open it: checks, a cleaned view, groups and trends, and a first model. Its **Guided / Code** switch, top right, shows the code behind this page.
+# **Step 2 · Understand, explore and predict.** Click into the cell below and press **Shift + Enter** to open it: what each column means and the semantic views over your data, then checks, a cleaned view, groups and trends, and a first model. Its **Guided / Code** switch, top right, shows the code behind this page.
 #
 # </div>
 
 # %% tags=["exakit-guide", "skip-ci"]
-# Explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
+# Understand, explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
 import exakit.guide as guide
 
 guide.explore()
@@ -27,16 +27,16 @@ guide.explore()
 # The same steps as the cards above, as cells you can read, change and run one by one. **Code**, at the top right of a card, opens this section; **Guided** closes it again.
 
 # %% [markdown]
-# ## Prepare, explore, model, validate
+# ## Understand, prepare, explore, model, validate
 #
-# **Dataset:** the one you approved last (else `amazon_sales`). Change `DATASET` for `fraud_transactions` or your own file.
+# **Dataset:** the tables chosen in the quickstart (else the one approved last, else `amazon_sales`). Set `DATASET` for `fraud_transactions` or your own file.
 #
-# ![Steps 3 Prepare, 4 Explore, 5 Model and 6 Validate . All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:3,4,5,6)
+# ![Steps 2 Understand, 3 Prepare, 4 Explore, 5 Model and 6 Validate . All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](journey:2,3,4,5,6)
 #
 # Each query is built from the approved column map, so no cell names a column. If the data has no date or no text, the step that needs it skips and says why. Settings are in the first cell. The AI model has its own cell. The AI step at the end is optional and off.
 
 # %%
-DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
+DATASET = None   # None: the tables chosen in the quickstart (else the dataset approved last, else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
 USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
 USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
 USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
@@ -59,9 +59,9 @@ LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model ca
 nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
 
 # %% [markdown]
-# ## Step 2, continued · Your column map
+# ## Step 2 · Understand the data
 #
-# Every query below is built from this map. A draft map is enough here.
+# The tables chosen in the quickstart, opened again here. For each you approve the column map: the key, the date, the groups and the outcome. The kit proposes it and shows the least certain columns first. Approving it publishes the table in **Exasol Semantic Views**, the database's semantic layer, and the model over all your tables is built from the same choices. Every later step reads this map, so the same notebooks run on any table.
 
 # %%
 import os
@@ -69,9 +69,44 @@ import exakit.nb as nb
 
 workflow_id = nb.continue_workflow("explore")   # the quickstart's workflow, or the last one: nothing to paste
 connection = nb.connect()
-dataset_id = nb.chosen_dataset(DATASET)
-loaded_dataset = nb.review_roles(connection, dataset_id).dataset(draft_ok=True)   # the table as loaded; `dataset` below is what the steps read
-nb.show_roles(loaded_dataset)
+chosen_tables = nb.open_chosen(connection)      # the tables the quickstart chose, by name (nb.chosen_tables() lists them)
+if DATASET or not chosen_tables:
+    chosen_data = nb.chosen_dataset(DATASET)   # a name: the review below opens it (a file of your own is drafted there)
+else:
+    chosen_data = next(iter(chosen_tables.values()))   # another one: chosen_data = chosen_tables["SCHEMA.TABLE"]
+
+# %% [include] ../00_shared/data_paths.py review
+
+
+# %% [markdown]
+# ### A first result
+#
+# Rows per group, and the % where the target is 1 when the map has a target. Each query shows its SQL before the result.
+
+# %%
+missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
+if GROUP_ROLE != "category":
+    print(f"No category ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
+if "label" in missing_roles:
+    print(f"No target ({missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: the group column and what a row counts
+LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None   # the target column, then _PCT
+LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
+first_rows = nb.sql(connection, f"""
+SELECT {GROUP_COLUMN} AS {GROUP_HEADER},
+       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}
+FROM {dataset.fact_table}
+GROUP BY {GROUP_COLUMN}
+ORDER BY {COUNT_HEADER} DESC
+LIMIT 10""")
+nb.show_sql()
+overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset.col('label')}), 1) AS PCT FROM {dataset.fact_table}") if LABEL_PCT_HEADER else None
+nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]) if LABEL_PCT_HEADER else None)
+first_rows
+
+# %%
+loaded_dataset = role_review.dataset(draft_ok=True)   # the table as loaded; `dataset` below is what the steps read
 
 # %% [markdown]
 # ## Step 3 · Prepare the data

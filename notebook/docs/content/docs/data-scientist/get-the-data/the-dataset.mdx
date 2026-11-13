@@ -18,7 +18,7 @@ dataset.missing                                 # the roles no column plays, eac
 
 ## Pick the dataset for each notebook
 
-One assignment picks the data for each notebook: `SAMPLE = "..."` in the quickstart and `DATASET = "..."` in the other notebooks. With `DATASET = None`, each notebook follows the dataset you approved last. Approve a different one in the quickstart. The other notebooks pick it up when you run their first cell again.
+One assignment picks the data for each notebook: `SAMPLE = "..."` in the quickstart and `DATASET = "..."` in the other notebooks. With `DATASET = None`, `01_explore` opens the tables you chose in the quickstart (`nb.chosen_tables()` lists them), and the later notebooks follow the dataset you approved last. Approve a different one in `01_explore`. The other notebooks pick it up when you run their first cell again.
 
 To pin one notebook to one dataset, set `DATASET = "..."` in that notebook.
 

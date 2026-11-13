@@ -24,7 +24,7 @@ Not every change is noticed. This table says, for each kind of change, what the 
 * Changed or new columns are flagged with low confidence, and the evidence says the column changed since the approved version.
 * The approved version stays approved for the old columns. Nothing is overwritten.
 
-`approve` refuses if the table changed since it was described, and says to describe it again. Explore, Ask and Share read only an approved column map. If a step reports that the map is not approved, open the quickstart and approve it.
+`approve` refuses if the table changed since it was described, and says to describe it again. Explore, Ask and Share read only an approved column map. If a step reports that the map is not approved, open `01_explore` and approve it.
 
 The kit checks columns and types when you describe. It does not compare every row on each run. Rows are checked when you approve, and again by a training hand-off's staleness check.
 

@@ -91,47 +91,55 @@ ACTIONS: dict[str, Action] = {
     # several tables chosen at once: each is kept by its table name, and one of them is the one being worked on
     "data.several": Action("00_quickstart", "chosen_tables = {{}}", "chosen_tables", False),
     "data.keep": Action("00_quickstart", "chosen_tables[{table}] = {data}", "chosen_tables", False),
+    "data.remember": Action("00_quickstart", "remembered = nb.remember_chosen({tables})", "remembered", False),
     "data.switch": Action("00_quickstart", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
     "data.map": Action("00_quickstart", "data_map = nb.data_map(connection)", "data_map", False),
     "data.connectors": Action("00_quickstart", "connectors = nb.connectors()", "connectors", False),
-    "semantic.models": Action("00_quickstart", "semantic_models = nb.semantic_models(connection)", "semantic_models", False),
-    "semantic.preview": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
+    "semantic.models": Action("01_explore", "semantic_models = nb.semantic_models(connection)", "semantic_models", False),
+    "semantic.preview": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
                                "links={links}, ai={ai}, preview=True)", "semantic", False),
-    "semantic.publish": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
+    "semantic.publish": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
                                "links={links}, ai={ai}, preview=False)", "semantic"),
-    "semantic.links": Action("00_quickstart", "found_links = nb.find_links(connection, {schemas}, ai={ai})", "found_links", False),
-    "semantic.preview_schemas": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
+    "semantic.links": Action("01_explore", "found_links = nb.find_links(connection, {schemas}, ai={ai})", "found_links", False),
+    "semantic.preview_schemas": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
                                        "links={links}, ai={ai}, preview=True)", "semantic", False),
-    "semantic.publish_schemas": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
+    "semantic.publish_schemas": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
                                        "links={links}, ai={ai}, preview=False)", "semantic"),
     # the tables a person ticked (not whole schemas), the links between them - one schema's tables too - and one pair checked
-    "semantic.links_tables": Action("00_quickstart", "found_links = nb.find_links(connection, tables={tables}, ai={ai})", "found_links", False),
-    "semantic.check_link": Action("00_quickstart", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False)",
+    "semantic.links_tables": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, ai={ai})", "found_links", False),
+    "semantic.check_link": Action("01_explore", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False)",
                                   "link_check", False),
     # model_links: the links to use, each as nb.find_links returns it (its evidence with it) and a note in your words
-    "semantic.preview_tables": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
+    "semantic.preview_tables": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
                                       "table_notes={table_notes}, description={description}, ai={ai}, preview=True)", "semantic", False),
-    "semantic.publish_tables": Action("00_quickstart", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
+    "semantic.publish_tables": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
                                       "table_notes={table_notes}, description={description}, ai={ai}, preview=False)", "semantic"),
-    "semantic.ai_notes": Action("00_quickstart", "model_notes = nb.model_notes(connection, {tables}, links={links})", "model_notes", False),
-    "semantic.refresh": Action("00_quickstart", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
-    "map.review": Action("00_quickstart", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
-    "map.approve": Action("00_quickstart", "role_review.approve({choices}, {slots}, notes={notes})\ndataset = role_review.dataset()", "dataset"),
-    "map.ai_check": Action("00_quickstart", "ai_map = nb.fill_column_map(role_review)", "ai_map", False),
+    "semantic.ai_notes": Action("01_explore", "model_notes = nb.model_notes(connection, {tables}, links={links})", "model_notes", False),
+    "semantic.refresh": Action("01_explore", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
+    # step 2 (01_explore) opens the tables the quickstart chose, each by name, and moves between them
+    "understand.open": Action("01_explore", "chosen_tables = nb.open_chosen(connection)", "chosen_tables", False),
+    "understand.switch": Action("01_explore", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
+    "understand.default": Action("01_explore", "chosen_data = nb.dataset(connection, nb.chosen_dataset(None))", "chosen_data", False),
+    "understand.map": Action("01_explore", "data_map = nb.data_map(connection)", "data_map", False),
+    "map.review": Action("01_explore", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
+    "map.approve": Action("01_explore", "role_review.approve({choices}, {slots}, notes={notes})\ndataset = role_review.dataset()", "dataset"),
+    "map.ai_check": Action("01_explore", "ai_map = nb.fill_column_map(role_review)", "ai_map", False),
     # several tables, read together: each table's review is kept, and the model reads the others next to the one it fills
-    "map.reviews": Action("00_quickstart", "role_reviews = {{}}", "role_reviews", False),
-    "map.review_keep": Action("00_quickstart", "role_reviews[{table}] = nb.review_roles(connection, chosen_data)", "role_reviews", False),
-    "map.ai_together": Action("00_quickstart", "ai_map = nb.fill_column_map(role_reviews[{table}], together=role_reviews)",
+    "map.reviews": Action("01_explore", "role_reviews = {{}}", "role_reviews", False),
+    "map.review_keep": Action("01_explore", "role_reviews[{table}] = nb.review_roles(connection, chosen_data)", "role_reviews", False),
+    "map.ai_together": Action("01_explore", "ai_map = nb.fill_column_map(role_reviews[{table}], together=role_reviews)",
                               "ai_map", False),
-    "semantic.links_checked": Action("00_quickstart", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai})",
+    "semantic.links_checked": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai})",
                                      "found_links", False),
-    "map.keep": Action("00_quickstart", "dataset = role_review.dataset()", "dataset", False),
-    "map.draft": Action("00_quickstart", "draft_dataset = role_review.dataset(draft_ok=True)", "draft_dataset", False),
-    "map.leakage": Action("00_quickstart", "leaking = nb.leakage_check(connection, {data})", "leaking", False),
-    "map.versions": Action("00_quickstart", "versions = nb.column_map_versions({dataset_id})", "versions", False),
-    "map.first_result": Action("00_quickstart", "first_rows = nb.sql(connection, {sql})", "first_rows", False),
-    "map.first_overall": Action("00_quickstart", "first_overall = nb.sql(connection, {sql})", "first_overall", False),
-    "map.first_note": Action("00_quickstart", "first_note = nb.note_groups(first_rows, dataset, {group}, {count}, {pct}, overall={overall})",
+    "map.reuse": Action("01_explore", "role_review = role_reviews[{table}]", "role_review", False),
+    "map.remember": Action("01_explore", "role_reviews[{table}] = role_review", "role_reviews", False),
+    "map.keep": Action("01_explore", "dataset = role_review.dataset()", "dataset", False),
+    "map.draft": Action("01_explore", "draft_dataset = role_review.dataset(draft_ok=True)", "draft_dataset", False),
+    "map.leakage": Action("01_explore", "leaking = nb.leakage_check(connection, {data})", "leaking", False),
+    "map.versions": Action("01_explore", "versions = nb.column_map_versions({dataset_id})", "versions", False),
+    "map.first_result": Action("01_explore", "first_rows = nb.sql(connection, {sql})", "first_rows", False),
+    "map.first_overall": Action("01_explore", "first_overall = nb.sql(connection, {sql})", "first_overall", False),
+    "map.first_note": Action("01_explore", "first_note = nb.note_groups(first_rows, dataset, {group}, {count}, {pct}, overall={overall})",
                              "first_note", False),
     # -- step 2: prepare, explore, model ----------------------------------------------------------------------------
     "explore.open": Action("01_explore", 'workflow_id = nb.continue_workflow("explore")\n'

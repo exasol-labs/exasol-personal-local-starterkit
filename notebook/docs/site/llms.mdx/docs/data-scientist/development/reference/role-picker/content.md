@@ -41,8 +41,6 @@ a name (a notebook's one assignment: a dataset id, a descriptor file, a data fil
 dataset is opened as it is described and nothing is profiled; a data file with no descriptor beside it is loaded
 and reviewed here.
 
-**Used in:** `data-scientist/01_explore`
-
 ## nb.RoleReview [#RoleReview]
 
 ```python

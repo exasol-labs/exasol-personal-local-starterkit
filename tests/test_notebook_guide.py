@@ -1172,7 +1172,7 @@ class SeveralTablesTest(unittest.TestCase):
                 ns["chosen_tables"] = {}
             elif action_id == "data.keep":
                 ns["chosen_tables"][values["table"]] = ns[values["data"].expr]
-            elif action_id == "data.switch":
+            elif action_id in ("data.switch", "understand.switch"):
                 ns["chosen_data"] = ns["chosen_tables"][values["table"]]
             elif action_id == "data.choose":
                 ns["chosen_data"] = ns[values["data"].expr]
@@ -1194,7 +1194,12 @@ class SeveralTablesTest(unittest.TestCase):
     def use(self, values):
         with mock.patch.object(self.session, "changed"):
             self.card.on_use(values)
-        return [a for a, _v in self.ran if a != "kit.approved"]      # (a refused load looks its table up there)
+        ran = [a for a, _v in self.ran if a != "kit.approved"]      # (a refused load looks its table up there)
+        if not ran or ran[-1] != "data.remember":     # nothing opened: nothing to note
+            self.assertNotIn("data.remember", ran)
+            return ran
+        self.assertEqual([e["table"] for e in self.session.chosen], self.ran[-1][1]["tables"], "noted for 01_explore")
+        return ran[:-1]
 
     def test_one_table_runs_the_cells_it_always_ran(self):
         for values in ({"kind": "sample", "sample": "amazon"}, {"kind": ["sample"], "sample": ["amazon"]}):

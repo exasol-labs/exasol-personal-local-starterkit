@@ -33,14 +33,16 @@ The three options of the **Choose your data** card are tick boxes, and so is eve
 |---|---|
 | Loads each ticked table | The same cell as for one table: `nb.load_sample`, `nb.use_table`, `nb.dataset` or `nb.load_source` |
 | Keeps each one by its table name | `chosen_tables[<table>] = ...` |
-| Opens the column map on the first | `chosen_data = chosen_tables[<table>]` |
+| Works on the first | `chosen_data = chosen_tables[<table>]` |
+| Notes them for `01_explore` | `nb.remember_chosen([...])` |
 
 A table that could not be loaded is named under the card with the kit's reason. The others are used.
 
 What follows from the choice:
 
-- **What each column means** shows a *Table* list when you chose more than one. It says how many still need approval. Picking another table opens its column map; each table is approved on its own.
-- **Semantic views** starts with the schemas of your tables ticked, so **Find links between them** and **Publish the model** work on the same choice. See [Semantic views](/data-scientist/explore/semantic-views).
+- The quickstart ends here, with **Next** at the bottom of the card. `01_explore` opens the tables you chose (`nb.open_chosen(connection)`); nothing is copied or loaded again.
+- Its first card is **What each column means** with **Semantic views** under it, in one card. A *Table* list shows when you chose more than one, with how many still need approval; picking another opens its column map, and one already drawn up opens without reading the table again. Each table is approved on its own, and approving it publishes it in Exasol Semantic Views.
+- **Semantic views**, at the bottom of that card, starts with your tables ticked, so **Find links between them** and **Publish the model** work on the same choice. See [Semantic views](/data-scientist/explore/semantic-views).
 
 With one table ticked the card runs the cells it always ran, and `chosen_tables` is not created.
 
@@ -57,7 +59,7 @@ With one table ticked the card runs the cells it always ran, and `chosen_tables`
 
 ## What you have at the end
 
-A table that the kit can describe, chosen by `nb.first(...)` as `chosen_data`, and a data map that shows it. The table has no approved column map yet. The next stage reviews the roles and approves them.
+The tables you chose, as `chosen_data` (and `chosen_tables` for several), noted for `01_explore`, and a data map that shows them. They have no approved column map yet: `01_explore` reviews the roles and approves them.
 
 Next: [Explore and understand](/data-scientist/explore).
 

@@ -15,8 +15,8 @@ The kit runs this workflow on an Exasol database on your computer. Four notebook
 <Flow
   caption="The four notebooks, in order, and the stages each one covers"
   steps="[
-  { title: &#x22;00_quickstart&#x22;, text: &#x22;Set up Exasol, Get the data, and the column map of Explore and understand&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/set-up&#x22; },
-  { title: &#x22;01_explore&#x22;, text: &#x22;Prepare, Explore, Model and Evaluate&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
+  { title: &#x22;00_quickstart&#x22;, text: &#x22;Set up Exasol and Get the data: datasets, your own files and tables, external sources&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/set-up&#x22; },
+  { title: &#x22;01_explore&#x22;, text: &#x22;Understand (the column map and the semantic views), Prepare, Explore, Model and Evaluate&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
   { title: &#x22;02_ask_your_data&#x22;, text: &#x22;Explore and understand: asking questions in plain language&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/explore&#x22; },
   { title: &#x22;03_share&#x22;, text: &#x22;Communicate and deploy: a dashboard and a hand-off folder&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate&#x22; },
 ]"

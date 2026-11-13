@@ -32,7 +32,7 @@ The JupyterLab and Marimo versions are pinned in the kit's `versions.json`
 
 The kit's notebooks are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/`,
 one folder per persona, with a README naming the order to open them in:
-`data-scientist/00_quickstart` (steps 0-2), `01_explore` (3-6), `02_ask_your_data` (7), `03_share` (8-9) (Data Scientist),
+`data-scientist/00_quickstart` (steps 0-1: the kit and the data), `01_explore` (2-6: the column map and semantic views, then prepare to validate), `02_ask_your_data` (7), `03_share` (8-9) (Data Scientist),
 and `ml-engineer/00_quickstart`, `01_train`, `02_rust_score`, `03_score_external_model` (ML Engineer),
 plus Exasol's examples library as `exasol-examples/`.
 Only the picked personas' folders are copied; a persona added later (`exakit persona add`) brings its own.
@@ -158,8 +158,9 @@ are configured; on a dataset with no text column (both `amazon_sales` and
 one call per side, and the model sorts each side into two to four themes: a table of theme,
 count, share and example. With Langfuse set up it is one trace, `explore-themes`.
 
-`DATASET = None` in the later notebooks means the dataset approved last in a quickstart
-(else `amazon_sales`); each says which in one line. Result columns are named after the
+`DATASET = None` in `01_explore` means the tables chosen in the quickstart (`nb.chosen_tables()`,
+opened with `nb.open_chosen`), else the dataset approved last; in the later notebooks the dataset
+approved last (else `amazon_sales`); each says which in one line. Result columns are named after the
 data (`CATEGORY`, `ORDERS`, `CANCELLED_PCT`; `nb.name`, `nb.count_name`), and a note in
 plain words sits under each result (`nb.note_groups`, `nb.note_trend`, `nb.note_model`).
 

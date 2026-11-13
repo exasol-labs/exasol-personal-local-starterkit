@@ -1,11 +1,11 @@
 """The guided view for the Exasol starter kit's JupyterLab.
 
     import exakit.guide as guide
-    guide.start()         # 00_quickstart: Home, then step 1, in one cell
+    guide.start()         # 00_quickstart: Home, then step 1 (choose your data), in one cell
     guide.home()          # the kit Home screen: setup, next step, continue
     guide.marketplace()   # every add-on and part of the kit: install, start, update (Home's Marketplace tab)
-    guide.understand()    # step 1: choose data, approve what each column means
-    guide.explore()       # step 2: check and clean, compare, predict, test feature ideas
+    guide.understand()    # step 2 alone: what each column means and the semantic views, in one card
+    guide.explore()       # step 2: that card, then check and clean, compare, predict, test feature ideas
     guide.ask()           # step 3: ask in plain words (also: a cell starting with %%ask)
     guide.share()         # step 4: preview and publish a dashboard, then the hand-off bundle
 
@@ -17,10 +17,10 @@ when first used, so the import is quick.
 from .magic import register as _register_magic
 
 __version__ = "0.1.0"
-__all__ = ["start", "home", "marketplace", "understand", "explore", "ask", "share", "Home", "ChooseData", "ColumnMap"]
+__all__ = ["start", "home", "marketplace", "understand", "explore", "ask", "share", "Home", "ChooseData", "ColumnMap", "Understand"]
 
 _LAZY = {"home": ".screens.home", "Home": ".screens.home", "marketplace": ".screens.home", "understand": ".screens.understand",
-         "ChooseData": ".screens.understand", "ColumnMap": ".screens.understand", "explore": ".screens.explore",
+         "ChooseData": ".screens.understand", "ColumnMap": ".screens.understand", "Understand": ".screens.understand", "explore": ".screens.explore",
          "ask": ".screens.ask", "share": ".screens.share"}
 
 
@@ -37,18 +37,18 @@ def __getattr__(name):
 
 
 def start():
-    """The quickstart's cards in one cell: Home (the kit), then step 1 - the one AI button, your data, its column
-    map, the map of all your data, and the semantic views over it, with the way on to the next notebook at the
-    bottom. Each run starts a workflow (nb.workflow, a new id); every card action after it is logged under that id
-    (nb.workflow_log)."""
+    """The quickstart's cards in one cell: Home (the kit), then step 1 - choose your data from any of your sources,
+    with the way on to the next notebook at the bottom. 01_explore opens what was chosen (guide.explore): the column
+    map and the semantic views. Each run starts a workflow (nb.workflow, a new id); every card action after it is
+    logged under that id (nb.workflow_log)."""
     from . import actions
     from .card import show
 
     actions.run("data.workflow")
     from .screens.home import Home
-    from .screens.understand import AiHelp, ChooseData, ColumnMap, DataMap, SemanticViews
+    from .screens.understand import ChooseData
 
-    return show(Home(), AiHelp(), ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="get-the-data")
+    return show(Home(), ChooseData(), docs="get-the-data")
 
 
 def load_ipython_extension(ip) -> None:

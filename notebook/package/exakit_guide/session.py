@@ -42,6 +42,10 @@ class Session:
         # "Connection cannot be shared between multiple threads"). A button's work and the cards' background reads
         # take turns through this lock; it is re-entrant, so an action inside an action does not wait for itself.
         self.lock = threading.RLock()
+        # Step 2's Understand card opens the quickstart's tables in the background; the cards under it wait for that
+        # (opened) instead of opening the dataset approved last on their own.
+        self.understanding = False
+        self.opened = threading.Event()
 
     # -- the notebook's namespace ----------------------------------------------------------
     def namespace(self) -> dict[str, Any]:

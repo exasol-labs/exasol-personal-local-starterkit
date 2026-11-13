@@ -27,7 +27,7 @@ The count column, named after what is counted: ORDER_LINES, STORE_WEEKS; ROW_COU
 not say (ROWS is an SQL word); \<WORD>\_COUNT when what is counted is another SQL word (CS, short for
 CASESPECIFIC: "COUNT(\*) AS CS" is a syntax error).
 
-**Used in:** `data-scientist/00_quickstart`, `data-scientist/01_explore`, `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/00_quickstart`
+**Used in:** `data-scientist/01_explore`, `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/00_quickstart`
 
 ## nb.name [#name]
 
@@ -38,7 +38,7 @@ nb.name(column: str | None, suffix: str='') -> str
 A result column named after a data column: `CANCELLED` + `PCT` -> `CANCELLED_PCT`; quotes, dots and
 spaces become underscores, so the name works unquoted in SQL.
 
-**Used in:** `data-scientist/00_quickstart`, `data-scientist/01_explore`, `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/00_quickstart`
+**Used in:** `data-scientist/01_explore`, `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/00_quickstart`
 
 ## nb.note_groups [#note_groups]
 
@@ -56,7 +56,7 @@ nb.note_groups(
 
 Print (and return) the note under a per-group result: one line per fact, in the data's own words.
 
-**Used in:** `data-scientist/00_quickstart`, `data-scientist/01_explore`, `ml-engineer/00_quickstart`
+**Used in:** `data-scientist/01_explore`, `ml-engineer/00_quickstart`
 
 ## nb.note_model [#note_model]
 

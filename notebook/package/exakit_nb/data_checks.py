@@ -126,15 +126,43 @@ def data_checks(conn, ds, *, show: bool = True):
     return frame
 
 
+def _grouped(conn, table: str, columns: list[str], rate: str | None = None, where: str = "") -> dict[str, Any]:
+    """Each column's value counts from ONE statement (GROUPING SETS), not one query a column: {COLUMN: frame of
+    VALUE_, N and, with ``rate``, R = AVG(rate)}. The values are read as text; a NULL value is a group of its own."""
+    if not columns:
+        return {}
+    select = ", ".join(f"GROUPING({_quoted(c)}) AS G{i}, CAST({_quoted(c)} AS VARCHAR(2000)) AS V{i}"
+                       for i, c in enumerate(columns))
+    average = f", AVG(CAST({_quoted(rate)} AS DOUBLE)) AS R" if rate else ""
+    frame = _run(conn, f"SELECT {select}, COUNT(*) AS N{average} FROM {table}{where} "
+                       f"GROUP BY GROUPING SETS ({', '.join(f'({_quoted(c)})' for c in columns)})")
+    out: dict[str, Any] = {}
+    for i, column in enumerate(columns):
+        part = frame[frame[f"G{i}"].astype(int) == 0]
+        keep = {"VALUE_": part[f"V{i}"], "N": part["N"].astype(float)}
+        if rate:
+            keep["R"] = part["R"].astype(float)
+        import pandas as pd
+
+        out[column] = pd.DataFrame(keep).sort_values("N", ascending=False).reset_index(drop=True)
+    return out
+
+
 def placeholders(conn, ds) -> dict[str, list[tuple[str, int]]]:
     """{COLUMN: [(value, rows), ...]} for the values that stand for "not known" in the category and flag columns -
     only where the values can be listed (at most GROUPABLE of them). The typed view turns these into NULL."""
     table, columns = ds.fact_table, _columns(ds)
     label = _bare(ds.col("label")) if ds.has("label") else None
     found: dict[str, list[tuple[str, int]]] = {}
-    for column in [c for c, e in columns.items() if e.get("role") in ("category", "flag") and c != label]:
-        values = _run(conn, f"SELECT {_quoted(column)} AS VALUE_, COUNT(*) AS N FROM {table} "
-                            f"GROUP BY 1 ORDER BY N DESC LIMIT {GROUPABLE + 1}")
+    wanted = [c for c, e in columns.items() if e.get("role") in ("category", "flag") and c != label]
+    if not wanted:
+        return found
+    # Two statements for every column together: how many values each has, then the values of the ones that can be
+    # listed - not one query a column.
+    distinct = _run(conn, "SELECT " + ", ".join(f"APPROXIMATE_COUNT_DISTINCT({_quoted(c)}) AS {_quoted('D_' + c)}"
+                                                for c in wanted) + f" FROM {table}")
+    few = [c for c in wanted if int(distinct[f"D_{c}"][0] or 0) <= GROUPABLE * 2]
+    for column, values in _grouped(conn, table, few).items():
         if len(values) > GROUPABLE:
             continue
         hits = [(str(v), int(n)) for v, n in zip(values["VALUE_"], values["N"]) if isinstance(v, str) and PLACEHOLDER.match(v)]
@@ -162,11 +190,9 @@ def leakage_check(conn, ds, *, show: bool = True) -> list[str]:
     distinct = _run(conn, "SELECT " + ", ".join(f"COUNT(DISTINCT {_quoted(c)}) AS {_quoted('D_' + c)}" for c in candidates)
                     + f" FROM {table}")
     leaked: list[str] = []
-    for column in candidates:
-        if not (1 < int(distinct[f"D_{column}"][0] or 0) <= GROUPABLE):
-            continue
-        groups = _run(conn, f"SELECT {_quoted(column)} AS VALUE_, COUNT(*) AS N, AVG(CAST({_quoted(label)} AS DOUBLE)) AS R "
-                            f"FROM {table} WHERE {_quoted(label)} IS NOT NULL GROUP BY 1")
+    groupable = [c for c in candidates if 1 < int(distinct[f"D_{c}"][0] or 0) <= GROUPABLE]
+    # Every groupable column's rate of the label per value, in ONE statement (GROUPING SETS), not one query a column.
+    for column, groups in _grouped(conn, table, groupable, rate=label, where=f" WHERE {_quoted(label)} IS NOT NULL").items():
         total = float(groups["N"].sum() or 0)
         positives = float((groups["N"] * groups["R"]).sum() or 0)
         if not total or not positives or positives == total:

@@ -74,7 +74,12 @@ class WorkingOn(Screen):
 
     def _load(self) -> None:
         try:
-            SESSION.open_latest("explore.open")
+            if SESSION.understanding:
+                # Step 2's card above opens the quickstart's tables: everything below follows the one whose column
+                # map is approved there, not the dataset approved last.
+                SESSION.opened.wait(900)
+            else:
+                SESSION.open_latest("explore.open")
             self.kit_said = SESSION.said
             self._count()
         except Exception as exc:
@@ -95,11 +100,14 @@ class WorkingOn(Screen):
 
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Working on",
-                "sub": "The data you approved in step 1. Everything below uses it."}
+                "sub": "The table whose column map you approved above. Everything below uses it."}
         if self.loading:
             return [head, {"t": "empty", "v": "Opening the data you approved last…"}]
         ds = SESSION.dataset
         blocks = [head]
+        if ds is None and SESSION.understanding and SESSION.source is not None:
+            blocks.append({"t": "msg", "kind": "info", "v": f"Approve the column map of {SESSION.source.fact_table} above: "
+                                                            "the steps below use it."})
         if ds is not None:
             rows = f" · {self.rows:,} rows" if getattr(self, "rows", None) is not None else ""
             blocks.append({"t": "summary_row", "v": _ds_label(ds) + rows,
@@ -127,6 +135,11 @@ class WorkingOn(Screen):
         self.flash = {"kind": "ok", "v": f"Now working on {ds_id}."}
 
     def on_session(self, what: str) -> None:
+        if what == "dataset":
+            try:
+                self._count()
+            except Exception:
+                self.rows = None
         self.refresh()
 
 
@@ -628,7 +641,11 @@ class Ideas(Screen):
 
 
 def explore():
-    """Step 2 in the guided view: check and clean, compare, then predict and test feature ideas."""
+    """Step 2 in the guided view: the one AI button and one card for what each column means and the semantic views
+    over the tables chosen in the quickstart; then check and clean, compare, predict and test feature ideas on the
+    table approved there."""
     from ..card import show
+    from .understand import AiHelp, Understand
 
-    return show(WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="prepare")
+    understand = Understand()        # first: it opens the quickstart's tables, the cards below wait for it
+    return show(AiHelp(), understand, WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="prepare")

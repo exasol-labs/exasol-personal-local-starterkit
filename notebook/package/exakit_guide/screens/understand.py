@@ -290,14 +290,14 @@ class ChooseData(Screen):
                          "actions": items}]     # the buttons sit inside the panel under the ticked options
         if self.done and SESSION.source is not None:
             rows = f" · {SESSION.source_rows} rows" if SESSION.source_rows else ""
-            if len(SESSION.chosen) > 1:
-                others = ", ".join(e["table"] for e in SESSION.chosen)
-                blocks.append({"t": "msg", "kind": "ok", "keep": True,
-                               "v": f"Using {len(SESSION.chosen)} tables: {others}. The column map below opens on "
-                                    f"{SESSION.source.fact_table}; move between the tables there, then link them under "
-                                    "Semantic views."})
-            else:
-                blocks.append({"t": "msg", "kind": "ok", "v": f"Using {SESSION.source_label}{rows}. Check the column map below."})
+            what = (f"{len(SESSION.chosen)} tables: {', '.join(e['table'] for e in SESSION.chosen)}"
+                    if len(SESSION.chosen) > 1 else f"{SESSION.source_label}{rows}")
+            blocks.append({"t": "msg", "kind": "ok", "keep": True,
+                           "v": f"Using {what}. Next, 01_explore opens it: what each column means and the semantic "
+                                "views, then the checks, the groups and a first model."})
+            nxt = _next_notebook()            # the bottom of the quickstart: the way on, once the data is chosen
+            if nxt:
+                blocks.append({"t": "next", "v": f"Next: {nxt['title']}", "path": nxt["file"]})
         if self.failed:
             blocks.append({"t": "msg", "kind": "warn", "v": "; ".join(self.failed)})
         if self.kit_said:
@@ -418,6 +418,7 @@ class ChooseData(Screen):
             raise ValueError("Nothing was loaded. The kit's note is under 'What the kit said'.")
         SESSION.chosen, SESSION.chosen_n = chosen, SESSION.chosen_n + 1
         use_chosen(chosen[0])
+        actions.run("data.remember", tables=[e["table"] for e in chosen])    # what 01_explore opens
         self.done = True
         if connected or any(action_id == "data.own_file" for action_id, *_rest in wanted):
             self._load_options()                      # what was just loaded or connected can be picked
@@ -793,12 +794,30 @@ class ColumnMap(Screen):
             self.ai = SESSION.ai_maps.get(str(SESSION.source.fact_table))
         self.refresh()
 
-    def _review(self) -> None:
+    def _review(self, reuse: bool = False) -> None:
+        """Draw up this table's column map (nb.review_roles) and keep it by table name, so going back to a table
+        reads nothing again (reuse=True: role_review = role_reviews[table])."""
         from ..actions import Var
 
         self.first, self.leaks = None, []
-        self.ai = SESSION.ai_maps.get(str(SESSION.source.fact_table)) if SESSION.source is not None else None
-        actions.run("map.review")
+        table = str(SESSION.source.fact_table) if SESSION.source is not None else ""
+        self.ai = SESSION.ai_maps.get(table) if table else None
+        kept = SESSION.get("role_reviews")
+        seen = self.__dict__.setdefault("seen", {})       # {table: (leaks, first look)}: what was read with the review
+        if reuse and isinstance(kept, dict) and table in kept:
+            actions.run("map.reuse", table=table)
+            if table in seen:                             # nothing changed since: the same answers, no query
+                self.leaks, self.first = seen[table]
+                self.kit_said = SESSION.said
+                if SESSION.review.draft.status == "approved":
+                    actions.run("map.keep")
+                return
+        else:
+            actions.run("map.review")
+            if table:
+                if not isinstance(kept, dict):
+                    actions.run("map.reviews")
+                actions.run("map.remember", table=table)
         self.kit_said = SESSION.said
         try:
             actions.run("map.draft")
@@ -813,6 +832,8 @@ class ColumnMap(Screen):
                 SESSION.broken = {"id": SESSION.review.draft.id, "reason": str(exc).splitlines()[0]}
                 return
             self._first_result_safe()
+        if table:
+            seen[table] = (self.leaks, self.first)
 
     # -- view ---------------------------------------------------------------------------
     def build(self) -> list[dict]:
@@ -901,12 +922,16 @@ class ColumnMap(Screen):
         if entry is None or (SESSION.source is not None and str(SESSION.source.fact_table) == table):
             return
         print(f"Opening {table}")
-        actions.run("data.switch", table=table)
+        actions.run("understand.switch", table=table)
         use_chosen(entry)
-        print(f"Reading {table}: each column's type, how many values and how they spread")
+        kept = SESSION.get("role_reviews")
+        if not (isinstance(kept, dict) and table in kept):
+            print(f"Reading {table}: each column's type, how many values and how they spread")
         with SESSION.showing_queries():
-            self._review()
+            self._review(reuse=True)
         SESSION.changed("source", self)
+        if SESSION.dataset is not None:        # an approved table: the steps under this card follow it
+            SESSION.changed("dataset", self)
 
     def on_map_switch(self, v: dict) -> None:
         """Another of the chosen tables: its column map opens here (the cell: chosen_data = chosen_tables[...])."""
@@ -1181,6 +1206,8 @@ class ColumnMap(Screen):
         self._review()
         if SESSION.dataset is not None and not self.first:
             self._first_result_safe()
+            if SESSION.source is not None:
+                self.__dict__.setdefault("seen", {})[str(SESSION.source.fact_table)] = (self.leaks, self.first)
 
     def _first_result_safe(self) -> None:
         try:
@@ -1358,7 +1385,7 @@ class SemanticViews(Screen):
 
     def _load(self) -> None:
         try:
-            found = actions.run("data.map")
+            found = actions.run("understand.map")
             self.tables = [{"table": r["table"], "schema": r["table"].split(".", 1)[0], "origin": r["origin_label"],
                             "approved": str(r.get("map", "")).startswith("approved"), "rows": r.get("rows_shown") or ""}
                            for r in found.table_rows]
@@ -1482,11 +1509,6 @@ class SemanticViews(Screen):
             blocks += [{"t": "subhead", "v": "Preview"}, {"t": "pre", "v": self.preview_text}]
         if self.result_text:
             blocks += [{"t": "msg", "kind": "ok", "keep": True, "v": self.result_text}]
-        if SESSION.dataset is not None:
-            # the bottom of the quickstart: once a column map is approved, the way on to the next notebook
-            nxt = _next_notebook()
-            if nxt:
-                blocks.append({"t": "next", "v": f"Next: {nxt['title']}", "path": nxt["file"]})
         example = usable[:3] or ["MY_DATA.ORDERS", "VS_SALES.CUSTOMERS"]
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
                        "v": "\n".join([actions.code("semantic.links_tables", tables=example, ai=True),
@@ -1584,6 +1606,9 @@ class SemanticViews(Screen):
             if what == "source" and now != self.ticked:
                 self.ticked, self.gen = now, self.gen + 1
                 self.links, self.links_note = None, ""
+            elif what == "source" and self.tables:
+                self.refresh()               # another of the same tables opened above: nothing here to read again
+                return
             self.loading = True
             self.refresh()
             threading.Thread(target=self._load, daemon=True).start()
@@ -1619,7 +1644,7 @@ class AiHelp(Screen):
         tip = ("One click, for every table you chose: it corrects the kit's guesses, sets the other choices, writes a "
                "description for every column, finds the links between your tables and says what each table and link is. "
                "It is shown names, types and what the kit measured, never a row, and not a personal-data column. It "
-               "never picks what to predict. Choose your data below first. It fills the cards below: you still approve "
+               "never picks what to predict. It fills the card below: you still approve "
                "and publish."
                if ready else "No AI model is set up yet. Set one up on the Home notebook (AI model, Set up).")
         blocks: list[dict] = [{"t": "head", "kicker": KICKER, "title": "Fill in with AI", "sub": tip}]
@@ -1635,7 +1660,7 @@ class AiHelp(Screen):
 
     def on_ai_all(self, _v: dict) -> None:
         if SESSION.source is None:
-            raise ValueError("Choose your data below first.")
+            raise ValueError("Choose your data in the quickstart first.")
         current = str(SESSION.source.fact_table)
         tables = [e["table"] for e in SESSION.chosen] or [current]
         several = len(tables) > 1
@@ -1651,7 +1676,7 @@ class AiHelp(Screen):
             print(f"Reading {table}")
             try:
                 if several and str(SESSION.source.fact_table) != table:
-                    actions.run("data.switch", table=table)
+                    actions.run("understand.switch", table=table)
                     use_chosen(next(e for e in SESSION.chosen if e["table"] == table))
                 actions.run("map.review_keep", table=table) if several else actions.run("map.review")
                 read.append(table)
@@ -1673,7 +1698,7 @@ class AiHelp(Screen):
             for here, other in found.get("same_as") or []:          # a reading of meaning: checked against the data below
                 same += [pair for pair in (f"{here}={other}", f"{other}={here}") if pair not in same]
         if several and str(SESSION.source.fact_table) != current:
-            actions.run("data.switch", table=current)
+            actions.run("understand.switch", table=current)
             use_chosen(next(e for e in SESSION.chosen if e["table"] == current))
         done = [t for t in tables if t in SESSION.ai_maps]
         if done:
@@ -1709,12 +1734,120 @@ class AiHelp(Screen):
 
 
 def understand():
-    """Step 1 in the guided view: one button to have the AI fill everything in, then choose the data, approve what
-    each column means, see it on the map of all your data, and build the semantic views AI clients and notebooks
-    query."""
+    """Step 2 in the guided view, on its own: the one AI button, then one card with what each column means and the
+    semantic views over the tables chosen in the quickstart."""
     from ..card import show
 
-    return show(AiHelp(), ChooseData(), ColumnMap(), DataMap(), SemanticViews(), docs="explore")
+    return show(AiHelp(), Understand(), docs="explore")
+
+
+# =====================================================================================================
+class _MapPart(ColumnMap):
+    """The column map as the top of the Understand card: it draws into that card, not a card of its own."""
+    owner: "Understand | None" = None
+
+    def refresh(self) -> None:
+        if self.owner is not None:
+            self.owner.refresh()
+
+
+class _ViewsPart(SemanticViews):
+    """The semantic views as the bottom of the Understand card."""
+    owner: "Understand | None" = None
+
+    def refresh(self) -> None:
+        if self.owner is not None:
+            self.owner.refresh()
+
+
+def _part(cls, owner):
+    part = cls.__new__(cls)
+    part.owner = owner          # set before __init__, whose first refresh already draws into the owner
+    part.__init__()
+    return part
+
+
+class Understand(Screen):
+    """Step 2 in one card: what each column means (the column map) on top, the semantic views below. Approving a
+    table's column map publishes it in Exasol Semantic Views (the schema's model) and ticks it for the model over all
+    your tables underneath, so both are one job: approve each table, link them, publish. The tables are the ones
+    the quickstart chose (nb.open_chosen); a table already drawn up is not read again when you come back to it."""
+    help = ColumnMap.help + SemanticViews.help
+    kind = "card"
+
+    def __init__(self) -> None:
+        self.map = self.views = None
+        self.loading, self.error = True, None
+        SESSION.understanding = True
+        if not SESSION.chosen:
+            SESSION.opened.clear()
+        super().__init__()
+        self.map = _part(_MapPart, self)
+        self.views = _part(_ViewsPart, self)
+        self.refresh()
+        import threading
+
+        threading.Thread(target=self._open, daemon=True).start()
+
+    def _open(self) -> None:
+        """This notebook's kernel starts empty: open the tables the quickstart chose (the cell: chosen_tables =
+        nb.open_chosen(connection)), else the dataset approved last, and draw up the first one's column map."""
+        try:
+            with SESSION.lock:
+                if not SESSION.chosen:
+                    opened = actions.run("understand.open") or {}
+                    if opened:
+                        tables = list(opened)
+                        actions.run("understand.switch", table=tables[0])
+                    else:
+                        actions.run("understand.default")
+                        tables = [str(SESSION.source.fact_table)]
+                    SESSION.chosen = [{"label": table, "table": table, "variable": None, "rows": None, "broken": None}
+                                      for table in tables]
+                    SESSION.chosen_n += 1
+                    use_chosen(SESSION.chosen[0])
+                    print(f"Reading {tables[0]}: each column's type, how many values and how they spread")
+                    with SESSION.showing_queries():
+                        SESSION.changed("source", None)
+        except Exception as exc:
+            self.error = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+        self.loading = False
+        SESSION.opened.set()
+        self.refresh()
+        SESSION.release()
+
+    def __getattr__(self, name: str):
+        """A button of either part: its handler runs on that part, and what it says shows on this card."""
+        if name.startswith("on_") and name != "on_session":
+            for part in (self.__dict__.get("map"), self.__dict__.get("views")):
+                handler = getattr(type(part), name, None) if part is not None else None
+                if handler is not None:
+                    def run(values, part=part, handler=handler):
+                        part.flash = None
+                        try:
+                            handler(part, values)
+                        finally:
+                            if part.flash:
+                                self.flash, part.flash = part.flash, None
+                    return run
+        raise AttributeError(name)
+
+    def build(self) -> list[dict]:
+        if self.map is None or self.views is None:
+            return [{"t": "head", "kicker": KICKER, "title": "What each column means"}]
+        top = self.map.build()
+        if self.loading:
+            top = top[:1] + [{"t": "empty", "v": "Opening the tables chosen in the quickstart…"}]
+        if self.error:
+            top = top[:1] + [{"t": "msg", "kind": "warn", "v": f"The chosen tables could not be opened: {self.error}. "
+                                                               "Choose your data in the quickstart again."}]
+        bottom = self.views.build()
+        head = bottom[0] if bottom and bottom[0].get("t") == "head" else None
+        rest = bottom[1:] if head else bottom
+        for part, blocks in ((self.map, top), (self.views, rest)):
+            if part.flash:                    # said by a part's background read: shown with its part
+                blocks.insert(1 if blocks is top else 0, {"t": "msg", **{k: v for k, v in part.flash.items() if k != "said"}})
+        return top + [{"t": "subhead", "v": "Semantic views", "tip": (head or {}).get("sub")}] + rest
 
 
 def _publish_note(said: str) -> str:
