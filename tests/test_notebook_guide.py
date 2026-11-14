@@ -15,6 +15,7 @@ import time
 import re
 import importlib.util
 import json
+import types
 import os
 import stat
 import string
@@ -1245,6 +1246,32 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual(("done", "sales_360"), steps["Semantic model"])
         self.assertEqual("src_add", flow["add"]["action"])
 
+    def test_a_live_table_waits_for_a_click_and_only_the_chosen_tables_are_linked(self):
+        explore = importlib.import_module("exakit_guide.screens.explore")
+        card = explore.Prepare.__new__(explore.Prepare)
+        card.__dict__.update(findings=None, typed=None, joined=None, kit_said="", flash=None)
+        card.refresh = lambda: None
+        self.session._ns["dataset"] = mock.Mock(source="snowflake_sales", fact_table="VS_SALES.ORDERS")
+        with mock.patch.object(card, "_check") as check:
+            card.on_session("dataset")
+            check.assert_not_called()
+            self.assertIn("Run it now", json.dumps(card.build()))
+            card.on_run_live({})
+            check.assert_called_once()
+        part = self.understand._ViewsPart.__new__(self.understand._ViewsPart)
+        part.__dict__.update(owner=None, tables=[], columns={}, models=[], links=None, loading=False, error=None,
+                             ticked=set(), gen=0, link_gen=0, flash=None, fill=None, fill_n=0)
+        self.session.chosen = [{"table": "AMAZON.ORDER_LINES"}, {"table": "VS_LOGISTICS.COURIER_DAILY"}]
+        every = types.SimpleNamespace(table_rows=[{"table": t, "origin_label": "x", "map": "approved v1", "rows_shown": ""}
+                                                  for t in ("AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY", "TPCH.ORDERS")],
+                                      column_rows=[{"table": "TPCH.ORDERS", "column": "O_ORDERKEY"}])
+        with mock.patch.object(self.understand.actions, "run", side_effect=lambda a, **k: every if a == "understand.map" else
+                               ({"links": [], "checked": 1, "statements": 1} if a == "semantic.links_tables" else [])):
+            part._load()
+        self.assertEqual(["AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"], [t["table"] for t in part.tables],
+                         "only the tables chosen, never every table of the database")
+        self.assertNotIn("Semantic views", json.dumps(part.build()))
+
     def test_nothing_ticked_and_nothing_loaded_are_said(self):
         with self.assertRaisesRegex(ValueError, "Tick at least one"):
             self.use({"kind": ["sample"], "sample": []})
@@ -1379,7 +1406,7 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual("linkcard", built[-1]["t"], [b["t"] for b in built])
         done = built[-1]
         self.assertEqual(("All 2 tables are approved", None), (done["title"], done.get("button")))
-        self.assertIn("Semantic views", done["text"])
+        self.assertIn("how they connect", done["text"])
         self.session.chosen = self.session.chosen[:1]                                 # one table: no tabs, no step
         self.assertEqual(["head", "aicheck", "rolemap", "actions"], [b["t"] for b in self._built(card)])
 

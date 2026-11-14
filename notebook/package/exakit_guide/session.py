@@ -184,6 +184,11 @@ class Session:
     def listen(self, screen) -> None:
         self._listeners.append(weakref.ref(screen))
 
+    def changed_later(self, what: str, source=None) -> None:
+        """changed(), in the background: the button that caused it is done at once, and the cards that follow read
+        what they need while the person reads the result. Each card's database work takes the one lock as always."""
+        threading.Thread(target=self.changed, args=(what, source), name=f"exakit-guide-{what}", daemon=True).start()
+
     def changed(self, what: str, source=None) -> None:
         alive = []
         for ref in self._listeners:

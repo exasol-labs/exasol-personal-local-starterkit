@@ -874,7 +874,7 @@ class ColumnMap(Screen):
                                    "text": f"{done} of {len(SESSION.chosen)} tables approved. Next: {left[0]}.",
                                    "button": {"label": f"Review {left[0]}", "id": "map_next"}} if left else
                           {"t": "linkcard", "kind": "ok", "title": f"All {len(SESSION.chosen)} tables are approved",
-                           "text": "Link them and publish one model over them under Semantic views, below."})
+                           "text": "They are in the model of all your data. Check how they connect, below."})
         return blocks
 
     @staticmethod
@@ -1179,7 +1179,8 @@ class ColumnMap(Screen):
         flash = self.flash
         self._reload_saved()
         self.flash = flash
-        SESSION.changed("dataset", self)
+        # the cards below (checks, groups, the model) follow in the background: saving is done when it is saved
+        SESSION.changed_later("dataset", self)
 
     def _save(self, choices: dict | None, slots: dict, notes: dict | None = None) -> None:
         try:
@@ -1860,12 +1861,76 @@ class _SourcesPart(ChooseData):
 
 
 class _ViewsPart(SemanticViews):
-    """The semantic views as the bottom of the Understand card."""
+    """How the chosen tables connect, as the bottom of the Understand card: only the tables chosen (not every table of
+    the database), no topic of its own - the links found between them, a link of your own, the same thing in two
+    sources - and saving puts them in the one model of all your data (all_data). Approving a column map already put
+    the table there; this adds how the tables connect."""
     owner: "Understand | None" = None
 
     def refresh(self) -> None:
         if self.owner is not None:
             self.owner.refresh()
+
+    def _load(self) -> None:
+        chosen = self._chosen_tables()
+        super()._load()
+        self.tables = [t for t in self.tables if t["table"].upper() in chosen]
+        self.columns = {t: c for t, c in self.columns.items() if t.upper() in chosen}
+        self.refresh()
+
+    def _picked(self, v: dict) -> dict:
+        found = super()._picked(v)
+        found["tables"] = [t["table"] for t in self.tables if t["approved"]]       # the chosen ones, all of them
+        found["name"] = "all_data"
+        return found
+
+    def build(self) -> list[dict]:
+        tip = ("How the tables you chose connect, found from their values. Tick the links that are right and save them: "
+               "they go into the one semantic model of all your data (all_data) with their evidence, so AI clients and "
+               "notebooks join the tables the same way.")
+        blocks: list[dict] = [{"t": "subhead", "v": "How your tables connect", "tip": tip}]
+        if self.loading:
+            return blocks + [{"t": "empty", "v": "Reading which of your tables are approved…"}]
+        if self.error:
+            return blocks + [{"t": "msg", "kind": "warn", "v": f"The tables could not be read: {self.error}"},
+                             {"t": "actions", "items": [{"id": "sv_reload", "label": "Read it again"}]}]
+        usable = [t["table"] for t in self.tables if t["approved"]]
+        if len(self.tables) < 2:
+            return blocks + [{"t": "p", "muted": True, "v": "One table chosen: add another source or table above to link them."}]
+        if len(usable) < 2:
+            return blocks + [{"t": "p", "muted": True, "v": f"Approve the column maps above ({len(usable)} of {len(self.tables)} "
+                                                             "approved): the links between them are then looked for by themselves."}]
+        if self.links:
+            blocks.append({"t": "linklist", "items": [
+                {"id": self._lid(l), "note_id": self._fid(f"svn:{l['from']}={l['to']}"), "from": l["from"], "to": l["to"],
+                 "evidence": l.get("evidence_text") or "", "confidence": l.get("confidence") or "",
+                 "by": l.get("proposed_by") or "values", "value": l.get("confidence") == "high" or l.get("proposed_by") == "you",
+                 "note": l.get("note") or ((self.fill or {}).get("links") or {}).get(f"{l['from']}={l['to']}".upper(), "")}
+                for l in self.links]})
+        elif self.links is not None:
+            blocks.append({"t": "p", "muted": True, "v": "No column of one table points at a key of another. Add a link below if you know one."})
+        if self.links_note:
+            blocks.append({"t": "p", "muted": True, "v": self.links_note.splitlines()[-1]})
+        tables = [{"value": t, "label": t} for t in usable]
+        by_table = {t: [{"value": c, "label": c} for c in self.columns.get(t, [])] for t in usable}
+        blocks += [{"t": "details", "title": "A link of your own", "blocks": [
+                       {"t": "fields", "items": [{"id": "sv_own", "type": "group", "fields": [
+                           {"id": "sv_from_table", "type": "select", "label": "From table", "value": usable[0], "options": tables},
+                           {"id": "sv_to_table", "type": "select", "label": "To table", "value": usable[1], "options": tables},
+                           {"id": "sv_from_col", "type": "select", "label": "From column",
+                            "options_from": {"field": "sv_from_table", "map": by_table}, "empty": "That table's columns are not known yet."},
+                           {"id": "sv_to_col", "type": "select", "label": "To column (one row per value)",
+                            "options_from": {"field": "sv_to_table", "map": by_table}, "empty": "That table's columns are not known yet."}]}]},
+                       {"t": "actions", "items": [{"id": "sv_add", "label": "Check and add", "busy": "Checking…"}]}]},
+                   {"t": "actions", "items": [{"id": "sv_find", "label": "Look again", "busy": "Comparing values…"},
+                                              {"id": "sv_publish", "label": "Save the links in the model", "primary": bool(self.links),
+                                               "busy": "Saving in Exasol Semantic Views…"}]}]
+        if self.result_text:
+            blocks.append({"t": "msg", "kind": "ok", "keep": True, "v": self.result_text})
+        fusion = self._fusion_blocks()
+        if fusion:
+            blocks.append({"t": "details", "title": "The same thing in two sources", "blocks": fusion[1:]})
+        return blocks
 
 
 def _part(cls, owner):
@@ -2045,7 +2110,7 @@ class Understand(Screen):
         for part, blocks in ((self.map, top), (self.views, rest)):
             if part.flash:                    # said by a part's background read: shown with its part
                 blocks.insert(1 if blocks is top else 0, {"t": "msg", **{k: v for k, v in part.flash.items() if k != "said"}})
-        return top + [{"t": "subhead", "v": "Semantic views", "tip": (head or {}).get("sub")}] + rest
+        return top + rest
 
     def _adding_blocks(self) -> list[dict]:
         """The add-a-source part, under the flow while it is open: the quickstart's choice of data, without its title."""

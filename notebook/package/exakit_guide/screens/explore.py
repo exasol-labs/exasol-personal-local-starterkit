@@ -59,6 +59,20 @@ def _state():
 
 
 # =====================================================================================================
+def _live() -> str | None:
+    """The source a table is read live from (a virtual schema), else None: every statement on it goes to that system
+    (measured on Snowflake: about 10 s each), so the cards below wait for a click instead of querying it on their own."""
+    ds = SESSION.dataset
+    return getattr(ds, "source", None) if ds is not None else None
+
+
+def _waiting(head: dict, what: str) -> list[dict]:
+    ds = SESSION.dataset
+    return [head, {"t": "msg", "kind": "info",
+                   "v": f"{ds.fact_table} is read live from {_live()}: {what} sends its queries there, so it waits for you."},
+            {"t": "actions", "items": [{"id": "run_live", "label": "Run it now", "busy": f"Reading {_live()}…"}]}]
+
+
 class WorkingOn(Screen):
     help = (('Pick the data for a notebook', 'get-the-data/the-dataset'),)
     kind = "card"
@@ -94,7 +108,7 @@ class WorkingOn(Screen):
     def _count(self) -> None:
         ds = SESSION.dataset
         self.rows = None
-        if ds is not None:
+        if ds is not None and not _live():             # a live table: its rows are counted at the source, on request
             frame = actions.run("explore.count", sql=f"SELECT COUNT(*) AS N FROM {ds.fact_table}")
             self.rows = int(frame["N"][0])
 
@@ -157,10 +171,19 @@ class Prepare(Screen):
         SESSION.listen(self)
         self.refresh()
 
+    waiting = False
+
     def on_session(self, what: str) -> None:
         if what == "dataset" and SESSION.dataset is not None:
-            self._check()
+            self.waiting = bool(_live())
+            if not self.waiting:
+                self._check()
         self.refresh()
+
+    def on_run_live(self, _v: dict) -> None:
+        self.waiting = False
+        with SESSION.showing_queries():
+            self._check()
 
     def _check(self) -> None:
         print("Checking the data: empty values, repeated rows, odd values in every column")
@@ -176,6 +199,8 @@ class Prepare(Screen):
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Is the data clean?",
                 "sub": "The kit checked every row. It can make a cleaned copy (a view); your table stays as it is."}
+        if SESSION.dataset is not None and self.waiting:
+            return _waiting(head, "checking every row")
         if SESSION.dataset is None or self.findings is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
         items = []
@@ -245,12 +270,22 @@ class Compare(Screen):
         SESSION.listen(self)
         self.refresh()
 
+    waiting = False
+
     def on_session(self, what: str) -> None:
         if what == "dataset" and SESSION.dataset is not None:
             self._options()
+            self.waiting = bool(_live())
+            if not self.waiting:
+                self._groups()
+                self._trend()
+        self.refresh()
+
+    def on_run_live(self, _v: dict) -> None:
+        self.waiting = False
+        with SESSION.showing_queries():
             self._groups()
             self._trend()
-        self.refresh()
 
     def _options(self) -> None:
         ds = SESSION.dataset
@@ -329,6 +364,8 @@ class Compare(Screen):
                 "sub": "Where the outcome is higher or lower, and how it changes over time."}
         if SESSION.dataset is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
+        if self.waiting:
+            return _waiting(head, "counting the groups and the trend")
         blocks = [head]
         if self.groups:
             blocks.append({"t": "inline_form", "fields": [{"id": "group", "type": "select", "label": "Compare by", "value": self.group,
@@ -372,10 +409,19 @@ class Predict(Screen):
         SESSION.listen(self)
         self.refresh()
 
+    waiting = False
+
     def on_session(self, what: str) -> None:
         if what == "dataset" and SESSION.dataset is not None:
-            self._load()
+            self.waiting = bool(_live())
+            if not self.waiting:
+                self._load()
         self.refresh()
+
+    def on_run_live(self, _v: dict) -> None:
+        self.waiting = False
+        with SESSION.showing_queries():
+            self._load()
 
     def _load(self) -> None:
         self.result, self.result_task = None, None
@@ -395,6 +441,8 @@ class Predict(Screen):
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Build a model",
                 "sub": "Choose what to do, which model and how to split the data. Or keep the recommendations."}
+        if SESSION.dataset is not None and self.waiting:
+            return _waiting(head, "reading the rows to train on")
         if SESSION.dataset is None or self.data is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
         d = self.data

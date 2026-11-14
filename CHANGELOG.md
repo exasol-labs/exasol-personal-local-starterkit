@@ -4,6 +4,7 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **Approving a column map no longer waits for the cards below, and a live table is read only when you ask.** *Saving…* lasted until every Explore card below had queried the table again: the row count, the data checks, the cleaned-view proposal, the groups, the trend and the rows for the model. On a table read live from Snowflake that is about 10 s a statement, well over a minute per approval. The approval now returns as soon as it is saved and published, and the cards follow in the background. On a table read live from an external source they do not query it on their own: each says it would read the source and waits for **Run it now**. Its row count is shown as live. In the Understand card, the separate *Semantic views* part is gone. In its place is one short section, **How your tables connect**: only the tables you chose (not every table of the database), the links found between them, a link of your own, the same thing in two sources, and **Save the links in the model**, which saves them into `all_data`.
 - **AI clients and the terminal do what the notebook does: `exakit semantic` and `exakit board`.** Every step of the semantic layer and the multi-page dashboard is a command now. Each runs the notebook's own functions and uses the same files, so a person in a terminal or an AI client with a shell gets the same model and the same dashboard.
   - **`exakit semantic`:**
     - `fields`: a model's metrics and dimensions, with what each holds and why it is used
