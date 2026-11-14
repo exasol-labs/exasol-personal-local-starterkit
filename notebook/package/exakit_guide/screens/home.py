@@ -250,7 +250,7 @@ class Home(Screen):
                      "dot": "ok" if ready else "warn" if sources else "off",
                      "text": f"{shown}: queried live, nothing copied" if sources
                              else "None connected yet: query Postgres, MySQL, Snowflake and more where they live",
-                     "sub": ("A source's tables join your own in one SQL query, the AI and semantic views read them too. "
+                     "sub": ("A source's tables join your own in one SQL query, and your questions, dashboards and AI tools read them too. "
                              "Pick or connect one in Choose your data below, or in a terminal: exakit connect"),
                      "cmd": actions.code("kit.sources"), "actions": []})
 

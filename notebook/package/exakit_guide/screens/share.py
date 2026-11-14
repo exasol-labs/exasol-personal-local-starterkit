@@ -291,7 +291,7 @@ class Handoff(Screen):
                 "sub": "One folder (and a zip) with everything someone needs to repeat or build on this work. No passwords inside."}
         blocks = [head, {"t": "p", "muted": True, "v": "The kit packs:"}, {"t": "list", "items": [
             "README: what was done and how to repeat it",
-            "The approved column map (descriptor)",
+            "The approved column map",
             "Every query that ran, in order",
             "The workflow log: each step, approval and answer, with times"]},
             {"t": "actions", "items": [{"id": "bundle", "label": "Create the hand-off bundle" if not self.bundle else "Create it again",

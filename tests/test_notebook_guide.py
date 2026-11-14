@@ -1243,7 +1243,7 @@ class SeveralTablesTest(unittest.TestCase):
         steps = {s["label"]: (s["state"], s["sub"]) for s in flow["steps"]}
         self.assertEqual(("now", "1 of 3 approved"), steps["Column maps"])
         self.assertEqual(("done", "1 found"), steps["Links"])
-        self.assertEqual(("done", "sales_360"), steps["Semantic model"])
+        self.assertEqual(("done", "saved"), steps["Data map"])
         self.assertEqual("src_add", flow["add"]["action"])
 
     def test_a_live_table_waits_for_a_click_and_only_the_chosen_tables_are_linked(self):
@@ -1271,6 +1271,61 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual(["AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"], [t["table"] for t in part.tables],
                          "only the tables chosen, never every table of the database")
         self.assertNotIn("Semantic views", json.dumps(part.build()))
+
+    def test_all_tables_are_reviewed_and_approved_together_with_one_publish_per_schema(self):
+        """nb.schema_review shows only what needs a person (low-confidence columns, personal data); nb.approve_all
+        approves each table as drafted with the changes given, publishing once per schema with its last table."""
+        picker = importlib.import_module("exakit_nb.role_picker")
+
+        def review(status, columns):
+            made = mock.Mock()
+            made.draft.status, made.draft.doc = status, {"columns": columns}
+            made.approve.side_effect = lambda choices=None, publish=True: f"approved publish={publish} {choices}"
+            made.dataset.return_value = "as it was"
+            return made
+        reviews = {
+            "VS_S.ORDERS": review("draft", {"ID": {"role": "key", "confidence": "high"},
+                                            "STATUS": {"role": "measure", "confidence": "low", "evidence": "5 distinct"}}),
+            "VS_S.CUSTOMERS": review("draft", {"EMAIL": {"role": "text", "confidence": "high", "sensitive": True}}),
+            "VS_S.STORES": review("approved", {"NAME": {"role": "text", "confidence": "low"}}),
+            "MY_DATA.TARGETS": review("draft", {"STATE": {"role": "category", "confidence": "high"}})}
+        found = picker.schema_review(reviews)
+        self.assertEqual([("VS_S.ORDERS", "STATUS", "measure", "5 distinct")],
+                         [(c["table"], c["column"], c["role"], c["evidence"]) for c in found["check"]],
+                         "only the guesses of tables still to approve")
+        self.assertEqual([{"table": "VS_S.CUSTOMERS", "column": "EMAIL"}], found["sensitive"])
+        self.assertEqual((["VS_S.STORES"], 4), (found["approved"], found["fine"]))
+        with mock.patch("builtins.print"):
+            done = picker.approve_all(reviews, {"vs_s.orders": {"STATUS": "category"}})
+        self.assertEqual({"VS_S.ORDERS": "approved publish=False {'STATUS': 'category'}",
+                          "VS_S.CUSTOMERS": "approved publish=True None",     # the schema's last table publishes it
+                          "VS_S.STORES": "as it was",                          # approved already: left alone
+                          "MY_DATA.TARGETS": "approved publish=True None"}, done)
+        reviews["VS_S.ORDERS"].approve.side_effect = ValueError("STATUS sits in two slots")
+        with self.assertRaisesRegex(ValueError, "VS_S.ORDERS: STATUS sits in two slots"):
+            picker.approve_all(reviews)
+
+    def test_the_card_offers_all_tables_at_once_and_sends_only_the_changed_columns(self):
+        card = self.understand.ColumnMap.__new__(self.understand.ColumnMap)
+        card.__dict__.update(all_review=None, kit_said="", flash=None, seen={})
+        self.session.chosen = [{"table": "VS_S.ORDERS"}, {"table": "VS_S.CUSTOMERS"}]
+        self.assertEqual("map_all", card._all_blocks(2)[0]["items"][0]["id"])
+        self.assertEqual([], card._all_blocks(1), "one table left: its own tab approves it")
+        card.all_review = {"tables": ["VS_S.ORDERS", "VS_S.CUSTOMERS"], "approved": [], "fine": 7,
+                           "check": [{"table": "VS_S.ORDERS", "column": "STATUS", "role": "measure", "evidence": "5 distinct"},
+                                     {"table": "VS_S.ORDERS", "column": "QTY", "role": "measure", "evidence": ""}],
+                           "sensitive": [{"table": "VS_S.CUSTOMERS", "column": "EMAIL"}]}
+        text = json.dumps(card._all_blocks(2))
+        for needle in ("ORDERS.STATUS (5 distinct)", "CUSTOMERS.EMAIL", "7 other columns look fine", "Approve all 2 tables"):
+            self.assertIn(needle, text)
+        self.session._ns["chosen_data"] = mock.Mock(fact_table="VS_S.ORDERS")
+        self.ran.clear()
+        with mock.patch.object(card, "_reload_saved"), mock.patch.object(self.session, "changed_later") as later:
+            card.on_map_all_approve({"all:VS_S.ORDERS:STATUS": "category", "all:VS_S.ORDERS:QTY": "measure"})
+        approve = next(v for a, v in self.ran if a == "map.approve_all")
+        self.assertEqual(({"VS_S.ORDERS": {"STATUS": "category"}}, "VS_S.ORDERS"), (approve["choices"], approve["table"]))
+        later.assert_called_once_with("dataset", card)
+        self.assertIsNone(card.all_review)
 
     def test_nothing_ticked_and_nothing_loaded_are_said(self):
         with self.assertRaisesRegex(ValueError, "Tick at least one"):

@@ -194,7 +194,7 @@ class Proposal:
         if not self._approved_digest:
             raise RuntimeError("Approve the SQL first: only an approved question can be kept.")
         if not self.request:
-            raise RuntimeError("Only a question answered from the semantic model can be kept as a verified question "
+            raise RuntimeError("Only a question answered from your data map can be saved as a trusted question "
                                "(this SQL was written or edited by hand, or drafted from the column map).")
         from .semantic import verify_question
 
@@ -300,8 +300,8 @@ def _verified_answer(conn, semantic: dict[str, Any], question: str, dataset: Any
             if compiled["status"] != "ok":
                 return None
             return Proposal(dataset, question.strip(), _read_sql(compiled["sql"]),
-                            [f"A verified question of the semantic model {semantic['model']}: \"{known['name']}\", "
-                             "reviewed before. Its request is used as it was approved; no model was asked."],
+                            [f"A trusted question, checked before: \"{known['name']}\". It is answered the way it was approved; "
+                             "no AI was asked."],
                             [], request=request)
     except Exception:                       # noqa: BLE001 - no verified questions: drafted as usual
         return None
@@ -492,23 +492,23 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                 client.close()
                 request, plain, said, unsure = asked
                 return Proposal(dataset, question.strip(), _read_sql(plain),
-                                [f"Answered from the semantic model {semantic['model']} (view {semantic['view']}): the "
-                                 "same metrics and dimensions an AI client reads over MCP.",
+                                [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
+                                 "AI tools use, so the numbers match.",
                                  "Request: " + json.dumps({k: v for k, v in request.items() if k not in ("model", "object", "client")}),
                                  *said], unsure, request=request)
             try:
                 drafted = _ask_semantic(client, model, options, semantic, question)
             except Exception as error:       # noqa: BLE001 - the column map still answers; the proposal says why
                 drafted = None
-                doubts.append(f"Not answered from the semantic model {semantic['model']} "
+                doubts.append(f"Not answered from your data map ({semantic['model']}) "
                               f"({str(error).splitlines()[0][:160] if str(error) else type(error).__name__}); "
                               "drafted from the column map instead.")
             if drafted:
                 client.close()
                 semantic_sql, plain, said, unsure = drafted
                 return Proposal(dataset, question.strip(), _read_sql(plain),
-                                [f"Answered from the semantic model {semantic['model']} (view {semantic['view']}): the "
-                                 "same metrics and dimensions an AI client reads over MCP.",
+                                [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
+                                 "AI tools use, so the numbers match.",
                                  f"Semantic SQL: {semantic_sql}", *said], unsure)
         prompt = {**described(dataset), "question": question,
                   "rules": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. Query the "

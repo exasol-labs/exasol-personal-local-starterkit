@@ -296,8 +296,8 @@ class ChooseData(Screen):
             what = (f"{len(SESSION.chosen)} tables: {', '.join(e['table'] for e in SESSION.chosen)}"
                     if len(SESSION.chosen) > 1 else f"{SESSION.source_label}{rows}")
             blocks.append({"t": "msg", "kind": "ok", "keep": True,
-                           "v": f"Using {what}. Next, 01_explore opens it: what each column means and the semantic "
-                                "views, then the checks, the groups and a first model."})
+                           "v": f"Using {what}. Next, 01_explore opens it: what each column means and how your "
+                                "tables connect, then the checks, the groups and a first prediction."})
             nxt = _next_notebook()            # the bottom of the quickstart: the way on, once the data is chosen
             if nxt:
                 blocks.append({"t": "next", "v": f"Next: {nxt['title']}", "path": nxt["file"]})
@@ -862,6 +862,8 @@ class ColumnMap(Screen):
                         "items": [{"value": e["table"], "label": e["table"],
                                    "state": "approved" if e["table"].upper() in approved else "todo"}
                                   for e in SESSION.chosen]})
+        if several:
+            top += self._all_blocks(len(left))
         top.append(self._ai_block(rv))
         blocks[1:1] = top
         if several and now.upper() in approved:
@@ -874,8 +876,91 @@ class ColumnMap(Screen):
                                    "text": f"{done} of {len(SESSION.chosen)} tables approved. Next: {left[0]}.",
                                    "button": {"label": f"Review {left[0]}", "id": "map_next"}} if left else
                           {"t": "linkcard", "kind": "ok", "title": f"All {len(SESSION.chosen)} tables are approved",
-                           "text": "They are in the model of all your data. Check how they connect, below."})
+                           "text": "They are saved in your data map. Check how they connect, below."})
         return blocks
+
+    # -- every chosen table at once ---------------------------------------------------------------------------------
+    all_review: dict | None = None      # nb.schema_review(role_reviews): what to look at across the tables
+
+    def _all_blocks(self, left: int) -> list[dict]:
+        """Approve the chosen tables together: the kit drafts each, and one screen shows only what needs a person -
+        the columns it guessed at, across every table, and the columns it marked personal data. What it is sure of
+        is counted, not listed. One button approves them all; the semantic model is updated once per source."""
+        if left < 2:                       # one table left: its own tab approves it
+            return []
+        found = self.all_review
+        if found is None:
+            return [{"t": "actions", "items": [{"id": "map_all", "label": f"Review all {len(SESSION.chosen)} tables together",
+                                                "busy": "Reading each table…"}]}]
+        todo = [t for t in found["tables"] if t not in found["approved"]]
+        blocks: list[dict] = [{"t": "subhead", "v": f"All {len(found['tables'])} tables at once",
+                               "tip": "Only what needs you is shown: the columns the kit was not sure about, in every table. "
+                                      "Change one if it is wrong. What to predict is not set here: pick it in a table's own "
+                                      "tab when you want a model."}]
+        if found["check"]:
+            options = [{"value": k, "label": v} for k, v in ROLE_LABELS.items()]
+            blocks.append({"t": "fields", "items": [{"id": "map_all_check", "type": "group", "fields": [
+                {"id": f"all:{c['table']}:{c['column']}", "type": "select", "value": c["role"], "options": options,
+                 "label": f"{c['table'].split('.', 1)[1]}.{c['column']}" + (f" ({c['evidence']})" if c["evidence"] else "")}
+                for c in found["check"]]}]})
+        else:
+            blocks.append({"t": "p", "muted": True, "v": "The kit is confident about every column of these tables."})
+        if found["sensitive"]:
+            blocks.append({"t": "p", "v": "Personal data, never charted, grouped or sent to a model: "
+                           + ", ".join(f"{c['table'].split('.', 1)[1]}.{c['column']}" for c in found["sensitive"]) + "."})
+        blocks += [{"t": "p", "muted": True, "v": f"{found['fine']} other columns look fine. Each table's tab shows them all."},
+                   {"t": "actions", "items": [{"id": "map_all_approve", "label": f"Approve all {len(todo)} tables", "primary": True,
+                                               "busy": "Approving, then saving your data map once…"}]}]
+        return blocks
+
+    def on_map_all(self, _v: dict) -> None:
+        """Draw up every chosen table's column map (the ones not read yet: nb.review_roles each), then say what to
+        look at across them (nb.schema_review)."""
+        current = str(SESSION.source.fact_table)
+        kept = SESSION.get("role_reviews")
+        if not isinstance(kept, dict):
+            actions.run("map.reviews")
+            actions.run("map.remember", table=current)
+            kept = SESSION.get("role_reviews")
+        failed = []
+        with SESSION.showing_queries():
+            for entry in SESSION.chosen:
+                table = entry["table"]
+                if table in kept:
+                    continue
+                print(f"Reading {table}: each column's type, how many values and how they spread")
+                try:
+                    actions.run("understand.switch", table=table)
+                    actions.run("map.review_keep", table=table)
+                except Exception as exc:
+                    failed.append(f"{table} ({str(exc).splitlines()[0][:160] if str(exc) else type(exc).__name__})")
+            actions.run("understand.switch", table=current)
+        self.all_review = dict(actions.run("map.schema_review"))
+        if failed:
+            self.flash = {"kind": "warn", "v": "Not read, so not in this approval: " + "; ".join(failed)}
+
+    def on_map_all_approve(self, v: dict) -> None:
+        """Approve every table as drafted, with the columns changed here (nb.approve_all): one approval, and the
+        semantic model updated once per source."""
+        found = self.all_review or {}
+        choices: dict[str, dict[str, str]] = {}
+        for c in found.get("check") or []:
+            picked = str(v.get(f"all:{c['table']}:{c['column']}") or "")
+            if picked and picked != c["role"]:
+                choices.setdefault(c["table"], {})[c["column"]] = picked
+        current = str(SESSION.source.fact_table)
+        try:
+            actions.run("map.approve_all", choices=choices or None, table=current)
+        except ValueError as exc:
+            raise ValueError(_plain_kit_error(str(exc))) from exc
+        self.kit_said = SESSION.said
+        self.all_review = None
+        self.__dict__.setdefault("seen", {}).clear()          # each table's first look is of its approved map now
+        actions.run("map.reviews")                            # the drafts are approved maps now: read again when opened
+        count = len(found.get("tables") or [])
+        self._reload_saved()
+        self.flash = {"kind": "ok", "v": f"Approved {count} tables. " + _publish_note(self.kit_said)}
+        SESSION.changed_later("dataset", self)
 
     @staticmethod
     def _approved_tables() -> set[str]:
@@ -1032,7 +1117,7 @@ class ColumnMap(Screen):
         if self.leaks:
             blocks.append({"t": "msg", "kind": "warn",
                            "v": f"{', '.join(self.leaks)} gives the answer away: it's filled in after the outcome. "
-                                "The model step leaves it out automatically."})
+                                "The prediction step leaves it out automatically."})
         blocks += [
             {"t": "rolemap", "roles": [{"value": k, "label": v, "meaning": ROLE_MEANING[k]} for k, v in ROLE_LABELS.items()],
              "rows": rows, "targets": targets, "target": slots.get("target") or "", "slots": other_slots,
@@ -1314,7 +1399,7 @@ class DataMap(Screen):
                          "columns": ["Origin", "Table", "Rows", "Columns", "Column map", "Roles"], "rows": self.rows}]
         if self.links:
             blocks += [{"t": "subhead", "v": "Columns that link tables"},
-                       {"t": "p", "muted": True, "v": "A possible link or shared dimension only shares a name: check it before a join."},
+                       {"t": "p", "muted": True, "v": "A possible link only shares a column name: check it before joining the tables."},
                        {"t": "table", "columns": ["From", "To", "Kind", "Origins"], "rows": self.links}]
         blocks.append({"t": "actions", "items": [{"id": "reload", "label": "Read it again"}]})
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card", "v": actions.code("data.map")})
@@ -1348,7 +1433,7 @@ class SemanticViews(Screen):
     What you say here is stored in the model - each table's description, each link with its evidence and your note -
     so an AI client or a colleague reading the model sees how the tables connect and why. Every step is a cell of the
     quickstart (actions: semantic.*)."""
-    help = (('Build a semantic model', 'explore/semantic-views#one-model-across-sources'),
+    help = (('How your tables connect', 'explore/semantic-views#one-model-across-sources'),
             ('Find links across sources', 'explore/semantic-views#links-across-sources'),)
 
     kind = "card"
@@ -1563,16 +1648,17 @@ class SemanticViews(Screen):
         kit_models = [m["model"] for m in self.models if m.get("refreshable")]
         if not kit_models:
             return []
+        kit_models.sort(key=lambda name: name != "all_data")       # the one over all your data first
         every = [{"value": t["table"], "label": t["table"]} for t in self.tables]
         approved = [{"value": t["table"], "label": t["table"]} for t in self.tables if t["approved"]]
         by_table = {t["table"]: [{"value": "", "label": "(the same name as the key)"}]
                     + [{"value": c, "label": c} for c in self.columns.get(t["table"], [])] for t in self.tables}
         blocks = [{"t": "subhead", "v": "4 · The same thing in two sources",
-                   "tip": "When another source holds the same rows as a table of the model (customers in the warehouse "
+                   "tip": "When another source holds the same rows as one of your tables (customers in the warehouse "
                           "and in a CRM), declare them one thing with two sources. Requests are answered from either; the "
                           "one that wins gives a value both hold. It is checked against the data before anything changes."},
                   {"t": "fields", "items": [{"id": "sv_fuse", "type": "group", "fields": [
-                      {"id": "sv_fuse_model", "type": "select", "label": "Model", "value": kit_models[0],
+                      {"id": "sv_fuse_model", "type": "select", "label": "Data map", "value": kit_models[0],
                        "options": [{"value": m, "label": m} for m in kit_models]},
                       {"id": "sv_fuse_table", "type": "select", "label": "Its table", "value": approved[0]["value"] if approved else "",
                        "options": approved},
@@ -1581,17 +1667,17 @@ class SemanticViews(Screen):
                       {"id": "sv_fuse_key", "type": "select", "label": "Its key column",
                        "options_from": {"field": "sv_fuse_other", "map": by_table}, "empty": "Pick the table first."},
                       {"id": "sv_fuse_wins", "type": "select", "label": "When both hold a value", "value": "model",
-                       "options": [{"value": "model", "label": "the model's table wins"}, {"value": "other", "label": "the other source wins"}]}]}]},
+                       "options": [{"value": "model", "label": "this table wins"}, {"value": "other", "label": "the other source wins"}]}]}]},
                   {"t": "actions", "items": [{"id": "sv_fuse_check", "label": "Check against the data", "busy": "Checking (nothing changes)…"}]
                    + ([{"id": "sv_fuse_apply", "label": "Apply", "primary": True, "busy": "Applying…"}]
                       if self.fusion_said and self.fusion_said.get("dry_run") and self.fusion_said.get("status") != "error" else [])}]
         if self.fusion_said:
             ok = self.fusion_said.get("status") != "error"
             blocks.append({"t": "msg", "kind": "ok" if ok else "error", "keep": True,
-                           "v": ("Checked: the data backs it, nothing was changed. Apply makes it part of the model."
+                           "v": ("Checked: the data backs it, nothing was changed. Apply saves it to your data map."
                                  if ok and self.fusion_said.get("dry_run") else
-                                 "Applied: the model answers from both sources now; the document is kept beside it."
-                                 if ok else "The model refused it")
+                                 "Applied: questions are answered from both sources now."
+                                 if ok else "It was not accepted")
                                 + (f" ({self.fusion_said['message']})" if self.fusion_said.get("message") else "")})
         if self.fusion_doc:
             import json
@@ -1602,7 +1688,7 @@ class SemanticViews(Screen):
     def _fusion_inputs(self, v: dict) -> tuple:
         model, table, other = (str(v.get(k) or "").strip() for k in ("sv_fuse_model", "sv_fuse_table", "sv_fuse_other"))
         if not (model and table and other):
-            raise ValueError("Pick the model, its table and the table of the other source.")
+            raise ValueError("Pick the table and the table of the other source that holds the same rows.")
         return model, table, other, str(v.get("sv_fuse_key") or "").strip() or None, str(v.get("sv_fuse_wins") or "model")
 
     def on_sv_fuse_check(self, v: dict) -> None:
@@ -1885,9 +1971,10 @@ class _ViewsPart(SemanticViews):
         return found
 
     def build(self) -> list[dict]:
-        tip = ("How the tables you chose connect, found from their values. Tick the links that are right and save them: "
-               "they go into the one semantic model of all your data (all_data) with their evidence, so AI clients and "
-               "notebooks join the tables the same way.")
+        tip = ("How the tables you chose connect, found from their values. Tick the links that are right and save them. "
+               "They go into your data map: the one place that says what every table and column means and how they "
+               "connect. Your questions, dashboards and AI tools all read it, so they join the tables the same way. "
+               "(It is kept in the database, in Exasol Semantic Views.)")
         blocks: list[dict] = [{"t": "subhead", "v": "How your tables connect", "tip": tip}]
         if self.loading:
             return blocks + [{"t": "empty", "v": "Reading which of your tables are approved…"}]
@@ -1923,8 +2010,8 @@ class _ViewsPart(SemanticViews):
                             "options_from": {"field": "sv_to_table", "map": by_table}, "empty": "That table's columns are not known yet."}]}]},
                        {"t": "actions", "items": [{"id": "sv_add", "label": "Check and add", "busy": "Checking…"}]}]},
                    {"t": "actions", "items": [{"id": "sv_find", "label": "Look again", "busy": "Comparing values…"},
-                                              {"id": "sv_publish", "label": "Save the links in the model", "primary": bool(self.links),
-                                               "busy": "Saving in Exasol Semantic Views…"}]}]
+                                              {"id": "sv_publish", "label": "Save the links", "primary": bool(self.links),
+                                               "busy": "Saving to your data map…"}]}]
         if self.result_text:
             blocks.append({"t": "msg", "kind": "ok", "keep": True, "v": self.result_text})
         fusion = self._fusion_blocks()
@@ -2061,14 +2148,15 @@ class Understand(Screen):
         steps = [
             {"kind": "1", "label": "Column maps", "sub": f"{approved} of {len(every)} approved",
              "state": "done" if every and approved == len(every) else "now",
-             "tip": "What each column means, per table. Approving one publishes it in Exasol Semantic Views."},
+             "tip": "What each column means, per table. Approving one saves it to your data map."},
             {"kind": "2", "label": "Links", "sub": f"{len(links)} found" if links else "found when 2 maps are approved",
              "state": "done" if links else ("now" if approved >= 2 else "todo"),
              "tip": "How the tables of different sources connect, from their values. Tick the ones that are right: "
-                    "they become the model's relationships, with their evidence."},
-            {"kind": "3", "label": "Semantic model", "sub": mine[0]["model"] if mine else "not published yet",
+                    "they are saved in your data map, with what the data showed."},
+            {"kind": "3", "label": "Data map", "sub": "saved" if mine else "not saved yet",
              "state": "done" if mine else ("now" if approved else "todo"),
-             "tip": "One Exasol Semantic Views model over every source: the same metrics for Ask, the dashboard and AI clients."},
+             "tip": "One place that says what every table and column means and how they connect, across all your sources. "
+                    "Your questions, dashboards and AI tools read it, so they all give the same numbers."},
             {"kind": "4", "label": "Clean", "sub": "below", "state": "todo", "tip": "Checks and a cleaned view, in the cards below."},
             {"kind": "5", "label": "Ask", "sub": "02_ask_your_data", "state": "todo",
              "tip": "Ask in words or SQL; approve it; table, chart, insights or JSON."},
@@ -2130,7 +2218,7 @@ def _publish_note(said: str) -> str:
 
     found = re.search(r"Published in Exasol Semantic Views as (.+?): agents", said or "")
     if found:
-        return f"Published in Exasol Semantic Views as {found.group(1)}: AI agents read the fields from it."
+        return "Saved to your data map: your questions, dashboards and AI tools read what each column means from it."
     missed = re.search(r"Approved, not published: ([^\n]+?)\. Retry with: (.+)", said or "")
     if missed:
         return f"Not published for AI agents yet ({missed.group(1)}); retry with {missed.group(2).strip()}."

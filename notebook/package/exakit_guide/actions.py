@@ -137,6 +137,10 @@ ACTIONS: dict[str, Action] = {
                               "ai_map", False),
     "semantic.links_checked": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai})",
                                      "found_links", False),
+    # every chosen table at once: what to look at across them, then one approval (one publish per schema)
+    "map.schema_review": Action("01_explore", "schema_summary = nb.schema_review(role_reviews)", "schema_summary", False),
+    "map.approve_all": Action("01_explore", "approved_all = nb.approve_all(role_reviews, {choices})\ndataset = approved_all[{table}]",
+                              "approved_all"),
     "map.reuse": Action("01_explore", "role_review = role_reviews[{table}]", "role_review", False),
     "map.remember": Action("01_explore", "role_reviews[{table}] = role_review", "role_reviews", False),
     "map.keep": Action("01_explore", "dataset = role_review.dataset()", "dataset", False),

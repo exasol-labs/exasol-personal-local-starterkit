@@ -79,6 +79,22 @@ else:
 
 
 # %% [markdown]
+# ### Approve every table at once
+#
+# With several tables chosen - six tables of one source, say - you do not have to approve them one by one. `nb.schema_review` says what to look at across all of them: the columns the kit guessed at, and the ones it marked personal data. `nb.approve_all` then approves every table as drafted, with the columns you change in `ALL_CHOICES`, and updates the semantic model once per source instead of once per table. What to predict is not set here: it stays each table's own choice.
+
+# %%
+APPROVE_ALL = False
+ALL_CHOICES = None            # the columns to change: {"VS_SALES.ORDERS": {"STATUS": "category"}}
+if APPROVE_ALL and chosen_tables:
+    role_reviews = {table: nb.review_roles(connection, data) for table, data in chosen_tables.items()}
+    schema_summary = nb.schema_review(role_reviews)
+    print(f"{len(schema_summary['check'])} columns to look at, {len(schema_summary['sensitive'])} marked personal data, "
+          f"{schema_summary['fine']} look fine.")
+    approved_all = nb.approve_all(role_reviews, ALL_CHOICES)
+    dataset = approved_all[str(chosen_data.fact_table)]
+
+# %% [markdown]
 # ### Add another source
 #
 # Fusion: data from several places in one model. Every source connected with `exakit connect` (S3, Snowflake, MongoDB, PostgreSQL and the rest) is listed here, read live where it lives. Name a table of one in `ADD_SOURCE` to add it to the tables above; the card's **Add a source or table** does the same and connects a new source too.

@@ -304,6 +304,29 @@ def _(SEMANTIC_NAME, connection, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### Approve every table at once
+
+    With several tables chosen - six tables of one source, say - you do not have to approve them one by one. `nb.schema_review` says what to look at across all of them: the columns the kit guessed at, and the ones it marked personal data. `nb.approve_all` then approves every table as drafted, with the columns you change in `ALL_CHOICES`, and updates the semantic model once per source instead of once per table. What to predict is not set here: it stays each table's own choice.
+    """)
+    return
+
+
+@app.cell
+def _(chosen_data, chosen_tables, connection, nb):
+    APPROVE_ALL = False
+    ALL_CHOICES = None  # the columns to change: {"VS_SALES.ORDERS": {"STATUS": "category"}}
+    if APPROVE_ALL and chosen_tables:
+        role_reviews = {table: nb.review_roles(connection, data) for table, data in chosen_tables.items()}
+        schema_summary = nb.schema_review(role_reviews)
+        print(f"{len(schema_summary['check'])} columns to look at, {len(schema_summary['sensitive'])} marked personal data, {schema_summary['fine']} look fine.")
+        approved_all = nb.approve_all(role_reviews, ALL_CHOICES)
+        dataset_1 = approved_all[str(chosen_data.fact_table)]
+    return (dataset_1,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ### Add another source
 
     Fusion: data from several places in one model. Every source connected with `exakit connect` (S3, Snowflake, MongoDB, PostgreSQL and the rest) is listed here, read live where it lives. Name a table of one in `ADD_SOURCE` to add it to the tables above; the card's **Add a source or table** does the same and connects a new source too.
@@ -334,20 +357,20 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset, nb):
-    _missing_roles = {missing['role']: missing['reason'] for missing in dataset.missing}
-    GROUP_ROLE, GROUP_COLUMN = dataset.group_by()  # the category, else the entity, else the target
+def _(connection, dataset_1, nb):
+    _missing_roles = {missing['role']: missing['reason'] for missing in dataset_1.missing}
+    GROUP_ROLE, GROUP_COLUMN = dataset_1.group_by()
     if GROUP_ROLE != 'category':
         print(f"No category ({_missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
     if 'label' in _missing_roles:
         print(f"No target ({_missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
-    GROUP_HEADER, COUNT_HEADER = (nb.name(GROUP_COLUMN), nb.count_name(dataset))  # columns named after the data: the group column and what a row counts
-    LABEL_PCT_HEADER = nb.name(dataset.col('label'), 'PCT') if dataset.has('label') and GROUP_ROLE != 'label' else None  # the target column, then _PCT
-    LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ''
-    first_rows = nb.sql(connection, f'\nSELECT {GROUP_COLUMN} AS {GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}\nFROM {dataset.fact_table}\nGROUP BY {GROUP_COLUMN}\nORDER BY {COUNT_HEADER} DESC\nLIMIT 10')
+    GROUP_HEADER, COUNT_HEADER = (nb.name(GROUP_COLUMN), nb.count_name(dataset_1))
+    LABEL_PCT_HEADER = nb.name(dataset_1.col('label'), 'PCT') if dataset_1.has('label') and GROUP_ROLE != 'label' else None
+    LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset_1.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ''
+    first_rows = nb.sql(connection, f'\nSELECT {GROUP_COLUMN} AS {GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}\nFROM {dataset_1.fact_table}\nGROUP BY {GROUP_COLUMN}\nORDER BY {COUNT_HEADER} DESC\nLIMIT 10')
     nb.show_sql()
-    _overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset.col('label')}), 1) AS PCT FROM {dataset.fact_table}") if LABEL_PCT_HEADER else None
-    nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]) if LABEL_PCT_HEADER else None)
+    _overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset_1.col('label')}), 1) AS PCT FROM {dataset_1.fact_table}") if LABEL_PCT_HEADER else None
+    nb.note_groups(first_rows, dataset_1, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]) if LABEL_PCT_HEADER else None)
     first_rows
     return
 
@@ -435,9 +458,9 @@ def _(mo):
 @app.cell
 def _(USE_PREPARED, connection, joined_dataset, nb):
     typed_view_proposal = nb.typed_view(connection, joined_dataset)
-    dataset_1 = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset  # the dataset every step below reads
+    dataset_2 = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset  # the dataset every step below reads
     typed_view_proposal
-    return (dataset_1,)
+    return (dataset_2,)
 
 
 @app.cell(hide_code=True)
@@ -461,13 +484,13 @@ def _(mo):
 
 
 @app.cell
-def _(dataset_1):
-    ENTITY_COLUMN = dataset_1.col('entity') if dataset_1.has('entity') else None
-    CATEGORY_COLUMN = dataset_1.col('category') if dataset_1.has('category') else None
-    TEXT_SQL = dataset_1.text_sql() if dataset_1.has('text') else None
-    DATE_COLUMN = dataset_1.col('date') if dataset_1.has('date') else None
-    LABEL_COLUMN = dataset_1.col('label') if dataset_1.has('label') else None
-    _missing_roles = {missing['role']: missing['reason'] for missing in dataset_1.missing if not dataset_1.has(missing['role'])}
+def _(dataset_2):
+    ENTITY_COLUMN = dataset_2.col('entity') if dataset_2.has('entity') else None
+    CATEGORY_COLUMN = dataset_2.col('category') if dataset_2.has('category') else None
+    TEXT_SQL = dataset_2.text_sql() if dataset_2.has('text') else None
+    DATE_COLUMN = dataset_2.col('date') if dataset_2.has('date') else None
+    LABEL_COLUMN = dataset_2.col('label') if dataset_2.has('label') else None
+    _missing_roles = {missing['role']: missing['reason'] for missing in dataset_2.missing if not dataset_2.has(missing['role'])}
     SHOWN = {'date': 'time', 'label': 'target'}
     missing_line = '; '.join((f'no {SHOWN.get(role, role)}: {reason}' for role, reason in _missing_roles.items()))
     for role in ('entity', 'category', 'date', 'label', 'text'):
@@ -499,22 +522,22 @@ def _(
     ENTITY_COLUMN,
     LABEL_COLUMN,
     connection,
-    dataset_1,
+    dataset_2,
     missing_line,
     nb,
 ):
     landscape = landscape_grid = None
-    COUNT_HEADER_1 = nb.count_name(dataset_1)
+    COUNT_HEADER_1 = nb.count_name(dataset_2)
     ENTITY_HEADER = nb.name(ENTITY_COLUMN) if ENTITY_COLUMN else None
     CATEGORY_HEADER = nb.name(CATEGORY_COLUMN) if CATEGORY_COLUMN else None
     LABEL_PCT_HEADER_1 = nb.name(LABEL_COLUMN, 'PCT') if LABEL_COLUMN else None
-    if not all((dataset_1.has(role) for role in ('entity', 'category', 'label'))):
+    if not all((dataset_2.has(role) for role in ('entity', 'category', 'label'))):
         print(f'Skipped - the landscape needs an entity, a category and a target ({missing_line}).')
     else:
-        _overall_rate = nb.sql(connection, f'SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL_COLUMN}), 1) AS PCT FROM {dataset_1.fact_table}')
-        landscape = nb.sql(connection, f'\nWITH TOP_ENTITIES AS (\n    SELECT {ENTITY_COLUMN} AS ENTITY, COUNT(*) AS N_ROWS\n    FROM {dataset_1.fact_table}\n    GROUP BY {ENTITY_COLUMN}\n    ORDER BY N_ROWS DESC\n    LIMIT 10)\nSELECT T.ENTITY AS {ENTITY_HEADER},\n       F.{CATEGORY_COLUMN} AS {CATEGORY_HEADER},\n       COUNT(*) AS {COUNT_HEADER_1},\n       ROUND(100 * AVG(F.{LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER_1}\nFROM {dataset_1.fact_table} F\nJOIN TOP_ENTITIES T ON F.{ENTITY_COLUMN} = T.ENTITY\nGROUP BY T.ENTITY, F.{CATEGORY_COLUMN}\nORDER BY T.ENTITY, {COUNT_HEADER_1} DESC')
+        _overall_rate = nb.sql(connection, f'SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL_COLUMN}), 1) AS PCT FROM {dataset_2.fact_table}')
+        landscape = nb.sql(connection, f'\nWITH TOP_ENTITIES AS (\n    SELECT {ENTITY_COLUMN} AS ENTITY, COUNT(*) AS N_ROWS\n    FROM {dataset_2.fact_table}\n    GROUP BY {ENTITY_COLUMN}\n    ORDER BY N_ROWS DESC\n    LIMIT 10)\nSELECT T.ENTITY AS {ENTITY_HEADER},\n       F.{CATEGORY_COLUMN} AS {CATEGORY_HEADER},\n       COUNT(*) AS {COUNT_HEADER_1},\n       ROUND(100 * AVG(F.{LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER_1}\nFROM {dataset_2.fact_table} F\nJOIN TOP_ENTITIES T ON F.{ENTITY_COLUMN} = T.ENTITY\nGROUP BY T.ENTITY, F.{CATEGORY_COLUMN}\nORDER BY T.ENTITY, {COUNT_HEADER_1} DESC')
         nb.show_sql()
-        nb.note_groups(landscape, dataset_1, (ENTITY_HEADER, CATEGORY_HEADER), COUNT_HEADER_1, LABEL_PCT_HEADER_1, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]))
+        nb.note_groups(landscape, dataset_2, (ENTITY_HEADER, CATEGORY_HEADER), COUNT_HEADER_1, LABEL_PCT_HEADER_1, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]))
         landscape_grid = landscape.pivot_table(index=ENTITY_HEADER, columns=CATEGORY_HEADER, values=COUNT_HEADER_1, fill_value=0, aggfunc='sum')
     landscape
     return COUNT_HEADER_1, LABEL_PCT_HEADER_1, landscape_grid
@@ -551,20 +574,20 @@ def _(
     LABEL_COLUMN,
     LABEL_PCT_HEADER_1,
     connection,
-    dataset_1,
+    dataset_2,
     missing_line,
     nb,
 ):
     over_time = None
-    if not (dataset_1.has('date') and dataset_1.has('label')):
+    if not (dataset_2.has('date') and dataset_2.has('label')):
         print(f'Skipped - rows and target rate per period need a time and a target ({missing_line}).')
     else:
-        date_span = nb.sql(connection, f'SELECT DAYS_BETWEEN(MAX({DATE_COLUMN}), MIN({DATE_COLUMN})) AS DAYS FROM {dataset_1.fact_table}')
+        date_span = nb.sql(connection, f'SELECT DAYS_BETWEEN(MAX({DATE_COLUMN}), MIN({DATE_COLUMN})) AS DAYS FROM {dataset_2.fact_table}')
         span_days = int(date_span['DAYS'][0] or 0)
         period = 'DAY' if span_days <= 62 else 'MONTH' if span_days <= 3 * 366 else 'YEAR'
-        over_time = nb.sql(connection, f"\nSELECT CAST(DATE_TRUNC('{period}', {DATE_COLUMN}) AS DATE) AS {period}_START,\n       COUNT(*) AS {COUNT_HEADER_1},\n       ROUND(100 * AVG({LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER_1}\nFROM {dataset_1.fact_table}\nGROUP BY 1\nORDER BY 1")
+        over_time = nb.sql(connection, f"\nSELECT CAST(DATE_TRUNC('{period}', {DATE_COLUMN}) AS DATE) AS {period}_START,\n       COUNT(*) AS {COUNT_HEADER_1},\n       ROUND(100 * AVG({LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER_1}\nFROM {dataset_2.fact_table}\nGROUP BY 1\nORDER BY 1")
         nb.show_sql()
-        nb.note_trend(over_time, dataset_1, f'{period}_START', COUNT_HEADER_1, LABEL_PCT_HEADER_1)
+        nb.note_trend(over_time, dataset_2, f'{period}_START', COUNT_HEADER_1, LABEL_PCT_HEADER_1)
     over_time
     return
 
@@ -590,8 +613,8 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset_1, nb):
-    LEAKING_COLUMNS = nb.leakage_check(connection, dataset_1)
+def _(connection, dataset_2, nb):
+    LEAKING_COLUMNS = nb.leakage_check(connection, dataset_2)
     return (LEAKING_COLUMNS,)
 
 
@@ -617,29 +640,29 @@ def _(
     LABEL_COLUMN,
     LEAKING_COLUMNS,
     connection,
-    dataset_1,
+    dataset_2,
     missing_line,
     nb,
 ):
     MODEL_ROW_LIMIT = 20000
     # The features the model reads, each only when its role exists and does not give the target away: the category and the
     # entity as text, then the month of the date.
-    USE_CATEGORY = dataset_1.has('category') and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
-    USE_ENTITY = dataset_1.has('entity') and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
-    CATEGORY_FEATURE = f"CAST({dataset_1.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ''
-    ENTITY_FEATURE = f"CAST({dataset_1.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ''
-    MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset_1.col('date')}) AS MONTH_,\n       " if dataset_1.has('date') else ''
+    USE_CATEGORY = dataset_2.has('category') and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
+    USE_ENTITY = dataset_2.has('entity') and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
+    CATEGORY_FEATURE = f"CAST({dataset_2.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ''
+    ENTITY_FEATURE = f"CAST({dataset_2.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ''
+    MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset_2.col('date')}) AS MONTH_,\n       " if dataset_2.has('date') else ''
     # Which rows: the newest by date, else the first by the key - the same rows on every rerun either way.
-    KEY_COLUMN = dataset_1.descriptor.slots.get('key')
-    ROW_ORDER = f"{dataset_1.col('date')} DESC" if dataset_1.has('date') else f'"{KEY_COLUMN}"' if KEY_COLUMN else '1'
+    KEY_COLUMN = dataset_2.descriptor.slots.get('key')
+    ROW_ORDER = f"{dataset_2.col('date')} DESC" if dataset_2.has('date') else f'"{KEY_COLUMN}"' if KEY_COLUMN else '1'
     model = None
-    if not (dataset_1.has('label') and (USE_CATEGORY or USE_ENTITY)):
+    if not (dataset_2.has('label') and (USE_CATEGORY or USE_ENTITY)):
         print(f"Skipped - the small model predicts the target from the category and entity, so it needs a target and a category or entity that does not give the target away ({missing_line or 'see the cell above'}).")
     else:
         FEATURE_LABELS = {'MONTH_': 'month', 'CATEGORY_': (CATEGORY_COLUMN or '').strip('"'), 'ENTITY_': (ENTITY_COLUMN or '').strip('"')}
         if not DATE_COLUMN:
             print('No date: the model reads the first rows by the key and leaves the month out.')  # What each feature is called on screen: the column it comes from, or "month".
-        model_rows = nb.sql(connection, f'\nSELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL_COLUMN} AS LABEL_\nFROM {dataset_1.fact_table}\nWHERE {LABEL_COLUMN} IS NOT NULL\nORDER BY {ROW_ORDER}\nLIMIT {MODEL_ROW_LIMIT}')
+        model_rows = nb.sql(connection, f'\nSELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL_COLUMN} AS LABEL_\nFROM {dataset_2.fact_table}\nWHERE {LABEL_COLUMN} IS NOT NULL\nORDER BY {ROW_ORDER}\nLIMIT {MODEL_ROW_LIMIT}')
         nb.show_sql()
         from sklearn.linear_model import LogisticRegression
         from sklearn.model_selection import train_test_split
@@ -684,7 +707,7 @@ def _(mo):
 
 @app.cell
 def _(
-    dataset_1,
+    dataset_2,
     label_values,
     model,
     model_rows,
@@ -697,7 +720,7 @@ def _(
         from sklearn.metrics import roc_auc_score
         roc_auc = roc_auc_score(test_labels, model.predict_proba(test_features)[:, 1])
         print(f'ROC AUC on the held-out quarter: {roc_auc:.3f}')
-        nb.note_model(roc_auc, dataset_1, len(model_rows), label_values.mean())
+        nb.note_model(roc_auc, dataset_2, len(model_rows), label_values.mean())
     return
 
 
@@ -741,12 +764,12 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset_1, nb):
+def _(connection, dataset_2, nb):
     # Cell tags: skip-ci
     LAB_TASK = 'predict_yes_no'  # or "predict_number", "find_groups", "find_unusual"
-    lab_data = nb.lab_data(connection, dataset_1)  # read once; lab_data.left_out says what was left out and why
+    lab_data = nb.lab_data(connection, dataset_2)  # read once; lab_data.left_out says what was left out and why
     kept_features = {}
-    lab = nb.model_lab(connection, dataset_1, LAB_TASK, model='all', target_number=None, data=lab_data, features=kept_features)
+    lab = nb.model_lab(connection, dataset_2, LAB_TASK, model='all', target_number=None, data=lab_data, features=kept_features)
     print(lab.note or lab)
     lab.board if LAB_TASK in ('predict_yes_no', 'predict_number') else lab.result
     return LAB_TASK, kept_features, lab
@@ -787,27 +810,27 @@ def _(
     TEXT_SQL,
     USE_AI_THEMES,
     connection,
-    dataset_1,
+    dataset_2,
     missing_line,
     nb,
 ):
     SAMPLE_TEXTS = 20  # per side: the newest texts where the target is 1, and as many where it is 0
     text_sample = themes = None
-    NEWEST_FIRST = f"{dataset_1.col('date')} DESC" if dataset_1.has('date') else dataset_1.col('entity') if dataset_1.has('entity') else '1'
-    PER_LABEL = f"PARTITION BY {dataset_1.col('label')} " if dataset_1.has('label') else ''
-    LABELLED_ONLY = f" AND {dataset_1.col('label')} IS NOT NULL" if dataset_1.has('label') else ''
-    if not dataset_1.has('text'):
+    NEWEST_FIRST = f"{dataset_2.col('date')} DESC" if dataset_2.has('date') else dataset_2.col('entity') if dataset_2.has('entity') else '1'
+    PER_LABEL = f"PARTITION BY {dataset_2.col('label')} " if dataset_2.has('label') else ''
+    LABELLED_ONLY = f" AND {dataset_2.col('label')} IS NOT NULL" if dataset_2.has('label') else ''
+    if not dataset_2.has('text'):
         print(f'Skipped - the themes need a text role ({missing_line}).')
     else:
-        TEXT_SAMPLE_SQL = f"\nSELECT {LABEL_COLUMN or 'NULL'} AS LABEL_, {TEXT_SQL} AS TEXT_\nFROM {dataset_1.fact_table}\nWHERE LENGTH(TRIM({TEXT_SQL})) > 0{LABELLED_ONLY}\nQUALIFY ROW_NUMBER() OVER ({PER_LABEL}ORDER BY {NEWEST_FIRST}) <= {SAMPLE_TEXTS}"
+        TEXT_SAMPLE_SQL = f"\nSELECT {LABEL_COLUMN or 'NULL'} AS LABEL_, {TEXT_SQL} AS TEXT_\nFROM {dataset_2.fact_table}\nWHERE LENGTH(TRIM({TEXT_SQL})) > 0{LABELLED_ONLY}\nQUALIFY ROW_NUMBER() OVER ({PER_LABEL}ORDER BY {NEWEST_FIRST}) <= {SAMPLE_TEXTS}"
         text_sample = nb.sql(connection, TEXT_SAMPLE_SQL)
         nb.show_sql()
         if not USE_AI_THEMES:
             print('The AI step is off: above is the sample it would read. To run it, switch USE_AI_THEMES on in the first cell. Everything else in this notebook runs without a model.')
         else:
             model_endpoint = nb.model_client()
-            if model_endpoint is not None and nb.confirm_send(dataset_1, len(text_sample)):
-                themes = nb.themes(connection, dataset_1, text_sample, model_endpoint, sql=TEXT_SAMPLE_SQL)
+            if model_endpoint is not None and nb.confirm_send(dataset_2, len(text_sample)):
+                themes = nb.themes(connection, dataset_2, text_sample, model_endpoint, sql=TEXT_SAMPLE_SQL)
     themes if themes is not None else text_sample
     return
 

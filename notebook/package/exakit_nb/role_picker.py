@@ -38,7 +38,7 @@ from .dataset import DATA_FILES, Dataset, _locate, checked, dataset, remember_da
 from .describe import COLUMN_ROLES, SLOTS, Draft, ROLES, describe
 from .workflow import DESCRIBE_APPROVE, DESCRIBE_DRAFT, log_event
 
-__all__ = ["ApprovalNeeded", "RoleReview", "review_roles"]
+__all__ = ["ApprovalNeeded", "RoleReview", "approve_all", "review_roles", "schema_review"]
 
 NOTE_LIMIT = 300            # a column's description: one sentence, not a document
 
@@ -235,7 +235,7 @@ class RoleReview:
     # --- approving -------------------------------------------------------------------------------------------------
 
     def approve(self, choices: dict[str, str | None] | None = None, slots: dict[str, str | None] | None = None,
-                notes: dict[str, str | None] | None = None) -> Dataset:
+                notes: dict[str, str | None] | None = None, *, publish: bool = True) -> Dataset:
         """Apply the reviewed roles ({COLUMN: role}, one of the eight; the proposal when None) and slots ({slot:
         COLUMN or None}), then save and comment the approved descriptor. ``notes`` ({COLUMN: text}) sets a column's
         description - what the column holds, in a sentence; the semantic model shows it as the field's comment - and
@@ -278,7 +278,9 @@ class RoleReview:
                 entry["note"] = text
             else:
                 entry.pop("note", None)
-        self.approved = corrected.approve(conn=self.conn)           # logs the approval to the active workflow
+        # logs the approval to the active workflow; publish=False leaves the semantic model to a later approval
+        # (nb.approve_all publishes once for a whole schema)
+        self.approved = corrected.approve(conn=self.conn, comments=publish)
         self._save_beside(corrected)
         return self.approved
 
@@ -588,6 +590,55 @@ def _open(conn, name: str):
               "(The quickstart's MY_DATA cell does the same, into the schema MY_SCHEMA names.)")
         return load_own_file(given, table, conn=conn), False
     return dataset(conn, name), True
+
+
+def schema_review(reviews: dict[str, "RoleReview"]) -> dict[str, Any]:
+    """What a person should look at before approving several tables at once ({SCHEMA.TABLE: nb.review_roles(...)}):
+
+    - ``check``: the columns drafted at low confidence, where the draft guessed - {table, column, role, evidence}
+    - ``sensitive``: the columns marked personal data (never charted, grouped or sent to a model)
+    - ``fine``: how many columns were drafted at high confidence
+    - ``approved``: the tables whose column map is approved already
+
+    Nothing is read from the database: it is the drafts' own evidence."""
+    check, sensitive, approved, fine = [], [], [], 0
+    for table, review in reviews.items():
+        columns = review.draft.doc.get("columns") or {}
+        if review.draft.status == "approved":
+            approved.append(table)
+        for column, entry in columns.items():
+            if entry.get("sensitive"):
+                sensitive.append({"table": table, "column": column})
+            if entry.get("confidence") == "low" and review.draft.status != "approved":
+                check.append({"table": table, "column": column, "role": entry.get("role"),
+                              "evidence": str(entry.get("evidence") or "")})
+            else:
+                fine += 1
+    return {"tables": list(reviews), "check": check, "sensitive": sensitive, "fine": fine, "approved": approved}
+
+
+def approve_all(reviews: dict[str, "RoleReview"], choices: dict[str, dict[str, str]] | None = None) -> dict[str, Dataset]:
+    """Approve the column maps of several tables at once: each as drafted, with ``choices`` ({SCHEMA.TABLE: {COLUMN:
+    role}}) applied where you changed a column. A table approved already, with nothing changed, is left as it is. The
+    semantic models are updated once per schema - with its last table - not once per table, so six tables of one
+    source are one publish. What to predict is never set here: it stays each table's own choice. Returns
+    {SCHEMA.TABLE: its Dataset}; a table that cannot be approved raises, naming it, and the ones before it stand."""
+    choices = {str(t).upper(): dict(c) for t, c in (choices or {}).items()}
+    todo = [t for t, r in reviews.items() if r.draft.status != "approved" or choices.get(t.upper())]
+    last = {t.split(".", 1)[0].upper(): t for t in todo}             # the table each schema is published with
+    done: dict[str, Dataset] = {}
+    for table, review in reviews.items():
+        if table not in todo:
+            done[table] = review.dataset()
+            continue
+        try:
+            done[table] = review.approve(choices.get(table.upper()) or None,
+                                         publish=last[table.split(".", 1)[0].upper()] == table)
+        except ValueError as error:
+            raise ValueError(f"{table}: {error}") from error
+    print(f"Approved {len(todo)} of {len(reviews)} tables" + (f" ({len(reviews) - len(todo)} were approved already)"
+                                                              if len(todo) < len(reviews) else "") + ".")
+    return done
 
 
 def review_roles(conn, source: Any) -> RoleReview:

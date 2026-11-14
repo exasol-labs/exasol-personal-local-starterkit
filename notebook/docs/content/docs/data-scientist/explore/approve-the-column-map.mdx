@@ -53,6 +53,26 @@ The kit keeps a meaning only when it names a real column and one of the eight ro
 
 Without a model the bar says where to set one up, and the rest of the card works as before. In a notebook cell, set `AI_CHECK = True` under the review to see the answer, and `AI_APPROVE = True` to approve with it.
 
+## Approve every table at once
+
+With two or more tables still to approve, such as the six tables of one Snowflake source, the card offers **Review all tables together** under the table tabs. The kit draws up each table's column map and shows one short list for all of them:
+
+| Shown | What to do |
+|---|---|
+| The columns the kit was not sure about, in every table, each with what it measured | Change the meaning of one that is wrong |
+| The columns marked personal data | Read the list. They are never charted, grouped or sent to a model. |
+| How many other columns look fine | Nothing. Each table's own tab shows them all. |
+
+**Approve all tables** approves every table with those choices. Each table still gets its own version in the kit's store, so one table can be restored without the others. The semantic model is updated once per source, not once per table.
+
+What to predict is not set here. Pick it in a table's own tab when you want a model.
+
+```python
+role_reviews = {table: nb.review_roles(connection, data) for table, data in chosen_tables.items()}
+nb.schema_review(role_reviews)          # check: the guesses; sensitive: personal data; fine: the rest, counted
+approved_all = nb.approve_all(role_reviews, {"VS_SALES.ORDERS": {"STATUS": "category"}})
+```
+
 ## What approval checks and writes
 
 - Every column has a role, and no column sits in two slots.

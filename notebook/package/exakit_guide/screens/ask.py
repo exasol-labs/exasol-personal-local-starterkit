@@ -252,14 +252,14 @@ class Ask(Screen):
         p = self.proposal
         blocks += [{"t": "subhead", "v": "Keep this answer",
                     "tip": "Pin it to a page of a dashboard: the next notebook (03_share) publishes the pages as one "
-                           "dashboard on Dash Server, with tabs and filters. A question answered from the semantic model "
-                           "can also be kept in the model: anyone who asks it again, here or in an AI client, gets this "
-                           "reviewed request."},
+                           "dashboard on Dash Server, with tabs and filters. You can also save a question as a trusted "
+                           "question: anyone who asks it again, here or in an AI tool, gets this checked answer "
+                           "instead of a new guess."},
                    {"t": "fields", "items": [{"id": "ask_keep", "type": "group", "fields": [
                        {"id": "board", "type": "text", "label": "Dashboard", "value": self.board, "placeholder": "sales-overview"},
                        {"id": "page", "type": "text", "label": "Page", "value": self.page, "placeholder": "Overview"}]}]},
                    {"t": "actions", "items": [{"id": "pin", "label": "Pin to dashboard", "busy": "Pinning…"}]
-                    + ([{"id": "verify", "label": "Save as a verified question", "busy": "Saving in the model…"}]
+                    + ([{"id": "verify", "label": "Save as a trusted question", "busy": "Saving…"}]
                        if p is not None and getattr(p, "request", None) else [])}]
         return blocks
 
@@ -286,7 +286,7 @@ class Ask(Screen):
     def on_verify(self, _v: dict) -> None:
         """Keep the question in the semantic model as a verified question (proposal.verify)."""
         found = actions.run("ask.verify")
-        self.flash = {"kind": "ok", "v": f"Kept in the model as a verified question: {found['verified']['name']}."}
+        self.flash = {"kind": "ok", "v": f"Saved as a trusted question: {found['verified']['name']}. Asked again, it gets this answer."}
 
     def on_draft(self, v: dict) -> None:
         self._draft(str(v.get("question") or ""))
