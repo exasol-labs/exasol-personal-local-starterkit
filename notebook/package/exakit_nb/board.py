@@ -29,7 +29,7 @@ from typing import Any
 
 from .workflow import current_workflow, home, log_event
 
-__all__ = ["Board", "board", "boards", "pin"]
+__all__ = ["Board", "board", "boards", "pin", "starter_board"]
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 KINDS = ("kpi", "bar", "line", "table")
@@ -141,11 +141,14 @@ class Board:
         return self
 
     def filters(self, page: dict[str, Any]) -> list[str]:
-        """The columns every tile of a page returns that are not numbers: what the page can be filtered by."""
+        """What a page can be filtered by: the columns that are not numbers and that every tile of the page returns,
+        or that two or more of its tiles do."""
         sets = [set(t.get("dimensions") or []) for t in page["tiles"] if t.get("kind") != "kpi"]
         common = set.intersection(*sets) if sets else set()
-        first = next((t.get("dimensions") or [] for t in page["tiles"] if t.get("kind") != "kpi"), [])
-        return [c for c in first if c in common][:3]
+        # also a column two or more tiles return: it filters those, and the dashboard leaves the others as they are
+        shared = {c for c in set().union(*sets) if sum(c in one for one in sets) >= 2} if sets else set()
+        order = [c for t in page["tiles"] if t.get("kind") != "kpi" for c in t.get("dimensions") or []]
+        return [c for c in dict.fromkeys(order) if c in common | shared][:3]
 
     def spec(self) -> dict[str, Any]:
         """What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files."""
@@ -235,3 +238,141 @@ def pin(proposal, answer=None, *, board: str = "my-dashboard", page: str = "Over
     log_event("board.pin", board=target.name, page=here["title"], tile=tile["id"], sql_digest=digest, question=proposal.question)
     print(f"Pinned to {target.name} / {here['title']} as a {tile['kind']}: {tile['title']}")
     return tile
+
+
+# --- a starter dashboard, straight from the column maps -----------------------------------------------------------------
+
+def _words(text: str) -> str:
+    return str(text).replace('"', "").split(".")[-1].replace("_", " ").strip().lower()
+
+
+def _starter_tile(title: str, sql: str, kind: str, dimensions: list[str], ds) -> dict[str, Any]:
+    from .ask import _read_sql
+
+    statement = _read_sql(sql)
+    digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
+    return {"id": digest[:8], "title": title, "question": title, "sql": statement, "sql_digest": digest, "kind": kind,
+            "dimensions": dimensions, "columns": [], "dataset": getattr(ds, "id", None),
+            "descriptor_version": str(getattr(ds, "version", "") or ""), "request": None, "workflow_id": current_workflow(),
+            "starter": True}
+
+
+def _starter_page(ds) -> dict[str, Any] | None:
+    """One table's page, from its approved column map: how many rows, each measure's total, rows and totals per group
+    (the map's category first), and rows over time when it has a date. No personal-data column is ever used."""
+    from .readout import count_name, name, noun
+
+    columns = dict(getattr(ds.descriptor, "columns", {}) or {})
+    usable = lambda role: [c for c, e in columns.items() if e.get("role") in role and not e.get("sensitive")]
+    measures = usable(("measure",))[:2]
+    groups = usable(("category", "flag"))
+    try:
+        role, first = ds.group_by()
+        first = first.strip('"')
+        if role == "category" and first in groups:
+            groups = [first] + [g for g in groups if g != first]
+    except ValueError:
+        pass
+    table, count = ds.fact_table, count_name(ds)
+    what = noun(ds)
+    tiles = [_starter_tile(f"Number of {what}", f"SELECT COUNT(*) AS {count} FROM {table}", "kpi", [], ds)]
+    for m in measures:
+        tiles.append(_starter_tile(f"Total {_words(m)}", f'SELECT SUM("{m}") AS {name(m, "TOTAL")} FROM {table}', "kpi", [], ds))
+    for n, group in enumerate(groups[:3]):
+        header = name(group)
+        tiles.append(_starter_tile(f"{what.capitalize()} by {_words(group)}",
+                                   f'SELECT "{group}" AS {header}, COUNT(*) AS {count} FROM {table} '
+                                   f"GROUP BY 1 ORDER BY 2 DESC LIMIT 25", "bar", [header], ds))
+        if n == 0 and measures:          # the first group again by the first measure: the two share a filter
+            m = measures[0]
+            tiles.append(_starter_tile(f"Total {_words(m)} by {_words(group)}",
+                                       f'SELECT "{group}" AS {header}, SUM("{m}") AS {name(m, "TOTAL")} FROM {table} '
+                                       f"GROUP BY 1 ORDER BY 2 DESC LIMIT 25", "bar", [header], ds))
+    if ds.has("date"):
+        d = ds.col("date")
+        tiles.append(_starter_tile(f"{what.capitalize()} over time",
+                                   f"SELECT CAST(DATE_TRUNC('MONTH', {d}) AS DATE) AS MONTH_START, COUNT(*) AS {count} "
+                                   f"FROM {table} WHERE {d} IS NOT NULL GROUP BY 1 ORDER BY 1", "line", ["MONTH_START"], ds))
+    if len(tiles) == 1 + len(measures) and not groups:
+        return None if not measures else {"title": _words(table).title(), "tiles": tiles}
+    return {"title": _words(table).title(), "tiles": tiles}
+
+
+def _starter_links(datasets: list[Any]) -> list[dict[str, Any]]:
+    """The links saved in your data map between these tables ({from table, column, to table, key}); [] without any."""
+    try:
+        from .describe import describe_service
+
+        kept = describe_service().publishing.kept("all_data") or {}
+    except Exception:
+        return []
+    spec = kept.get("spec") or {}
+    tables = {e["name"]: f"{e['schema']}.{e['table']}" for e in spec.get("entities") or []}
+    have = {str(d.fact_table).replace('"', "").upper() for d in datasets}
+    out = []
+    for r in spec.get("relationships") or []:
+        a, b = tables.get(r["from"], ""), tables.get(r["to"], "")
+        if a.upper() in have and b.upper() in have:
+            out.append({"from": a, "column": r["from_column"], "to": b, "key": r["to_column"]})
+    return out
+
+
+def starter_board(conn, datasets: list[Any] | None = None, *, name: str = "overview", title: str | None = None) -> Board:
+    """A dashboard to start from, made from the approved column maps with no question asked: a page per table (how
+    many rows, each measure's total, rows and totals per group, rows over time); a table that links to another one
+    (the links saved in your data map) also shows its rows per group of that table. ``datasets``
+    defaults to the tables you chose (nb.chosen_tables) that are approved, else every approved one (12 at most).
+    Every tile is a query the kit wrote from the map - shown when it is shared, checked in the preview before it goes
+    live - and can be moved, removed or joined by your own pinned answers. A page that was made here before is
+    replaced; pages of your own are kept. Returns the Board, saved."""
+    if datasets is None:
+        from .chosen import chosen_tables
+        from .dataset import dataset
+        from .descriptor_store import approved_datasets
+
+        approved = approved_datasets()
+        chosen = {t.upper() for t in chosen_tables()}
+        picked = [a for a in approved if a["table"].upper() in chosen] or approved
+        datasets = []
+        for entry in picked[:12]:
+            try:
+                datasets.append(dataset(conn, entry["id"]))
+            except Exception as error:                      # a table that is gone, or a map the kit refuses: said, skipped
+                print(f"Left out {entry['table']}: {str(error).splitlines()[0][:160]}")
+    datasets = list(datasets.values()) if isinstance(datasets, dict) else list(datasets)
+    if not datasets:
+        raise ValueError("No table has an approved column map yet: approve one in 01_explore first.")
+    target = board(name)
+    target.title = title or target.title or "Overview of your data"
+    target.pages = [p for p in target.pages if not all(t.get("starter") for t in p["tiles"])]      # yours stay
+    made, pages = [], {}
+    for ds in datasets:
+        page = _starter_page(ds)
+        if page:
+            made.append(page)
+            pages[str(ds.fact_table).replace('"', "").upper()] = page
+        else:
+            print(f"{ds.fact_table}: no group, date or measure in its column map, so it has no page.")
+    # a table that links to another one also gets its rows per group of that table, on its own page
+    by_table = {str(d.fact_table).replace('"', "").upper(): d for d in datasets}
+    for link in _starter_links(datasets)[:6]:
+        a, b = by_table[link["from"].upper()], by_table[link["to"].upper()]
+        columns = dict(getattr(b.descriptor, "columns", {}) or {})
+        group = next((c for c, e in columns.items() if e.get("role") in ("category", "flag") and not e.get("sensitive")), None)
+        page = pages.get(link["from"].upper())
+        if not group or page is None:
+            continue
+        from .readout import count_name, name as header_of, noun
+
+        page["tiles"].append(_starter_tile(
+            f"{noun(a).capitalize()} by {_words(group)} ({_words(link['to'])})",
+            f'SELECT b."{group}" AS {header_of(group)}, COUNT(*) AS {count_name(a)} FROM {a.fact_table} a '
+            f'JOIN {b.fact_table} b ON a."{link["column"]}" = b."{link["key"]}" GROUP BY 1 ORDER BY 2 DESC LIMIT 25',
+            "bar", [header_of(group)], a))
+    if not made:
+        raise ValueError("Nothing to show yet: no approved table has a group, a date or a measure in its column map.")
+    target.pages = made + target.pages
+    target.save()
+    log_event("board.starter", board=target.name, pages=[p["title"] for p in made], tiles=sum(len(p["tiles"]) for p in made))
+    print(f"{target.name}: {len(made)} pages, {sum(len(p['tiles']) for p in made)} tiles, from {len(datasets)} approved tables.")
+    return target

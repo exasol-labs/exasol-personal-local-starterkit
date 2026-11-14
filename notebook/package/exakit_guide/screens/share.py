@@ -192,7 +192,10 @@ class Dashboard(Screen):
                         "disabled": not boards, "disabled_reason": "Pin an answer in step 3 first (Pin to dashboard).",
                         "fields": [{"id": "board", "type": "select", "label": "Dashboard", "value": boards[0]["value"] if boards else "",
                                     "options": boards}]})
-        blocks += [{"t": "choice", "id": "what", "value": "board" if boards else ("compare" if self.groups else "answer"), "options": options},
+        options.insert(0, {"value": "starter", "title": "A starter dashboard of all your data",
+                           "text": "A page per table you approved: counts, totals, groups and trends. "
+                                   "Nothing to set up; add your own answers to it later."})
+        blocks += [{"t": "choice", "id": "what", "value": "board" if boards else "starter", "options": options},
                    {"t": "fields", "items": [{"id": "title", "type": "text", "label": "Title (optional)", "placeholder": "Named after the data if empty"}]},
                    {"t": "actions", "items": [{"id": "preview", "label": "Make a preview" if not self.preview_url else "Make a new preview",
                                                "primary": not self.preview_url,
@@ -232,6 +235,10 @@ class Dashboard(Screen):
     # -- actions ---------------------------------------------------------------------------
     def on_preview(self, v: dict) -> None:
         board = str(v.get("board") or "") if v.get("what") == "board" else ""
+        if v.get("what") == "starter":           # made from the column maps (nb.starter_board), then shared as a board
+            board = "overview"
+            actions.run("share.starter", board=board)
+            self._read_boards(board)
         if not board:
             sql, title, measure = self._sql_for(v)
         self._server_ready()

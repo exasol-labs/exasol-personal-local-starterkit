@@ -560,6 +560,27 @@ def _(landscape_grid):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### Compare by a group of a linked table
+
+    When this table links to another table (the links you saved in step 2), its rows can be compared by a group kept there, such as orders by the customer's segment. `nb.linked_groups` lists those groups, each with the table and system it comes from. With no saved link the list is empty and this cell does nothing.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset_2, nb):
+    linked = nb.linked_groups(dataset_2)
+    ACROSS_GROUP = linked[0]['value'] if linked else None  # or another of them: [g["value"] for g in linked]
+    if ACROSS_GROUP:
+        across_query = nb.across_sql(dataset_2, ACROSS_GROUP)
+        groups = nb.sql(connection, across_query)
+    [g['label'] for g in linked]
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ### Over time
 
     Rows per day, month or year, and the % where the target is 1. Needs a time and a target.

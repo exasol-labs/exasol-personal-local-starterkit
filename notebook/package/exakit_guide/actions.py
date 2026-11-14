@@ -161,6 +161,10 @@ ACTIONS: dict[str, Action] = {
     "explore.typed": Action("01_explore", "typed_view_proposal = nb.typed_view(connection, dataset)", "typed_view_proposal", False),
     "explore.clean": Action("01_explore", "dataset = typed_view_proposal.create(connection)", "dataset"),
     "explore.count": Action("01_explore", "row_count = nb.sql(connection, {sql})", "row_count", False),
+    # a group that lives in a linked table of another source: the one query that reads both (nb.across_sql)
+    "explore.linked": Action("01_explore", "linked = nb.linked_groups(dataset)", "linked", False),
+    "explore.across": Action("01_explore", "across_query = nb.across_sql(dataset, {group})\ngroups = nb.sql(connection, across_query)",
+                             "groups", False),
     "explore.groups": Action("01_explore", "groups = nb.sql(connection, {sql})", "groups", False),
     "explore.overall": Action("01_explore", "overall = nb.sql(connection, {sql})", "overall", False),
     "explore.groups_note": Action("01_explore", "groups_note = nb.note_groups(groups, dataset, {group}, {count}, {pct}, overall={overall})",
@@ -203,6 +207,7 @@ ACTIONS: dict[str, Action] = {
     "share.board": Action("03_share", "board = nb.board({board})", "board", False),
     "share.board_move": Action("03_share", "board.move({tile}, {page}).save()", None),
     "share.board_remove": Action("03_share", "board.remove({tile}).save()", None),
+    "share.starter": Action("03_share", "board = nb.starter_board(connection, name={board})", "board"),
     "share.board_draft": Action("03_share", "board_draft = nb.board({board}).share()", "board_draft"),
     "share.board_preview": Action("03_share", "dash_server = nb.dash_tools()\nboard_preview = board_draft.preview(dash_server)",
                                   "board_preview"),

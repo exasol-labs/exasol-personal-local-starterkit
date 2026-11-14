@@ -641,3 +641,6 @@ button.guide-flow-node:hover:not(:disabled) { border-color: var(--guide-accent);
 .guide-flow-arrow-sm { font-size: 14px; }
 
 .guide-downloads { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+
+.guide-picks-all { margin-left: 10px; font-size: 12.5px; background: none; border: 0; padding: 0; cursor: pointer; color: var(--guide-accent); }
+.guide-picks-all:disabled { opacity: .5; cursor: default; }

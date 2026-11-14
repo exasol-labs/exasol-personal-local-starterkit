@@ -105,7 +105,10 @@ else:
 # The answers you pinned in `02_ask_your_data` (**Pin to dashboard**, or `nb.pin`) make one dashboard: a tab per page, a tile per answer, its SQL exactly as approved. The filters on a page are the columns all its tiles return. Only the open tab is queried, its tiles in parallel, and each result is kept for five minutes, so moving between tabs and filtering does not query again. `board.move(tile, page)` and `board.remove(tile)` change it before it is shared; a preview comes first, and it goes live only after you check the figures.
 
 # %%
-BOARD_NAME = None            # None: the dashboard pinned to last; or a name, such as "sales-overview"
+STARTER_BOARD = False        # True: make "overview" from your approved column maps - a page per table, no question asked
+if STARTER_BOARD:
+    board = nb.starter_board(connection, name="overview")
+BOARD_NAME = None            # None: the dashboard changed last; or a name, such as "sales-overview"
 BOARD_FIGURES_CHECKED = False
 MOVE_TILE = None             # a tile to another page: ("a1b2c3d4", "Delivery")
 REMOVE_TILE = None           # a tile to take off: "a1b2c3d4"

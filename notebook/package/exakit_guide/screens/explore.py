@@ -294,8 +294,12 @@ class Compare(Screen):
         cands = [c for c, e in cols.items() if e.get("role") in ("category", "flag") and c != label and not e.get("sensitive")]
         first = _bare(ds.group_by()[1])
         self.groups = ([first] if first in cands else []) + [c for c in cands if c != first]
-        if self.group not in self.groups:
-            self.group = self.groups[0] if self.groups else None
+        try:            # groups that live in a linked table, maybe of another source (the links saved in the data map)
+            self.linked = {g["value"]: g for g in actions.run("explore.linked") or []}
+        except Exception:
+            self.linked = {}
+        if self.group not in self.groups and self.group not in self.linked:
+            self.group = self.groups[0] if self.groups else next(iter(self.linked), None)
 
     def _groups(self) -> None:
         import exakit.nb as nb
@@ -305,13 +309,19 @@ class Compare(Screen):
         if not self.group:
             return
         ds = SESSION.dataset
+        far = getattr(self, "linked", {}).get(self.group)          # a group of a linked table: one query over both
+        shown = far["column"] if far else self.group
         g = f'"{self.group}"'
-        group_h, count_h = nb.name(self.group), nb.count_name(ds)
+        group_h, count_h = nb.name(shown), nb.count_name(ds)
         has_label = ds.has("label")
         pct_h = nb.name(ds.col("label"), "PCT") if has_label else None
         rate = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
-        sql = f"SELECT {g} AS {group_h},\n       COUNT(*) AS {count_h}{rate}\nFROM {ds.fact_table}\nGROUP BY {g}\nORDER BY {count_h} DESC\nLIMIT 15"
-        frame = actions.run("explore.groups", sql=sql)
+        if far:
+            frame = actions.run("explore.across", group=self.group)
+            sql = str(SESSION.get("across_query") or "")
+        else:
+            sql = f"SELECT {g} AS {group_h},\n       COUNT(*) AS {count_h}{rate}\nFROM {ds.fact_table}\nGROUP BY {g}\nORDER BY {count_h} DESC\nLIMIT 15"
+            frame = actions.run("explore.groups", sql=sql)
         overall = (actions.run("explore.overall", sql=f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}")
                    if pct_h else None)
         note = actions.run("explore.groups_note", group=group_h, count=count_h, pct=pct_h,
@@ -320,10 +330,10 @@ class Compare(Screen):
             items = [{"label": "(no value)" if r[group_h] is None else str(r[group_h]), "value": float(r[pct_h] or 0) / 100, "rows": int(r[count_h])}
                      for _, r in frame.iterrows() if int(r[count_h]) >= SMALL]
             items.sort(key=lambda i: -i["value"])
-            title = f"{_bare(ds.col('label'))} rate by {self.group}"
+            title = f"{_bare(ds.col('label'))} rate by {shown}"
         else:
             items = [{"label": "(no value)" if r[group_h] is None else str(r[group_h]), "value": int(r[count_h]), "rows": int(r[count_h])} for _, r in frame.iterrows()]
-            title = f"{count_h.replace('_', ' ').capitalize()} by {self.group}"
+            title = f"{count_h.replace('_', ' ').capitalize()} by {shown}"
         self.result = {"title": title, "items": items, "pct": bool(pct_h),
                        "overall": float(overall["PCT"][0]) / 100 if pct_h else None, "note": note, "sql": sql}
 
@@ -367,9 +377,10 @@ class Compare(Screen):
         if self.waiting:
             return _waiting(head, "counting the groups and the trend")
         blocks = [head]
-        if self.groups:
+        if self.groups or getattr(self, "linked", {}):
             blocks.append({"t": "inline_form", "fields": [{"id": "group", "type": "select", "label": "Compare by", "value": self.group,
-                                                           "options": [{"value": g, "label": g} for g in self.groups]}],
+                                                           "options": [{"value": g, "label": g} for g in self.groups]
+                                                           + [{"value": v, "label": g["label"]} for v, g in getattr(self, "linked", {}).items()]}],
                            "action": {"id": "regroup", "label": "Show"}, "live": True})
         r = self.result
         if r:

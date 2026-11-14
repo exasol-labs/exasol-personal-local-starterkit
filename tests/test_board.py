@@ -99,6 +99,60 @@ class BoardTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no longer matches"):
             board_draft(kept, "sales")
 
+    def _dataset(self, table, columns, date=None, grain="one row per order"):
+        roles = {"date": date} if date else {}
+        ds = types.SimpleNamespace(id=table.split(".")[1].lower(), version=1, fact_table=table,
+                                   descriptor=types.SimpleNamespace(columns=columns, grain=grain),
+                                   has=lambda role: role in roles, col=lambda role: f'"{roles[role]}"')
+        first = next((c for c, e in columns.items() if e.get("role") == "category"), None)
+        ds.group_by = (lambda: ("category", f'"{first}"')) if first else (lambda: (_ for _ in ()).throw(ValueError("none")))
+        return ds
+
+    def test_a_starter_dashboard_has_a_page_per_table_and_follows_the_saved_links(self):
+        orders = self._dataset("VS_SALES.ORDERS", {"ORDER_ID": {"role": "key"}, "CUSTOMER_ID": {"role": "identifier"},
+                                                   "STATUS": {"role": "category"}, "AMOUNT": {"role": "measure"},
+                                                   "EMAIL": {"role": "category", "sensitive": True},
+                                                   "ORDER_DATE": {"role": "time"}}, date="ORDER_DATE")
+        customers = self._dataset("CRM.CUSTOMERS", {"ID": {"role": "key"}, "SEGMENT": {"role": "category"}},
+                                  grain="one row per customer")
+        link = [{"from": "VS_SALES.ORDERS", "column": "CUSTOMER_ID", "to": "CRM.CUSTOMERS", "key": "ID"}]
+        with mock.patch.object(self.board, "_starter_links", return_value=link), mock.patch("builtins.print"):
+            made = self.board.starter_board(None, [orders, customers], name="overview")
+        self.assertEqual(["Orders", "Customers"], [p["title"] for p in made.pages], "a page per table, named after it")
+        titles = [t["title"] for t in made.pages[0]["tiles"]]
+        self.assertEqual(["Number of orders", "Total amount", "Orders by status", "Total amount by status", "Orders over time",
+                          "Orders by segment (customers)"], titles)
+        joined = made.pages[0]["tiles"][-1]["sql"]
+        self.assertIn('JOIN CRM.CUSTOMERS b ON a."CUSTOMER_ID" = b."ID"', joined)
+        self.assertNotIn("EMAIL", json.dumps(made.pages), "a personal-data column is never used")
+        self.assertEqual(["STATUS"], made.filters(made.pages[0]), "the two tiles by status share a filter")
+        self.board.pin(proposal("Mine?", "SELECT 1 AS N"), pd.DataFrame({"N": [1]}), board="overview", page="Mine")
+        with mock.patch.object(self.board, "_starter_links", return_value=[]), mock.patch("builtins.print"):
+            again = self.board.starter_board(None, [orders], name="overview")
+        self.assertEqual(["Orders", "Mine"], [p["title"] for p in again.pages], "made again: its pages replaced, yours kept")
+        with mock.patch.object(self.board, "_starter_links", return_value=[]), mock.patch("builtins.print"), \
+                self.assertRaisesRegex(ValueError, "Nothing to show"):
+            self.board.starter_board(None, [self._dataset("A.B", {"ID": {"role": "key"}})], name="empty")
+
+    def test_a_table_is_compared_by_a_group_of_a_table_it_links_to(self):
+        import importlib
+        across = importlib.import_module("exakit_nb.across")
+        orders = self._dataset("VS_SALES.ORDERS", {"CUSTOMER_ID": {"role": "identifier"}})
+        doc = {"columns": {"ID": {"role": "key"}, "SEGMENT": {"role": "category"}, "PHONE": {"role": "category", "sensitive": True}}}
+        service = types.SimpleNamespace(flow=types.SimpleNamespace(load=lambda text: doc), store=types.SimpleNamespace(current=lambda t: "x"))
+        with mock.patch.object(across, "_links", return_value=[{"column": "CUSTOMER_ID", "to": "VS_CRM.CUSTOMERS", "key": "ID"}]), \
+                mock.patch.object(across, "_service", return_value=service), \
+                mock.patch.object(across, "_origins", return_value={"VS_CRM": {"connector_name": "MongoDB"}, "VS_SALES": {"connector_name": "Snowflake"}}), \
+                mock.patch("exakit_nb.descriptor_store.approved_datasets", return_value=[{"table": "VS_CRM.CUSTOMERS"}]):
+            groups = across.linked_groups(orders)
+            self.assertEqual([("VS_CRM.CUSTOMERS::SEGMENT", "SEGMENT · from CUSTOMERS (MongoDB)")], [(g["value"], g["label"]) for g in groups])
+            sql = across.across_sql(orders, groups[0])
+            self.assertIn('JOIN VS_CRM.CUSTOMERS b ON a."CUSTOMER_ID" = b."ID"', sql)
+            self.assertEqual(["Snowflake", "MongoDB"], across.read_from(sql))
+            self.assertEqual(["this database"], across.read_from("SELECT 1 FROM MY_DATA.T"))
+        with mock.patch.object(across, "_links", return_value=[]):
+            self.assertEqual([], across.linked_groups(orders), "no saved link: nothing changes")
+
     def test_insights_say_the_largest_the_share_and_the_change(self):
         from exakit_nb import insights
         said = insights(pd.DataFrame({"CATEGORY": list("abcdefghij"), "REVENUE": [5, 3, 9, 1, 2, 2, 3, 100, 4, 5]}))

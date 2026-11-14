@@ -100,7 +100,7 @@
   - Development
     - [Development](/data-scientist/development): How the kit's notebooks, helpers and CLI fit together, where the files live, how to add a command and how these docs are built.
     - Notebook commands
-      - [All commands](/data-scientist/development/reference): Every public helper of exakit.nb, 148 in all, with the page that documents it.
+      - [All commands](/data-scientist/development/reference): Every public helper of exakit.nb, 153 in all, with the page that documents it.
       - [Connect, SQL and tracing](/data-scientist/development/reference/core): Helpers for the Exasol Personal Local Starter Kit's notebooks: exakit.nb (this module; exakit_nb is the same module under its older name).
       - [Quickstart steps](/data-scientist/development/reference/quickstart): The steps both quickstarts share (notebook/notebooks/00_shared): is the database there, what does it hold, and one loader per way data comes in - a sample dataset the kit ships, your own file, an external source connected as a virtual schema.
       - [Your own file or table](/data-scientist/development/reference/own-file): Your own CSV, Parquet or JSON file as a dataset: loaded into a table over the kit's connection, described by a few role assignments, and checked by the same rules as a kit dataset - so the notebooks run on it unchanged.
@@ -129,6 +129,7 @@
       - [Training handoff](/data-scientist/development/reference/handoff): The handoff from the Data Scientist to the ML Engineer (DS-3 -> ML-3, design 4): one JSON file that holds everything 01_train needs to train without opening the descriptor - which descriptor version and digest it came from, a digest of the data, the feature view built from the roles (as CREATE OR REPLACE VIEW SQL), the label and its positive class, the training SELECT with a reproducible time split, and the input and output schemas.
       - [In-database training](/data-scientist/development/reference/ml-train): Prepare the ML Engineer's in-database training from an approved, fresh handoff (ML-3, design 7).
       - [ML Engineer checks](/data-scientist/development/reference/checks): The three things the ML Engineer's notebooks depend on, one check each (ml-engineer/00_quickstart): the database's Python container answers a smoke UDF with the packages training needs, the MLflow server is reachable, and the bucket directory is where the kit expects it.
+      - [Across](/data-scientist/development/reference/across): Working across sources: which system a table lives in, what a table links to in other tables, and the one query that reads them together - no copy, no pipeline.
       - [Board](/data-scientist/development/reference/board): A dashboard of several pages, built from approved answers: pin answers to pages, then publish it on Dash Server.
       - [Chosen](/data-scientist/development/reference/chosen): The tables chosen in the quickstart, carried to the next notebook.
       - [Insights](/data-scientist/development/reference/insights): What an answer says, in sentences: worked out from the result itself by fixed rules, with no model and no new query.

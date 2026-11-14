@@ -30,21 +30,21 @@ class nb.Board
 
 A dashboard being put together: its pages, in order, each with its tiles.
 
-| Member                                       | What it is                                                                                                |
-| -------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `name`                                       | `str`                                                                                                     |
-| `title`                                      | `str`                                                                                                     |
-| `pages`                                      | `list[dict[str, Any]]`                                                                                    |
-| `save() -> Path`                             |                                                                                                           |
-| `tiles`                                      |                                                                                                           |
-| `page(title: str) -> dict[str, Any]`         | The page of that title, made at the end when there is none.                                               |
-| `move(tile_id: str, page: str) -> Board`     |                                                                                                           |
-| `remove(tile_id: str) -> Board`              |                                                                                                           |
-| `show_as(tile_id: str, kind: str) -> Board`  |                                                                                                           |
-| `rename_page(old: str, new: str) -> Board`   |                                                                                                           |
-| `filters(page: dict[str, Any]) -> list[str]` | The columns every tile of a page returns that are not numbers: what the page can be filtered by.          |
-| `spec() -> dict[str, Any]`                   | What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files. |
-| `share(name: str \| None=None)`              | The Dash app for this board (a BoardDraft): nothing is sent until its preview().                          |
+| Member                                       | What it is                                                                                                                                     |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                       | `str`                                                                                                                                          |
+| `title`                                      | `str`                                                                                                                                          |
+| `pages`                                      | `list[dict[str, Any]]`                                                                                                                         |
+| `save() -> Path`                             |                                                                                                                                                |
+| `tiles`                                      |                                                                                                                                                |
+| `page(title: str) -> dict[str, Any]`         | The page of that title, made at the end when there is none.                                                                                    |
+| `move(tile_id: str, page: str) -> Board`     |                                                                                                                                                |
+| `remove(tile_id: str) -> Board`              |                                                                                                                                                |
+| `show_as(tile_id: str, kind: str) -> Board`  |                                                                                                                                                |
+| `rename_page(old: str, new: str) -> Board`   |                                                                                                                                                |
+| `filters(page: dict[str, Any]) -> list[str]` | What a page can be filtered by: the columns that are not numbers and that every tile of the page returns, or that two or more of its tiles do. |
+| `spec() -> dict[str, Any]`                   | What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files.                                      |
+| `share(name: str \| None=None)`              | The Dash app for this board (a BoardDraft): nothing is sent until its preview().                                                               |
 
 ## nb.board [#board]
 
@@ -85,3 +85,25 @@ or table; by default what the answer looks like). The same SQL pinned again to a
 Returns the tile.
 
 **Used in:** `data-scientist/02_ask_your_data`, `data-scientist/03_share`
+
+## nb.starter_board [#starter_board]
+
+```python
+nb.starter_board(
+    conn,
+    datasets: list[Any] | None=None,
+    *,
+    name: str='overview',
+    title: str | None=None,
+) -> Board
+```
+
+A dashboard to start from, made from the approved column maps with no question asked: a page per table (how
+many rows, each measure's total, rows and totals per group, rows over time); a table that links to another one
+(the links saved in your data map) also shows its rows per group of that table. `datasets`
+defaults to the tables you chose (nb.chosen_tables) that are approved, else every approved one (12 at most).
+Every tile is a query the kit wrote from the map - shown when it is shared, checked in the preview before it goes
+live - and can be moved, removed or joined by your own pinned answers. A page that was made here before is
+replaced; pages of your own are kept. Returns the Board, saved.
+
+**Used in:** `data-scientist/03_share`

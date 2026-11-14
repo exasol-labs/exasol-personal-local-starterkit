@@ -168,8 +168,11 @@ def _(mo):
 
 
 @app.cell
-def _(nb):
-    BOARD_NAME = None  # None: the dashboard pinned to last; or a name, such as "sales-overview"
+def _(connection, nb):
+    STARTER_BOARD = False  # True: make "overview" from your approved column maps - a page per table, no question asked
+    if STARTER_BOARD:
+        board = nb.starter_board(connection, name='overview')
+    BOARD_NAME = None  # None: the dashboard changed last; or a name, such as "sales-overview"
     BOARD_FIGURES_CHECKED = False
     MOVE_TILE = None  # a tile to another page: ("a1b2c3d4", "Delivery")
     REMOVE_TILE = None  # a tile to take off: "a1b2c3d4"

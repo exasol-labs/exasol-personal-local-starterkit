@@ -1064,8 +1064,15 @@ function render({ model, el }) {
       const cur = Array.isArray(st.fields[f.id]) ? st.fields[f.id] : (st.fields[f.id] ? [st.fields[f.id]] : []);
       st.fields[f.id] = cur;
       const has = (o) => cur.map(String).includes(String(o.value));
+      // Select all / Clear, when there are three or more things to tick. An entry that starts something else
+      // ("Load a new file…", "New connection…": values starting with "__") is never ticked by Select all.
+      const real = (f.options || []).filter((o) => !String(o.value).startsWith("__") && !o.disabled).map((o) => o.value);
+      const special = cur.filter((x) => String(x).startsWith("__"));
+      const allOn = real.length > 0 && real.every((x) => cur.map(String).includes(String(x)));
+      const bulk = real.length >= 3 ? h("button", { type: "button", class: "guide-link guide-picks-all", disabled: !!ui.busy,
+        onClick: () => { st.fields[f.id] = allOn ? special : real.concat(special); draw(); } }, allOn ? "Clear" : "Select all") : null;
       return h("div", { class: "guide-field guide-picks", role: "group", "aria-label": f.label },
-        h("span", {}, f.label, cur.length > 1 ? ` · ${cur.length} ticked` : ""),
+        h("span", {}, f.label, cur.length > 1 ? ` · ${cur.length} ticked` : "", bulk),
         h("div", { class: "guide-checks guide-picks-list" }, (f.options || []).map((o) => h("label", { class: "guide-checkrow" },
           h("input", { type: "checkbox", checked: has(o) ? true : null, disabled: !!ui.busy, onChange: (e) => {
             const next = (f.options || []).map((x) => x.value).filter((x) => (String(x) === String(o.value) ? e.target.checked : cur.map(String).includes(String(x))));

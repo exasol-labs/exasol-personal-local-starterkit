@@ -14,6 +14,7 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic refresh <MODEL>                             changed in place, or rebuilt when it is gone
 
     exakit board list | show <NAME>
+    exakit board starter [NAME]                                 a page per approved table, from the column maps (default: overview)
     exakit board pin <NAME> --page P --question "..." --sql "SELECT ..." | --sql-file F [--title T] [--kind K]
     exakit board move <NAME> <TILE> <PAGE> | remove <NAME> <TILE> | kind <NAME> <TILE> <kpi|bar|line|table>
     exakit board preview <NAME>                                 a health-checked preview on Dash Server
@@ -185,6 +186,13 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         found = boards.boards()
         return found, "\n".join(f"{b['name']:<24} {b['pages']} pages, {b['tiles']} tiles  {b['title']}" for b in found) \
             or "No dashboards yet: exakit board pin <NAME> --page P --question ... --sql ..."
+    if action == "starter":
+        name = (words or ["overview"])[0]
+        from exakit_nb.workflow import continue_workflow
+
+        continue_workflow("board")
+        b = _connected(lambda c: boards.starter_board(c, name=name))
+        return {"name": b.name, "title": b.title, "pages": b.pages}, f"{b}\nPreview it: exakit board preview {b.name}"
     if action == "show":
         name, = _need(words, 1, "exakit board show <NAME>")
         b = boards.board(name)
@@ -264,7 +272,7 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         tools = dash_tools()
         route = draft.confirm(tools, figures_checked=True)
         return {"name": name, "live": tools.url + route}, f"Live: {tools.url + route}"
-    raise Refused(f"Unknown action '{action}' (list, show, pin, move, remove, kind, preview, publish).")
+    raise Refused(f"Unknown action '{action}' (list, starter, show, pin, move, remove, kind, preview, publish).")
 
 
 def main(argv: list[str]) -> int:
