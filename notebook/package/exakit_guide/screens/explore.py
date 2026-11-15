@@ -316,9 +316,12 @@ class Compare(Screen):
         has_label = ds.has("label")
         pct_h = nb.name(ds.col("label"), "PCT") if has_label else None
         rate = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
-        if far:
-            frame = actions.run("explore.across", group=self.group)
-            sql = str(SESSION.get("across_query") or "")
+        if far:          # the same query as the notebook's cell: this table joined to the one the link points at
+            rate_b = rate.replace(f"AVG({ds.col('label')})", f"AVG(a.{ds.col('label')})") if rate else ""
+            sql = (f'SELECT b."{far["column"]}" AS {group_h},\n       COUNT(*) AS {count_h}{rate_b}\n'
+                   f'FROM {ds.fact_table} a\nJOIN {far["table"]} b ON a."{far["link_column"]}" = b."{far["key"]}"\n'
+                   f"GROUP BY 1\nORDER BY {count_h} DESC\nLIMIT 15")
+            frame = actions.run("explore.groups", sql=sql)
         else:
             sql = f"SELECT {g} AS {group_h},\n       COUNT(*) AS {count_h}{rate}\nFROM {ds.fact_table}\nGROUP BY {g}\nORDER BY {count_h} DESC\nLIMIT 15"
             frame = actions.run("explore.groups", sql=sql)

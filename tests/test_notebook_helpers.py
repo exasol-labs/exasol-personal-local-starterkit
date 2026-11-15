@@ -533,7 +533,8 @@ class SwapTest(unittest.TestCase):
     role renders the same way or stops with the descriptor's reason for it."""
 
     EXTRA = {"LEAKING_COLUMNS": [], "MODEL_ROW_LIMIT": 20000, "SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
-             "UDF": "EXAKIT_MODELS.SCORE_MODEL", "where": "1 = 1", "limit": 10, "extra": ""}
+             "UDF": "EXAKIT_MODELS.SCORE_MODEL", "where": "1 = 1", "limit": 10, "extra": "",
+             "LINKED_GROUP": {"column": "SEGMENT", "table": "CRM.CUSTOMERS", "link_column": "CUSTOMER_ID", "key": "ID"}}
 
     def render(self, notebook: Path, descriptor) -> list[str]:
         """Every SQL f-string of the notebook, evaluated with its own role assignments on ``descriptor``."""
@@ -1457,14 +1458,18 @@ class NotebookWorkflowTest(unittest.TestCase):
         with mock.patch.object(exakit_nb, "describe_schema", return_value=found) as surveyed:
             namespace, _ = self.run_cell(schema_cell, namespace)
         surveyed.assert_called_once_with(mock.ANY, ds)
-        namespace, _ = self.run_cell(joined_cell, {**namespace, "USE_JOINED": False})
+        settings = {"USE_JOINED": False, "USE_PREPARED": False, "JOINED_SQL": None, "CLEANING_SQL": None,
+                    "PLACEHOLDER_VALUES": ["unknown*"], "RARE_TARGET": 0.1, "DATE_FORMATS": ["YYYY-MM-DD"],
+                    "TIMESTAMP_FORMATS": [], "DROP_COPIES": True, "CAST_TYPES": True, "GIVES_IT_AWAY": 0.99}
+        namespace, _ = self.run_cell(joined_cell, {**namespace, **settings})
         found.joined_view.assert_called_once_with(ds)
         found.joined_view.return_value.create.assert_not_called()
         self.assertIs(namespace["joined_dataset"], ds, "nothing is joined until USE_JOINED is set")
         view = next(c for c in cells if c.startswith("typed_view_proposal = "))
         with mock.patch.object(exakit_nb, "typed_view", return_value=mock.Mock(needed=False)) as typed:
-            namespace, _ = self.run_cell(view, {**namespace, "USE_PREPARED": False})
-        typed.assert_called_once_with(mock.ANY, ds)
+            namespace, _ = self.run_cell(view, {**namespace, **settings})
+        typed.assert_called_once_with(mock.ANY, ds, placeholder_values=["unknown*"], date_formats=["YYYY-MM-DD"],
+                                      timestamp_formats=[], drop_copies=True, cast_types=True)
         self.assertIs(namespace["dataset"], ds)
         namespace, _ = self.run_cell(next(c for c in cells if c.startswith("ENTITY_COLUMN = ")), namespace)
         self.assertEqual(namespace["LABEL_COLUMN"], "CANCELLED")

@@ -168,21 +168,29 @@ class JoinedView:
             html.append(f"<pre style=\"white-space: pre-wrap\">{escape(self.sql)}</pre>")
         return "\n".join(html)
 
-    def create(self, connection) -> Any:
+    def create(self, connection, sql: str | None = None) -> Any:
         """Approve the schema map (when it is a draft), create the view, describe it with the main table's roles
-        carried over and approve that; returns the view's dataset. With nothing to join, the dataset as it was."""
+        carried over and approve that; returns the view's dataset. With nothing to join, the dataset as it was.
+        ``sql`` is your own version of the CREATE VIEW (the one printed, edited): it must create this same view."""
         if not self.needed:
             print(self._state())
             return self.source
+        statement = self.sql
+        if sql and str(sql).strip():
+            import re
+
+            if not re.match(r"(?i)^CREATE\s+(OR\s+REPLACE\s+)?VIEW\s+" + re.escape(str(self.view)), " ".join(str(sql).split())):
+                raise ValueError(f"Your SQL must start with CREATE OR REPLACE VIEW {self.view} AS ...: the steps below read that view.")
+            statement = str(sql).strip().rstrip(";")
         from . import describe as describe_table
         from .dataset import remember_dataset
         from .workflow import log_sql
 
         if self.schema_map.doc.get("status") != "approved":
             self.schema_map.approve(connection)
-        for statement in ("CREATE SCHEMA IF NOT EXISTS EXAKIT_PREPARED", self.sql):
-            connection.execute(statement)
-            log_sql(connection, statement, None)
+        for run in ("CREATE SCHEMA IF NOT EXISTS EXAKIT_PREPARED", statement):
+            connection.execute(run)
+            log_sql(connection, run, None)
         schema, name = self.view.split(".", 1)
         base = (self.source_id or self.main.split(".")[-1].lower()).removesuffix("_joined")
         draft = describe_table(f"{schema}.{name.strip(chr(34))}", conn=connection, id=f"{base}_joined", force=True)

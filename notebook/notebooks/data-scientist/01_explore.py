@@ -40,6 +40,17 @@ DATASET = None   # None: the tables chosen in the quickstart (else the dataset a
 USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
 USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
 USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
+JOINED_SQL = None      # your own joined view: the CREATE VIEW printed under Prepare, as a string, edited
+CLEANING_SQL = None    # your own cleaned view: the CREATE VIEW printed under Prepare, as a string, edited
+# The rules the checks and the cleaning use. Change any of them and run the cells below again.
+PLACEHOLDER_VALUES = ["unknown*", "invalid*", "n/a", "na", "none", "null", "nil", "missing", "not available",
+                      "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]   # mean "not known"; "word*" = starts with
+RARE_TARGET = 0.10     # a target in under 10% (or over 90%) of rows is rare: judge a model by ROC AUC, not accuracy
+DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]   # how a date written as text is read
+TIMESTAMP_FORMATS = ["YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD HH24:MI"]
+DROP_COPIES = True     # the cleaned view drops rows that copy another row (one of each is kept)
+CAST_TYPES = True      # the cleaned view gives a text column of numbers, dates or true/false its type
+GIVES_IT_AWAY = 0.99   # a value whose target rate is 99% or more (or 1% or less) decides the target on its own
 
 # %% [markdown]
 # ## Optional · Your AI model and Langfuse
@@ -146,10 +157,10 @@ loaded_dataset = role_review.dataset(draft_ok=True)   # the table as loaded; `da
 # %% [markdown]
 # ### Is the data clean?
 #
-# Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. `fraud_transactions` has all of them.
+# Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. What counts as a placeholder and when a target is rare are `PLACEHOLDER_VALUES` and `RARE_TARGET` in the first cell. `fraud_transactions` has all of them.
 
 # %%
-findings = nb.data_checks(connection, loaded_dataset)
+findings = nb.data_checks(connection, loaded_dataset, placeholder_values=PLACEHOLDER_VALUES, rare=RARE_TARGET)
 findings
 
 # %% [markdown]
@@ -164,11 +175,12 @@ schema_map = nb.describe_schema(connection, loaded_dataset)
 schema_map
 
 # %% [markdown]
-# The joined view combines this table with every linked table. Read the joins and the SQL. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+# The joined view combines this table with every linked table. Read the joins and the SQL. To change the SQL, copy it into `JOINED_SQL` in the first cell and edit it there. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
 
 # %%
 joined_view_proposal = schema_map.joined_view(loaded_dataset)
-joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joined_view_proposal.needed else loaded_dataset
+joined_dataset = (joined_view_proposal.create(connection, sql=JOINED_SQL) if USE_JOINED and joined_view_proposal.needed
+                  else loaded_dataset)
 joined_view_proposal
 
 # %% [markdown]
@@ -176,11 +188,13 @@ joined_view_proposal
 #
 # Proposes a view with correct types (numbers, dates), blanks and placeholders as NULL, and exact copies removed. The table never changes.
 #
-# Read what changes. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+# Read what changes. The rules are in the first cell (`PLACEHOLDER_VALUES`, `DATE_FORMATS`, `DROP_COPIES`, `CAST_TYPES`): change one and run this cell again. To change the SQL itself, copy it into `CLEANING_SQL` in the first cell and edit it there. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
 
 # %%
-typed_view_proposal = nb.typed_view(connection, joined_dataset)
-dataset = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset   # the dataset every step below reads
+typed_view_proposal = nb.typed_view(connection, joined_dataset, placeholder_values=PLACEHOLDER_VALUES, date_formats=DATE_FORMATS,
+                                    timestamp_formats=TIMESTAMP_FORMATS, drop_copies=DROP_COPIES, cast_types=CAST_TYPES)
+dataset = (typed_view_proposal.create(connection, sql=CLEANING_SQL)
+           if USE_PREPARED and (typed_view_proposal.needed or CLEANING_SQL) else joined_dataset)   # what every step below reads
 typed_view_proposal
 
 # %% [markdown]
@@ -255,12 +269,22 @@ landscape_grid
 # When this table links to another table (the links you saved in step 2), its rows can be compared by a group kept there, such as orders by the customer's segment. `nb.linked_groups` lists those groups, each with the table and system it comes from. With no saved link the list is empty and this cell does nothing.
 
 # %%
-linked = nb.linked_groups(dataset)
-ACROSS_GROUP = linked[0]["value"] if linked else None        # or another of them: [g["value"] for g in linked]
-if ACROSS_GROUP:
-    across_query = nb.across_sql(dataset, ACROSS_GROUP)
-    groups = nb.sql(connection, across_query)
-[g["label"] for g in linked]
+linked = nb.linked_groups(dataset)          # each: the table, its group column and the columns the link joins on
+LINKED_GROUP = linked[0] if linked else None                # or another of them
+groups = None
+if LINKED_GROUP:
+    GROUP_HEADER = nb.name(LINKED_GROUP["column"])
+    groups = nb.sql(connection, f"""
+SELECT b."{LINKED_GROUP['column']}" AS {GROUP_HEADER},
+       COUNT(*) AS {COUNT_HEADER}
+FROM {dataset.fact_table} a
+JOIN {LINKED_GROUP['table']} b ON a."{LINKED_GROUP['link_column']}" = b."{LINKED_GROUP['key']}"
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 15""")
+    nb.show_sql()
+print("\n".join(g["label"] for g in linked) or "No linked table with a group.")
+groups
 
 # %% [markdown]
 # ### Over time
@@ -298,7 +322,7 @@ over_time
 # A column written after the outcome (an order's status after cancellation) predicts the target perfectly on old rows and fails on new rows. This cell flags those columns. The model does not use them.
 
 # %%
-LEAKING_COLUMNS = nb.leakage_check(connection, dataset)
+LEAKING_COLUMNS = nb.leakage_check(connection, dataset, pure=GIVES_IT_AWAY)
 
 # %% [markdown]
 # ### Train a baseline model

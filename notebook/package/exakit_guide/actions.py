@@ -161,10 +161,8 @@ ACTIONS: dict[str, Action] = {
     "explore.typed": Action("01_explore", "typed_view_proposal = nb.typed_view(connection, dataset)", "typed_view_proposal", False),
     "explore.clean": Action("01_explore", "dataset = typed_view_proposal.create(connection)", "dataset"),
     "explore.count": Action("01_explore", "row_count = nb.sql(connection, {sql})", "row_count", False),
-    # a group that lives in a linked table of another source: the one query that reads both (nb.across_sql)
+    # the groups of the tables this one links to (the card then joins them with explore.groups' own SQL)
     "explore.linked": Action("01_explore", "linked = nb.linked_groups(dataset)", "linked", False),
-    "explore.across": Action("01_explore", "across_query = nb.across_sql(dataset, {group})\ngroups = nb.sql(connection, across_query)",
-                             "groups", False),
     "explore.groups": Action("01_explore", "groups = nb.sql(connection, {sql})", "groups", False),
     "explore.overall": Action("01_explore", "overall = nb.sql(connection, {sql})", "overall", False),
     "explore.groups_note": Action("01_explore", "groups_note = nb.note_groups(groups, dataset, {group}, {count}, {pct}, overall={overall})",

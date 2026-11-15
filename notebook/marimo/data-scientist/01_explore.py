@@ -67,7 +67,32 @@ def _():
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
     USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
     USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
-    return DATASET, USE_AI_THEMES, USE_JOINED, USE_PREPARED
+    JOINED_SQL = None      # your own joined view: the CREATE VIEW printed under Prepare, as a string, edited
+    CLEANING_SQL = None    # your own cleaned view: the CREATE VIEW printed under Prepare, as a string, edited
+    # The rules the checks and the cleaning use. Change any of them and run the cells below again.
+    PLACEHOLDER_VALUES = ["unknown*", "invalid*", "n/a", "na", "none", "null", "nil", "missing", "not available",
+                          "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]   # mean "not known"; "word*" = starts with
+    RARE_TARGET = 0.10     # a target in under 10% (or over 90%) of rows is rare: judge a model by ROC AUC, not accuracy
+    DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]   # how a date written as text is read
+    TIMESTAMP_FORMATS = ["YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD HH24:MI"]
+    DROP_COPIES = True     # the cleaned view drops rows that copy another row (one of each is kept)
+    CAST_TYPES = True      # the cleaned view gives a text column of numbers, dates or true/false its type
+    GIVES_IT_AWAY = 0.99   # a value whose target rate is 99% or more (or 1% or less) decides the target on its own
+    return (
+        CAST_TYPES,
+        CLEANING_SQL,
+        DATASET,
+        DATE_FORMATS,
+        DROP_COPIES,
+        GIVES_IT_AWAY,
+        JOINED_SQL,
+        PLACEHOLDER_VALUES,
+        RARE_TARGET,
+        TIMESTAMP_FORMATS,
+        USE_AI_THEMES,
+        USE_JOINED,
+        USE_PREPARED,
+    )
 
 
 @app.cell(hide_code=True)
@@ -364,13 +389,13 @@ def _(connection, dataset_1, nb):
         print(f"No category ({_missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
     if 'label' in _missing_roles:
         print(f"No target ({_missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
-    GROUP_HEADER, COUNT_HEADER = (nb.name(GROUP_COLUMN), nb.count_name(dataset_1))
+    _GROUP_HEADER, COUNT_HEADER = (nb.name(GROUP_COLUMN), nb.count_name(dataset_1))
     LABEL_PCT_HEADER = nb.name(dataset_1.col('label'), 'PCT') if dataset_1.has('label') and GROUP_ROLE != 'label' else None
     LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset_1.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ''
-    first_rows = nb.sql(connection, f'\nSELECT {GROUP_COLUMN} AS {GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}\nFROM {dataset_1.fact_table}\nGROUP BY {GROUP_COLUMN}\nORDER BY {COUNT_HEADER} DESC\nLIMIT 10')
+    first_rows = nb.sql(connection, f'\nSELECT {GROUP_COLUMN} AS {_GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}\nFROM {dataset_1.fact_table}\nGROUP BY {GROUP_COLUMN}\nORDER BY {COUNT_HEADER} DESC\nLIMIT 10')
     nb.show_sql()
     _overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset_1.col('label')}), 1) AS PCT FROM {dataset_1.fact_table}") if LABEL_PCT_HEADER else None
-    nb.note_groups(first_rows, dataset_1, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]) if LABEL_PCT_HEADER else None)
+    nb.note_groups(first_rows, dataset_1, _GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]) if LABEL_PCT_HEADER else None)
     first_rows
     return
 
@@ -396,14 +421,14 @@ def _(mo):
     mo.md(r"""
     ### Is the data clean?
 
-    Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. `fraud_transactions` has all of them.
+    Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. What counts as a placeholder and when a target is rare are `PLACEHOLDER_VALUES` and `RARE_TARGET` in the first cell. `fraud_transactions` has all of them.
     """)
     return
 
 
 @app.cell
-def _(connection, loaded_dataset, nb):
-    findings = nb.data_checks(connection, loaded_dataset)
+def _(PLACEHOLDER_VALUES, RARE_TARGET, connection, loaded_dataset, nb):
+    findings = nb.data_checks(connection, loaded_dataset, placeholder_values=PLACEHOLDER_VALUES, rare=RARE_TARGET)
     findings
     return
 
@@ -430,15 +455,16 @@ def _(connection, loaded_dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The joined view combines this table with every linked table. Read the joins and the SQL. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+    The joined view combines this table with every linked table. Read the joins and the SQL. To change the SQL, copy it into `JOINED_SQL` in the first cell and edit it there. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
     """)
     return
 
 
 @app.cell
-def _(USE_JOINED, connection, loaded_dataset, schema_map):
+def _(JOINED_SQL, USE_JOINED, connection, loaded_dataset, schema_map):
     joined_view_proposal = schema_map.joined_view(loaded_dataset)
-    joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joined_view_proposal.needed else loaded_dataset
+    joined_dataset = (joined_view_proposal.create(connection, sql=JOINED_SQL) if USE_JOINED and joined_view_proposal.needed
+                      else loaded_dataset)
     joined_view_proposal
     return (joined_dataset,)
 
@@ -450,16 +476,27 @@ def _(mo):
 
     Proposes a view with correct types (numbers, dates), blanks and placeholders as NULL, and exact copies removed. The table never changes.
 
-    Read what changes. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+    Read what changes. The rules are in the first cell (`PLACEHOLDER_VALUES`, `DATE_FORMATS`, `DROP_COPIES`, `CAST_TYPES`): change one and run this cell again. To change the SQL itself, copy it into `CLEANING_SQL` in the first cell and edit it there. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
     """)
     return
 
 
 @app.cell
-def _(USE_PREPARED, connection, joined_dataset, nb):
-    typed_view_proposal = nb.typed_view(connection, joined_dataset)
-    dataset_2 = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset  # the dataset every step below reads
-    typed_view_proposal
+def _(
+    CAST_TYPES,
+    CLEANING_SQL,
+    DATE_FORMATS,
+    DROP_COPIES,
+    PLACEHOLDER_VALUES,
+    TIMESTAMP_FORMATS,
+    USE_PREPARED,
+    connection,
+    joined_dataset,
+    nb,
+):
+    typed_view_proposal = nb.typed_view(connection, joined_dataset, placeholder_values=PLACEHOLDER_VALUES, date_formats=DATE_FORMATS, timestamp_formats=TIMESTAMP_FORMATS, drop_copies=DROP_COPIES, cast_types=CAST_TYPES)
+    dataset_2 = typed_view_proposal.create(connection, sql=CLEANING_SQL) if USE_PREPARED and (typed_view_proposal.needed or CLEANING_SQL) else joined_dataset
+    typed_view_proposal  # what every step below reads
     return (dataset_2,)
 
 
@@ -568,13 +605,16 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset_2, nb):
+def _(COUNT_HEADER_1, connection, dataset_2, nb):
     linked = nb.linked_groups(dataset_2)
-    ACROSS_GROUP = linked[0]['value'] if linked else None  # or another of them: [g["value"] for g in linked]
-    if ACROSS_GROUP:
-        across_query = nb.across_sql(dataset_2, ACROSS_GROUP)
-        groups = nb.sql(connection, across_query)
-    [g['label'] for g in linked]
+    LINKED_GROUP = linked[0] if linked else None
+    groups = None
+    if LINKED_GROUP:
+        _GROUP_HEADER = nb.name(LINKED_GROUP['column'])
+        groups = nb.sql(connection, f'''\nSELECT b."{LINKED_GROUP['column']}" AS {_GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER_1}\nFROM {dataset_2.fact_table} a\nJOIN {LINKED_GROUP['table']} b ON a."{LINKED_GROUP['link_column']}" = b."{LINKED_GROUP['key']}"\nGROUP BY 1\nORDER BY 2 DESC\nLIMIT 15''')
+        nb.show_sql()
+    print('\n'.join((g['label'] for g in linked)) or 'No linked table with a group.')
+    groups
     return
 
 
@@ -634,8 +674,8 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset_2, nb):
-    LEAKING_COLUMNS = nb.leakage_check(connection, dataset_2)
+def _(GIVES_IT_AWAY, connection, dataset_2, nb):
+    LEAKING_COLUMNS = nb.leakage_check(connection, dataset_2, pure=GIVES_IT_AWAY)
     return (LEAKING_COLUMNS,)
 
 

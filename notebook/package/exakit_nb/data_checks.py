@@ -14,9 +14,32 @@ from __future__ import annotations
 import re
 from typing import Any
 
-# A value that stands for "not known" while looking like a category. Matched on the whole value, case-insensitive.
-PLACEHOLDER = re.compile(r"^\s*(unknown.*|invalid.*|n/?a|none|null|nil|missing|not (available|known|set)|undefined|"
-                         r"-+|\?+|tbd|#n/a)\s*$", re.IGNORECASE)
+# The values that stand for "not known" while looking like a category: matched on the whole value, ignoring case and
+# the blanks around it. "word*" matches anything starting with the word; "-" and "?" match a run of them. The
+# notebook's cells pass their own list (PLACEHOLDER_VALUES), so a person can add or remove one.
+PLACEHOLDER_VALUES = ["unknown*", "invalid*", "n/a", "na", "none", "null", "nil", "missing", "not available",
+                      "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]
+
+
+def placeholder_pattern(values: list[str] | None = None) -> "re.Pattern[str]":
+    """The regular expression a list of placeholder values stands for (PLACEHOLDER_VALUES by default)."""
+    parts = []
+    for value in values if values is not None else PLACEHOLDER_VALUES:
+        value = str(value).strip()
+        if not value:
+            continue
+        if set(value) <= {"-"}:
+            parts.append("-+")
+        elif set(value) <= {"?"}:
+            parts.append(r"\?+")
+        elif value.endswith("*"):
+            parts.append(re.escape(value[:-1]) + ".*")
+        else:
+            parts.append(re.escape(value))
+    return re.compile(r"^\s*(" + "|".join(parts or ["(?!)"]) + r")\s*$", re.IGNORECASE)
+
+
+PLACEHOLDER = placeholder_pattern()
 GROUPABLE = 50          # a column with at most this many values is checked value by value
 PURE = 0.99             # a value whose label rate is at least this (or at most 1 - this) decides the label
 RARE = 0.10             # a label rate under this (or over 1 - this) is a rare class
@@ -52,10 +75,12 @@ def _frame(rows: list[dict[str, Any]], columns: list[str]):
     return pd.DataFrame(rows, columns=columns)
 
 
-def data_checks(conn, ds, *, show: bool = True):
+def data_checks(conn, ds, *, show: bool = True, placeholder_values: list[str] | None = None, rare: float = RARE):
     """Prepare: one row per finding - CHECK, COLUMN_NAME, ROWS_AFFECTED, PCT, MEANS - for repeated keys, repeated
     identifiers, exact copies of a row, empty cells, placeholder values and a rare label. Prints each finding in one
-    sentence (``show=False`` only returns them); an empty frame means the table passed every check."""
+    sentence (``show=False`` only returns them); an empty frame means the table passed every check.
+    ``placeholder_values`` is the list of values that mean "not known" (PLACEHOLDER_VALUES by default); ``rare`` the
+    target rate under which a target counts as rare (0.10)."""
     table, columns, key = ds.fact_table, _columns(ds), _key(ds)
     label = _bare(ds.col("label")) if ds.has("label") else None
     findings: list[dict[str, Any]] = []
@@ -103,7 +128,7 @@ def data_checks(conn, ds, *, show: bool = True):
             add("empty cells", column, empty,
                 f"{column} is empty in {empty:,} rows: averages leave those rows out and groupings put them in a "
                 "group of their own")
-    for column, found in placeholders(conn, ds).items():
+    for column, found in placeholders(conn, ds, values=placeholder_values).items():
         for value, count in found:
             add("placeholder", column, count,
                 f"{column} = '{value}' in {count:,} rows looks like a category but means 'not known': "
@@ -111,11 +136,11 @@ def data_checks(conn, ds, *, show: bool = True):
     if label:
         rate = _run(conn, f"SELECT AVG(CAST({_quoted(label)} AS DOUBLE)) AS R FROM {table} WHERE {_quoted(label)} IS NOT NULL")
         r = float(rate["R"][0] or 0)
-        if r < RARE or r > 1 - RARE:
-            rare, common = (1, 0) if r < RARE else (0, 1)
-            share = r if rare == 1 else 1 - r
+        if r < rare or r > 1 - rare:
+            rare_value, common = (1, 0) if r < rare else (0, 1)
+            share = r if rare_value == 1 else 1 - r
             add("rare label", label, int(round(share * n)),
-                f"{label} = {rare} in only {100 * share:.1f}% of rows: a model that always answers {common} is right "
+                f"{label} = {rare_value} in only {100 * share:.1f}% of rows: a model that always answers {common} is right "
                 f"{100 * (1 - share):.1f}% of the time, so judge a model by ROC AUC or by that baseline, never by accuracy")
     frame = _frame(findings, ["CHECK", "COLUMN_NAME", "ROWS_AFFECTED", "PCT", "MEANS"])
     if show:
@@ -148,12 +173,13 @@ def _grouped(conn, table: str, columns: list[str], rate: str | None = None, wher
     return out
 
 
-def placeholders(conn, ds) -> dict[str, list[tuple[str, int]]]:
+def placeholders(conn, ds, values: list[str] | None = None) -> dict[str, list[tuple[str, int]]]:
     """{COLUMN: [(value, rows), ...]} for the values that stand for "not known" in the category and flag columns -
     only where the values can be listed (at most GROUPABLE of them). The typed view turns these into NULL."""
     table, columns = ds.fact_table, _columns(ds)
     label = _bare(ds.col("label")) if ds.has("label") else None
     found: dict[str, list[tuple[str, int]]] = {}
+    pattern = PLACEHOLDER if values is None else placeholder_pattern(values)
     wanted = [c for c, e in columns.items() if e.get("role") in ("category", "flag") and c != label]
     if not wanted:
         return found
@@ -162,16 +188,16 @@ def placeholders(conn, ds) -> dict[str, list[tuple[str, int]]]:
     distinct = _run(conn, "SELECT " + ", ".join(f"APPROXIMATE_COUNT_DISTINCT({_quoted(c)}) AS {_quoted('D_' + c)}"
                                                 for c in wanted) + f" FROM {table}")
     few = [c for c in wanted if int(distinct[f"D_{c}"][0] or 0) <= GROUPABLE * 2]
-    for column, values in _grouped(conn, table, few).items():
-        if len(values) > GROUPABLE:
+    for column, counted in _grouped(conn, table, few).items():
+        if len(counted) > GROUPABLE:
             continue
-        hits = [(str(v), int(n)) for v, n in zip(values["VALUE_"], values["N"]) if isinstance(v, str) and PLACEHOLDER.match(v)]
+        hits = [(str(v), int(n)) for v, n in zip(counted["VALUE_"], counted["N"]) if isinstance(v, str) and pattern.match(v)]
         if hits:
             found[column] = hits
     return found
 
 
-def leakage_check(conn, ds, *, show: bool = True) -> list[str]:
+def leakage_check(conn, ds, *, show: bool = True, pure: float = PURE) -> list[str]:
     """Validate: the columns whose values (almost) decide the label on their own - each a value or values where the
     label is (nearly) always 1 or always 0, covering most rows. Such a column is usually written after the outcome
     (an order's status once it was cancelled) and makes any model look perfect; leave it out of the features. Returns
@@ -197,13 +223,13 @@ def leakage_check(conn, ds, *, show: bool = True) -> list[str]:
         positives = float((groups["N"] * groups["R"]).sum() or 0)
         if not total or not positives or positives == total:
             continue
-        pure = groups[(groups["R"] >= PURE) | (groups["R"] <= 1 - PURE)]
-        pure_rows = float(pure["N"].sum())
-        caught = float((pure["N"] * pure["R"]).sum())      # label-1 rows that sit in a value deciding them
+        deciders = groups[(groups["R"] >= pure) | (groups["R"] <= 1 - pure)]
+        pure_rows = float(deciders["N"].sum())
+        caught = float((deciders["N"] * deciders["R"]).sum())      # label-1 rows that sit in a value deciding them
         if pure_rows / total >= 0.95 and caught / positives >= 0.9:
             leaked.append(column)
             if show:
-                deciding = pure[pure["R"] >= PURE]["VALUE_"].astype(str).tolist()[:3]
+                deciding = deciders[deciders["R"] >= pure]["VALUE_"].astype(str).tolist()[:3]
                 print(f"- {column} gives {label} away: "
                       + (f"{label} is 1 whenever {column} is {', '.join(repr(v) for v in deciding)}" if deciding
                          else f"its values split {label} almost perfectly")
