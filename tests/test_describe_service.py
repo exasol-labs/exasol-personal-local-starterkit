@@ -455,6 +455,16 @@ class SemanticSurfaces(unittest.TestCase):
         self.assertIn("METRIC_NAME IN ('m')", conn.sent[-1])
         self.assertEqual([], svc.valid_combinations(self.Conn({}), "sales", "orders"))
 
+    def test_the_request_format_and_definition_hashes_are_semantic_views_own(self):
+        conn = self.Conn({"COMPILE_REQUEST_SCHEMA_FOR_AGENT": [{"CONTRACT_SECTION": "REQUEST_KEY", "NAME": "limit", "DESCRIPTION": "rows",
+                                                                "IS_REQUIRED": False, "VALUE_TYPE": "integer", "ALLOWED_VALUES": None}],
+                          "DEFINITION_HASHES_FOR_AGENT": [{"FIELD_KIND": "MODEL", "FIELD_NAME": None, "DEFINITION_HASH": "a"},
+                                                          {"FIELD_KIND": "metric", "FIELD_NAME": "total_amount", "DEFINITION_HASH": "b"}]})
+        self.assertEqual([{"section": "REQUEST_KEY", "name": "limit", "about": "rows", "required": False, "type": "integer"}],
+                         svc.request_contract(conn))
+        self.assertEqual({"MODEL": "a", "METRIC:total_amount": "b"}, svc.definition_hashes(conn, "sales"))
+        self.assertEqual(({}, []), (svc.definition_hashes(self.Conn({}), "sales"), svc.request_contract(self.Conn({}))))
+
     def test_fusion_health_and_feedback_are_semantic_views_own(self):
         conn = self.Conn({"CHECK_FUSION_HEALTH": [{"ENTITY_NAME": "customers", "ATTRIBUTE_NAME": "region", "FUSION_STRATEGY": "COALESCE",
                                                    "TOTAL_KEYS": 10, "FROM_FIRST_SOURCE": 8, "FILLED": 1, "UNRESOLVED": 1}]})

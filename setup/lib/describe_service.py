@@ -1163,6 +1163,34 @@ def valid_combinations(conn, model: str, object_name: str, metrics: list[str] | 
              "valid": bool(r.get("IS_VALID")), "reason": str(r.get("REASON_CODE") or "")} for r in rows]
 
 
+def request_contract(conn) -> list[dict[str, Any]]:
+    """The structured request format, as Semantic Views publishes it (SEMANTIC_AGENT.COMPILE_REQUEST_SCHEMA_FOR_AGENT):
+    every key, filter key and operator with what it means, whether it is required and its allowed values. [] when it
+    cannot be read; Ask then gives the AI its own rules alone."""
+    try:
+        rows = _up(_rows(conn, "SELECT * FROM SEMANTIC_AGENT.COMPILE_REQUEST_SCHEMA_FOR_AGENT"))
+    except Exception:                       # noqa: BLE001
+        return []
+    return [{"section": str(r.get("CONTRACT_SECTION") or ""), "name": str(r.get("NAME") or ""),
+             "about": str(r.get("DESCRIPTION") or ""), "required": bool(r.get("IS_REQUIRED")),
+             "type": str(r.get("VALUE_TYPE") or ""), **({"allowed": str(r["ALLOWED_VALUES"])} if r.get("ALLOWED_VALUES") else {})}
+            for r in rows]
+
+
+def definition_hashes(conn, model: str) -> dict[str, str]:
+    """Each field's definition as Semantic Views fingerprints it (SEMANTIC_AGENT.DEFINITION_HASHES_FOR_AGENT):
+    {"MODEL": hash, "METRIC:total_amount": hash, "DIMENSION:state": hash, ...}. {} when it cannot be read."""
+    from descriptor import semantic_model as sm
+
+    try:
+        rows = _up(_rows(conn, "SELECT FIELD_KIND, FIELD_NAME, DEFINITION_HASH FROM SEMANTIC_AGENT.DEFINITION_HASHES_FOR_AGENT "
+                               f"WHERE UPPER(MODEL_NAME) = UPPER({sm.literal(sm.model_name(model))})"))
+    except Exception:                       # noqa: BLE001
+        return {}
+    return {("MODEL" if str(r.get("FIELD_KIND")).upper() == "MODEL" else f"{str(r.get('FIELD_KIND')).upper()}:{r.get('FIELD_NAME')}"):
+            str(r.get("DEFINITION_HASH") or "") for r in rows}
+
+
 def explain_metric(conn, model: str, object_name: str, metric: str) -> list[dict[str, str]]:
     """A metric as Semantic Views explains it (EXPLAIN_SEMANTIC_METRIC): its definition, lineage, the dimensions it
     can be grouped by and its validation state. [{section, item, detail}]."""

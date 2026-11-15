@@ -270,6 +270,24 @@ class DataMapChecksTest(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
+    def test_the_ai_gets_semantic_views_own_request_format_and_the_question_travels_with_the_request(self):
+        semantic = {"model": "sales", "object": "ORDERS", "view": "SEM.ORDERS", "conn": object(),
+                    "dimensions": [{"name": "state"}], "metrics": [{"name": "total_amount"}]}
+        client = mock.Mock()
+        client.chat.completions.create.return_value = types.SimpleNamespace(choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=json.dumps({"metrics": ["total_amount"], "dimensions": ["state"]})))])
+        self.service.glossary.return_value = ""
+        self.service.valid_combinations.return_value = []
+        self.service.request_contract.return_value = [{"section": "FILTER_OPERATOR", "name": "IN", "about": "one of", "required": False},
+                                                      {"section": "REQUEST_KEY", "name": "proof_mode", "about": "x", "required": False}]
+        self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT 1", "explained": [], "request_id": 1}
+        request, *_rest = self.ask._ask_request(client, "m", {}, semantic, "Revenue by state?")
+        prompt = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual([{"section": "FILTER_OPERATOR", "name": "IN", "about": "one of", "required": False}], prompt["request_format"],
+                         "the product's own format; planner-only keys left out")
+        self.assertEqual(("Revenue by state?", "exakit Ask"), (request["natural_language_text"], request["purpose"]),
+                         "the question is kept with the request in Semantic Views' history")
+
     def test_a_pair_semantic_views_refuses_goes_back_to_the_ai_once(self):
         semantic = {"model": "sales", "object": "ORDERS", "view": "SEM.ORDERS", "conn": object(),
                     "dimensions": [{"name": "state"}, {"name": "product"}], "metrics": [{"name": "order_cost"}]}
@@ -360,6 +378,17 @@ class DataMapChecksTest(unittest.TestCase):
             self.assertEqual("SELECT 1 FROM T", b.pages[0]["tiles"][0]["sql"])
             self.service.compile_request.side_effect = RuntimeError("SEMANTIC_ADMIN missing")
             self.assertEqual("refused", b.recheck(object())[0]["state"])
+            # a tile that remembers Semantic Views' fingerprints of its fields: unchanged fields, no compile
+            self.service.compile_request.side_effect = None
+            self.service.compile_request.reset_mock()
+            b.pages[0]["tiles"][0]["hashes"] = {"METRIC:revenue": "h1"}
+            self.service.definition_hashes.return_value = {"MODEL": "m", "METRIC:revenue": "h1"}
+            self.assertEqual("same", b.recheck(object())[0]["state"])
+            self.service.compile_request.assert_not_called()
+            self.service.definition_hashes.return_value = {"MODEL": "m2", "METRIC:revenue": "h2"}
+            self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT 2 FROM T"}
+            self.assertEqual("changed", b.recheck(object(), update=True)[0]["state"], "a changed field is compiled again")
+            self.assertEqual({"METRIC:revenue": "h2"}, b.pages[0]["tiles"][0]["hashes"])
 
 
 class AskRulesTest(unittest.TestCase):

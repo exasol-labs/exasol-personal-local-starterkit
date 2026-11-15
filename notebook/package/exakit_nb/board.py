@@ -199,11 +199,25 @@ class Board:
 
         service = _service()
         found = []
+        hashes: dict[str, dict[str, str]] = {}
         for page in self.pages:
             for tile in page["tiles"]:
                 if not tile.get("request"):
                     continue
                 entry = {"id": tile["id"], "page": page["title"], "title": tile["title"], "sql": None, "reason": None}
+                if tile.get("hashes"):
+                    # Semantic Views' fingerprints of the fields this tile uses: unchanged, nothing to compile
+                    model = tile["request"].get("model")
+                    if model not in hashes:
+                        try:
+                            got = service.definition_hashes(conn, model)
+                            hashes[model] = got if isinstance(got, dict) else {}
+                        except Exception:       # noqa: BLE001
+                            hashes[model] = {}
+                    now = {k: hashes[model].get(k) for k in tile["hashes"]}
+                    if hashes[model] and now == tile["hashes"]:
+                        found.append(dict(entry, state="same"))
+                        continue
                 try:
                     compiled = service.compile_request(conn, dict(tile["request"]))
                 except Exception as err:     # noqa: BLE001 - the data map cannot be read: said per tile, nothing changes
@@ -217,6 +231,8 @@ class Board:
                 found.append(dict(entry, state="same" if same else "changed", sql=None if same else fresh))
                 if update and not same:
                     tile.update(sql=fresh, sql_digest=hashlib.sha256(fresh.encode("utf-8")).hexdigest())
+                    if tile.get("hashes"):
+                        tile["hashes"] = {k: (hashes.get(tile["request"].get("model")) or {}).get(k, v) for k, v in tile["hashes"].items()}
                     log_event("board.recheck", board=self.name, tile=tile["id"], sql_digest=tile["sql_digest"])
         if update and any(f["state"] == "changed" for f in found):
             self.save()
@@ -316,6 +332,21 @@ def board(name: str) -> Board:
     return Board(name, str(doc.get("title") or ""), list(doc.get("pages") or []), dict(doc.get("rules") or {}))
 
 
+def _field_hashes(conn, request: dict[str, Any]) -> dict[str, str]:
+    """The fingerprints Semantic Views keeps of the fields a request uses (DEFINITION_HASHES_FOR_AGENT), so a recheck
+    knows which tiles' fields changed without compiling every tile again. {} when they cannot be read."""
+    try:
+        from .semantic import _service
+
+        every = _service().definition_hashes(conn, request["model"])
+    except Exception:                       # noqa: BLE001
+        return {}
+    if not isinstance(every, dict):
+        return {}
+    used = [f"METRIC:{m}" for m in request.get("metrics") or []] + [f"DIMENSION:{d}" for d in request.get("dimensions") or []]
+    return {k: every[k] for k in used if k in every}
+
+
 def pin(proposal, answer=None, *, board: str = "my-dashboard", page: str = "Overview", title: str | None = None,
         kind: str | None = None) -> dict[str, Any]:
     """Put an approved answer on a page of a dashboard: its SQL exactly as approved, shown as ``kind`` (kpi, bar, line
@@ -347,6 +378,8 @@ def pin(proposal, answer=None, *, board: str = "my-dashboard", page: str = "Over
             "dimensions": dimensions, "columns": [str(c) for c in getattr(answer, "columns", [])],
             "dataset": getattr(dataset, "id", None), "descriptor_version": str(getattr(dataset, "version", "") or ""),
             "request": getattr(proposal, "request", None), "workflow_id": current_workflow()}
+    if tile["request"] and getattr(proposal, "conn", None) is not None:
+        tile["hashes"] = _field_hashes(proposal.conn, tile["request"])
     here = target.page(page)
     here["tiles"] = [t for t in here["tiles"] if t["sql_digest"] != digest] + [tile]
     target.save()

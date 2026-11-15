@@ -366,6 +366,8 @@ Ask gives your AI Semantic Views' own glossary of the semantic view (`GET_BUSINE
 
 Before anything is compiled, Ask checks each metric and dimension the AI picked against what Semantic Views allows (`VALID_COMBINATIONS_FOR_AGENT`). A pair it refuses, such as a cost recorded once per order grouped by product, goes back to the AI once, with the product's reason and the dimensions each metric may be grouped by. When the AI still finds no allowed pair, Ask says which pair and why, and nothing is compiled. `exakit semantic combinations all_data ORDER_LINES` lists them.
 
+The AI is also given the request format as Semantic Views publishes it (`COMPILE_REQUEST_SCHEMA_FOR_AGENT`): every key, filter key and operator with what it means. Your question travels with the request (`natural_language_text`), so it shows in Semantic Views' request history.
+
 ### What you see before you approve an answer [#what-you-see-before-you-approve-an-answer]
 
 Every answer in Ask says whether your data map checked it:
@@ -384,6 +386,8 @@ exakit semantic search "revenue country" --model all_data
 ```
 
 ### When your data map changes, your dashboards are rechecked [#when-your-data-map-changes-your-dashboards-are-rechecked]
+
+A tile pinned from a checked answer also keeps Semantic Views' fingerprint of each field it uses (`DEFINITION_HASHES_FOR_AGENT`). The recheck compiles a tile again only when one of those fingerprints changed.
 
 A tile pinned from a checked answer keeps the request it came from. The Share notebook compiles each such tile again and lists the ones whose SQL your data map now writes differently. Set `UPDATE_TILES = True` to take the new SQL. Tiles you wrote or edited yourself are left as they are.
 

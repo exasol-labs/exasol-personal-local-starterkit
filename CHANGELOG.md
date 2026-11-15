@@ -4,6 +4,7 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **Ask and the dashboards read two more of Semantic Views' own surfaces.** Ask gives the AI the product's published request format (`COMPILE_REQUEST_SCHEMA_FOR_AGENT`) and sends your question with the request, so it shows in Semantic Views' request history. A pinned tile keeps the product's fingerprint of each field it uses (`DEFINITION_HASHES_FOR_AGENT`), so a recheck compiles only the tiles whose fields changed.
 - **Ask checks the AI's metric and dimension pairs against what Semantic Views allows** (`VALID_COMBINATIONS_FOR_AGENT`) before compiling. A refused pair goes back to the AI once with the product's reason and the allowed dimensions; `exakit semantic combinations` lists them.
 - **The last of Semantic Views' features, in the card, the notebook and `exakit semantic fuse`.**
   - **Different ids across sources:** a table pairing them, bound as a certified `MAPPED` identity.

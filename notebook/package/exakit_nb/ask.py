@@ -288,7 +288,8 @@ ASK_RULES: dict[str, Any] = {
     "SEARCH_WORDS": 4,
     "REQUEST_SYSTEM": "Return only one JSON object with metrics, dimensions, filters, order_by, limit, assumptions (array) "
                       "and doubts (array). No Markdown.",
-    "REQUEST_PROMPT": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
+    "REQUEST_PROMPT": "Answer with a structured request, in Semantic Views' request_format when it is given: metrics "
+                      "(names from the list), dimensions (names from the list, "
                       "to group by), filters [{field, op, value}] on dimensions (op one of = != > >= < <= LIKE IN BETWEEN), "
                       "order_by [{field, direction}], limit. Use only the names listed (the glossary, when given, is Semantic "
                       "Views' own description of them), and follow the model's instructions "
@@ -350,6 +351,21 @@ def _ask_rules(given: dict[str, Any] | None) -> dict[str, Any]:
 _STOP = {"the", "and", "for", "per", "what", "which", "how", "many", "much", "show", "give", "list", "with", "from",
          "that", "this", "are", "was", "were", "has", "have", "each", "all", "our", "their", "by", "of", "in", "on", "to",
          "is", "me", "a", "an", "top", "most", "least", "by", "over", "between", "last", "first"}
+
+
+def _contract(semantic: dict[str, Any]) -> list[dict[str, Any]]:
+    """The request format as Semantic Views publishes it, for the AI: the keys it may use, the filter operators and
+    what each means. [] when it cannot be read."""
+    if not semantic.get("conn"):
+        return []
+    try:
+        from .semantic import _service
+
+        found = _service().request_contract(semantic["conn"])
+        return [r for r in found if r.get("name") not in ("client", "purpose", "proof_mode", "options", "max_branches, max_bytes")] \
+            if isinstance(found, list) else []
+    except Exception:                       # noqa: BLE001
+        return []
 
 
 def _not_allowed(semantic: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any] | None:
@@ -507,6 +523,9 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     said_by_product = None if looked else _glossary(semantic, "STRUCTURED_REQUEST")
     if said_by_product:
         prompt["glossary"] = said_by_product
+    contract = _contract(semantic)
+    if contract:
+        prompt["request_format"] = contract
     prompt["rules"] = rules["REQUEST_PROMPT"]
     answer = client.chat.completions.create(
         model=model,
@@ -539,7 +558,8 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
         if again:
             raise ValueError("Semantic Views does not allow " + "; ".join(f"{x['metric']} by {x['dimension']} ({x['reason']})"
                                                                            for x in again["pairs"][:4]))
-    request = {"model": semantic["model"], "object": semantic["object"]}
+    request = {"model": semantic["model"], "object": semantic["object"], "natural_language_text": str(question)[:1000],
+               "purpose": "exakit Ask"}
     for key in ("metrics", "dimensions", "filters", "having", "order_by"):
         if isinstance(parsed.get(key), list) and parsed[key]:
             request[key] = parsed[key]
@@ -717,7 +737,8 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                 return Proposal(dataset, question.strip(), _read_sql(plain),
                                 [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
                                  "AI tools use, so the numbers match.",
-                                 "Request: " + json.dumps({k: v for k, v in request.items() if k not in ("model", "object", "client")}),
+                                 "Request: " + json.dumps({k: v for k, v in request.items()
+                                                           if k not in ("model", "object", "client", "purpose", "natural_language_text")}),
                                  *said], unsure, request=request, plan=plan, checked=True, request_id=request_id, conn=conn)
             try:
                 drafted = _ask_semantic(client, model, options, semantic, question, rules) if "data_map_sql" in order else None
