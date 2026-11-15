@@ -506,6 +506,28 @@ class SemanticModelTest(unittest.TestCase):
         sent = semantic_model.instruction_statements("shop", rules)
         self.assertTrue(sent[0].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.ADD_AGENT_INSTRUCTION('shop', 'MODEL', NULL, 'GENERAL'"))
 
+    def test_a_hidden_column_gets_semantic_views_mask_and_is_cleared_when_shown_again(self):
+        tables = [semantic_model.table_input("TPCH.ORDERS", self.ORDERS, {"O_TOTALPRICE": "DECIMAL(15,2)", "O_ORDERDATE": "DATE"}),
+                  semantic_model.table_input("TPCH.CUSTOMER", self.CUSTOMER, {})]
+        spec = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "TPCH.CUSTOMER.C_CUSTKEY"}], "shop")
+        found, refused = semantic_model.field_policies(spec, {"TPCH.CUSTOMER": ["C_MKTSEGMENT", "C_PHONE"]})
+        self.assertEqual([("ORDERS", "c_mktsegment")], [(x["object"], x["field"]) for x in found], "every view that shows it")
+        self.assertEqual(["hide TPCH.CUSTOMER.C_PHONE: it is not a column to group by in your data map"], refused,
+                         "a personal-data column of a column map is not in the model at all")
+        sent = []
+        spec["policies"] = found
+        with mock.patch.object(semantic_model, "existing", return_value=None):
+            semantic_model.apply(sent.append, lambda sql: [], spec)
+        self.assertIn("EXECUTE SCRIPT SEMANTIC_ADMIN.SET_FIELD_POLICY('shop', 'ORDERS', 'c_mktsegment', 'MASK', 'personal data')", sent)
+        previous = dict(spec)
+        shown = dict(spec, policies=[])
+        sent.clear()
+        with mock.patch.object(semantic_model, "existing", return_value={"name": "shop", "kit": True}), \
+                mock.patch.object(semantic_model, "changes", return_value=[]):
+            semantic_model.apply(sent.append, lambda sql: [], shown, previous=previous)
+        self.assertIn("EXECUTE SCRIPT SEMANTIC_ADMIN.SET_FIELD_POLICY('shop', 'ORDERS', 'c_mktsegment', NULL, NULL)", sent,
+                      "shown again: the policy is cleared")
+
     def test_the_ai_draft_keeps_only_real_names_and_reads_no_row(self):
         """One call drafts the data map from the approved column maps on this computer; whatever names no real table
         or column is dropped and said. The prompt holds names, roles, notes and known values only."""

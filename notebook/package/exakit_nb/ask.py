@@ -273,14 +273,16 @@ ASK_RULES: dict[str, Any] = {
                       "and doubts (array). No Markdown.",
     "REQUEST_PROMPT": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
                       "to group by), filters [{field, op, value}] on dimensions (op one of = != > >= < <= LIKE IN BETWEEN), "
-                      "order_by [{field, direction}], limit. Use only the names listed, and follow the model's instructions "
+                      "order_by [{field, direction}], limit. Use only the names listed (the glossary, when given, is Semantic "
+                      "Views' own description of them), and follow the model's instructions "
                       "(a SAFETY one is never broken). If the question cannot be answered from them, return an empty "
                       "metrics list and say why in doubts.",
     "DATA_MAP_SQL_SYSTEM": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. "
                            "Never execute SQL.",
     "DATA_MAP_SQL_PROMPT": "Answer with Semantic SQL over the semantic view: SELECT <dimension names>, <metric names> FROM "
                            "<semantic_view> [WHERE <dimension> = '<value>'] GROUP BY <the dimension names>. Use only the "
-                           "names listed. No joins, no aggregate functions, no other tables: the metrics already aggregate. "
+                           "names listed (the glossary, when given, is Semantic Views' own description of them). No joins, no "
+                           "aggregate functions, no other tables: the metrics already aggregate. "
                            "If the question cannot be answered from these metrics and dimensions, return sql as an empty "
                            "string and say why in doubts.",
     "COLUMN_MAP_SYSTEM": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Use "
@@ -333,6 +335,19 @@ _STOP = {"the", "and", "for", "per", "what", "which", "how", "many", "much", "sh
          "is", "me", "a", "an", "top", "most", "least", "by", "over", "between", "last", "first"}
 
 
+def _glossary(semantic: dict[str, Any], mode: str) -> str:
+    """Semantic Views' own glossary of the semantic view (GET_BUSINESS_GLOSSARY): what each field means and the
+    model's instructions, written by the product for an AI. "" when it cannot be read; the field list stands."""
+    if not semantic.get("conn"):
+        return ""
+    try:
+        from .semantic import _service
+
+        return _service().glossary(semantic["conn"], semantic["model"], semantic["object"], mode)[:12000]
+    except Exception:                       # noqa: BLE001
+        return ""
+
+
 def _narrowed(semantic: dict[str, Any], question: str, rules: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
     """The fields the AI is shown. A small data map is shown whole. A large one (more than SEARCH_ABOVE fields) is
     searched first (SEARCH_SEMANTIC_OBJECTS, one word at a time: the question's SEARCH_WORDS longest words) and only
@@ -369,6 +384,9 @@ def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], q
     semantic, _looked = _narrowed(semantic, question, rules)
     prompt = {"semantic_view": semantic["view"], "dimensions": semantic["dimensions"], "metrics": semantic["metrics"],
               "instructions": semantic.get("instructions") or [], "question": question}
+    said_by_product = None if _looked else _glossary(semantic, "SEMANTIC_SQL")
+    if said_by_product:
+        prompt["glossary"] = said_by_product
     prompt["rules"] = rules["DATA_MAP_SQL_PROMPT"]
     answer = client.chat.completions.create(
         model=model,
@@ -445,6 +463,9 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     semantic, looked = _narrowed(semantic, question, rules)
     prompt = {"model": semantic["model"], "object": semantic["object"], "dimensions": semantic["dimensions"],
               "metrics": semantic["metrics"], "instructions": semantic.get("instructions") or [], "question": question}
+    said_by_product = None if looked else _glossary(semantic, "STRUCTURED_REQUEST")
+    if said_by_product:
+        prompt["glossary"] = said_by_product
     prompt["rules"] = rules["REQUEST_PROMPT"]
     answer = client.chat.completions.create(
         model=model,

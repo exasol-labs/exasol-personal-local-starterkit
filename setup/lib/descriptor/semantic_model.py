@@ -677,6 +677,14 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
             execute(_script("PUBLISH_MODEL", model))
         except Exception as err:
             warnings.append(f"publish after the extra definitions: {' '.join(str(err).split())[:300]}")
+    policies = list(spec.get("policies") or [])
+    gone = [x for x in (previous or {}).get("policies") or [] if x not in policies] if mode != "rebuilt" else []
+    for policy, masked in [(x, True) for x in policies] + [(x, False) for x in gone]:
+        try:
+            execute(_script("SET_FIELD_POLICY", model, policy["object"], policy["field"], "MASK" if masked else None,
+                            "personal data" if masked else None))
+        except Exception as err:
+            warnings.append(f"{policy['object']}.{policy['field']}: {' '.join(str(err).split())[:200]} (not hidden)")
     if reader:
         warnings += grant_reader(execute, model, reader)
     counts = {"views": len(spec["objects"]), "entities": len(spec["entities"]),
@@ -809,6 +817,23 @@ def user_metrics(spec: dict[str, Any], metrics: Iterable[dict[str, Any]]) -> tup
             taken.update([total, rows_])
         taken.add(name)
     return extra, refused
+
+
+def field_policies(spec: dict[str, Any], hidden: dict[str, Iterable[str]] | None) -> tuple[list[dict[str, str]], list[str]]:
+    """([{object, field}], what was refused) for columns to hide in answers ({SCHEMA.TABLE: [COLUMN]}): every semantic
+    view that has a dimension over that column gets Semantic Views' own MASK policy (SET_FIELD_POLICY) - the value is
+    never returned, filtering on it still works. A personal-data column of a column map is not in the model at all."""
+    found, refused = [], []
+    for table, columns in (hidden or {}).items():
+        schema, _, name = str(table).upper().partition(".")
+        entity = next((e for e in spec["entities"] if (e["schema"], e["table"]) == (schema, name)), None)
+        for column in columns or []:
+            hits = [{"object": o["name"], "field": d["name"]} for o in spec["objects"] for d in o["dimensions"]
+                    if entity and d.get("entity") == entity["name"] and _field_of([d], column)]
+            if not hits:
+                refused.append(f"hide {table}.{column}: it is not a column to group by in your data map")
+            found += [h for h in hits if h not in found]
+    return found, refused
 
 
 def user_instructions(spec: dict[str, Any], instructions: Iterable[Any]) -> list[dict[str, Any]]:

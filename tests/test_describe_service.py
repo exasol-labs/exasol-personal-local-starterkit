@@ -408,6 +408,27 @@ class SemanticSurfaces(unittest.TestCase):
         with self.assertRaisesRegex(svc.Refused, "column maps"):
             svc.adopt_view(conn, "sales", "MART_SEMANTIC.SHIPPING")
 
+    def test_validation_explanation_and_glossary_are_semantic_views_own_words(self):
+        conn = self.Conn({"VALIDATE_MODEL": [{"SEVERITY": "error", "OBJECT_TYPE": "METRIC", "OBJECT_NAME": "x", "RULE_CODE": "SEMANTIC_MODEL_076",
+                                              "MESSAGE": "declares  DECIMAL"}],
+                          "CHECK_METRIC_TYPES": [{"OBJECT_NAME": "ORDERS", "METRIC_NAME": "x", "DECLARED_TYPE": "DECIMAL(18,2)",
+                                                  "COMPILED_TYPE": "DOUBLE", "COMPATIBLE": False, "PROBE_ERROR": None},
+                                                 {"OBJECT_NAME": "ORDERS", "METRIC_NAME": "y", "COMPATIBLE": True}],
+                          "SUGGEST_GRAIN_METADATA": [],
+                          "COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT 1 FROM S.T", "AGENT_REQUEST_ID": 42}],
+                          "EXPLAIN_COMPILED_SQL": [{"GOVERNANCE": "Certified model.\nRow policy: none.", "SELECTED_MATERIALIZATION": None}],
+                          "GET_BUSINESS_GLOSSARY": [{"GLOSSARY_TEXT": "total_amount: revenue incl. tax"}]})
+        found = svc.validate_model(conn, "Sales")
+        self.assertEqual((1, "SEMANTIC_MODEL_076", "declares DECIMAL", ["x"]),
+                         (found["errors"], found["issues"][0]["rule"], found["issues"][0]["message"], [t["metric"] for t in found["types"]]))
+        self.assertIn("ALTER SESSION SET QUERY_TIMEOUT=60", conn.sent, "the product's data probes are bounded")
+        compiled = svc.compile_request(conn, {"model": "sales", "object": "ORDERS", "metrics": ["m"]})
+        self.assertEqual(["Semantic Views: Certified model.", "Semantic Views: Row policy: none.", "Reads S.T."], compiled["explained"],
+                         "the product's own words first")
+        self.assertIn("EXPLAIN_COMPILED_SQL('AGENT_REQUEST', 42)", " ".join(conn.sent))
+        self.assertEqual("total_amount: revenue incl. tax", svc.glossary(conn, "sales", "orders"))
+        self.assertEqual("", svc.glossary(self.Conn({}), "sales", "orders"))
+
     def test_a_verified_question_is_compiled_first_and_kept_beside_the_model(self):
         from descriptor import publish
         publish.keep({"model": "sales"}, {"tables": []})

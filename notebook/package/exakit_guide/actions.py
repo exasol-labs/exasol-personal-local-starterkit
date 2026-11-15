@@ -108,8 +108,9 @@ ACTIONS: dict[str, Action] = {
                                   "link_check", False),
     "semantic.save_map": Action("01_explore", "semantic = nb.semantic_model(connection, \"all_data\", tables={tables}, links={links}, "
                                 "table_notes={table_notes}, grains={grains}, starts={starts}, metrics={metrics}, "
-                                "instructions={instructions}, description={description}, replace_links=True, ai=False, "
+                                "instructions={instructions}, hidden={hidden}, description={description}, replace_links=True, ai=False, "
                                 "preview={preview})", "semantic"),
+    "semantic.validate": Action("01_explore", "data_map_check = nb.validate_data_map(connection)", "data_map_check", False),
     # step 2 (01_explore) opens the tables the quickstart chose, each by name, and moves between them
     "understand.open": Action("01_explore", "chosen_tables = nb.open_chosen(connection)", "chosen_tables", False),
     "understand.switch": Action("01_explore", "chosen_data = chosen_tables[{table}]", "chosen_data", False),

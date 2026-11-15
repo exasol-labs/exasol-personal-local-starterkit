@@ -1458,10 +1458,12 @@ class SemanticViews(Screen):
     warnings: list = []
     fusion_doc = fusion_said = None
     fusion_for: tuple = ()
+    report: dict | None = None           # what Semantic Views found wrong (nb.validate_data_map), after a save or a check
 
     @staticmethod
     def _empty() -> dict:
-        return {"grains": {}, "table_notes": {}, "links": [], "starts": [], "metrics": [], "instructions": [], "description": ""}
+        return {"grains": {}, "table_notes": {}, "links": [], "starts": [], "metrics": [], "instructions": [], "description": "",
+                "hidden": {}}
 
     @staticmethod
     def _chosen_tables() -> list[str]:
@@ -1525,6 +1527,9 @@ class SemanticViews(Screen):
         metrics = list(self.dm.get("metrics") or [])
         kept = {str(x) for x in v.get(self._id("metrics")) or []} if has("metrics") else {str(i) for i in range(len(metrics))}
         dm["metrics"] = [m for i, m in enumerate(metrics) if str(i) in kept]
+        dm["hidden"] = {t: ([str(c) for c in v.get(self._id("hide", t)) or []] if has("hide", t) else list((self.dm.get("hidden") or {}).get(t) or []))
+                         for t in tables}
+        dm["hidden"] = {t: c for t, c in dm["hidden"].items() if c}
         rules = list(self.dm.get("instructions") or [])
         typed = [text("rule", str(i)) if has("rule", str(i)) else (rules[i] if i < len(rules) else "") for i in range(len(rules) + 1)]
         dm["instructions"] = [r for r in typed if r]
@@ -1535,7 +1540,7 @@ class SemanticViews(Screen):
         if self.loading or not self.facts["tables"]:
             return
         now = self._collected(v)
-        self.dm.update({k: now[k] for k in ("grains", "table_notes", "links", "starts", "metrics", "instructions")})
+        self.dm.update({k: now[k] for k in ("grains", "table_notes", "links", "starts", "metrics", "instructions", "hidden")})
         self.dm["description"] = now["description"] or ""
 
     # -- the form ---------------------------------------------------------------------------------------------------
@@ -1566,9 +1571,17 @@ class SemanticViews(Screen):
                  "placeholder": "one order line"},
                 {"id": self._id("note", t), "type": "text", "label": "What the table is (optional)",
                  "value": self.dm["table_notes"].get(t) or "", "placeholder": "Every order line of the online shop"}]})
+        hide = [{"id": self._id("hide", t), "type": "picks", "label": f"{t}: hide in answers (optional)",
+                 "value": list((self.dm.get("hidden") or {}).get(t) or []),
+                 "options": [{"value": c["name"], "label": c["name"]} for c in self._of_role(t, ("category", "identifier", "key", "flag", "time"))]}
+                for t in tables if self._of_role(t, ("category", "identifier", "key", "flag", "time"))]
         blocks += [{"t": "subhead", "v": "1 · Your tables", "tip": "What one row of each table is. Semantic Views uses it so an "
-                    "amount is never counted once per row of another table. The key comes from the column map."},
+                    "amount is never counted once per row of another table. The key comes from the column map. A column "
+                    "you hide (a customer's name) is never shown in an answer, but questions can still filter on it; a "
+                    "column the column map marks as personal data is not in your data map at all."},
                    {"t": "fields", "items": rows}]
+        if hide:
+            blocks.append({"t": "details", "title": "Hide columns in answers", "blocks": [{"t": "fields", "items": hide}]})
         # 2 · the links
         blocks.append({"t": "subhead", "v": "2 · How they connect", "tip": "A link says: this column holds the key of that "
                        "table. Many-to-one: many rows here, one there (order lines to orders). One-to-one: each value once on "
@@ -1650,6 +1663,10 @@ class SemanticViews(Screen):
             blocks.append({"t": "msg", "kind": "ok", "keep": True, "v": self.result_text})
         if self.warnings:
             blocks.append({"t": "msg", "kind": "warn", "keep": True, "v": "Semantic Views said: " + " · ".join(self.warnings)})
+        if self.saved:
+            blocks.append({"t": "actions", "items": [{"id": "dm_validate", "label": "Check my data map", "busy": "Semantic Views is checking…",
+                                                      "tip": "Semantic Views validates it again and lists every problem in its own words."}]})
+        blocks += self._report_blocks()
         if self.preview_text:
             blocks.append({"t": "details", "title": "What saving runs", "blocks": [{"t": "pre", "v": self.preview_text}]})
         fusion = self._fusion_blocks()
@@ -1658,6 +1675,22 @@ class SemanticViews(Screen):
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
                        "v": actions.code("semantic.save_map", **self._save_args(self.dm, preview=False))})
         return blocks
+
+    def _report_blocks(self) -> list[dict]:
+        """What Semantic Views found, in its own words: each issue, each metric whose type differs, each suggestion."""
+        r = self.report
+        if not r:
+            return []
+        rows = [[i["severity"], f"{i['object_type']} {i['object']}".strip(), i["rule"], i["message"]] for i in r.get("issues") or []]
+        rows += [["TYPE", f"{t['object']}.{t['metric']}", "", f"declares {t['declared']}, returns {t['compiled']} {t['error']}".strip()]
+                 for t in r.get("types") or []]
+        rows += [["SUGGESTION", x["object"], x["reason"], f"{x['type']}: {x['proposed']}"] for x in r.get("suggestions") or []]
+        if not rows:
+            return [{"t": "msg", "kind": "ok", "keep": True, "v": "Semantic Views checked your data map and finds nothing wrong."}]
+        head = (f"Semantic Views finds {r.get('errors', 0)} error{'s' if r.get('errors') != 1 else ''} to fix"
+                if r.get("errors") else "Semantic Views has notes on your data map")
+        return [{"t": "msg", "kind": "warn" if r.get("errors") else "info", "keep": True, "v": head + ", in its own words:"},
+                {"t": "table", "columns": ["Kind", "Where", "Rule", "What it says"], "rows": rows}]
 
     @staticmethod
     def _said(m: dict) -> str:
@@ -1739,7 +1772,8 @@ class SemanticViews(Screen):
                 "table_notes": dict(dm.get("table_notes") or {}), "grains": dict(dm.get("grains") or {}),
                 "starts": list(dm.get("starts") or []) or None,
                 "metrics": [{k: x for k, x in m.items() if k != "by"} for m in dm.get("metrics") or []],
-                "instructions": list(dm.get("instructions") or []), "description": dm.get("description") or None, "preview": preview}
+                "instructions": list(dm.get("instructions") or []), "hidden": dict(dm.get("hidden") or {}),
+                "description": dm.get("description") or None, "preview": preview}
 
     def _save(self, v: dict, preview: bool):
         if not self.facts["tables"]:
@@ -1758,6 +1792,14 @@ class SemanticViews(Screen):
         self.result_text = (f"Saved and checked by Semantic Views: {', '.join(found.views)}. Ask, dashboards and AI tools "
                             "read it now.")
         self.saved, self.n = True, self.n + 1
+        try:
+            self.report = dict(actions.run("semantic.validate"))
+        except Exception as exc:                # the save stands; the check is said to have failed
+            self.report = {"issues": [{"severity": "NOTE", "object_type": "", "object": "", "rule": "",
+                                       "message": f"Not checked: {str(exc).splitlines()[0][:200] if str(exc) else type(exc).__name__}"}]}
+
+    def on_dm_validate(self, _v: dict) -> None:
+        self.report = dict(actions.run("semantic.validate"))
 
     def on_session(self, what: str) -> None:
         if what == "ai" and SESSION.ai_model is not None:
@@ -1782,6 +1824,7 @@ class SemanticViews(Screen):
         dm["instructions"] = list(dm.get("instructions") or []) + [i for i in draft.get("instructions") or []
                                                                     if i not in (dm.get("instructions") or [])]
         dm["description"] = dm.get("description") or draft.get("description") or ""
+        dm["hidden"] = {**{t: c for t, c in (draft.get("hidden") or {}).items() if t in self.facts["tables"]}, **(dm.get("hidden") or {})}
         self.n += 1
 
     # -- the same thing in two sources (fusion) ---------------------------------------------------------------------

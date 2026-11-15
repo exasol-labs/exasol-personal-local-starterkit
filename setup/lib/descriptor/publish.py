@@ -301,10 +301,13 @@ def all_tables(rows: Run, home: Path | None = None) -> list[str]:
     return [t for t in approved if t.upper() in present]
 
 
-def your_definitions(spec: dict[str, Any], metrics: list | None, instructions: list | None) -> list[tuple[str, str]]:
-    """Your metrics as Semantic Views definitions (sm.user_metrics) and your instructions on the spec; what cannot
-    be one is said in the spec's notes. [(view, definition)]."""
+def your_definitions(spec: dict[str, Any], metrics: list | None, instructions: list | None,
+                     hidden: dict[str, list[str]] | None = None) -> list[tuple[str, str]]:
+    """Your metrics as Semantic Views definitions (sm.user_metrics), your instructions and the columns you hide in
+    answers (sm.field_policies) on the spec; what cannot be one is said in the spec's notes. [(view, definition)]."""
     extra, refused = sm.user_metrics(spec, metrics or [])
+    spec["policies"], hide_refused = sm.field_policies(spec, hidden)
+    refused += hide_refused
     spec["instructions"] = list(spec.get("instructions") or []) + sm.user_instructions(spec, instructions or [])
     spec["notes"] = list(spec.get("notes") or []) + refused
     return extra
@@ -315,7 +318,7 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
              description: str | None = None, labels: dict[str, Any] | None = None,
              extra: list | None = None, grains: dict[str, str] | None = None, starts: list[str] | None = None,
              metrics: list | None = None, instructions: list | None = None,
-             replace_links: bool = False) -> tuple[dict[str, Any], dict[str, Any], list] | None:
+             replace_links: bool = False, hidden: dict[str, list[str]] | None = None) -> tuple[dict[str, Any], dict[str, Any], list] | None:
     """(the spec of the model over all your data, its inputs, its extra definitions), as publish_all would build it;
     None when nothing is approved. Nothing is written."""
     kept_inputs = (kept(ALL_MODEL, home) or {}).get("inputs") or {}
@@ -338,6 +341,7 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     starts = list(starts if starts is not None else kept_inputs.get("starts") or [])
     metrics = list(metrics if metrics is not None else kept_inputs.get("metrics") or [])
     instructions = list(instructions if instructions is not None else kept_inputs.get("instructions") or [])
+    hidden = {str(k).upper(): list(v) for k, v in (hidden if hidden is not None else kept_inputs.get("hidden") or {}).items() if v}
     spec = build_model(rows, every, joins, ALL_MODEL, description=about, home=home, grains=grains, starts=starts)
     for entity in spec["entities"]:
         said = notes.get(f"{entity['schema']}.{entity['table']}".upper())
@@ -352,8 +356,8 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     inputs = {"tables": every, "links": cross, "name": ALL_MODEL, "all": True,
               "description": about if about != ALL_ABOUT else None, "table_notes": notes,
               "labels": labels, "extra": [list(x) for x in extra], "grains": grains, "starts": starts,
-              "metrics": metrics, "instructions": instructions}
-    extra = extra + your_definitions(spec, metrics, instructions)
+              "metrics": metrics, "instructions": instructions, "hidden": hidden}
+    extra = extra + your_definitions(spec, metrics, instructions, hidden)
     return spec, inputs, extra
 
 
@@ -363,7 +367,8 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
                 labels: dict[str, Any] | None = None, extra: list | None = None,
                 progress: Callable[[str], None] | None = None, grains: dict[str, str] | None = None,
                 starts: list[str] | None = None, metrics: list | None = None,
-                instructions: list | None = None, replace_links: bool = False) -> dict[str, Any] | None:
+                instructions: list | None = None, replace_links: bool = False,
+                hidden: dict[str, list[str]] | None = None) -> dict[str, Any] | None:
     """The one model over all your data (ALL_MODEL): every approved table of every source, each schema's approved
     links, and the links across sources you confirmed for it (kept beside it), its fusion and verified questions with
     it. Built or changed in place on every approval; EXAKIT_ALL_DATA_MODEL=0 turns it off. None when nothing is
@@ -372,7 +377,7 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
         return None
     built = all_spec(rows, home=home, tables=tables, links=links, table_notes=table_notes, description=description,
                      labels=labels, extra=extra, grains=grains, starts=starts, metrics=metrics, instructions=instructions,
-                     replace_links=replace_links)
+                     replace_links=replace_links, hidden=hidden)
     if built is None:
         return None
     spec, inputs, extra = built
@@ -474,7 +479,7 @@ def refresh(execute: Callable[[str], Any], rows: Run, model: str, reader: str | 
     if inputs.get("labels"):
         apply_labels(spec, inputs["labels"])
     extra = [(view, ddl) for view, ddl in inputs.get("extra") or []]
-    extra += your_definitions(spec, inputs.get("metrics"), inputs.get("instructions"))
+    extra += your_definitions(spec, inputs.get("metrics"), inputs.get("instructions"), inputs.get("hidden"))
     result = publish_model(execute, rows, spec, inputs, reader=reader, home=home, extra=extra)
     result["view"] = f"semantic model {result['model']} ({result['published_schema']})"
     return result
@@ -554,6 +559,7 @@ def data_map_inputs(tables: list[str], model: str = ALL_MODEL, home: Path | None
         "metrics": [m for m in saved.get("metrics") or [] if str(m.get("table") or "").upper() in found["tables"]],
         "starts": [t for t in saved.get("starts") or [] if t in found["tables"]],
         "instructions": list(saved.get("instructions") or []),
+        "hidden": {t: list(c) for t, c in (saved.get("hidden") or {}).items() if t in found["tables"]},
         "description": saved.get("description") or ""})
     return found
 
@@ -568,7 +574,8 @@ values. You never see a row. Answer with ONE JSON object and nothing else:
  "starts": ["SCHEMA.TABLE"],
  "metrics": [{"table": "SCHEMA.TABLE", "name": "lower_snake", "how": "sum|count|average", "column": "<an amount column>",
               "where": {"column": "<a column to group by>", "values": ["<known values>"]}, "about": "<what it means>"}],
- "instructions": ["<a rule an analyst must know, such as what an amount includes>"]}
+ "instructions": ["<a rule an analyst must know, such as what an amount includes>"],
+ "hidden": {"SCHEMA.TABLE": ["<a column to group by that holds a person's name, email, phone or address>"]}}
 A link goes from a column of one table to the key of ANOTHER table, many-to-one unless both sides hold each value once.
 Starts are the tables questions begin from: the ones with amounts. A metric's where is optional and uses known values
 only. Use only the names given. Leave out what you are unsure of."""
@@ -627,4 +634,7 @@ def draft_data_map(tables: list[str], chat: Callable[[str], str], home: Path | N
             "starts": [str(t).upper() for t in answer.get("starts") or [] if str(t).upper() in known],
             "metrics": metrics,
             "instructions": [" ".join(str(i).split())[:500] for i in answer.get("instructions") or [] if str(i).strip()][:10],
+            "hidden": {t: [columns[t][str(c).upper()]["name"] for c in cs if str(c).upper() in columns.get(t, {})]
+                       for t, cs in ((str(t).upper(), cs) for t, cs in (answer.get("hidden") or {}).items()
+                                     if isinstance(answer.get("hidden"), dict) and isinstance(cs, list)) if t in known},
             "refused": refused}

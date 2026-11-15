@@ -17,6 +17,8 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic run <MODEL> --sql-file F                    your own version of those statements
     exakit semantic adopt <MODEL> <SCHEMA.VIEW> [--dry-run]     a view you already wrote, made a semantic view
     exakit semantic draft --table S.T [--table ...]             your AI drafts the data map (nothing saved)
+    exakit semantic validate <MODEL>                            what Semantic Views finds wrong with it
+    exakit semantic explain <MODEL> <VIEW> <METRIC>             a metric as Semantic Views explains it
 
     exakit board list | show <NAME>
     exakit board starter [NAME] [--rules '{"GROUPS": 5}']       a page per approved table, from the column maps (default: overview)
@@ -193,6 +195,18 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         statements = [p.strip() for p in text.split(";\n") if p.strip().rstrip(";")]
         found = _connected(lambda c: svc.semantic_model(c, model, [], statements=[p.rstrip(";") for p in statements]))
         return found, f"Ran {len(statements)} statements for {model}."
+    if action == "validate":
+        model, = _need(words, 1, "exakit semantic validate <MODEL>")
+        found = _connected(lambda c: svc.validate_model(c, model))
+        lines = [f"{i['severity']:<12} {i['object_type']} {i['object']} {i['rule']}: {i['message']}" for i in found["issues"]]
+        lines += [f"TYPE         {t['object']}.{t['metric']}: declared {t['declared']}, returns {t['compiled']} {t['error']}".rstrip()
+                  for t in found["types"]]
+        lines += [f"SUGGESTION   {x['type']} {x['object']} ({x['reason']}): {x['proposed']}" for x in found["suggestions"]]
+        return found, "\n".join(lines) or f"Semantic Views finds nothing wrong with {found['model']}."
+    if action == "explain":
+        model, view, metric = _need(words, 3, "exakit semantic explain <MODEL> <VIEW> <METRIC>")
+        found = _connected(lambda c: svc.explain_metric(c, model, view, metric))
+        return found, "\n".join(f"{r['section']:<14} {r['item']}: {r['detail']}" for r in found) or "Nothing to say."
     if action == "draft":
         tables = [t for t in (opts.get("table") or "").split(",") if t]
         if not tables:
@@ -212,7 +226,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
     raise Refused(f"Unknown action '{action}' (models, fields, search, compile, verify, verified, fuse, fusion, column-maps, "
-                  "restore-maps, refresh, plan, run, adopt, draft).")
+                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain).")
 
 
 # --- exakit board -----------------------------------------------------------------------------------------------------

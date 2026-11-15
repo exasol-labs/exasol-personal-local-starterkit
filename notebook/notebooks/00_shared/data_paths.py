@@ -207,6 +207,7 @@ nb.data_map(connection)
 # | `SEMANTIC_STARTS` | the tables questions start from: `["S.T"]` |
 # | `SEMANTIC_METRICS` | `[{"table": "S.T", "name": "completed_revenue", "how": "sum", "column": "AMOUNT", "where": {"column": "STATUS", "values": ["COMPLETED"]}}]`; `how` is `sum`, `count` or `average` |
 # | `SEMANTIC_INSTRUCTIONS` | `["Revenue excludes tax"]`, or `{"table": "S.T", "text": "..."}` |
+# | `SEMANTIC_HIDDEN` | columns never shown in answers, still usable in filters: `{"S.T": ["CUSTOMER_NAME"]}` |
 # | `SEMANTIC_ABOUT` | what your data is about, in a sentence |
 # | `CHECK_LINKS` | `True`: count how many of each link's values its key holds |
 # | `PUBLISH_SEMANTIC` | `True`: save it; `False`: a preview, which prints every statement saving runs |
@@ -222,26 +223,31 @@ SEMANTIC_TABLE_NOTES = None
 SEMANTIC_STARTS = None
 SEMANTIC_METRICS = None
 SEMANTIC_INSTRUCTIONS = None
+SEMANTIC_HIDDEN = None
 SEMANTIC_ABOUT = None
 CHECK_LINKS = False
 PUBLISH_SEMANTIC = False
 DATA_MAP_SQL = None
 data_map_inputs = nb.data_map_inputs(SEMANTIC_TABLES)
-your_map = {key: data_map_inputs[key] for key in ("links", "grains", "table_notes", "starts", "metrics", "instructions", "description")}
+your_map = {key: data_map_inputs[key] for key in ("links", "grains", "table_notes", "starts", "metrics", "instructions", "hidden", "description")}
 if AI_CHECK:
     drafted_map = nb.draft_data_map(SEMANTIC_TABLES)
     your_map = {key: your_map[key] or drafted_map[key] for key in your_map}
 your_map.update({key: value for key, value in (("links", SEMANTIC_LINKS), ("grains", SEMANTIC_GRAINS), ("table_notes", SEMANTIC_TABLE_NOTES),
                                                ("starts", SEMANTIC_STARTS), ("metrics", SEMANTIC_METRICS),
-                                               ("instructions", SEMANTIC_INSTRUCTIONS), ("description", SEMANTIC_ABOUT)) if value is not None})
+                                               ("instructions", SEMANTIC_INSTRUCTIONS), ("hidden", SEMANTIC_HIDDEN),
+                                               ("description", SEMANTIC_ABOUT)) if value is not None})
 if CHECK_LINKS and your_map["links"]:
     link_check = nb.find_links(connection, tables=SEMANTIC_TABLES, check=[f"{link['from']}={link['to']}" for link in your_map["links"]],
                                ai=False, rules=LINK_RULES)
     print(link_check)
 semantic = nb.semantic_model(connection, "all_data", tables=SEMANTIC_TABLES, links=your_map["links"], table_notes=your_map["table_notes"],
                              grains=your_map["grains"], starts=your_map["starts"] or None, metrics=your_map["metrics"],
-                             instructions=your_map["instructions"], description=your_map["description"] or None, replace_links=True,
-                             ai=False, preview=not PUBLISH_SEMANTIC, sql=DATA_MAP_SQL if PUBLISH_SEMANTIC else None)
+                             instructions=your_map["instructions"], hidden=your_map["hidden"], description=your_map["description"] or None,
+                             replace_links=True, ai=False, preview=not PUBLISH_SEMANTIC, sql=DATA_MAP_SQL if PUBLISH_SEMANTIC else None)
+if PUBLISH_SEMANTIC:
+    data_map_check = nb.validate_data_map(connection)
+    print(data_map_check["issues"] or "Semantic Views finds nothing wrong with your data map.")
 semantic
 
 # %% tags=["review"]

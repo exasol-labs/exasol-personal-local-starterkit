@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -185,7 +185,8 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
                    description: str | None = None, preview: bool = False,
                    table_notes: dict[str, str] | None = None, sql: list[str] | str | None = None,
                    grains: dict[str, str] | None = None, starts: list[str] | None = None, metrics: list | None = None,
-                   instructions: list | None = None, replace_links: bool = False) -> SemanticModel:
+                   instructions: list | None = None, replace_links: bool = False,
+                   hidden: dict[str, list[str]] | None = None) -> SemanticModel:
     """Build (or with ``preview=True`` only show) an Exasol Semantic Views model over ``tables`` - SCHEMA.TABLE of any
     schemas, each with an approved column map - joined along each schema's approved links and ``links``
     (SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY). ``schemas`` takes every table of those schemas that has an approved column
@@ -198,7 +199,8 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
     What Semantic Views needs from you: ``grains`` ({SCHEMA.TABLE: "one row is one order line"}), each link's "type"
     (MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), ``starts`` (the tables questions start from),
     ``metrics`` ([{"table", "name", "how": "sum"|"count"|"average", "column", "where": {"column", "values"}, "about"}])
-    and ``instructions`` (rules for AI tools, as text or {"table", "text"}). nb.draft_data_map drafts them with AI;
+    ``instructions`` (rules for AI tools, as text or {"table", "text"}) and ``hidden`` ({SCHEMA.TABLE: [COLUMN]}:
+    never shown in answers - Semantic Views' MASK policy - but usable in filters). nb.draft_data_map drafts them with AI;
     Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
     have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user."""
     from .workflow import log_event
@@ -217,7 +219,8 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
                                    grains=dict(grains or {}), starts=list(starts) if starts is not None else None,
                                    metrics=list(metrics) if metrics is not None else None,
                                    instructions=list(instructions) if instructions is not None else None,
-                                   replace_links=bool(replace_links))
+                                   replace_links=bool(replace_links),
+                                   hidden=dict(hidden) if hidden is not None else None)
     model = SemanticModel(name, tables, list(links or []), description, use_ai, found, conn,
                           schemas=list(schemas or []), find=bool(find), table_notes=dict(table_notes or {}))
     if not preview:
@@ -315,6 +318,19 @@ def draft_data_map(tables: list[str]) -> dict[str, Any]:
     instructions. It sees names, roles, notes and known values, never a row; nothing is saved. Check it, change it,
     then pass it to nb.semantic_model."""
     return _service().draft_data_map(list(tables))
+
+
+def validate_data_map(conn, model: str = "all_data") -> dict[str, Any]:
+    """What Semantic Views finds wrong with your data map, in its own words: every issue of a fresh validation run
+    (severity, the part, its rule code, the message), metrics whose result type differs from what they declare, and
+    the keys it suggests. {issues, types, suggestions, errors}."""
+    return _service().validate_model(conn, model)
+
+
+def explain_metric(conn, object_name: str, metric: str, model: str = "all_data") -> list[dict[str, str]]:
+    """A metric as Semantic Views explains it: its definition, where it comes from, what it can be grouped by and
+    whether it validates. [{section, item, detail}]."""
+    return _service().explain_metric(conn, model, object_name, metric)
 
 
 def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[str, Any]:

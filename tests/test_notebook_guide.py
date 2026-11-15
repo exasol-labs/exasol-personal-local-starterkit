@@ -1621,8 +1621,17 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertIn("48 of 50", views.checked["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE"])
         self.answers["semantic.save_map"] = mock.Mock(views=["SEM_ALL_DATA.ORDER_LINES"],
                                                       found={"warnings": ["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], "notes": []})
-        views.on_sv_publish({f"dmlinks{views.n}:": [], f"dmmetrics{views.n}:": ["0"]})
-        self.assertEqual([], self.sent[-1][1]["links"], "unticked: removed from your data map")
+        self.answers["semantic.validate"] = {"issues": [{"severity": "ERROR", "object_type": "METRIC", "object": "completed_revenue",
+                                                        "rule": "SEMANTIC_MODEL_076", "message": "declares DECIMAL, returns DOUBLE"}],
+                                             "types": [], "suggestions": [], "errors": 1}
+        views.on_sv_publish({f"dmlinks{views.n}:": [], f"dmmetrics{views.n}:": ["0"], f"dmhide{views.n}:AMAZON.ORDER_LINES": ["SHIP_STATE"]})
+        saved = next(given for action, given in reversed(self.sent) if action == "semantic.save_map")
+        self.assertEqual([], saved["links"], "unticked: removed from your data map")
+        self.assertEqual({"AMAZON.ORDER_LINES": ["SHIP_STATE"]}, saved["hidden"], "hidden in answers by Semantic Views' MASK")
+        self.assertEqual("semantic.validate", self.sent[-1][0], "Semantic Views checks it right after the save")
+        built = json.dumps(self._build(views))
+        self.assertIn("SEMANTIC_MODEL_076", built)
+        self.assertIn("Check my data map", built)
         self.assertEqual(["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], views.warnings, "what Semantic Views said, word for word")
         self.assertTrue(views.saved)
 

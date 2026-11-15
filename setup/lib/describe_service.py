@@ -601,7 +601,8 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                    schemas: list[str] | None = None, discover: bool = False,
                    table_notes: dict[str, str] | None = None, statements: list[str] | None = None,
                    grains: dict[str, str] | None = None, starts: list[str] | None = None, metrics: list | None = None,
-                   instructions: list | None = None, replace_links: bool = False) -> dict[str, Any]:
+                   instructions: list | None = None, replace_links: bool = False,
+                   hidden: dict[str, list[str]] | None = None) -> dict[str, Any]:
     """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
     approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). A link
     may also be a dict as find_links returns it ({"from", "to", ...its evidence}) with an optional "note" in a
@@ -611,7 +612,8 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
 
     What you say about the data map: ``grains`` ({SCHEMA.TABLE: "one row is ..."}), a link's "type" (MANY_TO_ONE or
     ONE_TO_ONE), ``starts`` (the tables questions start from), ``metrics`` ([{table, name, how, column, where,
-    about}]: sm.user_metrics) and ``instructions`` (texts, or {table, text}). Semantic Views checks all of it when it
+    about}]: sm.user_metrics), ``instructions`` (texts, or {table, text}) and ``hidden`` ({SCHEMA.TABLE: [COLUMN]}:
+    kept out of answers by Semantic Views' MASK policy, still usable in filters). Semantic Views checks all of it when it
     is saved. ``replace_links``: the links given are all of them (the data map card), not added to the kept ones."""
     from descriptor import semantic_model as sm
 
@@ -695,7 +697,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     proposal = semantic_ai(spec, chat) if ai else {"labels": {}, "extra": [], "refused": [], "error": None}
     if proposal["labels"]:
         publishing.apply_labels(spec, proposal["labels"])
-    yours = publishing.your_definitions(spec, metrics, instructions)
+    yours = publishing.your_definitions(spec, metrics, instructions, hidden)
     for table in skipped:
         spec["notes"].append(f"{table} has no approved column map, so it is not in the model: exakit describe {table}")
     for link in (discovered or {}).get("links") or []:
@@ -715,20 +717,24 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
         if spec["model"] == publishing.ALL_MODEL:
             built = publishing.all_spec(rows, tables=names, links=joins, table_notes=said, description=description,
                                         labels=proposal["labels"], extra=proposal["extra"] or None, grains=grains,
-                                        starts=starts, metrics=metrics, instructions=instructions, replace_links=replace_links)
+                                        starts=starts, metrics=metrics, instructions=instructions, replace_links=replace_links,
+                                        hidden=hidden)
             planned_spec = built[0] if built else spec
             if built:
                 found["summary"], yours = sm.summary(planned_spec), built[2][len(proposal["extra"]):]
                 found["spec"] = planned_spec
         try:
             found["sql"] = publishing.planned(rows, planned_spec) + [
-                sm._script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False) for _view, ddl in proposal["extra"] + yours]
+                sm._script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False) for _view, ddl in proposal["extra"] + yours] + [
+                sm._script("SET_FIELD_POLICY", planned_spec["model"], x["object"], x["field"], "MASK", "personal data")
+                for x in planned_spec.get("policies") or []]
         except Exception:
             found["sql"] = sm.statements(planned_spec)
         return found
     inputs = {"tables": names, "links": joins, "name": name, "description": description, "table_notes": said,
               "labels": proposal["labels"], "extra": proposal["extra"], "grains": dict(grains or {}),
-              "starts": list(starts or []), "metrics": list(metrics or []), "instructions": list(instructions or [])}
+              "starts": list(starts or []), "metrics": list(metrics or []), "instructions": list(instructions or []),
+              "hidden": dict(hidden or {})}
     try:
         if spec["model"] == publishing.ALL_MODEL:
             # the model of all your data: what is given here joins every approved table and what was confirmed before
@@ -736,7 +742,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                                             table_notes=said, description=description, labels=proposal["labels"],
                                             extra=proposal["extra"] or None, progress=progress, grains=grains,
                                             starts=starts, metrics=metrics, instructions=instructions,
-                                            replace_links=replace_links)
+                                            replace_links=replace_links, hidden=hidden)
         else:
             result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
                                               extra=proposal["extra"] + yours, progress=progress)
@@ -1025,11 +1031,106 @@ def compile_request(conn, request: dict[str, Any]) -> dict[str, Any]:
 
     ok = str(row.get("STATUS") or "").upper() == "OK" and row.get("GENERATED_SQL")
     sql = " ".join(str(row.get("GENERATED_SQL") or "").split())
+    said = governance_lines(explain_request(conn, row.get("AGENT_REQUEST_ID"))) if ok else []
     return {"status": "ok" if ok else "error", "sql": sql,
-            "plan": parsed("PLAN_JSON"), "explained": plan_lines(sql, parsed("PLAN_JSON")) if ok else [],
+            "plan": parsed("PLAN_JSON"), "explained": (said + plan_lines(sql, parsed("PLAN_JSON"))) if ok else [],
             "clarification": parsed("CLARIFICATION_JSON"),
             "request_id": row.get("AGENT_REQUEST_ID"), "request": body,
             "error": None if ok else f"{row.get('ERROR_CODE') or 'refused'}: {row.get('ERROR_MESSAGE') or row.get('STATUS')}"}
+
+
+def explain_request(conn, request_id: Any) -> dict[str, Any]:
+    """What Semantic Views itself says about a compiled request (SEMANTIC_ADMIN.EXPLAIN_COMPILED_SQL): its governance
+    narrative, the plan and the materialization it chose. {} when it cannot say (an old product, another user's id)."""
+    if request_id in (None, ""):
+        return {}
+    try:
+        row = _script_row(conn, f"EXECUTE SCRIPT SEMANTIC_ADMIN.EXPLAIN_COMPILED_SQL('AGENT_REQUEST', {int(request_id)})")
+    except Exception:                       # noqa: BLE001 - the explanation is extra; the answer stands without it
+        return {}
+    governance = row.get("GOVERNANCE")
+    try:
+        governance = json.loads(governance) if isinstance(governance, str) and governance.strip()[:1] in "[{" else governance
+    except ValueError:
+        pass
+    return {"governance": governance, "materialization": row.get("SELECTED_MATERIALIZATION"), "status": row.get("STATUS")}
+
+
+def governance_lines(explained: dict[str, Any]) -> list[str]:
+    """The product's governance narrative as lines to read: its text, or each entry of its JSON."""
+    found = (explained or {}).get("governance")
+    lines: list[str] = []
+    if isinstance(found, str) and found.strip():
+        lines = [" ".join(part.split()) for part in found.splitlines() if part.strip()]
+    elif isinstance(found, dict):
+        lines = [f"{k.replace('_', ' ')}: {v if not isinstance(v, (dict, list)) else json.dumps(v, default=str)[:200]}"
+                 for k, v in found.items() if v not in (None, "", [], {})]
+    elif isinstance(found, list):
+        lines = [str(x.get("message") or x.get("text") or json.dumps(x, default=str)[:200]) if isinstance(x, dict) else str(x) for x in found]
+    if (explained or {}).get("materialization"):
+        lines.append(f"Read from the stored totals {explained['materialization']}.")
+    return [f"Semantic Views: {line}" for line in lines[:8]]
+
+
+def glossary(conn, model: str, object_name: str, mode: str = "STRUCTURED_REQUEST") -> str:
+    """The business glossary Semantic Views writes for a semantic view (SEMANTIC_ADMIN.GET_BUSINESS_GLOSSARY): its
+    fields, what each means and the model's instructions, as text for an AI. "" when it cannot be read."""
+    from descriptor import semantic_model as sm
+
+    try:
+        row = _script_row(conn, sm._script("GET_BUSINESS_GLOSSARY", sm.model_name(model), str(object_name).upper(), mode))
+    except Exception:                       # noqa: BLE001 - the kit's own field list is used instead
+        return ""
+    return str(row.get("GLOSSARY_TEXT") or "")
+
+
+def validate_model(conn, model: str) -> dict[str, Any]:
+    """What Semantic Views finds wrong with a model, in its own words: every issue of a fresh validation run
+    (VALIDATE_MODEL: severity, object, rule code, message), each published metric whose result type differs from
+    what it declares (CHECK_METRIC_TYPES; no data read), and the keys and key mappings it suggests
+    (SUGGEST_GRAIN_METADATA). Validation may probe the data, bounded by a 60-second timeout."""
+    from descriptor import semantic_model as sm
+
+    name = sm.model_name(model)
+    conn.execute("ALTER SESSION SET QUERY_TIMEOUT=60")      # the product's data probes need a bound (SEMANTIC_MODEL_041)
+    upper = lambda r: {str(k).upper(): v for k, v in r.items()}
+    try:
+        issues = [upper(r) for r in _rows(conn, sm._script("VALIDATE_MODEL", name))]
+    except Exception as err:
+        raise Refused(f"Semantic Views could not validate {name}: {' '.join(str(err).split())[:300]}") from err
+    found: dict[str, Any] = {"model": name, "issues": [
+        {"severity": str(r.get("SEVERITY") or "").upper(), "object_type": str(r.get("OBJECT_TYPE") or ""),
+         "object": str(r.get("OBJECT_NAME") or ""), "rule": str(r.get("RULE_CODE") or ""),
+         "message": " ".join(str(r.get("MESSAGE") or "").split())} for r in issues], "types": [], "suggestions": []}
+    try:
+        found["types"] = [{"object": str(r.get("OBJECT_NAME") or ""), "metric": str(r.get("METRIC_NAME") or ""),
+                           "declared": str(r.get("DECLARED_TYPE") or ""), "compiled": str(r.get("COMPILED_TYPE") or ""),
+                           "error": str(r.get("PROBE_ERROR") or "")}
+                          for r in map(upper, _rows(conn, sm._script("CHECK_METRIC_TYPES", name)))
+                          if r.get("COMPATIBLE") is False or r.get("PROBE_ERROR")]
+    except Exception:                       # noqa: BLE001 - an older product: validation alone
+        pass
+    try:
+        found["suggestions"] = [{"type": str(r.get("SUGGESTION_TYPE") or ""), "object": str(r.get("OBJECT_NAME") or ""),
+                                 "reason": str(r.get("REASON_CODE") or ""), "proposed": r.get("PROPOSED_METADATA_JSON")}
+                                for r in map(upper, _rows(conn, sm._script("SUGGEST_GRAIN_METADATA", name)))]
+    except Exception:                       # noqa: BLE001
+        pass
+    found["errors"] = sum(1 for i in found["issues"] if i["severity"] in ("ERROR", "PRECONDITION"))
+    return found
+
+
+def explain_metric(conn, model: str, object_name: str, metric: str) -> list[dict[str, str]]:
+    """A metric as Semantic Views explains it (EXPLAIN_SEMANTIC_METRIC): its definition, lineage, the dimensions it
+    can be grouped by and its validation state. [{section, item, detail}]."""
+    from descriptor import semantic_model as sm
+
+    try:
+        rows = _rows(conn, sm._script("EXPLAIN_SEMANTIC_METRIC", sm.model_name(model), str(object_name).upper(), str(metric)))
+    except Exception as err:
+        raise Refused(f"Semantic Views could not explain {metric}: {' '.join(str(err).split())[:300]}") from err
+    return [{"section": str(r.get("SECTION_NAME") or ""), "item": str(r.get("ITEM_NAME") or ""),
+             "detail": " ".join(str(r.get("DETAIL_TEXT") or "").split())} for r in ({str(k).upper(): v for k, v in x.items()} for x in rows)]
 
 
 def verify_question(conn, model: str, object_name: str, name: str, question: str, request: dict[str, Any], *,
