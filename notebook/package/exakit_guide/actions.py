@@ -102,7 +102,9 @@ ACTIONS: dict[str, Action] = {
                                   "fusion_applied"),
     "sources.list": Action("01_explore", "sources = nb.sources()", "sources", False),
     # your data map: what Semantic Views needs, from this computer (no query); one AI draft; saved by Semantic Views
-    "semantic.inputs": Action("01_explore", "data_map_inputs = nb.data_map_inputs({tables})", "data_map_inputs", False),
+    "semantic.inputs": Action("01_explore", "data_map_inputs = nb.data_map_inputs({tables}, connection=connection)", "data_map_inputs", False),
+    "semantic.versions": Action("01_explore", "data_map_versions = nb.data_map_versions(connection)", "data_map_versions", False),
+    "semantic.restore": Action("01_explore", "restored = nb.restore_data_map(connection, {version})", "restored"),
     "semantic.draft": Action("01_explore", "drafted_map = nb.draft_data_map({tables})", "drafted_map", False),
     "semantic.check_link": Action("01_explore", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False, rules=LINK_RULES)",
                                   "link_check", False),

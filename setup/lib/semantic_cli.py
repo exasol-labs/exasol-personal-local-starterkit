@@ -18,6 +18,8 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic adopt <MODEL> <SCHEMA.VIEW> [--dry-run]     a view you already wrote, made a semantic view
     exakit semantic draft --table S.T [--table ...]             your AI drafts the data map (nothing saved)
     exakit semantic validate <MODEL>                            what Semantic Views finds wrong with it
+    exakit semantic versions <MODEL>                            every saved version, kept in the model
+    exakit semantic restore-version <MODEL> <N>                 save version N again (it becomes the newest)
     exakit semantic explain <MODEL> <VIEW> <METRIC>             a metric as Semantic Views explains it
 
     exakit board list | show <NAME>
@@ -195,6 +197,17 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         statements = [p.strip() for p in text.split(";\n") if p.strip().rstrip(";")]
         found = _connected(lambda c: svc.semantic_model(c, model, [], statements=[p.rstrip(";") for p in statements]))
         return found, f"Ran {len(statements)} statements for {model}."
+    if action == "versions":
+        model, = _need(words, 1, "exakit semantic versions <MODEL>")
+        found = _connected(lambda c: svc.data_map_versions(c, model))
+        return found, "\n".join(f"v{v['version']:<4} {v['saved_at'] or '':<22} {v['tables']} tables, {v['links']} links, "
+                                f"{v['metrics']} metrics" for v in found) or f"{model} has no saved versions yet."
+    if action == "restore-version":
+        model, number = _need(words, 2, "exakit semantic restore-version <MODEL> <N>")
+        if not number.lstrip("v").isdigit():
+            raise Refused("The version is a number, as exakit semantic versions lists it.")
+        found = _connected(lambda c: svc.restore_data_map(c, int(number.lstrip("v")), model))
+        return found, f"Saved version {number} again as version {found.get('version')}."
     if action == "validate":
         model, = _need(words, 1, "exakit semantic validate <MODEL>")
         found = _connected(lambda c: svc.validate_model(c, model))
@@ -226,7 +239,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
     raise Refused(f"Unknown action '{action}' (models, fields, search, compile, verify, verified, fuse, fusion, column-maps, "
-                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain).")
+                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version).")
 
 
 # --- exakit board -----------------------------------------------------------------------------------------------------

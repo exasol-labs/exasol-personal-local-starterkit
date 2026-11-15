@@ -243,7 +243,7 @@ class AskFromTheModelTest(unittest.TestCase):
         client.chat.completions.create.return_value = types.SimpleNamespace(
             choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=said))])
         self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT STATE, SUM(AMOUNT) FROM T GROUP BY 1"}
-        request, sql, assumptions, _, _plan = self.ask._ask_request(client, "m", {}, self.semantic, "revenue by state?")
+        request, sql, assumptions, _, _plan, _id = self.ask._ask_request(client, "m", {}, self.semantic, "revenue by state?")
         self.assertEqual(1000, request["limit"], "capped")
         self.assertEqual(("sales", "ORDERS"), (request["model"], request["object"]))
         self.assertTrue(sql.startswith("SELECT STATE"))
@@ -310,6 +310,14 @@ class DataMapChecksTest(unittest.TestCase):
         self.assertIn("How it is put together", str(mapped))
         mapped.edit("SELECT 2")
         self.assertEqual((None, []), (mapped.checked, mapped.plan), "your own SQL: no longer the data map's")
+        told = self.ask.Proposal(types.SimpleNamespace(id="x", version=1, require_approved=lambda _w: None), "q", "SELECT 1",
+                                 request_id=7, conn=object())
+        told.approve()
+        self.service.record_feedback.assert_called_with(told.conn, 7, "ACCEPTED", "Approved to run as compiled.", None)
+        told.edit("SELECT 3")
+        self.assertEqual(("NEEDS_CHANGE", "SELECT 3"), (self.service.record_feedback.call_args.args[2], self.service.record_feedback.call_args.args[4]),
+                         "your own SQL goes back to Semantic Views as the change it needed")
+        self.assertIsNone(told.request_id)
 
     def test_a_pinned_tile_is_compiled_again_and_updated_only_when_asked(self):
         import importlib

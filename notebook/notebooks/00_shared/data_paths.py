@@ -228,7 +228,7 @@ SEMANTIC_ABOUT = None
 CHECK_LINKS = False
 PUBLISH_SEMANTIC = False
 DATA_MAP_SQL = None
-data_map_inputs = nb.data_map_inputs(SEMANTIC_TABLES)
+data_map_inputs = nb.data_map_inputs(SEMANTIC_TABLES, connection=connection)
 your_map = {key: data_map_inputs[key] for key in ("links", "grains", "table_notes", "starts", "metrics", "instructions", "hidden", "description")}
 if AI_CHECK:
     drafted_map = nb.draft_data_map(SEMANTIC_TABLES)
@@ -250,9 +250,16 @@ if PUBLISH_SEMANTIC:
     print(data_map_check["issues"] or "Semantic Views finds nothing wrong with your data map.")
 semantic
 
+# %% [markdown] tags=["review"]
+# Every save that changes your data map is a version, kept in the model itself: what you said, and the whole model as Semantic Views exports it. A new computer reads them back from the model. `DATA_MAP_VERSION = 3` saves version 3 again as the newest.
+
 # %% tags=["review"]
+DATA_MAP_VERSION = None
+if DATA_MAP_VERSION:
+    restored = nb.restore_data_map(connection, DATA_MAP_VERSION)
+data_map_versions = nb.data_map_versions(connection)
 semantic_models = nb.semantic_models(connection)
-semantic_models
+data_map_versions
 
 # %% [markdown] tags=["review"]
 # ### The same thing in two sources

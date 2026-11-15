@@ -68,12 +68,22 @@ A question the model finds ambiguous comes back with `clarification`: the choice
 ## nb.data_map_inputs [#data_map_inputs]
 
 ```python
-nb.data_map_inputs(tables: list[str], model: str='all_data') -> dict[str, Any]
+nb.data_map_inputs(tables: list[str], model: str='all_data', connection=None) -> dict[str, Any]
 ```
 
-What your data map holds for these tables, read from this computer (no query): each table's key, grain and
-columns from its approved column map, and what you said before - grains, notes, links with their type, metrics,
-starting points, instructions. The data map card opens with it.
+What your data map holds for these tables: each table's key, grain and columns from its approved column map,
+and what you said before - grains, notes, links with their type, metrics, starting points, instructions, hidden
+columns. Read from this computer; with `connection`, what this computer does not have (a new computer, a deleted
+folder) is put back from the model first, which is the record.
+
+## nb.data_map_versions [#data_map_versions]
+
+```python
+nb.data_map_versions(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Every saved version of your data map, from the model itself, newest first: \{version, saved_at, tables, links,
+metrics, definitions}. Each holds what you said and the whole model as Semantic Views exported it.
 
 ## nb.draft_data_map [#draft_data_map]
 
@@ -85,6 +95,20 @@ The AI set up for the kit drafts the data map for these tables in one call: what
 is, the links with their type, the tables questions start from, metrics (with a condition where one fits) and
 instructions. It sees names, roles, notes and known values, never a row; nothing is saved. Check it, change it,
 then pass it to nb.semantic_model.
+
+## nb.explain_metric [#explain_metric]
+
+```python
+nb.explain_metric(
+    conn,
+    object_name: str,
+    metric: str,
+    model: str='all_data',
+) -> list[dict[str, str]]
+```
+
+A metric as Semantic Views explains it: its definition, where it comes from, what it can be grouped by and
+whether it validates. \[\{section, item, detail}].
 
 ## nb.find_links [#find_links]
 
@@ -195,6 +219,14 @@ Put the kit's store back from the model (a computer replaced, the store deleted)
 no column map, or an older one, gets the model's. `write=False` (the default) only says what it would write.
 The other way round - the model lost, the store kept - is nb.refresh_semantic(connection, model).
 
+## nb.restore_data_map [#restore_data_map]
+
+```python
+nb.restore_data_map(conn, version: int, model: str='all_data') -> dict[str, Any]
+```
+
+Save an earlier version of your data map again (it becomes the newest version).
+
 ## nb.semantic_model [#semantic_model]
 
 ```python
@@ -216,6 +248,7 @@ nb.semantic_model(
     metrics: list | None=None,
     instructions: list | None=None,
     replace_links: bool=False,
+    hidden: dict[str, list[str]] | None=None,
 ) -> SemanticModel
 ```
 
@@ -231,7 +264,8 @@ fields' business names, synonyms and extra metrics.
 What Semantic Views needs from you: `grains` (\{SCHEMA.TABLE: "one row is one order line"}), each link's "type"
 (MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), `starts` (the tables questions start from),
 `metrics` (\[\{"table", "name", "how": "sum"|"count"|"average", "column", "where": \{"column", "values"}, "about"}])
-and `instructions` (rules for AI tools, as text or \{"table", "text"}). nb.draft_data_map drafts them with AI;
+`instructions` (rules for AI tools, as text or \{"table", "text"}) and `hidden` (\{SCHEMA.TABLE: \[COLUMN]}:
+never shown in answers - Semantic Views' MASK policy - but usable in filters). nb.draft_data_map drafts them with AI;
 Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
 have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user.
 
@@ -278,6 +312,16 @@ A semantic model: what it holds (`spec`), what the AI proposed, and - once publi
 | `spec`                                |                                                                                                     |
 | `fields`                              | One row per dimension and metric: view, kind, name, display name, what it is.                       |
 | `publish(conn=None) -> SemanticModel` | Build the previewed model in the database (the AI's proposal is asked again only if none was kept). |
+
+## nb.validate_data_map [#validate_data_map]
+
+```python
+nb.validate_data_map(conn, model: str='all_data') -> dict[str, Any]
+```
+
+What Semantic Views finds wrong with your data map, in its own words: every issue of a fresh validation run
+(severity, the part, its rule code, the message), metrics whose result type differs from what they declare, and
+the keys it suggests. \{issues, types, suggestions, errors}.
 
 ## nb.verified_questions [#verified_questions]
 

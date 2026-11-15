@@ -154,6 +154,8 @@ class Proposal:
     request: dict[str, Any] | None = None     # the structured request the SQL was compiled from (semantic model only)
     plan: list[str] = field(default_factory=list)   # how the answer is put together, in plain words
     checked: bool | None = None               # True: your data map wrote or checked the SQL; False: the AI wrote it alone
+    request_id: Any = None                    # Semantic Views' number for the compile: feedback goes to it
+    conn: Any = field(default=None, repr=False, compare=False)
     _approved_digest: str | None = field(default=None, init=False, repr=False)
 
     def _sections(self) -> list[tuple[str, list[str]]]:
@@ -193,7 +195,21 @@ class Proposal:
         html.append(f"<p>{state}</p>")
         return "\n".join(html)
 
+    def _feedback(self, verdict: str, comment: str | None = None, proposed: str | None = None) -> None:
+        """What you made of an answer Semantic Views compiled, recorded with it (RECORD_AGENT_FEEDBACK)."""
+        if self.request_id is None or self.conn is None:
+            return
+        try:
+            from .semantic import _service
+
+            _service().record_feedback(self.conn, self.request_id, verdict, comment, proposed)
+        except Exception:                   # noqa: BLE001 - feedback is extra
+            pass
+
     def edit(self, sql: str) -> "Proposal":
+        if self.request_id is not None:
+            self._feedback("NEEDS_CHANGE", "A person wrote other SQL for this question.", _read_sql(sql))
+            self.request_id = None
         self.sql = _read_sql(sql)
         self._approved_digest = None
         self.request = None                  # your own SQL: it no longer is what the request compiles to
@@ -218,6 +234,7 @@ class Proposal:
         self.dataset.require_approved("ask")
         self.sql = _read_sql(self.sql)
         self._approved_digest = hashlib.sha256(self.sql.encode("utf-8")).hexdigest()
+        self._feedback("ACCEPTED", "Approved to run as compiled.")
         log_event(ASK_APPROVE, dataset=self.dataset.id, question=self.question, sql=self.sql,
                   sql_digest=self._approved_digest, descriptor_version=self.dataset.version)
         return self
@@ -401,9 +418,10 @@ def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], q
     semantic_sql = _read_sql(semantic_sql)
     if semantic["view"].upper() not in semantic_sql.upper():
         raise ValueError("the draft does not query the semantic view")
-    plain, plan = _compiled_semantic(semantic["conn"], semantic_sql)
+    plain, plan, request_id = _compiled_semantic(semantic["conn"], semantic_sql)
     said = ([_looked] if _looked else []) + [str(v) for v in parsed.get("assumptions") or []]
-    return semantic_sql, plain, said, [str(v) for v in parsed.get("doubts") or []], _plan_of(plain, plan)
+    return (semantic_sql, plain, said, [str(v) for v in parsed.get("doubts") or []],
+            _plan_of(plain, plan, semantic["conn"], request_id), request_id)
 
 
 def _words(text: str) -> list[str]:
@@ -429,7 +447,8 @@ def _verified_answer(conn, semantic: dict[str, Any], question: str, dataset: Any
             return Proposal(dataset, question.strip(), _read_sql(compiled["sql"]),
                             [f"A trusted question, checked before: \"{known['name']}\". It is answered the way it was approved; "
                              "no AI was asked."],
-                            [], request=request, plan=compiled.get("explained") or [], checked=True)
+                            [], request=request, plan=compiled.get("explained") or [], checked=True,
+                            request_id=compiled.get("request_id"), conn=conn)
     except Exception:                       # noqa: BLE001 - no verified questions: drafted as usual
         return None
     return None
@@ -488,7 +507,7 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
         choices = compiled.get("clarification")
         raise ValueError(compiled["error"] + (f"; the model asks which is meant: {json.dumps(choices)[:300]}" if choices else ""))
     said = ([looked] if looked else []) + [str(v) for v in parsed.get("assumptions") or []]
-    return request, compiled["sql"], said, doubts, compiled.get("explained") or []
+    return request, compiled["sql"], said, doubts, compiled.get("explained") or [], compiled.get("request_id")
 
 
 def semantic_context(conn, table: str) -> dict[str, Any] | None:
@@ -557,12 +576,15 @@ def semantic_context(conn, table: str) -> dict[str, Any] | None:
     return found if found["metrics"] else None
 
 
-def _plan_of(sql: str, plan: Any = None) -> list[str]:
-    """plan_lines from the kit's service, or nothing when this Python has no kit beside it."""
+def _plan_of(sql: str, plan: Any = None, conn=None, request_id: Any = None) -> list[str]:
+    """How the answer is put together: Semantic Views' own explanation first (EXPLAIN_COMPILED_SQL, when it compiled
+    it), then the tables and joins read from the SQL. Nothing when this Python has no kit beside it."""
     try:
         from .semantic import _service
 
-        return _service().plan_lines(sql, plan)
+        service = _service()
+        own = service.governance_lines(service.explain_request(conn, request_id)) if conn is not None and request_id is not None else []
+        return own + service.plan_lines(sql, plan)
     except Exception:                       # noqa: BLE001 - the plan is shown when it can be worked out
         return []
 
@@ -574,8 +596,8 @@ def compile_semantic(conn, semantic_sql: str) -> str:
     return _compiled_semantic(conn, semantic_sql)[0]
 
 
-def _compiled_semantic(conn, semantic_sql: str) -> tuple[str, Any]:
-    """(the plain SQL, the plan the product returned with it, parsed when it is JSON)."""
+def _compiled_semantic(conn, semantic_sql: str) -> tuple[str, Any, Any]:
+    """(the plain SQL, the plan the product returned with it, parsed when it is JSON, its request number)."""
     done = conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.COMPILE_SQL('" + semantic_sql.replace("'", "''") + "')")
     names = [str(c) for c in done.column_names()] if hasattr(done, "column_names") else []
     row = done.fetchall()[0]
@@ -589,7 +611,8 @@ def _compiled_semantic(conn, semantic_sql: str) -> tuple[str, Any]:
         plan = json.loads(plan) if isinstance(plan, str) else plan
     except ValueError:
         pass
-    return " ".join(str(generated).split()), plan
+    request_id = next((v for k, v in row.items() if str(k).upper() == "AGENT_REQUEST_ID"), None)
+    return " ".join(str(generated).split()), plan, request_id
 
 
 def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_description: str | None = None,
@@ -646,12 +669,12 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                 doubts.append(f"The structured request was not used ({str(error).splitlines()[0][:160] if str(error) else type(error).__name__}).")
             if asked:
                 client.close()
-                request, plain, said, unsure, plan = asked
+                request, plain, said, unsure, plan, request_id = asked
                 return Proposal(dataset, question.strip(), _read_sql(plain),
                                 [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
                                  "AI tools use, so the numbers match.",
                                  "Request: " + json.dumps({k: v for k, v in request.items() if k not in ("model", "object", "client")}),
-                                 *said], unsure, request=request, plan=plan, checked=True)
+                                 *said], unsure, request=request, plan=plan, checked=True, request_id=request_id, conn=conn)
             try:
                 drafted = _ask_semantic(client, model, options, semantic, question, rules) if "data_map_sql" in order else None
             except Exception as error:       # noqa: BLE001 - the column map still answers; the proposal says why
@@ -661,11 +684,12 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                               "drafted from the column map instead.")
             if drafted:
                 client.close()
-                semantic_sql, plain, said, unsure, plan = drafted
+                semantic_sql, plain, said, unsure, plan, request_id = drafted
                 return Proposal(dataset, question.strip(), _read_sql(plain),
                                 [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
                                  "AI tools use, so the numbers match.",
-                                 f"Semantic SQL: {semantic_sql}", *said], unsure, plan=plan, checked=True)
+                                 f"Semantic SQL: {semantic_sql}", *said], unsure, plan=plan, checked=True,
+                                request_id=request_id, conn=conn)
         if "column_map" not in order:
             client.close()
             raise ValueError("Not answered: the ways in ORDER found no answer, and column_map is not in it. "

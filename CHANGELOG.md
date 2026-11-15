@@ -4,6 +4,14 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **Semantic Views does the work the kit used to do itself.**
+  - **Checks:** saving your data map runs `VALIDATE_MODEL` and `CHECK_METRIC_TYPES` and lists what they find in their own words; **Check my data map** and `exakit semantic validate` run them again.
+  - **Changes:** a link, key or semantic view taken away, or a link of another type, is changed in place with `REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS` and `REMOVE_SEMANTIC_OBJECT` instead of rebuilding the model, so trusted questions and grants stay.
+  - **Ask:** the AI reads Semantic Views' glossary (`GET_BUSINESS_GLOSSARY`); each answer shows Semantic Views' own explanation (`EXPLAIN_COMPILED_SQL`); approving or rewriting an answer is recorded with it (`RECORD_AGENT_FEEDBACK`).
+  - **Hidden columns:** a column you hide in answers gets Semantic Views' `MASK` policy (`SET_FIELD_POLICY`).
+  - **Two sources:** after declaring the same rows in two sources, `CHECK_FUSION_HEALTH` shows how each value is filled.
+  - **Reading back:** column maps are read back with `GET_CUSTOM_EXTENSIONS`; `exakit semantic explain` explains a metric (`EXPLAIN_SEMANTIC_METRIC`).
+- **Your data map is versioned in the model.** Every save that changes it adds `data_map_v<N>` to the model: what you said and the model as `EXPORT_SEMANTIC_DEFINITION` writes it. The history survives a rebuild. A new computer reads the data map and its column maps back from the model. `exakit semantic versions` lists them, `exakit semantic restore-version` saves one again, and the card's **Versions** does both.
 - **Your data map asks you instead of guessing.** The data map section of Understand asks for exactly what Exasol Semantic Views needs: what one row of each table is, how the tables connect and the type of each link (many-to-one or one-to-one), where questions start, metrics with a condition ("completed revenue"), and rules for AI tools. It opens from your approved column maps on this computer, with no query. Links are no longer found by scanning values on their own; **Check with data** counts a link's values only when you press it. **Save to your data map** hands it to Semantic Views, and what it refuses is shown word for word. The same is `nb.semantic_model(..., grains=, starts=, metrics=, instructions=)` and each link's `"type"`.
 - **One AI button drafts the whole data map.** **Fill everything in with AI** now drafts the grains, links with their type, starting points, metrics and rules in one call (`nb.draft_data_map`, `exakit semantic draft`), from names, roles, notes and known values, never a row. Every suggestion is marked as the AI's until you keep it.
 - **AI tools are granted your data map the way Semantic Views grants it.** Saving runs `GRANT_MODEL_ROLE` to the role `EXAKIT_SEMANTIC_READERS`, which the read-only user has, instead of granting the published schema directly.

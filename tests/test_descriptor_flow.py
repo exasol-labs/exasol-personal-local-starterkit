@@ -188,8 +188,10 @@ class FlowTest(unittest.TestCase):
         doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], note="Where the ticket came in")
         self.db.sv.scripts.clear()
         self.approve(doc)
-        self.assertEqual(["ADD_CUSTOM_EXTENSION", "APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL", "GRANT_MODEL_ROLE"], self.db.sv.scripts,
-                         "the new column map version goes into the model, the changed view is replaced, one publish, the grant")
+        self.assertEqual(["ADD_CUSTOM_EXTENSION", "APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL", "GRANT_MODEL_ROLE",
+                          "ADD_CUSTOM_EXTENSION"], self.db.sv.scripts,
+                         "the new column map version goes into the model, the changed view is replaced, one publish, the "
+                         "grant, and the data map's next version kept in the model")
         version_2 = [x for x in self.db.sent if "ADD_CUSTOM_EXTENSION" in x and "'ENTITY'" in x][-1]
         self.assertIn("'column_map_v2'", version_2)
         self.assertIn("Where the ticket came in", version_2, "the approved text itself, as the store holds it")
@@ -201,7 +203,8 @@ class FlowTest(unittest.TestCase):
         self.db.sv.scripts.clear()
         self.approve(doc)
         self.assertIn("DROP_MODEL_IF_EXISTS", self.db.sv.scripts, "a key change needs a rebuild")
-        self.assertEqual(["ADD_VERIFIED_QUERY", "GRANT_MODEL_ROLE"], self.db.sv.scripts[-2:], "and the verified question is put back")
+        self.assertIn("ADD_VERIFIED_QUERY", self.db.sv.scripts, "and the verified question is put back")
+        self.assertLess(self.db.sv.scripts.index("DROP_MODEL_IF_EXISTS"), self.db.sv.scripts.index("ADD_VERIFIED_QUERY"))
 
     def test_the_statements_are_planned_shown_and_your_edited_ones_run_instead(self):
         """A model's statements can be read before they run (planned: the change in place, else the whole model after
@@ -470,7 +473,17 @@ class SemanticModelTest(unittest.TestCase):
                       "the pointer is a declared unique key too")
         many = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "BILL.INVOICES.ORDER_REF"}], "bills")
         self.assertEqual("MANY_TO_ONE", many["relationships"][0]["cardinality"])
-        self.assertIsNone(semantic_model.changes(many, measured), "a link turned one-to-one: built again")
+        step = semantic_model.changes(many, measured)
+        self.assertEqual(["ADD_UNIQUE_KEY_WITH_COLUMNS", "SET_RELATIONSHIP", "PUBLISH_MODEL"],
+                         [re.search(r"SEMANTIC_ADMIN\.(\w+)", x).group(1) for x in step],
+                         "a link turned one-to-one is changed in place by Semantic Views, after the key it needs")
+        self.assertIn("'ONE_TO_ONE'", step[1])
+        back = semantic_model.changes(measured, many)
+        self.assertEqual(["SET_RELATIONSHIP", "REMOVE_UNIQUE_KEY_WITH_COLUMNS", "PUBLISH_MODEL"],
+                         [re.search(r"SEMANTIC_ADMIN\.(\w+)", x).group(1) for x in back], "and back, the key taken away in place")
+        gone = semantic_model.changes(many, dict(many, relationships=[], objects=[o for o in many["objects"] if o["name"] != "INVOICES"]))
+        self.assertEqual(["REMOVE_SEMANTIC_OBJECT", "REMOVE_RELATIONSHIP_KEY_MAPPING", "REMOVE_RELATIONSHIP"],
+                         [re.search(r"SEMANTIC_ADMIN\.(\w+)", x).group(1) for x in gone][:3], "a view and a link taken away, in place")
 
     def test_what_you_say_goes_into_the_model_as_semantic_views_definitions(self):
         """Your grain, where questions start, metrics with a condition and rules for AI tools become Semantic Views'
@@ -527,6 +540,28 @@ class SemanticModelTest(unittest.TestCase):
             semantic_model.apply(sent.append, lambda sql: [], shown, previous=previous)
         self.assertIn("EXECUTE SCRIPT SEMANTIC_ADMIN.SET_FIELD_POLICY('shop', 'ORDERS', 'c_mktsegment', NULL, NULL)", sent,
                       "shown again: the policy is cleared")
+
+    def test_the_model_is_the_record_with_its_versions(self):
+        """Each save that changes what was said adds the next data_map_v<N> to the model - the inputs and the model as
+        Semantic Views exports it; an unchanged save adds nothing; a rebuild (which drops a model's extensions) puts
+        every version back first. All of it read with GET_CUSTOM_EXTENSIONS."""
+        v1 = {"version": 1, "saved_at": "2026-11-01T10:00:00Z", "inputs": {"tables": ["A.B"], "links": []}, "definition": []}
+        kept_rows = [{"SCOPE_TYPE": "MODEL", "SCOPE_NAME": None, "EXTENSION_NAME": "data_map_v1", "DATA_JSON": json.dumps(v1)},
+                     {"SCOPE_TYPE": "ENTITY", "SCOPE_NAME": "orders", "EXTENSION_NAME": "column_map_v2", "DATA_JSON": json.dumps({"version": 2})},
+                     {"SCOPE_TYPE": "MODEL", "SCOPE_NAME": None, "EXTENSION_NAME": "sources", "DATA_JSON": "[]"}]
+        rows = lambda sql: (kept_rows if "GET_CUSTOM_EXTENSIONS" in sql else
+                            [{"DEFINITION_KIND": "MODEL", "DEFINITION_SQL": "CREATE SEMANTIC MODEL shop"}] if "EXPORT_SEMANTIC_DEFINITION" in sql else [])
+        carried = publish.extensions(rows, "shop", r"(data_map|column_map)_v\d+")
+        self.assertEqual(["data_map_v1", "column_map_v2"], [x["name"] for x in carried])
+        sent = []
+        self.assertEqual((1, []), publish._versioned(sent.append, rows, "shop", {"tables": ["A.B"], "links": []}, carried, False))
+        self.assertEqual([], sent, "nothing changed: no new version")
+        number, _said = publish._versioned(sent.append, rows, "shop", {"tables": ["A.B"], "links": [{"from": "x", "to": "y"}]}, carried, True)
+        self.assertEqual(2, number)
+        self.assertEqual(["data_map_v1", "column_map_v2", "data_map_v2"], [re.findall(r"'(\w+_v\d+)'\)$", x)[0] for x in sent],
+                         "rebuilt: the history first, then the new version")
+        self.assertIn("'ENTITY', 'orders'", sent[1])
+        self.assertIn("CREATE SEMANTIC MODEL shop", sent[2], "the whole model as Semantic Views exports it")
 
     def test_the_ai_draft_keeps_only_real_names_and_reads_no_row(self):
         """One call drafts the data map from the approved column maps on this computer; whatever names no real table

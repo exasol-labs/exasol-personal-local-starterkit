@@ -80,6 +80,8 @@ the SQL and removes the approval; `run()` runs the approved text through the kit
 | `request` | `dict[str, Any] | None` |
 | `plan` | `list[str]` |
 | `checked` | `bool | None` |
+| `request_id` | `Any` |
+| `conn` | `Any` |
 | `checked_line` |  |
 | `edit(sql: str) -> Proposal` |  |
 | `verify(conn, name: str \| None=None) -> dict[str, Any]` | Keep this approved question in the semantic model as a verified question (nb.verify_question): the next time it is asked - here or by an AI client over MCP - its request is used, with no new draft. |

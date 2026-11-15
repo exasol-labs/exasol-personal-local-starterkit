@@ -136,6 +136,32 @@ semantic = nb.semantic_model(connection, "all_data", tables=tables,
 
 From a terminal, `exakit semantic draft --table AMAZON.ORDER_LINES --table MY_DATA.TARGETS` prints the AI's draft.
 
+### Semantic Views checks it, in its own words [#semantic-views-checks-it-in-its-own-words]
+
+Saving runs Semantic Views' own validation (`VALIDATE_MODEL`) and lists what it finds under the card: the kind (error, warning), the part, its rule code and its message, word for word. It also lists each metric whose result type differs from what it declares (`CHECK_METRIC_TYPES`, no data read) and the keys it suggests (`SUGGEST_GRAIN_METADATA`). **Check my data map** runs it again.
+
+```bash
+exakit semantic validate all_data
+exakit semantic explain all_data ORDER_LINES completed_revenue   # a metric as Semantic Views explains it
+```
+
+### Hide a column in answers [#hide-a-column-in-answers]
+
+Under **Hide columns in answers**, tick a column such as a customer's name. Semantic Views' own `MASK` policy (`SET_FIELD_POLICY`) then never returns its values, while questions can still filter on it. A column the column map marks as personal data is not in your data map at all.
+
+### Versions, kept in the model [#versions-kept-in-the-model]
+
+Every save that changes something is a version kept in the model itself, as `data_map_v<N>`: what you said, and the whole model as Semantic Views exports it (`EXPORT_SEMANTIC_DEFINITION`). Each table's column map is kept the same way, one `column_map_v<N>` per approval. When the model has to be rebuilt, every version is put back. A new computer reads them back from the model, so the files on this computer are a copy. **Versions** in the card lists them; saving an older one again makes it the newest.
+
+```bash
+exakit semantic versions all_data
+exakit semantic restore-version all_data 3
+```
+
+### Changed in place by Semantic Views [#changed-in-place-by-semantic-views]
+
+A link taken away or of another type, a key or a semantic view taken away: each is changed in place with Semantic Views' own scripts (`REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS`, `REMOVE_SEMANTIC_OBJECT`), so trusted questions, grants and the query log stay. Only a table taken away, or another description of the whole map, rebuilds it, because Semantic Views has no script for those.
+
 ### Who may read it [#who-may-read-it]
 
 Saving grants the data map to the kit's read-only user the way Semantic Views grants it: `GRANT_MODEL_ROLE` to the role `EXAKIT_SEMANTIC_READERS`, which that user has. The SQL Semantic Views writes reads your tables with the asking user's rights; the read-only user may read every table (`SELECT ANY TABLE`), external sources included.
@@ -288,6 +314,10 @@ exakit semantic refresh all_data
 ```
 
 The kit's `exakit` skill tells AI clients to read `all_data` first and to use these commands rather than their own SQL against the semantic layer. Before every write, the client shows you the request, the document or the SQL and waits for your yes.
+
+### What Semantic Views tells the AI and you [#what-semantic-views-tells-the-ai-and-you]
+
+Ask gives your AI Semantic Views' own glossary of the semantic view (`GET_BUSINESS_GLOSSARY`): what each field means and the rules for AI tools, as the product writes it. Under **How it is put together**, its own explanation of the answer (`EXPLAIN_COMPILED_SQL`) comes first. When you approve an answer, or write other SQL instead, that is recorded with the request in Semantic Views (`RECORD_AGENT_FEEDBACK`), so whoever looks after the data map sees what needed a change.
 
 ### What you see before you approve an answer [#what-you-see-before-you-approve-an-answer]
 

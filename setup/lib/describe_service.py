@@ -866,9 +866,26 @@ def links_text(found: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def data_map_inputs(tables: list[str], model: str = "all_data") -> dict[str, Any]:
-    """What the data map card shows for these tables, from this computer only (publish.data_map_inputs)."""
-    return publishing.data_map_inputs([str(t).upper() for t in tables], sm_name(model))
+def data_map_inputs(tables: list[str], model: str = "all_data", conn=None) -> dict[str, Any]:
+    """What the data map card shows for these tables (publish.data_map_inputs), from this computer. With ``conn``, the
+    model is the record: a column map or the data map this computer does not have is put back from it first (one
+    catalog read, only then)."""
+    wanted = [str(t).upper() for t in tables]
+    found = publishing.data_map_inputs(wanted, sm_name(model))
+    if conn is None or (found["saved"] and not found["missing"]):
+        return found
+    try:
+        if found["missing"]:
+            restore_column_maps(conn, model, write=True)
+        if not found["saved"]:
+            latest = next((x["data"] for x in sorted(publishing.extensions(lambda sql: _rows(conn, sql), model, r"data_map_v\d+"),
+                                                     key=lambda x: -((x["data"] or {}).get("version") or 0))
+                           if isinstance(x["data"], dict)), None)
+            if latest:
+                publishing.remember_inputs(sm_name(model), latest.get("inputs") or {}, latest.get("version"))
+    except Exception:                       # noqa: BLE001 - not reachable: what this computer has
+        return found
+    return publishing.data_map_inputs(wanted, sm_name(model))
 
 
 def sm_name(model: str) -> str:
@@ -1187,28 +1204,14 @@ def verified_questions(conn, model: str) -> list[dict[str, Any]]:
 
 def column_maps_in_model(conn, model: str) -> dict[str, dict[str, Any]]:
     """The approved column maps the model carries, the newest version of each table: {SCHEMA.TABLE: {version, text}}.
-    Read from SEMANTIC_CATALOG.CUSTOM_EXTENSIONS (the kit's column_map_v<N> extensions on each entity)."""
-    from descriptor import semantic_model as sm
-
-    try:
-        rows = _rows(conn, "SELECT * FROM SEMANTIC_CATALOG.CUSTOM_EXTENSIONS")
-    except Exception as err:
-        raise Unreachable(f"The model's extensions cannot be read ({' '.join(str(err).split())[:160]}).") from err
-    wanted = sm.model_name(model).upper()
+    Read with Semantic Views' own GET_CUSTOM_EXTENSIONS (the kit's column_map_v<N> extensions on each entity)."""
     found: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        values = [v for v in row.values() if isinstance(v, str)]
-        if not any(v.upper() == wanted for v in values) or not any(re.fullmatch(r"column_map_v\d+", v) for v in values):
-            continue
-        for value in values:
-            try:
-                kept = json.loads(value)
-            except ValueError:
-                continue
-            if isinstance(kept, dict) and kept.get("text") and isinstance(kept.get("version"), int) and kept.get("table"):
-                table = str(kept["table"])
-                if kept["version"] > (found.get(table) or {}).get("version", 0):
-                    found[table] = {"version": kept["version"], "text": kept["text"]}
+    for ext in publishing.extensions(lambda sql: _rows(conn, sql), model, r"column_map_v\d+"):
+        kept = ext["data"]
+        if isinstance(kept, dict) and kept.get("text") and isinstance(kept.get("version"), int) and kept.get("table"):
+            table = str(kept["table"])
+            if kept["version"] > (found.get(table) or {}).get("version", 0):
+                found[table] = {"version": kept["version"], "text": kept["text"]}
     return found
 
 
@@ -1252,6 +1255,7 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
     if not dry_run:
         exported = fusion(conn, name)
         result["document"] = exported
+        result["health"] = fusion_health(conn, name)
         kept = publishing.kept(name)
         if kept and exported:
             kept["fusion"] = exported
@@ -1309,6 +1313,63 @@ def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[st
                   metrics=answer.get("METRICS"), status=str(answer.get("STATUS") or "").lower() or "unknown",
                   ddl=[s.strip() for s in str(ddl or "").split(";\n") if s.strip()])
     return result
+
+
+def fusion_health(conn, model: str) -> list[dict[str, Any]]:
+    """How each value both sources hold is answered (SEMANTIC_ADMIN.CHECK_FUSION_HEALTH): by the first source, filled
+    from the other, or not at all - one row per fused attribute. [] when there is nothing fused."""
+    from descriptor import semantic_model as sm
+
+    try:
+        rows = _rows(conn, sm._script("CHECK_FUSION_HEALTH", sm.model_name(model)))
+    except Exception:                       # noqa: BLE001 - an older product, or nothing fused
+        return []
+    up = [{str(k).upper(): v for k, v in r.items()} for r in rows]
+    return [{"entity": str(r.get("ENTITY_NAME") or ""), "attribute": str(r.get("ATTRIBUTE_NAME") or ""),
+             "strategy": str(r.get("FUSION_STRATEGY") or ""), "first_source": str(r.get("FIRST_SOURCE") or ""),
+             "keys": r.get("TOTAL_KEYS"), "from_first": r.get("FROM_FIRST_SOURCE"), "filled": r.get("FILLED"),
+             "unresolved": r.get("UNRESOLVED"), "error": str(r.get("PROBE_ERROR") or "")} for r in up]
+
+
+def record_feedback(conn, request_id: Any, verdict: str, comment: str | None = None, proposed: str | None = None) -> bool:
+    """Tell Semantic Views what a person made of an answer it compiled (RECORD_AGENT_FEEDBACK): ACCEPTED when approved,
+    NEEDS_CHANGE with the SQL they wrote instead. Its reviewers see it with the request. False when it could not."""
+    from descriptor import semantic_model as sm
+
+    if request_id in (None, ""):
+        return False
+    try:
+        conn.execute(f"EXECUTE SCRIPT SEMANTIC_ADMIN.RECORD_AGENT_FEEDBACK('AGENT_REQUEST', {int(request_id)}, "
+                     f"{sm.literal(verdict)}, {sm.literal(comment) if comment else 'NULL'}, {sm.literal(proposed) if proposed else 'NULL'})")
+        return True
+    except Exception:                       # noqa: BLE001 - feedback is extra; the answer stands
+        return False
+
+
+def data_map_versions(conn, model: str = "all_data") -> list[dict[str, Any]]:
+    """Every saved version of the data map, from the model itself (the kit's data_map_v<N> extensions, read with
+    GET_CUSTOM_EXTENSIONS): {version, saved_at, tables, links, metrics}, newest first."""
+    found = []
+    for ext in publishing.extensions(lambda sql: _rows(conn, sql), model, r"data_map_v\d+"):
+        data = ext["data"] if isinstance(ext["data"], dict) else {}
+        inputs = data.get("inputs") or {}
+        found.append({"version": data.get("version"), "saved_at": data.get("saved_at"), "tables": len(inputs.get("tables") or []),
+                      "links": len(inputs.get("links") or []), "metrics": len(inputs.get("metrics") or []),
+                      "definitions": len(data.get("definition") or [])})
+    return sorted(found, key=lambda v: -(v["version"] or 0))
+
+
+def restore_data_map(conn, version: int, model: str = "all_data") -> dict[str, Any]:
+    """Save an earlier version of the data map again: what was said then (grains, links and their type, starts,
+    metrics, rules, hidden columns), from the model's data_map_v<N>. The result is saved as a new version."""
+    wanted = next((x["data"] for x in publishing.extensions(lambda sql: _rows(conn, sql), model, rf"data_map_v{int(version)}")
+                   if isinstance(x["data"], dict)), None)
+    if not wanted:
+        raise NotFound(f"Your data map has no version {version}: exakit semantic versions {model}")
+    i = wanted.get("inputs") or {}
+    return semantic_model(conn, model, list(i.get("tables") or []), list(i.get("links") or []), description=i.get("description"),
+                          table_notes=i.get("table_notes"), grains=i.get("grains"), starts=i.get("starts"), metrics=i.get("metrics"),
+                          instructions=i.get("instructions"), hidden=i.get("hidden"), replace_links=True)
 
 
 def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None,

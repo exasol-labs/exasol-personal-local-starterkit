@@ -490,13 +490,21 @@ def _entity_shape(e: dict[str, Any]) -> tuple:
 
 
 def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] | None:
-    """The statements that turn the published ``previous`` spec into ``spec`` in place - new tables, new unique keys,
-    new links, new or changed views - then one publish; [] when nothing changed. None when only a rebuild can do it: a
-    table, key, link or view taken away, an entity moved to another source, or another model name or description.
+    """The statements that turn the published ``previous`` spec into ``spec`` in place, each Semantic Views' own
+    script, then one publish; [] when nothing changed:
+
+        a semantic view taken away or rooted elsewhere   REMOVE_SEMANTIC_OBJECT (then added again)
+        a link taken away or joined differently          REMOVE_RELATIONSHIP_KEY_MAPPING, REMOVE_RELATIONSHIP
+        a link of another type                           SET_RELATIONSHIP
+        a unique key taken away                          REMOVE_UNIQUE_KEY_WITH_COLUMNS
+        a new table, key, link or view; a changed view   ADD_ENTITY, ADD_UNIQUE_KEY_WITH_COLUMNS, ADD_RELATIONSHIP, ...
+
+    None only where the product has no script for the change: a table taken away or moved to another source, or
+    another model name or description - then the model is rebuilt.
 
     In-place is the product's own path for a published model (every published mutator validates before it returns
     and restores the catalog when it fails), and it keeps what a rebuild loses: verified queries, feedback, the query
-    log and the model's history. A rebuild drops all of that with the model."""
+    log and the model's history."""
     if not previous or previous.get("model") != spec["model"] or previous.get("description") != spec["description"] \
             or previous.get("published_schema") != spec["published_schema"]:
         return None
@@ -507,14 +515,22 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
         return None
     old_links = {r["name"]: r for r in previous.get("relationships") or []}
     new_links = {r["name"]: r for r in spec["relationships"]}
-    if any(name not in new_links or {k: v for k, v in old_links[name].items() if k != "evidence"}
-           != {k: v for k, v in new_links[name].items() if k != "evidence"} for name in old_links):
-        return None
+    shape = lambda r: {k: v for k, v in r.items() if k not in ("evidence", "cardinality", "given")}
     old_objects = {o["name"]: o for o in previous.get("objects") or []}
     new_objects = {o["name"]: o for o in spec["objects"]}
-    if any(name not in new_objects or old_objects[name]["root"] != new_objects[name]["root"] for name in old_objects):
-        return None
     found: list[str] = []
+    gone_objects = [n for n, o in old_objects.items() if n not in new_objects or new_objects[n]["root"] != o["root"]]
+    retyped: list[str] = []                          # after the keys: one-to-one needs the pointer's unique key first
+    for name in gone_objects:                        # first: a view may reach through a link about to go
+        found.append(_script("REMOVE_SEMANTIC_OBJECT", model, name))
+    for name, r in old_links.items():
+        if name not in new_links or shape(new_links[name]) != shape(r):
+            found.append(_script("REMOVE_RELATIONSHIP_KEY_MAPPING", model, name, 1))
+            found.append(_script("REMOVE_RELATIONSHIP", model, name))
+        elif (r.get("cardinality") or "MANY_TO_ONE") != (new_links[name].get("cardinality") or "MANY_TO_ONE"):
+            kind = new_links[name].get("cardinality") or "MANY_TO_ONE"
+            # to one-to-one after the pointer's unique key is added; back to many-to-one before that key is removed
+            (retyped if kind == "ONE_TO_ONE" else found).append(_script("SET_RELATIONSHIP", model, name, None, kind, None, None))
     for name, e in after.items():
         if name not in before:
             found.append(_script("ADD_ENTITY", model, e["name"], e["schema"], e["table"], e["alias"],
@@ -530,12 +546,11 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
                 found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk"),
                                      "UNIQUE", f"{column} is unique in {e['schema']}.{e['table']}: a link ends on it", "NATIVE",
                                      json.dumps([{"column_name": column, "ordinal_position": 1}])))
-        if name in before and set(before[name].get("unique") or []) - set(e.get("unique") or []):
-            return None
+        for column in sorted(had - set(e.get("unique") or [])):
+            found.append(_script("REMOVE_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk")))
+    found += retyped
     for name, r in new_links.items():
-        if name in old_links:
-            if (old_links[name].get("cardinality") or "MANY_TO_ONE") != (r.get("cardinality") or "MANY_TO_ONE"):
-                return None                        # a link that turned one-to-one (or back): the model is built again
+        if name in old_links and shape(old_links[name]) == shape(r):
             continue
         found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE", "LEFT", None))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
@@ -543,7 +558,7 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
             found.append(_script("ADD_CUSTOM_EXTENSION", model, "RELATIONSHIP", r["name"], "exakit",
                                  json.dumps(r["evidence"], ensure_ascii=False, default=str), "EXAKIT", "link_evidence"))
     for name, obj in new_objects.items():
-        if name not in old_objects:
+        if name not in old_objects or name in gone_objects:
             found.append(_script("ADD_SEMANTIC_OBJECT", model, obj["name"], obj["root"], obj["description"]))
             found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
         elif definition(previous, old_objects[name]) != definition(spec, obj):

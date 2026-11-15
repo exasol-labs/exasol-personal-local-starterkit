@@ -16,8 +16,10 @@ last published one back, and ``refresh`` rebuilds a model from it with the colum
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -242,16 +244,98 @@ def build_model(rows: Run, tables: list[str], links: list[dict[str, str]], name:
     return spec
 
 
+def extensions(rows: Run, model: str, pattern: str) -> list[dict[str, Any]]:
+    """The kit's records kept in a model, read with Semantic Views' own GET_CUSTOM_EXTENSIONS (vendor exakit): each
+    whose name matches ``pattern`` (column_map_v3, data_map_v12), as {name, scope_type, scope_name, data}. [] when
+    the model has none or cannot be read."""
+    name = sm.model_name(model)
+    try:
+        found = rows(sm._script("GET_CUSTOM_EXTENSIONS", name, None, None, "exakit"))
+    except Exception:                       # noqa: BLE001 - an older product: its catalog view, this model's rows
+        try:
+            found = [r for r in rows("SELECT * FROM SEMANTIC_CATALOG.CUSTOM_EXTENSIONS")
+                     if any(isinstance(v, str) and v.upper() == name.upper() for v in r.values())]
+        except Exception:                   # noqa: BLE001
+            return []
+    out = []
+    for row in found:
+        r = {str(k).upper(): v for k, v in row.items()}
+        ext = str(r.get("EXTENSION_NAME") or next((v for v in r.values() if isinstance(v, str) and re.fullmatch(pattern, v)), ""))
+        if not re.fullmatch(pattern, ext):
+            continue
+        data = r.get("DATA_JSON")
+        if data is None:
+            data = next((v for v in r.values() if isinstance(v, str) and v.strip().startswith("{")), None)
+        try:
+            data = json.loads(data) if isinstance(data, str) else data
+        except ValueError:
+            pass
+        out.append({"name": ext, "scope_type": str(r.get("SCOPE_TYPE") or "MODEL"), "scope_name": r.get("SCOPE_NAME"), "data": data})
+    return out
+
+
+def remember_inputs(model: str, inputs: dict[str, Any], version: Any, home: Path | None = None) -> Path:
+    """This computer's copy of what a data map was saved with, put back from the model (no spec: the next save
+    builds it again from the column maps)."""
+    path = spec_path(sm.model_name(model), home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"spec": None, "inputs": inputs, "version": version}, indent=2, ensure_ascii=False) + "\n",
+                    encoding="utf-8")
+    return path
+
+
+def _versioned(execute: Callable[[str], Any], rows: Run, model: str, inputs: dict[str, Any], carried: list[dict[str, Any]],
+               rebuilt: bool) -> tuple[int | None, list[str]]:
+    """The model is the record, with its history: after a rebuild (which drops a model's extensions) every version
+    kept in it before is put back; then, when what was said changed, the next data_map_v<N> is added - the inputs
+    and the whole model as Semantic Views exports it (EXPORT_SEMANTIC_DEFINITION). (the version, warnings)."""
+    said: list[str] = []
+    if rebuilt:
+        for ext in carried:
+            scope = None if ext["scope_type"] == "MODEL" else ext["scope_name"]
+            try:
+                execute(sm._script("ADD_CUSTOM_EXTENSION", model, ext["scope_type"], scope, "exakit",
+                                   json.dumps(ext["data"], ensure_ascii=False, default=str), "EXAKIT", ext["name"]))
+            except Exception:                   # noqa: BLE001 - a version of a table no longer in the model
+                said.append(f"{ext['name']} of {scope or model} could not be kept: its part is no longer in the model")
+    versions = [x["data"] for x in carried if x["name"].startswith("data_map_v") and isinstance(x["data"], dict)]
+    latest = max(versions, key=lambda d: d.get("version") or 0, default=None)
+    same = lambda a, b: json.dumps(a or {}, sort_keys=True, default=str) == json.dumps(b or {}, sort_keys=True, default=str)
+    if latest and same(latest.get("inputs"), inputs):
+        return latest.get("version"), said
+    number = int((latest or {}).get("version") or 0) + 1
+    try:
+        definition = [str({str(k).upper(): v for k, v in r.items()}.get("DEFINITION_SQL") or "")
+                      for r in rows(sm._script("EXPORT_SEMANTIC_DEFINITION", model, None, None))]
+    except Exception:                       # noqa: BLE001 - an older product: the inputs alone
+        definition = []
+    record = {"version": number, "saved_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "inputs": inputs, "definition": [d for d in definition if d]}
+    try:
+        execute(sm._script("ADD_CUSTOM_EXTENSION", model, "MODEL", None, "exakit", json.dumps(record, ensure_ascii=False, default=str),
+                           "EXAKIT", f"data_map_v{number}"))
+    except Exception as err:                # noqa: BLE001
+        said.append(f"version {number} could not be kept in the model: {' '.join(str(err).split())[:200]}")
+        return None, said
+    return number, said
+
+
 def publish_model(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], inputs: dict[str, Any], *,
                   reader: str | None = None, home: Path | None = None, extra: list[tuple[str, str]] | None = None,
                   progress: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Install Semantic Views when needed, rebuild the model, keep its spec. The apply() result."""
+    """Install Semantic Views when needed, publish the model, keep its record in the model itself (a numbered
+    data_map_v<N> on each change, the history carried across a rebuild) and a copy on this computer. The apply()
+    result, with "version"."""
     ensure_installed(rows)
     before = kept(spec["model"], home) or {}
     previous = before.get("spec")
     governance = {k: before[k] for k in ("verified", "instructions", "fusion") if before.get(k)}
+    carried = extensions(rows, spec["model"], r"(data_map|column_map)_v\d+") if sm.existing(rows, spec["model"]) else []
     result = sm.apply(execute, rows, spec, reader=reader, previous=previous, extra=extra, progress=progress,
                       kept=governance, previous_extra=(before.get("inputs") or {}).get("extra"))
+    version, said = _versioned(execute, rows, spec["model"], inputs, carried, result.get("mode") == "rebuilt")
+    result["version"] = version
+    result["warnings"] = list(result.get("warnings") or []) + said
     keep(spec, inputs, home, governance)
     return result
 

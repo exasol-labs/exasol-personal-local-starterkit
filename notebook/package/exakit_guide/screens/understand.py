@@ -1459,6 +1459,7 @@ class SemanticViews(Screen):
     fusion_doc = fusion_said = None
     fusion_for: tuple = ()
     report: dict | None = None           # what Semantic Views found wrong (nb.validate_data_map), after a save or a check
+    versions: list | None = None         # the saved versions, from the model (nb.data_map_versions), when asked for
 
     @staticmethod
     def _empty() -> dict:
@@ -1665,8 +1666,10 @@ class SemanticViews(Screen):
             blocks.append({"t": "msg", "kind": "warn", "keep": True, "v": "Semantic Views said: " + " · ".join(self.warnings)})
         if self.saved:
             blocks.append({"t": "actions", "items": [{"id": "dm_validate", "label": "Check my data map", "busy": "Semantic Views is checking…",
-                                                      "tip": "Semantic Views validates it again and lists every problem in its own words."}]})
-        blocks += self._report_blocks()
+                                                      "tip": "Semantic Views validates it again and lists every problem in its own words."},
+                                                     {"id": "dm_versions", "label": "Versions", "busy": "Reading the versions…",
+                                                      "tip": "Every save that changed something is a version, kept in the model itself."}]})
+        blocks += self._report_blocks() + self._version_blocks()
         if self.preview_text:
             blocks.append({"t": "details", "title": "What saving runs", "blocks": [{"t": "pre", "v": self.preview_text}]})
         fusion = self._fusion_blocks()
@@ -1691,6 +1694,34 @@ class SemanticViews(Screen):
                 if r.get("errors") else "Semantic Views has notes on your data map")
         return [{"t": "msg", "kind": "warn" if r.get("errors") else "info", "keep": True, "v": head + ", in its own words:"},
                 {"t": "table", "columns": ["Kind", "Where", "Rule", "What it says"], "rows": rows}]
+
+    def _version_blocks(self) -> list[dict]:
+        if self.versions is None:
+            return []
+        if not self.versions:
+            return [{"t": "p", "muted": True, "v": "No version is kept in the model yet: the next save that changes something is version 1."}]
+        options = [{"value": str(v["version"]), "label": f"v{v['version']} · {v.get('saved_at') or ''}"} for v in self.versions]
+        return [{"t": "subhead", "v": "Versions of your data map", "tip": "Kept in the model: what you said and the whole model as "
+                 "Semantic Views exported it. Saving an older one again makes it the newest; nothing is lost."},
+                {"t": "table", "columns": ["Version", "Saved", "Tables", "Links", "Metrics"],
+                 "rows": [[f"v{v['version']}", v.get("saved_at") or "", v["tables"], v["links"], v["metrics"]] for v in self.versions]},
+                {"t": "fields", "items": [{"id": "dm_version", "type": "select", "label": "Save this version again",
+                                           "value": options[min(1, len(options) - 1)]["value"], "options": options}]},
+                {"t": "actions", "items": [{"id": "dm_restore", "label": "Save it again", "busy": "Saving…"}]}]
+
+    def on_dm_versions(self, _v: dict) -> None:
+        found = actions.run("semantic.versions")
+        self.versions = list(found or [])
+
+    def on_dm_restore(self, v: dict) -> None:
+        number = str(v.get("dm_version") or "")
+        if not number.isdigit():
+            raise ValueError("Pick a version.")
+        found = actions.run("semantic.restore", version=int(number))
+        self.result_text = f"Version {number} saved again as version {found.get('version')}."
+        self.versions = None
+        self.loading = True
+        self._load()
 
     @staticmethod
     def _said(m: dict) -> str:
@@ -1857,6 +1888,11 @@ class SemanticViews(Screen):
                                  if ok and self.fusion_said.get("dry_run") else
                                  "Applied: questions are answered from both sources now." if ok else "It was not accepted")
                                 + (f" ({self.fusion_said['message']})" if self.fusion_said.get("message") else "")})
+        health = self.fusion_said.get("health") if self.fusion_said else None
+        if health:
+            blocks.append({"t": "table", "columns": ["Value", "How both are combined", "Rows", "From the first source", "Filled by the other", "Neither has it"],
+                           "rows": [[f"{h['entity']}.{h['attribute']}", h["strategy"], h["keys"], h["from_first"], h["filled"], h["unresolved"]]
+                                    for h in health]})
         if self.fusion_doc:
             import json
 

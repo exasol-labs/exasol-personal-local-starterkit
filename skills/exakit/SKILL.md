@@ -211,6 +211,9 @@ against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, a
 | The model's fusion, its column maps | `exakit semantic fusion all_data`, `exakit semantic column-maps all_data` | no |
 | A view the user already wrote (one table, grouped, SUM / COUNT / AVG / MIN / MAX) | `exakit semantic adopt logistics MART_SEMANTIC.SHIPPING --dry-run` shows the view and the statement; drop `--dry-run` on a yes. A join, a WHERE or several tables is refused: approve the tables' column maps instead | without `--dry-run` |
 | A dashboard's tiles after the model changed | `exakit board recheck <NAME>` lists tiles whose SQL the model now writes differently; `--update` on a yes | only with `--update` |
+| What Semantic Views finds wrong with a model, in its own words | `exakit semantic validate all_data` | no |
+| A metric as Semantic Views explains it | `exakit semantic explain all_data <VIEW> <METRIC>` | no |
+| The data map's versions, kept in the model; an older one saved again | `exakit semantic versions all_data`; `exakit semantic restore-version all_data <N>` on a yes | restore-version |
 | A lost store, a lost model | `exakit semantic restore-maps all_data` (add `--write` on a yes); `exakit semantic refresh all_data` | `--write`, refresh |
 
 **A dashboard of several answers is `exakit board`, on Dash Server.** Show each query to the user; pinning it is

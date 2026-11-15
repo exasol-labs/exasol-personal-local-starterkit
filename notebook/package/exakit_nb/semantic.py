@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -305,11 +305,23 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
     return found
 
 
-def data_map_inputs(tables: list[str], model: str = "all_data") -> dict[str, Any]:
-    """What your data map holds for these tables, read from this computer (no query): each table's key, grain and
-    columns from its approved column map, and what you said before - grains, notes, links with their type, metrics,
-    starting points, instructions. The data map card opens with it."""
-    return _service().data_map_inputs(list(tables), model)
+def data_map_inputs(tables: list[str], model: str = "all_data", connection=None) -> dict[str, Any]:
+    """What your data map holds for these tables: each table's key, grain and columns from its approved column map,
+    and what you said before - grains, notes, links with their type, metrics, starting points, instructions, hidden
+    columns. Read from this computer; with ``connection``, what this computer does not have (a new computer, a deleted
+    folder) is put back from the model first, which is the record."""
+    return _service().data_map_inputs(list(tables), model, connection)
+
+
+def data_map_versions(conn, model: str = "all_data") -> list[dict[str, Any]]:
+    """Every saved version of your data map, from the model itself, newest first: {version, saved_at, tables, links,
+    metrics, definitions}. Each holds what you said and the whole model as Semantic Views exported it."""
+    return _service().data_map_versions(conn, model)
+
+
+def restore_data_map(conn, version: int, model: str = "all_data") -> dict[str, Any]:
+    """Save an earlier version of your data map again (it becomes the newest version)."""
+    return _service().restore_data_map(conn, version, model)
 
 
 def draft_data_map(tables: list[str]) -> dict[str, Any]:

@@ -429,6 +429,33 @@ class SemanticSurfaces(unittest.TestCase):
         self.assertEqual("total_amount: revenue incl. tax", svc.glossary(conn, "sales", "orders"))
         self.assertEqual("", svc.glossary(self.Conn({}), "sales", "orders"))
 
+    def test_a_new_computer_reads_the_data_map_back_from_the_model_and_restores_a_version(self):
+        from descriptor import publish
+        record = {"version": 3, "inputs": {"all": True, "tables": ["SHOP.ORDERS"], "grains": {"SHOP.ORDERS": "one order"},
+                                           "links": [], "metrics": [], "instructions": ["Tax included."]}}
+        conn = self.Conn({"GET_CUSTOM_EXTENSIONS": [{"SCOPE_TYPE": "MODEL", "EXTENSION_NAME": "data_map_v3", "DATA_JSON": json.dumps(record)}]})
+        with mock.patch.object(publish, "data_map_inputs", side_effect=lambda t, m: {"tables": {}, "missing": [], "saved": publish.kept(m) is not None}), \
+                mock.patch.object(svc, "restore_column_maps") as maps:
+            found = svc.data_map_inputs(["shop.orders"], "all_data", conn)
+        maps.assert_not_called()
+        self.assertTrue(found["saved"], "put back from the model, which is the record")
+        self.assertEqual((3, ["Tax included."]), (publish.kept("all_data")["version"], publish.kept("all_data")["inputs"]["instructions"]))
+        self.assertEqual([3], [v["version"] for v in svc.data_map_versions(conn)])
+        with mock.patch.object(svc, "semantic_model", return_value={"version": 4}) as saved:
+            self.assertEqual({"version": 4}, svc.restore_data_map(conn, 3))
+        self.assertEqual(({"SHOP.ORDERS": "one order"}, ["Tax included."], True),
+                         (saved.call_args.kwargs["grains"], saved.call_args.kwargs["instructions"], saved.call_args.kwargs["replace_links"]))
+        with self.assertRaises(svc.NotFound):
+            svc.restore_data_map(conn, 9)
+
+    def test_fusion_health_and_feedback_are_semantic_views_own(self):
+        conn = self.Conn({"CHECK_FUSION_HEALTH": [{"ENTITY_NAME": "customers", "ATTRIBUTE_NAME": "region", "FUSION_STRATEGY": "COALESCE",
+                                                   "TOTAL_KEYS": 10, "FROM_FIRST_SOURCE": 8, "FILLED": 1, "UNRESOLVED": 1}]})
+        self.assertEqual([("region", 1)], [(h["attribute"], h["unresolved"]) for h in svc.fusion_health(conn, "crm")])
+        self.assertTrue(svc.record_feedback(conn, 5, "ACCEPTED", "ok"))
+        self.assertIn("RECORD_AGENT_FEEDBACK('AGENT_REQUEST', 5, 'ACCEPTED', 'ok', NULL)", conn.sent[-1])
+        self.assertFalse(svc.record_feedback(conn, None, "ACCEPTED"))
+
     def test_a_verified_question_is_compiled_first_and_kept_beside_the_model(self):
         from descriptor import publish
         publish.keep({"model": "sales"}, {"tables": []})
@@ -469,8 +496,16 @@ class SemanticSurfaces(unittest.TestCase):
         rows = [{"MODEL_NAME": "sales", "OBJECT_NAME": "orders", "EXTENSION_KEY": f"column_map_v{d['version']}",
                  "EXTENSION_VALUE": json.dumps(d)} for d in (older, newer)]
         rows.append({"MODEL_NAME": "other", "EXTENSION_KEY": "column_map_v9", "EXTENSION_VALUE": json.dumps(dict(newer, version=9))})
-        conn = self.Conn({"CUSTOM_EXTENSIONS": rows})
+        old = self.Conn({"CUSTOM_EXTENSIONS": rows})
+        old.execute = (lambda inner: lambda sql: (_ for _ in ()).throw(RuntimeError("no such script")) if "GET_CUSTOM_EXTENSIONS" in sql
+                       else inner(sql))(old.execute)
+        self.assertEqual({"SHOP.ORDERS": {"version": 2, "text": "version: 2\n"}}, svc.column_maps_in_model(old, "sales"),
+                         "an older product: its catalog view, this model's rows")
+        conn = self.Conn({"GET_CUSTOM_EXTENSIONS": [{"SCOPE_TYPE": "ENTITY", "SCOPE_NAME": "orders", "VENDOR_NAME": "exakit",
+                                                     "EXTENSION_NAME": f"column_map_v{d['version']}", "DATA_JSON": json.dumps(d)}
+                                                    for d in (older, newer)]})
         self.assertEqual({"SHOP.ORDERS": {"version": 2, "text": "version: 2\n"}}, svc.column_maps_in_model(conn, "sales"))
+        self.assertIn("GET_CUSTOM_EXTENSIONS('sales', NULL, NULL, 'exakit')", " ".join(conn.sent), "Semantic Views' own reader")
         said = svc.restore_column_maps(conn, "sales")
         self.assertEqual("would be written to the store", said[0]["action"])
         self.assertEqual([], store.versions("SHOP.ORDERS"), "nothing written without write=True")
