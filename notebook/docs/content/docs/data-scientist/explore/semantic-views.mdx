@@ -284,6 +284,32 @@ exakit semantic refresh all_data
 
 The kit's `exakit` skill tells AI clients to read `all_data` first and to use these commands rather than their own SQL against the semantic layer. Before every write, the client shows you the request, the document or the SQL and waits for your yes.
 
+### What you see before you approve an answer
+
+Every answer in Ask says whether your data map checked it:
+
+| The card says | What it means |
+|---|---|
+| **Checked by your data map** | Semantic Views wrote the SQL from its own definitions: a trusted question, or the AI picked metric and dimension names and the data map wrote the rest. A join that would count an amount twice is refused, not run. |
+| **Not checked by your data map** | The AI wrote the SQL from the column map alone. Read its joins and sums before you approve it. |
+
+Under **How it is put together**, a checked answer lists the tables it reads, how many it joins, which copy of a table was used when the same rows live in two sources, and whether there was more than one way to join them. All of this comes from the plan Semantic Views returns with the SQL; nothing is run to work it out.
+
+When your data map has many fields (more than `SEARCH_ABOVE`, 30 by default, in `ASK_RULES`), it is searched for the question's words first, and the AI sees only the fields that match. The search is Semantic Views' own: names, business names, descriptions, synonyms and trusted questions.
+
+```bash
+exakit semantic search "revenue country" --model all_data
+```
+
+### When your data map changes, your dashboards are rechecked
+
+A tile pinned from a checked answer keeps the request it came from. The Share notebook compiles each such tile again and lists the ones whose SQL your data map now writes differently. Set `UPDATE_TILES = True` to take the new SQL. Tiles you wrote or edited yourself are left as they are.
+
+```bash
+exakit board recheck my-dashboard            # what changed
+exakit board recheck my-dashboard --update   # take the new SQL
+```
+
 ### A view you already wrote
 
 If you already have a view that groups one table, Semantic Views can adopt it as it is. Plain columns become dimensions, `SUM`, `COUNT`, `AVG`, `MIN` and `MAX` become metrics, and the view's comments become their descriptions:

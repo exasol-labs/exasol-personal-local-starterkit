@@ -188,6 +188,40 @@ class Board:
         log_event("board.edit", board=self.name, tile=tile_id, sql_digest=tile["sql_digest"])
         return self
 
+    def recheck(self, conn, *, update: bool = False) -> list[dict[str, Any]]:
+        """Each tile answered from your data map, compiled again from its request: when the data map changed since
+        it was pinned (a new link, a definition changed, a table rebuilt), its SQL comes out different, or is refused.
+        Tiles written or edited by hand have no request and are left as they are. ``update=True`` takes the new SQL
+        for the changed tiles and saves the dashboard (that is your approval of it); else nothing changes.
+        [{id, page, title, state: same | changed | refused, sql, reason}]."""
+        from .ask import _read_sql
+        from .semantic import _service
+
+        service = _service()
+        found = []
+        for page in self.pages:
+            for tile in page["tiles"]:
+                if not tile.get("request"):
+                    continue
+                entry = {"id": tile["id"], "page": page["title"], "title": tile["title"], "sql": None, "reason": None}
+                try:
+                    compiled = service.compile_request(conn, dict(tile["request"]))
+                except Exception as err:     # noqa: BLE001 - the data map cannot be read: said per tile, nothing changes
+                    found.append(dict(entry, state="refused", reason=" ".join(str(err).split())[:200]))
+                    continue
+                if compiled["status"] != "ok":
+                    found.append(dict(entry, state="refused", reason=compiled.get("error")))
+                    continue
+                fresh = _read_sql(compiled["sql"])
+                same = " ".join(fresh.split()) == " ".join(str(tile["sql"]).split())
+                found.append(dict(entry, state="same" if same else "changed", sql=None if same else fresh))
+                if update and not same:
+                    tile.update(sql=fresh, sql_digest=hashlib.sha256(fresh.encode("utf-8")).hexdigest())
+                    log_event("board.recheck", board=self.name, tile=tile["id"], sql_digest=tile["sql_digest"])
+        if update and any(f["state"] == "changed" for f in found):
+            self.save()
+        return found
+
     def show_as(self, tile_id: str, kind: str) -> "Board":
         if kind not in KINDS:
             raise ValueError(f"A tile shows as one of {', '.join(KINDS)}.")

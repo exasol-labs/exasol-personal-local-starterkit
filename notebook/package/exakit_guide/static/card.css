@@ -368,6 +368,8 @@
 .guide-list-muted { color: var(--guide-muted); font-size: 13px; }
 .guide-doubts { display: flex; gap: 9px; padding: 10px 12px; border-radius: 10px; background: rgba(176,106,11,.08); font-size: 13px; }
 .guide-doubts .guide-icon { color: var(--guide-warn); margin-top: 2px; }
+.guide-checked { display: flex; gap: 9px; align-items: center; padding: 8px 12px; border-radius: 10px; background: rgba(19,128,78,.08); font-size: 13px; }
+.guide-checked .guide-icon { color: var(--guide-ok); }
 .guide-sqledit { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .guide-textarea { font-family: var(--guide-mono); font-size: 12.5px; color: var(--guide-text); background: var(--guide-card); border: 1px solid var(--guide-border-strong); border-radius: 8px; padding: 8px 10px; resize: vertical; }
 .guide-answer { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 10px; background: rgba(19,128,78,.07); }

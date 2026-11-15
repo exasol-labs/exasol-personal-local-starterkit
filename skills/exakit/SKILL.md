@@ -202,12 +202,14 @@ against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, a
 | Need | Command | Writes |
 |---|---|---|
 | A model's fields, with what each holds and why it is used | `exakit semantic fields all_data --json` | no |
+| The fields that match the user's words, best first (use it before picking names from a large model) | `exakit semantic search "revenue country" --model all_data --json` | no |
 | The SQL for a question, from metric and dimension names | `exakit semantic compile '{"model": "all_data", "object": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["state"]}' --json` - a refusal with choices means ask the user which one | no |
 | Questions already reviewed (use them before drafting) | `exakit semantic verified all_data --json` | no |
 | Keep an approved question in the model | `exakit semantic verify all_data --object ORDER_LINES --name "Revenue by state" --question "..." --request '{...}'` | yes |
 | The same rows in two sources (customers here and in a CRM) | `exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS [--key CUST_ID] [--wins model\|other]` - a dry run; show its result, then add `--apply` on a yes | only with `--apply` |
 | The model's fusion, its column maps | `exakit semantic fusion all_data`, `exakit semantic column-maps all_data` | no |
 | A view the user already wrote (one table, grouped, SUM / COUNT / AVG / MIN / MAX) | `exakit semantic adopt logistics MART_SEMANTIC.SHIPPING --dry-run` shows the view and the statement; drop `--dry-run` on a yes. A join, a WHERE or several tables is refused: approve the tables' column maps instead | without `--dry-run` |
+| A dashboard's tiles after the model changed | `exakit board recheck <NAME>` lists tiles whose SQL the model now writes differently; `--update` on a yes | only with `--update` |
 | A lost store, a lost model | `exakit semantic restore-maps all_data` (add `--write` on a yes); `exakit semantic refresh all_data` | `--write`, refresh |
 
 **A dashboard of several answers is `exakit board`, on Dash Server.** Show each query to the user; pinning it is

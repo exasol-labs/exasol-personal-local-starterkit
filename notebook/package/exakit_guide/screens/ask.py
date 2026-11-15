@@ -195,6 +195,8 @@ class Ask(Screen):
             approved = bool(getattr(p, "_approved_digest", None))
             blocks.append({"t": "proposal", "summary": (self.my_notes[0] if self.my_notes and self.my_notes[0] else "The plan for this question."),
                            "by": self.drafted_by, "assumptions": list(p.assumptions or []), "doubts": list(p.doubts or []),
+                           "plan": list(getattr(p, "plan", None) or []), "checked": getattr(p, "checked", None),
+                           "checked_line": getattr(p, "checked_line", ""),
                            "sql": p.sql, "approved": approved, "ran": self.answer is not None})
         if self.answer is not None:
             frame, line, chart = self.answer

@@ -117,6 +117,7 @@ else:
 # | `BOARD_FIGURES_CHECKED` | `True` only after you checked the preview's figures: it goes live |
 # | `MOVE_TILE`, `REMOVE_TILE` | `("a1b2c3d4", "Delivery")` moves a tile to a page; `"a1b2c3d4"` takes it off |
 # | `EDIT_TILE` | `("a1b2c3d4", "SELECT ...")`: your own SQL for a tile, the one printed below, edited |
+# | `UPDATE_TILES` | `True`: tiles whose SQL your data map now writes differently (listed below) take the new SQL |
 # | `DASHBOARD_RULES` | changes to how the dashboard behaves, such as `{"CACHE_SECONDS": 60, "PARALLEL": 8, "FILTERS": 5}`; `nb.dashboard_rules()` lists every rule |
 # | `PAGE_FILTERS` | the filters of a page, chosen by you: `{"Revenue": ["STATE", "CATEGORY"]}` |
 # | `BOARD_APP_FILE` | your own version of the dashboard's source, saved from `nb.board_app()` and changed (keep `create_dash_app`) |
@@ -131,6 +132,7 @@ BOARD_FIGURES_CHECKED = False
 MOVE_TILE = None
 REMOVE_TILE = None
 EDIT_TILE = None
+UPDATE_TILES = False
 DASHBOARD_RULES = {}
 PAGE_FILTERS = {}
 BOARD_APP_FILE = None
@@ -148,6 +150,10 @@ if boards:
         board.save()
     for page_title, columns in PAGE_FILTERS.items():
         board.set_filters(page_title, columns).save()
+    for tile in board.recheck(connection, update=UPDATE_TILES):
+        if tile["state"] != "same":
+            print(f"[{tile['id']}] {tile['page']} / {tile['title']}: your data map now writes it differently ({tile['state']})"
+                  + (f"\n{tile['sql']}" if tile["sql"] else f": {tile['reason']}") + "\n")
     for page in board.pages:
         for tile in page["tiles"]:
             print(f"[{tile['id']}] {page['title']} / {tile['title']}\n{tile['sql']}\n")

@@ -44,6 +44,7 @@ A dashboard being put together: its pages, in order, each with its tiles.
 | `move(tile_id: str, page: str) -> Board` |  |
 | `remove(tile_id: str) -> Board` |  |
 | `edit(tile_id: str, sql: str, title: str \| None=None) -> Board` | Your own SQL for a tile (the one shown, edited): saving it here is your approval of it, so the dashboard runs exactly this. |
+| `recheck(conn, *, update: bool=False) -> list[dict[str, Any]]` | Each tile answered from your data map, compiled again from its request: when the data map changed since it was pinned (a new link, a definition changed, a table rebuilt), its SQL comes out different, or is refused. |
 | `show_as(tile_id: str, kind: str) -> Board` |  |
 | `rename_page(old: str, new: str) -> Board` |  |
 | `filters(page: dict[str, Any]) -> list[str]` | What a page can be filtered by: the ones set for it (set_filters), else the columns that are not numbers and that every tile of the page returns, or that FILTER_SHARED_BY of its tiles do - FILTERS of them at most. |

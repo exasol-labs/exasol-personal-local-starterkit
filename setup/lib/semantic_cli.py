@@ -3,7 +3,8 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
 
     exakit semantic models                                      every model, and which the kit built
     exakit semantic fields <MODEL>                              its metrics and dimensions, with what each is
-    exakit semantic compile '<request json>' | --request-file F the SQL a structured request compiles to
+    exakit semantic search "<words>" [--model M]                the fields that match, best first
+    exakit semantic compile '<request json>' | --request-file F the SQL a structured request compiles to, and how
     exakit semantic verify <MODEL> --object O --name N --question "..." --request '<json>'
     exakit semantic verified <MODEL>                            its verified questions
     exakit semantic fuse <MODEL> --table S.T --same-as S.T [--key COL] [--wins model|other] [--apply]
@@ -21,6 +22,7 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit board pin <NAME> --page P --question "..." --sql "SELECT ..." | --sql-file F [--title T] [--kind K]
     exakit board edit <NAME> <TILE> --sql "SELECT ..."          your own SQL for a tile
     exakit board move <NAME> <TILE> <PAGE> | remove <NAME> <TILE> | kind <NAME> <TILE> <kpi|bar|line|table>
+    exakit board recheck <NAME> [--update]                      tiles from your data map compiled again: what changed
     exakit board preview <NAME> [--rules '{...}'] [--app-file F] a health-checked preview on Dash Server
     exakit board publish <NAME> --figures-checked [--app-file F]  live, after a person checked the preview's figures
 
@@ -45,8 +47,8 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 
 import describe_service as svc  # noqa: E402
 
-FLAGS = {"--json": "json", "--apply": "apply", "--dry-run": "dry_run", "--write": "write", "--figures-checked": "figures_checked"}
-VALUED = {"--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
+FLAGS = {"--json": "json", "--apply": "apply", "--dry-run": "dry_run", "--update": "update", "--write": "write", "--figures-checked": "figures_checked"}
+VALUED = {"--model", "--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
 
@@ -116,10 +118,17 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         model, = _need(words, 1, "exakit semantic fields <MODEL>")
         found = _connected(lambda c: svc.model_fields(c, model))
         return found, "\n".join(f"{f['object']:<20} {f['kind']:<10} {f['name']:<32} {f['about']}" for f in found) or "No fields."
+    if action == "search":
+        if not words:
+            raise Refused('Usage: exakit semantic search "<words>" [--model M]')
+        text = " ".join(words)
+        found = _connected(lambda c: svc.search_fields(c, text, opts.get("model")))
+        return found, "\n".join(f"{f['model']:<16} {f['object']:<18} {f['kind']:<10} {f['name']:<30} {f['about']}"
+                                for f in found) or f"Nothing in your data map matches '{text}'."
     if action == "compile":
         request = _json_arg(opts, words)
         found = _connected(lambda c: svc.compile_request(c, request))
-        return found, found["sql"] if found["status"] == "ok" else (
+        return found, found["sql"] + "".join(f"\n-- {line}" for line in found.get("explained") or []) if found["status"] == "ok" else (
             f"Refused: {found['error']}" + (f"\nChoices: {json.dumps(found['clarification'])}" if found.get("clarification") else ""))
     if action == "verify":
         model, = _need(words, 1, "exakit semantic verify <MODEL> --object O --name N --question \"...\" --request '<json>'")
@@ -195,7 +204,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         model, = _need(words, 1, "exakit semantic refresh <MODEL>")
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
-    raise Refused(f"Unknown action '{action}' (models, fields, compile, verify, verified, fuse, fusion, column-maps, "
+    raise Refused(f"Unknown action '{action}' (models, fields, search, compile, verify, verified, fuse, fusion, column-maps, "
                   "restore-maps, refresh, plan, run, adopt).")
 
 
@@ -252,6 +261,20 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         tile = boards.pin(approved, answer, board=name, page=opts.get("page") or "Overview", title=opts.get("title"),
                           kind=opts.get("kind"))
         return tile, f"Pinned to {name} / {opts.get('page') or 'Overview'} as a {tile['kind']} (tile {tile['id']})."
+    if action == "recheck":
+        name, = _need(words, 1, "exakit board recheck <NAME> [--update]")
+        found = _connected(lambda c: boards.board(name).recheck(c, update=bool(opts.get("update"))))
+        changed = [f for f in found if f["state"] != "same"]
+        text = "\n".join(f"[{f['id']}] {f['page']} / {f['title']}: {f['state']}"
+                         + (f"\n{f['sql']}" if f.get("sql") else "") + (f" ({f['reason']})" if f.get("reason") else "")
+                         for f in changed)
+        if not found:
+            text = f"{name} has no tile answered from your data map."
+        elif not changed:
+            text = f"Every tile of {name} answered from your data map compiles as it was pinned."
+        elif not opts.get("update") and any(f["state"] == "changed" for f in changed):
+            text += "\nTake the new SQL with --update after the user agrees."
+        return found, text
     if action == "edit":
         name, tile = _need(words, 2, "exakit board edit <NAME> <TILE> --sql \"SELECT ...\" | --sql-file F")
         if not (opts.get("sql") or opts.get("sql_file")):
@@ -322,7 +345,7 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         tools = dash_tools()
         route = draft.confirm(tools, figures_checked=True)
         return {"name": name, "live": tools.url + route}, f"Live: {tools.url + route}"
-    raise Refused(f"Unknown action '{action}' (list, starter, show, pin, edit, move, remove, kind, preview, publish).")
+    raise Refused(f"Unknown action '{action}' (list, starter, show, pin, edit, recheck, move, remove, kind, preview, publish).")
 
 
 def main(argv: list[str]) -> int:

@@ -5,7 +5,7 @@ schema map (the links between tables) become one model in Exasol Semantic Views,
 layer the semantic-views add-on installs (SEMANTIC_ADMIN, SEMANTIC_CATALOG, SEMANTIC_AGENT):
 
     table                      ->  entity (its alias, its key, its grain)
-    link  ORDERS.O_CUSTKEY     ->  relationship ORDERS -> CUSTOMER, MANY_TO_ONE, with its key mapping
+    link  ORDERS.O_CUSTKEY     ->  relationship ORDERS -> CUSTOMER, MANY_TO_ONE (ONE_TO_ONE when both sides are unique), with its key mapping
     role  time, category, flag ->  dimension (a time column also gives <column>_month)
     role  measure              ->  fact, and the metrics total_<column> (SUM) and average_<column> (per row)
     every entity               ->  a private row fact and the metric <entity>_count
@@ -193,7 +193,7 @@ def _paths(root: str, edges: dict[str, list[tuple[str, str]]]) -> dict[str, list
 def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], name: str, *,
           description: str | None = None) -> dict[str, Any]:
     """The model as a dict. ``tables`` from table_input(); ``links`` as {"from": "SCHEMA.TABLE.COLUMN",
-    "to": "SCHEMA.TABLE.KEY"} (many-to-one: the key side is unique). A link naming a table that is not modelled is
+    "to": "SCHEMA.TABLE.KEY"} (many-to-one: the key side is unique; one-to-one when the pointer is unique too). A link naming a table that is not modelled is
     left out, and so is a table whose schema or name the product cannot take; ``notes`` says what was left out."""
     model = model_name(name)
     notes: list[str] = []
@@ -235,13 +235,24 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             name_ = f"{name_}_{len(relationships) + 1}"
         used.add(name_)
         relationships.append({"name": name_, "from": a["name"], "to": b["name"], "from_column": from_column,
-                              "to_column": to_column, "evidence": link.get("evidence"),
+                              "to_column": to_column, "evidence": link.get("evidence"), "given": link.get("cardinality"),
                               "join": f"{column_sql(a['alias'], from_column)} = {column_sql(b['alias'], to_column)}"})
         edges.setdefault(a["name"], []).append((b["name"], name_))
         # a many-to-one link must end on a unique key the model declares: the column map's key, or this column,
         # which the link's own check found unique (Semantic Views refuses the relationship otherwise)
         if to_column not in b["key"] and to_column not in b.setdefault("unique", []):
             b["unique"].append(to_column)
+    for r in relationships:
+        # one-to-one when the pointer is unique as well: its table's key, a column a link ends on, or measured so by
+        # the link's own check. Else many-to-one: the key side is unique, the pointer repeats
+        a = next(e for e in entities if e["name"] == r["from"])
+        given = str(r.get("given") or "").upper()
+        unique_from = given == "ONE_TO_ONE" if given in ("ONE_TO_ONE", "MANY_TO_ONE") else (
+            a["key"] == [r["from_column"]] or r["from_column"] in (a.get("unique") or [])
+            or bool((r.get("evidence") or {}).get("from_unique")))
+        r["cardinality"] = "ONE_TO_ONE" if unique_from else "MANY_TO_ONE"
+        if unique_from and r["from_column"] not in a["key"] and r["from_column"] not in a.setdefault("unique", []):
+            a["unique"].append(r["from_column"])
 
     def free(wanted: str, *prefixes: str) -> str:
         """A name not yet in the model: the wanted one, else prefixed with its entity (or view); never a keyword."""
@@ -426,7 +437,7 @@ def statements(spec: dict[str, Any]) -> list[str]:
                                  json.dumps([{"column_name": column, "ordinal_position": 1}])))
         found += column_map_statements(model, e)
     for r in spec["relationships"]:
-        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], "MANY_TO_ONE", "LEFT", None))
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE", "LEFT", None))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
         if r.get("evidence"):
             # why this link is in the model (who proposed it, what the data showed): kept on the relationship itself,
@@ -516,8 +527,10 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
             return None
     for name, r in new_links.items():
         if name in old_links:
+            if (old_links[name].get("cardinality") or "MANY_TO_ONE") != (r.get("cardinality") or "MANY_TO_ONE"):
+                return None                        # a link that turned one-to-one (or back): the model is built again
             continue
-        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], "MANY_TO_ONE", "LEFT", None))
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE", "LEFT", None))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
         if r.get("evidence"):
             found.append(_script("ADD_CUSTOM_EXTENSION", model, "RELATIONSHIP", r["name"], "exakit",

@@ -453,6 +453,24 @@ class SemanticModelTest(unittest.TestCase):
         self.assertIn('"table": "GEO.STATES"', sources)
         self.assertLess(sent.index(stored), sent.index(next(s for s in sent if "ADD_SEMANTIC_OBJECT" in s)))
 
+    def test_a_link_unique_on_both_sides_is_one_to_one_and_a_change_rebuilds(self):
+        """A pointer that is unique as well (its table's key, or measured unique by the link check) makes the link
+        ONE_TO_ONE, declared unique on both ends; a link whose kind changes is not changed in place."""
+        invoices = {"columns": {"ORDER_REF": {"role": "key"}, "TAX": {"role": "measure"}}, "slots": {"key": "ORDER_REF"}}
+        tables = [semantic_model.table_input("TPCH.ORDERS", self.ORDERS, {"O_TOTALPRICE": "DECIMAL(15,2)", "O_ORDERDATE": "DATE"}),
+                  semantic_model.table_input("BILL.INVOICES", invoices, {"TAX": "DECIMAL(15,2)"})]
+        one = semantic_model.build(tables, [{"from": "BILL.INVOICES.ORDER_REF", "to": "TPCH.ORDERS.O_ORDERKEY"}], "bills")
+        self.assertEqual(["ONE_TO_ONE"], [r["cardinality"] for r in one["relationships"]])
+        self.assertTrue(any("'ONE_TO_ONE', 'LEFT'" in x for x in semantic_model.statements(one)))
+        measured = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "BILL.INVOICES.ORDER_REF",
+                                                  "evidence": {"from_unique": True}}], "bills")
+        self.assertEqual("ONE_TO_ONE", measured["relationships"][0]["cardinality"])
+        self.assertIn("O_CUSTKEY", next(e for e in measured["entities"] if e["table"] == "ORDERS")["unique"],
+                      "the pointer is a declared unique key too")
+        many = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "BILL.INVOICES.ORDER_REF"}], "bills")
+        self.assertEqual("MANY_TO_ONE", many["relationships"][0]["cardinality"])
+        self.assertIsNone(semantic_model.changes(many, measured), "a link turned one-to-one: built again")
+
     def test_an_ai_proposal_is_checked_before_it_is_used(self):
         spec = self.spec()
         labels, extra, refused = semantic_model.ai_accept(spec, {

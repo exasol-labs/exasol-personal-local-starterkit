@@ -152,14 +152,26 @@ class Proposal:
     assumptions: list[str] = field(default_factory=list)
     doubts: list[str] = field(default_factory=list)
     request: dict[str, Any] | None = None     # the structured request the SQL was compiled from (semantic model only)
+    plan: list[str] = field(default_factory=list)   # how the answer is put together, in plain words
+    checked: bool | None = None               # True: your data map wrote or checked the SQL; False: the AI wrote it alone
     _approved_digest: str | None = field(default=None, init=False, repr=False)
 
     def _sections(self) -> list[tuple[str, list[str]]]:
-        return [("What the model assumed", self.assumptions), ("Check before you approve", self.doubts)]
+        return [("How it is put together", self.plan), ("What the model assumed", self.assumptions),
+                ("Check before you approve", self.doubts)]
+
+    @property
+    def checked_line(self) -> str:
+        if self.checked is True:
+            return "Checked by your data map: it wrote this SQL from its own definitions, and refuses joins that count twice."
+        if self.checked is False:
+            return ("Not checked by your data map: the AI wrote this SQL from the column map alone. Read the joins and "
+                    "the sums before you approve it.")
+        return ""
 
     def __str__(self) -> str:
         state = "approved" if self._approved_digest else "not approved yet: nothing has run"
-        lines = [f"Question: {self.question}", f"SQL ({state}):", readable(self.sql)]
+        lines = [f"Question: {self.question}"] + ([self.checked_line] if self.checked_line else []) + [f"SQL ({state}):", readable(self.sql)]
         for title, items in self._sections():
             if items:
                 lines += ["", f"{title}:", *(f"  - {item}" for item in items)]
@@ -173,7 +185,7 @@ class Proposal:
         state = ("<b>Approved</b>: run it with <code>proposal.run()</code>." if self._approved_digest
                  else "<b>Not approved yet</b>: nothing has run. Edit with <code>proposal.edit(\"...\")</code> if needed, "
                       "then approve it in the next cell.")
-        html = [f"<p><b>Question:</b> {escape(self.question)}</p>",
+        html = [f"<p><b>Question:</b> {escape(self.question)}</p>"] + ([f"<p><i>{escape(self.checked_line)}</i></p>"] if self.checked_line else []) + [
                 f"<pre style=\"white-space: pre-wrap\">{escape(readable(self.sql))}</pre>"]
         for title, items in self._sections():
             if items:
@@ -185,6 +197,7 @@ class Proposal:
         self.sql = _read_sql(sql)
         self._approved_digest = None
         self.request = None                  # your own SQL: it no longer is what the request compiles to
+        self.checked, self.plan = None, []
         return self
 
     def verify(self, conn, name: str | None = None) -> dict[str, Any]:
@@ -254,6 +267,8 @@ MARK = "[built by exakit]"      # in the description of a semantic model the kit
 ASK_RULES: dict[str, Any] = {
     "ORDER": ["trusted", "data_map_request", "data_map_sql", "column_map"],
     "REQUEST_LIMIT": 1000,
+    "SEARCH_ABOVE": 30,
+    "SEARCH_WORDS": 4,
     "REQUEST_SYSTEM": "Return only one JSON object with metrics, dimensions, filters, order_by, limit, assumptions (array) "
                       "and doubts (array). No Markdown.",
     "REQUEST_PROMPT": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
@@ -285,6 +300,9 @@ def ask_rules() -> dict[str, Any]:
                           AI picks names, the data map writes the SQL), data_map_sql (the AI writes Semantic SQL),
                           column_map (the AI writes SQL from the column map). Leave one out to skip it.
     REQUEST_LIMIT         the most rows a request may ask for
+    SEARCH_ABOVE          with more fields than this, the data map is searched for the question's words first and the
+                          AI is shown the fields that match (all of them when none matches)
+    SEARCH_WORDS          how many of the question's words are looked up
     *_SYSTEM, *_PROMPT    every instruction each way gives the AI, word for word
     Also the no-AI drafter's rules (nb.draft_question) and the insights' rules: see nb.draft_rules() and
     nb.insight_rules()."""
@@ -301,22 +319,56 @@ def _ask_rules(given: dict[str, Any] | None) -> dict[str, Any]:
             if wrong:
                 raise ValueError(f"ORDER lists ways from {', '.join(STEPS)}, not {wrong}")
             value = list(value)
-        elif key == "REQUEST_LIMIT":
-            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-                raise ValueError(f"REQUEST_LIMIT is a whole number, not {value!r}")
+        elif key in ("REQUEST_LIMIT", "SEARCH_ABOVE", "SEARCH_WORDS"):
+            if isinstance(value, bool) or not isinstance(value, int) or value < (0 if key == "SEARCH_ABOVE" else 1):
+                raise ValueError(f"{key} is a whole number, not {value!r}")
         elif not isinstance(value, str) or not value.strip():
             raise ValueError(f"{key} is the text the AI is given, not {value!r}")
         found[key] = value
     return found
 
 
+_STOP = {"the", "and", "for", "per", "what", "which", "how", "many", "much", "show", "give", "list", "with", "from",
+         "that", "this", "are", "was", "were", "has", "have", "each", "all", "our", "their", "by", "of", "in", "on", "to",
+         "is", "me", "a", "an", "top", "most", "least", "by", "over", "between", "last", "first"}
+
+
+def _narrowed(semantic: dict[str, Any], question: str, rules: dict[str, Any]) -> tuple[dict[str, Any], str | None]:
+    """The fields the AI is shown. A small data map is shown whole. A large one (more than SEARCH_ABOVE fields) is
+    searched first (SEARCH_SEMANTIC_OBJECTS, one word at a time: the question's SEARCH_WORDS longest words) and only
+    the matching metrics and dimensions of this view are shown; a kind with no match is shown whole, so a question
+    the search misses still has every name. (semantic, a line saying what was looked up, or None)."""
+    every = len(semantic["dimensions"]) + len(semantic["metrics"])
+    if every <= int(rules.get("SEARCH_ABOVE", 30)) or not semantic.get("conn"):
+        return semantic, None
+    from .semantic import _service
+
+    words = sorted({w for w in _words(question) if len(w) > 2 and w not in _STOP}, key=lambda w: (-len(w), w))
+    hits: dict[str, float] = {}
+    try:
+        for word in words[:int(rules.get("SEARCH_WORDS", 4))]:
+            for f in _service().search_fields(semantic["conn"], word, semantic["model"]):
+                if f["object"].upper() == semantic["object"].upper():
+                    hits[f["name"].lower()] = max(hits.get(f["name"].lower(), 0.0), f["score"])
+    except Exception:                       # noqa: BLE001 - no search: every field is shown, as before
+        return semantic, None
+    if not hits:
+        return semantic, None
+    rank = lambda items: sorted([i for i in items if i["name"].lower() in hits], key=lambda i: -hits[i["name"].lower()])
+    metrics, dimensions = rank(semantic["metrics"]), rank(semantic["dimensions"])
+    narrowed = dict(semantic, metrics=metrics or semantic["metrics"], dimensions=dimensions or semantic["dimensions"])
+    shown = len(narrowed["metrics"]) + len(narrowed["dimensions"])
+    return narrowed, f"Your data map was searched for this question: {shown} of its {every} fields were shown to the AI."
+
+
 def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], question: str,
                   rules: dict[str, Any] | None = None):
     """(Semantic SQL, the plain SQL it compiles to, assumptions, doubts) for a question, or None when the model says
     the question cannot be answered from these metrics and dimensions."""
+    rules = rules or ASK_RULES
+    semantic, _looked = _narrowed(semantic, question, rules)
     prompt = {"semantic_view": semantic["view"], "dimensions": semantic["dimensions"], "metrics": semantic["metrics"],
               "instructions": semantic.get("instructions") or [], "question": question}
-    rules = rules or ASK_RULES
     prompt["rules"] = rules["DATA_MAP_SQL_PROMPT"]
     answer = client.chat.completions.create(
         model=model,
@@ -331,8 +383,9 @@ def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], q
     semantic_sql = _read_sql(semantic_sql)
     if semantic["view"].upper() not in semantic_sql.upper():
         raise ValueError("the draft does not query the semantic view")
-    plain = compile_semantic(semantic["conn"], semantic_sql)
-    return semantic_sql, plain, [str(v) for v in parsed.get("assumptions") or []], [str(v) for v in parsed.get("doubts") or []]
+    plain, plan = _compiled_semantic(semantic["conn"], semantic_sql)
+    said = ([_looked] if _looked else []) + [str(v) for v in parsed.get("assumptions") or []]
+    return semantic_sql, plain, said, [str(v) for v in parsed.get("doubts") or []], _plan_of(plain, plan)
 
 
 def _words(text: str) -> list[str]:
@@ -358,7 +411,7 @@ def _verified_answer(conn, semantic: dict[str, Any], question: str, dataset: Any
             return Proposal(dataset, question.strip(), _read_sql(compiled["sql"]),
                             [f"A trusted question, checked before: \"{known['name']}\". It is answered the way it was approved; "
                              "no AI was asked."],
-                            [], request=request)
+                            [], request=request, plan=compiled.get("explained") or [], checked=True)
     except Exception:                       # noqa: BLE001 - no verified questions: drafted as usual
         return None
     return None
@@ -388,9 +441,10 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     product's choices, named in the doubts."""
     from .semantic import _service
 
+    rules = rules or ASK_RULES
+    semantic, looked = _narrowed(semantic, question, rules)
     prompt = {"model": semantic["model"], "object": semantic["object"], "dimensions": semantic["dimensions"],
               "metrics": semantic["metrics"], "instructions": semantic.get("instructions") or [], "question": question}
-    rules = rules or ASK_RULES
     prompt["rules"] = rules["REQUEST_PROMPT"]
     answer = client.chat.completions.create(
         model=model,
@@ -412,7 +466,8 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     if compiled["status"] != "ok":
         choices = compiled.get("clarification")
         raise ValueError(compiled["error"] + (f"; the model asks which is meant: {json.dumps(choices)[:300]}" if choices else ""))
-    return request, compiled["sql"], [str(v) for v in parsed.get("assumptions") or []], doubts
+    said = ([looked] if looked else []) + [str(v) for v in parsed.get("assumptions") or []]
+    return request, compiled["sql"], said, doubts, compiled.get("explained") or []
 
 
 def semantic_context(conn, table: str) -> dict[str, Any] | None:
@@ -481,10 +536,25 @@ def semantic_context(conn, table: str) -> dict[str, Any] | None:
     return found if found["metrics"] else None
 
 
+def _plan_of(sql: str, plan: Any = None) -> list[str]:
+    """plan_lines from the kit's service, or nothing when this Python has no kit beside it."""
+    try:
+        from .semantic import _service
+
+        return _service().plan_lines(sql, plan)
+    except Exception:                       # noqa: BLE001 - the plan is shown when it can be worked out
+        return []
+
+
 def compile_semantic(conn, semantic_sql: str) -> str:
     """The plain SQL Exasol Semantic Views compiles a Semantic SQL query into (SEMANTIC_ADMIN.COMPILE_SQL): the joins
     and aggregates the model defines. Nothing of the user's data is read. ValueError with the product's reason when
     the query names something the model does not have."""
+    return _compiled_semantic(conn, semantic_sql)[0]
+
+
+def _compiled_semantic(conn, semantic_sql: str) -> tuple[str, Any]:
+    """(the plain SQL, the plan the product returned with it, parsed when it is JSON)."""
     done = conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.COMPILE_SQL('" + semantic_sql.replace("'", "''") + "')")
     names = [str(c) for c in done.column_names()] if hasattr(done, "column_names") else []
     row = done.fetchall()[0]
@@ -493,7 +563,12 @@ def compile_semantic(conn, semantic_sql: str) -> str:
     if str(row.get("STATUS") or "").upper() != "OK" or not generated:
         reason = next((str(v) for k, v in row.items() if "ERROR" in str(k).upper() or "MESSAGE" in str(k).upper() and v), "")
         raise ValueError(f"The semantic model refused the query: {reason or row.get('STATUS')}")
-    return " ".join(str(generated).split())
+    plan = next((v for k, v in row.items() if str(k).upper() == "PLAN_JSON" and v), None)
+    try:
+        plan = json.loads(plan) if isinstance(plan, str) else plan
+    except ValueError:
+        pass
+    return " ".join(str(generated).split()), plan
 
 
 def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_description: str | None = None,
@@ -550,12 +625,12 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                 doubts.append(f"The structured request was not used ({str(error).splitlines()[0][:160] if str(error) else type(error).__name__}).")
             if asked:
                 client.close()
-                request, plain, said, unsure = asked
+                request, plain, said, unsure, plan = asked
                 return Proposal(dataset, question.strip(), _read_sql(plain),
                                 [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
                                  "AI tools use, so the numbers match.",
                                  "Request: " + json.dumps({k: v for k, v in request.items() if k not in ("model", "object", "client")}),
-                                 *said], unsure, request=request)
+                                 *said], unsure, request=request, plan=plan, checked=True)
             try:
                 drafted = _ask_semantic(client, model, options, semantic, question, rules) if "data_map_sql" in order else None
             except Exception as error:       # noqa: BLE001 - the column map still answers; the proposal says why
@@ -565,11 +640,11 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                               "drafted from the column map instead.")
             if drafted:
                 client.close()
-                semantic_sql, plain, said, unsure = drafted
+                semantic_sql, plain, said, unsure, plan = drafted
                 return Proposal(dataset, question.strip(), _read_sql(plain),
                                 [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
                                  "AI tools use, so the numbers match.",
-                                 f"Semantic SQL: {semantic_sql}", *said], unsure)
+                                 f"Semantic SQL: {semantic_sql}", *said], unsure, plan=plan, checked=True)
         if "column_map" not in order:
             client.close()
             raise ValueError("Not answered: the ways in ORDER found no answer, and column_map is not in it. "
@@ -598,4 +673,7 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
             doubts = [str(v) for v in parsed.get("doubts", [])]
         except (ValueError, KeyError, TypeError) as error:
             raise ValueError("The model did not return a SQL proposal JSON object; ask again or write SQL yourself.") from error
+        drafted_sql = _read_sql(proposed_sql)
+        return Proposal(dataset, question.strip(), drafted_sql, assumptions, doubts,
+                        plan=_plan_of(drafted_sql)[:1], checked=False)
     return Proposal(dataset, question.strip(), _read_sql(proposed_sql), assumptions, doubts)

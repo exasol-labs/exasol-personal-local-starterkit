@@ -206,7 +206,7 @@ def find(run: Run, schemas: Iterable[str], *, approved_keys: dict[str, str] | No
     ``approved_keys`` ({SCHEMA.TABLE.COLUMN: why}) are keys a person approved; ``roles`` ({SCHEMA.TABLE.COLUMN: role})
     the approved column maps' roles (a measure is never a pointer; a key or identifier may be one); ``proposals`` are (from, to) pairs an AI
     model suggested, checked the same way and kept only when the values agree. Returns {links, partial, checked,
-    not_checked, keys, statements}: ``links`` many-to-one, at most one per column; ``partial`` text columns only partly
+    not_checked, keys, statements}: ``links`` many-to-one (``from_unique`` when the pointer is unique too: one-to-one), at most one per column; ``partial`` text columns only partly
     contained in a key (a spelling or case difference to look at; never joined)."""
     say = progress or (lambda _line: None)
     sent = [0]
@@ -331,6 +331,10 @@ def find(run: Run, schemas: Iterable[str], *, approved_keys: dict[str, str] | No
             if not unique_exactly(counted, link["to"]):
                 continue
             link["key_evidence"] = "measured: every value present and different"
+        # the pointer side unique too (a key of its own table, confirmed exactly) makes it one-to-one: an order's
+        # one invoice, a user's one profile. Declared so, the compiler never multiplies either side's amounts
+        if link["from"] in keys and (keys[link["from"]] != "measured" or unique_exactly(counted, link["from"])):
+            link["from_unique"] = True
         links.append(link)
     links.sort(key=lambda l: (l["from"], l["to"]))
     partial.sort(key=lambda l: -l["share"])
@@ -346,14 +350,15 @@ def evidence_text(link: dict[str, Any]) -> str:
     doubt = ("" if link.get("confidence") != "low" else
              " CONFIRM THIS ONE: both columns are plain numbers, and numbers in a sequence match by chance, so the "
              "data cannot prove this link - only that it does not contradict it.")
+    one = "; one to one: each value appears once on both sides" if link.get("from_unique") else ""
     if link.get("rows"):
         r = link["rows"]
         odd = f" (not matching: {', '.join(r['unmatched_values'])})" if r["unmatched_values"] else ""
         return (f"{link['from']} -> {link['to']}: {r['matched']:,} of {r['rows']:,} rows of {link['from']} have a value in "
                 f"{link['to']}; {r['unmatched']:,} do not{odd}; {link['to']} is a key ({link['key_evidence']}); "
-                f"found from the values{live}")
+                f"found from the values{live}{one}")
     return doubt.strip() + (" " if doubt else "") + (f"{link['from']} -> {link['to']}: {link['found']} of {link['checked']} sampled values of {link['from']} are in "
-            f"{link['to']} ({link['share']:.0%}); {link['to']} is a key ({link['key_evidence']}); {by}{live}")
+            f"{link['to']} ({link['share']:.0%}); {link['to']} is a key ({link['key_evidence']}); {by}{live}{one}")
 
 
 AI_INSTRUCTIONS = """You link tables of different data sources for a semantic model.

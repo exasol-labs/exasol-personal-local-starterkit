@@ -243,7 +243,7 @@ class AskFromTheModelTest(unittest.TestCase):
         client.chat.completions.create.return_value = types.SimpleNamespace(
             choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=said))])
         self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT STATE, SUM(AMOUNT) FROM T GROUP BY 1"}
-        request, sql, assumptions, _ = self.ask._ask_request(client, "m", {}, self.semantic, "revenue by state?")
+        request, sql, assumptions, _, _plan = self.ask._ask_request(client, "m", {}, self.semantic, "revenue by state?")
         self.assertEqual(1000, request["limit"], "capped")
         self.assertEqual(("sales", "ORDERS"), (request["model"], request["object"]))
         self.assertTrue(sql.startswith("SELECT STATE"))
@@ -256,6 +256,78 @@ class AskFromTheModelTest(unittest.TestCase):
         self.assertIsNone(proposal.request, "edited by hand: no request to keep")
         with self.assertRaisesRegex(RuntimeError, "Approve"):
             proposal.verify(object())
+
+
+class DataMapChecksTest(unittest.TestCase):
+    """A large data map is searched before the AI picks names; the plan comes back in plain words; an answer says
+    whether the data map checked it; a pinned tile is compiled again when the data map changes."""
+
+    def setUp(self):
+        import importlib
+        self.ask = importlib.import_module("exakit_nb.ask")
+        self.service = mock.Mock()
+        patch = mock.patch("exakit_nb.semantic._service", return_value=self.service)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def test_a_large_data_map_is_searched_and_a_small_one_shown_whole(self):
+        many = {"model": "all_data", "object": "ORDERS", "view": "SEM.ORDERS", "conn": object(),
+                "metrics": [{"name": f"m{i}"} for i in range(20)] + [{"name": "total_revenue"}],
+                "dimensions": [{"name": f"d{i}"} for i in range(20)] + [{"name": "customer_country"}]}
+        self.service.search_fields.side_effect = lambda _c, word, _m: (
+            [{"object": "ORDERS", "name": "total_revenue", "score": 90}, {"object": "CARTS", "name": "m3", "score": 99}]
+            if word == "revenue" else [{"object": "ORDERS", "name": "customer_country", "score": 80}] if word == "country" else [])
+        narrowed, said = self.ask._narrowed(many, "What is the revenue by country?", self.ask.ask_rules())
+        self.assertEqual((["total_revenue"], ["customer_country"]),
+                         ([m["name"] for m in narrowed["metrics"]], [d["name"] for d in narrowed["dimensions"]]))
+        self.assertIn("2 of its 42 fields", said)
+        small = dict(many, metrics=many["metrics"][:2], dimensions=many["dimensions"][:2])
+        self.assertEqual((small, None), self.ask._narrowed(small, "revenue?", self.ask.ask_rules()))
+        self.service.search_fields.side_effect = lambda *_a: []
+        self.assertIsNone(self.ask._narrowed(many, "revenue?", self.ask.ask_rules())[1], "no match: every field")
+        with self.assertRaisesRegex(ValueError, "SEARCH_WORDS"):
+            self.ask._ask_rules({"SEARCH_WORDS": 0})
+
+    def test_the_plan_in_plain_words_and_the_checked_line(self):
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("repo_describe_service", ROOT / "setup" / "lib" / "describe_service.py")
+        svc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(svc)
+        lines = svc.plan_lines('SELECT a FROM "SALES"."ORDER_LINES" t1 LEFT JOIN SALES.ORDERS t2 ON t1.O = t2.O '
+                               'LEFT JOIN "USERS"."USERS" t3 ON t2.U = t3.U',
+                               {"logical_plan": {"warnings": [{"code": "RELATIONSHIP_PATH_ALTERNATIVES", "selected_path": "lines > orders > users"}]},
+                                "selected_representations": [{"entity_name": "users", "representation_name": "crm_users",
+                                                              "selection_reason": "BINDING_PRIORITY"},
+                                                             {"entity_name": "orders", "selection_reason": "STATIC_PRIMARY"}]})
+        self.assertEqual("Reads SALES.ORDER_LINES, SALES.ORDERS, USERS.USERS.", lines[0])
+        self.assertIn("Joins 3 tables", lines[1])
+        self.assertIn("users is read from crm_users", " ".join(lines))
+        self.assertIn("the shortest was used (lines > orders > users)", " ".join(lines))
+        ds = types.SimpleNamespace(id="x")
+        self.assertIn("Not checked", self.ask.Proposal(ds, "q", "SELECT 1", checked=False).checked_line)
+        mapped = self.ask.Proposal(ds, "q", "SELECT 1", plan=["Reads A.B."], checked=True)
+        self.assertIn("Checked by your data map", str(mapped))
+        self.assertIn("How it is put together", str(mapped))
+        mapped.edit("SELECT 2")
+        self.assertEqual((None, []), (mapped.checked, mapped.plan), "your own SQL: no longer the data map's")
+
+    def test_a_pinned_tile_is_compiled_again_and_updated_only_when_asked(self):
+        import importlib
+        boards = importlib.import_module("exakit_nb.board")
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {"EXAKIT_HOME": home}):
+            b = boards.Board(name="ops", title="Ops", pages=[{"title": "Sales", "filters": None, "tiles": [
+                {"id": "aaaa1111", "title": "Revenue", "sql": "SELECT 1", "sql_digest": "x", "kind": "bar",
+                 "request": {"model": "all_data", "object": "ORDERS", "metrics": ["revenue"]}},
+                {"id": "bbbb2222", "title": "Mine", "sql": "SELECT 2", "sql_digest": "y", "kind": "kpi", "request": None}]}])
+            self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT 1"}
+            self.assertEqual(["same"], [t["state"] for t in b.recheck(object())], "hand-written tiles are left alone")
+            self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT 1 FROM T"}
+            found = b.recheck(object())
+            self.assertEqual(("changed", "SELECT 1"), (found[0]["state"], b.pages[0]["tiles"][0]["sql"]), "nothing changes unasked")
+            b.recheck(object(), update=True)
+            self.assertEqual("SELECT 1 FROM T", b.pages[0]["tiles"][0]["sql"])
+            self.service.compile_request.side_effect = RuntimeError("SEMANTIC_ADMIN missing")
+            self.assertEqual("refused", b.recheck(object())[0]["state"])
 
 
 class AskRulesTest(unittest.TestCase):

@@ -4,6 +4,10 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **Ask shows what your data map checked, and how.** Each answer says **Checked by your data map** (Semantic Views wrote the SQL and refuses joins that count twice) or **Not checked by your data map** (the AI wrote it from the column map alone). A checked answer lists, in plain words from the plan Semantic Views returns: the tables it reads, the joins, which copy of a table was used, and whether another join path existed.
+- **A large data map is searched before the AI picks names.** With more than `SEARCH_ABOVE` fields, Ask looks the question's words up with Semantic Views' own search and shows the AI only the fields that match. `exakit semantic search "<words>"` does the same from a terminal.
+- **Links are declared one-to-one when both sides are unique.** A link whose pointer is also unique is declared `ONE_TO_ONE` rather than `MANY_TO_ONE`. A link's type changing rebuilds the model.
+- **Dashboard tiles are rechecked when your data map changes.** The Share notebook and `exakit board recheck <NAME>` list the tiles whose SQL your data map now writes differently; `UPDATE_TILES = True` or `--update` takes the new SQL.
 - **A view you already wrote becomes part of your data map.** `exakit semantic adopt <MODEL> <SCHEMA.VIEW>` (`nb.adopt_view` in a notebook) hands a view that groups one table to Semantic Views (`ADOPT_VIEW`): its plain columns become dimensions, its `SUM`, `COUNT`, `AVG`, `MIN` and `MAX` become metrics, its comments their descriptions, in a model of its own. `--dry-run` shows the view and the statement first. A view of another shape, or a model the kit builds from your column maps, is refused with the reason.
 - **The guided cards use the rules you set in the notebook.** Every card action passes the same settings the cells do, so a rule changed in a settings cell changes what the card does too:
   - **Column map:** `ROLE_RULES`.

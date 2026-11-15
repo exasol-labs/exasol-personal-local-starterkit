@@ -665,7 +665,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
             if inside and link["confidence"] == "high" and not any(j["from"] == link["from"] for j in joins):
                 joins.append({"from": link["from"], "to": link["to"],
                               "evidence": {k: link[k] for k in ("proposed_by", "found", "checked", "share", "key_evidence",
-                                                                "from_live", "to_live", "evidence_text", "rows")
+                                                                "from_live", "to_live", "evidence_text", "rows", "from_unique")
                                            if k in link}})
     for schema in sorted({n.split(".", 1)[0] for n in names}):
         for link in publishing.schema_links(schema):
@@ -881,6 +881,83 @@ def model_fields(conn, model: str) -> list[dict[str, Any]]:
              "about": str(r.get("DESCRIPTION") or ""), "certified": bool(r.get("IS_CERTIFIED"))} for r in found]
 
 
+_TABLE_REF = re.compile(r'\b(FROM|JOIN)\s+("?[A-Za-z_][\w$]*"?\s*\.\s*"?[A-Za-z_][\w$]*"?)', re.I)
+
+
+def _plan_items(plan: Any, key: str) -> list[Any]:
+    """Every list held under ``key`` anywhere in a plan (its nesting differs between the product's plan versions)."""
+    found: list[Any] = []
+    if isinstance(plan, dict):
+        for k, v in plan.items():
+            if k == key and isinstance(v, list):
+                found += v
+            else:
+                found += _plan_items(v, key)
+    elif isinstance(plan, list):
+        for v in plan:
+            found += _plan_items(v, key)
+    return found
+
+
+def _first(item: dict[str, Any], *keys: str) -> str:
+    return next((str(item[k]) for k in keys if isinstance(item, dict) and item.get(k) not in (None, "", [])), "")
+
+
+def plan_lines(sql: str, plan: Any = None) -> list[str]:
+    """How a compiled answer is put together, in plain words, before anyone approves it: the tables it reads, how
+    many joins it makes, and what Semantic Views decided on the way (PLAN_JSON: which copy of a table it read, a
+    choice between join paths). From the SQL and the plan only; nothing is run."""
+    refs = _TABLE_REF.findall(str(sql or ""))
+    tables = list(dict.fromkeys(re.sub(r'[\s"]', "", t).upper() for _kind, t in refs))
+    joins = sum(1 for kind, _t in refs if kind.upper() == "JOIN")
+    lines = []
+    if tables:
+        lines.append(f"Reads {', '.join(tables)}.")
+    if joins:
+        lines.append(f"Joins {joins + 1} tables along the links in your data map. Semantic Views refuses a join that "
+                     "would count an amount more than once, so these are safe for the totals asked.")
+    for item in _plan_items(plan, "selected_representations"):
+        reason = _first(item, "selection_reason", "reason")
+        fused = _plan_items(item, "fusion_contributors")
+        if reason.upper() == "STATIC_PRIMARY" and not fused:
+            continue
+        entity = _first(item, "entity_name", "entity")
+        copy = _first(item, "representation_name", "representation", "source_name", "source")
+        if fused:
+            lines.append(f"{entity or 'A table'} is combined from {len(fused)} sources that hold the same rows.")
+        elif entity and copy:
+            lines.append(f"{entity} is read from {copy} ({reason.lower().replace('_', ' ') or 'chosen by the model'}).")
+    for warning in _plan_items(plan, "warnings"):
+        code = _first(warning, "code", "warning_code")
+        if code == "RELATIONSHIP_PATH_ALTERNATIVES":
+            chosen = _first(warning, "selected_path", "selected")
+            lines.append("These tables can be joined more than one way; the shortest was used"
+                         + (f" ({chosen})." if chosen else "."))
+        elif code:
+            lines.append(f"Note from your data map: {code.lower().replace('_', ' ')}.")
+    return lines
+
+
+def search_fields(conn, text: str, model: str | None = None) -> list[dict[str, Any]]:
+    """The fields of the data map that match ``text`` (SEMANTIC_ADMIN.SEARCH_SEMANTIC_OBJECTS: names, business names,
+    descriptions, synonyms and trusted questions; the longest word of the text is matched, an exact name ranks first),
+    best first: {model, object, kind, name, display, about, score, certified}. Reads the catalog only."""
+    from descriptor import semantic_model as sm
+
+    found = _rows(conn, "EXECUTE SCRIPT SEMANTIC_ADMIN.SEARCH_SEMANTIC_OBJECTS("
+                        f"{sm.literal(str(text or ''))}, {sm.literal(sm.model_name(model)) if model else 'NULL'})")
+    out = []
+    for r in found:
+        r = {str(k).upper(): v for k, v in r.items()}
+        if not r.get("FIELD_NAME"):
+            continue
+        out.append({"model": str(r.get("MODEL_NAME") or ""), "object": str(r.get("OBJECT_NAME") or ""),
+                    "kind": str(r.get("FIELD_KIND") or "").upper(), "name": str(r["FIELD_NAME"]),
+                    "display": str(r.get("DISPLAY_NAME") or ""), "about": str(r.get("DESCRIPTION") or ""),
+                    "score": float(r.get("SCORE") or 0), "certified": bool(r.get("IS_CERTIFIED"))})
+    return sorted(out, key=lambda f: -f["score"])
+
+
 def compile_request(conn, request: dict[str, Any]) -> dict[str, Any]:
     """A structured request ({model, object, metrics, dimensions, filters, having, order_by, limit}) compiled by the
     semantic layer (SEMANTIC_ADMIN.COMPILE_REQUEST_JSON) into the SQL to run: {status, sql, plan, clarification,
@@ -901,8 +978,10 @@ def compile_request(conn, request: dict[str, Any]) -> dict[str, Any]:
             return row.get(key)
 
     ok = str(row.get("STATUS") or "").upper() == "OK" and row.get("GENERATED_SQL")
-    return {"status": "ok" if ok else "error", "sql": " ".join(str(row.get("GENERATED_SQL") or "").split()),
-            "plan": parsed("PLAN_JSON"), "clarification": parsed("CLARIFICATION_JSON"),
+    sql = " ".join(str(row.get("GENERATED_SQL") or "").split())
+    return {"status": "ok" if ok else "error", "sql": sql,
+            "plan": parsed("PLAN_JSON"), "explained": plan_lines(sql, parsed("PLAN_JSON")) if ok else [],
+            "clarification": parsed("CLARIFICATION_JSON"),
             "request_id": row.get("AGENT_REQUEST_ID"), "request": body,
             "error": None if ok else f"{row.get('ERROR_CODE') or 'refused'}: {row.get('ERROR_MESSAGE') or row.get('STATUS')}"}
 

@@ -51,6 +51,9 @@ ORDER                 the ways tried, first to last: trusted (a trusted question
                       AI picks names, the data map writes the SQL), data_map_sql (the AI writes Semantic SQL),
                       column_map (the AI writes SQL from the column map). Leave one out to skip it.
 REQUEST_LIMIT         the most rows a request may ask for
+SEARCH_ABOVE          with more fields than this, the data map is searched for the question's words first and the
+                      AI is shown the fields that match (all of them when none matches)
+SEARCH_WORDS          how many of the question's words are looked up
 \*\_SYSTEM, \*\_PROMPT    every instruction each way gives the AI, word for word
 Also the no-AI drafter's rules (nb.draft_question) and the insights' rules: see nb.draft_rules() and
 nb.insight_rules().
@@ -75,6 +78,9 @@ the SQL and removes the approval; `run()` runs the approved text through the kit
 | `assumptions` | `list[str]` |
 | `doubts` | `list[str]` |
 | `request` | `dict[str, Any] | None` |
+| `plan` | `list[str]` |
+| `checked` | `bool | None` |
+| `checked_line` |  |
 | `edit(sql: str) -> Proposal` |  |
 | `verify(conn, name: str \| None=None) -> dict[str, Any]` | Keep this approved question in the semantic model as a verified question (nb.verify_question): the next time it is asked - here or by an AI client over MCP - its request is used, with no new draft. |
 | `approve() -> Proposal` |  |
