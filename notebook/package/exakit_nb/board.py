@@ -128,6 +128,20 @@ class Board:
         self.pages = [p for p in self.pages if p["tiles"]]
         return self
 
+    def edit(self, tile_id: str, sql: str, title: str | None = None) -> "Board":
+        """Your own SQL for a tile (the one shown, edited): saving it here is your approval of it, so the dashboard
+        runs exactly this. Its shape stays as it was; show_as() changes it."""
+        from .ask import _read_sql
+
+        statement = _read_sql(sql)
+        tile = self._find(tile_id)[1]
+        tile.update(sql=statement, sql_digest=hashlib.sha256(statement.encode("utf-8")).hexdigest(), starter=False,
+                    edited=True, request=None)
+        if title:
+            tile["title"] = " ".join(str(title).split())[:120]
+        log_event("board.edit", board=self.name, tile=tile_id, sql_digest=tile["sql_digest"])
+        return self
+
     def show_as(self, tile_id: str, kind: str) -> "Board":
         if kind not in KINDS:
             raise ValueError(f"A tile shows as one of {', '.join(KINDS)}.")

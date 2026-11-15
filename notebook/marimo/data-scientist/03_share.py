@@ -182,6 +182,7 @@ def _(mo):
     | `BOARD_NAME` | `None`: the dashboard changed last; or its name |
     | `BOARD_FIGURES_CHECKED` | `True` only after you checked the preview's figures: it goes live |
     | `MOVE_TILE`, `REMOVE_TILE` | `("a1b2c3d4", "Delivery")` moves a tile to a page; `"a1b2c3d4"` takes it off |
+    | `EDIT_TILE` | `("a1b2c3d4", "SELECT ...")`: your own SQL for a tile, the one printed below, edited |
     """)
     return
 
@@ -195,6 +196,7 @@ def _(connection, nb):
     BOARD_FIGURES_CHECKED = False
     MOVE_TILE = None
     REMOVE_TILE = None
+    EDIT_TILE = None
     boards = nb.boards()
     if boards:
         board = nb.board(BOARD_NAME or boards[0]['name'])
@@ -202,6 +204,11 @@ def _(connection, nb):
             board.move(MOVE_TILE[0], MOVE_TILE[1]).save()
         if REMOVE_TILE:
             board.remove(REMOVE_TILE).save()
+        if EDIT_TILE:
+            board.edit(EDIT_TILE[0], EDIT_TILE[1]).save()
+        for page in board.pages:
+            for tile in page['tiles']:
+                print(f"[{tile['id']}] {page['title']} / {tile['title']}\n{tile['sql']}\n")
         print(board)
         board_draft = nb.board(board.name).share()
         dash_server_1 = nb.dash_tools()

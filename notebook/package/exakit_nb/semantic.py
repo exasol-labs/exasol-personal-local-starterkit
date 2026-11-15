@@ -94,6 +94,11 @@ class SemanticModel:
         return str(self.found.get("status") or "")
 
     @property
+    def sql(self) -> list[str]:
+        """The statements publishing runs (a preview's), or the ones that ran: SQL to read, copy and edit."""
+        return list(self.found.get("sql") or [])
+
+    @property
     def views(self) -> list[str]:
         return list(self.found.get("views") or [])
 
@@ -143,6 +148,8 @@ class SemanticModel:
                          "GROUP BY ...\"), or from an AI client through the Exasol MCP server.")
         else:
             lines.append("Preview only: nothing was written. Publish it: model.publish()")
+            if self.sql:
+                lines += ["", f"The {len(self.sql)} statements publishing runs:", ""] + [statement + ";" for statement in self.sql]
         return "\n".join(lines)
 
     __repr__ = __str__
@@ -175,7 +182,7 @@ def find_links(conn, schemas: list[str] | None = None, *, tables: list[str] | No
 def semantic_model(conn, name: str, tables: list[str] | None = None, links: list | None = None, *,
                    schemas: list[str] | None = None, find: bool = False, ai: bool | None = None,
                    description: str | None = None, preview: bool = False,
-                   table_notes: dict[str, str] | None = None) -> SemanticModel:
+                   table_notes: dict[str, str] | None = None, sql: list[str] | str | None = None) -> SemanticModel:
     """Build (or with ``preview=True`` only show) an Exasol Semantic Views model over ``tables`` - SCHEMA.TABLE of any
     schemas, each with an approved column map - joined along each schema's approved links and ``links``
     (SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY). ``schemas`` takes every table of those schemas that has an approved column
@@ -192,9 +199,12 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
     if not preview:
         ensure_semantic_views(conn)
     tables = list(tables or [])
-    found = service.semantic_model(conn, name, tables, list(links or []), ai=use_ai, dry_run=preview,
+    statements = None
+    if sql:
+        statements = [p.strip() for p in (sql.split(";\n") if isinstance(sql, str) else sql) if str(p).strip()]
+    found = service.semantic_model(conn, name, tables, list(links or []), ai=use_ai, dry_run=preview and not statements,
                                    description=description, schemas=list(schemas or []), discover=bool(find),
-                                   table_notes=dict(table_notes or {}))
+                                   table_notes=dict(table_notes or {}), statements=statements)
     model = SemanticModel(name, tables, list(links or []), description, use_ai, found, conn,
                           schemas=list(schemas or []), find=bool(find), table_notes=dict(table_notes or {}))
     if not preview:

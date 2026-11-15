@@ -582,7 +582,7 @@ def semantic_ai(spec: dict[str, Any], chat=None) -> dict[str, Any]:
 def semantic_model(conn, name: str, tables: list[str], links: list | None = None, *, ai: bool = False,
                    dry_run: bool = False, description: str | None = None, chat=None, progress=None,
                    schemas: list[str] | None = None, discover: bool = False,
-                   table_notes: dict[str, str] | None = None) -> dict[str, Any]:
+                   table_notes: dict[str, str] | None = None, statements: list[str] | None = None) -> dict[str, Any]:
     """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
     approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). A link
     may also be a dict as find_links returns it ({"from", "to", ...its evidence}) with an optional "note" in a
@@ -591,6 +591,16 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     fields first. ``dry_run`` builds the spec and says what it would publish."""
     from descriptor import semantic_model as sm
 
+    rows_of = lambda sql: _rows(conn, sql)
+    if statements:
+        # the statements as a person edited them (the ones a preview printed): run as given, nothing rebuilt around them
+        try:
+            result = publishing.run_statements(conn.execute, rows_of, name, list(statements), os.environ.get(READER_VARIABLE))
+        except sm.ModelRefused as err:
+            raise Refused(str(err)) from err
+        return dict(result, status="published", model=sm.model_name(name), published_schema=sm.published_schema(name),
+                    summary=f"Ran your {len(statements)} statements for {sm.model_name(name)}.", spec={}, links=[],
+                    ai={"refused": [], "error": None}, proposed_metrics=[], sql=list(statements))
     names = []
     for table in tables:
         schema, object_name = split_table(table)
@@ -672,6 +682,16 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                              "proposed_metrics": [ddl for _view, ddl in proposal["extra"]]}
     if dry_run:
         found["status"] = "dry run"
+        planned_spec = spec
+        if spec["model"] == publishing.ALL_MODEL:
+            built = publishing.all_spec(rows, tables=names, links=joins, table_notes=said, description=description,
+                                        labels=proposal["labels"], extra=proposal["extra"] or None)
+            planned_spec = built[0] if built else spec
+        try:
+            found["sql"] = publishing.planned(rows, planned_spec) + [
+                sm._script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False) for _view, ddl in proposal["extra"]]
+        except Exception:
+            found["sql"] = sm.statements(planned_spec)
         return found
     inputs = {"tables": names, "links": joins, "name": name, "description": description, "table_notes": said,
               "labels": proposal["labels"], "extra": proposal["extra"]}

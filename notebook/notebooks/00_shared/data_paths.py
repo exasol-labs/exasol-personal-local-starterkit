@@ -198,7 +198,8 @@ nb.data_map(connection)
 # | `SEMANTIC_LINKS` | links of your own: `"S.T.COL=S.T.KEY"`, or `{"from", "to", "note"}` |
 # | `SEMANTIC_TABLE_NOTES` | what each table is, in a sentence |
 # | `SEMANTIC_SCHEMAS` | whole schemas instead: every approved table of each |
-# | `PUBLISH_SEMANTIC` | `True`: save it; `False`: a preview only |
+# | `PUBLISH_SEMANTIC` | `True`: save it; `False`: a preview, which prints every statement saving runs |
+# | `DATA_MAP_SQL` | your own version of those statements: the printed list, edited; it runs instead of the kit's |
 
 # %% tags=["review"]
 SEMANTIC_NAME = "all_data"
@@ -207,18 +208,20 @@ SEMANTIC_LINKS = []
 SEMANTIC_TABLE_NOTES = {}
 PUBLISH_SEMANTIC = False
 SEMANTIC_SCHEMAS = []
+DATA_MAP_SQL = None
 found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
 model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
 if AI_CHECK:
     model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)
     SEMANTIC_TABLE_NOTES = {**model_notes["tables"], **SEMANTIC_TABLE_NOTES}
 semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=model_links, table_notes=SEMANTIC_TABLE_NOTES,
-                             schemas=SEMANTIC_SCHEMAS, find=bool(SEMANTIC_SCHEMAS), ai=None, preview=not PUBLISH_SEMANTIC)
+                             schemas=SEMANTIC_SCHEMAS, find=bool(SEMANTIC_SCHEMAS), ai=None, preview=not PUBLISH_SEMANTIC,
+                             sql=DATA_MAP_SQL if PUBLISH_SEMANTIC else None)
 semantic
 
 # %% tags=["review"]
 semantic_models = nb.semantic_models(connection)
-if PUBLISH_SEMANTIC:
+if PUBLISH_SEMANTIC and not DATA_MAP_SQL:
     refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)
 semantic_models
 
@@ -228,15 +231,17 @@ semantic_models
 # When another source holds the same rows as a table of the model - customers in the warehouse and in a CRM, orders here and in a lakehouse - declare them one thing with two sources (Exasol Semantic Views **fusion**). Requests are then answered from either, and for a value both hold the side you pick wins. `nb.fuse` checks it against the data first and changes nothing; `APPLY_FUSION = True` applies it, and the document is kept beside the model so a rebuild puts it back.
 
 # %% [markdown] tags=["review"]
-# `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `APPLY_FUSION = True` applies it after the check.
+# `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `FUSION_DOCUMENT`: your own version of the printed document, edited. `APPLY_FUSION = True` applies it after the check.
 
 # %% tags=["review"]
 FUSE_TABLE = ""
 FUSE_OTHER = ""
 FUSE_KEY = None
+FUSION_DOCUMENT = None
 APPLY_FUSION = False
-if FUSE_TABLE and FUSE_OTHER:
-    fusion_document = nb.fusion_document(connection, SEMANTIC_NAME, FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model")
+if FUSION_DOCUMENT or (FUSE_TABLE and FUSE_OTHER):
+    fusion_document = FUSION_DOCUMENT or nb.fusion_document(connection, SEMANTIC_NAME, FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model")
+    print(fusion_document)
     fusion_check = nb.fuse(connection, SEMANTIC_NAME, fusion_document)
     if APPLY_FUSION and fusion_check["status"] != "error":
         fusion_applied = nb.fuse(connection, SEMANTIC_NAME, fusion_document, dry_run=False)

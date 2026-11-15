@@ -12,10 +12,13 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic column-maps <MODEL>                         the approved column maps the model carries
     exakit semantic restore-maps <MODEL> [--write]              the kit's store put back from the model
     exakit semantic refresh <MODEL>                             changed in place, or rebuilt when it is gone
+    exakit semantic plan <MODEL> --table S.T... [--link S.T.COL=S.T.KEY]...   every statement saving it runs
+    exakit semantic run <MODEL> --sql-file F                    your own version of those statements
 
     exakit board list | show <NAME>
     exakit board starter [NAME]                                 a page per approved table, from the column maps (default: overview)
     exakit board pin <NAME> --page P --question "..." --sql "SELECT ..." | --sql-file F [--title T] [--kind K]
+    exakit board edit <NAME> <TILE> --sql "SELECT ..."          your own SQL for a tile
     exakit board move <NAME> <TILE> <PAGE> | remove <NAME> <TILE> | kind <NAME> <TILE> <kpi|bar|line|table>
     exakit board preview <NAME>                                 a health-checked preview on Dash Server
     exakit board publish <NAME> --figures-checked               live, after a person checked the preview's figures
@@ -42,7 +45,7 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 import describe_service as svc  # noqa: E402
 
 FLAGS = {"--json": "json", "--apply": "apply", "--write": "write", "--figures-checked": "figures_checked"}
-VALUED = {"--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
+VALUED = {"--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
 
@@ -61,7 +64,8 @@ def parse(args: list[str]) -> tuple[list[str], dict[str, Any]]:
         elif arg in VALUED:
             if i + 1 >= len(args):
                 raise Refused(f"{arg} needs a value.")
-            opts[arg[2:].replace("-", "_")] = args[i + 1]
+            key = arg[2:].replace("-", "_")
+            opts[key] = f"{opts[key]},{args[i + 1]}" if key in ("table", "link") and opts.get(key) else args[i + 1]
             i += 1
         elif arg.startswith("--"):
             raise Refused(f"Unknown option '{arg}'. See: exakit help {'semantic' if 'semantic' in sys.argv[1:2] else 'board'}")
@@ -130,6 +134,8 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         return found, "\n".join(f"{q['name']}: {q['question']}" for q in found) or "No verified questions yet."
     if action == "fuse":
         model, = _need(words, 1, "exakit semantic fuse <MODEL> --table S.T --same-as S.T [--key COL] [--wins model|other] [--apply]")
+        if opts.get("table") and "," in opts["table"]:
+            raise Refused("fuse takes one --table: the model's table that the other source copies.")
 
         def work(conn):
             if opts.get("document"):
@@ -162,6 +168,20 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         model, = _need(words, 1, "exakit semantic restore-maps <MODEL> [--write]")
         found = _connected(lambda c: svc.restore_column_maps(c, model, write=bool(opts.get("write"))))
         return found, "\n".join(f"{r['table']}: v{r['version']} - {r['action']}" for r in found) or "Nothing to restore."
+    if action == "plan":
+        model, = _need(words, 1, "exakit semantic plan <MODEL> --table S.T [--table ...] [--link S.T.COL=S.T.KEY]")
+        tables = [t for t in (opts.get("table") or "").split(",") if t]
+        links = [l for l in (opts.get("link") or "").split(",") if l]
+        found = _connected(lambda c: svc.semantic_model(c, model, tables, links, dry_run=True))
+        return found["sql"], ";\n\n".join(found["sql"]) + ";"
+    if action == "run":
+        model, = _need(words, 1, "exakit semantic run <MODEL> --sql-file F")
+        if not opts.get("sql_file"):
+            raise Refused("--sql-file is needed: the statements (as plan printed them, edited), each ending in ;")
+        text = Path(opts["sql_file"]).expanduser().read_text(encoding="utf-8")
+        statements = [p.strip() for p in text.split(";\n") if p.strip().rstrip(";")]
+        found = _connected(lambda c: svc.semantic_model(c, model, [], statements=[p.rstrip(";") for p in statements]))
+        return found, f"Ran {len(statements)} statements for {model}."
     if action == "refresh":
         model, = _need(words, 1, "exakit semantic refresh <MODEL>")
         found = _connected(lambda c: svc.refresh_model(c, model))
@@ -222,6 +242,20 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         tile = boards.pin(approved, answer, board=name, page=opts.get("page") or "Overview", title=opts.get("title"),
                           kind=opts.get("kind"))
         return tile, f"Pinned to {name} / {opts.get('page') or 'Overview'} as a {tile['kind']} (tile {tile['id']})."
+    if action == "edit":
+        name, tile = _need(words, 2, "exakit board edit <NAME> <TILE> --sql \"SELECT ...\" | --sql-file F")
+        if not (opts.get("sql") or opts.get("sql_file")):
+            raise Refused("--sql (or --sql-file) is needed: the tile's new SQL, which the user approved.")
+        sql = opts.get("sql") or Path(opts["sql_file"]).expanduser().read_text(encoding="utf-8")
+        b = boards.board(name)
+        try:
+            b.edit(tile, sql, title=opts.get("title"))
+        except KeyError as err:
+            raise svc.NotFound(str(err).strip("'\"")) from err
+        except ValueError as err:
+            raise Refused(str(err)) from err
+        b.save()
+        return {"name": b.name, "pages": b.pages}, str(b)
     if action in ("move", "remove", "kind"):
         usage = {"move": "exakit board move <NAME> <TILE> <PAGE>", "remove": "exakit board remove <NAME> <TILE>",
                  "kind": "exakit board kind <NAME> <TILE> <kpi|bar|line|table>"}[action]
@@ -272,7 +306,7 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         tools = dash_tools()
         route = draft.confirm(tools, figures_checked=True)
         return {"name": name, "live": tools.url + route}, f"Live: {tools.url + route}"
-    raise Refused(f"Unknown action '{action}' (list, starter, show, pin, move, remove, kind, preview, publish).")
+    raise Refused(f"Unknown action '{action}' (list, starter, show, pin, edit, move, remove, kind, preview, publish).")
 
 
 def main(argv: list[str]) -> int:

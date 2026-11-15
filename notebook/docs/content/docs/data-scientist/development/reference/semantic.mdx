@@ -190,6 +190,7 @@ nb.semantic_model(
     description: str | None=None,
     preview: bool=False,
     table_notes: dict[str, str] | None=None,
+    sql: list[str] | str | None=None,
 ) -> SemanticModel
 ```
 
@@ -244,6 +245,7 @@ A semantic model: what it holds (`spec`), what the AI proposed, and - once publi
 | `find` | `bool` |
 | `table_notes` | `dict[str, str]` |
 | `status` |  |
+| `sql` | The statements publishing runs (a preview's), or the ones that ran: SQL to read, copy and edit. |
 | `views` |  |
 | `spec` |  |
 | `fields` | One row per dimension and metric: view, kind, name, display name, what it is. |

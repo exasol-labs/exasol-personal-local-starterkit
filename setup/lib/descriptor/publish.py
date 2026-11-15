@@ -300,17 +300,12 @@ def all_tables(rows: Run, home: Path | None = None) -> list[str]:
     return [t for t in approved if t.upper() in present]
 
 
-def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *, home: Path | None = None,
-                tables: list[str] | None = None, links: list[dict[str, Any]] | None = None,
-                table_notes: dict[str, str] | None = None, description: str | None = None,
-                labels: dict[str, Any] | None = None, extra: list | None = None,
-                progress: Callable[[str], None] | None = None) -> dict[str, Any] | None:
-    """The one model over all your data (ALL_MODEL): every approved table of every source, each schema's approved
-    links, and the links across sources you confirmed for it (kept beside it), its fusion and verified questions with
-    it. Built or changed in place on every approval; EXAKIT_ALL_DATA_MODEL=0 turns it off. None when nothing is
-    approved. ``tables`` and the rest add to what is kept (the Semantic views card publishing under this name)."""
-    if os.environ.get("EXAKIT_ALL_DATA_MODEL", "1").strip() == "0":
-        return None
+def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = None,
+             links: list[dict[str, Any]] | None = None, table_notes: dict[str, str] | None = None,
+             description: str | None = None, labels: dict[str, Any] | None = None,
+             extra: list | None = None) -> tuple[dict[str, Any], dict[str, Any], list] | None:
+    """(the spec of the model over all your data, its inputs, its extra definitions), as publish_all would build it;
+    None when nothing is approved. Nothing is written."""
     kept_inputs = (kept(ALL_MODEL, home) or {}).get("inputs") or {}
     every = all_tables(rows, home)
     every += [t for t in tables or [] if t not in every]
@@ -338,12 +333,80 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
         apply_labels(spec, labels)
     extra = [tuple(x) for x in (extra if extra is not None else kept_inputs.get("extra") or [])]
     cross = [j for j in joins if j["from"].split(".", 1)[0] != j["to"].split(".", 1)[0] or j.get("evidence")]
-    result = publish_model(execute, rows, spec, {"tables": every, "links": cross, "name": ALL_MODEL, "all": True,
-                                                 "description": about if about != ALL_ABOUT else None, "table_notes": notes,
-                                                 "labels": labels, "extra": [list(x) for x in extra]},
-                           reader=reader, home=home, extra=extra, progress=progress)
+    inputs = {"tables": every, "links": cross, "name": ALL_MODEL, "all": True,
+              "description": about if about != ALL_ABOUT else None, "table_notes": notes,
+              "labels": labels, "extra": [list(x) for x in extra]}
+    return spec, inputs, extra
+
+
+def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *, home: Path | None = None,
+                tables: list[str] | None = None, links: list[dict[str, Any]] | None = None,
+                table_notes: dict[str, str] | None = None, description: str | None = None,
+                labels: dict[str, Any] | None = None, extra: list | None = None,
+                progress: Callable[[str], None] | None = None) -> dict[str, Any] | None:
+    """The one model over all your data (ALL_MODEL): every approved table of every source, each schema's approved
+    links, and the links across sources you confirmed for it (kept beside it), its fusion and verified questions with
+    it. Built or changed in place on every approval; EXAKIT_ALL_DATA_MODEL=0 turns it off. None when nothing is
+    approved. ``tables`` and the rest add to what is kept (the Semantic views card publishing under this name)."""
+    if os.environ.get("EXAKIT_ALL_DATA_MODEL", "1").strip() == "0":
+        return None
+    built = all_spec(rows, home=home, tables=tables, links=links, table_notes=table_notes, description=description,
+                     labels=labels, extra=extra)
+    if built is None:
+        return None
+    spec, inputs, extra = built
+    result = publish_model(execute, rows, spec, inputs, reader=reader, home=home, extra=extra, progress=progress)
     result["view"] = f"semantic model {result['model']} ({result['published_schema']})"
     return result
+
+
+def planned(rows: Run, spec: dict[str, Any], home: Path | None = None) -> list[str]:
+    """The statements publishing ``spec`` would run, in order, as SQL a person can read and edit: the change to the
+    model published before when it can be made in place, else the whole model (after dropping the one there)."""
+    previous = (kept(spec["model"], home) or {}).get("spec")
+    found = sm.existing(rows, spec["model"])
+    step = sm.changes(previous, spec) if found else None
+    if step is not None:
+        return step
+    drop = [sm._script("DROP_MODEL_IF_EXISTS", spec["model"])] if found else []
+    return drop + sm.statements(spec)
+
+
+def run_statements(execute: Callable[[str], Any], rows: Run, model: str, statements: list[str], reader: str | None,
+                   home: Path | None = None) -> dict[str, Any]:
+    """Run a model's statements as a person edited them, in order, after the same checks a publish makes: Semantic
+    Views is installed, and a model of that name someone else made is left alone. Only Semantic Views' own scripts
+    and Semantic SQL are taken. The model is then marked edited by hand, so the next approval rebuilds it from the
+    column maps (an edit is not merged into a later change). The read-only user can read it."""
+    import re
+
+    ensure_installed(rows)
+    name = sm.model_name(model)
+    found = sm.existing(rows, name)
+    if found and not found["kit"]:
+        raise sm.ModelRefused(f"A semantic model named {found['name']} already exists and the kit did not build it; it is left alone.")
+    allowed = re.compile(r"(?is)^\s*(EXECUTE\s+SCRIPT\s+SEMANTIC_ADMIN\.|ALTER\s+SEMANTIC\s+VIEW\s|ALTER\s+SESSION\s)")
+    wrong = [s for s in statements if not allowed.match(str(s))]
+    if wrong:
+        raise sm.ModelRefused("Only Semantic Views' own statements run here (EXECUTE SCRIPT SEMANTIC_ADMIN..., ALTER SEMANTIC "
+                              f"VIEW ...), not: {' '.join(str(wrong[0]).split())[:120]}")
+    for statement in statements:
+        execute(str(statement).strip().rstrip(";"))
+    warnings = []
+    if reader:
+        schema = sm.published_schema(name)
+        for sql in (f'GRANT SEMANTIC_USER TO "{reader}"', f'GRANT SELECT ON SCHEMA {schema} TO "{reader}"'):
+            try:
+                execute(sql)
+            except Exception as err:
+                warnings.append(f"the read-only user {reader}: {' '.join(str(err).split())[:200]}")
+    before = kept(name, home)
+    if before:
+        before["spec"] = dict(before.get("spec") or {}, edited=True, model=name, description="edited by hand")
+        path = spec_path(name, home)
+        path.write_text(json.dumps(before, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return {"model": name, "statements": len(statements), "mode": "your statements", "warnings": warnings,
+            "view": f"semantic model {name} ({sm.published_schema(name)})", "views": [], "counts": {}, "notes": []}
 
 
 def refresh_including(execute: Callable[[str], Any], rows: Run, table: str, reader: str | None, *,

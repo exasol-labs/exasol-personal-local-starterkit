@@ -77,6 +77,19 @@ class SemanticTest(unittest.TestCase):
             run("semantic", "restore-maps", "all_data", "--write")
             self.assertTrue(restored.call_args.kwargs["write"])
 
+    def test_plan_prints_the_statements_and_run_runs_your_file(self):
+        with mock.patch.object(cli.svc, "semantic_model", return_value={"sql": ["EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('m')", "EXECUTE SCRIPT SEMANTIC_ADMIN.PUBLISH_MODEL('m')"]}) as planned:
+            code, out, _ = run("semantic", "plan", "m", "--table", "A.B", "--table", "C.D", "--link", "A.B.X=C.D.Y")
+        self.assertEqual((["A.B", "C.D"], ["A.B.X=C.D.Y"], True), (planned.call_args.args[2], planned.call_args.args[3], planned.call_args.kwargs["dry_run"]))
+        self.assertIn("CREATE_MODEL('m');\n\nEXECUTE", out)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "m.sql"
+            path.write_text(out, encoding="utf-8")
+            with mock.patch.object(cli.svc, "semantic_model", return_value={}) as ran:
+                code, out, _ = run("semantic", "run", "m", "--sql-file", str(path))
+        self.assertEqual((0, ["EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('m')", "EXECUTE SCRIPT SEMANTIC_ADMIN.PUBLISH_MODEL('m')"]),
+                         (code, ran.call_args.kwargs["statements"]))
+
     def test_unknown_actions_and_options_are_refused_with_exit_2(self):
         self.assertEqual(2, run("semantic", "nope")[0])
         self.assertEqual(2, run("semantic", "fields", "all_data", "--nosuch")[0])
@@ -100,6 +113,12 @@ class BoardTest(unittest.TestCase):
         self.assertEqual(0, code, err)
         tile = json.loads(out)
         self.assertEqual(("bar", sql), (tile["kind"], tile["sql"]))
+        code, out, _ = run("board", "edit", "sales", tile["id"], "--sql", "SELECT STATE, COUNT(*) AS N FROM SHOP.ORDERS GROUP BY 1")
+        self.assertEqual(0, code)
+        edited = json.loads(run("board", "show", "sales", "--json")[1])["pages"][0]["tiles"][0]
+        self.assertEqual(("SELECT STATE, COUNT(*) AS N FROM SHOP.ORDERS GROUP BY 1", True), (edited["sql"], edited["edited"]))
+        self.assertEqual(2, run("board", "edit", "sales", tile["id"], "--sql", "DELETE FROM SHOP.ORDERS")[0], "only a query")
+        tile = edited
         code, out, _ = run("board", "move", "sales", tile["id"], "Overview")
         self.assertIn("Overview", out)
         self.assertEqual(3, run("board", "remove", "sales", "nosuchid")[0])

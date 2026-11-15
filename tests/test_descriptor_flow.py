@@ -202,6 +202,36 @@ class FlowTest(unittest.TestCase):
         self.assertIn("DROP_MODEL_IF_EXISTS", self.db.sv.scripts, "a key change needs a rebuild")
         self.assertEqual("ADD_VERIFIED_QUERY", self.db.sv.scripts[-1], "and the verified question is put back")
 
+    def test_the_statements_are_planned_shown_and_your_edited_ones_run_instead(self):
+        """A model's statements can be read before they run (planned: the change in place, else the whole model after
+        a drop) and run as a person edited them (run_statements): only Semantic Views' own statements, a model of
+        someone else's is left alone, and an edited model is built again from the column maps by the next approval."""
+        off = mock.patch.dict("os.environ", {"EXAKIT_ALL_DATA_MODEL": "0"})
+        off.start()
+        self.addCleanup(off.stop)
+        doc = self.describe()["doc"]
+        spec = publish.build_model(self.db.run, ["SUPPORT.TICKETS"], [], "support", docs={"SUPPORT.TICKETS": doc}, home=self.home)
+        fresh = publish.planned(self.db.run, spec, self.home)
+        self.assertTrue(fresh[0].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('support'"), "nothing there: the whole model")
+        self.approve(doc)
+        self.assertEqual([], publish.planned(self.db.run, publish.kept("support", self.home)["spec"], self.home),
+                         "published and unchanged: nothing to run")
+        mine = [s for s in fresh if "ADD_AGENT_INSTRUCTION" not in s]
+        self.db.sv.scripts.clear()
+        with mock.patch.object(store, "kit_home", return_value=self.home):
+            done = publish.run_statements(self.db.execute, self.db.run, "support", ["EXECUTE SCRIPT SEMANTIC_ADMIN.DROP_MODEL_IF_EXISTS('support')"] + mine,
+                                          "MCP_READONLY", self.home)
+        self.assertEqual(("your statements", len(mine) + 1), (done["mode"], done["statements"]))
+        self.assertEqual("DROP_MODEL_IF_EXISTS", self.db.sv.scripts[0])
+        self.assertTrue(publish.kept("support", self.home)["spec"]["edited"], "marked edited by hand")
+        with self.assertRaisesRegex(semantic_model.ModelRefused, "Only Semantic Views"):
+            publish.run_statements(self.db.execute, self.db.run, "support", ["DROP TABLE SUPPORT.TICKETS"], None, self.home)
+        self.db.sv.scripts.clear()
+        doc = self.describe(force=True)["doc"]
+        doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], note="Where it came in")
+        self.approve(doc)
+        self.assertIn("DROP_MODEL_IF_EXISTS", self.db.sv.scripts, "an edited model is built again, not changed in place")
+
     def test_every_approval_also_updates_the_one_model_of_all_your_data(self):
         doc = self.describe()["doc"]
         result = self.approve(doc)
