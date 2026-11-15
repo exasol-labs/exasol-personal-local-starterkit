@@ -74,7 +74,7 @@ ACTIONS: dict[str, Action] = {
     "data.workflow": Action("00_quickstart", 'workflow_id = nb.workflow("data-scientist-quickstart")', "workflow_id"),
     "data.connect": Action("00_quickstart", "connection = nb.connect()\nnb.check_connection(connection)", "connection"),
     "data.sample": Action("00_quickstart", "sample_data = nb.load_sample(connection, {dataset_id})", "sample_data"),
-    "data.own_file": Action("00_quickstart", "own_data = nb.load_own_file({path}, {schema}, conn=connection)", "own_data"),
+    "data.own_file": Action("00_quickstart", "own_data = nb.load_own_file({path}, {schema}, conn=connection, rules=LOAD_RULES)", "own_data"),
     "data.table": Action("00_quickstart", "own_data = nb.use_table(connection, {table})", "own_data"),
     "data.approved": Action("00_quickstart", "own_data = nb.dataset(connection, {dataset_id})", "own_data"),
     "data.connect_source": Action("00_quickstart", "connected = nb.connect_source({connector}, {name}{settings}{secret})", "connected"),
@@ -106,14 +106,14 @@ ACTIONS: dict[str, Action] = {
                                "links={links}, ai={ai}, preview=True)", "semantic", False),
     "semantic.publish": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
                                "links={links}, ai={ai}, preview=False)", "semantic"),
-    "semantic.links": Action("01_explore", "found_links = nb.find_links(connection, {schemas}, ai={ai})", "found_links", False),
+    "semantic.links": Action("01_explore", "found_links = nb.find_links(connection, {schemas}, ai={ai}, rules=LINK_RULES)", "found_links", False),
     "semantic.preview_schemas": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
                                        "links={links}, ai={ai}, preview=True)", "semantic", False),
     "semantic.publish_schemas": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
                                        "links={links}, ai={ai}, preview=False)", "semantic"),
     # the tables a person ticked (not whole schemas), the links between them - one schema's tables too - and one pair checked
-    "semantic.links_tables": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, ai={ai})", "found_links", False),
-    "semantic.check_link": Action("01_explore", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False)",
+    "semantic.links_tables": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, ai={ai}, rules=LINK_RULES)", "found_links", False),
+    "semantic.check_link": Action("01_explore", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False, rules=LINK_RULES)",
                                   "link_check", False),
     # model_links: the links to use, each as nb.find_links returns it (its evidence with it) and a note in your words
     "semantic.preview_tables": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
@@ -127,15 +127,15 @@ ACTIONS: dict[str, Action] = {
     "understand.switch": Action("01_explore", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
     "understand.default": Action("01_explore", "chosen_data = nb.dataset(connection, nb.chosen_dataset(None))", "chosen_data", False),
     "understand.map": Action("01_explore", "data_map = nb.data_map(connection)", "data_map", False),
-    "map.review": Action("01_explore", "role_review = nb.review_roles(connection, chosen_data)", "role_review"),
+    "map.review": Action("01_explore", "role_review = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)", "role_review"),
     "map.approve": Action("01_explore", "role_review.approve({choices}, {slots}, notes={notes})\ndataset = role_review.dataset()", "dataset"),
     "map.ai_check": Action("01_explore", "ai_map = nb.fill_column_map(role_review)", "ai_map", False),
     # several tables, read together: each table's review is kept, and the model reads the others next to the one it fills
     "map.reviews": Action("01_explore", "role_reviews = {{}}", "role_reviews", False),
-    "map.review_keep": Action("01_explore", "role_reviews[{table}] = nb.review_roles(connection, chosen_data)", "role_reviews", False),
+    "map.review_keep": Action("01_explore", "role_reviews[{table}] = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)", "role_reviews", False),
     "map.ai_together": Action("01_explore", "ai_map = nb.fill_column_map(role_reviews[{table}], together=role_reviews)",
                               "ai_map", False),
-    "semantic.links_checked": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai})",
+    "semantic.links_checked": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai}, rules=LINK_RULES)",
                                      "found_links", False),
     # every chosen table at once: what to look at across them, then one approval (one publish per schema)
     "map.schema_review": Action("01_explore", "schema_summary = nb.schema_review(role_reviews)", "schema_summary", False),
@@ -145,7 +145,7 @@ ACTIONS: dict[str, Action] = {
     "map.remember": Action("01_explore", "role_reviews[{table}] = role_review", "role_reviews", False),
     "map.keep": Action("01_explore", "dataset = role_review.dataset()", "dataset", False),
     "map.draft": Action("01_explore", "draft_dataset = role_review.dataset(draft_ok=True)", "draft_dataset", False),
-    "map.leakage": Action("01_explore", "leaking = nb.leakage_check(connection, {data})", "leaking", False),
+    "map.leakage": Action("01_explore", "leaking = nb.leakage_check(connection, {data}, pure=GIVES_IT_AWAY)", "leaking", False),
     "map.versions": Action("01_explore", "versions = nb.column_map_versions({dataset_id})", "versions", False),
     "map.first_result": Action("01_explore", "first_rows = nb.sql(connection, {sql})", "first_rows", False),
     "map.first_overall": Action("01_explore", "first_overall = nb.sql(connection, {sql})", "first_overall", False),
@@ -154,11 +154,13 @@ ACTIONS: dict[str, Action] = {
     # -- step 2: prepare, explore, model ----------------------------------------------------------------------------
     "explore.open": Action("01_explore", 'workflow_id = nb.continue_workflow("explore")\n'
                                           "dataset = nb.dataset(connection, nb.chosen_dataset({dataset_id}))", "dataset"),
-    "explore.checks": Action("01_explore", "findings = nb.data_checks(connection, dataset)", "findings", False),
+    "explore.checks": Action("01_explore", "findings = nb.data_checks(connection, dataset, placeholder_values=PLACEHOLDER_VALUES, rare=RARE_TARGET)", "findings", False),
     "explore.schema": Action("01_explore", "schema_map = nb.describe_schema(connection, dataset)\n"
                                             "joined_view_proposal = schema_map.joined_view(dataset)", "joined_view_proposal", False),
     "explore.join": Action("01_explore", "dataset = joined_view_proposal.create(connection)", "dataset"),
-    "explore.typed": Action("01_explore", "typed_view_proposal = nb.typed_view(connection, dataset)", "typed_view_proposal", False),
+    "explore.typed": Action("01_explore", "typed_view_proposal = nb.typed_view(connection, dataset, placeholder_values=PLACEHOLDER_VALUES, "
+                             "date_formats=DATE_FORMATS, timestamp_formats=TIMESTAMP_FORMATS, drop_copies=DROP_COPIES, "
+                             "cast_types=CAST_TYPES)", "typed_view_proposal", False),
     "explore.clean": Action("01_explore", "dataset = typed_view_proposal.create(connection)", "dataset"),
     "explore.count": Action("01_explore", "row_count = nb.sql(connection, {sql})", "row_count", False),
     # the groups of the tables this one links to (the card then joins them with explore.groups' own SQL)
@@ -183,12 +185,12 @@ ACTIONS: dict[str, Action] = {
                                              "dataset = nb.dataset(connection, nb.chosen_dataset({dataset_id}))\n"
                                              'dataset.require_approved("ask")', "dataset", False),
     "ask.examples": Action("02_ask_your_data", "examples = nb.example_questions(dataset)", "examples", False),
-    "ask.model": Action("02_ask_your_data", "proposal = nb.ask(dataset, {question}, conn=connection)", "proposal"),
-    "ask.rules": Action("02_ask_your_data", "proposal = nb.draft_question(connection, dataset, {question})", "proposal"),
+    "ask.model": Action("02_ask_your_data", "proposal = nb.ask(dataset, {question}, conn=connection, rules=ASK_RULES)", "proposal"),
+    "ask.rules": Action("02_ask_your_data", "proposal = nb.draft_question(connection, dataset, {question}, rules=DRAFT_RULES)", "proposal"),
     "ask.edit": Action("02_ask_your_data", "proposal.edit({sql})", None),
     "ask.currency": Action("02_ask_your_data", "currency = nb.currency_of(connection, dataset)", "currency", False),
     "ask.run": Action("02_ask_your_data", "proposal.approve()\nanswer = proposal.run()", "answer"),
-    "ask.insights": Action("02_ask_your_data", "insights = nb.insights(answer)", "insights", False),
+    "ask.insights": Action("02_ask_your_data", "insights = nb.insights(answer, rules=INSIGHT_RULES)", "insights", False),
     "ask.pin": Action("02_ask_your_data", "pinned = nb.pin(proposal, answer, board={board}, page={page})", "pinned"),
     "ask.verify": Action("02_ask_your_data", "verified = proposal.verify(connection)", "verified"),
     # -- step 4: share and hand off ---------------------------------------------------------------------------------
@@ -205,8 +207,8 @@ ACTIONS: dict[str, Action] = {
     "share.board": Action("03_share", "board = nb.board({board})", "board", False),
     "share.board_move": Action("03_share", "board.move({tile}, {page}).save()", None),
     "share.board_remove": Action("03_share", "board.remove({tile}).save()", None),
-    "share.starter": Action("03_share", "board = nb.starter_board(connection, name={board})", "board"),
-    "share.board_draft": Action("03_share", "board_draft = nb.board({board}).share()", "board_draft"),
+    "share.starter": Action("03_share", "board = nb.starter_board(connection, name={board}, rules=STARTER_RULES)", "board"),
+    "share.board_draft": Action("03_share", "board = nb.board({board})\nboard.rules = {{**board.rules, **DASHBOARD_RULES}}\nboard_draft = board.share()", "board_draft"),
     "share.board_preview": Action("03_share", "dash_server = nb.dash_tools()\nboard_preview = board_draft.preview(dash_server)",
                                   "board_preview"),
     "share.board_publish": Action("03_share", "board_live = board_draft.confirm(dash_server, figures_checked=True)", "board_live"),

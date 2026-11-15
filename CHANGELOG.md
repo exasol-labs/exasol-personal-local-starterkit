@@ -4,6 +4,17 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **The guided cards use the rules you set in the notebook.** Every card action passes the same settings the cells do, so a rule changed in a settings cell changes what the card does too:
+  - **Column map:** `ROLE_RULES`.
+  - **Links:** `LINK_RULES`.
+  - **Checks and the cleaned view:** `PLACEHOLDER_VALUES`, `RARE_TARGET`, `DATE_FORMATS`, `TIMESTAMP_FORMATS`, `DROP_COPIES`, `CAST_TYPES`.
+  - **Leakage:** `GIVES_IT_AWAY`.
+  - **Ask:** `ASK_RULES`, `DRAFT_RULES`, `INSIGHT_RULES`.
+  - **Starter dashboard:** `STARTER_RULES`.
+  - **Dashboard behaviour:** `DASHBOARD_RULES`.
+  - **Loading a file:** `LOAD_RULES`.
+
+  When no settings cell ran, the kit's own values are used. When a card uses rules you changed, it says so in one line under its title (column map, Ask, Make a dashboard).
 - **How the quickstart loads and reads your data is yours to change.** `nb.load_rules()` lists how your own files are loaded: the schema a file lands in when none is named, whether a file loads again over a table of that name, the widest a text column is made, and when a text column is read as a date. `LOAD_RULES` in the load cell (`nb.load_own_file(..., rules=)`) changes the ones you name. How a table is read for its column map is now part of `nb.role_rules()` and `ROLE_RULES`: `VIRTUAL_ROWS` (the rows read of a source read live), `TOP_VALUES` and `VALUES_DISTINCT` (the values listed per column) and `EXACT_WITHIN`. The quickstart's kit cell already shows the `exakit` commands it runs.
 - **How the dashboards behave is yours to change, down to their source.**
   - **The rules:** `nb.dashboard_rules()` lists:

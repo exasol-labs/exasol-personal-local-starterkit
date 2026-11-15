@@ -183,6 +183,9 @@ class Ask(Screen):
             blocks.append({"t": "summary_row", "v": f"{ds.id} · {ds.fact_table} · column map v{ds.version}",
                            "sub": "Drafts with your AI model." if _model_ready() else
                                   "Drafts with the kit's rules. Set up an AI model on the Home screen for harder questions."})
+            mine = SESSION.your_rules("ASK_RULES", "DRAFT_RULES", "INSIGHT_RULES")
+            if mine:
+                blocks.append(mine)
             blocks.append({"t": "askbox", "value": self.question, "examples": self.examples,
                            "placeholder": f"For example: {self.examples[0]}" if self.examples else "Ask a question about this data"})
         else:

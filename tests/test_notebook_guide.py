@@ -1327,6 +1327,25 @@ class SeveralTablesTest(unittest.TestCase):
         later.assert_called_once_with("dataset", card)
         self.assertIsNone(card.all_review)
 
+    def test_the_cards_run_with_the_rules_the_notebook_set_else_the_kits_own(self):
+        actions = importlib.import_module("exakit_guide.actions")
+        self.session._ns = {"nb": None}
+        ns = self.session.namespace()
+        self.assertEqual(({}, {}, 0.99), (ns["ROLE_RULES"], ns["ASK_RULES"], ns["GIVES_IT_AWAY"]), "nothing set: the kit's own")
+        self.assertIn("unknown*", ns["PLACEHOLDER_VALUES"])
+        self.assertIsNone(self.session.your_rules("ROLE_RULES"))
+        self.session._ns["ROLE_RULES"] = {"CATEGORY_DISTINCT": 100}
+        self.assertIn("CATEGORY_DISTINCT = 100", self.session.your_rules("ROLE_RULES", "LINK_RULES")["v"])
+        self.assertEqual({"CATEGORY_DISTINCT": 100}, self.session.namespace()["ROLE_RULES"], "what the notebook set stays")
+        for action_id, name in (("map.review", "rules=ROLE_RULES"), ("semantic.links_tables", "rules=LINK_RULES"),
+                                ("explore.checks", "placeholder_values=PLACEHOLDER_VALUES"), ("explore.typed", "date_formats=DATE_FORMATS"),
+                                ("map.leakage", "pure=GIVES_IT_AWAY"), ("ask.model", "rules=ASK_RULES"),
+                                ("ask.rules", "rules=DRAFT_RULES"), ("ask.insights", "rules=INSIGHT_RULES"),
+                                ("share.starter", "rules=STARTER_RULES"), ("share.board_draft", "DASHBOARD_RULES"),
+                                ("data.own_file", "rules=LOAD_RULES")):
+            with self.subTest(action=action_id):
+                self.assertIn(name, actions.ACTIONS[action_id].code)
+
     def test_nothing_ticked_and_nothing_loaded_are_said(self):
         with self.assertRaisesRegex(ValueError, "Tick at least one"):
             self.use({"kind": ["sample"], "sample": []})

@@ -54,7 +54,42 @@ class Session:
 
             self._ns = {"nb": nb}
             self.log("import exakit.nb as nb")
+        self._rule_defaults(self._ns)
         return self._ns
+
+    def your_rules(self, *names: str) -> dict | None:
+        """{"t": "p"} block saying which of these rule settings the notebook changed from the kit's own, or None."""
+        ns = self.namespace()
+        changed = []
+        for name in names:
+            value = ns.get(name)
+            if isinstance(value, dict) and value:
+                changed.append(f"{name} " + ", ".join(f"{k} = {v}" for k, v in list(value.items())[:4]))
+        if not changed:
+            return None
+        return {"t": "p", "muted": True, "v": "Using your rules from the notebook's settings: " + "; ".join(changed) + "."}
+
+    @staticmethod
+    def _rule_defaults(ns: dict[str, Any]) -> None:
+        """The notebooks' rule settings, as the cards read them: what a settings cell set, else the kit's own value.
+        The cards then run with the same rules as the cells (a rule changed in a settings cell changes the card)."""
+        if "ROLE_RULES" in ns and "ASK_RULES" in ns and "LOAD_RULES" in ns:
+            return
+        defaults = {"ROLE_RULES": {}, "LINK_RULES": {}, "ASK_RULES": {}, "DRAFT_RULES": {}, "INSIGHT_RULES": {},
+                    "STARTER_RULES": {}, "DASHBOARD_RULES": {}, "LOAD_RULES": {}, "RARE_TARGET": 0.10,
+                    "GIVES_IT_AWAY": 0.99, "DROP_COPIES": True, "CAST_TYPES": True}
+        try:
+            import importlib
+
+            checks = importlib.import_module("exakit_nb.data_checks")
+            prepare = importlib.import_module("exakit_nb.prepare")
+            defaults.update(PLACEHOLDER_VALUES=list(checks.PLACEHOLDER_VALUES), DATE_FORMATS=list(prepare.DATE_FORMATS),
+                            TIMESTAMP_FORMATS=list(prepare.TIMESTAMP_FORMATS), RARE_TARGET=checks.RARE,
+                            GIVES_IT_AWAY=checks.PURE)
+        except ImportError:
+            pass
+        for name, value in defaults.items():
+            ns.setdefault(name, value)
 
     def get(self, name: str) -> Any:
         return self.namespace().get(name)

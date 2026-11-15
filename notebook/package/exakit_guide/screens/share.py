@@ -179,6 +179,9 @@ class Dashboard(Screen):
         blocks = [head, {"t": "summary_row", "v": f"{ds.id} · {ds.fact_table} · column map v{ds.version}",
                          "sub": (f"Dashboards: running at {self.dash['url']}" if self._server_up()
                                  else "Dashboards: the dashboard server is set up for you when you make the preview")}]
+        mine = SESSION.your_rules("STARTER_RULES", "DASHBOARD_RULES")
+        if mine:
+            blocks.append(mine)
         group_opts = [{"value": g, "label": g} for g in self.groups]
         options = [{"value": "compare", "title": "A comparison", "text": "Counts per group, with the outcome's rate when there is one.",
                     "disabled": not self.groups, "disabled_reason": "No column was marked Group to compare in step 1.",

@@ -864,6 +864,9 @@ class ColumnMap(Screen):
                                   for e in SESSION.chosen]})
         if several:
             top += self._all_blocks(len(left))
+        mine = SESSION.your_rules("ROLE_RULES", "LINK_RULES")
+        if mine:
+            top.append(mine)
         top.append(self._ai_block(rv))
         blocks[1:1] = top
         if several and now.upper() in approved:
