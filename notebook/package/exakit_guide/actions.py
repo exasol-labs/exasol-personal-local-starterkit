@@ -101,27 +101,15 @@ ACTIONS: dict[str, Action] = {
     "semantic.fuse_apply": Action("01_explore", "fusion_applied = nb.fuse(connection, {model}, fusion_document, dry_run=False)",
                                   "fusion_applied"),
     "sources.list": Action("01_explore", "sources = nb.sources()", "sources", False),
-    "semantic.models": Action("01_explore", "semantic_models = nb.semantic_models(connection)", "semantic_models", False),
-    "semantic.preview": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
-                               "links={links}, ai={ai}, preview=True)", "semantic", False),
-    "semantic.publish": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, "
-                               "links={links}, ai={ai}, preview=False)", "semantic"),
-    "semantic.links": Action("01_explore", "found_links = nb.find_links(connection, {schemas}, ai={ai}, rules=LINK_RULES)", "found_links", False),
-    "semantic.preview_schemas": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
-                                       "links={links}, ai={ai}, preview=True)", "semantic", False),
-    "semantic.publish_schemas": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, schemas={schemas}, "
-                                       "links={links}, ai={ai}, preview=False)", "semantic"),
-    # the tables a person ticked (not whole schemas), the links between them - one schema's tables too - and one pair checked
-    "semantic.links_tables": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, ai={ai}, rules=LINK_RULES)", "found_links", False),
+    # your data map: what Semantic Views needs, from this computer (no query); one AI draft; saved by Semantic Views
+    "semantic.inputs": Action("01_explore", "data_map_inputs = nb.data_map_inputs({tables})", "data_map_inputs", False),
+    "semantic.draft": Action("01_explore", "drafted_map = nb.draft_data_map({tables})", "drafted_map", False),
     "semantic.check_link": Action("01_explore", "link_check = nb.find_links(connection, tables={tables}, check={check}, ai=False, rules=LINK_RULES)",
                                   "link_check", False),
-    # model_links: the links to use, each as nb.find_links returns it (its evidence with it) and a note in your words
-    "semantic.preview_tables": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
-                                      "table_notes={table_notes}, description={description}, ai={ai}, preview=True)", "semantic", False),
-    "semantic.publish_tables": Action("01_explore", "semantic = nb.semantic_model(connection, {name}, tables={tables}, links=model_links, "
-                                      "table_notes={table_notes}, description={description}, ai={ai}, preview=False)", "semantic"),
-    "semantic.ai_notes": Action("01_explore", "model_notes = nb.model_notes(connection, {tables}, links={links})", "model_notes", False),
-    "semantic.refresh": Action("01_explore", "refreshed = nb.refresh_semantic(connection, {name})", "refreshed"),
+    "semantic.save_map": Action("01_explore", "semantic = nb.semantic_model(connection, \"all_data\", tables={tables}, links={links}, "
+                                "table_notes={table_notes}, grains={grains}, starts={starts}, metrics={metrics}, "
+                                "instructions={instructions}, description={description}, replace_links=True, ai=False, "
+                                "preview={preview})", "semantic"),
     # step 2 (01_explore) opens the tables the quickstart chose, each by name, and moves between them
     "understand.open": Action("01_explore", "chosen_tables = nb.open_chosen(connection)", "chosen_tables", False),
     "understand.switch": Action("01_explore", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
@@ -135,8 +123,6 @@ ACTIONS: dict[str, Action] = {
     "map.review_keep": Action("01_explore", "role_reviews[{table}] = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)", "role_reviews", False),
     "map.ai_together": Action("01_explore", "ai_map = nb.fill_column_map(role_reviews[{table}], together=role_reviews)",
                               "ai_map", False),
-    "semantic.links_checked": Action("01_explore", "found_links = nb.find_links(connection, tables={tables}, check={check}, ai={ai}, rules=LINK_RULES)",
-                                     "found_links", False),
     # every chosen table at once: what to look at across them, then one approval (one publish per schema)
     "map.schema_review": Action("01_explore", "schema_summary = nb.schema_review(role_reviews)", "schema_summary", False),
     "map.approve_all": Action("01_explore", "approved_all = nb.approve_all(role_reviews, {choices})\ndataset = approved_all[{table}]",

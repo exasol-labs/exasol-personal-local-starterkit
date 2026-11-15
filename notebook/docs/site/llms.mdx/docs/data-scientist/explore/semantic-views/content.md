@@ -105,40 +105,46 @@ Measured values are for this database and these tables. Your numbers differ if y
 
 ## One model across sources [#one-model-across-sources]
 
-In the guided view, open **Understand** and scroll to **Semantic views**. The card builds the model by hand, in three parts.
+In the guided view, open **Understand** and scroll to **Your data map**. It asks for exactly what Exasol Semantic Views needs to answer questions across your tables, and nothing is worked out for you. It opens from your approved column maps on this computer, so there is nothing to wait for.
 
-| Part             | What you do                                                                                                                                                                                                                                                                                                                             |
-| ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The tables       | Every schema is listed with its tables under it, and where it comes from: sample data, your data or an external source. Tick the tables the model is about. The tables you chose in **Choose your data** start ticked. A schema's own box ticks or clears all its tables. Under each ticked table, say in a sentence what the table is. |
-| How they connect | **Find links between the ticked tables** compares their values and lists each link with what the data says. Tick the ones to use, and say in a sentence why the two belong together. Add a link of your own from four lists: this table, by this column, points at that table, which holds the values in that column.                   |
-| The model        | Give it a name, for example `sales_360`, and say what it is about. **Preview** shows the dimensions and metrics of each view and writes nothing. **Publish the model** builds it.                                                                                                                                                       |
+| Section                   | What you say                                                                                                  | Why Semantic Views needs it                                 |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1 · Your tables           | What one row of each table is (its grain), and what the table is. The key comes from the column map.          | So an amount is never counted once per row of another table |
+| 2 · How they connect      | This column holds that table's key: pick both from lists, and the type, many-to-one or one-to-one             | A join that would multiply an amount is refused             |
+| 3 · Where questions start | The tables questions begin from. Empty: the tables with an amount                                             | Each becomes a semantic view that reaches the linked tables |
+| 4 · Metrics               | A name, how (sum, number of rows, average), of which column, and only the rows where a column has some values | "Completed revenue" is defined once, the same for everyone  |
+| 5 · Rules for AI tools    | What anyone asking must know, in a sentence each                                                              | AI tools read them with the fields                          |
 
-A table needs an approved column map to be ticked. One without is shown greyed, with where to approve it.
+**Fill everything in with AI**, at the top of the page, drafts all five from names, roles, notes and the values the column maps saw. It never reads a row and never scans values. Each suggestion is marked *suggested by AI*: untick what is wrong, change what is close.
 
-The model takes the tables you ticked, not every table of their schemas. Two tables of the same schema are compared for links too.
-
-Tick **Let the AI help** to have your model propose links from what the columns mean, and business names, synonyms and metrics for the model. It is shown names, types and notes, never a row.
-
-### A link of your own is checked first [#a-link-of-your-own-is-checked-first]
-
-**Check it against the data and add it** runs the same check a found link gets (`nb.find_links(connection, tables=[...], check=[...])`). When the data backs the pair, it is added to the list with its evidence, marked *Yours, checked*. When it does not, it is not added and the card says what the data showed: too few values match, the two columns are of different kinds, or the column on the right does not hold each value once.
+**Check with data** is optional: one bounded count per link, saying how many of its values the key holds. **Show what saving runs** prints every statement. **Save to your data map** hands it all to Semantic Views, which checks it. What it refuses is shown word for word, for example a metric name that exists already.
 
 ### The same in a cell [#the-same-in-a-cell]
 
 ```python
-tables = ["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "VS_LOGISTICS.STATE_LOGISTICS"]
-found_links = nb.find_links(connection, tables=tables)
-model_links = [link for link in found_links["links"] if link["confidence"] == "high"]
-model_links.append({"from": "AMAZON.RETURNS.ORDER_ID", "to": "AMAZON.ORDER_LINES.ORDER_ID", "note": "A return belongs to one order."})
-semantic = nb.semantic_model(connection, "sales_360", tables=tables, links=model_links,
-                             table_notes={"VS_LOGISTICS.STATE_LOGISTICS": "Average delivery days per state."}, preview=True)
+tables = ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS"]
+saved = nb.data_map_inputs(tables)                  # what you said before, from this computer
+drafted = nb.draft_data_map(tables)                 # the AI's suggestions, nothing saved
+semantic = nb.semantic_model(connection, "all_data", tables=tables,
+                             links=[{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "MANY_TO_ONE"}],
+                             grains={"MY_DATA.TARGETS": "one state's monthly target"},
+                             starts=["AMAZON.ORDER_LINES"],
+                             metrics=[{"table": "AMAZON.ORDER_LINES", "name": "completed_revenue", "how": "sum", "column": "AMOUNT",
+                                       "where": {"column": "STATUS", "values": ["COMPLETED"]}}],
+                             instructions=["Revenue includes tax."], replace_links=True, preview=True)
 ```
 
-**Models in the database** lists every model. **Refresh it** rebuilds a model the kit built, from the column maps and links approved since.
+From a terminal, `exakit semantic draft --table AMAZON.ORDER_LINES --table MY_DATA.TARGETS` prints the AI's draft.
+
+### Who may read it [#who-may-read-it]
+
+Saving grants the data map to the kit's read-only user the way Semantic Views grants it: `GRANT_MODEL_ROLE` to the role `EXAKIT_SEMANTIC_READERS`, which that user has. The SQL Semantic Views writes reads your tables with the asking user's rights; the read-only user may read every table (`SELECT ANY TABLE`), external sources included.
 
 ## Links across sources [#links-across-sources]
 
 Tables of different sources rarely declare how they join, and the same thing is often named differently: a customer number in one, a client id in another. The kit finds such a link from the values the columns hold. It does not match column names, and it needs no foreign key.
+
+The data map card never runs this search by itself: links are yours to add. Run it in a cell or a terminal when you want the values compared.
 
 <Flow
   caption="How a link between two sources is found"

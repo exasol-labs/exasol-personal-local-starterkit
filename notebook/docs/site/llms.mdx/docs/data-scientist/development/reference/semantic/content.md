@@ -65,6 +65,27 @@ Compile a structured request - \{"model", "object", "metrics": \[...], "dimensio
 (COMPILE_REQUEST_JSON). Returns \{status, sql, plan, clarification, request_id, error}; nothing of the data is read.
 A question the model finds ambiguous comes back with `clarification`: the choices to pick from.
 
+## nb.data_map_inputs [#data_map_inputs]
+
+```python
+nb.data_map_inputs(tables: list[str], model: str='all_data') -> dict[str, Any]
+```
+
+What your data map holds for these tables, read from this computer (no query): each table's key, grain and
+columns from its approved column map, and what you said before - grains, notes, links with their type, metrics,
+starting points, instructions. The data map card opens with it.
+
+## nb.draft_data_map [#draft_data_map]
+
+```python
+nb.draft_data_map(tables: list[str]) -> dict[str, Any]
+```
+
+The AI set up for the kit drafts the data map for these tables in one call: what one row of each is, what each
+is, the links with their type, the tables questions start from, metrics (with a condition where one fits) and
+instructions. It sees names, roles, notes and known values, never a row; nothing is saved. Check it, change it,
+then pass it to nb.semantic_model.
+
 ## nb.find_links [#find_links]
 
 ```python
@@ -190,6 +211,11 @@ nb.semantic_model(
     preview: bool=False,
     table_notes: dict[str, str] | None=None,
     sql: list[str] | str | None=None,
+    grains: dict[str, str] | None=None,
+    starts: list[str] | None=None,
+    metrics: list | None=None,
+    instructions: list | None=None,
+    replace_links: bool=False,
 ) -> SemanticModel
 ```
 
@@ -200,7 +226,13 @@ map; `find=True` finds the links between the schemas from their values (nb.find_
 data backs. A link may also be one of nb.find_links' own (\{"from", "to", ...}): its evidence is stored in the
 model with it, and a "note" you add says in your words why the two belong together. `table_notes` (\{SCHEMA.TABLE:
 text}) says what each table is. `ai` (default: when a model is configured) lets your model propose the
-fields' business names, synonyms and extra metrics. Publishing installs Semantic Views when the database does not
+fields' business names, synonyms and extra metrics.
+
+What Semantic Views needs from you: `grains` (\{SCHEMA.TABLE: "one row is one order line"}), each link's "type"
+(MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), `starts` (the tables questions start from),
+`metrics` (\[\{"table", "name", "how": "sum"|"count"|"average", "column", "where": \{"column", "values"}, "about"}])
+and `instructions` (rules for AI tools, as text or \{"table", "text"}). nb.draft_data_map drafts them with AI;
+Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
 have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user.
 
 ## nb.semantic_models [#semantic_models]

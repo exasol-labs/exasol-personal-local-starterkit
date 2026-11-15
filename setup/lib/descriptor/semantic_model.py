@@ -191,10 +191,15 @@ def _paths(root: str, edges: dict[str, list[tuple[str, str]]]) -> dict[str, list
 
 
 def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], name: str, *,
-          description: str | None = None) -> dict[str, Any]:
+          description: str | None = None, grains: dict[str, str] | None = None,
+          starts: Iterable[str] | None = None) -> dict[str, Any]:
     """The model as a dict. ``tables`` from table_input(); ``links`` as {"from": "SCHEMA.TABLE.COLUMN",
     "to": "SCHEMA.TABLE.KEY"} (many-to-one: the key side is unique; one-to-one when the pointer is unique too). A link naming a table that is not modelled is
-    left out, and so is a table whose schema or name the product cannot take; ``notes`` says what was left out."""
+    left out, and so is a table whose schema or name the product cannot take; ``notes`` says what was left out.
+    ``grains`` ({SCHEMA.TABLE: "one row is ..."}) says what one row of a table is, in your words; ``starts``
+    (SCHEMA.TABLE) are the tables questions start from - each a semantic view (default: the tables with an amount)."""
+    grains = {str(k).upper(): " ".join(str(v).split())[:200] for k, v in (grains or {}).items() if str(v).strip()}
+    starts = {str(t).upper() for t in starts or []}
     model = model_name(name)
     notes: list[str] = []
     entities: list[dict[str, Any]] = []
@@ -215,7 +220,7 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         origin = dict(table.get("origin") or {})
         record = {"name": entity, "schema": schema.upper(), "table": object_name.upper(), "alias": f"t{index}",
                   "key": [k for k in table.get("key") or [] if k], "virtual": bool(table.get("virtual")),
-                  "grain": table.get("grain") or f"one row of {schema}.{object_name}",
+                  "grain": grains.get(f"{schema}.{object_name}".upper()) or table.get("grain") or f"one row of {schema}.{object_name}",
                   "description": (table.get("description") or f"{schema}.{object_name}").rstrip(".") + ". "
                   + where_from(origin, schema.upper(), bool(table.get("virtual"))),
                   "origin": origin, "columns": table["columns"]}
@@ -309,7 +314,8 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         return found
 
     objects: list[dict[str, Any]] = []
-    roots = [e for e in entities if any(not f.get("row") for f in facts_of[e["name"]])] or list(entities)
+    chosen = [e for e in entities if f"{e['schema']}.{e['table']}" in starts]
+    roots = chosen or [e for e in entities if any(not f.get("row") for f in facts_of[e["name"]])] or list(entities)
     covered: set[str] = set()
     # The tables with measures first; then every table no view reached yet gets a view of its own (its row count and
     # its dimensions), so a table without measures and without a link is still asked about.
@@ -460,7 +466,8 @@ def instruction_statements(model: str, instructions: list[dict[str, Any]], befor
     it is no field, a personal-data rule, a source read live. Added after the publish, as the product asks; on a
     change, only the ones that are new."""
     had = {(i["entity"], i["kind"], i["text"]) for i in before or []}
-    return [_script("ADD_AGENT_INSTRUCTION", model, "ENTITY", i["entity"], i["kind"], i["text"], None, int(i["priority"]))
+    return [_script("ADD_AGENT_INSTRUCTION", model, i.get("scope") or "ENTITY", i["entity"], i["kind"], i["text"], None,
+                    int(i["priority"]))
             for i in instructions if (i["entity"], i["kind"], i["text"]) not in had]
 
 
@@ -671,11 +678,7 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
         except Exception as err:
             warnings.append(f"publish after the extra definitions: {' '.join(str(err).split())[:300]}")
     if reader:
-        for sql in (f'GRANT SEMANTIC_USER TO "{reader}"', f'GRANT SELECT ON SCHEMA {spec["published_schema"]} TO "{reader}"'):
-            try:
-                execute(sql)
-            except Exception as err:
-                warnings.append(f"the read-only user {reader}: {' '.join(str(err).split())[:200]}")
+        warnings += grant_reader(execute, model, reader)
     counts = {"views": len(spec["objects"]), "entities": len(spec["entities"]),
               "relationships": len(spec["relationships"]),
               "dimensions": sum(len(o["dimensions"]) for o in spec["objects"]),
@@ -684,6 +687,26 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
     return {"model": model, "published_schema": spec["published_schema"],
             "views": [f"{spec['published_schema']}.{o['name']}" for o in spec["objects"]], "counts": counts,
             "statements": len(sent), "mode": mode, "notes": list(spec.get("notes") or []), "warnings": warnings}
+
+
+READER_ROLE = "EXAKIT_SEMANTIC_READERS"
+
+
+def grant_reader(execute: Callable[[str], Any], model: str, reader: str) -> list[str]:
+    """The read-only user may use the model, the way Semantic Views grants it: GRANT_MODEL_ROLE to a role (it records
+    the grant, gives SELECT on the published schema and SEMANTIC_USER), and that role to the user. The user's SELECT on
+    the sources the compiled SQL reads is the kit's read-only grant (SELECT ANY TABLE). [what did not work]."""
+    said = []
+    for sql in (f"CREATE ROLE {READER_ROLE}", f'GRANT {READER_ROLE} TO "{reader}"',
+                _script("GRANT_MODEL_ROLE", model, READER_ROLE)):
+        try:
+            execute(sql)
+        except Exception as err:
+            text = " ".join(str(err).split())
+            if sql.startswith("CREATE ROLE") and ("exist" in text.lower() or "conflict" in text.lower()):
+                continue                                   # made for an earlier model
+            said.append(f"the read-only user {reader}: {text[:200]}")
+    return said
 
 
 def summary(spec: dict[str, Any]) -> str:
@@ -704,6 +727,103 @@ def summary(spec: dict[str, Any]) -> str:
 _TOKEN = re.compile(r"\s*(?:([A-Za-z_][A-Za-z0-9_]*)|(\d+(?:\.\d+)?)|([-+*/(),]))")
 _FUNCTIONS = {"SUM", "NULLIF"}
 _FILTER = re.compile(r"^\s*([a-z][a-z0-9_]*)\s*(=|<>|IN)\s*(\(.*\)|'(?:[^']|'')*')\s*$", re.IGNORECASE)
+
+
+HOW = ("sum", "count", "average")
+
+
+def _view_of(spec: dict[str, Any], table: str) -> dict[str, Any] | None:
+    schema, _, name = str(table).upper().partition(".")
+    entity = next((e for e in spec["entities"] if (e["schema"], e["table"]) == (schema, name)), None)
+    return next((o for o in spec["objects"] if entity and o["root"] == entity["name"]), None)
+
+
+def _field_of(items: list[dict[str, Any]], column: str, entity: str | None = None) -> dict[str, Any] | None:
+    """The fact or dimension over ``column`` (COLUMN, or SCHEMA.TABLE.COLUMN of a joined table)."""
+    wanted = str(column).upper().rsplit(".", 1)[-1].strip('"')
+    for item in items:
+        if str(item.get("expression") or "").rsplit(".", 1)[-1].strip('"').upper() == wanted and (
+                entity is None or item.get("entity") == entity):
+            return item
+    return None
+
+
+def user_metrics(spec: dict[str, Any], metrics: Iterable[dict[str, Any]]) -> tuple[list[tuple[str, str]], list[str]]:
+    """([(view, Semantic SQL)], what was refused and why) for metrics a person defined: {table, name, how: sum | count
+    | average, column (for sum and average), where: {column, values: [...]} (optional: only these rows count), about}.
+    Each is written as Semantic Views' own definition; Semantic Views checks it when it is saved and says what is
+    wrong. Here only the names are checked: the table must be a starting point, the column one of its amounts, the
+    condition's column one of its dimensions."""
+    extra, refused = [], []
+    taken = {f["name"] for o in spec["objects"] for f in o["dimensions"] + o["facts"] + o["metrics"]}
+    for m in metrics or []:
+        if not isinstance(m, dict):
+            continue
+        name = identifier(m.get("name") or "", "metric")
+        how = str(m.get("how") or "sum").lower()
+        view = _view_of(spec, m.get("table") or "")
+        why = None
+        if view is None:
+            why = f"{m.get('table')} is not a starting point of the data map"
+        elif how not in HOW:
+            why = f"'{how}' is not one of {', '.join(HOW)}"
+        elif name in taken:
+            why = f"the name {name} is taken"
+        fact = row = None
+        if not why:
+            row = next(f for f in view["facts"] if f.get("row"))
+            if how != "count":
+                fact = _field_of([f for f in view["facts"] if not f.get("row")], m.get("column") or "", view["root"])
+                if fact is None:
+                    why = f"{m.get('column')} is not an amount of {m.get('table')}"
+        flt = ""
+        where = m.get("where") or {}
+        if not why and where.get("column"):
+            dim = _field_of(view["dimensions"], where["column"])
+            values = [str(v) for v in where.get("values") or [] if str(v) != ""]
+            if dim is None:
+                why = f"{where['column']} is not a column to group by in {m.get('table')}"
+            elif not values:
+                why = f"name the values of {where['column']} that count"
+            else:
+                flt = (f"{dim['name']} = {literal(values[0])}" if len(values) == 1
+                       else f"{dim['name']} IN ({', '.join(literal(v) for v in values)})")
+        if why:
+            refused.append(f"metric {name}: {why}")
+            continue
+        about = " ".join(str(m.get("about") or "").split())[:300] or _words(name)
+        tail = lambda display, kind, comment: (f"\n  DISPLAY {_text(display)}\n  COMMENT {_text(comment)}\n  {kind} PUBLIC")
+        head = lambda metric, expression, kind_type: (f"ALTER SEMANTIC VIEW {spec['model']}.{view['name']}\nADD OR REPLACE METRIC "
+                                                      f"{metric}\n  AS {expression}\n  ON ENTITY {view['root']}\n  RETURNS {kind_type}"
+                                                      + (f"\n  FILTER (WHERE {flt})" if flt and "/" not in expression else ""))
+        if how == "sum":
+            extra.append((view["name"], head(name, f"SUM({fact['name']})", fact["type"] if fact["type"].startswith("DECIMAL") else "DOUBLE")
+                          + tail(_words(name), "ADDITIVE", about)))
+        elif how == "count":
+            extra.append((view["name"], head(name, f"SUM({row['name']})", "DECIMAL(36,0)") + tail(_words(name), "ADDITIVE", about)))
+        else:
+            total, rows_ = identifier(f"{name}_total", "metric"), identifier(f"{name}_rows", "metric")
+            extra.append((view["name"], head(total, f"SUM({fact['name']})", "DOUBLE") + tail(f"{_words(name)} (total)", "ADDITIVE", about)))
+            extra.append((view["name"], head(rows_, f"SUM({row['name']})", "DECIMAL(36,0)") + tail(f"{_words(name)} (rows)", "ADDITIVE", about)))
+            extra.append((view["name"], head(name, f"{total} / NULLIF({rows_}, 0)", "DOUBLE") + tail(_words(name), "RATIO", about)))
+            taken.update([total, rows_])
+        taken.add(name)
+    return extra, refused
+
+
+def user_instructions(spec: dict[str, Any], instructions: Iterable[Any]) -> list[dict[str, Any]]:
+    """Instructions in a person's words for AI tools ("revenue excludes tax"): a text is about the whole data map, a
+    {table, text} about one table."""
+    found = []
+    for item in instructions or []:
+        table, text = (item.get("table"), item.get("text")) if isinstance(item, dict) else (None, item)
+        text = " ".join(str(text or "").split())[:1000]
+        if not text:
+            continue
+        schema, _, name = str(table or "").upper().partition(".")
+        entity = next((e["name"] for e in spec["entities"] if (e["schema"], e["table"]) == (schema, name)), None)
+        found.append({"entity": entity, "scope": "ENTITY" if entity else "MODEL", "kind": "GENERAL", "priority": 20, "text": text})
+    return found
 
 
 def ai_facts(spec: dict[str, Any]) -> dict[str, Any]:

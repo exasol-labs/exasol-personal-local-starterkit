@@ -157,8 +157,9 @@ class FlowTest(unittest.TestCase):
         model = self.db.sv.models["support"]
         self.assertEqual(([("SUPPORT", "TICKETS")], "SEM_SUPPORT", True), (model["entities"], model["published_schema"], model["published"]))
         self.assertIn(semantic_model.MARK, model["description"])
-        self.assertIn('GRANT SEMANTIC_USER TO "MCP_READONLY"', self.db.sent)
-        self.assertIn('GRANT SELECT ON SCHEMA SEM_SUPPORT TO "MCP_READONLY"', self.db.sent)
+        self.assertIn('GRANT EXAKIT_SEMANTIC_READERS TO "MCP_READONLY"', self.db.sent)
+        self.assertTrue(any("GRANT_MODEL_ROLE(" in sql and "'EXAKIT_SEMANTIC_READERS'" in sql for sql in self.db.sent),
+                        "the model is granted the way Semantic Views grants it")
         self.assertFalse(any(s.startswith("DROP SCHEMA") for s in self.db.sent), "no schema is ever dropped")
         definition = model["definitions"][0]
         self.assertIn("DIMENSION opened_on", definition)
@@ -187,8 +188,8 @@ class FlowTest(unittest.TestCase):
         doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], note="Where the ticket came in")
         self.db.sv.scripts.clear()
         self.approve(doc)
-        self.assertEqual(["ADD_CUSTOM_EXTENSION", "APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL"], self.db.sv.scripts,
-                         "the new column map version goes into the model, the changed view is replaced, then one publish")
+        self.assertEqual(["ADD_CUSTOM_EXTENSION", "APPLY_SEMANTIC_DEFINITION_OR_FAIL", "PUBLISH_MODEL", "GRANT_MODEL_ROLE"], self.db.sv.scripts,
+                         "the new column map version goes into the model, the changed view is replaced, one publish, the grant")
         version_2 = [x for x in self.db.sent if "ADD_CUSTOM_EXTENSION" in x and "'ENTITY'" in x][-1]
         self.assertIn("'column_map_v2'", version_2)
         self.assertIn("Where the ticket came in", version_2, "the approved text itself, as the store holds it")
@@ -200,7 +201,7 @@ class FlowTest(unittest.TestCase):
         self.db.sv.scripts.clear()
         self.approve(doc)
         self.assertIn("DROP_MODEL_IF_EXISTS", self.db.sv.scripts, "a key change needs a rebuild")
-        self.assertEqual("ADD_VERIFIED_QUERY", self.db.sv.scripts[-1], "and the verified question is put back")
+        self.assertEqual(["ADD_VERIFIED_QUERY", "GRANT_MODEL_ROLE"], self.db.sv.scripts[-2:], "and the verified question is put back")
 
     def test_the_statements_are_planned_shown_and_your_edited_ones_run_instead(self):
         """A model's statements can be read before they run (planned: the change in place, else the whole model after
@@ -470,6 +471,71 @@ class SemanticModelTest(unittest.TestCase):
         many = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "BILL.INVOICES.ORDER_REF"}], "bills")
         self.assertEqual("MANY_TO_ONE", many["relationships"][0]["cardinality"])
         self.assertIsNone(semantic_model.changes(many, measured), "a link turned one-to-one: built again")
+
+    def test_what_you_say_goes_into_the_model_as_semantic_views_definitions(self):
+        """Your grain, where questions start, metrics with a condition and rules for AI tools become Semantic Views'
+        own definitions; a name that is not in the data map is refused with the reason, never guessed at."""
+        tables = [semantic_model.table_input("TPCH.ORDERS", self.ORDERS, {"O_TOTALPRICE": "DECIMAL(15,2)", "O_ORDERDATE": "DATE"}),
+                  semantic_model.table_input("TPCH.CUSTOMER", self.CUSTOMER, {})]
+        spec = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "TPCH.CUSTOMER.C_CUSTKEY"}], "shop",
+                                    grains={"tpch.customer": "one  customer"}, starts=["TPCH.CUSTOMER"])
+        self.assertEqual("one customer", next(e for e in spec["entities"] if e["table"] == "CUSTOMER")["grain"])
+        self.assertEqual(["CUSTOMER", "ORDERS"], [o["name"] for o in spec["objects"]],
+                         "the table you said questions start from first; one it does not reach keeps a view of its own")
+        spec = semantic_model.build(tables, [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "TPCH.CUSTOMER.C_CUSTKEY"}], "shop")
+        extra, refused = semantic_model.user_metrics(spec, [
+            {"table": "TPCH.ORDERS", "name": "Open value", "how": "sum", "column": "O_TOTALPRICE",
+             "where": {"column": "O_ORDERSTATUS", "values": ["O", "P's"]}, "about": "Value of open orders"},
+            {"table": "TPCH.ORDERS", "name": "open_orders", "how": "count", "where": {"column": "O_ORDERSTATUS", "values": ["O"]}},
+            {"table": "TPCH.ORDERS", "name": "avg_value", "how": "average", "column": "O_TOTALPRICE"},
+            {"table": "TPCH.ORDERS", "name": "bad", "how": "sum", "column": "O_ORDERSTATUS"},
+            {"table": "TPCH.NOPE", "name": "nope", "how": "sum", "column": "X"},
+            {"table": "TPCH.ORDERS", "name": "cond", "how": "count", "where": {"column": "O_ORDERSTATUS", "values": []}}])
+        ddl = [d for _v, d in extra]
+        self.assertIn("ADD OR REPLACE METRIC open_value\n  AS SUM(", ddl[0])
+        self.assertIn("FILTER (WHERE o_orderstatus IN ('O', 'P''s'))", ddl[0])
+        self.assertIn("COMMENT 'Value of open orders'", ddl[0])
+        self.assertIn("FILTER (WHERE o_orderstatus = 'O')", ddl[1])
+        self.assertEqual(["avg_value_total", "avg_value_rows", "avg_value"], [re.search(r"METRIC (\w+)", d).group(1) for d in ddl[2:5]])
+        self.assertIn("AS avg_value_total / NULLIF(avg_value_rows, 0)", ddl[4])
+        self.assertEqual(["metric bad: O_ORDERSTATUS is not an amount of TPCH.ORDERS",
+                          "metric nope: TPCH.NOPE is not a starting point of the data map",
+                          "metric cond: name the values of O_ORDERSTATUS that count"], refused)
+        rules = semantic_model.user_instructions(spec, ["Value includes tax.", {"table": "TPCH.CUSTOMER", "text": "Segments are 2024's."}, ""])
+        self.assertEqual([("MODEL", None), ("ENTITY", "customer")], [(r["scope"], r["entity"]) for r in rules])
+        sent = semantic_model.instruction_statements("shop", rules)
+        self.assertTrue(sent[0].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.ADD_AGENT_INSTRUCTION('shop', 'MODEL', NULL, 'GENERAL'"))
+
+    def test_the_ai_draft_keeps_only_real_names_and_reads_no_row(self):
+        """One call drafts the data map from the approved column maps on this computer; whatever names no real table
+        or column is dropped and said. The prompt holds names, roles, notes and known values only."""
+        with tempfile.TemporaryDirectory() as home:
+            base = Path(home)
+            docs = {"TPCH.ORDERS": self.ORDERS, "TPCH.CUSTOMER": self.CUSTOMER}
+            seen = []
+            answer = {"description": "Orders.", "grains": {"TPCH.ORDERS": "one order", "X.Y": "no"},
+                      "links": [{"from": "TPCH.ORDERS.O_CUSTKEY", "to": "TPCH.CUSTOMER.C_CUSTKEY", "type": "many-to-one"},
+                                {"from": "TPCH.ORDERS.NOPE", "to": "TPCH.CUSTOMER.C_CUSTKEY"}],
+                      "starts": ["TPCH.ORDERS", "X.Y"],
+                      "metrics": [{"table": "TPCH.ORDERS", "name": "Open value", "how": "sum", "column": "O_TOTALPRICE",
+                                   "where": {"column": "O_ORDERSTATUS", "values": ["O"]}},
+                                  {"table": "TPCH.ORDERS", "name": "x", "how": "sum", "column": "O_COMMENT"}],
+                      "instructions": ["Value includes tax."]}
+            with mock.patch.object(store, "current", side_effect=lambda t, h=None: t if t in docs else None), \
+                    mock.patch.object(publish, "_load", side_effect=lambda text: dict(docs[text], version=1)), \
+                    mock.patch.object(store, "read_profile", return_value=None):
+                found = publish.draft_data_map(["TPCH.ORDERS", "TPCH.CUSTOMER"], lambda prompt: seen.append(prompt) or json.dumps(answer),
+                                               home=base)
+                facts = publish.data_map_inputs(["TPCH.ORDERS", "TPCH.NOPE"], home=base)
+        self.assertEqual(({"TPCH.ORDERS": "one order"}, ["TPCH.ORDERS"], "Orders.", ["Value includes tax."]),
+                         (found["grains"], found["starts"], found["description"], found["instructions"]))
+        self.assertEqual([("TPCH.ORDERS.O_CUSTKEY", "TPCH.CUSTOMER.C_CUSTKEY", "MANY_TO_ONE", "ai")],
+                         [(l["from"], l["to"], l["type"], l["by"]) for l in found["links"]])
+        self.assertEqual([("open_value", "O_TOTALPRICE", {"column": "O_ORDERSTATUS", "values": ["O"]})],
+                         [(m["name"], m["column"], m["where"]) for m in found["metrics"]])
+        self.assertEqual(2, len(found["refused"]))
+        self.assertNotIn("O_SECRET", seen[0], "a personal-data column is never shown")
+        self.assertEqual((["TPCH.ORDERS"], ["TPCH.NOPE"], False), (list(facts["tables"]), facts["missing"], facts["saved"]))
 
     def test_an_ai_proposal_is_checked_before_it_is_used(self):
         spec = self.spec()

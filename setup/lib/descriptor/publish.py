@@ -200,7 +200,8 @@ def keep(spec: dict[str, Any], inputs: dict[str, Any], home: Path | None = None,
 
 def build_model(rows: Run, tables: list[str], links: list[dict[str, str]], name: str, *,
                 description: str | None = None, docs: dict[str, dict[str, Any]] | None = None,
-                home: Path | None = None) -> dict[str, Any]:
+                home: Path | None = None, grains: dict[str, str] | None = None,
+                starts: list[str] | None = None) -> dict[str, Any]:
     """The spec of a model over ``tables`` (SCHEMA.TABLE, any schemas), from their approved column maps (``docs``,
     else the store's). A table with no approved column map is refused: approve it first."""
     docs = dict(docs or {})
@@ -224,7 +225,7 @@ def build_model(rows: Run, tables: list[str], links: list[dict[str, str]], name:
         schema = t.split(".", 1)[0]
         inputs.append(sm.table_input(t, docs[t], types.get(t, {}), virtual=schema in virtual, profile=profile,
                                      origin=origins.get(schema.upper())))
-    spec = sm.build(inputs, links, name, description=description)
+    spec = sm.build(inputs, links, name, description=description, grains=grains, starts=starts)
     # Each table's approved column map goes into the model with it (sm.column_map_statements): the text as the store
     # holds that version, so the model alone is enough to put the store back.
     for entity in spec["entities"]:
@@ -300,10 +301,21 @@ def all_tables(rows: Run, home: Path | None = None) -> list[str]:
     return [t for t in approved if t.upper() in present]
 
 
+def your_definitions(spec: dict[str, Any], metrics: list | None, instructions: list | None) -> list[tuple[str, str]]:
+    """Your metrics as Semantic Views definitions (sm.user_metrics) and your instructions on the spec; what cannot
+    be one is said in the spec's notes. [(view, definition)]."""
+    extra, refused = sm.user_metrics(spec, metrics or [])
+    spec["instructions"] = list(spec.get("instructions") or []) + sm.user_instructions(spec, instructions or [])
+    spec["notes"] = list(spec.get("notes") or []) + refused
+    return extra
+
+
 def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = None,
              links: list[dict[str, Any]] | None = None, table_notes: dict[str, str] | None = None,
              description: str | None = None, labels: dict[str, Any] | None = None,
-             extra: list | None = None) -> tuple[dict[str, Any], dict[str, Any], list] | None:
+             extra: list | None = None, grains: dict[str, str] | None = None, starts: list[str] | None = None,
+             metrics: list | None = None, instructions: list | None = None,
+             replace_links: bool = False) -> tuple[dict[str, Any], dict[str, Any], list] | None:
     """(the spec of the model over all your data, its inputs, its extra definitions), as publish_all would build it;
     None when nothing is approved. Nothing is written."""
     kept_inputs = (kept(ALL_MODEL, home) or {}).get("inputs") or {}
@@ -312,7 +324,7 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     if not every:
         return None
     joins: list[dict[str, Any]] = []
-    for link in list(links or []) + list(kept_inputs.get("links") or []):
+    for link in list(links or []) + ([] if replace_links else list(kept_inputs.get("links") or [])):
         if not any(j["from"] == link["from"] for j in joins):
             joins.append(link)
     for schema in sorted({t.split(".", 1)[0] for t in every}):
@@ -322,7 +334,11 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     joins = [j for j in joins if j["from"].rsplit(".", 1)[0] in every and j["to"].rsplit(".", 1)[0] in every]
     notes = {**(kept_inputs.get("table_notes") or {}), **{k.upper(): v for k, v in (table_notes or {}).items()}}
     about = description or kept_inputs.get("description") or ALL_ABOUT
-    spec = build_model(rows, every, joins, ALL_MODEL, description=about, home=home)
+    grains = {**(kept_inputs.get("grains") or {}), **{k.upper(): v for k, v in (grains or {}).items()}}
+    starts = list(starts if starts is not None else kept_inputs.get("starts") or [])
+    metrics = list(metrics if metrics is not None else kept_inputs.get("metrics") or [])
+    instructions = list(instructions if instructions is not None else kept_inputs.get("instructions") or [])
+    spec = build_model(rows, every, joins, ALL_MODEL, description=about, home=home, grains=grains, starts=starts)
     for entity in spec["entities"]:
         said = notes.get(f"{entity['schema']}.{entity['table']}".upper())
         if said:
@@ -335,7 +351,9 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     cross = [j for j in joins if j["from"].split(".", 1)[0] != j["to"].split(".", 1)[0] or j.get("evidence")]
     inputs = {"tables": every, "links": cross, "name": ALL_MODEL, "all": True,
               "description": about if about != ALL_ABOUT else None, "table_notes": notes,
-              "labels": labels, "extra": [list(x) for x in extra]}
+              "labels": labels, "extra": [list(x) for x in extra], "grains": grains, "starts": starts,
+              "metrics": metrics, "instructions": instructions}
+    extra = extra + your_definitions(spec, metrics, instructions)
     return spec, inputs, extra
 
 
@@ -343,7 +361,9 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
                 tables: list[str] | None = None, links: list[dict[str, Any]] | None = None,
                 table_notes: dict[str, str] | None = None, description: str | None = None,
                 labels: dict[str, Any] | None = None, extra: list | None = None,
-                progress: Callable[[str], None] | None = None) -> dict[str, Any] | None:
+                progress: Callable[[str], None] | None = None, grains: dict[str, str] | None = None,
+                starts: list[str] | None = None, metrics: list | None = None,
+                instructions: list | None = None, replace_links: bool = False) -> dict[str, Any] | None:
     """The one model over all your data (ALL_MODEL): every approved table of every source, each schema's approved
     links, and the links across sources you confirmed for it (kept beside it), its fusion and verified questions with
     it. Built or changed in place on every approval; EXAKIT_ALL_DATA_MODEL=0 turns it off. None when nothing is
@@ -351,7 +371,8 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
     if os.environ.get("EXAKIT_ALL_DATA_MODEL", "1").strip() == "0":
         return None
     built = all_spec(rows, home=home, tables=tables, links=links, table_notes=table_notes, description=description,
-                     labels=labels, extra=extra)
+                     labels=labels, extra=extra, grains=grains, starts=starts, metrics=metrics, instructions=instructions,
+                     replace_links=replace_links)
     if built is None:
         return None
     spec, inputs, extra = built
@@ -394,12 +415,7 @@ def run_statements(execute: Callable[[str], Any], rows: Run, model: str, stateme
         execute(str(statement).strip().rstrip(";"))
     warnings = []
     if reader:
-        schema = sm.published_schema(name)
-        for sql in (f'GRANT SEMANTIC_USER TO "{reader}"', f'GRANT SELECT ON SCHEMA {schema} TO "{reader}"'):
-            try:
-                execute(sql)
-            except Exception as err:
-                warnings.append(f"the read-only user {reader}: {' '.join(str(err).split())[:200]}")
+        warnings += sm.grant_reader(execute, name, reader)
     before = kept(name, home)
     if before:
         before["spec"] = dict(before.get("spec") or {}, edited=True, model=name, description="edited by hand")
@@ -449,7 +465,8 @@ def refresh(execute: Callable[[str], Any], rows: Run, model: str, reader: str | 
     if inputs.get("all"):
         return publish_all(execute, rows, reader, home=home)
     spec = build_model(rows, list(inputs["tables"]), list(inputs.get("links") or []), inputs.get("name") or model,
-                       description=inputs.get("description"), home=home)
+                       description=inputs.get("description"), home=home, grains=inputs.get("grains"),
+                       starts=inputs.get("starts"))
     for entity in spec["entities"]:            # what a person said each table is, kept with the model
         about = (inputs.get("table_notes") or {}).get(f"{entity['schema']}.{entity['table']}".upper())
         if about:
@@ -457,6 +474,7 @@ def refresh(execute: Callable[[str], Any], rows: Run, model: str, reader: str | 
     if inputs.get("labels"):
         apply_labels(spec, inputs["labels"])
     extra = [(view, ddl) for view, ddl in inputs.get("extra") or []]
+    extra += your_definitions(spec, inputs.get("metrics"), inputs.get("instructions"))
     result = publish_model(execute, rows, spec, inputs, reader=reader, home=home, extra=extra)
     result["view"] = f"semantic model {result['model']} ({result['published_schema']})"
     return result
@@ -497,3 +515,116 @@ def model_of(rows: Run, table: str) -> str | None:
         if sm.MARK in str(row.get("DESCRIPTION") or ""):
             return f"semantic model {row['MODEL_NAME']} ({row.get('PUBLISHED_SCHEMA')})"
     return None
+
+
+# --- the data map as a person fills it in: what Semantic Views needs, read from your approvals --------------------------
+
+def data_map_inputs(tables: list[str], model: str = ALL_MODEL, home: Path | None = None) -> dict[str, Any]:
+    """Everything the data map card shows, from this computer only (the approved column maps and what was saved with
+    the model before; no query): per table its key, grain and columns (role, note, the known values of a column to
+    group by), and what you said before - grains, table notes, links with their type, metrics, starting points,
+    instructions, the description."""
+    found: dict[str, Any] = {"tables": {}, "missing": []}
+    for table in tables:
+        name = str(table).upper()
+        text = store.current(name, home) or store.current(str(table), home)
+        if not text:
+            found["missing"].append(name)
+            continue
+        doc = _load(text)
+        version = doc.get("version")
+        profile = store.read_profile(name, int(version), home) if isinstance(version, int) else None
+        shaped = sm.table_input(name, doc, {}, profile=profile)
+        found["tables"][name] = {
+            "key": shaped["key"], "grain": shaped["grain"],
+            "columns": [{"name": c["name"], "role": c["role"], "note": c["note"],
+                         **({"values": c["values"]} if c["role"] in sm.DIMENSION_ROLES and c["values"] else {})}
+                        for c in shaped["columns"] if not c["sensitive"]]}
+    had = kept(model, home)
+    found["saved"] = had is not None
+    saved = (had or {}).get("inputs") or {}
+    inside = lambda column: str(column).upper().rsplit(".", 1)[0] in found["tables"]
+    found.update({
+        "grains": {t: g for t, g in (saved.get("grains") or {}).items() if t in found["tables"]},
+        "table_notes": {t: n for t, n in (saved.get("table_notes") or {}).items() if t in found["tables"]},
+        "links": [{"from": l["from"], "to": l["to"], "type": l.get("cardinality") or "MANY_TO_ONE",
+                   "note": "" if (l.get("evidence") or {}).get("note") in (None, "given by a person", "given with --link")
+                   else l["evidence"]["note"], "by": (l.get("evidence") or {}).get("proposed_by") or "you"}
+                  for l in saved.get("links") or [] if inside(l["from"]) and inside(l["to"])],
+        "metrics": [m for m in saved.get("metrics") or [] if str(m.get("table") or "").upper() in found["tables"]],
+        "starts": [t for t in saved.get("starts") or [] if t in found["tables"]],
+        "instructions": list(saved.get("instructions") or []),
+        "description": saved.get("description") or ""})
+    return found
+
+
+DRAFT_INSTRUCTIONS = """You draft a data map (an Exasol Semantic Views model) for a person to check. Below are tables with
+their key, what one row is (grain), and their columns: name, role and note, and for a column to group by its known
+values. You never see a row. Answer with ONE JSON object and nothing else:
+{"description": "<what the data is about, one sentence>",
+ "table_notes": {"SCHEMA.TABLE": "<what the table is>"},
+ "grains": {"SCHEMA.TABLE": "one row is <...>"},
+ "links": [{"from": "SCHEMA.TABLE.COLUMN", "to": "SCHEMA.TABLE.KEY", "type": "MANY_TO_ONE|ONE_TO_ONE", "note": "<why>"}],
+ "starts": ["SCHEMA.TABLE"],
+ "metrics": [{"table": "SCHEMA.TABLE", "name": "lower_snake", "how": "sum|count|average", "column": "<an amount column>",
+              "where": {"column": "<a column to group by>", "values": ["<known values>"]}, "about": "<what it means>"}],
+ "instructions": ["<a rule an analyst must know, such as what an amount includes>"]}
+A link goes from a column of one table to the key of ANOTHER table, many-to-one unless both sides hold each value once.
+Starts are the tables questions begin from: the ones with amounts. A metric's where is optional and uses known values
+only. Use only the names given. Leave out what you are unsure of."""
+
+
+def draft_data_map(tables: list[str], chat: Callable[[str], str], home: Path | None = None) -> dict[str, Any]:
+    """One AI call drafts the whole data map from names, roles, notes and known values (never a row): grains, table
+    notes, links with their type, starting points, metrics, instructions, a description. Only what names a real
+    table and column is kept, each marked as the AI's; nothing is saved. {..., refused: [what was dropped and why]}."""
+    facts = data_map_inputs(tables, home=home)
+    known = facts["tables"]
+    if not known:
+        raise sm.ModelRefused("None of these tables has an approved column map yet: approve one first.")
+    text = chat(DRAFT_INSTRUCTIONS + "\n\nTables: " + json.dumps(known, ensure_ascii=False, default=str)).strip()
+    try:
+        answer = json.loads(text[text.find("{"):text.rfind("}") + 1])
+    except ValueError as err:
+        raise sm.ModelRefused(f"The AI's answer was not JSON ({str(err)[:120]}); press the button again.") from None
+    answer = answer if isinstance(answer, dict) else {}
+    columns = {t: {c["name"].upper(): c for c in v["columns"]} for t, v in known.items()}
+    column_of = lambda full: (lambda t, c: columns.get(t, {}).get(c))(*(str(full).upper().rsplit(".", 1) + [""])[:2])
+    refused: list[str] = []
+    said = lambda key: {str(t).upper(): " ".join(str(v).split())[:300] for t, v in (answer.get(key) or {}).items()
+                        if str(t).upper() in known and str(v).strip()} if isinstance(answer.get(key), dict) else {}
+    links = []
+    for link in answer.get("links") or []:
+        if not isinstance(link, dict):
+            continue
+        source, target = str(link.get("from") or "").upper(), str(link.get("to") or "").upper()
+        kind = str(link.get("type") or "MANY_TO_ONE").upper().replace("-", "_")
+        if not column_of(source) or not column_of(target) or source.rsplit(".", 1)[0] == target.rsplit(".", 1)[0]:
+            refused.append(f"link {source} -> {target}: not a column of one table and a column of another")
+            continue
+        links.append({"from": source, "to": target, "type": kind if kind in ("MANY_TO_ONE", "ONE_TO_ONE") else "MANY_TO_ONE",
+                      "note": " ".join(str(link.get("note") or "").split())[:300], "by": "ai"})
+    metrics = []
+    for m in answer.get("metrics") or []:
+        if not isinstance(m, dict):
+            continue
+        table, how = str(m.get("table") or "").upper(), str(m.get("how") or "sum").lower()
+        column = columns.get(table, {}).get(str(m.get("column") or "").upper())
+        where = m.get("where") if isinstance(m.get("where"), dict) else {}
+        by = columns.get(table, {}).get(str(where.get("column") or "").upper()) if where else None
+        if table not in known or how not in sm.HOW or (how != "count" and (not column or column["role"] != "measure")):
+            refused.append(f"metric {m.get('name')}: not an amount of a table given")
+            continue
+        if where and (not by or by["role"] not in sm.DIMENSION_ROLES):
+            refused.append(f"metric {m.get('name')}: its condition is not on a column to group by")
+            continue
+        metrics.append({"table": table, "name": sm.identifier(m.get("name") or "", "metric"), "how": how,
+                        **({"column": column["name"]} if column and how != "count" else {}),
+                        **({"where": {"column": by["name"], "values": [str(v) for v in where.get("values") or []][:10]}} if by else {}),
+                        "about": " ".join(str(m.get("about") or "").split())[:300], "by": "ai"})
+    return {"description": " ".join(str(answer.get("description") or "").split())[:300],
+            "table_notes": said("table_notes"), "grains": said("grains"), "links": links,
+            "starts": [str(t).upper() for t in answer.get("starts") or [] if str(t).upper() in known],
+            "metrics": metrics,
+            "instructions": [" ".join(str(i).split())[:500] for i in answer.get("instructions") or [] if str(i).strip()][:10],
+            "refused": refused}

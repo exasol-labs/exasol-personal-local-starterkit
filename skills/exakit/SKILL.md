@@ -202,6 +202,7 @@ against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, a
 | Need | Command | Writes |
 |---|---|---|
 | A model's fields, with what each holds and why it is used | `exakit semantic fields all_data --json` | no |
+| A draft of the data map to show the user (grains, links with their type, starts, metrics, rules), never saved by itself | `exakit semantic draft --table S.T --table S.T` | no |
 | The fields that match the user's words, best first (use it before picking names from a large model) | `exakit semantic search "revenue country" --model all_data --json` | no |
 | The SQL for a question, from metric and dimension names | `exakit semantic compile '{"model": "all_data", "object": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["state"]}' --json` - a refusal with choices means ask the user which one | no |
 | Questions already reviewed (use them before drafting) | `exakit semantic verified all_data --json` | no |

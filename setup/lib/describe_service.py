@@ -599,13 +599,20 @@ def semantic_ai(spec: dict[str, Any], chat=None) -> dict[str, Any]:
 def semantic_model(conn, name: str, tables: list[str], links: list | None = None, *, ai: bool = False,
                    dry_run: bool = False, description: str | None = None, chat=None, progress=None,
                    schemas: list[str] | None = None, discover: bool = False,
-                   table_notes: dict[str, str] | None = None, statements: list[str] | None = None) -> dict[str, Any]:
+                   table_notes: dict[str, str] | None = None, statements: list[str] | None = None,
+                   grains: dict[str, str] | None = None, starts: list[str] | None = None, metrics: list | None = None,
+                   instructions: list | None = None, replace_links: bool = False) -> dict[str, Any]:
     """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
     approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). A link
     may also be a dict as find_links returns it ({"from", "to", ...its evidence}) with an optional "note" in a
     person's words: its evidence and the note are stored in the model with it. ``table_notes`` ({SCHEMA.TABLE: text})
     says what a table is; the model keeps it as that entity's description. With ``ai`` the user's model proposes the
-    fields first. ``dry_run`` builds the spec and says what it would publish."""
+    fields first. ``dry_run`` builds the spec and says what it would publish.
+
+    What you say about the data map: ``grains`` ({SCHEMA.TABLE: "one row is ..."}), a link's "type" (MANY_TO_ONE or
+    ONE_TO_ONE), ``starts`` (the tables questions start from), ``metrics`` ([{table, name, how, column, where,
+    about}]: sm.user_metrics) and ``instructions`` (texts, or {table, text}). Semantic Views checks all of it when it
+    is saved. ``replace_links``: the links given are all of them (the data map card), not added to the kept ones."""
     from descriptor import semantic_model as sm
 
     rows_of = lambda sql: _rows(conn, sql)
@@ -642,13 +649,16 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                 raise Refused(f"A link names SCHEMA.TABLE.COLUMN on both sides, not '{source}' and '{target}'.")
             evidence = {k: spec[k] for k in ("proposed_by", "found", "checked", "share", "key_evidence", "from_live",
                                              "to_live", "evidence_text", "rows", "confidence") if k in spec}
-            evidence.setdefault("proposed_by", "you")
+            evidence.setdefault("proposed_by", str(spec.get("by") or "you"))
             note = " ".join(str(spec.get("note") or "").split())[:300]
             if note:
                 evidence["note"] = note
             elif "evidence_text" not in evidence:
                 evidence["note"] = "given by a person"
-            joins.append({"from": source, "to": target, "evidence": evidence})
+            kind = str(spec.get("type") or spec.get("cardinality") or "").upper().replace("-", "_")
+            if kind and kind not in ("MANY_TO_ONE", "ONE_TO_ONE"):
+                raise Refused(f"A link's type is MANY_TO_ONE or ONE_TO_ONE, not '{kind}'.")
+            joins.append({"from": source, "to": target, "evidence": evidence, **({"cardinality": kind} if kind else {})})
             continue
         source, sep, target = spec.partition("=")
         if not sep or source.count(".") != 2 or target.count(".") != 2:
@@ -674,7 +684,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                 joins.append(link)
     rows = lambda sql: _rows(conn, sql)
     try:
-        spec = publishing.build_model(rows, names, joins, name, description=description)
+        spec = publishing.build_model(rows, names, joins, name, description=description, grains=grains, starts=starts)
     except sm.ModelRefused as err:
         raise Refused(str(err)) from err
     said = {str(t).upper(): " ".join(str(text or "").split())[:400] for t, text in (table_notes or {}).items()}
@@ -685,6 +695,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     proposal = semantic_ai(spec, chat) if ai else {"labels": {}, "extra": [], "refused": [], "error": None}
     if proposal["labels"]:
         publishing.apply_labels(spec, proposal["labels"])
+    yours = publishing.your_definitions(spec, metrics, instructions)
     for table in skipped:
         spec["notes"].append(f"{table} has no approved column map, so it is not in the model: exakit describe {table}")
     for link in (discovered or {}).get("links") or []:
@@ -696,31 +707,39 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     found: dict[str, Any] = {"model": spec["model"], "published_schema": spec["published_schema"], "spec": spec,
                              "summary": sm.summary(spec), "ai": {k: proposal[k] for k in ("refused", "error")},
                              "links": [{"from": j["from"], "to": j["to"], "evidence": j.get("evidence")} for j in joins],
-                             "proposed_metrics": [ddl for _view, ddl in proposal["extra"]]}
+                             "proposed_metrics": [ddl for _view, ddl in proposal["extra"]],
+                             "your_metrics": [ddl for _view, ddl in yours]}
     if dry_run:
         found["status"] = "dry run"
         planned_spec = spec
         if spec["model"] == publishing.ALL_MODEL:
             built = publishing.all_spec(rows, tables=names, links=joins, table_notes=said, description=description,
-                                        labels=proposal["labels"], extra=proposal["extra"] or None)
+                                        labels=proposal["labels"], extra=proposal["extra"] or None, grains=grains,
+                                        starts=starts, metrics=metrics, instructions=instructions, replace_links=replace_links)
             planned_spec = built[0] if built else spec
+            if built:
+                found["summary"], yours = sm.summary(planned_spec), built[2][len(proposal["extra"]):]
+                found["spec"] = planned_spec
         try:
             found["sql"] = publishing.planned(rows, planned_spec) + [
-                sm._script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False) for _view, ddl in proposal["extra"]]
+                sm._script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False) for _view, ddl in proposal["extra"] + yours]
         except Exception:
             found["sql"] = sm.statements(planned_spec)
         return found
     inputs = {"tables": names, "links": joins, "name": name, "description": description, "table_notes": said,
-              "labels": proposal["labels"], "extra": proposal["extra"]}
+              "labels": proposal["labels"], "extra": proposal["extra"], "grains": dict(grains or {}),
+              "starts": list(starts or []), "metrics": list(metrics or []), "instructions": list(instructions or [])}
     try:
         if spec["model"] == publishing.ALL_MODEL:
             # the model of all your data: what is given here joins every approved table and what was confirmed before
             result = publishing.publish_all(conn.execute, rows, os.environ.get(READER_VARIABLE), tables=names, links=joins,
                                             table_notes=said, description=description, labels=proposal["labels"],
-                                            extra=proposal["extra"] or None, progress=progress)
+                                            extra=proposal["extra"] or None, progress=progress, grains=grains,
+                                            starts=starts, metrics=metrics, instructions=instructions,
+                                            replace_links=replace_links)
         else:
             result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
-                                              extra=proposal["extra"], progress=progress)
+                                              extra=proposal["extra"] + yours, progress=progress)
     except sm.ModelRefused as err:
         raise Refused(str(err)) from err
     found.update(result, status="published")
@@ -839,6 +858,33 @@ def links_text(found: dict[str, Any]) -> str:
     if not found["links"] and not found.get("partial"):
         lines.append("  No column of one schema points at a key of another. Give a link yourself with --link if you know one.")
     return "\n".join(lines)
+
+
+def data_map_inputs(tables: list[str], model: str = "all_data") -> dict[str, Any]:
+    """What the data map card shows for these tables, from this computer only (publish.data_map_inputs)."""
+    return publishing.data_map_inputs([str(t).upper() for t in tables], sm_name(model))
+
+
+def sm_name(model: str) -> str:
+    from descriptor import semantic_model as sm
+
+    return sm.model_name(model)
+
+
+def draft_data_map(tables: list[str], chat=None) -> dict[str, Any]:
+    """One AI call drafts the data map for these tables (publish.draft_data_map): names, roles, notes and known
+    values only, never a row, no query. Nothing is saved."""
+    from descriptor import semantic_model as sm
+
+    if chat is None:
+        if not os.environ.get("EXAKIT_MODEL_ID", "").strip() or not os.environ.get("EXAKIT_PROVIDER_BASE_URL", "").strip():
+            raise Refused("No AI model is set up (EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL): fill the data map in yourself, "
+                          "or set one up with nb.model_setup().")
+        chat = _chat
+    try:
+        return publishing.draft_data_map([str(t).upper() for t in tables], chat)
+    except sm.ModelRefused as err:
+        raise Refused(str(err)) from err
 
 
 def refresh_model(conn, name: str) -> dict[str, Any]:

@@ -1242,7 +1242,7 @@ class SeveralTablesTest(unittest.TestCase):
                          [(s["kind"], s["label"], s["state"], s["sub"]) for s in flow["sources"]])
         steps = {s["label"]: (s["state"], s["sub"]) for s in flow["steps"]}
         self.assertEqual(("now", "1 of 3 approved"), steps["Column maps"])
-        self.assertEqual(("done", "1 found"), steps["Links"])
+        self.assertEqual(("done", "1 added"), steps["Links"])
         self.assertEqual(("done", "saved"), steps["Data map"])
         self.assertEqual("src_add", flow["add"]["action"])
 
@@ -1337,7 +1337,7 @@ class SeveralTablesTest(unittest.TestCase):
         self.session._ns["ROLE_RULES"] = {"CATEGORY_DISTINCT": 100}
         self.assertIn("CATEGORY_DISTINCT = 100", self.session.your_rules("ROLE_RULES", "LINK_RULES")["v"])
         self.assertEqual({"CATEGORY_DISTINCT": 100}, self.session.namespace()["ROLE_RULES"], "what the notebook set stays")
-        for action_id, name in (("map.review", "rules=ROLE_RULES"), ("semantic.links_tables", "rules=LINK_RULES"),
+        for action_id, name in (("map.review", "rules=ROLE_RULES"), ("semantic.check_link", "rules=LINK_RULES"),
                                 ("explore.checks", "placeholder_values=PLACEHOLDER_VALUES"), ("explore.typed", "date_formats=DATE_FORMATS"),
                                 ("map.leakage", "pure=GIVES_IT_AWAY"), ("ask.model", "rules=ASK_RULES"),
                                 ("ask.rules", "rules=DRAFT_RULES"), ("ask.insights", "rules=INSIGHT_RULES"),
@@ -1535,130 +1535,122 @@ class SeveralTablesTest(unittest.TestCase):
         card._review()
         self.assertIsNone(card.ai)
 
-    def _views(self):
+    INPUTS = {"tables": {
+        "AMAZON.ORDER_LINES": {"key": ["ORDER_LINE_ID"], "grain": "one order line", "columns": [
+            {"name": "ORDER_LINE_ID", "role": "key", "note": ""}, {"name": "ORDER_ID", "role": "identifier", "note": ""},
+            {"name": "SHIP_STATE", "role": "category", "note": "", "values": ["CA", "NY"]},
+            {"name": "STATUS", "role": "category", "note": "", "values": ["COMPLETED", "CANCELLED"]},
+            {"name": "AMOUNT", "role": "measure", "note": "incl. tax"}]},
+        "MY_DATA.TARGETS": {"key": ["STATE"], "grain": "", "columns": [
+            {"name": "STATE", "role": "key", "note": ""}, {"name": "TARGET", "role": "measure", "note": ""}]}},
+        "missing": ["MY_DATA.DRAFTS"], "saved": False, "grains": {}, "table_notes": {}, "links": [], "starts": [],
+        "metrics": [], "instructions": [], "description": ""}
+
+    def _views(self, inputs=None):
+        self.session.chosen = [{"table": t} for t in ("AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "MY_DATA.DRAFTS")]
+        self.sent = []
+        answers = {"semantic.inputs": inputs or json.loads(json.dumps(self.INPUTS))}
+        self.answers = answers
+        self.understand.actions.run.side_effect = lambda action_id, session=None, **values: self.sent.append((action_id, values)) or answers[action_id]
         views = self.understand.SemanticViews.__new__(self.understand.SemanticViews)
-        views.__dict__.update(ticked=set(), gen=0, link_gen=0, fill=None, fill_n=0, links=None, links_note="", loading=False, error=None, models=[],
-                              preview_text="", result_text="",
-                              tables=[{"table": t, "schema": t.split(".")[0], "origin": o, "approved": ok, "rows": "10"}
-                                      for t, o, ok in (("AMAZON.ORDER_LINES", "Kit dataset", True), ("AMAZON.RETURNS", "Kit dataset", True),
-                                                       ("MY_DATA.TARGETS", "Your data", True), ("MY_DATA.DRAFTS", "Your data", False),
-                                                       ("VS_LOGISTICS.COURIER_DAILY", "External source", True))],
-                              columns={"AMAZON.ORDER_LINES": ["ORDER_ID", "SHIP_STATE"], "AMAZON.RETURNS": ["ORDER_ID"],
-                                       "MY_DATA.TARGETS": ["STATE"], "VS_LOGISTICS.COURIER_DAILY": ["STATE"]})
+        views.__dict__.update(n=0, facts={"tables": {}, "missing": []}, dm=views._empty(), checked={}, warnings=[],
+                              result_text="", preview_text="", saved=False, loading=True, error=None, flash=None)
+        views.refresh = lambda: None
+        views._load()
         return views
 
-    def test_semantic_views_lists_the_tables_under_their_schemas_with_the_chosen_ones_ticked(self):
-        """The model is about tables, not whole schemas: every schema lists its tables, the ones chosen in step 1
-        start ticked, one without an approved column map cannot be, and a new choice starts the ticks afresh."""
-        views = self._views()
-        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
-        with mock.patch.object(views, "refresh"), mock.patch.object(views, "_load"):
-            views.on_session("source")
-        for thread in __import__("threading").enumerate():
-            if thread is not __import__("threading").current_thread() and thread.daemon:
-                thread.join(timeout=2)
-        self.assertEqual(({"AMAZON.ORDER_LINES", "MY_DATA.TARGETS"}, 1, None), (views.ticked, views.gen, views.links))
-        views.loading = False
+    def _build(self, views):
         with mock.patch.object(self.understand.actions, "code", return_value=""):
-            blocks = views.build()
-        tree = next(b for b in blocks if b["t"] == "schematree")
-        self.assertEqual(["AMAZON", "MY_DATA", "VS_LOGISTICS"], sorted(g["schema"] for g in tree["groups"]))
-        ticks = {t["table"]: (t["id"], t["value"], t["approved"]) for g in tree["groups"] for t in g["tables"]}
-        self.assertEqual({"AMAZON.ORDER_LINES": ("svt1:AMAZON.ORDER_LINES", True, True), "AMAZON.RETURNS": ("svt1:AMAZON.RETURNS", False, True),
-                          "MY_DATA.TARGETS": ("svt1:MY_DATA.TARGETS", True, True), "MY_DATA.DRAFTS": ("svt1:MY_DATA.DRAFTS", False, False),
-                          "VS_LOGISTICS.COURIER_DAILY": ("svt1:VS_LOGISTICS.COURIER_DAILY", False, True)}, ticks)
-        picked = views._picked({"svt1:AMAZON.ORDER_LINES": True, "svt1:MY_DATA.DRAFTS": True, "svt:AMAZON.RETURNS": True,
-                                "svd:AMAZON.ORDER_LINES": "  One row per   order line. ", "sv_about": " Orders  and targets "})
-        self.assertEqual((["AMAZON.ORDER_LINES"], {"AMAZON.ORDER_LINES": "One row per order line."}, "Orders and targets", "all_data"),
-                         (picked["tables"], picked["table_notes"], picked["description"], picked["name"]))
-        # a link of your own is picked from lists: the tables with a column map, and each one's columns
-        own = next(f for b in blocks if b["t"] == "fields" for f in b["items"] if f["id"] == "sv_own")["fields"]
-        self.assertEqual(["sv_from_table", "sv_to_table", "sv_from_col", "sv_to_col"], [f["id"] for f in own])
-        self.assertNotIn("MY_DATA.DRAFTS", [o["value"] for o in own[0]["options"]])
-        self.assertEqual(["ORDER_ID", "SHIP_STATE"], [o["value"] for o in own[2]["options_from"]["map"]["AMAZON.ORDER_LINES"]])
+            return views.build()
 
-    def test_links_are_found_between_the_ticked_tables_checked_when_added_and_go_into_the_model_with_their_notes(self):
+    def test_the_data_map_opens_from_your_column_maps_and_asks_what_semantic_views_needs(self):
+        """No query while it opens: the approved column maps and what was saved before, read from this computer. It
+        asks for exactly what Semantic Views needs - the grain, the links and their type, where questions start,
+        metrics, rules - and nothing is found or guessed for you."""
         views = self._views()
-        high = {"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "confidence": "high", "proposed_by": "values",
-                "evidence_text": "128,921 of 128,942 rows"}
-        low = {"from": "AMAZON.RETURNS.ORDER_ID", "to": "AMAZON.ORDER_LINES.ORDER_ID", "confidence": "low", "proposed_by": "values",
-               "evidence_text": "CONFIRM THIS ONE"}
-        own = {"from": "MY_DATA.TARGETS.STATE", "to": "VS_LOGISTICS.COURIER_DAILY.STATE", "confidence": "high", "proposed_by": "values",
-               "evidence_text": "36 of 36 rows"}
-        answers = {"semantic.links_tables": {"links": [high, low], "partial": [], "checked": 4, "statements": 11, "ai": None},
-                   "semantic.check_link": {"links": [own], "partial": [], "rejected": []},
-                   "semantic.preview_tables": "the preview"}
-        sent = []
-        self.understand.actions.run.side_effect = lambda action_id, session=None, **values: sent.append((action_id, values)) or answers[action_id]
-        tick = {"svt:AMAZON.ORDER_LINES": True, "svt:AMAZON.RETURNS": True, "svt:MY_DATA.TARGETS": True}
-        with self.assertRaisesRegex(ValueError, "at least two tables"):
-            views.on_sv_find({"svt:AMAZON.ORDER_LINES": True})
-        views.on_sv_find(tick)
-        self.assertEqual(("semantic.links_tables", {"tables": ["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "MY_DATA.TARGETS"], "ai": False}), sent[-1],
-                         "the ticked tables, two of one schema among them: not whole schemas")
-        with mock.patch.object(self.understand.actions, "code", return_value=""):
-            rows = next(b for b in views.build() if b["t"] == "linklist")["items"]
-        self.assertEqual([("svl1:" + high["from"] + "=" + high["to"], True), ("svl1:" + low["from"] + "=" + low["to"], False)],
-                         [(r["id"], r["value"]) for r in rows], "what the data backs is ticked; plain numbers are left for you")
-        # a link of your own: checked against the data first
-        for bad, said in (({"sv_from_table": "MY_DATA.TARGETS"}, "Pick the table and the column"),
-                          ({"sv_from_table": "MY_DATA.TARGETS", "sv_from_col": "STATE", "sv_to_table": "MY_DATA.TARGETS", "sv_to_col": "STATE"}, "between two tables")):
+        self.assertEqual([("semantic.inputs", {"tables": ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "MY_DATA.DRAFTS"]})], self.sent)
+        blocks = self._build(views)
+        heads = [b["v"] for b in blocks if b["t"] == "subhead"]
+        self.assertEqual(["Your data map", "1 · Your tables", "2 · How they connect", "3 · Where questions start", "4 · Metrics",
+                          "5 · Rules for AI tools"], heads)
+        self.assertIn("MY_DATA.DRAFTS", next(b["v"] for b in blocks if b["t"] == "msg"), "a table to approve first is named")
+        grains = {f["id"]: f["value"] for b in blocks if b["t"] == "fields" for g in b["items"] if g.get("type") == "group"
+                  for f in g["fields"] if f["id"].startswith("dmgrain")}
+        self.assertEqual({"dmgrain1:AMAZON.ORDER_LINES": "one order line", "dmgrain1:MY_DATA.TARGETS": ""}, grains)
+        self.assertIn("No links yet.", json.dumps(blocks))
+        keys = next(f for b in blocks if b["t"] == "fields" for g in b["items"] if g["id"] == "dm_new_link" for f in g["fields"]
+                    if f["id"] == "dm_to_col")["options_from"]["map"]["MY_DATA.TARGETS"]
+        self.assertEqual("STATE (key)", keys[0]["label"], "a link ends on the other table's key, listed first")
+        self.assertFalse(any(a in ("semantic.check_link", "semantic.draft") for a, _ in self.sent), "nothing is checked or guessed by itself")
+
+    def test_your_links_metrics_and_rules_go_to_semantic_views_as_you_said_them(self):
+        views = self._views()
+        for bad, said in (({"dm_from_table": "MY_DATA.TARGETS"}, "Pick the table and the column"),
+                          ({"dm_from_table": "MY_DATA.TARGETS", "dm_from_col": "STATE", "dm_to_table": "MY_DATA.TARGETS", "dm_to_col": "STATE"}, "between two tables")):
             with self.assertRaisesRegex(ValueError, said):
-                views.on_sv_add(bad)
-        pick = {"sv_from_table": "MY_DATA.TARGETS", "sv_from_col": "STATE", "sv_to_table": "VS_LOGISTICS.COURIER_DAILY", "sv_to_col": "STATE"}
-        views.on_sv_add(pick)
-        self.assertEqual(("semantic.check_link", {"tables": ["MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"],
-                                                  "check": ["MY_DATA.TARGETS.STATE=VS_LOGISTICS.COURIER_DAILY.STATE"]}), sent[-1])
-        self.assertEqual("you", views.links[-1]["proposed_by"])
-        with self.assertRaisesRegex(ValueError, "in the list already"):
-            views.on_sv_add(pick)
-        answers["semantic.check_link"] = {"links": [], "partial": [], "rejected": [{"from": "AMAZON.RETURNS.ORDER_ID", "to": "MY_DATA.TARGETS.STATE", "why": "the two columns are of different kinds"}]}
-        with self.assertRaisesRegex(ValueError, "Not added: AMAZON.RETURNS.ORDER_ID -> MY_DATA.TARGETS.STATE: the two columns are of different kinds"):
-            views.on_sv_add({"sv_from_table": "AMAZON.RETURNS", "sv_from_col": "ORDER_ID", "sv_to_table": "MY_DATA.TARGETS", "sv_to_col": "STATE"})
-        # the model: the ticked tables, the links in use with what was said about them
-        lid = views._lid
-        values = {**tick, lid(high): True, lid(low): False, lid(views.links[-1]): True, "sv_name": "sales_360",
-                  f"svn:{high['from']}={high['to']}": " The state  an order ships to. "}
-        views.on_sv_preview(values)
-        action, given = sent[-1]
-        self.assertEqual(("semantic.preview_tables", "sales_360", ["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "MY_DATA.TARGETS"]),
-                         (action, given["name"], given["tables"]))
-        self.assertEqual([{**high, "note": "The state an order ships to."}], self.session.get("model_links"),
-                         "a link whose table is not ticked (the courier table) is left out; an unticked one is not used")
-        self.assertEqual("the preview", views.preview_text)
-        with self.assertRaisesRegex(ValueError, "at least one table"):
-            views.on_sv_preview({})
+                views.on_dm_add_link(bad)
+        views.on_dm_add_link({"dm_from_table": "AMAZON.ORDER_LINES", "dm_from_col": "SHIP_STATE", "dm_to_table": "MY_DATA.TARGETS",
+                              "dm_to_col": "STATE", "dm_link_type": "MANY_TO_ONE"})
+        self.assertEqual([("AMAZON.ORDER_LINES.SHIP_STATE", "MY_DATA.TARGETS.STATE", "MANY_TO_ONE", "you")],
+                         [(l["from"], l["to"], l["type"], l["by"]) for l in views.links])
+        with self.assertRaisesRegex(ValueError, "Say which values"):
+            views.on_dm_add_metric({"dm_m_table": "AMAZON.ORDER_LINES", "dm_m_name": "x", "dm_m_how": "sum", "dm_m_column": "AMOUNT",
+                                    "dm_m_where": "STATUS"})
+        views.on_dm_add_metric({"dm_m_table": "AMAZON.ORDER_LINES", "dm_m_name": "Completed revenue", "dm_m_how": "sum",
+                                "dm_m_column": "AMOUNT", "dm_m_where": "STATUS", "dm_m_values": "COMPLETED, Shipped"})
+        self.assertIn("Shipped is not among the values", views.flash["v"], "a value the column map never saw is pointed out")
+        self.assertEqual({"table": "AMAZON.ORDER_LINES", "name": "completed_revenue", "how": "sum", "column": "AMOUNT",
+                          "where": {"column": "STATUS", "values": ["COMPLETED", "Shipped"]}, "about": ""}, views.dm["metrics"][0])
+        n = views.n
+        form = {f"dmlinks{n}:": ["0"], f"dmltype{n}:0": "ONE_TO_ONE", f"dmlnote{n}:0": " the  state ", f"dmmetrics{n}:": ["0"],
+                f"dmgrain{n}:MY_DATA.TARGETS": "one state's target", f"dmstarts{n}:": ["AMAZON.ORDER_LINES"],
+                f"dmrule{n}:0": "Revenue includes tax", f"dmabout{n}:": "Orders and targets"}
+        self.answers["semantic.save_map"] = mock.Mock(sql=["EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('all_data')"])
+        views.on_sv_preview(form)
+        action, given = self.sent[-1]
+        self.assertEqual("semantic.save_map", action)
+        self.assertEqual(([{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "ONE_TO_ONE", "note": "the state"}],
+                          {"MY_DATA.TARGETS": "one state's target"}, ["AMAZON.ORDER_LINES"], ["Revenue includes tax"], "Orders and targets", True),
+                         (given["links"], given["grains"], given["starts"], given["instructions"], given["description"], given["preview"]))
+        self.assertEqual("completed_revenue", given["metrics"][0]["name"])
+        self.assertIn("CREATE_MODEL", views.preview_text)
+        # an unticked link is removed; Check with data runs only when pressed, one bounded count per link
+        self.answers["semantic.check_link"] = {"links": [{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "found": 48, "checked": 50}]}
+        views.on_dm_check({**form})
+        self.assertEqual(("semantic.check_link", ["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE"]), (self.sent[-1][0], self.sent[-1][1]["check"]))
+        self.assertIn("48 of 50", views.checked["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE"])
+        self.answers["semantic.save_map"] = mock.Mock(views=["SEM_ALL_DATA.ORDER_LINES"],
+                                                      found={"warnings": ["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], "notes": []})
+        views.on_sv_publish({f"dmlinks{views.n}:": [], f"dmmetrics{views.n}:": ["0"]})
+        self.assertEqual([], self.sent[-1][1]["links"], "unticked: removed from your data map")
+        self.assertEqual(["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], views.warnings, "what Semantic Views said, word for word")
+        self.assertTrue(views.saved)
 
-
-    def test_one_button_fills_every_table_the_links_and_the_descriptions(self):
-        """Fill everything in with AI: for every chosen table its column map answer (kept per table, so each tab
-        shows its own), the links between the tables, and a sentence for each table, each link and the model. The
-        cards below are filled; nothing is approved or published. A part that fails is named, the rest stands."""
+    def test_one_button_fills_every_table_and_drafts_the_data_map_without_reading_a_row(self):
+        """Fill everything in with AI: each chosen table's column map answer (kept per table), then one call drafting
+        the data map - grains, links with their type, starts, metrics, rules - from names, roles, notes and known values.
+        No value scan, nothing approved or saved. A part that fails is named, the rest stands."""
         self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
         self.session.ai_maps, self.session.ai_model, self.session.ai_runs = {}, None, 0
         self.addCleanup(lambda: self.session.__dict__.update(ai_maps={}, ai_model=None, ai_runs=0))
-        link = {"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "confidence": "high", "proposed_by": "values"}
-        real, ran, checked = self.understand.actions.run.side_effect, [], []
+        draft = {"description": "Orders and targets.", "grains": {"MY_DATA.TARGETS": "one state's target"}, "table_notes": {},
+                 "links": [{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "MANY_TO_ONE", "note": "Same state.", "by": "ai"}],
+                 "starts": ["AMAZON.ORDER_LINES"], "metrics": [], "instructions": ["Amounts include tax."], "refused": []}
+        real, ran = self.understand.actions.run.side_effect, []
 
         def run(action_id, session=None, **values):
             ran.append(action_id)
-            table = str(self.session.source.fact_table)
             if action_id == "kit.model":
                 return {"configured": True, "model_id": "m1"}
             if action_id in ("map.reviews", "map.review_keep"):
                 return None
-            if action_id == "map.ai_together":                       # each table, with the others in view
+            if action_id == "map.ai_together":
                 if values["table"] == "MY_DATA.TARGETS":
                     raise RuntimeError("429 too many requests\nmore")
                 return {"roles": [{"column": "B", "kit_role": "measure", "role": "identifier", "why": "A code."}],
-                        "slots": {"entity": "B"}, "notes": {"B": "x", "C": "y"},
-                        "same_as": [("AMAZON.ORDER_LINES.SHIP_STATE", "MY_DATA.TARGETS.STATE")]}
-            if action_id == "semantic.links_checked":
-                checked.append(values)
-                return {"links": [link], "checked": 3, "statements": 9, "ai": "the model proposed 1 pair(s)"}
-            if action_id == "semantic.ai_notes":
-                return {"tables": {"AMAZON.ORDER_LINES": "One row per order line."}, "links": {"AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE": "Same state."},
-                        "name": "sales_360", "about": "Orders and targets."}
+                        "slots": {"entity": "B"}, "notes": {"B": "x", "C": "y"}}
+            if action_id == "semantic.draft":
+                return draft
             return real(action_id, session, **values)
 
         self.understand.actions.run.side_effect = run
@@ -1668,39 +1660,20 @@ class SeveralTablesTest(unittest.TestCase):
         with mock.patch.object(self.session, "changed", side_effect=lambda what, source=None: heard.append(what)):
             card.on_ai_all({})
         self.assertEqual(["source", "ai"], heard)
-        self.assertEqual(["map.reviews", "map.review_keep", "map.review_keep", "map.ai_together", "map.ai_together"],
-                         [a for a in ran if a.startswith("map.")], "every table is read first, then each is filled with the others in view")
-        self.assertEqual([{"tables": ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS"], "ai": True,
-                           "check": ["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE", "MY_DATA.TARGETS.STATE=AMAZON.ORDER_LINES.SHIP_STATE"]}],
-                         checked, "what the AI read as the same thing across sources is checked against the data, both ways round")
-        self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table, "it ends on the table it started on")
-        self.assertEqual(["AMAZON.ORDER_LINES"], list(self.session.ai_maps))
-        self.assertEqual(({"B": "x", "C": "y"}, {"entity": "B"}), (self.session.ai_maps["AMAZON.ORDER_LINES"]["notes"], self.session.ai_maps["AMAZON.ORDER_LINES"]["slots"]))
-        self.assertEqual(["1 column map (1 meaning changed, 2 descriptions)", "1 link found", "1 table description"], card.said)
+        self.assertNotIn("semantic.check_link", ran, "no value scan")
+        self.assertEqual(1, ran.count("semantic.draft"), "one call for the whole data map")
+        self.assertEqual(["1 column map (1 meaning changed, 2 descriptions)", "your data map (1 links, 1 rules, 1 grains)"], card.said)
         self.assertEqual(["MY_DATA.TARGETS (429 too many requests)"], card.failed)
-        self.assertFalse([a for a in ran if a in ("map.approve", "semantic.publish_tables", "semantic.publish")], "it fills in; it approves and publishes nothing")
-        blocks = card.build()
-        self.assertEqual(["head", "actions", "msg", "msg"], [b["t"] for b in blocks])
-        self.assertEqual("ai_all", blocks[1]["items"][0]["id"])
-        # the column map card shows this table's answer; semantic views its links and what was said
-        column_map = self._map_card()
-        with mock.patch.object(column_map, "refresh"):
-            column_map.on_session("ai")
-        self.assertEqual(self.session.ai_maps["AMAZON.ORDER_LINES"], column_map.ai)
-        views = self._views()
-        with mock.patch.object(views, "refresh"):
-            views.on_session("ai")
-        self.assertEqual(([link], 1, 1), (views.links, views.link_gen, views.fill_n))
-        with mock.patch.object(self.understand.actions, "code", return_value=""):
-            built = views.build()
-        tree = next(b for b in built if b["t"] == "schematree")
-        notes = {t["table"]: (t["note_id"], t["note"]) for g in tree["groups"] for t in g["tables"]}
-        self.assertEqual(("svd:AMAZON.ORDER_LINES#1", "One row per order line."), notes["AMAZON.ORDER_LINES"])
-        self.assertEqual("Same state.", next(b for b in built if b["t"] == "linklist")["items"][0]["note"])
-        model = next(f for b in built if b["t"] == "fields" for f in b["items"] if f["id"] == "sv_model")["fields"]
-        self.assertEqual([("sv_name#1", "sales_360"), ("sv_about#1", "Orders and targets.")], [(f["id"], f["value"]) for f in model])
-        picked = views._picked({"svt:AMAZON.ORDER_LINES": True, "sv_name#1": "sales_360", "svd:AMAZON.ORDER_LINES#1": "One row per order line."})
-        self.assertEqual(("sales_360", {"AMAZON.ORDER_LINES": "One row per order line."}), (picked["name"], picked["table_notes"]))
+        self.assertFalse([a for a in ran if a in ("map.approve", "semantic.save_map")], "it fills in; it approves and saves nothing")
+        self.assertEqual("ai_all", card.build()[1]["items"][0]["id"])
+        # the data map card takes the AI's suggestions where you said nothing; what you said stays
+        inputs = json.loads(json.dumps(self.INPUTS))
+        inputs["grains"] = {"MY_DATA.TARGETS": "yours"}
+        views = self._views(inputs)
+        views.on_session("ai")
+        self.assertEqual(({"MY_DATA.TARGETS": "yours"}, ["ai"], ["AMAZON.ORDER_LINES"], "Orders and targets."),
+                         (views.dm["grains"], [l["by"] for l in views.links], views.dm["starts"], views.dm["description"]))
+        self.assertIn("suggested by AI", json.dumps(self._build(views)))
         self.understand.actions.run.side_effect = lambda action_id, session=None, **values: {"configured": False}
         self.assertEqual(["head", "msg"], [b["t"] for b in card.build()], "without a model: no button, one line saying so")
         self.session._ns["chosen_data"] = None

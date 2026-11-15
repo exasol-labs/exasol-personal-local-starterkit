@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "adopt_view", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -183,7 +183,9 @@ def find_links(conn, schemas: list[str] | None = None, *, tables: list[str] | No
 def semantic_model(conn, name: str, tables: list[str] | None = None, links: list | None = None, *,
                    schemas: list[str] | None = None, find: bool = False, ai: bool | None = None,
                    description: str | None = None, preview: bool = False,
-                   table_notes: dict[str, str] | None = None, sql: list[str] | str | None = None) -> SemanticModel:
+                   table_notes: dict[str, str] | None = None, sql: list[str] | str | None = None,
+                   grains: dict[str, str] | None = None, starts: list[str] | None = None, metrics: list | None = None,
+                   instructions: list | None = None, replace_links: bool = False) -> SemanticModel:
     """Build (or with ``preview=True`` only show) an Exasol Semantic Views model over ``tables`` - SCHEMA.TABLE of any
     schemas, each with an approved column map - joined along each schema's approved links and ``links``
     (SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY). ``schemas`` takes every table of those schemas that has an approved column
@@ -191,7 +193,13 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
     data backs. A link may also be one of nb.find_links' own ({"from", "to", ...}): its evidence is stored in the
     model with it, and a "note" you add says in your words why the two belong together. ``table_notes`` ({SCHEMA.TABLE:
     text}) says what each table is. ``ai`` (default: when a model is configured) lets your model propose the
-    fields' business names, synonyms and extra metrics. Publishing installs Semantic Views when the database does not
+    fields' business names, synonyms and extra metrics.
+
+    What Semantic Views needs from you: ``grains`` ({SCHEMA.TABLE: "one row is one order line"}), each link's "type"
+    (MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), ``starts`` (the tables questions start from),
+    ``metrics`` ([{"table", "name", "how": "sum"|"count"|"average", "column", "where": {"column", "values"}, "about"}])
+    and ``instructions`` (rules for AI tools, as text or {"table", "text"}). nb.draft_data_map drafts them with AI;
+    Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
     have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user."""
     from .workflow import log_event
 
@@ -205,7 +213,11 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
         statements = [p.strip() for p in (sql.split(";\n") if isinstance(sql, str) else sql) if str(p).strip()]
     found = service.semantic_model(conn, name, tables, list(links or []), ai=use_ai, dry_run=preview and not statements,
                                    description=description, schemas=list(schemas or []), discover=bool(find),
-                                   table_notes=dict(table_notes or {}), statements=statements)
+                                   table_notes=dict(table_notes or {}), statements=statements,
+                                   grains=dict(grains or {}), starts=list(starts) if starts is not None else None,
+                                   metrics=list(metrics) if metrics is not None else None,
+                                   instructions=list(instructions) if instructions is not None else None,
+                                   replace_links=bool(replace_links))
     model = SemanticModel(name, tables, list(links or []), description, use_ai, found, conn,
                           schemas=list(schemas or []), find=bool(find), table_notes=dict(table_notes or {}))
     if not preview:
@@ -288,6 +300,21 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
     print(("Checked (nothing changed): " if dry_run else "Applied: ") + (found["status"] or "")
           + (f" - {found['message']}" if found["message"] else ""))
     return found
+
+
+def data_map_inputs(tables: list[str], model: str = "all_data") -> dict[str, Any]:
+    """What your data map holds for these tables, read from this computer (no query): each table's key, grain and
+    columns from its approved column map, and what you said before - grains, notes, links with their type, metrics,
+    starting points, instructions. The data map card opens with it."""
+    return _service().data_map_inputs(list(tables), model)
+
+
+def draft_data_map(tables: list[str]) -> dict[str, Any]:
+    """The AI set up for the kit drafts the data map for these tables in one call: what one row of each is, what each
+    is, the links with their type, the tables questions start from, metrics (with a condition where one fits) and
+    instructions. It sees names, roles, notes and known values, never a row; nothing is saved. Check it, change it,
+    then pass it to nb.semantic_model."""
+    return _service().draft_data_map(list(tables))
 
 
 def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[str, Any]:
