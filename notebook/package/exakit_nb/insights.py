@@ -12,7 +12,19 @@ from __future__ import annotations
 
 from typing import Any
 
-__all__ = ["insights"]
+__all__ = ["insight_rules", "insights"]
+
+INSIGHT_RULES = {"SENTENCES": 6, "TOP": 3, "OUTLIER_IQR": 1.5, "OUTLIER_MIN_ROWS": 8}
+
+
+def insight_rules() -> dict:
+    """The rules the insights are worked out with, to copy, change and pass (nb.insights(answer, rules={...})):
+
+    SENTENCES          at most this many sentences
+    TOP                "the top N hold x% of the total"
+    OUTLIER_IQR        a value further than this many interquartile ranges from the middle half is far from the rest
+    OUTLIER_MIN_ROWS   values are compared this way only with at least this many rows"""
+    return dict(INSIGHT_RULES)
 
 
 def _number(value: Any) -> float | None:
@@ -36,8 +48,14 @@ def _is_time(values: list[Any]) -> bool:
                                 (isinstance(v, str) and len(v) >= 7 and v[:4].isdigit() and v[4] in "-/") for v in values)
 
 
-def insights(frame, *, limit: int = 6) -> list[str]:
-    """Up to ``limit`` sentences about a result (a pandas DataFrame, or rows as a list of dicts)."""
+def insights(frame, *, limit: int | None = None, rules: dict | None = None) -> list[str]:
+    """Up to SENTENCES sentences about a result (a pandas DataFrame, or rows as a list of dicts); ``rules`` changes
+    the rules (nb.insight_rules() lists them)."""
+    rules = {**INSIGHT_RULES, **{k: v for k, v in (rules or {}).items()}}
+    wrong = [k for k in rules if k not in INSIGHT_RULES]
+    if wrong:
+        raise ValueError(f"{wrong[0]} is not an insight rule: the rules are {', '.join(INSIGHT_RULES)}")
+    limit = int(limit if limit is not None else rules["SENTENCES"])
     try:
         columns = [str(c) for c in frame.columns]
         rows = frame.astype(object).values.tolist()
@@ -76,15 +94,17 @@ def insights(frame, *, limit: int = 6) -> list[str]:
         share = f" ({top[1] / total:.0%} of the total)" if total > 0 and all(p[1] >= 0 for p in pairs) else ""
         said.append(f"{top[0]} has the largest {name}: {_shown(top[1])}{share}.")
         said.append(f"{low[0]} has the smallest: {_shown(low[1])}.")
-        if total > 0 and all(p[1] >= 0 for p in pairs) and len(pairs) > 3:
+        top_n = int(rules["TOP"])
+        if total > 0 and all(p[1] >= 0 for p in pairs) and len(pairs) > top_n > 0:
             ranked = sorted((p[1] for p in pairs), reverse=True)
-            top3 = sum(ranked[:3]) / total
-            said.append(f"The top 3 hold {top3:.0%} of the total {name}.")
+            share_top = sum(ranked[:top_n]) / total
+            said.append(f"The top {top_n} hold {share_top:.0%} of the total {name}.")
     values = sorted(p[1] for p in pairs)
-    if len(values) >= 8:
+    if len(values) >= int(rules["OUTLIER_MIN_ROWS"]):
         q1, q3 = values[len(values) // 4], values[(3 * len(values)) // 4]
         span = q3 - q1
-        far = [p for p in pairs if span and (p[1] > q3 + 1.5 * span or p[1] < q1 - 1.5 * span)]
+        k = float(rules["OUTLIER_IQR"])
+        far = [p for p in pairs if span and (p[1] > q3 + k * span or p[1] < q1 - k * span)]
         if far:
             said.append("Far from the rest: " + ", ".join(f"{p[0]} ({_shown(p[1])})" for p in far[:3])
                         + (f" and {len(far) - 3} more" if len(far) > 3 else "") + ".")

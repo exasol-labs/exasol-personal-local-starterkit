@@ -251,20 +251,76 @@ def described(dataset: Any) -> dict[str, Any]:
 
 MARK = "[built by exakit]"      # in the description of a semantic model the kit built
 
+ASK_RULES: dict[str, Any] = {
+    "ORDER": ["trusted", "data_map_request", "data_map_sql", "column_map"],
+    "REQUEST_LIMIT": 1000,
+    "REQUEST_SYSTEM": "Return only one JSON object with metrics, dimensions, filters, order_by, limit, assumptions (array) "
+                      "and doubts (array). No Markdown.",
+    "REQUEST_PROMPT": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
+                      "to group by), filters [{field, op, value}] on dimensions (op one of = != > >= < <= LIKE IN BETWEEN), "
+                      "order_by [{field, direction}], limit. Use only the names listed, and follow the model's instructions "
+                      "(a SAFETY one is never broken). If the question cannot be answered from them, return an empty "
+                      "metrics list and say why in doubts.",
+    "DATA_MAP_SQL_SYSTEM": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. "
+                           "Never execute SQL.",
+    "DATA_MAP_SQL_PROMPT": "Answer with Semantic SQL over the semantic view: SELECT <dimension names>, <metric names> FROM "
+                           "<semantic_view> [WHERE <dimension> = '<value>'] GROUP BY <the dimension names>. Use only the "
+                           "names listed. No joins, no aggregate functions, no other tables: the metrics already aggregate. "
+                           "If the question cannot be answered from these metrics and dimensions, return sql as an empty "
+                           "string and say why in doubts.",
+    "COLUMN_MAP_SYSTEM": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Use "
+                         "fully qualified Exasol table names. Never execute SQL.",
+    "COLUMN_MAP_PROMPT": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. Query the table "
+                         "named above with its fully qualified name. Use only its columns listed above (or in the supplied "
+                         "schema description); the slots name the ones the question most likely means. A flag's evidence "
+                         "gives its values. Do not include row data.",
+}
+STEPS = ("trusted", "data_map_request", "data_map_sql", "column_map")
 
-def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], question: str):
+
+def ask_rules() -> dict[str, Any]:
+    """How a question is drafted, as values to copy, change and pass (nb.ask(..., rules={...})):
+
+    ORDER                 the ways tried, first to last: trusted (a trusted question, no AI), data_map_request (the
+                          AI picks names, the data map writes the SQL), data_map_sql (the AI writes Semantic SQL),
+                          column_map (the AI writes SQL from the column map). Leave one out to skip it.
+    REQUEST_LIMIT         the most rows a request may ask for
+    *_SYSTEM, *_PROMPT    every instruction each way gives the AI, word for word
+    Also the no-AI drafter's rules (nb.draft_question) and the insights' rules: see nb.draft_rules() and
+    nb.insight_rules()."""
+    return {k: list(v) if isinstance(v, list) else v for k, v in ASK_RULES.items()}
+
+
+def _ask_rules(given: dict[str, Any] | None) -> dict[str, Any]:
+    found = ask_rules()
+    for key, value in (given or {}).items():
+        if key not in found:
+            raise ValueError(f"{key} is not an ask rule: the rules are {', '.join(found)}")
+        if key == "ORDER":
+            wrong = [v for v in value if v not in STEPS] if isinstance(value, (list, tuple)) else [value]
+            if wrong:
+                raise ValueError(f"ORDER lists ways from {', '.join(STEPS)}, not {wrong}")
+            value = list(value)
+        elif key == "REQUEST_LIMIT":
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(f"REQUEST_LIMIT is a whole number, not {value!r}")
+        elif not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{key} is the text the AI is given, not {value!r}")
+        found[key] = value
+    return found
+
+
+def _ask_semantic(client, model: str, options: dict, semantic: dict[str, Any], question: str,
+                  rules: dict[str, Any] | None = None):
     """(Semantic SQL, the plain SQL it compiles to, assumptions, doubts) for a question, or None when the model says
     the question cannot be answered from these metrics and dimensions."""
     prompt = {"semantic_view": semantic["view"], "dimensions": semantic["dimensions"], "metrics": semantic["metrics"],
-              "instructions": semantic.get("instructions") or [], "question": question,
-              "rules": "Answer with Semantic SQL over the semantic view: SELECT <dimension names>, <metric names> FROM "
-                       "<semantic_view> [WHERE <dimension> = '<value>'] GROUP BY <the dimension names>. Use only the "
-                       "names listed. No joins, no aggregate functions, no other tables: the metrics already aggregate. "
-                       "If the question cannot be answered from these metrics and dimensions, return sql as an empty "
-                       "string and say why in doubts."}
+              "instructions": semantic.get("instructions") or [], "question": question}
+    rules = rules or ASK_RULES
+    prompt["rules"] = rules["DATA_MAP_SQL_PROMPT"]
     answer = client.chat.completions.create(
         model=model,
-        messages=[{"role": "system", "content": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Never execute SQL."},
+        messages=[{"role": "system", "content": rules["DATA_MAP_SQL_SYSTEM"]},
                   {"role": "user", "content": json.dumps(prompt)}], **options)
     raw = answer.choices[0].message.content or ""
     fences = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.S | re.I)
@@ -324,7 +380,8 @@ def _instructions(rows, model: str, lit) -> list[str]:
     return out[:60]
 
 
-def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], question: str):
+def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], question: str,
+                 rules: dict[str, Any] | None = None):
     """(the structured request, the SQL the semantic layer compiles it to, assumptions, doubts), or None when the
     model says the question is outside the model. The model only picks metric and dimension names, filters and an
     order; Exasol Semantic Views (COMPILE_REQUEST_JSON) writes the SQL. An ambiguous request comes back with the
@@ -332,16 +389,12 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     from .semantic import _service
 
     prompt = {"model": semantic["model"], "object": semantic["object"], "dimensions": semantic["dimensions"],
-              "metrics": semantic["metrics"], "instructions": semantic.get("instructions") or [], "question": question,
-              "rules": "Answer with a structured request: metrics (names from the list), dimensions (names from the list, "
-                       "to group by), filters [{field, op, value}] on dimensions (op one of = != > >= < <= LIKE IN BETWEEN), "
-                       "order_by [{field, direction}], limit. Use only the names listed, and follow the model's instructions "
-                       "(a SAFETY one is never broken). If the question cannot be "
-                       "answered from them, return an empty metrics list and say why in doubts."}
+              "metrics": semantic["metrics"], "instructions": semantic.get("instructions") or [], "question": question}
+    rules = rules or ASK_RULES
+    prompt["rules"] = rules["REQUEST_PROMPT"]
     answer = client.chat.completions.create(
         model=model,
-        messages=[{"role": "system", "content": "Return only one JSON object with metrics, dimensions, filters, order_by, "
-                                                "limit, assumptions (array) and doubts (array). No Markdown."},
+        messages=[{"role": "system", "content": rules["REQUEST_SYSTEM"]},
                   {"role": "user", "content": json.dumps(prompt)}], **options)
     raw = answer.choices[0].message.content or ""
     fences = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.S | re.I)
@@ -353,7 +406,7 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
         if isinstance(parsed.get(key), list) and parsed[key]:
             request[key] = parsed[key]
     if isinstance(parsed.get("limit"), int) and parsed["limit"] > 0:
-        request["limit"] = min(int(parsed["limit"]), 1000)
+        request["limit"] = min(int(parsed["limit"]), int(rules["REQUEST_LIMIT"]))
     compiled = _service().compile_request(semantic["conn"], request)
     doubts = [str(v) for v in parsed.get("doubts") or []]
     if compiled["status"] != "ok":
@@ -444,14 +497,18 @@ def compile_semantic(conn, semantic_sql: str) -> str:
 
 
 def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_description: str | None = None,
-        request_timeout: float | None = None, max_output_tokens: int | None = None, conn=None) -> Proposal:
+        request_timeout: float | None = None, max_output_tokens: int | None = None, conn=None,
+        rules: dict[str, Any] | None = None) -> Proposal:
     """Draft SQL from the user's opted-in model endpoint; ``proposed_sql`` supports manual drafting.
 
     With ``conn`` (the notebook's connection) and a semantic model the kit built over this data, the model answers
     from the semantic layer: it is shown the model's metrics and dimensions, writes Semantic SQL over the published
     view, and Exasol Semantic Views compiles that into the plain SQL you read and approve - the same definitions an
     AI client over MCP uses, so both give the same number. Without a model over the data, or when the question
-    cannot be put in its terms, the SQL is drafted from the approved column map as before, and the proposal says so."""
+    cannot be put in its terms, the SQL is drafted from the approved column map as before, and the proposal says so.
+    ``rules`` changes the order of the ways tried, and every word the AI is given (nb.ask_rules() lists them)."""
+    rules = _ask_rules(rules)
+    order = rules["ORDER"]
     if request_timeout is not None and request_timeout <= 0:
         raise ValueError("request_timeout must be positive.")
     if max_output_tokens is not None and max_output_tokens <= 0:
@@ -464,9 +521,12 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
     semantic = None
     if proposed_sql is None and conn is not None:
         semantic = semantic_context(conn, dataset.fact_table)
-        known = _verified_answer(conn, semantic, question, dataset) if semantic else None
+        known = _verified_answer(conn, semantic, question, dataset) if semantic and "trusted" in order else None
         if known:                          # asked before and reviewed: its request, compiled now - no model call
             return known
+    if proposed_sql is None and not any(step in order for step in ("data_map_request", "data_map_sql", "column_map")):
+        raise ValueError("No way left to draft this question: ORDER has none that asks the AI, and no trusted question "
+                         "matched. Write the SQL yourself (proposed_sql=) or put a way back in ORDER.")
     if proposed_sql is None:
         from . import model_client
 
@@ -484,7 +544,7 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
         if semantic:
             semantic["conn"] = conn
             try:
-                asked = _ask_request(client, model, options, semantic, question)
+                asked = _ask_request(client, model, options, semantic, question, rules) if "data_map_request" in order else None
             except Exception as error:       # noqa: BLE001 - Semantic SQL, then the column map, still answer
                 asked = None
                 doubts.append(f"The structured request was not used ({str(error).splitlines()[0][:160] if str(error) else type(error).__name__}).")
@@ -497,7 +557,7 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                                  "Request: " + json.dumps({k: v for k, v in request.items() if k not in ("model", "object", "client")}),
                                  *said], unsure, request=request)
             try:
-                drafted = _ask_semantic(client, model, options, semantic, question)
+                drafted = _ask_semantic(client, model, options, semantic, question, rules) if "data_map_sql" in order else None
             except Exception as error:       # noqa: BLE001 - the column map still answers; the proposal says why
                 drafted = None
                 doubts.append(f"Not answered from your data map ({semantic['model']}) "
@@ -510,17 +570,17 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
                                 [f"Answered from your data map ({semantic['model']}): the same meanings your dashboards and "
                                  "AI tools use, so the numbers match.",
                                  f"Semantic SQL: {semantic_sql}", *said], unsure)
-        prompt = {**described(dataset), "question": question,
-                  "rules": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. Query the "
-                           "table named above with its fully qualified name. Use only its columns listed above (or in "
-                           "the supplied schema description); the slots name the ones the question most likely means. "
-                           "A flag's evidence gives its values. Do not include row data."}
+        if "column_map" not in order:
+            client.close()
+            raise ValueError("Not answered: the ways in ORDER found no answer, and column_map is not in it. "
+                             + " ".join(doubts))
+        prompt = {**described(dataset), "question": question, "rules": rules["COLUMN_MAP_PROMPT"]}
         if table_description:
             prompt["table_description"] = table_description
         try:
             answer = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "system", "content": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Use fully qualified Exasol table names. Never execute SQL."},
+                messages=[{"role": "system", "content": rules["COLUMN_MAP_SYSTEM"]},
                           {"role": "user", "content": json.dumps(prompt)}], **options)
         finally:
             client.close()

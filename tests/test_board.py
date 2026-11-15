@@ -230,6 +230,69 @@ class AskFromTheModelTest(unittest.TestCase):
             proposal.verify(object())
 
 
+class AskRulesTest(unittest.TestCase):
+    """How a question is drafted can be read and changed: the order of the ways, every word the AI gets, the no-AI
+    drafter's rules and the insight rules."""
+
+    def setUp(self):
+        import importlib
+        self.ask = importlib.import_module("exakit_nb.ask")
+        self.dataset = types.SimpleNamespace(id="orders", version=1, fact_table="SHOP.ORDERS", require_approved=lambda _w: None,
+                                             descriptor=types.SimpleNamespace(columns={}, grain="one row per order", slots={}),
+                                             roles=lambda: [])
+
+    def test_the_order_and_the_prompts_are_the_ones_given(self):
+        said = json.dumps({"sql": "SELECT 1 AS N FROM SHOP.ORDERS", "assumptions": [], "doubts": []})
+        client = mock.Mock()
+        client.chat.completions.create.return_value = types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=said))])
+        with mock.patch("exakit_nb.model_client", return_value=(client, "m")), \
+                mock.patch.object(self.ask, "described", return_value={"table": "SHOP.ORDERS"}), \
+                mock.patch.object(self.ask, "semantic_context", return_value={"model": "all_data"}) as context, \
+                mock.patch.object(self.ask, "_verified_answer") as trusted:
+            proposal = self.ask.ask(self.dataset, "How many?", conn=object(),
+                                    rules={"ORDER": ["column_map"], "COLUMN_MAP_SYSTEM": "Answer in JSON, briefly."})
+        trusted.assert_not_called()
+        self.assertEqual("SELECT 1 AS N FROM SHOP.ORDERS", proposal.sql)
+        sent = client.chat.completions.create.call_args.kwargs["messages"]
+        self.assertEqual("Answer in JSON, briefly.", sent[0]["content"], "the system words are the ones given")
+        self.assertIn(self.ask.ASK_RULES["COLUMN_MAP_PROMPT"], sent[1]["content"])
+        with self.assertRaisesRegex(ValueError, "not an ask rule"):
+            self.ask.ask(self.dataset, "q", conn=object(), rules={"NOPE": 1})
+        with self.assertRaisesRegex(ValueError, "ORDER lists ways"):
+            self.ask.ask(self.dataset, "q", conn=object(), rules={"ORDER": ["guess"]})
+        with mock.patch.object(self.ask, "semantic_context", return_value=None), \
+                self.assertRaisesRegex(ValueError, "No way left"):
+            self.ask.ask(self.dataset, "q", conn=object(), rules={"ORDER": ["trusted"]})
+
+    def test_the_drafter_and_insight_rules_apply_for_one_call(self):
+        import importlib
+        rules_q = importlib.import_module("exakit_nb.question_rules")
+        seen = {}
+
+        def draft(_self, question):
+            seen.update(rows=rules_q.MIN_GROUP_ROWS, amount=rules_q._SYNONYMS["amount"])
+            return {"sql": "SELECT 1 FROM SHOP.ORDERS"}
+        with mock.patch.object(rules_q, "context_for", return_value=None), mock.patch.object(rules_q.RuleDrafter, "__init__", lambda s, c: None), \
+                mock.patch.object(rules_q.RuleDrafter, "draft", draft), mock.patch.object(self.ask, "ask", return_value="proposal"), \
+                mock.patch("exakit_nb.ask.ask", return_value=types.SimpleNamespace(assumptions=[], doubts=[])):
+            try:
+                rules_q.draft_question(None, self.dataset, "q", rules={"MIN_GROUP_ROWS": 10, "SYNONYMS": {"amount": ["Turnover"]}})
+            except Exception:
+                pass
+        self.assertEqual((10, ["turnover"]), (seen["rows"], seen["amount"]))
+        self.assertEqual(30, rules_q.MIN_GROUP_ROWS, "back to the default")
+        with self.assertRaisesRegex(ValueError, "not a drafter rule"):
+            with rules_q._with_rules({"NOPE": 1}):
+                pass
+        from exakit_nb.insights import insights
+        frame = pd.DataFrame({"CATEGORY": list("abcdefghij"), "REVENUE": [5, 3, 9, 1, 2, 2, 3, 100, 4, 5]})
+        said = insights(frame, rules={"TOP": 2, "SENTENCES": 3})
+        self.assertEqual(3, len(said))
+        self.assertNotIn("Far from the rest: h (100).", insights(frame, rules={"OUTLIER_MIN_ROWS": 50}))
+        with self.assertRaisesRegex(ValueError, "not an insight rule"):
+            insights(frame, rules={"NOPE": 1})
+
 @unittest.skipUnless(HAVE_DASH, "dash is not installed here (the dashboard's environment has it)")
 class BoardAppTest(unittest.TestCase):
     """The uploaded app.py, run against a stand-in for Dash Server's helper that counts the queries."""

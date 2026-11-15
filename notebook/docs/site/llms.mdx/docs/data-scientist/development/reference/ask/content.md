@@ -21,6 +21,7 @@ nb.ask(
     request_timeout: float | None=None,
     max_output_tokens: int | None=None,
     conn=None,
+    rules: dict[str, Any] | None=None,
 ) -> Proposal
 ```
 
@@ -31,6 +32,25 @@ from the semantic layer: it is shown the model's metrics and dimensions, writes 
 view, and Exasol Semantic Views compiles that into the plain SQL you read and approve - the same definitions an
 AI client over MCP uses, so both give the same number. Without a model over the data, or when the question
 cannot be put in its terms, the SQL is drafted from the approved column map as before, and the proposal says so.
+`rules` changes the order of the ways tried, and every word the AI is given (nb.ask_rules() lists them).
+
+**Used in:** `data-scientist/02_ask_your_data`
+
+## nb.ask_rules [#ask_rules]
+
+```python
+nb.ask_rules() -> dict[str, Any]
+```
+
+How a question is drafted, as values to copy, change and pass (nb.ask(..., rules=\{...})):
+
+ORDER                 the ways tried, first to last: trusted (a trusted question, no AI), data_map_request (the
+AI picks names, the data map writes the SQL), data_map_sql (the AI writes Semantic SQL),
+column_map (the AI writes SQL from the column map). Leave one out to skip it.
+REQUEST_LIMIT         the most rows a request may ask for
+\*\_SYSTEM, \*\_PROMPT    every instruction each way gives the AI, word for word
+Also the no-AI drafter's rules (nb.draft_question) and the insights' rules: see nb.draft_rules() and
+nb.insight_rules().
 
 **Used in:** `data-scientist/02_ask_your_data`
 

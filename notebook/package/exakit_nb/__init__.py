@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from ._kit import pinned_dsn, setting, telemetry_off, tls_fingerprint
-from .ask import Proposal, ask
+from .ask import Proposal, ask, ask_rules
 from .checks import check_bucket, check_container, check_mlflow, check_model_compatibility, model_list
 from .dash_mcp import DashTools, dash_tools
 from .data_checks import data_checks, leakage_check
@@ -43,7 +43,7 @@ from .semantic import (SemanticModel, column_maps_in_model, compile_request, fin
                        semantic_model, semantic_models, semantic_sql, verified_questions, verify_question)
 from .kit_commands import KitRun, addon_ready, exakit, kit_check, kit_status, kit_update
 from .kit_facts import addons, ai_clients, components, connector_inputs, connectors, loaded_files, notebooks, persona_plan, personas, sample_datasets
-from .question_rules import draft_question, example_questions
+from .question_rules import draft_question, draft_rules, example_questions
 from .chosen import chosen_tables, open_chosen, remember_chosen
 from .handoff_bundle import HandoffBundle, handoff_bundle
 from .dataset import Dataset, DescriptorNotApproved, chosen_dataset, dataset
@@ -60,7 +60,7 @@ from .number_format import column_format, currency_of, format_value, formatted
 from .setup_env import forget_model, model_setup, use_mlflow, use_model
 from .share import BoardDraft, ShareDraft, share
 from .board import Board, board, boards, pin, starter_board, starter_rules
-from .insights import insights
+from .insights import insight_rules, insights
 from .across import across_sql, linked_groups, read_from, systems
 from .themes import themes
 from .ml_train import TrainingPlan, prepare_training
@@ -70,7 +70,7 @@ from .workflow import continue_workflow, current_workflow, last_workflow, list_w
 from .workflow import read_log as workflow_log
 
 # Kept alphabetical (case-insensitive) by construction, so a new export can never break the order test.
-__all__ = sorted(["Docs", "docs", "lab_data", "approved_datasets", "column_map_versions", "list_workflows", "workflow_log", "use_table", "forget_model", "addons", "ai_clients", "components", "connector_inputs", "connectors", "loaded_files", "test_source", "SourceTest", "read_connection_string", "source_engine", "sources", "chosen_tables", "open_chosen", "remember_chosen", "notebooks", "persona_plan", "personas", "sample_datasets", "Lab", "feature_ideas", "model_lab", "try_feature", "draft_question", "example_questions", "addon_ready", "exakit", "HandoffBundle", "handoff_bundle", "kit_check", "kit_status", "kit_update", "KitRun", "ask", "check_bucket", "check_connection", "check_roles", "column_format", "currency_of", "format_value", "formatted", "fill_column_map", "model_notes", "check_container", "check_mlflow", "clean_path", "connect_source", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "continue_workflow", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "data_checks", "data_map", "DataMap", "Dataset", "dataset", "describe_schema", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "JoinedView", "last_workflow", "leakage_check", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "model_setup", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "role_rules", "link_rules", "approve_all", "schema_review", "save_descriptor", "SchemaMap", "SemanticModel", "find_links", "effort_levels", "model_providers", "provider_models", "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "compile_request", "column_maps_in_model", "restore_column_maps", "fuse", "fusion", "fusion_document", "model_fields", "verified_questions", "verify_question", "share", "ShareDraft", "BoardDraft", "Board", "board", "boards", "pin", "starter_board", "starter_rules", "across_sql", "linked_groups", "read_from", "systems", "insights", "show_roles", "SourceProblem", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "TypedView", "typed_view", "use_mlflow", "use_model", "workflow", "write_handoff"], key=str.lower)
+__all__ = sorted(["Docs", "docs", "lab_data", "approved_datasets", "column_map_versions", "list_workflows", "workflow_log", "use_table", "forget_model", "addons", "ai_clients", "components", "connector_inputs", "connectors", "loaded_files", "test_source", "SourceTest", "read_connection_string", "source_engine", "sources", "chosen_tables", "open_chosen", "remember_chosen", "notebooks", "persona_plan", "personas", "sample_datasets", "Lab", "feature_ideas", "model_lab", "try_feature", "draft_question", "example_questions", "addon_ready", "exakit", "HandoffBundle", "handoff_bundle", "kit_check", "kit_status", "kit_update", "KitRun", "ask", "check_bucket", "check_connection", "check_roles", "column_format", "currency_of", "format_value", "formatted", "fill_column_map", "model_notes", "check_container", "check_mlflow", "clean_path", "connect_source", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "continue_workflow", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "data_checks", "data_map", "DataMap", "Dataset", "dataset", "describe_schema", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "JoinedView", "last_workflow", "leakage_check", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "model_setup", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "role_rules", "link_rules", "approve_all", "schema_review", "save_descriptor", "SchemaMap", "SemanticModel", "find_links", "effort_levels", "model_providers", "provider_models", "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "compile_request", "column_maps_in_model", "restore_column_maps", "fuse", "fusion", "fusion_document", "model_fields", "verified_questions", "verify_question", "share", "ShareDraft", "BoardDraft", "Board", "board", "boards", "pin", "starter_board", "starter_rules", "across_sql", "linked_groups", "read_from", "systems", "insights", "insight_rules", "ask_rules", "draft_rules", "show_roles", "SourceProblem", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "TypedView", "typed_view", "use_mlflow", "use_model", "workflow", "write_handoff"], key=str.lower)
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset

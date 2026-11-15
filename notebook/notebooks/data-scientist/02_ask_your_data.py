@@ -37,7 +37,14 @@ guide.ask()
 # Optional: set `DRAFT_WITH_MODEL = True` to let your model write the SQL. The model gets the column map only, never rows.
 
 # %% [markdown]
-# `DATASET`: `None` is the dataset approved last. `QUESTION`: your question in words. `DRAFT_WITH_MODEL = True`: your AI model drafts the SQL from the column map; no rows are sent.
+# | Setting | What it does |
+# |---|---|
+# | `DATASET` | `None`: the dataset approved last |
+# | `QUESTION` | your question in words |
+# | `DRAFT_WITH_MODEL` | `True`: your AI model drafts the SQL; no rows are sent |
+# | `ASK_RULES` | changes to how the AI drafts: the order of the ways it tries and every word of its instructions; `nb.ask_rules()` lists them |
+# | `DRAFT_RULES` | changes to the no-AI drafter, such as `{"MIN_GROUP_ROWS": 10, "SYNONYMS": {"amount": ["revenue", "turnover"]}}`; `nb.draft_rules()` lists them |
+# | `INSIGHT_RULES` | changes to the insights, such as `{"TOP": 5, "OUTLIER_IQR": 3}`; `nb.insight_rules()` lists them |
 
 # %%
 import exakit.nb as nb
@@ -45,6 +52,9 @@ import exakit.nb as nb
 DATASET = None
 QUESTION = "How many rows are in each category?"
 DRAFT_WITH_MODEL = False
+ASK_RULES = {}
+DRAFT_RULES = {}
+INSIGHT_RULES = {}
 
 dataset_id = nb.chosen_dataset(DATASET)
 nb.continue_workflow("questions")
@@ -98,9 +108,9 @@ if GROUP_ROLE != "category":
     print(f"{dataset.id} has no category; the starter SQL counts rows per {GROUP_ROLE} ({GROUP_COLUMN}).")
 DRAFT_WITH_RULES = False
 if DRAFT_WITH_RULES:
-    proposal = nb.draft_question(connection, dataset, QUESTION)
+    proposal = nb.draft_question(connection, dataset, QUESTION, rules=DRAFT_RULES)
 else:
-    proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql, conn=connection)
+    proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql, conn=connection, rules=ASK_RULES)
 EDITED_SQL = ""
 if EDITED_SQL:
     proposal.edit(EDITED_SQL)
@@ -144,7 +154,7 @@ nb.formatted(answer, dataset, currency) if answer is not None else None
 PIN_TO = None
 KEEP_AS_VERIFIED = False
 if answer is not None:
-    insights = nb.insights(answer)
+    insights = nb.insights(answer, rules=INSIGHT_RULES)
     print("\n".join(insights))
     if PIN_TO:
         pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1])

@@ -13,12 +13,28 @@ measured): the largest and the smallest, the top one's share of the total when e
 from the first to the last period of a time series, and values far from the rest (outside 1.5 times the
 interquartile range). A result with no number has only its row count. Nothing leaves this computer.
 
+## nb.insight_rules [#insight_rules]
+
+```python
+nb.insight_rules() -> dict
+```
+
+The rules the insights are worked out with, to copy, change and pass (nb.insights(answer, rules=\{...})):
+
+SENTENCES          at most this many sentences
+TOP                "the top N hold x% of the total"
+OUTLIER_IQR        a value further than this many interquartile ranges from the middle half is far from the rest
+OUTLIER_MIN_ROWS   values are compared this way only with at least this many rows
+
+**Used in:** `data-scientist/02_ask_your_data`
+
 ## nb.insights [#insights]
 
 ```python
-nb.insights(frame, *, limit: int=6) -> list[str]
+nb.insights(frame, *, limit: int | None=None, rules: dict | None=None) -> list[str]
 ```
 
-Up to `limit` sentences about a result (a pandas DataFrame, or rows as a list of dicts).
+Up to SENTENCES sentences about a result (a pandas DataFrame, or rows as a list of dicts); `rules` changes
+the rules (nb.insight_rules() lists them).
 
 **Used in:** `data-scientist/02_ask_your_data`

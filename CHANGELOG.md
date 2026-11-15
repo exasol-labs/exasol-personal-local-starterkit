@@ -4,6 +4,11 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **How Ask drafts and explains is yours to change.**
+  - **The AI drafting:** `nb.ask_rules()` lists the order of the ways a question is tried (a trusted question; the AI picking names for your data map to write the SQL; the AI writing Semantic SQL; the AI writing SQL from the column map), the most rows a request may ask for, and every instruction each way gives the AI, word for word.
+  - **The no-AI drafter:** `nb.draft_rules()` lists its rules: the fewest rows a group needs for a rate, how many values make a filter, the synonyms that tie a question's words to a column, and the words that mean time.
+  - **The insights:** `nb.insight_rules()` lists how many sentences, the top N share, and when a value is far from the rest.
+  - **In the notebook:** `ASK_RULES`, `DRAFT_RULES` and `INSIGHT_RULES` in `02_ask_your_data`'s first cell change the ones you name. A rule that does not exist, or a way that is not one, is refused by name.
 - **How the starter dashboard makes its tiles is yours to change.** `nb.starter_rules()` lists the rules with their values:
   - how many measures and groups of a table get tiles, and the largest how many groups a bar shows;
   - whether the first group is shown again by the first measure, and whether that measure is summed, averaged, or its lowest or highest value is taken;
