@@ -703,11 +703,11 @@ class Ideas(Screen):
 
 
 def explore():
-    """Step 2 in the guided view: the one AI button and one card for what each column means and the semantic views
+    """Step 2 in the guided view: choose your data (more beside the quickstart's), the one AI button and one card for what each column means and the semantic views
     over the tables chosen in the quickstart; then check and clean, compare, predict and test feature ideas on the
     table approved there."""
     from ..card import show
-    from .understand import AiHelp, Understand
+    from .understand import AiHelp, ExploreChoose, Understand
 
     understand = Understand()        # first: it opens the quickstart's tables, the cards below wait for it
-    return show(AiHelp(), understand, WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="prepare")
+    return show(ExploreChoose(), AiHelp(), understand, WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="prepare")

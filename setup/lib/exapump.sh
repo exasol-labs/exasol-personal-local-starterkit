@@ -3203,6 +3203,14 @@ EXAKIT_EDF_EOF
         if [ "$_edf_tok" != 1 ]; then
             fetch_quiet "$_edf_src" "$_edf_part" || rm -f "$_edf_part"
         fi
+        # A kit installed from a private repository (a fork, a backup) reaches its release only with a token. The
+        # public kit's release holds the same file, and the SHA-256 below checks it either way: try that one.
+        _edf_public="$(printf '%s' "$_edf_url" | sed "s|{repo}|exasol-labs/exasol-personal-local-starterkit|")"
+        if [ ! -s "$_edf_part" ] && [ -z "${EXAKIT_DATASETS_MIRROR:-}" ] && [ "$_edf_public" != "$_edf_src" ]; then
+            _exakit_log_file "INFO  $_edf_src was not reachable without a token; trying the public kit's copy $_edf_public"
+            fetch_quiet "$_edf_public" "$_edf_part" || rm -f "$_edf_part"
+            [ -s "$_edf_part" ] && _edf_src="$_edf_public"
+        fi
         EXAKIT_ACTIVE_LABEL=""
     fi
     if [ ! -s "$_edf_part" ]; then

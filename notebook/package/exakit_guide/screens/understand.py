@@ -2194,12 +2194,27 @@ class AiHelp(Screen):
         SESSION.changed("ai", self)
 
 
+class ExploreChoose(ChooseData):
+    """Choose your data, as the first card of the explore notebook: the tables the quickstart chose stay, and what you
+    tick here is added beside them (the cards below take it up). The same choices and code as the quickstart's."""
+    ADDING = True
+
+    def build(self) -> list[dict]:
+        blocks = super().build()
+        if blocks and blocks[0].get("t") == "head":
+            chosen = ", ".join(e["table"] for e in SESSION.chosen[:4]) + (" and more" if len(SESSION.chosen) > 4 else "")
+            blocks[0] = dict(blocks[0], sub=(f"You are working on {chosen}. " if chosen else "")
+                             + "Tick more to add them: kit datasets, your own tables and files, external sources. Nothing "
+                               "you chose before is taken away.")
+        return blocks
+
+
 def understand():
-    """Step 2 in the guided view, on its own: the one AI button, then one card with what each column means and the
-    semantic views over the tables chosen in the quickstart."""
+    """Step 2 in the guided view, on its own: choose your data, the one AI button, then one card with what each column
+    means and your data map over the tables chosen."""
     from ..card import show
 
-    return show(AiHelp(), Understand(), docs="explore")
+    return show(ExploreChoose(), AiHelp(), Understand(), docs="explore")
 
 
 # =====================================================================================================

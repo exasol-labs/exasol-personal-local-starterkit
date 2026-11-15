@@ -86,6 +86,48 @@ def _journey(notebooks: list[dict], events: list[dict]) -> list[dict]:
     return out
 
 
+# what a card's button did, said as what you were doing (the workflow log's guide_action events: card, action)
+_DID = {"ChooseData": "chose your data", "ColumnMap": "were approving column maps", "Understand": "were going through your data",
+        "SemanticViews": "were filling in your data map", "AiHelp": "had the AI fill things in", "Prepare": "were cleaning your data",
+        "Compare": "were comparing your data", "Predict": "were training a model", "Ideas": "were trying feature ideas",
+        "Ask": "were asking questions", "Share": "were making a dashboard", "Home": "were setting up the kit"}
+
+
+def _left_off(notebooks: list[dict], events: list[dict]) -> dict | None:
+    """Where you left off and what you did last, from the workflow log: the notebook the work was in last (its start or
+    step event), and the last thing done there - an approval, a question, a model, a dashboard, a card's button.
+    {"where", "did", "path", "ts"}; None when the log says nothing."""
+    wf = importlib.import_module("exakit_nb.workflow")
+    by_id = {row.get("id"): row for row in notebooks}
+    where = None
+    did, ts = "", None
+    for e in events:
+        kind = e.get("kind")
+        if kind in (wf.START, wf.STEP) and e.get("name") in by_id:
+            where = by_id[e["name"]]
+        said = ""
+        if kind == wf.DESCRIBE_APPROVE:
+            said = f"approved the column map of {e.get('dataset') or e.get('table') or 'a table'}"
+        elif kind == wf.ASK_APPROVE:
+            said = f"approved the question \"{_short(str(e.get('question') or ''))}\""
+        elif kind == wf.ASK_ANSWER:
+            said = f"got an answer to \"{_short(str(e.get('question') or ''))}\""
+        elif kind in (wf.MODEL, wf.MLFLOW_RUN):
+            said = "trained a model"
+        elif kind == wf.DASHBOARD_REVISION:
+            said = "published a dashboard" if e.get("state") == "live" else "previewed a dashboard"
+        elif kind == wf.HANDOFF:
+            said = "packed the hand-off"
+        elif kind == "guide_action" and e.get("ok") is not False:
+            card = str(e.get("card") or "").lstrip("_").replace("Part", "")
+            said = _DID.get(card) or _DID.get({"Map": "ColumnMap", "Views": "SemanticViews", "Sources": "ChooseData"}.get(card, ""), "")
+        if said:
+            did, ts = said, e.get("ts")
+    if where is None and not did:
+        return None
+    return {"where": (where or {}).get("title") or "", "did": did, "path": (where or {}).get("file"), "ts": ts}
+
+
 class Home(Screen):
     help = (('Set up the kit', 'set-up'),
             ('Set up AI and Langfuse', 'set-up/ai-and-langfuse'),)
@@ -441,12 +483,15 @@ class Home(Screen):
             blocks.append({"t": "foot", "v": "The same as `exakit marketplace`, `exakit version` and `exakit update` in a terminal."})
             return blocks
         working = d.get("working_on")
+        left = _left_off(notebooks, d.get("events") or [])
         if last or working:
+            here = (f"In {left['where']}" if left and left["where"] else "") + (f" you {left['did']}" if left and left["did"] else "")
+            when = _ago(left["ts"]) if left and left.get("ts") else (_ago(last.get("last")) if last else "")
             blocks += [{"t": "section", "v": "Continue where you left off"},
-                       {"t": "resume", "text": f"Working on {working}" if working else "Your last session",
-                        "sub": " · ".join(x for x in [f"Last session {_ago(last.get('last'))}" if last else "",
-                                                       f"Next: {nxt['title']}" if nxt else ""] if x),
-                        "path": nxt["path"] if nxt else None,
+                       {"t": "resume", "text": f"Working on {working}" if working else (here.strip() or "Your last session"),
+                        "sub": " · ".join(x for x in [here.strip() if working else "", when,
+                                                       f"then: {nxt['title']}" if nxt and (not left or nxt["path"] != left.get("path")) else ""] if x),
+                        "path": (left or {}).get("path") or (nxt["path"] if nxt else None),
                         "cmd": actions.code("kit.workflow_log", workflow_id=last["id"]) if last else ""}]
         for r in rows:                      # a row's set-up opens right under that row
             if r["id"] == "model" and self.ai_open:

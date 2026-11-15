@@ -3220,6 +3220,14 @@ function Get-ExakitDatasetFiles {
             if (Get-ExakitFile -Url $source -Dest $part -Soft) { break }
             if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
         }
+        # A kit installed from a private repository (a fork, a backup) reaches its release only with a token. The
+        # public kit's release holds the same file, and the SHA-256 below checks it either way: try that one.
+        $public = $url.Replace("{repo}", "exasol-labs/exasol-personal-local-starterkit")
+        $got = (Test-Path -LiteralPath $part) -and ((Get-Item -LiteralPath $part).Length -gt 0)
+        if (-not $got -and -not $mirror -and $public -ne $source) {
+            Write-ExakitLog "INFO" "$source was not reachable without a token; trying the public kit's copy $public"
+            if (Get-ExakitFile -Url $public -Dest $part -Soft) { $source = $public }
+        }
     }
     if (-not (Test-Path -LiteralPath $part) -or (Get-Item -LiteralPath $part).Length -eq 0) {
         Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue

@@ -4,6 +4,9 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **A sample dataset loads on a kit installed from a private repository.** When its own release cannot be reached without a token, the kit fetches the same archive from the public kit's release; the SHA-256 checks it either way.
+- **The Home card says where you left off.** "In Start here: your kit and your data you chose your data · 2 minutes ago · then: Understand and explore", from the workflow log, and its button opens the notebook you were in.
+- **The explore notebook starts with Choose your data** (Step 1 of 4): what the quickstart chose stays, and what you tick is added beside it.
 - **Ask and the dashboards read two more of Semantic Views' own surfaces.** Ask gives the AI the product's published request format (`COMPILE_REQUEST_SCHEMA_FOR_AGENT`) and sends your question with the request, so it shows in Semantic Views' request history. A pinned tile keeps the product's fingerprint of each field it uses (`DEFINITION_HASHES_FOR_AGENT`), so a recheck compiles only the tiles whose fields changed.
 - **Ask checks the AI's metric and dimension pairs against what Semantic Views allows** (`VALID_COMBINATIONS_FOR_AGENT`) before compiling. A refused pair goes back to the AI once with the product's reason and the allowed dimensions; `exakit semantic combinations` lists them.
 - **The last of Semantic Views' features, in the card, the notebook and `exakit semantic fuse`.**

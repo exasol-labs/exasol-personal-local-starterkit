@@ -377,6 +377,37 @@ class CardTest(unittest.TestCase):
         load = next(a for a in rows["data"]["actions"] if a["label"] == "Load d2")
         self.assertEqual('nb.exakit("data-load", "d2")', load["cmd"])
 
+    def test_the_explore_notebook_starts_with_choose_your_data_which_adds(self):
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        self.assertTrue(understand.ExploreChoose.ADDING, "what the quickstart chose stays; ticks are added beside it")
+        card = understand.ExploreChoose.__new__(understand.ExploreChoose)
+        with mock.patch.object(understand.ChooseData, "build", return_value=[{"t": "head", "kicker": understand.KICKER,
+                                                                                "title": "Choose your data", "sub": "x"}]), \
+                mock.patch.object(understand.SESSION, "chosen", [{"table": "AMAZON.ORDER_LINES"}]):
+            head = card.build()[0]
+        self.assertEqual(("Step 1 of 4 · Understand your data", "Choose your data"), (head["kicker"], head["title"]))
+        self.assertIn("You are working on AMAZON.ORDER_LINES", head["sub"])
+        explore = importlib.import_module("exakit_guide.screens.explore")
+        import inspect
+        self.assertIn("show(ExploreChoose(), AiHelp(), understand", inspect.getsource(explore.explore))
+
+    def test_the_home_card_says_where_you_left_off_and_what_you_did(self):
+        home = importlib.import_module("exakit_guide.screens.home")
+        notebooks = [{"id": "data-scientist-quickstart", "title": "Start here: your kit and your data", "file": "00_quickstart.ipynb"},
+                     {"id": "explore", "title": "Understand and explore", "file": "01_explore.ipynb"}]
+        events = [{"kind": "start", "name": "data-scientist-quickstart", "ts": "2026-11-16T00:00:00Z"},
+                  {"kind": "guide_action", "card": "ChooseData", "action": "use", "ok": True, "ts": "2026-11-16T00:01:00Z"},
+                  {"kind": "sql", "ts": "2026-11-16T00:02:00Z"}]
+        left = home._left_off(notebooks, events)
+        self.assertEqual(("Start here: your kit and your data", "chose your data", "00_quickstart.ipynb"),
+                         (left["where"], left["did"], left["path"]))
+        events += [{"kind": "step", "name": "explore"}, {"kind": "guide_action", "card": "_ViewsPart", "ok": True},
+                   {"kind": "describe.approve", "dataset": "amazon_sales"}, {"kind": "guide_action", "card": "Ask", "ok": False}]
+        left = home._left_off(notebooks, events)
+        self.assertEqual(("Understand and explore", "approved the column map of amazon_sales"), (left["where"], left["did"]),
+                         "a button that failed is not what you did")
+        self.assertIsNone(home._left_off(notebooks, [{"kind": "sql"}]))
+
     def test_the_journey_reads_the_kits_event_kinds(self):
         home = importlib.import_module("exakit_guide.screens.home")
         wf = importlib.import_module("exakit_nb.workflow")
