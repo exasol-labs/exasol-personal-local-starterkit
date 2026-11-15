@@ -109,6 +109,7 @@ else:
 # | Setting | What it does |
 # |---|---|
 # | `STARTER_BOARD` | `True`: make `overview` from your approved column maps, a page per table |
+# | `STARTER_RULES` | changes to how its tiles are made, such as `{"GROUPS": 5, "TOP": 10, "PERIOD": "WEEK", "MEASURE_SUM": "AVG"}`; `nb.starter_rules()` lists every rule |
 # | `BOARD_NAME` | `None`: the dashboard changed last; or its name |
 # | `BOARD_FIGURES_CHECKED` | `True` only after you checked the preview's figures: it goes live |
 # | `MOVE_TILE`, `REMOVE_TILE` | `("a1b2c3d4", "Delivery")` moves a tile to a page; `"a1b2c3d4"` takes it off |
@@ -116,8 +117,9 @@ else:
 
 # %%
 STARTER_BOARD = False
+STARTER_RULES = {}
 if STARTER_BOARD:
-    board = nb.starter_board(connection, name="overview")
+    board = nb.starter_board(connection, name="overview", rules=STARTER_RULES)
 BOARD_NAME = None
 BOARD_FIGURES_CHECKED = False
 MOVE_TILE = None

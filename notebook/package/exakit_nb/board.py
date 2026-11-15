@@ -29,7 +29,7 @@ from typing import Any
 
 from .workflow import current_workflow, home, log_event
 
-__all__ = ["Board", "board", "boards", "pin", "starter_board"]
+__all__ = ["Board", "board", "boards", "pin", "starter_board", "starter_rules"]
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 KINDS = ("kpi", "bar", "line", "table")
@@ -271,15 +271,56 @@ def _starter_tile(title: str, sql: str, kind: str, dimensions: list[str], ds) ->
             "starter": True}
 
 
-def _starter_page(ds) -> dict[str, Any] | None:
-    """One table's page, from its approved column map: how many rows, each measure's total, rows and totals per group
-    (the map's category first), and rows over time when it has a date. No personal-data column is ever used."""
+STARTER_RULES = {"MEASURES": 2, "GROUPS": 3, "TOP": 25, "TOTAL_BY_GROUP": True, "MEASURE_SUM": "SUM",
+                 "TREND": True, "PERIOD": "MONTH", "GROUP_ROLES": ["category", "flag"], "LINKED": 6}
+PERIODS = ("DAY", "WEEK", "MONTH", "QUARTER", "YEAR")
+AGGREGATES = ("SUM", "AVG", "MIN", "MAX")
+
+
+def starter_rules() -> dict[str, Any]:
+    """The rules a starter dashboard is made with, to copy, change and pass (nb.starter_board(..., rules={...})):
+
+    MEASURES, GROUPS     how many measures and groups of a table get tiles
+    TOP                  the largest groups a bar shows
+    TOTAL_BY_GROUP       the first group again by the first measure (the two share a filter)
+    MEASURE_SUM          how a measure is added up: SUM, AVG, MIN or MAX
+    TREND, PERIOD        rows over time, per DAY, WEEK, MONTH, QUARTER or YEAR
+    GROUP_ROLES          which column map roles are groups: category, flag (identifier, key ...)
+    LINKED               how many links to other tables get a tile"""
+    return {k: list(v) if isinstance(v, list) else v for k, v in STARTER_RULES.items()}
+
+
+def _rules(given: dict[str, Any] | None) -> dict[str, Any]:
+    found = starter_rules()
+    for key, value in (given or {}).items():
+        if key not in found:
+            raise ValueError(f"{key} is not a starter rule: the rules are {', '.join(found)}")
+        if key in ("MEASURES", "GROUPS", "TOP", "LINKED") and (isinstance(value, bool) or not isinstance(value, int) or value < 0):
+            raise ValueError(f"{key} is a whole number, not {value!r}")
+        if key in ("TOTAL_BY_GROUP", "TREND") and not isinstance(value, bool):
+            raise ValueError(f"{key} is True or False, not {value!r}")
+        if key == "PERIOD" and str(value).upper() not in PERIODS:
+            raise ValueError(f"PERIOD is one of {', '.join(PERIODS)}, not {value!r}")
+        if key == "MEASURE_SUM" and str(value).upper() not in AGGREGATES:
+            raise ValueError(f"MEASURE_SUM is one of {', '.join(AGGREGATES)}, not {value!r}")
+        if key == "GROUP_ROLES" and not isinstance(value, (list, tuple)):
+            raise ValueError(f"GROUP_ROLES is a list of roles, not {value!r}")
+        found[key] = str(value).upper() if key in ("PERIOD", "MEASURE_SUM") else value
+    return found
+
+
+def _starter_page(ds, rules: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    """One table's page, from its approved column map and the starter rules (starter_rules): how many rows, each
+    measure's total, rows and totals per group (the map's category first), and rows over time when it has a date. No
+    personal-data column is ever used."""
     from .readout import count_name, name, noun
 
+    rules = _rules(rules)
     columns = dict(getattr(ds.descriptor, "columns", {}) or {})
     usable = lambda role: [c for c, e in columns.items() if e.get("role") in role and not e.get("sensitive")]
-    measures = usable(("measure",))[:2]
-    groups = usable(("category", "flag"))
+    measures = usable(("measure",))[:rules["MEASURES"]]
+    agg, top = rules["MEASURE_SUM"], int(rules["TOP"])
+    groups = usable(tuple(rules["GROUP_ROLES"]))
     try:
         role, first = ds.group_by()
         first = first.strip('"')
@@ -290,23 +331,25 @@ def _starter_page(ds) -> dict[str, Any] | None:
     table, count = ds.fact_table, count_name(ds)
     what = noun(ds)
     tiles = [_starter_tile(f"Number of {what}", f"SELECT COUNT(*) AS {count} FROM {table}", "kpi", [], ds)]
+    word = {"SUM": "Total", "AVG": "Average", "MIN": "Lowest", "MAX": "Highest"}[agg]
+    suffix = {"SUM": "TOTAL", "AVG": "AVG", "MIN": "MIN", "MAX": "MAX"}[agg]
     for m in measures:
-        tiles.append(_starter_tile(f"Total {_words(m)}", f'SELECT SUM("{m}") AS {name(m, "TOTAL")} FROM {table}', "kpi", [], ds))
-    for n, group in enumerate(groups[:3]):
+        tiles.append(_starter_tile(f"{word} {_words(m)}", f'SELECT {agg}("{m}") AS {name(m, suffix)} FROM {table}', "kpi", [], ds))
+    for n, group in enumerate(groups[:rules["GROUPS"]]):
         header = name(group)
         tiles.append(_starter_tile(f"{what.capitalize()} by {_words(group)}",
                                    f'SELECT "{group}" AS {header}, COUNT(*) AS {count} FROM {table} '
-                                   f"GROUP BY 1 ORDER BY 2 DESC LIMIT 25", "bar", [header], ds))
-        if n == 0 and measures:          # the first group again by the first measure: the two share a filter
+                                   f"GROUP BY 1 ORDER BY 2 DESC LIMIT {top}", "bar", [header], ds))
+        if n == 0 and measures and rules["TOTAL_BY_GROUP"]:
             m = measures[0]
-            tiles.append(_starter_tile(f"Total {_words(m)} by {_words(group)}",
-                                       f'SELECT "{group}" AS {header}, SUM("{m}") AS {name(m, "TOTAL")} FROM {table} '
-                                       f"GROUP BY 1 ORDER BY 2 DESC LIMIT 25", "bar", [header], ds))
-    if ds.has("date"):
-        d = ds.col("date")
+            tiles.append(_starter_tile(f"{word} {_words(m)} by {_words(group)}",
+                                       f'SELECT "{group}" AS {header}, {agg}("{m}") AS {name(m, suffix)} FROM {table} '
+                                       f"GROUP BY 1 ORDER BY 2 DESC LIMIT {top}", "bar", [header], ds))
+    if ds.has("date") and rules["TREND"]:
+        d, period = ds.col("date"), rules["PERIOD"]
         tiles.append(_starter_tile(f"{what.capitalize()} over time",
-                                   f"SELECT CAST(DATE_TRUNC('MONTH', {d}) AS DATE) AS MONTH_START, COUNT(*) AS {count} "
-                                   f"FROM {table} WHERE {d} IS NOT NULL GROUP BY 1 ORDER BY 1", "line", ["MONTH_START"], ds))
+                                   f"SELECT CAST(DATE_TRUNC('{period}', {d}) AS DATE) AS {period}_START, COUNT(*) AS {count} "
+                                   f"FROM {table} WHERE {d} IS NOT NULL GROUP BY 1 ORDER BY 1", "line", [f"{period}_START"], ds))
     if len(tiles) == 1 + len(measures) and not groups:
         return None if not measures else {"title": _words(table).title(), "tiles": tiles}
     return {"title": _words(table).title(), "tiles": tiles}
@@ -331,13 +374,15 @@ def _starter_links(datasets: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
-def starter_board(conn, datasets: list[Any] | None = None, *, name: str = "overview", title: str | None = None) -> Board:
+def starter_board(conn, datasets: list[Any] | None = None, *, name: str = "overview", title: str | None = None,
+                  rules: dict[str, Any] | None = None) -> Board:
     """A dashboard to start from, made from the approved column maps with no question asked: a page per table (how
     many rows, each measure's total, rows and totals per group, rows over time); a table that links to another one
     (the links saved in your data map) also shows its rows per group of that table. ``datasets``
     defaults to the tables you chose (nb.chosen_tables) that are approved, else every approved one (12 at most).
-    Every tile is a query the kit wrote from the map - shown when it is shared, checked in the preview before it goes
-    live - and can be moved, removed or joined by your own pinned answers. A page that was made here before is
+    ``rules`` changes how the tiles are made (nb.starter_rules() lists them: how many groups, the largest how many, the
+    period of the trend ...). Every tile is a query the kit wrote from the map - shown when it is shared, checked in
+    the preview before it goes live - and can be edited, moved, removed or joined by your own pinned answers. A page that was made here before is
     replaced; pages of your own are kept. Returns the Board, saved."""
     if datasets is None:
         from .chosen import chosen_tables
@@ -356,12 +401,13 @@ def starter_board(conn, datasets: list[Any] | None = None, *, name: str = "overv
     datasets = list(datasets.values()) if isinstance(datasets, dict) else list(datasets)
     if not datasets:
         raise ValueError("No table has an approved column map yet: approve one in 01_explore first.")
+    rules = _rules(rules)
     target = board(name)
     target.title = title or target.title or "Overview of your data"
     target.pages = [p for p in target.pages if not all(t.get("starter") for t in p["tiles"])]      # yours stay
     made, pages = [], {}
     for ds in datasets:
-        page = _starter_page(ds)
+        page = _starter_page(ds, rules)
         if page:
             made.append(page)
             pages[str(ds.fact_table).replace('"', "").upper()] = page
@@ -369,10 +415,10 @@ def starter_board(conn, datasets: list[Any] | None = None, *, name: str = "overv
             print(f"{ds.fact_table}: no group, date or measure in its column map, so it has no page.")
     # a table that links to another one also gets its rows per group of that table, on its own page
     by_table = {str(d.fact_table).replace('"', "").upper(): d for d in datasets}
-    for link in _starter_links(datasets)[:6]:
+    for link in _starter_links(datasets)[:int(rules["LINKED"])]:
         a, b = by_table[link["from"].upper()], by_table[link["to"].upper()]
         columns = dict(getattr(b.descriptor, "columns", {}) or {})
-        group = next((c for c, e in columns.items() if e.get("role") in ("category", "flag") and not e.get("sensitive")), None)
+        group = next((c for c, e in columns.items() if e.get("role") in tuple(rules["GROUP_ROLES"]) and not e.get("sensitive")), None)
         page = pages.get(link["from"].upper())
         if not group or page is None:
             continue
@@ -381,7 +427,7 @@ def starter_board(conn, datasets: list[Any] | None = None, *, name: str = "overv
         page["tiles"].append(_starter_tile(
             f"{noun(a).capitalize()} by {_words(group)} ({_words(link['to'])})",
             f'SELECT b."{group}" AS {header_of(group)}, COUNT(*) AS {count_name(a)} FROM {a.fact_table} a '
-            f'JOIN {b.fact_table} b ON a."{link["column"]}" = b."{link["key"]}" GROUP BY 1 ORDER BY 2 DESC LIMIT 25',
+            f'JOIN {b.fact_table} b ON a."{link["column"]}" = b."{link["key"]}" GROUP BY 1 ORDER BY 2 DESC LIMIT {int(rules["TOP"])}',
             "bar", [header_of(group)], a))
     if not made:
         raise ValueError("Nothing to show yet: no approved table has a group, a date or a measure in its column map.")

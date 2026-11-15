@@ -4,6 +4,14 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **How the starter dashboard makes its tiles is yours to change.** `nb.starter_rules()` lists the rules with their values:
+  - how many measures and groups of a table get tiles, and the largest how many groups a bar shows;
+  - whether the first group is shown again by the first measure, and whether that measure is summed, averaged, or its lowest or highest value is taken;
+  - whether there is a trend, and per day, week, month, quarter or year;
+  - which column map roles count as groups;
+  - how many links get a tile.
+
+  `STARTER_RULES` in `03_share` (`nb.starter_board(..., rules=)`, `exakit board starter --rules '{...}'`) changes the ones you name, and a wrong name or value is refused by name.
 - **How the column map is drafted and how links are found are yours to change.** Every rule the kit drafts a column map with is a value you can read and change: how many values make a group, which words in a name suggest an amount, a date or free text, how sure a guess must be. So is every rule links are found with: how many values are read, and how many must match. `nb.role_rules()` and `nb.link_rules()` list them with their values. `ROLE_RULES` and `LINK_RULES` in `01_explore`'s first cell (and the ML engineer quickstart) change the ones you name: `{"CATEGORY_DISTINCT": 100, "MEASURE_HINTS": ["revenue", "amount"]}`. The cells pass them to `nb.review_roles(..., rules=)` and `nb.find_links(..., rules=)`, which draft the table again with them. The defaults come back after each run, and a name that is not a rule is refused by name.
 - **What the kit runs is SQL you can read and change.** Each step of the data map, the fusion and the dashboard shows the SQL or the document it runs, and runs your edited copy when you give one.
   - **Data map.** A preview prints every statement saving it runs, in order (`model.sql`): the change in place, or the whole model after a drop. `DATA_MAP_SQL` (or `nb.semantic_model(..., sql=...)`) runs your edited copy instead. Only Semantic Views' own statements are accepted, a model someone else made is left alone, and an edited model is marked so: the next approval builds it again from the column maps.

@@ -96,6 +96,7 @@ nb.starter_board(
     *,
     name: str='overview',
     title: str | None=None,
+    rules: dict[str, Any] | None=None,
 ) -> Board
 ```
 
@@ -103,8 +104,27 @@ A dashboard to start from, made from the approved column maps with no question a
 many rows, each measure's total, rows and totals per group, rows over time); a table that links to another one
 (the links saved in your data map) also shows its rows per group of that table. `datasets`
 defaults to the tables you chose (nb.chosen_tables) that are approved, else every approved one (12 at most).
-Every tile is a query the kit wrote from the map - shown when it is shared, checked in the preview before it goes
-live - and can be moved, removed or joined by your own pinned answers. A page that was made here before is
+`rules` changes how the tiles are made (nb.starter_rules() lists them: how many groups, the largest how many, the
+period of the trend ...). Every tile is a query the kit wrote from the map - shown when it is shared, checked in
+the preview before it goes live - and can be edited, moved, removed or joined by your own pinned answers. A page that was made here before is
 replaced; pages of your own are kept. Returns the Board, saved.
+
+**Used in:** `data-scientist/03_share`
+
+## nb.starter_rules [#starter_rules]
+
+```python
+nb.starter_rules() -> dict[str, Any]
+```
+
+The rules a starter dashboard is made with, to copy, change and pass (nb.starter_board(..., rules=\{...})):
+
+MEASURES, GROUPS     how many measures and groups of a table get tiles
+TOP                  the largest groups a bar shows
+TOTAL_BY_GROUP       the first group again by the first measure (the two share a filter)
+MEASURE_SUM          how a measure is added up: SUM, AVG, MIN or MAX
+TREND, PERIOD        rows over time, per DAY, WEEK, MONTH, QUARTER or YEAR
+GROUP_ROLES          which column map roles are groups: category, flag (identifier, key ...)
+LINKED               how many links to other tables get a tile
 
 **Used in:** `data-scientist/03_share`

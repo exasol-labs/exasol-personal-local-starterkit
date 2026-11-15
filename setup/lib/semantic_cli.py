@@ -16,7 +16,7 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic run <MODEL> --sql-file F                    your own version of those statements
 
     exakit board list | show <NAME>
-    exakit board starter [NAME]                                 a page per approved table, from the column maps (default: overview)
+    exakit board starter [NAME] [--rules '{"GROUPS": 5}']       a page per approved table, from the column maps (default: overview)
     exakit board pin <NAME> --page P --question "..." --sql "SELECT ..." | --sql-file F [--title T] [--kind K]
     exakit board edit <NAME> <TILE> --sql "SELECT ..."          your own SQL for a tile
     exakit board move <NAME> <TILE> <PAGE> | remove <NAME> <TILE> | kind <NAME> <TILE> <kpi|bar|line|table>
@@ -45,7 +45,7 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 import describe_service as svc  # noqa: E402
 
 FLAGS = {"--json": "json", "--apply": "apply", "--write": "write", "--figures-checked": "figures_checked"}
-VALUED = {"--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
+VALUED = {"--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
 
@@ -211,7 +211,8 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         from exakit_nb.workflow import continue_workflow
 
         continue_workflow("board")
-        b = _connected(lambda c: boards.starter_board(c, name=name))
+        rules = _json_arg(opts, name="rules") if opts.get("rules") else None
+        b = _connected(lambda c: boards.starter_board(c, name=name, rules=rules))
         return {"name": b.name, "title": b.title, "pages": b.pages}, f"{b}\nPreview it: exakit board preview {b.name}"
     if action == "show":
         name, = _need(words, 1, "exakit board show <NAME>")

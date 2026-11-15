@@ -134,6 +134,24 @@ class BoardTest(unittest.TestCase):
                 self.assertRaisesRegex(ValueError, "Nothing to show"):
             self.board.starter_board(None, [self._dataset("A.B", {"ID": {"role": "key"}})], name="empty")
 
+    def test_the_starter_rules_change_the_tiles(self):
+        orders = self._dataset("VS_SALES.ORDERS", {"STATUS": {"role": "category"}, "REGION": {"role": "category"},
+                                                   "ID": {"role": "identifier"}, "AMOUNT": {"role": "measure"},
+                                                   "ORDER_DATE": {"role": "time"}}, date="ORDER_DATE")
+        with mock.patch.object(self.board, "_starter_links", return_value=[]), mock.patch("builtins.print"):
+            made = self.board.starter_board(None, [orders], name="ruled", rules={
+                "GROUPS": 1, "TOP": 5, "PERIOD": "week", "MEASURE_SUM": "avg", "TOTAL_BY_GROUP": False,
+                "GROUP_ROLES": ["category", "identifier"]})
+        tiles = made.pages[0]["tiles"]
+        self.assertEqual(["Number of orders", "Average amount", "Orders by status", "Orders over time"], [t["title"] for t in tiles])
+        self.assertIn("LIMIT 5", tiles[2]["sql"])
+        self.assertIn("AVG(\"AMOUNT\")", tiles[1]["sql"])
+        self.assertIn("DATE_TRUNC('WEEK'", tiles[3]["sql"])
+        for wrong in ({"GROUPS": "many"}, {"PERIOD": "DECADE"}, {"NOPE": 1}, {"TREND": "yes"}):
+            with self.assertRaises(ValueError), mock.patch("builtins.print"):
+                self.board.starter_board(None, [orders], name="ruled", rules=wrong)
+        self.assertEqual(3, self.board.starter_rules()["GROUPS"])
+
     def test_a_table_is_compared_by_a_group_of_a_table_it_links_to(self):
         import importlib
         across = importlib.import_module("exakit_nb.across")
