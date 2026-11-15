@@ -306,6 +306,21 @@ def _(connection, nb):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.md(r"""
+    `ROLE_RULES` and `LINK_RULES` change how the column map is drafted and how links are found: `nb.role_rules()` and `nb.link_rules()` list every rule with its value.
+    """)
+    return
+
+
+@app.cell
+def _():
+    ROLE_RULES = {}
+    LINK_RULES = {}
+    return LINK_RULES, ROLE_RULES
+
+
+@app.cell(hide_code=True)
+def _(mo):
     # Cell tags: review
     mo.md(r"""
     ### Approve the column map
@@ -342,9 +357,9 @@ def _(mo):
 
 
 @app.cell
-def _(chosen_data, connection, nb):
+def _(ROLE_RULES, chosen_data, connection, nb):
     # Cell tags: review
-    role_review = nb.review_roles(connection, chosen_data)
+    role_review = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)
     return (role_review,)
 
 
@@ -458,7 +473,7 @@ def _(mo):
 
 
 @app.cell
-def _(AI_CHECK, connection, dataset, nb):
+def _(AI_CHECK, LINK_RULES, connection, dataset, nb):
     # Cell tags: review
     SEMANTIC_NAME = "all_data"
     SEMANTIC_TABLES = [dataset.fact_table]
@@ -467,7 +482,7 @@ def _(AI_CHECK, connection, dataset, nb):
     PUBLISH_SEMANTIC = False
     SEMANTIC_SCHEMAS = []
     DATA_MAP_SQL = None
-    found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
+    found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None, rules=LINK_RULES) if len(SEMANTIC_TABLES) > 1 else None
     model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
     if AI_CHECK:
         model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)

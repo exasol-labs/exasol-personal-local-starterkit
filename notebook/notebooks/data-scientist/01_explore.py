@@ -46,6 +46,8 @@ guide.explore()
 # | `DATE_FORMATS`, `TIMESTAMP_FORMATS` | how a date written as text is read |
 # | `DROP_COPIES`, `CAST_TYPES` | the cleaned view drops copied rows, and gives text columns of numbers or dates their type |
 # | `GIVES_IT_AWAY` | a value whose target rate is this or more (or one minus this or less) decides the target |
+# | `ROLE_RULES` | changes to how a column map is drafted, such as `{"CATEGORY_DISTINCT": 100, "MEASURE_HINTS": ["revenue", "amount"]}`; `nb.role_rules()` lists every rule with its value |
+# | `LINK_RULES` | changes to how links are found, such as `{"MIN_SHARE": 0.8}`; `nb.link_rules()` lists every rule |
 
 # %%
 DATASET = None
@@ -62,6 +64,8 @@ TIMESTAMP_FORMATS = ["YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD HH24:MI"]
 DROP_COPIES = True
 CAST_TYPES = True
 GIVES_IT_AWAY = 0.99
+ROLE_RULES = {}
+LINK_RULES = {}
 
 # %% [markdown]
 # ## Optional · Your AI model and Langfuse

@@ -160,7 +160,7 @@ class SemanticModel:
 
 
 def find_links(conn, schemas: list[str] | None = None, *, tables: list[str] | None = None, ai: bool | None = None,
-               check: list[str] | None = None, show: bool = True) -> dict[str, Any]:
+               check: list[str] | None = None, show: bool = True, rules: dict[str, Any] | None = None) -> dict[str, Any]:
     """The links between tables of different schemas - sample data, your files, external sources - where no foreign
     key says so and the names differ, found from the values, each with its evidence (``exakit describe --links``).
     ``tables`` (SCHEMA.TABLE) searches a selection of tables instead of whole schemas, and then two tables of the
@@ -173,7 +173,8 @@ def find_links(conn, schemas: list[str] | None = None, *, tables: list[str] | No
     use_ai = _model_configured() if ai is None else bool(ai)
     if not schemas and not tables:
         raise ValueError("Name the schemas, or tables=[...], to find the links between.")
-    found = service.find_links(conn, list(schemas or []), ai=use_ai, check=list(check or []), tables=list(tables or []) or None)
+    found = service.find_links(conn, list(schemas or []), ai=use_ai, check=list(check or []), tables=list(tables or []) or None,
+                               rules=rules or None)
     if show:
         print(service.links_text(found))
     return found

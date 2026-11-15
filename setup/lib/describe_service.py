@@ -334,13 +334,30 @@ def adopt_shipped(table: str, root: Path | None = None) -> int | None:
     return None
 
 
-def describe(conn, table: str, dataset: str | None = None, force: bool = False) -> dict[str, Any]:
-    """flow.describe over the connection: {status, doc, profile, changed, previous}."""
+def describe(conn, table: str, dataset: str | None = None, force: bool = False,
+             rules: dict[str, Any] | None = None) -> dict[str, Any]:
+    """flow.describe over the connection: {status, doc, profile, changed, previous}. ``rules`` changes the rules the
+    draft is made with (descriptor/rules.py: role_rules() lists them); given, the table is drafted again with them."""
+    from descriptor import rules as rulebook
+
     adopt_shipped(table)
     try:
-        return flow.describe(lambda sql: _rows(conn, sql), table, dataset=dataset, force=force)
+        with rulebook.using(rules):
+            return flow.describe(lambda sql: _rows(conn, sql), table, dataset=dataset, force=force or bool(rules))
     except LookupError as err:
         raise NotFound(str(err)) from err
+
+
+def role_rules() -> dict[str, Any]:
+    from descriptor import rules as rulebook
+
+    return rulebook.role_rules()
+
+
+def link_rules() -> dict[str, Any]:
+    from descriptor import rules as rulebook
+
+    return rulebook.link_rules()
 
 
 def _correct(doc: dict[str, Any], roles: list[str], sets: list[str]) -> dict[str, Any]:
@@ -728,7 +745,17 @@ def _approved_in(schemas: list[str]) -> tuple[dict[str, dict[str, Any]], dict[st
 
 
 def find_links(conn, schemas: list[str], *, ai: bool = False, chat=None, progress=None,
-               check: list[str] | None = None, tables: list[str] | None = None) -> dict[str, Any]:
+               check: list[str] | None = None, tables: list[str] | None = None,
+               rules: dict[str, Any] | None = None) -> dict[str, Any]:
+    """find_links with ``rules`` (descriptor/rules.py: link_rules() lists them) in force for this search."""
+    from descriptor import rules as rulebook
+
+    with rulebook.using(None, rules):
+        return _find_links(conn, schemas, ai=ai, chat=chat, progress=progress, check=check, tables=tables)
+
+
+def _find_links(conn, schemas: list[str], *, ai: bool = False, chat=None, progress=None,
+                check: list[str] | None = None, tables: list[str] | None = None) -> dict[str, Any]:
     """The links between tables of different schemas (sample data, loaded files, external sources), found from their
     values and each shown with its evidence (descriptor/links.py). With ``ai`` the user's model proposes more pairs
     from names, types and notes only; each is checked against the data like any other. ``check`` is pairs someone

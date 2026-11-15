@@ -78,6 +78,13 @@ bucket_ok = nb.check_bucket(connection)
 
 # %% [include] ../00_shared/data_paths.py load
 
+# %% [markdown]
+# `ROLE_RULES` and `LINK_RULES` change how the column map is drafted and how links are found: `nb.role_rules()` and `nb.link_rules()` list every rule with its value.
+
+# %%
+ROLE_RULES = {}
+LINK_RULES = {}
+
 # %% [include] ../00_shared/data_paths.py review
 
 # %% [markdown]

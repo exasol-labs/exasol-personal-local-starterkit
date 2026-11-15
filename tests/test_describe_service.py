@@ -454,5 +454,36 @@ class SemanticSurfaces(unittest.TestCase):
         with self.assertRaises(svc.Refused):
             svc.fusion_document(conn, "crm", "SHOP.ORDERS", "VS_CRM.CUSTOMERS")
 
+
+class RulesTest(unittest.TestCase):
+    """The rules a column map is drafted with and links are found with can be read and changed for one run."""
+
+    def test_a_rule_changes_the_draft_and_the_defaults_come_back(self):
+        from descriptor import roles, rules
+        column = {"column": "SEGMENT", "type": "VARCHAR(20) UTF8", "kind": "string", "rows": 1000, "non_null": 1000,
+                  "approx_distinct": 80, "avg_length": 6.0}
+        before = roles.classify(dict(column))
+        with rules.using({"CATEGORY_DISTINCT": 100}):
+            during = roles.classify(dict(column))
+        self.assertEqual(("category", "low"), (before["role"], before["confidence"]), "80 values: over the default 50, a guess")
+        self.assertEqual(("category", "high", "80 distinct"), (during["role"], during["confidence"], during["evidence"]),
+                         "under the rule's 100: a sure group")
+        self.assertEqual(before, roles.classify(dict(column)), "the defaults are back afterwards")
+        self.assertIn("MEASURE_HINTS", svc.role_rules())
+        self.assertEqual(0.9, svc.link_rules()["MIN_SHARE"])
+        with self.assertRaisesRegex(ValueError, "not a link rule"):
+            with rules.using(None, {"NOPE": 1}):
+                pass
+        with self.assertRaisesRegex(ValueError, "is a number"):
+            with rules.using({"CATEGORY_DISTINCT": "many"}):
+                pass
+
+    def test_a_link_search_runs_with_the_rules_given(self):
+        from descriptor import links
+        seen = {}
+        with mock.patch.object(svc, "_find_links", side_effect=lambda *a, **k: seen.setdefault("share", links.MIN_SHARE)):
+            svc.find_links(None, ["A", "B"], rules={"MIN_SHARE": 0.75})
+        self.assertEqual((0.75, 0.9), (seen["share"], links.MIN_SHARE))
+
 if __name__ == "__main__":
     unittest.main()

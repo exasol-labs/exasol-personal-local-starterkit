@@ -252,7 +252,7 @@ class NotebookShapeTest(unittest.TestCase):
                                           ("ml-engineer", "00_quickstart", "nb.first(source_data, own_data, sample_data)")):
             cells = ["".join(c["source"]) for c in _built_cells(SOURCES / persona / f"{notebook}.py")]
             selected = next(i for i, cell in enumerate(cells) if chosen in cell)
-            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(connection, chosen_data)" in cell)
+            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(connection, chosen_data" in cell)
             approved = next(i for i, cell in enumerate(cells) if "dataset = role_review.dataset()" in cell)
             query = next(i for i, cell in enumerate(cells) if "first_rows = nb.sql(" in cell)
             self.assertLess(selected, review)

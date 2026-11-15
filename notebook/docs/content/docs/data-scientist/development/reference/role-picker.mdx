@@ -53,7 +53,7 @@ source are one publish. What to predict is never set here: it stays each table's
 ## nb.review_roles [#review_roles]
 
 ```python
-nb.review_roles(conn, source: Any) -> RoleReview
+nb.review_roles(conn, source: Any, rules: dict[str, Any] | None=None) -> RoleReview
 ```
 
 Profile the loaded sample, file or connected table, show evidence and role choices, then await approval. Given

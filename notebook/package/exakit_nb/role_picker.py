@@ -641,7 +641,7 @@ def approve_all(reviews: dict[str, "RoleReview"], choices: dict[str, dict[str, s
     return done
 
 
-def review_roles(conn, source: Any) -> RoleReview:
+def review_roles(conn, source: Any, rules: dict[str, Any] | None = None) -> RoleReview:
     """Profile the loaded sample, file or connected table, show evidence and role choices, then await approval. Given
     a name (a notebook's one assignment: a dataset id, a descriptor file, a data file with its roles beside it) the
     dataset is opened as it is described and nothing is profiled; a data file with no descriptor beside it is loaded
@@ -663,7 +663,7 @@ def review_roles(conn, source: Any) -> RoleReview:
             print(f"{source.id} v{source.version} is a draft: the cells run on its proposed roles. To approve them run the "
                   f"quickstart's MY_DATA cell with this file, or: exakit describe {source.id} --approve")
         return review
-    proposal = describe(source.fact_table, conn=conn, id=source.id)
+    proposal = describe(source.fact_table, conn=conn, id=source.id, rules=rules or None)
     log_event(DESCRIBE_DRAFT, descriptor_id=proposal.id, table=proposal.table, roles=proposal.roles,
               missing=[m.get("role") for m in proposal.missing])
     file = None

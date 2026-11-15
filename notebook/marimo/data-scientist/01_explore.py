@@ -74,6 +74,8 @@ def _(mo):
     | `DATE_FORMATS`, `TIMESTAMP_FORMATS` | how a date written as text is read |
     | `DROP_COPIES`, `CAST_TYPES` | the cleaned view drops copied rows, and gives text columns of numbers or dates their type |
     | `GIVES_IT_AWAY` | a value whose target rate is this or more (or one minus this or less) decides the target |
+    | `ROLE_RULES` | changes to how a column map is drafted, such as `{"CATEGORY_DISTINCT": 100, "MEASURE_HINTS": ["revenue", "amount"]}`; `nb.role_rules()` lists every rule with its value |
+    | `LINK_RULES` | changes to how links are found, such as `{"MIN_SHARE": 0.8}`; `nb.link_rules()` lists every rule |
     """)
     return
 
@@ -94,6 +96,8 @@ def _():
     DROP_COPIES = True
     CAST_TYPES = True
     GIVES_IT_AWAY = 0.99
+    ROLE_RULES = {}
+    LINK_RULES = {}
     return (
         CAST_TYPES,
         CLEANING_SQL,
@@ -102,8 +106,10 @@ def _():
         DROP_COPIES,
         GIVES_IT_AWAY,
         JOINED_SQL,
+        LINK_RULES,
         PLACEHOLDER_VALUES,
         RARE_TARGET,
+        ROLE_RULES,
         TIMESTAMP_FORMATS,
         USE_AI_THEMES,
         USE_JOINED,
@@ -205,9 +211,9 @@ def _(mo):
 
 
 @app.cell
-def _(chosen_data, connection, nb):
+def _(ROLE_RULES, chosen_data, connection, nb):
     # Cell tags: review
-    role_review = nb.review_roles(connection, chosen_data)
+    role_review = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)
     return (role_review,)
 
 
@@ -321,7 +327,7 @@ def _(mo):
 
 
 @app.cell
-def _(AI_CHECK, connection, dataset, nb):
+def _(AI_CHECK, LINK_RULES, connection, dataset, nb):
     # Cell tags: review
     SEMANTIC_NAME = "all_data"
     SEMANTIC_TABLES = [dataset.fact_table]
@@ -330,7 +336,7 @@ def _(AI_CHECK, connection, dataset, nb):
     PUBLISH_SEMANTIC = False
     SEMANTIC_SCHEMAS = []
     DATA_MAP_SQL = None
-    found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
+    found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None, rules=LINK_RULES) if len(SEMANTIC_TABLES) > 1 else None
     model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
     if AI_CHECK:
         model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)

@@ -1445,7 +1445,7 @@ class NotebookWorkflowTest(unittest.TestCase):
         review = mock.Mock(**{"dataset.return_value": ds})
         # Step 2 reviews the chosen table, then the steps read it as loaded (a draft is enough here).
         cells = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")
-        review_at = next(i for i, c in enumerate(cells) if c.startswith("role_review = nb.review_roles(connection, chosen_data)"))
+        review_at = next(i for i, c in enumerate(cells) if c.startswith("role_review = nb.review_roles(connection, chosen_data"))
         loaded_at = next(i for i, c in enumerate(cells) if c.startswith("loaded_dataset = role_review.dataset(draft_ok=True)"))
         self.assertLess(cells.index(first), review_at)
         self.assertLess(review_at, loaded_at)

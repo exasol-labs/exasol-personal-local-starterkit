@@ -140,7 +140,7 @@ nb.data_map(connection)
 # In plain Python: `role_review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
 
 # %% tags=["review"]
-role_review = nb.review_roles(connection, chosen_data)
+role_review = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)
 
 # %% [markdown] tags=["review"]
 # `AI_CHECK = True`: your AI model completes the draft from names, types and the kit's evidence, never a row. `AI_APPROVE = True`: approve with its answer.
@@ -209,7 +209,7 @@ SEMANTIC_TABLE_NOTES = {}
 PUBLISH_SEMANTIC = False
 SEMANTIC_SCHEMAS = []
 DATA_MAP_SQL = None
-found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
+found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None, rules=LINK_RULES) if len(SEMANTIC_TABLES) > 1 else None
 model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
 if AI_CHECK:
     model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)

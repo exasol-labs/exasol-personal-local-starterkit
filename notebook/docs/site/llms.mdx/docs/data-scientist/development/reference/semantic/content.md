@@ -65,6 +65,7 @@ nb.find_links(
     ai: bool | None=None,
     check: list[str] | None=None,
     show: bool=True,
+    rules: dict[str, Any] | None=None,
 ) -> dict[str, Any]
 ```
 

@@ -80,7 +80,8 @@ def _resolve(name: str) -> tuple[str, str | None]:
     raise ValueError(f"'{name}' is neither SCHEMA.TABLE nor a dataset id the kit knows.")
 
 
-def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str | None = None, force: bool = False) -> "Draft":
+def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str | None = None, force: bool = False,
+             rules: dict | None = None) -> "Draft":
     """Describe ``SCHEMA.TABLE`` (or a dataset id's table): the approved descriptor when the table still matches it,
     else a fresh draft. Uses the connection given, else opens the kit's. Only SELECTs run."""
     table, slug = _resolve(str(table_or_dataset))
@@ -91,7 +92,7 @@ def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str 
             from . import connect
             conn = connect()
         try:
-            found = service.describe(conn, table, dataset=id or slug, force=force)
+            found = service.describe(conn, table, dataset=id or slug, force=force, rules=rules or None)
             types = None if found.get("profile") else _column_types(conn, str(found["doc"]["source"]["object"]))
         finally:
             if own:
@@ -373,3 +374,21 @@ class Draft:
 
     def __repr__(self) -> str:
         return f"Draft({self.id!r}, {self.table}, slots={self.slots!r})"
+
+
+def role_rules() -> dict:
+    """The rules a column map is drafted with - thresholds and the words in a column's name that suggest a role - as
+    a dict to copy, change and pass: nb.review_roles(connection, data, rules={"CATEGORY_DISTINCT": 100})."""
+    service = describe_service()
+    if service is None:
+        raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python).")
+    return service.role_rules()
+
+
+def link_rules() -> dict:
+    """The rules links between tables are found with, as a dict to copy, change and pass:
+    nb.find_links(connection, tables=[...], rules={"MIN_SHARE": 0.8})."""
+    service = describe_service()
+    if service is None:
+        raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python).")
+    return service.link_rules()
