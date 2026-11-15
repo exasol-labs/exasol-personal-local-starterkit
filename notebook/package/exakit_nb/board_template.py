@@ -27,9 +27,12 @@ helper = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(helper)
 BOARD = json.loads((HERE / "BOARD.json").read_text(encoding="utf-8"))
 LINEAGE = json.loads((HERE / "REVISION.json").read_text(encoding="utf-8"))
-COLORS = ["#2a78d6", "#1baf7a", "#eb6834", "#eda100", "#8b6dcc", "#3c949c"]
-CACHE_SECONDS, WAIT_SECONDS, MAX_ROWS = 300, 25, 5000
-POOL = ThreadPoolExecutor(max_workers=4)
+RULES = BOARD.get("settings") or {}
+COLORS = RULES.get("COLORS") or ["#2a78d6", "#1baf7a", "#eb6834", "#eda100", "#8b6dcc", "#3c949c"]
+CACHE_SECONDS, WAIT_SECONDS = int(RULES.get("CACHE_SECONDS", 300)), int(RULES.get("WAIT_SECONDS", 25))
+MAX_ROWS, TABLE_ROWS = int(RULES.get("MAX_ROWS", 5000)), int(RULES.get("TABLE_ROWS", 1000))
+REFRESH_SECONDS = int(RULES.get("REFRESH_SECONDS", CACHE_SECONDS))
+POOL = ThreadPoolExecutor(max_workers=max(1, int(RULES.get("PARALLEL", 4))))
 CACHE, RUNNING, LOCK = {}, {}, threading.RLock()   # re-entrant: a query done at once calls back under it
 
 
@@ -150,7 +153,7 @@ def tile_view(tile, result, chosen):
     elif tile["kind"] in ("bar", "line") and figure(tile, rows) is not None:
         body.append(dcc.Graph(figure=figure(tile, rows), config={"displayModeBar": False, "responsive": True}))
     if rows and tile["kind"] != "kpi":
-        table = dash_table.DataTable(data=rows[:1000], columns=[{"name": k.replace("_", " "), "id": k} for k in rows[0]],
+        table = dash_table.DataTable(data=rows[:TABLE_ROWS], columns=[{"name": k.replace("_", " "), "id": k} for k in rows[0]],
                                      page_size=10, sort_action="native", export_format="csv", style_table={"overflowX": "auto"},
                                      style_cell={"fontFamily": "inherit", "fontSize": "12px", "textAlign": "left", "padding": "8px 12px"})
         body.append(table if tile["kind"] == "table" else html.Details([html.Summary("The rows"), table], className="board-rows"))
@@ -177,7 +180,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                       html.P("Every tile is an approved question: its SQL ran as written when it was approved, as the read-only user."),
                       html.P("Workflow: " + LINEAGE.get("workflow_id", "") + " · Board: " + LINEAGE.get("board", "")
                              + " · Queries: " + LINEAGE.get("query_digest", "")[:16])], className="share-about"),
-        dcc.Interval(id="board-tick", interval=CACHE_SECONDS * 1000, n_intervals=0),
+        dcc.Interval(id="board-tick", interval=max(REFRESH_SECONDS, 1) * 1000, n_intervals=0, disabled=REFRESH_SECONDS == 0),
     ], className="exakit-share")
 
     @app.callback(Output("board-filters", "children"), Input("board-page", "value"))

@@ -29,10 +29,30 @@ checked the figures. Its lineage names the board and every tile's approved SQL d
 ## nb.share [#share]
 
 ```python
-nb.share(dataset: Any, sql: str, title: str, name: str, *, measure: str='value') -> ShareDraft
+nb.share(
+    dataset: Any,
+    sql: str,
+    title: str,
+    name: str,
+    *,
+    measure: str='value',
+    app: str | None=None,
+) -> ShareDraft
 ```
 
 Make a draft from approved data and inspected SQL; measure=count enables count totals and composition.
+
+**Used in:** `data-scientist/03_share`
+
+
+## nb.share_app [#share_app]
+
+```python
+nb.share_app() -> str
+```
+
+The one-query dashboard's own source (app.py), to save, change and give back: nb.share(..., app=your_text).
+Keep create_dash_app, and the TITLE = '' and LINEAGE = \{\} lines the kit fills in.
 
 **Used in:** `data-scientist/03_share`
 

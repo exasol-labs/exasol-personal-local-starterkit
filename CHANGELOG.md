@@ -4,6 +4,17 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **How the dashboards behave is yours to change, down to their source.**
+  - **The rules:** `nb.dashboard_rules()` lists:
+    - how long a result is kept and how long a tab waits for a query;
+    - how many rows a tile keeps and a table shows;
+    - how many tiles are queried at once, and how often an open dashboard refreshes;
+    - how many filters a page gets, and how many tiles must share a column for it;
+    - when an answer is a table instead of bars, and the chart colours.
+  - **In the notebook and the terminal:** `DASHBOARD_RULES` in `03_share` (kept with the board; `exakit board preview --rules`) changes the ones you name.
+  - **Page filters:** `PAGE_FILTERS` (`board.set_filters(page, columns)`) picks a page's filters yourself.
+  - **The source itself:** `nb.board_app()` and `nb.share_app()` give the dashboards' own source. Save it, change it, and give it back with `BOARD_APP_FILE` / `APP_FILE` (`board.share(app=)`, `nb.share(..., app=)`, `exakit board preview --app-file`). It must keep `create_dash_app`, and the lineage records that the source is yours. `DASHBOARD_QUERY` gives the one-query dashboard your own query.
+  - **Fixed:** a dashboard's preview file was listed as a dashboard by `nb.boards()`.
 - **How Ask drafts and explains is yours to change.**
   - **The AI drafting:** `nb.ask_rules()` lists the order of the ways a question is tried (a trusted question; the AI picking names for your data map to write the SQL; the AI writing Semantic SQL; the AI writing SQL from the column map), the most rows a request may ask for, and every instruction each way gives the AI, word for word.
   - **The no-AI drafter:** `nb.draft_rules()` lists its rules: the fewest rows a group needs for a rate, how many values make a filter, the synonyms that tie a question's words to a column, and the words that mean time.

@@ -30,22 +30,24 @@ class nb.Board
 
 A dashboard being put together: its pages, in order, each with its tiles.
 
-| Member                                                           | What it is                                                                                                                                     |
-| ---------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`                                                           | `str`                                                                                                                                          |
-| `title`                                                          | `str`                                                                                                                                          |
-| `pages`                                                          | `list[dict[str, Any]]`                                                                                                                         |
-| `save() -> Path`                                                 |                                                                                                                                                |
-| `tiles`                                                          |                                                                                                                                                |
-| `page(title: str) -> dict[str, Any]`                             | The page of that title, made at the end when there is none.                                                                                    |
-| `move(tile_id: str, page: str) -> Board`                         |                                                                                                                                                |
-| `remove(tile_id: str) -> Board`                                  |                                                                                                                                                |
-| `edit(tile_id: str, sql: str, title: str \| None=None) -> Board` | Your own SQL for a tile (the one shown, edited): saving it here is your approval of it, so the dashboard runs exactly this.                    |
-| `show_as(tile_id: str, kind: str) -> Board`                      |                                                                                                                                                |
-| `rename_page(old: str, new: str) -> Board`                       |                                                                                                                                                |
-| `filters(page: dict[str, Any]) -> list[str]`                     | What a page can be filtered by: the columns that are not numbers and that every tile of the page returns, or that two or more of its tiles do. |
-| `spec() -> dict[str, Any]`                                       | What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files.                                      |
-| `share(name: str \| None=None)`                                  | The Dash app for this board (a BoardDraft): nothing is sent until its preview().                                                               |
+| Member                                                           | What it is                                                                                                                                                                                                            |
+| ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`                                                           | `str`                                                                                                                                                                                                                 |
+| `title`                                                          | `str`                                                                                                                                                                                                                 |
+| `pages`                                                          | `list[dict[str, Any]]`                                                                                                                                                                                                |
+| `rules`                                                          | `dict[str, Any]`                                                                                                                                                                                                      |
+| `save() -> Path`                                                 |                                                                                                                                                                                                                       |
+| `tiles`                                                          |                                                                                                                                                                                                                       |
+| `page(title: str) -> dict[str, Any]`                             | The page of that title, made at the end when there is none.                                                                                                                                                           |
+| `move(tile_id: str, page: str) -> Board`                         |                                                                                                                                                                                                                       |
+| `remove(tile_id: str) -> Board`                                  |                                                                                                                                                                                                                       |
+| `edit(tile_id: str, sql: str, title: str \| None=None) -> Board` | Your own SQL for a tile (the one shown, edited): saving it here is your approval of it, so the dashboard runs exactly this.                                                                                           |
+| `show_as(tile_id: str, kind: str) -> Board`                      |                                                                                                                                                                                                                       |
+| `rename_page(old: str, new: str) -> Board`                       |                                                                                                                                                                                                                       |
+| `filters(page: dict[str, Any]) -> list[str]`                     | What a page can be filtered by: the ones set for it (set_filters), else the columns that are not numbers and that every tile of the page returns, or that FILTER_SHARED_BY of its tiles do - FILTERS of them at most. |
+| `set_filters(page: str, columns: list[str] \| None) -> Board`    | The filters of a page, chosen by you (columns its tiles return); None goes back to the kit's choice.                                                                                                                  |
+| `spec() -> dict[str, Any]`                                       | What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files.                                                                                                             |
+| `share(name: str \| None=None, app: str \| None=None)`           | The Dash app for this board (a BoardDraft): nothing is sent until its preview().                                                                                                                                      |
 
 ## nb.board [#board]
 
@@ -57,6 +59,17 @@ A dashboard by name: the one kept on this computer, or a new empty one.
 
 **Used in:** `data-scientist/03_share`
 
+## nb.board_app [#board_app]
+
+```python
+nb.board_app() -> str
+```
+
+The dashboard's own source (app.py), to save, change and give back: board.share(app=your_text). It reads its
+pages from BOARD.json and runs each tile's SQL file through Dash Server's profile; keep create_dash_app.
+
+**Used in:** `data-scientist/03_share`
+
 ## nb.boards [#boards]
 
 ```python
@@ -64,6 +77,25 @@ nb.boards() -> list[dict[str, Any]]
 ```
 
 Every dashboard being put together on this computer, the one changed last first: name, title, pages, tiles.
+
+**Used in:** `data-scientist/03_share`
+
+## nb.dashboard_rules [#dashboard_rules]
+
+```python
+nb.dashboard_rules() -> dict[str, Any]
+```
+
+How a dashboard of several pages behaves, to copy, change and give a board (board.rules = \{...}):
+
+CACHE_SECONDS       how long a tile's result is kept before it is queried again
+WAIT_SECONDS        how long a tab waits for a query before the tile says it is still running
+MAX_ROWS            the most rows a tile keeps; TABLE_ROWS the most a table shows
+PARALLEL            how many tiles of a tab are queried at once
+REFRESH_SECONDS     how often an open dashboard refreshes by itself (0: only on Refresh)
+FILTERS             the most filters a page gets; FILTER_SHARED_BY how many tiles must return a column for it
+BAR_MAX_ROWS        an answer with more rows than this is shown as a table, not bars
+COLORS              the chart colours, in order
 
 **Used in:** `data-scientist/03_share`
 

@@ -171,6 +171,34 @@ class BoardTest(unittest.TestCase):
         with mock.patch.object(across, "_links", return_value=[]):
             self.assertEqual([], across.linked_groups(orders), "no saved link: nothing changes")
 
+    def test_the_dashboard_rules_filters_and_your_own_app_are_used(self):
+        self.board.pin(proposal("By state?", "SELECT STATE, COUNT(*) AS N FROM T GROUP BY 1"),
+                       pd.DataFrame({"STATE": ["a"], "CAT": ["x"], "N": [1]}), board="ruled", page="Revenue")
+        self.board.pin(proposal("By cat?", "SELECT CAT, COUNT(*) AS N FROM T GROUP BY 1"),
+                       pd.DataFrame({"STATE": ["a"], "CAT": ["x"], "N": [1]}), board="ruled", page="Revenue")
+        b = self.board.board("ruled")
+        b.rules = {"CACHE_SECONDS": 60, "PARALLEL": 8, "FILTERS": 1}
+        b.save()
+        again = self.board.board("ruled")
+        self.assertEqual(["STATE"], again.filters(again.pages[0]), "FILTERS 1: the first shared column")
+        again.set_filters("Revenue", ["CAT"]).save()
+        spec = self.board.board("ruled").spec()
+        self.assertEqual(["CAT"], spec["pages"][0]["filters"], "chosen by you")
+        self.assertEqual((60, 8), (spec["settings"]["CACHE_SECONDS"], spec["settings"]["PARALLEL"]))
+        with self.assertRaisesRegex(ValueError, "returns NOPE"):
+            again.set_filters("Revenue", ["NOPE"])
+        with self.assertRaisesRegex(ValueError, "not a dashboard rule"):
+            self.board.Board("x", rules={"NOPE": 1}).save()
+        with mock.patch("sys.stdout"):
+            mine = self.board.board("ruled").share(app="def create_dash_app(server, url_base_pathname, metadata):\n    return None\n")
+            with self.assertRaisesRegex(ValueError, "create_dash_app"):
+                self.board.board("ruled").share(app="print('hello')")
+        files = {f["path"]: f["content"] for f in mine.files}
+        self.assertTrue(files["app.py"].startswith("def create_dash_app"))
+        self.assertTrue(json.loads(files["REVISION.json"])["app"].startswith("yours"))
+        self.board._folder().joinpath("ruled.preview.json").write_text("{}", encoding="utf-8")
+        self.assertEqual(["ruled"], [x["name"] for x in self.board.boards()], "a preview file is no dashboard")
+
     def test_insights_say_the_largest_the_share_and_the_change(self):
         from exakit_nb import insights
         said = insights(pd.DataFrame({"CATEGORY": list("abcdefghij"), "REVENUE": [5, 3, 9, 1, 2, 2, 3, 100, 4, 5]}))

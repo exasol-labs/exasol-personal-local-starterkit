@@ -29,7 +29,7 @@ from typing import Any
 
 from .workflow import current_workflow, home, log_event
 
-__all__ = ["Board", "board", "boards", "pin", "starter_board", "starter_rules"]
+__all__ = ["Board", "board", "board_app", "boards", "dashboard_rules", "pin", "starter_board", "starter_rules"]
 
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
 KINDS = ("kpi", "bar", "line", "table")
@@ -50,7 +50,51 @@ def _check_name(name: str) -> str:
     return name
 
 
-def guess_kind(frame) -> str:
+DASHBOARD_RULES: dict[str, Any] = {
+    "CACHE_SECONDS": 300, "WAIT_SECONDS": 25, "MAX_ROWS": 5000, "TABLE_ROWS": 1000, "PARALLEL": 4,
+    "REFRESH_SECONDS": 300, "FILTERS": 3, "FILTER_SHARED_BY": 2, "BAR_MAX_ROWS": 50,
+    "COLORS": ["#2a78d6", "#1baf7a", "#eb6834", "#eda100", "#8b6dcc", "#3c949c"],
+}
+
+
+def dashboard_rules() -> dict[str, Any]:
+    """How a dashboard of several pages behaves, to copy, change and give a board (board.rules = {...}):
+
+    CACHE_SECONDS       how long a tile's result is kept before it is queried again
+    WAIT_SECONDS        how long a tab waits for a query before the tile says it is still running
+    MAX_ROWS            the most rows a tile keeps; TABLE_ROWS the most a table shows
+    PARALLEL            how many tiles of a tab are queried at once
+    REFRESH_SECONDS     how often an open dashboard refreshes by itself (0: only on Refresh)
+    FILTERS             the most filters a page gets; FILTER_SHARED_BY how many tiles must return a column for it
+    BAR_MAX_ROWS        an answer with more rows than this is shown as a table, not bars
+    COLORS              the chart colours, in order"""
+    return {k: list(v) if isinstance(v, list) else v for k, v in DASHBOARD_RULES.items()}
+
+
+def _dashboard_rules(given: dict[str, Any] | None) -> dict[str, Any]:
+    found = dashboard_rules()
+    for key, value in (given or {}).items():
+        if key not in found:
+            raise ValueError(f"{key} is not a dashboard rule: the rules are {', '.join(found)}")
+        if key == "COLORS":
+            if not isinstance(value, (list, tuple)) or not value or not all(isinstance(c, str) and c.startswith("#") for c in value):
+                raise ValueError(f"COLORS is a list of colours such as \"#2a78d6\", not {value!r}")
+            value = list(value)
+        elif isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{key} is a whole number, not {value!r}")
+        found[key] = value
+    return found
+
+
+def board_app() -> str:
+    """The dashboard's own source (app.py), to save, change and give back: board.share(app=your_text). It reads its
+    pages from BOARD.json and runs each tile's SQL file through Dash Server's profile; keep create_dash_app."""
+    from .board_template import BOARD_APP
+
+    return BOARD_APP
+
+
+def guess_kind(frame, bar_max_rows: int | None = None) -> str:
     """How to show a result: one number is a KPI, a date first is a line, a label and a number are bars, else a table."""
     try:
         columns = list(frame.columns)
@@ -74,7 +118,7 @@ def guess_kind(frame) -> str:
         return "table"
     if all(isinstance(v, (dt.date, dt.datetime)) or (isinstance(v, str) and re.match(r"^\d{4}-\d{2}", v)) for v in first):
         return "line"
-    return "bar" if len(rows) <= 50 else "table"
+    return "bar" if len(rows) <= int(bar_max_rows if bar_max_rows is not None else DASHBOARD_RULES["BAR_MAX_ROWS"]) else "table"
 
 
 @dataclass
@@ -83,6 +127,7 @@ class Board:
     name: str
     title: str = ""
     pages: list[dict[str, Any]] = field(default_factory=list)
+    rules: dict[str, Any] = field(default_factory=dict)       # only the dashboard rules changed (dashboard_rules)
 
     # -- reading and writing ---------------------------------------------------------------------------------------
     def save(self) -> Path:
@@ -90,8 +135,9 @@ class Board:
         folder.mkdir(parents=True, exist_ok=True)
         path = _path(self.name)
         temp = path.with_suffix(".tmp")
+        _dashboard_rules(self.rules)
         temp.write_text(json.dumps({"name": self.name, "title": self.title or self.name.replace("-", " ").title(),
-                                    "pages": self.pages}, indent=2, default=str) + "\n", encoding="utf-8")
+                                    "pages": self.pages, "rules": self.rules}, indent=2, default=str) + "\n", encoding="utf-8")
         os.replace(temp, path)
         return path
 
@@ -155,14 +201,31 @@ class Board:
         return self
 
     def filters(self, page: dict[str, Any]) -> list[str]:
-        """What a page can be filtered by: the columns that are not numbers and that every tile of the page returns,
-        or that two or more of its tiles do."""
+        """What a page can be filtered by: the ones set for it (set_filters), else the columns that are not numbers
+        and that every tile of the page returns, or that FILTER_SHARED_BY of its tiles do - FILTERS of them at most."""
+        if page.get("filters") is not None:
+            return list(page["filters"])
+        rules = _dashboard_rules(self.rules)
         sets = [set(t.get("dimensions") or []) for t in page["tiles"] if t.get("kind") != "kpi"]
         common = set.intersection(*sets) if sets else set()
-        # also a column two or more tiles return: it filters those, and the dashboard leaves the others as they are
-        shared = {c for c in set().union(*sets) if sum(c in one for one in sets) >= 2} if sets else set()
+        shared = {c for c in set().union(*sets) if sum(c in one for one in sets) >= rules["FILTER_SHARED_BY"]} if sets else set()
         order = [c for t in page["tiles"] if t.get("kind") != "kpi" for c in t.get("dimensions") or []]
-        return [c for c in dict.fromkeys(order) if c in common | shared][:3]
+        return [c for c in dict.fromkeys(order) if c in common | shared][:rules["FILTERS"]]
+
+    def set_filters(self, page: str, columns: list[str] | None) -> "Board":
+        """The filters of a page, chosen by you (columns its tiles return); None goes back to the kit's choice."""
+        found = next((p for p in self.pages if p["title"].lower() == str(page).lower()), None)
+        if found is None:
+            raise KeyError(f"No page {page} on {self.name}: {', '.join(p['title'] for p in self.pages)}")
+        if columns is None:
+            found.pop("filters", None)
+        else:
+            known = {c for t in found["tiles"] for c in t.get("dimensions") or []}
+            wrong = [c for c in columns if c not in known]
+            if wrong:
+                raise ValueError(f"No tile of {found['title']} returns {', '.join(wrong)}: its columns are {', '.join(sorted(known))}")
+            found["filters"] = list(columns)
+        return self
 
     def spec(self) -> dict[str, Any]:
         """What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files."""
@@ -172,7 +235,8 @@ class Board:
                           "tiles": [{"id": t["id"], "title": t["title"], "kind": t["kind"], "query": f"queries/{t['id']}.sql",
                                      "sql_digest": t["sql_digest"], "dataset": t.get("dataset"),
                                      "descriptor_version": t.get("descriptor_version")} for t in p["tiles"]]})
-        return {"title": self.title or self.name.replace("-", " ").title(), "pages": pages}
+        return {"title": self.title or self.name.replace("-", " ").title(), "pages": pages,
+                "settings": _dashboard_rules(self.rules)}
 
     def __str__(self) -> str:
         lines = [f"{self.title or self.name} ({self.name}): {len(self.pages)} pages, {len(self.tiles)} tiles"]
@@ -184,17 +248,20 @@ class Board:
 
     __repr__ = __str__
 
-    def share(self, name: str | None = None):
-        """The Dash app for this board (a BoardDraft): nothing is sent until its preview()."""
+    def share(self, name: str | None = None, app: str | None = None):
+        """The Dash app for this board (a BoardDraft): nothing is sent until its preview(). ``app`` is your own
+        version of the dashboard's source (nb.board_app(), changed)."""
         from .share import board_draft
 
-        return board_draft(self, name or self.name)
+        return board_draft(self, name or self.name, app=app)
 
 
 def boards() -> list[dict[str, Any]]:
     """Every dashboard being put together on this computer, the one changed last first: name, title, pages, tiles."""
     found = []
     for path in sorted(_folder().glob("*.json")) if _folder().is_dir() else []:
+        if path.name.endswith(".preview.json"):
+            continue
         try:
             doc = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
@@ -212,7 +279,7 @@ def board(name: str) -> Board:
         doc = json.loads(_path(name).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return Board(name)
-    return Board(name, str(doc.get("title") or ""), list(doc.get("pages") or []))
+    return Board(name, str(doc.get("title") or ""), list(doc.get("pages") or []), dict(doc.get("rules") or {}))
 
 
 def pin(proposal, answer=None, *, board: str = "my-dashboard", page: str = "Overview", title: str | None = None,
@@ -242,7 +309,7 @@ def pin(proposal, answer=None, *, board: str = "my-dashboard", page: str = "Over
     dataset = getattr(proposal, "dataset", None)
     tile = {"id": digest[:8], "title": " ".join(str(title or proposal.question).split())[:120].rstrip("?"),
             "question": proposal.question, "sql": sql, "sql_digest": digest,
-            "kind": kind or (guess_kind(answer) if answer is not None else "table"),
+            "kind": kind or (guess_kind(answer, _dashboard_rules(target.rules)["BAR_MAX_ROWS"]) if answer is not None else "table"),
             "dimensions": dimensions, "columns": [str(c) for c in getattr(answer, "columns", [])],
             "dataset": getattr(dataset, "id", None), "descriptor_version": str(getattr(dataset, "version", "") or ""),
             "request": getattr(proposal, "request", None), "workflow_id": current_workflow()}

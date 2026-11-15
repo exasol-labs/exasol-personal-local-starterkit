@@ -20,8 +20,8 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit board pin <NAME> --page P --question "..." --sql "SELECT ..." | --sql-file F [--title T] [--kind K]
     exakit board edit <NAME> <TILE> --sql "SELECT ..."          your own SQL for a tile
     exakit board move <NAME> <TILE> <PAGE> | remove <NAME> <TILE> | kind <NAME> <TILE> <kpi|bar|line|table>
-    exakit board preview <NAME>                                 a health-checked preview on Dash Server
-    exakit board publish <NAME> --figures-checked               live, after a person checked the preview's figures
+    exakit board preview <NAME> [--rules '{...}'] [--app-file F] a health-checked preview on Dash Server
+    exakit board publish <NAME> --figures-checked [--app-file F]  live, after a person checked the preview's figures
 
 Every command takes --json (one object on stdout). A fusion is a dry run unless --apply; restore-maps writes only
 with --write; publish needs --figures-checked. Pinning SQL to a board is the approval of that SQL: show it to the user
@@ -45,7 +45,7 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 import describe_service as svc  # noqa: E402
 
 FLAGS = {"--json": "json", "--apply": "apply", "--write": "write", "--figures-checked": "figures_checked"}
-VALUED = {"--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
+VALUED = {"--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
 
@@ -281,7 +281,12 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         from exakit_nb.workflow import continue_workflow
 
         continue_workflow("board")
-        draft = boards.board(name).share()
+        b = boards.board(name)
+        if opts.get("rules"):
+            b.rules = {**b.rules, **_json_arg(opts, name="rules")}
+            b.save()
+        app = Path(opts["app_file"]).expanduser().read_text(encoding="utf-8") if opts.get("app_file") else None
+        draft = b.share(app=app)
         tools = dash_tools()
         path = draft.preview(tools)
         state = {"name": name, "app": draft.name, "revision": draft.revision_number, "query_digest": draft.query_digest,
@@ -300,7 +305,8 @@ def board(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, str
         from exakit_nb.workflow import continue_workflow
 
         continue_workflow("board")
-        draft = boards.board(name).share()
+        app = Path(opts["app_file"]).expanduser().read_text(encoding="utf-8") if opts.get("app_file") else None
+        draft = boards.board(name).share(app=app)
         if draft.query_digest != state["query_digest"]:
             raise Refused(f"{name} changed since its preview: preview it again (exakit board preview {name}).")
         draft.revision_number, draft.healthy = state["revision"], True     # the preview this person checked
