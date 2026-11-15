@@ -199,7 +199,7 @@ exakit semantic suggestions all_data
 exakit semantic review 12 certified --why "Matches how finance counts it"
 exakit semantic totals all_data --store ORDER_LINES --metric total_amount --dimension ship_state --max-age "6 HOURS"
 exakit semantic totals all_data --refresh order_lines_ship_state
-exakit semantic freeze BI.REVENUE_BY_STATE --sql "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state"
+exakit semantic freeze BI.REVENUE_BY_STATE --sql "SELECT ship_state, total_amount FROM SEM_ALL_DATA.ORDER_LINES GROUP BY ship_state"
 exakit semantic frozen all_data --sync
 exakit semantic governance all_data governed
 exakit semantic logging on

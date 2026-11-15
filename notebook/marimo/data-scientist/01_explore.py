@@ -412,7 +412,7 @@ def _(mo):
     |---|---|
     | `STORE_TOTALS` | `{"view": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["ship_state"], "max_age": "1 DAYS"}`: pre-built totals for speed, stored in `EXAKIT_TOTALS`; Semantic Views answers from them while they are fresh |
     | `REFRESH_TOTALS` | the name of stored totals to fill again from the live tables |
-    | `FREEZE_VIEWS` | `{"BI.REVENUE_BY_STATE": "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state"}`: views for BI tools, compiled once into plain SQL |
+    | `FREEZE_VIEWS` | `{"BI.REVENUE_BY_STATE": "SELECT ship_state, total_amount FROM SEM_ALL_DATA.ORDER_LINES GROUP BY ship_state"}`: views for BI tools, compiled once into plain SQL |
     | `GOVERNANCE_MODE` | `"OPEN"`: Semantic Views reports sources read without their own row and column policy; `"GOVERNED"`: it refuses them |
     | `QUERY_LOGGING` | `True` or `False`: Semantic Views' own log of Semantic SQL statements |
     | `REVIEW_SUGGESTIONS` | `{12: ("CERTIFIED", "why")}`: your decision on a suggested change (from feedback on answers, AI tools, colleagues) |

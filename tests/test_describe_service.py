@@ -381,12 +381,12 @@ class SemanticSurfaces(unittest.TestCase):
     def test_a_view_you_wrote_is_adopted_and_a_refusal_says_why(self):
         view = [{"VIEW_SCHEMA": "MART_SEMANTIC", "VIEW_NAME": "SHIPPING",
                  "VIEW_TEXT": "CREATE VIEW SHIPPING AS SELECT ship_mode, SUM(freight) AS freight FROM MART.ORDERS GROUP BY 1"}]
-        conn = self.Conn({"EXA_ALL_VIEWS": view, "ADOPT_VIEW": [{"MODEL_NAME": "logistics", "OBJECT_NAME": "SHIPPING", "DIMENSIONS": 1,
+        conn = self.Conn({"EXA_ALL_SCRIPTS": [{"SCRIPT_NAME": "ADOPT_VIEW"}], "EXA_ALL_VIEWS": view, "ADOPT_VIEW": [{"MODEL_NAME": "logistics", "OBJECT_NAME": "SHIPPING", "DIMENSIONS": 1,
                                                                   "METRICS": 1, "STATUS": "PUBLISHED", "DDL": "CREATE_MODEL;\nPUBLISH"}]})
         planned = svc.adopt_view(conn, "Logistics", "mart_semantic.shipping", dry_run=True)
         self.assertEqual(("dry_run", "EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW('logistics', 'MART_SEMANTIC', 'SHIPPING')"),
                          (planned["status"], planned["sql"]))
-        self.assertFalse(any("ADOPT_VIEW" in sql for sql in conn.sent), "a dry run reads the view only")
+        self.assertFalse(any("EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW" in sql for sql in conn.sent), "a dry run reads the view only")
         self.assertIn("SUM(freight)", planned["view_sql"])
         found = svc.adopt_view(conn, "logistics", "MART_SEMANTIC.SHIPPING")
         self.assertEqual(("logistics", "SHIPPING", 1, 1, "published", ["CREATE_MODEL", "PUBLISH"]),
@@ -398,7 +398,9 @@ class SemanticSurfaces(unittest.TestCase):
                     raise RuntimeError("[SEMANTIC_ADMIN_229] the view has a join")
                 return super().execute(sql)
         with self.assertRaisesRegex(svc.Refused, "another shape.*SEMANTIC_ADMIN_229"):
-            svc.adopt_view(Refusing({"EXA_ALL_VIEWS": view}), "logistics", "MART_SEMANTIC.SHIPPING")
+            svc.adopt_view(Refusing({"EXA_ALL_SCRIPTS": [{"SCRIPT_NAME": "ADOPT_VIEW"}], "EXA_ALL_VIEWS": view}), "logistics", "MART_SEMANTIC.SHIPPING")
+        with self.assertRaisesRegex(svc.Refused, "arrives with Semantic Views 0.7.1"):
+            svc.adopt_view(self.Conn({"EXA_ALL_VIEWS": view, "PRODUCT_VERSION": [{"DISPLAY_VERSION": "0.6.1"}]}), "logistics", "MART_SEMANTIC.SHIPPING")
         with self.assertRaises(svc.NotFound):
             svc.adopt_view(self.Conn({}), "logistics", "MART_SEMANTIC.NOPE")
         with self.assertRaisesRegex(svc.Refused, "SCHEMA.VIEW"):
@@ -628,6 +630,24 @@ class SemanticSurfaces(unittest.TestCase):
                          (hot["coverage"], cold["coverage"]))
         self.assertFalse({"authority", "identity_binding"} & (set(hot) | set(cold)))
         self.assertNotIn("attribute_policies", split["entities"]["customers"], "a date split reconciles nothing")
+        self.assertEqual(["primary", split["split"]["representation"]], [c["representation_name"] for c in split["split"]["coverage"]],
+                         "both windows go to Semantic Views as one batch")
+
+        class Tx(self.Conn):
+            def __init__(self, answers):
+                super().__init__(answers)
+                self.log = []
+
+            def set_autocommit(self, on):
+                self.log.append(("autocommit", on))
+
+            def rollback(self):
+                self.log.append(("rollback",))
+        tx = Tx({"ADD_ENTITY_REPRESENTATION_WITH_COVERAGE": [{"STATUS": "OK"}]})
+        checked = svc.fuse(tx, "crm", split, dry_run=True)
+        self.assertEqual("dry_run", checked["status"])
+        self.assertTrue(any("ADD_ENTITY_REPRESENTATION_WITH_COVERAGE('crm', 'customers'" in x for x in tx.sent))
+        self.assertEqual([("autocommit", False), ("rollback",), ("autocommit", True)], tx.log, "a check is rolled back")
         with self.assertRaisesRegex(svc.Refused, "not both"):
             svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", mapping={"table": "CRM.XREF"}, split={"column": "CREATED"})
         with self.assertRaisesRegex(svc.Refused, "YYYY-MM-DD"):

@@ -1777,7 +1777,7 @@ class SemanticViews(Screen):
                    {"t": "fields", "items": [{"id": "dm_freeze", "type": "group", "cols": 2, "fields": [
                        {"id": "dm_f_view", "type": "text", "label": "View (SCHEMA.NAME)", "placeholder": "BI.REVENUE_BY_STATE"},
                        {"id": "dm_f_sql", "type": "text", "label": "Semantic SQL",
-                        "placeholder": f"SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.{starts[0] if starts else 'ORDERS'} GROUP BY ship_state"}]}]},
+                        "placeholder": f"SELECT ship_state, total_amount FROM SEM_ALL_DATA.{starts[0] if starts else 'ORDERS'} GROUP BY ship_state"}]}]},
                    {"t": "actions", "items": [{"id": "dm_freeze_make", "label": "Make the view", "busy": "Compiling…"},
                                               {"id": "dm_frozen_check", "label": "Check the views", "busy": "Checking…"}]}]
         if "frozen" in more:

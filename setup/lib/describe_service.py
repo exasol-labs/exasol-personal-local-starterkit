@@ -150,8 +150,11 @@ def connect():
 
 
 def _rows(conn, sql: str) -> list[dict[str, Any]]:
-    """The rows of one statement as dicts, whether the connection fetches dicts or tuples."""
+    """The rows of one statement as dicts, whether the connection fetches dicts or tuples; [] for a statement that
+    returns none (a Semantic Views script that "returns nothing", such as REGISTER_MATERIALIZATION)."""
     statement = conn.execute(sql)
+    if getattr(statement, "result_type", "resultSet") not in ("resultSet", None):
+        return []
     rows = statement.fetchall()
     if rows and not isinstance(rows[0], dict):
         names = statement.column_names()
@@ -1299,6 +1302,8 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
         raise Refused('A fusion document is {"entities": {<entity>: {"representations": [...], ...}}}.')
     name = sm.model_name(model)
     conn.execute("ALTER SESSION SET QUERY_TIMEOUT=60")      # the product's key probes need a bound (SEMANTIC_MODEL_041)
+    if isinstance(declaration.get("split"), dict):
+        return _split(conn, name, declaration, dry_run)
     row = _script_row(conn, sm._script("APPLY_FUSION_DECLARATION", name, json.dumps(declaration, ensure_ascii=False), bool(dry_run)))
     status = str(row.get("STATUS") or "").upper()
     result = {"status": status.lower() or "unknown", "dry_run": bool(dry_run),
@@ -1350,6 +1355,9 @@ def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[st
     if not found:
         raise NotFound(f"There is no view {schema}.{name} that this user can see.")
     row = {str(k).upper(): v for k, v in found[0].items()}
+    if not _rows(conn, "SELECT SCRIPT_NAME FROM SYS.EXA_ALL_SCRIPTS WHERE SCRIPT_SCHEMA = 'SEMANTIC_ADMIN' AND SCRIPT_NAME = 'ADOPT_VIEW'"):
+        raise Refused(f"This database's Semantic Views ({sm.installed(lambda sql: _rows(conn, sql)) or 'an older version'}) has no "
+                      "ADOPT_VIEW: it arrives with Semantic Views 0.7.1. Until then, approve the table's column map instead.")
     statement = sm._script("ADOPT_VIEW", target, str(row["VIEW_SCHEMA"]), str(row["VIEW_NAME"]))
     result = {"model": target, "object": str(row["VIEW_NAME"]), "dimensions": None, "metrics": None,
               "status": "dry_run" if dry_run else None, "ddl": [], "view_sql": " ".join(str(row.get("VIEW_TEXT") or "").split()),
@@ -1425,6 +1433,35 @@ def restore_data_map(conn, version: int, model: str = "all_data") -> dict[str, A
     return semantic_model(conn, model, list(i.get("tables") or []), list(i.get("links") or []), description=i.get("description"),
                           table_notes=i.get("table_notes"), grains=i.get("grains"), starts=i.get("starts"), metrics=i.get("metrics"),
                           instructions=i.get("instructions"), hidden=i.get("hidden"), synonyms=i.get("synonyms"), replace_links=True)
+
+
+def _split(conn, model: str, declaration: dict[str, Any], dry_run: bool) -> dict[str, Any]:
+    """A date split in Semantic Views' one call (ADD_ENTITY_REPRESENTATION_WITH_COVERAGE: the archive and both windows
+    as one batch). A dry run makes the call inside a transaction that is rolled back, so nothing is kept."""
+    from descriptor import semantic_model as sm
+
+    s = declaration["split"]
+    statement = sm._script("ADD_ENTITY_REPRESENTATION_WITH_COVERAGE", model, s["entity"], s["representation"], s["source_kind"],
+                           s["schema"], s["object"], 20, None, json.dumps(s["coverage"]))
+    result = {"status": "", "dry_run": bool(dry_run), "applied": None, "message": "", "document": None}
+    autocommit = getattr(conn, "set_autocommit", None)
+    try:
+        if dry_run and autocommit:
+            autocommit(False)
+        row = _script_row(conn, statement)
+        result["status"] = "dry_run" if dry_run else (str(row.get("STATUS") or "ok").lower())
+        result["message"] = (" ".join(str(v) for k, v in row.items() if "MESSAGE" in k or "WARNING" in k and v)
+                             or ("Checked by Semantic Views and rolled back: nothing changed." if dry_run else "Applied."))
+    except Exception as err:                # noqa: BLE001 - the product's own refusal, word for word
+        result.update(status="error", message=" ".join(str(err).split())[:600])
+    finally:
+        if dry_run and autocommit:
+            conn.rollback()
+            autocommit(True)
+    if not dry_run and result["status"] != "error":
+        result["document"] = fusion(conn, model)
+        result["coverage"] = partition_coverage(conn, model)
+    return result
 
 
 def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None,
@@ -1533,10 +1570,20 @@ def fusion_document(conn, model: str, table: str, other: str, *, key: str | None
         policies = []
         primary["coverage"] = {"predicate": f"{side} >= TIMESTAMP '{at}'", "valid_from": at}
         representation["coverage"] = {"predicate": f"{side} < TIMESTAMP '{at}'", "valid_to": at}
+        # a split is declared in one call, both windows as one batch (ADD_ENTITY_REPRESENTATION_WITH_COVERAGE): until
+        # both have one, Semantic Views checks the archive as an exact copy and refuses it (SEMANTIC_MODEL_038)
+        split_call = {"entity": entity["name"], "representation": representation["name"], "source_kind": representation["source_kind"],
+                      "schema": other_schema, "object": other_name,
+                      "coverage": [{"representation_name": item["name"], "coverage_predicate": item["coverage"]["predicate"],
+                                    "valid_from": item["coverage"].get("valid_from"), "valid_to": item["coverage"].get("valid_to")}
+                                   for item in (primary, representation)]}
     document["representations"] = [primary, representation]
     if policies:
         document["attribute_policies"] = policies
-    return {"entities": {entity["name"]: document}}
+    found = {"entities": {entity["name"]: document}}
+    if split:
+        found["split"] = split_call
+    return found
 
 
 def partition_coverage(conn, model: str) -> list[dict[str, Any]]:
@@ -1873,7 +1920,7 @@ def list_totals(conn, model: str) -> list[dict[str, Any]]:
 
 
 def freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]:
-    """A view for BI tools (Tableau, Power BI) over your data map: ``semantic_sql`` (SELECT ... FROM SEMANTIC_<MODEL>.<VIEW>
+    """A view for BI tools (Tableau, Power BI) over your data map: ``semantic_sql`` (SELECT ... FROM SEM_<MODEL>.<VIEW>, the model's published schema
     ...) compiled by Semantic Views once and stored as plain SQL, so it answers with no preprocessor. It is frozen:
     when a definition it uses changes, Semantic Views retires it (CHECK_FROZEN_VIEWS, SYNC_FROZEN_VIEWS) and you
     create it again. ``view`` is SCHEMA.NAME."""
@@ -1883,8 +1930,8 @@ def freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]:
     text = " ".join(str(semantic_sql or "").split()).rstrip(";")
     if not dot or not sm._IDENT.match(schema) or not sm._IDENT.match(name):
         raise Refused("Name the view as SCHEMA.NAME.")
-    if not re.match(r"(?is)^select\b", text) or ";" in text or not re.search(r"(?i)\bSEMANTIC_\w+\.\w+", text):
-        raise Refused("A frozen view is one SELECT over a semantic view (FROM SEMANTIC_<MODEL>.<VIEW>).")
+    if not re.match(r"(?is)^select\b", text) or ";" in text or not re.search(r"(?i)\bFROM\s+\w+\.\w+", text):
+        raise Refused("A frozen view is one SELECT over a semantic view (FROM SEM_<MODEL>.<VIEW>, its published schema).")
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema.upper()}")
     conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()")
     try:
@@ -1966,6 +2013,8 @@ def propose_change(conn, model: str, kind: str, object_type: str, object_name: s
     kind = str(kind).upper()
     if kind not in SUGGESTION_KINDS:
         raise Refused(f"The kind is one of {', '.join(SUGGESTION_KINDS)}.")
+    if str(object_type).upper() != "MODEL" and not str(object_name or "").strip():
+        raise Refused("Name the object the suggestion is about (a new concept: the name it would have).")
     if not isinstance(change, dict) or not str(rationale or "").strip():
         raise Refused("A suggestion is a change as a JSON object and the reason for it.")
     row = (_sv(conn, sm._script("PROPOSE_MODEL_EVOLUTION", sm.model_name(model), kind, str(object_type).upper(), object_name,

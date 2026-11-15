@@ -26,7 +26,7 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic restore-version <MODEL> <N>                 save version N again (it becomes the newest)
     exakit semantic totals <MODEL> [--store VIEW --metric M... --dimension D... [--name N] [--max-age "6 HOURS"]]
     exakit semantic totals <MODEL> --refresh N | --off N | --on N   pre-built totals for speed
-    exakit semantic freeze <SCHEMA.NAME> --sql "SELECT ... FROM SEMANTIC_X.V ..."   a view for BI tools
+    exakit semantic freeze <SCHEMA.NAME> --sql "SELECT ... FROM SEM_X.V ..."   a view for BI tools
     exakit semantic frozen <MODEL> [--sync]                     the frozen views, stale ones retired with --sync
     exakit semantic governance <MODEL> open|governed            report, or refuse, unprotected sources
     exakit semantic composition <MODEL> on|off                  semantic views joined like tables in plain SQL
@@ -243,7 +243,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         found = _connected(lambda c: svc.list_totals(c, model))
         return found, "\n".join(json.dumps(r, default=str) for r in found) or f"{model} has no stored totals."
     if action == "freeze":
-        view, = _need(words, 1, "exakit semantic freeze <SCHEMA.NAME> --sql \"SELECT ... FROM SEMANTIC_X.V\"")
+        view, = _need(words, 1, "exakit semantic freeze <SCHEMA.NAME> --sql \"SELECT ... FROM SEM_X.V\"")
         found = _connected(lambda c: svc.freeze_view(c, view, opts.get("sql") or ""))
         return found, f"Frozen: {found['view']} answers for anyone with SELECT on it, no preprocessor needed."
     if action == "frozen":

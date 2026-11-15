@@ -217,7 +217,7 @@ against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, a
 | The data map's versions, kept in the model; an older one saved again | `exakit semantic versions all_data`; `exakit semantic restore-version all_data <N>` on a yes | restore-version |
 | Suggested changes to review; a decision on one | `exakit semantic suggestions all_data`; `exakit semantic review <ID> certified\|rejected --why "..."` on the user's word | review |
 | Faster dashboards on large tables | `exakit semantic totals all_data --store <VIEW> --metric M --dimension D` on a yes; `--refresh <NAME>` later | yes |
-| A view a BI tool can read | `exakit semantic freeze SCHEMA.NAME --sql "SELECT ... FROM SEMANTIC_ALL_DATA.<VIEW> ..."` on a yes; `exakit semantic frozen all_data` | freeze |
+| A view a BI tool can read | `exakit semantic freeze SCHEMA.NAME --sql "SELECT ... FROM SEM_ALL_DATA.<VIEW> ..."` on a yes; `exakit semantic frozen all_data` | freeze |
 | A lost store, a lost model | `exakit semantic restore-maps all_data` (add `--write` on a yes); `exakit semantic refresh all_data` | `--write`, refresh |
 
 **A dashboard of several answers is `exakit board`, on Dash Server.** Show each query to the user; pinning it is
