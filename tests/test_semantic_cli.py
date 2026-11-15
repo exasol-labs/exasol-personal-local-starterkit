@@ -43,7 +43,12 @@ class SemanticTest(unittest.TestCase):
             code, out, _ = run("semantic", "fuse", "all_data", "--table", "MY_DATA.CUSTOMERS", "--same-as", "VS_CRM.CUSTOMERS",
                                "--key", "CUST_ID")
         self.assertEqual(0, code)
-        drawn.assert_called_once_with(self.conn, "all_data", "MY_DATA.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID", wins="model")
+        drawn.assert_called_once_with(self.conn, "all_data", "MY_DATA.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID", wins="model",
+                                      mapping=None, split=None)
+        with mock.patch.object(cli.svc, "fusion_document", return_value=doc) as drawn, \
+                mock.patch.object(cli.svc, "fuse", return_value={"status": "dry_run", "dry_run": True, "message": "", "document": None}):
+            run("semantic", "fuse", "all_data", "--table", "A.B", "--same-as", "C.D", "--split-column", "DAY", "--split-at", "2026-01-01")
+        self.assertEqual({"column": "DAY", "at": "2026-01-01"}, drawn.call_args.kwargs["split"])
         self.assertTrue(fuse.call_args.kwargs["dry_run"])
         self.assertIn("Apply it with --apply", out)
         with mock.patch.object(cli.svc, "fusion_document", return_value=doc), \

@@ -394,12 +394,14 @@ def all_tables(rows: Run, home: Path | None = None) -> list[str]:
 
 
 def your_definitions(spec: dict[str, Any], metrics: list | None, instructions: list | None,
-                     hidden: dict[str, list[str]] | None = None) -> list[tuple[str, str]]:
+                     hidden: dict[str, list[str]] | None = None,
+                     synonyms: dict[str, list[str]] | None = None) -> list[tuple[str, str]]:
     """Your metrics as Semantic Views definitions (sm.user_metrics), your instructions and the columns you hide in
     answers (sm.field_policies) on the spec; what cannot be one is said in the spec's notes. [(view, definition)]."""
     extra, refused = sm.user_metrics(spec, metrics or [])
     spec["policies"], hide_refused = sm.field_policies(spec, hidden)
-    refused += hide_refused
+    spec["synonym_calls"], words_refused = sm.user_synonyms(spec, synonyms, metrics)
+    refused += hide_refused + words_refused
     spec["instructions"] = list(spec.get("instructions") or []) + sm.user_instructions(spec, instructions or [])
     spec["notes"] = list(spec.get("notes") or []) + refused
     return extra
@@ -410,7 +412,8 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
              description: str | None = None, labels: dict[str, Any] | None = None,
              extra: list | None = None, grains: dict[str, str] | None = None, starts: list[str] | None = None,
              metrics: list | None = None, instructions: list | None = None,
-             replace_links: bool = False, hidden: dict[str, list[str]] | None = None) -> tuple[dict[str, Any], dict[str, Any], list] | None:
+             replace_links: bool = False, hidden: dict[str, list[str]] | None = None,
+             synonyms: dict[str, list[str]] | None = None) -> tuple[dict[str, Any], dict[str, Any], list] | None:
     """(the spec of the model over all your data, its inputs, its extra definitions), as publish_all would build it;
     None when nothing is approved. Nothing is written."""
     kept_inputs = (kept(ALL_MODEL, home) or {}).get("inputs") or {}
@@ -434,6 +437,7 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     metrics = list(metrics if metrics is not None else kept_inputs.get("metrics") or [])
     instructions = list(instructions if instructions is not None else kept_inputs.get("instructions") or [])
     hidden = {str(k).upper(): list(v) for k, v in (hidden if hidden is not None else kept_inputs.get("hidden") or {}).items() if v}
+    synonyms = {str(k): list(v) for k, v in (synonyms if synonyms is not None else kept_inputs.get("synonyms") or {}).items() if v}
     spec = build_model(rows, every, joins, ALL_MODEL, description=about, home=home, grains=grains, starts=starts)
     for entity in spec["entities"]:
         said = notes.get(f"{entity['schema']}.{entity['table']}".upper())
@@ -448,8 +452,8 @@ def all_spec(rows: Run, *, home: Path | None = None, tables: list[str] | None = 
     inputs = {"tables": every, "links": cross, "name": ALL_MODEL, "all": True,
               "description": about if about != ALL_ABOUT else None, "table_notes": notes,
               "labels": labels, "extra": [list(x) for x in extra], "grains": grains, "starts": starts,
-              "metrics": metrics, "instructions": instructions, "hidden": hidden}
-    extra = extra + your_definitions(spec, metrics, instructions, hidden)
+              "metrics": metrics, "instructions": instructions, "hidden": hidden, "synonyms": synonyms}
+    extra = extra + your_definitions(spec, metrics, instructions, hidden, synonyms)
     return spec, inputs, extra
 
 
@@ -460,7 +464,8 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
                 progress: Callable[[str], None] | None = None, grains: dict[str, str] | None = None,
                 starts: list[str] | None = None, metrics: list | None = None,
                 instructions: list | None = None, replace_links: bool = False,
-                hidden: dict[str, list[str]] | None = None) -> dict[str, Any] | None:
+                hidden: dict[str, list[str]] | None = None,
+                synonyms: dict[str, list[str]] | None = None) -> dict[str, Any] | None:
     """The one model over all your data (ALL_MODEL): every approved table of every source, each schema's approved
     links, and the links across sources you confirmed for it (kept beside it), its fusion and verified questions with
     it. Built or changed in place on every approval; EXAKIT_ALL_DATA_MODEL=0 turns it off. None when nothing is
@@ -469,7 +474,7 @@ def publish_all(execute: Callable[[str], Any], rows: Run, reader: str | None, *,
         return None
     built = all_spec(rows, home=home, tables=tables, links=links, table_notes=table_notes, description=description,
                      labels=labels, extra=extra, grains=grains, starts=starts, metrics=metrics, instructions=instructions,
-                     replace_links=replace_links, hidden=hidden)
+                     replace_links=replace_links, hidden=hidden, synonyms=synonyms)
     if built is None:
         return None
     spec, inputs, extra = built
@@ -571,7 +576,7 @@ def refresh(execute: Callable[[str], Any], rows: Run, model: str, reader: str | 
     if inputs.get("labels"):
         apply_labels(spec, inputs["labels"])
     extra = [(view, ddl) for view, ddl in inputs.get("extra") or []]
-    extra += your_definitions(spec, inputs.get("metrics"), inputs.get("instructions"), inputs.get("hidden"))
+    extra += your_definitions(spec, inputs.get("metrics"), inputs.get("instructions"), inputs.get("hidden"), inputs.get("synonyms"))
     result = publish_model(execute, rows, spec, inputs, reader=reader, home=home, extra=extra)
     result["view"] = f"semantic model {result['model']} ({result['published_schema']})"
     return result
@@ -645,6 +650,7 @@ def data_map_inputs(tables: list[str], model: str = ALL_MODEL, home: Path | None
         "grains": {t: g for t, g in (saved.get("grains") or {}).items() if t in found["tables"]},
         "table_notes": {t: n for t, n in (saved.get("table_notes") or {}).items() if t in found["tables"]},
         "links": [{"from": l["from"], "to": l["to"], "type": l.get("cardinality") or "MANY_TO_ONE",
+                   "join": l.get("join_type") or "LEFT", "fanout": l.get("fanout"),
                    "note": "" if (l.get("evidence") or {}).get("note") in (None, "given by a person", "given with --link")
                    else l["evidence"]["note"], "by": (l.get("evidence") or {}).get("proposed_by") or "you"}
                   for l in saved.get("links") or [] if inside(l["from"]) and inside(l["to"])],
@@ -652,6 +658,7 @@ def data_map_inputs(tables: list[str], model: str = ALL_MODEL, home: Path | None
         "starts": [t for t in saved.get("starts") or [] if t in found["tables"]],
         "instructions": list(saved.get("instructions") or []),
         "hidden": {t: list(c) for t, c in (saved.get("hidden") or {}).items() if t in found["tables"]},
+        "synonyms": {f: list(w) for f, w in (saved.get("synonyms") or {}).items()},
         "description": saved.get("description") or ""})
     return found
 

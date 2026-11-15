@@ -1421,6 +1421,11 @@ class DataMap(Screen):
             threading.Thread(target=self._load, daemon=True).start()
 
 
+def json_key(found: dict | None) -> tuple | None:
+    """A dict as something the picks can be compared by (the check and the apply must be of the same document)."""
+    return tuple(sorted(found.items())) if found else None
+
+
 class SemanticViews(Screen):
     """Your data map, filled in by you: exactly what Exasol Semantic Views needs, nothing worked out behind your back.
 
@@ -1465,7 +1470,7 @@ class SemanticViews(Screen):
     @staticmethod
     def _empty() -> dict:
         return {"grains": {}, "table_notes": {}, "links": [], "starts": [], "metrics": [], "instructions": [], "description": "",
-                "hidden": {}}
+                "hidden": {}, "synonyms": {}}
 
     @staticmethod
     def _chosen_tables() -> list[str]:
@@ -1522,6 +1527,8 @@ class SemanticViews(Screen):
         kept = {str(x) for x in v.get(self._id("links")) or []} if has("links") else {str(i) for i in range(len(self.links))}
         dm["links"] = [{"from": l["from"], "to": l["to"],
                         "type": str(v.get(self._id("ltype", str(i))) or l.get("type") or "MANY_TO_ONE"),
+                        "join": str(v.get(self._id("ljoin", str(i))) or l.get("join") or "LEFT"),
+                        "fanout": (str(v.get(self._id("lfan", str(i)))) if has("lfan", str(i)) else l.get("fanout")) or None,
                         "note": text("lnote", str(i)) if has("lnote", str(i)) else l.get("note") or "", "by": l.get("by") or "you"}
                        for i, l in enumerate(self.links) if str(i) in kept]
         starts = [str(t) for t in v.get(self._id("starts")) or []] if has("starts") else list(self.dm.get("starts") or [])
@@ -1532,6 +1539,9 @@ class SemanticViews(Screen):
         dm["hidden"] = {t: ([str(c) for c in v.get(self._id("hide", t)) or []] if has("hide", t) else list((self.dm.get("hidden") or {}).get(t) or []))
                          for t in tables}
         dm["hidden"] = {t: c for t, c in dm["hidden"].items() if c}
+        words = dict(self.dm.get("synonyms") or {})
+        kept_words = {str(x) for x in v.get(self._id("syn")) or []} if has("syn") else set(words)
+        dm["synonyms"] = {f: w for f, w in words.items() if f in kept_words}
         rules = list(self.dm.get("instructions") or [])
         typed = [text("rule", str(i)) if has("rule", str(i)) else (rules[i] if i < len(rules) else "") for i in range(len(rules) + 1)]
         dm["instructions"] = [r for r in typed if r]
@@ -1542,7 +1552,7 @@ class SemanticViews(Screen):
         if self.loading or not self.facts["tables"]:
             return
         now = self._collected(v)
-        self.dm.update({k: now[k] for k in ("grains", "table_notes", "links", "starts", "metrics", "instructions", "hidden")})
+        self.dm.update({k: now[k] for k in ("grains", "table_notes", "links", "starts", "metrics", "instructions", "hidden", "synonyms")})
         self.dm["description"] = now["description"] or ""
 
     # -- the form ---------------------------------------------------------------------------------------------------
@@ -1601,7 +1611,13 @@ class SemanticViews(Screen):
                  "value": l.get("type") or "MANY_TO_ONE",
                  "options": [{"value": "MANY_TO_ONE", "label": "many-to-one"}, {"value": "ONE_TO_ONE", "label": "one-to-one"}]},
                 {"id": self._id("lnote", str(i)), "type": "text", "label": "Why they belong together (optional)",
-                 "value": l.get("note") or "", "placeholder": "the order each line belongs to"}]} for i, l in enumerate(self.links)]})
+                 "value": l.get("note") or "", "placeholder": "the order each line belongs to"},
+                {"id": self._id("ljoin", str(i)), "type": "select", "label": "Rows without a match", "value": l.get("join") or "LEFT",
+                 "options": [{"value": "LEFT", "label": "keep them (left join)"}, {"value": "INNER", "label": "leave them out (inner join)"}]},
+                {"id": self._id("lfan", str(i)), "type": "select", "label": "When one row meets several", "value": l.get("fanout") or "",
+                 "options": [{"value": "", "label": "refuse to count twice (default)"}, {"value": "ALLOCATE", "label": "share the amount out"},
+                             {"value": "DEDUPLICATE", "label": "count it once"}, {"value": "REFERENCE_ONLY", "label": "only to look values up"}]}]}
+                for i, l in enumerate(self.links)]})
         else:
             blocks.append({"t": "p", "muted": True, "v": "No links yet." + ("" if len(tables) > 1 else " Add another table above to link it.")})
         if len(tables) > 1:
@@ -1649,6 +1665,15 @@ class SemanticViews(Screen):
                        {"id": "dm_m_values", "type": "text", "label": "is (values, comma-separated)", "placeholder": known[:120] or "COMPLETED"},
                        {"id": "dm_m_about", "type": "text", "label": "What it means (optional)", "placeholder": "Revenue of completed orders, tax included"}]}]},
                    {"t": "actions", "items": [{"id": "dm_add_metric", "label": "Add the metric"}]}]
+        words = self.dm.get("synonyms") or {}
+        if words:
+            blocks.append({"t": "fields", "items": [{"id": self._id("syn"), "type": "picks", "label": "Your words for fields (untick to remove)",
+                           "value": list(words), "options": [{"value": f, "label": f, "hint": ", ".join(w)} for f, w in words.items()]}]})
+        blocks += [{"t": "fields", "items": [{"id": "dm_synonyms", "type": "group", "cols": 2, "fields": [
+                       {"id": "dm_syn_field", "type": "text", "label": "Field (as your data map names it)", "placeholder": "total_amount"},
+                       {"id": "dm_syn_words", "type": "text", "label": "Also called (comma-separated)", "placeholder": "sales, revenue, turnover"}]}]},
+                   {"t": "actions", "items": [{"id": "dm_add_words", "label": "Add the words",
+                                               "tip": "Search and AI tools find the field by these words too."}]}]
         # 5 · rules for AI tools, and the description
         rules = list(self.dm.get("instructions") or []) + [""]
         blocks += [{"t": "subhead", "v": "5 · Rules for AI tools", "tip": "What anyone asking your data must know, in a sentence "
@@ -1882,6 +1907,16 @@ class SemanticViews(Screen):
             self.flash = {"kind": "warn", "v": f"Added. {', '.join(odd)} is not among the values the column map saw for "
                                                 f"{where_column} ({', '.join(known[:6])}): check the spelling."}
 
+    def on_dm_add_words(self, v: dict) -> None:
+        field_name = str(v.get("dm_syn_field") or "").strip().lower()
+        words = [w.strip() for w in str(v.get("dm_syn_words") or "").split(",") if w.strip()]
+        if not field_name or not words:
+            raise ValueError("Name the field and at least one word for it.")
+        self._keep(v)
+        self.dm["synonyms"] = {**(self.dm.get("synonyms") or {}),
+                               field_name: list(dict.fromkeys(list((self.dm.get("synonyms") or {}).get(field_name) or []) + words))}
+        self.n += 1
+
     def on_dm_check(self, v: dict) -> None:
         """One bounded count per ticked link, only now: how many of its values the key holds."""
         self._keep(v)
@@ -1903,7 +1938,9 @@ class SemanticViews(Screen):
         self.n += 1
 
     def _save_args(self, dm: dict, preview: bool) -> dict:
-        return {"tables": list(self.facts["tables"]), "links": [{k: l[k] for k in ("from", "to", "type", "note") if l.get(k)} for l in dm.get("links") or []],
+        return {"tables": list(self.facts["tables"]), "links": [{k: l[k] for k in ("from", "to", "type", "note", "join", "fanout") if l.get(k)}
+                                                       for l in dm.get("links") or []],
+                "synonyms": dict(dm.get("synonyms") or {}),
                 "table_notes": dict(dm.get("table_notes") or {}), "grains": dict(dm.get("grains") or {}),
                 "starts": list(dm.get("starts") or []) or None,
                 "metrics": [{k: x for k, x in m.items() if k != "by"} for m in dm.get("metrics") or []],
@@ -1981,7 +2018,21 @@ class SemanticViews(Screen):
                       {"id": "sv_fuse_key", "type": "select", "label": "Its key column",
                        "options_from": {"field": "sv_fuse_other", "map": by_table}, "empty": "Pick the table first."},
                       {"id": "sv_fuse_wins", "type": "select", "label": "When both hold a value", "value": "model",
-                       "options": [{"value": "model", "label": "your table wins"}, {"value": "other", "label": "the other source wins"}]}]}]},
+                       "options": [{"value": "model", "label": "your table wins"}, {"value": "other", "label": "the other source wins"}]},
+                      {"id": "sv_fuse_how", "type": "select", "label": "How they relate", "value": "same",
+                       "options": [{"value": "same", "label": "the same rows, the same ids"},
+                                   {"value": "mapped", "label": "the same rows, different ids (a table pairs them)"},
+                                   {"value": "split", "label": "the other holds the older rows"}]},
+                      {"id": "sv_fuse_xref", "type": "select", "label": "The table pairing the ids", "value": "", "options": every,
+                       "show_if": {"field": "sv_fuse_how", "equals": "mapped"}},
+                      {"id": "sv_fuse_local", "type": "text", "label": "Its column with the other source's id", "placeholder": "ACCOUNT_ID",
+                       "show_if": {"field": "sv_fuse_how", "equals": "mapped"}},
+                      {"id": "sv_fuse_semantic", "type": "text", "label": "Its column with your table's id", "placeholder": "CUSTOMER_ID",
+                       "show_if": {"field": "sv_fuse_how", "equals": "mapped"}},
+                      {"id": "sv_fuse_split_column", "type": "text", "label": "The date both hold", "placeholder": "ORDER_DATE",
+                       "show_if": {"field": "sv_fuse_how", "equals": "split"}},
+                      {"id": "sv_fuse_split_at", "type": "text", "label": "Your table answers from", "placeholder": "2026-01-01",
+                       "show_if": {"field": "sv_fuse_how", "equals": "split"}}]}]},
                   {"t": "actions", "items": [{"id": "sv_fuse_check", "label": "Check against the data", "busy": "Checking (nothing changes)…"}]
                    + ([{"id": "sv_fuse_apply", "label": "Apply", "primary": True, "busy": "Applying…"}]
                       if self.fusion_said and self.fusion_said.get("dry_run") and self.fusion_said.get("status") != "error" else [])}]
@@ -1992,6 +2043,10 @@ class SemanticViews(Screen):
                                  if ok and self.fusion_said.get("dry_run") else
                                  "Applied: questions are answered from both sources now." if ok else "It was not accepted")
                                 + (f" ({self.fusion_said['message']})" if self.fusion_said.get("message") else "")})
+        outside = self.fusion_said.get("coverage") if self.fusion_said else None
+        if outside:
+            blocks.append({"t": "msg", "kind": "warn", "keep": True, "v": "Rows outside their date window, which no answer counts: "
+                           + "; ".join(", ".join(f"{k.lower()} {val}" for k, val in r.items()) for r in outside[:5])})
         health = self.fusion_said.get("health") if self.fusion_said else None
         if health:
             blocks.append({"t": "table", "columns": ["Value", "How both are combined", "Rows", "From the first source", "Filled by the other", "Neither has it"],
@@ -2007,12 +2062,24 @@ class SemanticViews(Screen):
         table, other = (str(v.get(k) or "").strip() for k in ("sv_fuse_table", "sv_fuse_other"))
         if not (table and other):
             raise ValueError("Pick your table and the table of the other source that holds the same rows.")
-        return "all_data", table, other, str(v.get("sv_fuse_key") or "").strip() or None, str(v.get("sv_fuse_wins") or "model")
+        how, text = str(v.get("sv_fuse_how") or "same"), lambda k: str(v.get(k) or "").strip()
+        mapping = split = None
+        if how == "mapped":
+            if not (text("sv_fuse_xref") and text("sv_fuse_local") and text("sv_fuse_semantic")):
+                raise ValueError("Pick the table pairing the ids and name its two columns.")
+            mapping = {"table": text("sv_fuse_xref"), "local": text("sv_fuse_local").upper(), "key": text("sv_fuse_semantic").upper()}
+        elif how == "split":
+            if not (text("sv_fuse_split_column") and text("sv_fuse_split_at")):
+                raise ValueError("Name the date both tables hold and the day your table answers from.")
+            split = {"column": text("sv_fuse_split_column").upper(), "at": text("sv_fuse_split_at")}
+        return ("all_data", table, other, text("sv_fuse_key") or None, str(v.get("sv_fuse_wins") or "model"),
+                json_key(mapping), json_key(split))
 
     def on_sv_fuse_check(self, v: dict) -> None:
-        model, table, other, key, wins = self._fusion_inputs(v)
-        self.fusion_doc = actions.run("semantic.fusion_doc", model=model, table=table, other=other, key=key, wins=wins)
-        self.fusion_for = (model, table, other, key, wins)
+        model, table, other, key, wins, mapping, split = self._fusion_inputs(v)
+        self.fusion_doc = actions.run("semantic.fusion_doc", model=model, table=table, other=other, key=key, wins=wins,
+                                      mapping=dict(mapping) if mapping else None, split=dict(split) if split else None)
+        self.fusion_for = (model, table, other, key, wins, mapping, split)
         self.fusion_said = dict(actions.run("semantic.fuse_check", model=model))
 
     def on_sv_fuse_apply(self, v: dict) -> None:

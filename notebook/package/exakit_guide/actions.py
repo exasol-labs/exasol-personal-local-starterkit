@@ -96,7 +96,7 @@ ACTIONS: dict[str, Action] = {
     "data.map": Action("00_quickstart", "data_map = nb.data_map(connection)", "data_map", False),
     "data.connectors": Action("00_quickstart", "connectors = nb.connectors()", "connectors", False),
     "semantic.fusion_doc": Action("01_explore", "fusion_document = nb.fusion_document(connection, {model}, {table}, {other}, "
-                                  "key={key}, wins={wins})", "fusion_document", False),
+                                  "key={key}, wins={wins}, mapping={mapping}, split={split})", "fusion_document", False),
     "semantic.fuse_check": Action("01_explore", "fusion_check = nb.fuse(connection, {model}, fusion_document)", "fusion_check", False),
     "semantic.fuse_apply": Action("01_explore", "fusion_applied = nb.fuse(connection, {model}, fusion_document, dry_run=False)",
                                   "fusion_applied"),
@@ -110,7 +110,7 @@ ACTIONS: dict[str, Action] = {
                                   "link_check", False),
     "semantic.save_map": Action("01_explore", "semantic = nb.semantic_model(connection, \"all_data\", tables={tables}, links={links}, "
                                 "table_notes={table_notes}, grains={grains}, starts={starts}, metrics={metrics}, "
-                                "instructions={instructions}, hidden={hidden}, description={description}, replace_links=True, ai=False, "
+                                "instructions={instructions}, hidden={hidden}, synonyms={synonyms}, description={description}, replace_links=True, ai=False, "
                                 "preview={preview})", "semantic"),
     "semantic.validate": Action("01_explore", "data_map_check = nb.validate_data_map(connection)", "data_map_check", False),
     # the rest of Semantic Views: stored totals, views for BI tools, governance, the query log, suggested changes

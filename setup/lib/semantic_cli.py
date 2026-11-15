@@ -9,6 +9,9 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic verified <MODEL>                            its verified questions
     exakit semantic fuse <MODEL> --table S.T --same-as S.T [--key COL] [--wins model|other] [--apply]
     exakit semantic fuse <MODEL> --document F [--apply]         a fusion document of your own
+    exakit semantic fuse <MODEL> --table S.T --same-as S.T --mapping-table S.XREF --mapping-local COL --mapping-key COL
+    exakit semantic fuse <MODEL> --table S.T --same-as S.ARCHIVE --split-column DATE_COL --split-at 2026-01-01
+    exakit semantic coverage <MODEL>                            rows of a date split outside their window
     exakit semantic fusion <MODEL>                              its whole fusion layer, exported
     exakit semantic column-maps <MODEL>                         the approved column maps the model carries
     exakit semantic restore-maps <MODEL> [--write]              the kit's store put back from the model
@@ -66,7 +69,7 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 import describe_service as svc  # noqa: E402
 
 FLAGS = {"--json": "json", "--sync": "sync", "--session": "session", "--all": "all", "--apply": "apply", "--dry-run": "dry_run", "--update": "update", "--write": "write", "--figures-checked": "figures_checked"}
-VALUED = {"--model", "--store", "--metric", "--dimension", "--max-age", "--refresh", "--off", "--on", "--limit", "--kind", "--object-type", "--object", "--change", "--why", "--file", "--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
+VALUED = {"--mapping-table", "--mapping-local", "--mapping-key", "--split-column", "--split-at", "--model", "--store", "--metric", "--dimension", "--max-age", "--refresh", "--off", "--on", "--limit", "--kind", "--object-type", "--object", "--change", "--why", "--file", "--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
 
@@ -177,13 +180,21 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
                 wins = opts.get("wins") or "model"
                 if wins not in ("model", "other"):
                     raise Refused("--wins is model (the model's table wins) or other.")
-                document = svc.fusion_document(conn, model, opts["table"], opts["same_as"], key=opts.get("key"), wins=wins)
+                mapping = ({"table": opts["mapping_table"], "local": opts.get("mapping_local"), "key": opts.get("mapping_key")}
+                           if opts.get("mapping_table") else None)
+                split = {"column": opts["split_column"], "at": opts.get("split_at")} if opts.get("split_column") else None
+                document = svc.fusion_document(conn, model, opts["table"], opts["same_as"], key=opts.get("key"), wins=wins,
+                                               mapping=mapping, split=split)
             result = svc.fuse(conn, model, document, dry_run=not opts.get("apply"))
             return dict(result, document=result.get("document") or document)
         found = _connected(work)
         state = ("Applied" if not found["dry_run"] else "Checked, nothing changed") if found["status"] != "error" else "Refused"
         return found, (f"{state}: {found['status']}" + (f" - {found['message']}" if found.get("message") else "")
                        + ("\nApply it with --apply after the user agrees." if found["dry_run"] and found["status"] != "error" else ""))
+    if action == "coverage":
+        model, = _need(words, 1, "exakit semantic coverage <MODEL>")
+        found = _connected(lambda c: svc.partition_coverage(c, model))
+        return found, "\n".join(json.dumps(r, default=str) for r in found) or "Every row of a date split is inside its window."
     if action == "fusion":
         model, = _need(words, 1, "exakit semantic fusion <MODEL>")
         found = _connected(lambda c: svc.fusion(c, model))
@@ -327,7 +338,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
     raise Refused(f"Unknown action '{action}' (models, fields, search, compile, verify, verified, fuse, fusion, column-maps, "
-                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version, totals, freeze, frozen, governance, composition, logging, history, suggestions, propose, review, import-databricks, import-osi).")
+                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version, totals, freeze, frozen, governance, composition, logging, history, suggestions, propose, review, import-databricks, import-osi, coverage).")
 
 
 # --- exakit board -----------------------------------------------------------------------------------------------------

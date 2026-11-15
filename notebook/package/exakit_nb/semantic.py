@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "store_totals", "refresh_totals", "totals_status", "list_totals", "freeze_view", "frozen_views", "governance_mode", "derived_composition", "query_logging", "query_history", "propose_change", "suggestions", "review_change", "import_databricks", "import_osi", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "store_totals", "refresh_totals", "totals_status", "list_totals", "freeze_view", "frozen_views", "governance_mode", "derived_composition", "query_logging", "query_history", "propose_change", "suggestions", "review_change", "import_databricks", "import_osi", "partition_coverage", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -186,7 +186,7 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
                    table_notes: dict[str, str] | None = None, sql: list[str] | str | None = None,
                    grains: dict[str, str] | None = None, starts: list[str] | None = None, metrics: list | None = None,
                    instructions: list | None = None, replace_links: bool = False,
-                   hidden: dict[str, list[str]] | None = None) -> SemanticModel:
+                   hidden: dict[str, list[str]] | None = None, synonyms: dict[str, list[str]] | None = None) -> SemanticModel:
     """Build (or with ``preview=True`` only show) an Exasol Semantic Views model over ``tables`` - SCHEMA.TABLE of any
     schemas, each with an approved column map - joined along each schema's approved links and ``links``
     (SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY). ``schemas`` takes every table of those schemas that has an approved column
@@ -200,7 +200,9 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
     (MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), ``starts`` (the tables questions start from),
     ``metrics`` ([{"table", "name", "how": "sum"|"count"|"average", "column", "where": {"column", "values"}, "about"}])
     ``instructions`` (rules for AI tools, as text or {"table", "text"}) and ``hidden`` ({SCHEMA.TABLE: [COLUMN]}:
-    never shown in answers - Semantic Views' MASK policy - but usable in filters). nb.draft_data_map drafts them with AI;
+    never shown in answers - Semantic Views' MASK policy - but usable in filters) and ``synonyms`` ({field: ["sales"]}:
+    your words for a field). A link may say "join": "INNER" (default LEFT) and "fanout": ALLOCATE, DEDUPLICATE or
+    REFERENCE_ONLY. nb.draft_data_map drafts them with AI;
     Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
     have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user."""
     from .workflow import log_event
@@ -220,7 +222,8 @@ def semantic_model(conn, name: str, tables: list[str] | None = None, links: list
                                    metrics=list(metrics) if metrics is not None else None,
                                    instructions=list(instructions) if instructions is not None else None,
                                    replace_links=bool(replace_links),
-                                   hidden=dict(hidden) if hidden is not None else None)
+                                   hidden=dict(hidden) if hidden is not None else None,
+                                   synonyms=dict(synonyms) if synonyms is not None else None)
     model = SemanticModel(name, tables, list(links or []), description, use_ai, found, conn,
                           schemas=list(schemas or []), find=bool(find), table_notes=dict(table_notes or {}))
     if not preview:
@@ -361,15 +364,19 @@ def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[st
     return found
 
 
-def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None, wins: str = "model") -> dict[str, Any]:
+def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None, wins: str = "model",
+                    mapping: dict[str, str] | None = None, split: dict[str, str] | None = None) -> dict[str, Any]:
     """The fusion document saying ``other`` (a table of another source) holds the same thing as ``table`` (an entity
     of the published ``model``), at the same grain: a second copy of the entity, matched by its key (``key``: its
     column in ``other`` when it is named differently), every field bound there (a column of the same name, else
     empty), and the values of a field both hold reconciled - ``wins="model"`` keeps the model's copy authoritative,
-    ``wins="other"`` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document)."""
+    ``wins="other"`` makes the other one win. When the two use different ids, ``mapping`` names the table that pairs
+    them: {"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}. When ``other`` holds the older
+    rows, ``split`` says from when this table answers: {"column": "ORDER_DATE", "at": "2026-01-01"}. Nothing is
+    written: check it with nb.fuse(connection, model, document)."""
     if wins not in ("model", "other"):
         raise ValueError('wins is "model" (the model\'s own copy wins) or "other".')
-    return _service().fusion_document(conn, model, table, other, key=key, wins=wins)
+    return _service().fusion_document(conn, model, table, other, key=key, wins=wins, mapping=mapping, split=split)
 
 
 def column_maps_in_model(conn, model: str) -> dict[str, dict[str, Any]]:
@@ -550,3 +557,8 @@ def import_databricks(conn, model: str, yaml_text: str, *, apply: bool = False) 
 def import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]:
     """An import plan from another semantic layer (OSI's normalized form), applied and validated."""
     return _service().import_osi(conn, plan)
+
+
+def partition_coverage(conn, model: str = "all_data") -> list[dict[str, Any]]:
+    """Rows of a date-split source outside its window, which no answer counts; [] when all is well."""
+    return _service().partition_coverage(conn, model)

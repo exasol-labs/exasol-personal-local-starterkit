@@ -322,12 +322,13 @@ def _(mo):
     | Setting | What it does |
     |---|---|
     | `SEMANTIC_TABLES` | the tables, such as `"VS_LOGISTICS.COURIER_DAILY"` (each with an approved column map) |
-    | `SEMANTIC_LINKS` | `[{"from": "S.T.COL", "to": "S.T.KEY", "type": "MANY_TO_ONE", "note": "why"}]` |
+    | `SEMANTIC_LINKS` | `[{"from": "S.T.COL", "to": "S.T.KEY", "type": "MANY_TO_ONE", "note": "why"}]`; optional `"join": "INNER"` (rows without a match left out) and `"fanout"`: `ALLOCATE`, `DEDUPLICATE` or `REFERENCE_ONLY` (when one row meets several) |
     | `SEMANTIC_GRAINS` | `{"S.T": "one row is one order line"}` |
     | `SEMANTIC_TABLE_NOTES` | `{"S.T": "what the table is"}` |
     | `SEMANTIC_STARTS` | the tables questions start from: `["S.T"]` |
     | `SEMANTIC_METRICS` | `[{"table": "S.T", "name": "completed_revenue", "how": "sum", "column": "AMOUNT", "where": {"column": "STATUS", "values": ["COMPLETED"]}}]`; `how` is `sum`, `count` or `average` |
     | `SEMANTIC_INSTRUCTIONS` | `["Revenue excludes tax"]`, or `{"table": "S.T", "text": "..."}` |
+    | `SEMANTIC_SYNONYMS` | your words for a field: `{"total_amount": ["sales", "revenue"]}` |
     | `SEMANTIC_HIDDEN` | columns never shown in answers, still usable in filters: `{"S.T": ["CUSTOMER_NAME"]}` |
     | `SEMANTIC_ABOUT` | what your data is about, in a sentence |
     | `CHECK_LINKS` | `True`: count how many of each link's values its key holds |
@@ -350,18 +351,19 @@ def _(AI_CHECK, LINK_RULES, connection, dataset, nb):
     SEMANTIC_METRICS = None
     SEMANTIC_INSTRUCTIONS = None
     SEMANTIC_HIDDEN = None
+    SEMANTIC_SYNONYMS = None
     SEMANTIC_ABOUT = None
     CHECK_LINKS = False
     PUBLISH_SEMANTIC = False
     DATA_MAP_SQL = None
     data_map_inputs = nb.data_map_inputs(SEMANTIC_TABLES, connection=connection)
-    your_map = {key: data_map_inputs[key] for key in ("links", "grains", "table_notes", "starts", "metrics", "instructions", "hidden", "description")}
+    your_map = {key: data_map_inputs[key] for key in ("links", "grains", "table_notes", "starts", "metrics", "instructions", "hidden", "synonyms", "description")}
     if AI_CHECK:
         drafted_map = nb.draft_data_map(SEMANTIC_TABLES)
         your_map = {key: your_map[key] or drafted_map[key] for key in your_map}
     your_map.update({key: value for key, value in (("links", SEMANTIC_LINKS), ("grains", SEMANTIC_GRAINS), ("table_notes", SEMANTIC_TABLE_NOTES),
                                                    ("starts", SEMANTIC_STARTS), ("metrics", SEMANTIC_METRICS),
-                                                   ("instructions", SEMANTIC_INSTRUCTIONS), ("hidden", SEMANTIC_HIDDEN),
+                                                   ("instructions", SEMANTIC_INSTRUCTIONS), ("hidden", SEMANTIC_HIDDEN), ("synonyms", SEMANTIC_SYNONYMS),
                                                    ("description", SEMANTIC_ABOUT)) if value is not None})
     if CHECK_LINKS and your_map["links"]:
         link_check = nb.find_links(connection, tables=SEMANTIC_TABLES, check=[f"{link['from']}={link['to']}" for link in your_map["links"]],
@@ -369,7 +371,8 @@ def _(AI_CHECK, LINK_RULES, connection, dataset, nb):
         print(link_check)
     semantic = nb.semantic_model(connection, "all_data", tables=SEMANTIC_TABLES, links=your_map["links"], table_notes=your_map["table_notes"],
                                  grains=your_map["grains"], starts=your_map["starts"] or None, metrics=your_map["metrics"],
-                                 instructions=your_map["instructions"], hidden=your_map["hidden"], description=your_map["description"] or None,
+                                 instructions=your_map["instructions"], hidden=your_map["hidden"], synonyms=your_map["synonyms"],
+                                 description=your_map["description"] or None,
                                  replace_links=True, ai=False, preview=not PUBLISH_SEMANTIC, sql=DATA_MAP_SQL if PUBLISH_SEMANTIC else None)
     if PUBLISH_SEMANTIC:
         data_map_check = nb.validate_data_map(connection)
@@ -467,7 +470,7 @@ def _(mo):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
-    `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `FUSION_DOCUMENT`: your own version of the printed document, edited. `APPLY_FUSION = True` applies it after the check.
+    `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `FUSE_MAPPING`: when the two use different ids, the table pairing them, `{"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}`. `FUSE_SPLIT`: when the other holds the older rows, `{"column": "ORDER_DATE", "at": "2026-01-01"}`. `FUSION_DOCUMENT`: your own version of the printed document, edited. `APPLY_FUSION = True` applies it after the check.
     """)
     return
 
@@ -478,10 +481,13 @@ def _(connection, nb):
     FUSE_TABLE = ""
     FUSE_OTHER = ""
     FUSE_KEY = None
+    FUSE_MAPPING = None
+    FUSE_SPLIT = None
     FUSION_DOCUMENT = None
     APPLY_FUSION = False
     if FUSION_DOCUMENT or (FUSE_TABLE and FUSE_OTHER):
-        fusion_document = FUSION_DOCUMENT or nb.fusion_document(connection, "all_data", FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model")
+        fusion_document = FUSION_DOCUMENT or nb.fusion_document(connection, "all_data", FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model",
+                                                                    mapping=FUSE_MAPPING, split=FUSE_SPLIT)
         print(fusion_document)
         fusion_check = nb.fuse(connection, "all_data", fusion_document)
         if APPLY_FUSION and fusion_check["status"] != "error":

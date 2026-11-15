@@ -591,6 +591,30 @@ class SemanticSurfaces(unittest.TestCase):
         self.assertEqual([("region", "RECONCILE")], [(p["attribute_name"], p["strategy"]) for p in customers["attribute_policies"]])
         with self.assertRaises(svc.Refused):
             svc.fusion_document(conn, "crm", "SHOP.ORDERS", "VS_CRM.CUSTOMERS")
+        # different ids: a certified mapping table pairs them (a MAPPED identity)
+        both = self.Conn({"EXA_ALL_COLUMNS": [{"COLUMN_NAME": c, "COLUMN_TYPE": t, "COLUMN_ORDINAL_POSITION": i, "IS_VIRTUAL": 0}
+                                              for i, (c, t) in enumerate((("CUST_ID", "DECIMAL(18,0)"), ("ACCOUNT_ID", "DECIMAL(18,0)"),
+                                                                          ("REGION", "VARCHAR(20) UTF8"), ("CREATED", "DATE")), 1)]})
+        mapped = svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID",
+                                     mapping={"table": "CRM.XREF", "local": "account_id", "key": "cust_id"})
+        binding = mapped["entities"]["customers"]["representations"][1]["identity_binding"]
+        self.assertEqual(("MAPPED", {"source_schema": "CRM", "source_object": "XREF", "source_local_column": "ACCOUNT_ID",
+                                     "semantic_key_column": "CUST_ID", "certification_status": "CERTIFIED"}),
+                         (binding["binding_kind"], binding["mapping"]))
+        self.assertIn("identity", mapped["entities"]["customers"])
+        # older rows in another source: a date split, each side's window, no winner
+        split = svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID",
+                                    split={"column": "created", "at": "2026-01-01"})
+        hot, cold = split["entities"]["customers"]["representations"]
+        self.assertEqual(({"predicate": "t1.CREATED >= TIMESTAMP '2026-01-01 00:00:00'", "valid_from": "2026-01-01 00:00:00"},
+                          {"predicate": "t1.CREATED < TIMESTAMP '2026-01-01 00:00:00'", "valid_to": "2026-01-01 00:00:00"}),
+                         (hot["coverage"], cold["coverage"]))
+        self.assertFalse({"authority", "identity_binding"} & (set(hot) | set(cold)))
+        self.assertNotIn("attribute_policies", split["entities"]["customers"], "a date split reconciles nothing")
+        with self.assertRaisesRegex(svc.Refused, "not both"):
+            svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", mapping={"table": "CRM.XREF"}, split={"column": "CREATED"})
+        with self.assertRaisesRegex(svc.Refused, "YYYY-MM-DD"):
+            svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID", split={"column": "CREATED", "at": "soon"})
 
 
 class RulesTest(unittest.TestCase):

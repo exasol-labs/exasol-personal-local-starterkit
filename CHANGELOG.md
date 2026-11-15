@@ -4,6 +4,11 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **The last of Semantic Views' features, in the card, the notebook and `exakit semantic fuse`.**
+  - **Different ids across sources:** a table pairing them, bound as a certified `MAPPED` identity.
+  - **Older rows in another source:** a date split, each side answering its own period, checked by `CHECK_PARTITION_COVERAGE` (`exakit semantic coverage`).
+  - **How a link joins:** keep or leave out rows without a match (`LEFT` or `INNER`), and what happens when one row meets several (`ALLOCATE`, `DEDUPLICATE`, `REFERENCE_ONLY`), changed in place with `SET_RELATIONSHIP`.
+  - **Your words for a field** (synonyms): written into its definition, or added with `ADD_SYNONYM` for a metric of your own.
 - **The rest of Semantic Views, from the card, a notebook cell and `exakit semantic`.** Each reads or does one thing when you ask:
   - **Suggested changes** are listed for review and certified or rejected with a note (`PROPOSE_MODEL_EVOLUTION`, `REVIEW_MODEL_EVOLUTION`); feedback on answers lands there too.
   - **Stored totals for speed** are kept in `EXAKIT_TOTALS` and registered with the model, refreshed and turned off (`REGISTER_MATERIALIZATION`, `ADD_MATERIALIZATION_COLUMN`, `MARK_MATERIALIZATION_REFRESHED`, `SET_MATERIALIZATION_STATUS`). They are registered again after a rebuild.

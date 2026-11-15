@@ -208,6 +208,7 @@ against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, a
 | Questions already reviewed (use them before drafting) | `exakit semantic verified all_data --json` | no |
 | Keep an approved question in the model | `exakit semantic verify all_data --object ORDER_LINES --name "Revenue by state" --question "..." --request '{...}'` | yes |
 | The same rows in two sources (customers here and in a CRM) | `exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS [--key CUST_ID] [--wins model\|other]` - a dry run; show its result, then add `--apply` on a yes | only with `--apply` |
+| The same rows with different ids, or older rows elsewhere | `exakit semantic fuse ... --mapping-table S.XREF --mapping-local COL --mapping-key COL`, or `--split-column DATE --split-at YYYY-MM-DD` - a dry run; `--apply` on a yes; `exakit semantic coverage all_data` after a split | only with `--apply` |
 | The model's fusion, its column maps | `exakit semantic fusion all_data`, `exakit semantic column-maps all_data` | no |
 | A view the user already wrote (one table, grouped, SUM / COUNT / AVG / MIN / MAX) | `exakit semantic adopt logistics MART_SEMANTIC.SHIPPING --dry-run` shows the view and the statement; drop `--dry-run` on a yes. A join, a WHERE or several tables is refused: approve the tables' column maps instead | without `--dry-run` |
 | A dashboard's tiles after the model changed | `exakit board recheck <NAME>` lists tiles whose SQL the model now writes differently; `--update` on a yes | only with `--update` |

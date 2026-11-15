@@ -241,6 +241,8 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         used.add(name_)
         relationships.append({"name": name_, "from": a["name"], "to": b["name"], "from_column": from_column,
                               "to_column": to_column, "evidence": link.get("evidence"), "given": link.get("cardinality"),
+                              "join_type": str(link.get("join_type") or "LEFT").upper(),
+                              "fanout": (str(link["fanout"]).upper() if link.get("fanout") else None),
                               "join": f"{column_sql(a['alias'], from_column)} = {column_sql(b['alias'], to_column)}"})
         edges.setdefault(a["name"], []).append((b["name"], name_))
         # a many-to-one link must end on a unique key the model declares: the column map's key, or this column,
@@ -443,7 +445,8 @@ def statements(spec: dict[str, Any]) -> list[str]:
                                  json.dumps([{"column_name": column, "ordinal_position": 1}])))
         found += column_map_statements(model, e)
     for r in spec["relationships"]:
-        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE", "LEFT", None))
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE",
+                             r.get("join_type") or "LEFT", r.get("fanout")))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
         if r.get("evidence"):
             # why this link is in the model (who proposed it, what the data showed): kept on the relationship itself,
@@ -515,7 +518,8 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
         return None
     old_links = {r["name"]: r for r in previous.get("relationships") or []}
     new_links = {r["name"]: r for r in spec["relationships"]}
-    shape = lambda r: {k: v for k, v in r.items() if k not in ("evidence", "cardinality", "given")}
+    shape = lambda r: {k: v for k, v in r.items() if k not in ("evidence", "cardinality", "given", "join_type", "fanout")}
+    rules = lambda r: (r.get("cardinality") or "MANY_TO_ONE", r.get("join_type") or "LEFT", r.get("fanout"))
     old_objects = {o["name"]: o for o in previous.get("objects") or []}
     new_objects = {o["name"]: o for o in spec["objects"]}
     found: list[str] = []
@@ -527,10 +531,11 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
         if name not in new_links or shape(new_links[name]) != shape(r):
             found.append(_script("REMOVE_RELATIONSHIP_KEY_MAPPING", model, name, 1))
             found.append(_script("REMOVE_RELATIONSHIP", model, name))
-        elif (r.get("cardinality") or "MANY_TO_ONE") != (new_links[name].get("cardinality") or "MANY_TO_ONE"):
-            kind = new_links[name].get("cardinality") or "MANY_TO_ONE"
+        elif rules(r) != rules(new_links[name]):
+            kind, join_type, fanout = rules(new_links[name])
             # to one-to-one after the pointer's unique key is added; back to many-to-one before that key is removed
-            (retyped if kind == "ONE_TO_ONE" else found).append(_script("SET_RELATIONSHIP", model, name, None, kind, None, None))
+            (retyped if kind == "ONE_TO_ONE" else found).append(_script("SET_RELATIONSHIP", model, name, None, kind, join_type,
+                                                                        fanout or ("NONE" if rules(r)[2] else None)))
     for name, e in after.items():
         if name not in before:
             found.append(_script("ADD_ENTITY", model, e["name"], e["schema"], e["table"], e["alias"],
@@ -552,7 +557,8 @@ def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] 
     for name, r in new_links.items():
         if name in old_links and shape(old_links[name]) == shape(r):
             continue
-        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE", "LEFT", None))
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE",
+                             r.get("join_type") or "LEFT", r.get("fanout")))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
         if r.get("evidence"):
             found.append(_script("ADD_CUSTOM_EXTENSION", model, "RELATIONSHIP", r["name"], "exakit",
@@ -692,6 +698,12 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
             execute(_script("PUBLISH_MODEL", model))
         except Exception as err:
             warnings.append(f"publish after the extra definitions: {' '.join(str(err).split())[:300]}")
+    for word in spec.get("synonym_calls") or []:
+        try:
+            execute(_script("ADD_SYNONYM", model, word["type"], word["name"], word["synonym"], "MANUAL"))
+        except Exception as err:
+            if not re.search(r"(?i)exist|duplicate|already", str(err)):
+                warnings.append(f"synonym {word['synonym']} of {word['name']}: {' '.join(str(err).split())[:160]}")
     policies = list(spec.get("policies") or [])
     gone = [x for x in (previous or {}).get("policies") or [] if x not in policies] if mode != "rebuilt" else []
     for policy, masked in [(x, True) for x in policies] + [(x, False) for x in gone]:
@@ -859,6 +871,30 @@ def field_policies(spec: dict[str, Any], hidden: dict[str, Iterable[str]] | None
                 refused.append(f"hide {table}.{column}: it is not a column to group by in your data map")
             found += [h for h in hits if h not in found]
     return found, refused
+
+
+def user_synonyms(spec: dict[str, Any], synonyms: dict[str, Iterable[str]] | None,
+                  metrics: Iterable[dict[str, Any]] | None = None) -> tuple[list[dict[str, str]], list[str]]:
+    """Your words for a field ({field name: ["sales", "turnover"]}), found by search and by AI tools: a dimension's or
+    metric's own definition carries them (its SYNONYMS); a metric of your own gets them with ADD_SYNONYM after it is
+    defined. ([{type, name, synonym}] to add with ADD_SYNONYM, what was refused)."""
+    calls, refused = [], []
+    yours = {identifier(m.get("name") or "", "metric") for m in metrics or [] if isinstance(m, dict)}
+    for name, words in (synonyms or {}).items():
+        words = [" ".join(str(w).split())[:60] for w in words or [] if str(w).strip()]
+        hit = False
+        for obj in spec["objects"]:
+            for kind, items in (("DIMENSION", obj["dimensions"]), ("METRIC", obj["metrics"])):
+                for item in items:
+                    if item["name"] == name:
+                        item["synonyms"] = list(dict.fromkeys(list(item.get("synonyms") or []) + words))[:12]
+                        hit = True
+        if not hit and name in yours:
+            calls += [{"type": "METRIC", "name": name, "synonym": w} for w in words]
+            hit = True
+        if not hit:
+            refused.append(f"synonyms for {name}: no field of that name in your data map")
+    return calls, refused
 
 
 def user_instructions(spec: dict[str, Any], instructions: Iterable[Any]) -> list[dict[str, Any]]:

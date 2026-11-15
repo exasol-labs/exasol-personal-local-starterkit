@@ -67,6 +67,53 @@ Every button is one call, so clicking **Approve** and running the approve call d
 If you build on the kit, or want the commands behind the notebooks, see [For developers](/data-scientist/development). It has the command reference, how the cards and helpers fit together, and where the kit keeps its files.
 
 
+# The kit and its personas (/kit)
+
+
+
+The Exasol Personal Local Starter Kit installs a database on this computer and the tools around it. One command, `exakit`, runs all of it.
+
+## What every install has [#what-every-install-has]
+
+| Part          | What it is for                                                |
+| ------------- | ------------------------------------------------------------- |
+| The database  | Exasol, running on this computer                              |
+| `exakit`      | The command that starts, checks, loads and updates everything |
+| The AI bridge | Lets your AI clients query the database, read-only            |
+| AI skills     | Instructions that teach an AI client how to use the kit       |
+| Sample data   | Datasets to practise on                                       |
+
+## What a persona adds [#what-a-persona-adds]
+
+A **persona** is the kit set up for one kind of work. It decides which datasets are loaded, which add-ons are installed and which notebooks you get. See [What is a persona](/kit/personas/what-is-a-persona).
+
+## Find your task [#find-your-task]
+
+| I want to                                             | Go to                                                          |
+| ----------------------------------------------------- | -------------------------------------------------------------- |
+| See or change which persona this kit is               | [Choose and change a persona](/kit/personas/choose-and-change) |
+| Load a file, a folder or a kit dataset                | [Load data](/kit/data/load-data)                               |
+| Say what each column of a table means                 | [Column maps](/kit/data/column-maps)                           |
+| Run a query from the terminal                         | [Run SQL](/kit/data/run-sql)                                   |
+| Install a dashboard server, notebooks or another tool | [Add-ons](/kit/tools/add-ons)                                  |
+| Open JupyterLab or Marimo                             | [Notebooks](/kit/tools/notebooks)                              |
+| See what a piece of work did, step by step            | [Workflows](/kit/tools/workflows)                              |
+| Connect an AI client                                  | [AI clients and skills](/kit/tools/ai-clients-and-skills)      |
+| Look up a command                                     | [All exakit commands](/kit/reference/commands)                 |
+| Work through the Data Scientist notebooks             | [Data Scientist](/data-scientist)                              |
+
+## Help on this computer [#help-on-this-computer]
+
+```bash
+exakit help                # every command
+exakit help data-load      # one command in full
+exakit catalog load        # search the commands
+exakit status              # is the database up?
+```
+
+The same help is built into the kit, so it always matches the version you have.
+
+
 # Add-ons and downloads (/security/add-ons-and-downloads)
 
 
@@ -635,53 +682,6 @@ The installer adds the kit's `bin` folder to your shell profile, through `ensure
 * The virtual schema log removes its files older than `KEEP_DAYS` when a new day's file is opened (`setup/virtual-schemas/engine/vslog.py`). This page found no pruning rule for the other logs.
 
 
-# The kit and its personas (/kit)
-
-
-
-The Exasol Personal Local Starter Kit installs a database on this computer and the tools around it. One command, `exakit`, runs all of it.
-
-## What every install has [#what-every-install-has]
-
-| Part          | What it is for                                                |
-| ------------- | ------------------------------------------------------------- |
-| The database  | Exasol, running on this computer                              |
-| `exakit`      | The command that starts, checks, loads and updates everything |
-| The AI bridge | Lets your AI clients query the database, read-only            |
-| AI skills     | Instructions that teach an AI client how to use the kit       |
-| Sample data   | Datasets to practise on                                       |
-
-## What a persona adds [#what-a-persona-adds]
-
-A **persona** is the kit set up for one kind of work. It decides which datasets are loaded, which add-ons are installed and which notebooks you get. See [What is a persona](/kit/personas/what-is-a-persona).
-
-## Find your task [#find-your-task]
-
-| I want to                                             | Go to                                                          |
-| ----------------------------------------------------- | -------------------------------------------------------------- |
-| See or change which persona this kit is               | [Choose and change a persona](/kit/personas/choose-and-change) |
-| Load a file, a folder or a kit dataset                | [Load data](/kit/data/load-data)                               |
-| Say what each column of a table means                 | [Column maps](/kit/data/column-maps)                           |
-| Run a query from the terminal                         | [Run SQL](/kit/data/run-sql)                                   |
-| Install a dashboard server, notebooks or another tool | [Add-ons](/kit/tools/add-ons)                                  |
-| Open JupyterLab or Marimo                             | [Notebooks](/kit/tools/notebooks)                              |
-| See what a piece of work did, step by step            | [Workflows](/kit/tools/workflows)                              |
-| Connect an AI client                                  | [AI clients and skills](/kit/tools/ai-clients-and-skills)      |
-| Look up a command                                     | [All exakit commands](/kit/reference/commands)                 |
-| Work through the Data Scientist notebooks             | [Data Scientist](/data-scientist)                              |
-
-## Help on this computer [#help-on-this-computer]
-
-```bash
-exakit help                # every command
-exakit help data-load      # one command in full
-exakit catalog load        # search the commands
-exakit status              # is the database up?
-```
-
-The same help is built into the kit, so it always matches the version you have.
-
-
 # Build the dashboard query (/data-scientist/communicate/dashboard-query)
 
 
@@ -1100,392 +1100,6 @@ nb.show_sql()   # the SQL the last query ran
 Back to [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Next: [The hand-off bundle](/data-scientist/communicate/hand-off-bundle).
 
 
-# Add a command (/data-scientist/development/add-a-command)
-
-
-
-<Steps>
-  <Step>
-    ### Write the helper [#write-the-helper]
-
-    Add a function to a module in `notebook/package/exakit_nb/`, with a docstring. The first sentence becomes its one-line summary here; the rest becomes its reference text. Indented lines in a docstring are shown as code.
-
-    Export it: import it in `exakit_nb/__init__.py` and add its name to `__all__`.
-  </Step>
-
-  <Step>
-    ### Put it in a notebook [#put-it-in-a-notebook]
-
-    Add the call to the code section of the notebook it belongs to, guarded by a variable when it is optional:
-
-    ```python
-    if ADD_ON:
-        nb.addon_ready(ADD_ON)
-    ```
-  </Step>
-
-  <Step>
-    ### Give a card a button for it [#give-a-card-a-button-for-it]
-
-    Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`: the code and the notebook it belongs to. Have the screen call `actions.run(...)`.
-  </Step>
-
-  <Step>
-    ### Regenerate [#regenerate]
-
-    ```bash
-    python3 tools/notebooks.py --marimo     # the .ipynb and Marimo notebooks
-    python3 tools/nb_docs.py                # the command reference
-    ```
-
-    The new helper now has an entry in its module's reference page and a row in [All commands](/data-scientist/development/reference). `nb.docs(nb.your_helper)` opens it once the site is rebuilt.
-  </Step>
-
-  <Step>
-    ### Test [#test]
-
-    ```bash
-    python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs
-    ```
-  </Step>
-</Steps>
-
-<Callout>
-  A whole new module gets its own reference page automatically, titled from its file name. Give it a proper title and a place in the order by adding one line to `PAGES` in `tools/nb_docs.py`.
-</Callout>
-
-
-# These docs (/data-scientist/development/docs-site)
-
-
-
-## How it works [#how-it-works]
-
-* **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
-* **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
-* **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
-* **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
-
-Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
-
-## Change a page [#change-a-page]
-
-<Steps>
-  <Step>
-    ### Edit [#edit]
-
-    Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
-
-    ```text
-    ---
-    title: Page title
-    description: One sentence that says what the page covers.
-    ---
-    ```
-
-    `Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
-  </Step>
-
-  <Step>
-    ### Preview while you write [#preview-while-you-write]
-
-    ```bash
-    npm install
-    ```
-
-    ```bash
-    npm run dev
-    ```
-
-    Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
-  </Step>
-
-  <Step>
-    ### Build and publish [#build-and-publish]
-
-    ```bash
-    npm run build
-    ```
-
-    ```bash
-    python3 tools/nb_docs.py --publish
-    ```
-
-    The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
-  </Step>
-
-  <Step>
-    ### Check [#check]
-
-    ```bash
-    python3 tools/nb_docs.py --check
-    ```
-
-    It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
-  </Step>
-</Steps>
-
-## Pages you do not edit [#pages-you-do-not-edit]
-
-Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
-
-## Links [#links]
-
-Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/development/reference/describe#describe`. A test fails on a link that leads nowhere.
-
-
-# How it fits together (/data-scientist/development/how-it-fits)
-
-
-
-## Three layers [#three-layers]
-
-| Layer           | Where                                                    | What it owns                                                                  |
-| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| The kit         | `setup/`, the `exakit` command                           | The database, connections, loading, connectors, add-ons, the describe service |
-| The helpers     | `notebook/package/exakit_nb/` (`import exakit.nb as nb`) | One Python call for each thing a notebook does                                |
-| The guided view | `notebook/package/exakit_guide/` (`exakit.guide`)        | Cards that call the helpers; UI only                                          |
-
-A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
-
-## The helpers [#the-helpers]
-
-`exakit.nb` exports about 110 names, listed in [All commands](/data-scientist/development/reference). The rules they follow:
-
-* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
-* **The kit does the work.** Describing a table is the kit's describe service; loading is `exakit data-load`; connecting a source is `exakit connect`. The helpers call these, they do not reimplement them.
-* **SQL is shown.** `nb.sql` records the statement, `nb.show_sql()` prints it, and the workflow logs it.
-* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when called.
-
-## The guided view [#the-guided-view]
-
-```text
-notebook/package/exakit_guide/
-  actions.py     every action: one or more lines of exakit.nb code, and its notebook
-  session.py     the notebook's namespace the actions run in
-  card.py        the widget; a button's code comes from its action
-  screens/       one module per page (home, understand, explore, ask, share): UI only
-  static/        card.js and card.css: the renderer, no facts
-```
-
-`actions.code(id, **values)` is the exact cell text. `actions.run(id, **values)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why **Code** can always show what a card did.
-
-## Rules the tests enforce [#rules-the-tests-enforce]
-
-* An action's call exists in its notebook's code section, and calls something `exakit.nb` exports.
-* No screen names a dataset, connector, add-on or notebook. Those are read from the kit.
-* No action shows a secret: a key is bound at run time, never written into the code.
-* Every exported helper has a page in these docs, and every link in them leads somewhere.
-
-## Notebooks [#notebooks]
-
-Sources are `notebook/notebooks/<persona>/<NN>_<name>.py` in jupytext percent format. The `.ipynb` and the Marimo version are built from them:
-
-```bash
-python3 tools/notebooks.py --marimo            # rebuild
-python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
-```
-
-## Further reading [#further-reading]
-
-* [pyexasol](https://github.com/exasol/pyexasol), the Python driver that `nb.connect()` opens, with its [documentation](https://exasol.github.io/pyexasol/master/index.html).
-* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses for SQL and loading.
-* [Exasol MCP server](https://exasol.github.io/mcp-server/main/index.html), the server behind the AI clients, and its [repository](https://github.com/exasol/mcp-server).
-* [virtual-schemas](https://github.com/exasol/virtual-schemas), behind the `VS_<NAME>` schemas of external sources.
-* [Exasol Personal](https://github.com/exasol/exasol-personal), the local database the kit deploys.
-* [Security](/security), how the layers above handle credentials, the network and models.
-
-
-# Development (/data-scientist/development)
-
-
-
-This section is for people who build on the kit, or who want the commands behind the notebooks. The stage pages tell you what to do. These pages tell you how it works underneath.
-
-<Cards>
-  <Card title="How it fits together" href="/data-scientist/development/how-it-fits">
-    The three layers, and the rules that keep them honest.
-  </Card>
-
-  <Card title="Command reference" href="/data-scientist/development/reference">
-    Every public helper of 
-
-    `exakit.nb`
-
-    , generated from its docstrings.
-  </Card>
-
-  <Card title="Where things live" href="/data-scientist/development/where-things-live">
-    The files and folders the notebooks read and write.
-  </Card>
-
-  <Card title="Add a command" href="/data-scientist/development/add-a-command">
-    Write a helper, wire it to a card, and get its page.
-  </Card>
-
-  <Card title="These docs" href="/data-scientist/development/docs-site">
-    How this site is written, built and shipped.
-  </Card>
-</Cards>
-
-## How the pieces fit [#how-the-pieces-fit]
-
-Three layers do the work. Each has one job.
-
-| Layer           | Where it lives                                               | What it owns                                                                     |
-| --------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
-| The kit         | `setup/` and the `exakit` command                            | The database, connections, loading, connectors, add-ons and the describe service |
-| The helpers     | `notebook/package/exakit_nb/`, imported as `exakit.nb`       | One Python call for each thing a notebook does                                   |
-| The guided view | `notebook/package/exakit_guide/`, imported as `exakit.guide` | The cards, which call the helpers. They have no logic of their own.              |
-
-A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
-
-Every step follows the same path, whether you run a cell or click a card:
-
-<Flow
-  caption="From a notebook cell to the database"
-  steps="[
-  { title: &#x22;Notebook cell&#x22;, text: &#x22;Or a card button, which runs the same code&#x22;, code: 'dataset = nb.dataset(connection, &#x22;amazon_sales&#x22;)', tone: &#x22;you&#x22; },
-  { title: &#x22;exakit.nb helper&#x22;, text: &#x22;Builds the SQL from the approved roles, shows it and logs the step&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Kit service or CLI&#x22;, text: &#x22;The describe service, exakit data-load or exakit connect. The helper calls these and does not reimplement them.&#x22;, code: &#x22;exakit describe AMAZON.ORDER_LINES&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;The database&#x22;, text: &#x22;The Exasol database on this computer&#x22;, tone: &#x22;db&#x22; },
-]"
-/>
-
-The rules the helpers follow:
-
-* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
-* **The kit does the work.** Describing a table is the kit's describe service. Loading is `exakit data-load`. Connecting a source is `exakit connect`.
-* **SQL is shown.** `nb.sql` records each statement, `nb.show_sql()` prints the last one, and the workflow logs it.
-* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when they are called.
-
-Inside the guided view, `actions.py` lists every action as one or more lines of `exakit.nb` code. `actions.code(id, ...)` gives the exact cell text, and `actions.run(id, ...)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why the **Code** view can always show what a card did.
-
-The tests enforce a few more rules: every action calls something the helpers export, no screen names a dataset or a connector (the kit supplies those), no action shows a secret, and every helper has a page in these docs.
-
-## The command reference [#the-command-reference]
-
-The [command reference](/data-scientist/development/reference) lists every public helper of `exakit.nb`, 116 in all, with a one-line summary and a link to its page. The pages are generated from the docstrings in `exakit_nb`, one page per module.
-
-From a notebook, the docs open at a command's page:
-
-```python
-import exakit.nb as nb
-nb.docs(nb.describe)     # open one command's page
-nb.docs("words")         # search the docs
-```
-
-The `exakit` commands are described in `setup/help/exakit.json`. `exakit <command> --help` shows a command's reference and changes nothing.
-
-## Where things live [#where-things-live]
-
-Everything is under the kit's home, `~/.exasol-starter-kit`, or `EXAKIT_HOME` when it is set. The main folders are:
-
-| Path                     | What it holds                                                             |
-| ------------------------ | ------------------------------------------------------------------------- |
-| `descriptors/`           | Approved column maps, one folder per table, every version kept            |
-| `workflows/<id>.jsonl`   | Workflow logs                                                             |
-| `bundles/<workflow id>/` | Hand-off bundles, each also as a zip                                      |
-| `handoffs/`              | Training hand-offs for the ML Engineer                                    |
-| `exakit.env`             | Settings such as the model's id and address                               |
-| `credentials/`           | Secrets, readable by you only. Never read or print these from a notebook. |
-
-The full table, including what an update touches and the schemas in the database, is in [Where things live](/data-scientist/development/where-things-live).
-
-## Adding a command [#adding-a-command]
-
-Four steps, and a test:
-
-1. Add a function with a docstring to a module in `notebook/package/exakit_nb/`. Export it in `exakit_nb/__init__.py` and add its name to `__all__`.
-2. Call it from the notebook it belongs to, guarded by a variable when it is optional.
-3. Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`, so a card can have a button for it.
-4. Regenerate the notebooks and the command reference with `python3 tools/notebooks.py --marimo` and `python3 tools/nb_docs.py`.
-
-Then run `python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs`. The full steps, with examples, are in [Add a command](/data-scientist/development/add-a-command).
-
-## The notebooks [#the-notebooks]
-
-The notebook sources are `notebook/notebooks/<persona>/<NN>_<name>.py`, in jupytext percent format. The `.ipynb` files and the Marimo versions are built from them:
-
-```bash
-python3 tools/notebooks.py --marimo            # rebuild
-python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
-```
-
-## Building these docs [#building-these-docs]
-
-The documentation is MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar, and each folder's `meta.json` sets its title and page order.
-
-```bash
-npm install && npm run dev          # in notebook/docs: preview at http://localhost:3000/docs
-npm run build                       # writes notebook/docs/out
-python3 tools/nb_docs.py --publish  # copies it to notebook/docs/site, stamped with a digest
-python3 tools/nb_docs.py --check    # fails when a generated page or the shipped site is stale
-```
-
-Users never need Node. The built site travels with the kit, and `nb.docs()` serves it from the kit's own Python, on this computer only. The full steps are in [These docs](/data-scientist/development/docs-site).
-
-Everything under a persona's `reference/` folder is generated. Change the docstring and run `python3 tools/nb_docs.py`; do not edit the generated page.
-
-## When the documentation does not open [#when-the-documentation-does-not-open]
-
-`nb.docs()` reads the site from the kit copy. If it says the site is not there, run:
-
-```python
-nb.exakit("update", "notebook")
-```
-
-The site is served on this computer at one of the ports 8790 to 8809, the first one free. A port another program holds is skipped. When all of them are taken, any free port is used. To choose the port, set `EXAKIT_DOCS_PORT` before you start the notebooks.
-
-If the notebook runs on another machine than your browser, the frame cannot reach the site. Run `nb.docs(browser=True)` on the machine that runs the kit.
-
-To go back to the story, see [The data science workflow](/data-scientist).
-
-
-# Where things live (/data-scientist/development/where-things-live)
-
-
-
-Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` when set).
-
-| Path                                         | What it holds                                                                |
-| -------------------------------------------- | ---------------------------------------------------------------------------- |
-| `notebooks/starter-kit-notebooks/<persona>/` | Your copies of the notebooks                                                 |
-| `notebooks/marimo/<persona>/`                | The Marimo versions                                                          |
-| `descriptors/`                               | Approved column maps, one folder per table, every version kept               |
-| `last-dataset`                               | The dataset approved last, which the notebooks follow                        |
-| `workflows/<id>.jsonl`                       | Workflow logs                                                                |
-| `last-workflow`                              | The workflow started or resumed last                                         |
-| `bundles/<workflow id>/`                     | Hand-off bundles, each also as a zip                                         |
-| `handoffs/`                                  | Training handoffs for the ML Engineer                                        |
-| `exakit.env`                                 | Settings such as the model's id and address                                  |
-| `credentials/`                               | Secrets, readable by you only. Never read or print these from a notebook.    |
-| `kit/`                                       | The kit copy: scripts, datasets, the notebook package and this documentation |
-
-## In the database [#in-the-database]
-
-| Schema                                                 | What it holds                                                                  |
-| ------------------------------------------------------ | ------------------------------------------------------------------------------ |
-| `SEMANTIC_CATALOG`, `SEMANTIC_ADMIN`, `SEMANTIC_AGENT` | Exasol Semantic Views: the semantic models built from the approved column maps |
-| `SEM_<MODEL>`                                          | A model's published semantic views, queried with Semantic SQL                  |
-| `EXAKIT_PREPARED`                                      | Joined views and typed, cleaned views you chose to create                      |
-| `VS_<NAME>`                                            | The tables of an external source named `<NAME>`                                |
-
-## What an update touches [#what-an-update-touches]
-
-* A kit notebook you did not edit is refreshed when the kit's version changes.
-* A notebook you edited, or a file of your own, is never overwritten.
-* A notebook you deleted is not copied back.
-* Approved column maps, workflow logs and bundles are yours and are left alone.
-
-## Further reading [#further-reading]
-
-* [Virtual Schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm), for the `VS_<NAME>` schemas.
-* [Database users and roles](https://docs.exasol.com/db/latest/database_concepts/database_users_roles.htm), for the users behind the credentials folder.
-* [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views), for the `SEMANTIC_*` and `SEM_<MODEL>` schemas.
-* [What the kit writes](/security/what-the-kit-writes) and [Credentials](/security/credentials), with the file modes and the limits of each.
-
-
 # The checks (/data-scientist/evaluate/checks)
 
 
@@ -1891,6 +1505,392 @@ Each entry quotes the warning or describes the score you see.
 </Accordions>
 
 Back to [Evaluate](/data-scientist/evaluate).
+
+
+# Add a command (/data-scientist/development/add-a-command)
+
+
+
+<Steps>
+  <Step>
+    ### Write the helper [#write-the-helper]
+
+    Add a function to a module in `notebook/package/exakit_nb/`, with a docstring. The first sentence becomes its one-line summary here; the rest becomes its reference text. Indented lines in a docstring are shown as code.
+
+    Export it: import it in `exakit_nb/__init__.py` and add its name to `__all__`.
+  </Step>
+
+  <Step>
+    ### Put it in a notebook [#put-it-in-a-notebook]
+
+    Add the call to the code section of the notebook it belongs to, guarded by a variable when it is optional:
+
+    ```python
+    if ADD_ON:
+        nb.addon_ready(ADD_ON)
+    ```
+  </Step>
+
+  <Step>
+    ### Give a card a button for it [#give-a-card-a-button-for-it]
+
+    Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`: the code and the notebook it belongs to. Have the screen call `actions.run(...)`.
+  </Step>
+
+  <Step>
+    ### Regenerate [#regenerate]
+
+    ```bash
+    python3 tools/notebooks.py --marimo     # the .ipynb and Marimo notebooks
+    python3 tools/nb_docs.py                # the command reference
+    ```
+
+    The new helper now has an entry in its module's reference page and a row in [All commands](/data-scientist/development/reference). `nb.docs(nb.your_helper)` opens it once the site is rebuilt.
+  </Step>
+
+  <Step>
+    ### Test [#test]
+
+    ```bash
+    python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs
+    ```
+  </Step>
+</Steps>
+
+<Callout>
+  A whole new module gets its own reference page automatically, titled from its file name. Give it a proper title and a place in the order by adding one line to `PAGES` in `tools/nb_docs.py`.
+</Callout>
+
+
+# These docs (/data-scientist/development/docs-site)
+
+
+
+## How it works [#how-it-works]
+
+* **Source:** MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar; each folder's `meta.json` sets its title and page order, and a persona's folder is marked `"root": true`, which makes it an entry in the list at the top of the sidebar.
+* **Build:** a static site built with Node on a maintainer's machine. Users never need Node.
+* **Shipped:** the built files, in `notebook/docs/site/`, travel with the kit.
+* **Served:** `nb.docs()` serves that folder from the kit's own Python, on this computer only.
+
+Search runs in the browser on an index inside the site. It forgives typos, matches as you type and needs no internet.
+
+## Change a page [#change-a-page]
+
+<Steps>
+  <Step>
+    ### Edit [#edit]
+
+    Edit an `.mdx` file, or add one and list it in its folder's `meta.json`. Each page starts with:
+
+    ```text
+    ---
+    title: Page title
+    description: One sentence that says what the page covers.
+    ---
+    ```
+
+    `Callout`, `Tabs`, `Steps`, `Cards` and `Accordions` are available on every page without imports.
+  </Step>
+
+  <Step>
+    ### Preview while you write [#preview-while-you-write]
+
+    ```bash
+    npm install
+    ```
+
+    ```bash
+    npm run dev
+    ```
+
+    Run both in `notebook/docs`. The site is at `http://localhost:3000/docs` and reloads on every save.
+  </Step>
+
+  <Step>
+    ### Build and publish [#build-and-publish]
+
+    ```bash
+    npm run build
+    ```
+
+    ```bash
+    python3 tools/nb_docs.py --publish
+    ```
+
+    The first writes `notebook/docs/out`; the second copies it to `notebook/docs/site` and stamps it with a digest of the sources.
+  </Step>
+
+  <Step>
+    ### Check [#check]
+
+    ```bash
+    python3 tools/nb_docs.py --check
+    ```
+
+    It fails when a generated page is stale, or when the shipped site was built from older sources than the ones in the repository.
+  </Step>
+</Steps>
+
+## Pages you do not edit [#pages-you-do-not-edit]
+
+Everything under a persona's `reference/` folder is generated from the docstrings in `exakit_nb` by `python3 tools/nb_docs.py`. To change a command's text, change its docstring and run the tool.
+
+## Links [#links]
+
+Link to a page by its address, without the `/docs` prefix and without `.mdx`: `/data-scientist/concepts/descriptor`. Link to a command by its page and name: `/data-scientist/development/reference/describe#describe`. A test fails on a link that leads nowhere.
+
+
+# How it fits together (/data-scientist/development/how-it-fits)
+
+
+
+## Three layers [#three-layers]
+
+| Layer           | Where                                                    | What it owns                                                                  |
+| --------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The kit         | `setup/`, the `exakit` command                           | The database, connections, loading, connectors, add-ons, the describe service |
+| The helpers     | `notebook/package/exakit_nb/` (`import exakit.nb as nb`) | One Python call for each thing a notebook does                                |
+| The guided view | `notebook/package/exakit_guide/` (`exakit.guide`)        | Cards that call the helpers; UI only                                          |
+
+A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
+
+## The helpers [#the-helpers]
+
+`exakit.nb` exports about 110 names, listed in [All commands](/data-scientist/development/reference). The rules they follow:
+
+* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
+* **The kit does the work.** Describing a table is the kit's describe service; loading is `exakit data-load`; connecting a source is `exakit connect`. The helpers call these, they do not reimplement them.
+* **SQL is shown.** `nb.sql` records the statement, `nb.show_sql()` prints it, and the workflow logs it.
+* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when called.
+
+## The guided view [#the-guided-view]
+
+```text
+notebook/package/exakit_guide/
+  actions.py     every action: one or more lines of exakit.nb code, and its notebook
+  session.py     the notebook's namespace the actions run in
+  card.py        the widget; a button's code comes from its action
+  screens/       one module per page (home, understand, explore, ask, share): UI only
+  static/        card.js and card.css: the renderer, no facts
+```
+
+`actions.code(id, **values)` is the exact cell text. `actions.run(id, **values)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why **Code** can always show what a card did.
+
+## Rules the tests enforce [#rules-the-tests-enforce]
+
+* An action's call exists in its notebook's code section, and calls something `exakit.nb` exports.
+* No screen names a dataset, connector, add-on or notebook. Those are read from the kit.
+* No action shows a secret: a key is bound at run time, never written into the code.
+* Every exported helper has a page in these docs, and every link in them leads somewhere.
+
+## Notebooks [#notebooks]
+
+Sources are `notebook/notebooks/<persona>/<NN>_<name>.py` in jupytext percent format. The `.ipynb` and the Marimo version are built from them:
+
+```bash
+python3 tools/notebooks.py --marimo            # rebuild
+python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
+```
+
+## Further reading [#further-reading]
+
+* [pyexasol](https://github.com/exasol/pyexasol), the Python driver that `nb.connect()` opens, with its [documentation](https://exasol.github.io/pyexasol/master/index.html).
+* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses for SQL and loading.
+* [Exasol MCP server](https://exasol.github.io/mcp-server/main/index.html), the server behind the AI clients, and its [repository](https://github.com/exasol/mcp-server).
+* [virtual-schemas](https://github.com/exasol/virtual-schemas), behind the `VS_<NAME>` schemas of external sources.
+* [Exasol Personal](https://github.com/exasol/exasol-personal), the local database the kit deploys.
+* [Security](/security), how the layers above handle credentials, the network and models.
+
+
+# Development (/data-scientist/development)
+
+
+
+This section is for people who build on the kit, or who want the commands behind the notebooks. The stage pages tell you what to do. These pages tell you how it works underneath.
+
+<Cards>
+  <Card title="How it fits together" href="/data-scientist/development/how-it-fits">
+    The three layers, and the rules that keep them honest.
+  </Card>
+
+  <Card title="Command reference" href="/data-scientist/development/reference">
+    Every public helper of 
+
+    `exakit.nb`
+
+    , generated from its docstrings.
+  </Card>
+
+  <Card title="Where things live" href="/data-scientist/development/where-things-live">
+    The files and folders the notebooks read and write.
+  </Card>
+
+  <Card title="Add a command" href="/data-scientist/development/add-a-command">
+    Write a helper, wire it to a card, and get its page.
+  </Card>
+
+  <Card title="These docs" href="/data-scientist/development/docs-site">
+    How this site is written, built and shipped.
+  </Card>
+</Cards>
+
+## How the pieces fit [#how-the-pieces-fit]
+
+Three layers do the work. Each has one job.
+
+| Layer           | Where it lives                                               | What it owns                                                                     |
+| --------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------- |
+| The kit         | `setup/` and the `exakit` command                            | The database, connections, loading, connectors, add-ons and the describe service |
+| The helpers     | `notebook/package/exakit_nb/`, imported as `exakit.nb`       | One Python call for each thing a notebook does                                   |
+| The guided view | `notebook/package/exakit_guide/`, imported as `exakit.guide` | The cards, which call the helpers. They have no logic of their own.              |
+
+A notebook is cells that call the helpers. A card is a form that calls the same helpers. Neither talks to the database on its own.
+
+Every step follows the same path, whether you run a cell or click a card:
+
+<Flow
+  caption="From a notebook cell to the database"
+  steps="[
+  { title: &#x22;Notebook cell&#x22;, text: &#x22;Or a card button, which runs the same code&#x22;, code: 'dataset = nb.dataset(connection, &#x22;amazon_sales&#x22;)', tone: &#x22;you&#x22; },
+  { title: &#x22;exakit.nb helper&#x22;, text: &#x22;Builds the SQL from the approved roles, shows it and logs the step&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Kit service or CLI&#x22;, text: &#x22;The describe service, exakit data-load or exakit connect. The helper calls these and does not reimplement them.&#x22;, code: &#x22;exakit describe AMAZON.ORDER_LINES&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The database&#x22;, text: &#x22;The Exasol database on this computer&#x22;, tone: &#x22;db&#x22; },
+]"
+/>
+
+The rules the helpers follow:
+
+* **The connection comes from the kit.** `nb.connect()` opens it from the kit's encrypted store. No helper prints or returns a host, a user or a password.
+* **The kit does the work.** Describing a table is the kit's describe service. Loading is `exakit data-load`. Connecting a source is `exakit connect`.
+* **SQL is shown.** `nb.sql` records each statement, `nb.show_sql()` prints the last one, and the workflow logs it.
+* **Reads are live.** `nb.components()`, `nb.addons()`, `nb.connectors()` and the rest ask the kit when they are called.
+
+Inside the guided view, `actions.py` lists every action as one or more lines of `exakit.nb` code. `actions.code(id, ...)` gives the exact cell text, and `actions.run(id, ...)` runs that text in the notebook's namespace and logs it. A screen changes nothing except through `actions.run`, which is why the **Code** view can always show what a card did.
+
+The tests enforce a few more rules: every action calls something the helpers export, no screen names a dataset or a connector (the kit supplies those), no action shows a secret, and every helper has a page in these docs.
+
+## The command reference [#the-command-reference]
+
+The [command reference](/data-scientist/development/reference) lists every public helper of `exakit.nb`, 116 in all, with a one-line summary and a link to its page. The pages are generated from the docstrings in `exakit_nb`, one page per module.
+
+From a notebook, the docs open at a command's page:
+
+```python
+import exakit.nb as nb
+nb.docs(nb.describe)     # open one command's page
+nb.docs("words")         # search the docs
+```
+
+The `exakit` commands are described in `setup/help/exakit.json`. `exakit <command> --help` shows a command's reference and changes nothing.
+
+## Where things live [#where-things-live]
+
+Everything is under the kit's home, `~/.exasol-starter-kit`, or `EXAKIT_HOME` when it is set. The main folders are:
+
+| Path                     | What it holds                                                             |
+| ------------------------ | ------------------------------------------------------------------------- |
+| `descriptors/`           | Approved column maps, one folder per table, every version kept            |
+| `workflows/<id>.jsonl`   | Workflow logs                                                             |
+| `bundles/<workflow id>/` | Hand-off bundles, each also as a zip                                      |
+| `handoffs/`              | Training hand-offs for the ML Engineer                                    |
+| `exakit.env`             | Settings such as the model's id and address                               |
+| `credentials/`           | Secrets, readable by you only. Never read or print these from a notebook. |
+
+The full table, including what an update touches and the schemas in the database, is in [Where things live](/data-scientist/development/where-things-live).
+
+## Adding a command [#adding-a-command]
+
+Four steps, and a test:
+
+1. Add a function with a docstring to a module in `notebook/package/exakit_nb/`. Export it in `exakit_nb/__init__.py` and add its name to `__all__`.
+2. Call it from the notebook it belongs to, guarded by a variable when it is optional.
+3. Add one entry to `actions.ACTIONS` in `exakit_guide/actions.py`, so a card can have a button for it.
+4. Regenerate the notebooks and the command reference with `python3 tools/notebooks.py --marimo` and `python3 tools/nb_docs.py`.
+
+Then run `python3 -m unittest tests.test_notebook_guide tests.test_notebook_helpers tests.test_notebook_docs`. The full steps, with examples, are in [Add a command](/data-scientist/development/add-a-command).
+
+## The notebooks [#the-notebooks]
+
+The notebook sources are `notebook/notebooks/<persona>/<NN>_<name>.py`, in jupytext percent format. The `.ipynb` files and the Marimo versions are built from them:
+
+```bash
+python3 tools/notebooks.py --marimo            # rebuild
+python3 tools/notebooks.py --check --marimo    # fail when a built file is stale
+```
+
+## Building these docs [#building-these-docs]
+
+The documentation is MDX pages in `notebook/docs/content/docs/`, one folder per persona. The folder layout is the sidebar, and each folder's `meta.json` sets its title and page order.
+
+```bash
+npm install && npm run dev          # in notebook/docs: preview at http://localhost:3000/docs
+npm run build                       # writes notebook/docs/out
+python3 tools/nb_docs.py --publish  # copies it to notebook/docs/site, stamped with a digest
+python3 tools/nb_docs.py --check    # fails when a generated page or the shipped site is stale
+```
+
+Users never need Node. The built site travels with the kit, and `nb.docs()` serves it from the kit's own Python, on this computer only. The full steps are in [These docs](/data-scientist/development/docs-site).
+
+Everything under a persona's `reference/` folder is generated. Change the docstring and run `python3 tools/nb_docs.py`; do not edit the generated page.
+
+## When the documentation does not open [#when-the-documentation-does-not-open]
+
+`nb.docs()` reads the site from the kit copy. If it says the site is not there, run:
+
+```python
+nb.exakit("update", "notebook")
+```
+
+The site is served on this computer at one of the ports 8790 to 8809, the first one free. A port another program holds is skipped. When all of them are taken, any free port is used. To choose the port, set `EXAKIT_DOCS_PORT` before you start the notebooks.
+
+If the notebook runs on another machine than your browser, the frame cannot reach the site. Run `nb.docs(browser=True)` on the machine that runs the kit.
+
+To go back to the story, see [The data science workflow](/data-scientist).
+
+
+# Where things live (/data-scientist/development/where-things-live)
+
+
+
+Everything is under the kit's home, `~/.exasol-starter-kit` (or `EXAKIT_HOME` when set).
+
+| Path                                         | What it holds                                                                |
+| -------------------------------------------- | ---------------------------------------------------------------------------- |
+| `notebooks/starter-kit-notebooks/<persona>/` | Your copies of the notebooks                                                 |
+| `notebooks/marimo/<persona>/`                | The Marimo versions                                                          |
+| `descriptors/`                               | Approved column maps, one folder per table, every version kept               |
+| `last-dataset`                               | The dataset approved last, which the notebooks follow                        |
+| `workflows/<id>.jsonl`                       | Workflow logs                                                                |
+| `last-workflow`                              | The workflow started or resumed last                                         |
+| `bundles/<workflow id>/`                     | Hand-off bundles, each also as a zip                                         |
+| `handoffs/`                                  | Training handoffs for the ML Engineer                                        |
+| `exakit.env`                                 | Settings such as the model's id and address                                  |
+| `credentials/`                               | Secrets, readable by you only. Never read or print these from a notebook.    |
+| `kit/`                                       | The kit copy: scripts, datasets, the notebook package and this documentation |
+
+## In the database [#in-the-database]
+
+| Schema                                                 | What it holds                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------ |
+| `SEMANTIC_CATALOG`, `SEMANTIC_ADMIN`, `SEMANTIC_AGENT` | Exasol Semantic Views: the semantic models built from the approved column maps |
+| `SEM_<MODEL>`                                          | A model's published semantic views, queried with Semantic SQL                  |
+| `EXAKIT_PREPARED`                                      | Joined views and typed, cleaned views you chose to create                      |
+| `VS_<NAME>`                                            | The tables of an external source named `<NAME>`                                |
+
+## What an update touches [#what-an-update-touches]
+
+* A kit notebook you did not edit is refreshed when the kit's version changes.
+* A notebook you edited, or a file of your own, is never overwritten.
+* A notebook you deleted is not copied back.
+* Approved column maps, workflow logs and bundles are yours and are left alone.
+
+## Further reading [#further-reading]
+
+* [Virtual Schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm), for the `VS_<NAME>` schemas.
+* [Database users and roles](https://docs.exasol.com/db/latest/database_concepts/database_users_roles.htm), for the users behind the credentials folder.
+* [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views), for the `SEMANTIC_*` and `SEM_<MODEL>` schemas.
+* [What the kit writes](/security/what-the-kit-writes) and [Credentials](/security/credentials), with the file modes and the limits of each.
 
 
 # Approve the column map (/data-scientist/explore/approve-the-column-map)
@@ -2616,6 +2616,23 @@ exakit semantic restore-version all_data 3
 
 A link taken away or of another type, a key or a semantic view taken away: each is changed in place with Semantic Views' own scripts (`REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS`, `REMOVE_SEMANTIC_OBJECT`), so trusted questions, grants and the query log stay. Only a table taken away, or another description of the whole map, rebuilds it, because Semantic Views has no script for those.
 
+### Links: rows without a match, and one row meeting several [#links-rows-without-a-match-and-one-row-meeting-several]
+
+Each link also says, beside its type:
+
+| Choice                                                      | Means                                                            | In Semantic Views                           |
+| ----------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------- |
+| Rows without a match: keep them                             | an order with no customer still counts (left join, the default)  | `LEFT`                                      |
+| Rows without a match: leave them out                        | only orders that have a customer count                           | `INNER`                                     |
+| When one row meets several: refuse to count twice           | the default: a question that would multiply an amount is refused | no policy                                   |
+| Share the amount out, count it once, only to look values up | what Semantic Views does instead                                 | `ALLOCATE`, `DEDUPLICATE`, `REFERENCE_ONLY` |
+
+Changing them changes the link in place (`SET_RELATIONSHIP`).
+
+### Your words for a field [#your-words-for-a-field]
+
+Under **Metrics**, give a field the words people use for it: `total_amount` is also *sales*, *revenue*. Search and AI tools find it by them. They go into the field's own definition, or, for a metric of your own, through `ADD_SYNONYM`.
+
 ### More from Semantic Views [#more-from-semantic-views]
 
 Under **More from Semantic Views** in the card, in the notebook's *More from Semantic Views* cell, and with `exakit semantic`, each of these reads or does one thing when you ask:
@@ -2885,6 +2902,20 @@ chosen_tables[str(source_data.fact_table)] = source_data
 ```
 
 ## The same thing in two sources [#the-same-thing-in-two-sources]
+
+Three ways two sources can hold the same thing, chosen under **How they relate**:
+
+| How they relate                | What you give                                                                                                       | In Semantic Views                                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| The same rows, the same ids    | the other table, and its key when named differently                                                                 | an identity bound `DIRECT`                                                                                                                    |
+| The same rows, different ids   | the table that pairs the ids (`CRM.CUSTOMER_XREF`), its column with the other source's id and its column with yours | an identity bound `MAPPED` through that certified table                                                                                       |
+| The other holds the older rows | the date both hold and the day your table answers from                                                              | a date split: each side answers its own period (coverage); `exakit semantic coverage` lists rows outside their window, which no answer counts |
+
+```bash
+exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key ACCOUNT_ID \
+  --mapping-table VS_CRM.CUSTOMER_XREF --mapping-local ACCOUNT_ID --mapping-key CUSTOMER_ID
+exakit semantic fuse all_data --table MY_DATA.ORDERS --same-as VS_LAKE.ORDERS_ARCHIVE --split-column ORDER_DATE --split-at 2026-01-01
+```
 
 Customers in the warehouse and in a CRM, or orders here and in a lakehouse, are the same rows kept in two places. Declare them one entity with two sources, using Exasol Semantic Views *fusion*. Requests are then answered from either copy. For a value both copies hold, the side you pick wins.
 
@@ -6255,14 +6286,14 @@ searches them.
 
 ## Personas and notebooks [#personas-and-notebooks]
 
-| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | What it does                                                                                                                                                                                                                     |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                                                      |
-| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                                                |
-| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients.                                |
-| `exakit semantic` | `models [--json] \| fields <MODEL> [--json] \| search <words> [--model <MODEL>] [--json] \| compile '<request json>' \| --request-file <file> [--json] \| verify <MODEL> --object <OBJECT> --name <NAME> --question <text> --request '<json>' [--json] \| verified <MODEL> [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> [--key <COLUMN>] [--wins model\|other] [--apply] [--json] \| fuse <MODEL> --document <file> [--apply] [--json] \| fusion <MODEL> [--json] \| column-maps <MODEL> [--json] \| restore-maps <MODEL> [--write] [--json] \| refresh <MODEL> [--json] \| plan <MODEL> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--json] \| run <MODEL> --sql-file <file> [--json] \| adopt <MODEL> <SCHEMA.VIEW> [--dry-run] [--json] \| draft --table <SCHEMA.TABLE>... [--json] \| validate <MODEL> [--json] \| explain <MODEL> <VIEW> <METRIC> [--json] \| versions <MODEL> [--json] \| restore-version <MODEL> <N> [--json] \| totals <MODEL> [--store <VIEW> --metric <M>... --dimension <D>... [--name <N>] [--max-age <n UNIT>] \| --refresh <N> \| --off <N> \| --on <N>] [--json] \| freeze <SCHEMA.NAME> --sql <SELECT ...> [--json] \| frozen <MODEL> [--sync] [--json] \| governance <MODEL> open\|governed [--json] \| composition <MODEL> on\|off [--json] \| logging [on\|off] [--session] [--json] \| history [--limit <N>] [--json] \| suggestions <MODEL> [--all] [--json] \| propose <MODEL> --kind <K> --object-type <T> [--object <O>] --change <json> --why <text> [--json] \| review <ID> certified\|rejected --why <text> [--json] \| import-databricks <MODEL> --file <yaml> [--apply] [--json] \| import-osi --file <json> [--json]` | The semantic layer (Exasol Semantic Views) from the command line: a model's fields, structured requests compiled to SQL, verified questions, fusion of the same rows kept in two sources, and the column maps the model carries. |
-| `exakit board`    | `recheck <NAME> [--update] [--json] \| list [--json] \| starter [<NAME>] [--rules '<json>'] [--json] \| show <NAME> [--json] \| pin <NAME> --page <PAGE> --question <text> --sql <SELECT ...> \| --sql-file <file> [--title <text>] [--kind kpi\|bar\|line\|table] [--json] \| edit <NAME> <TILE> --sql <SELECT ...> \| --sql-file <file> [--title <text>] \| move <NAME> <TILE> <PAGE> \| remove <NAME> <TILE> \| kind <NAME> <TILE> <kpi\|bar\|line\|table> \| preview <NAME> [--rules '<json>'] [--app-file <file>] [--json] \| publish <NAME> --figures-checked [--app-file <file>] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | A dashboard of several pages from approved answers, on Dash Server: pin answers to pages, arrange them, preview it, publish it.                                                                                                  |
-| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                                               |
+| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | What it does                                                                                                                                                                                                                     |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                                                      |
+| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                                                |
+| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients.                                |
+| `exakit semantic` | `models [--json] \| fields <MODEL> [--json] \| search <words> [--model <MODEL>] [--json] \| compile '<request json>' \| --request-file <file> [--json] \| verify <MODEL> --object <OBJECT> --name <NAME> --question <text> --request '<json>' [--json] \| verified <MODEL> [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> [--key <COLUMN>] [--wins model\|other] [--apply] [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> --mapping-table <SCHEMA.TABLE> --mapping-local <COLUMN> --mapping-key <COLUMN> [--apply] [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> --split-column <COLUMN> --split-at <YYYY-MM-DD> [--apply] [--json] \| coverage <MODEL> [--json] \| fuse <MODEL> --document <file> [--apply] [--json] \| fusion <MODEL> [--json] \| column-maps <MODEL> [--json] \| restore-maps <MODEL> [--write] [--json] \| refresh <MODEL> [--json] \| plan <MODEL> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--json] \| run <MODEL> --sql-file <file> [--json] \| adopt <MODEL> <SCHEMA.VIEW> [--dry-run] [--json] \| draft --table <SCHEMA.TABLE>... [--json] \| validate <MODEL> [--json] \| explain <MODEL> <VIEW> <METRIC> [--json] \| versions <MODEL> [--json] \| restore-version <MODEL> <N> [--json] \| totals <MODEL> [--store <VIEW> --metric <M>... --dimension <D>... [--name <N>] [--max-age <n UNIT>] \| --refresh <N> \| --off <N> \| --on <N>] [--json] \| freeze <SCHEMA.NAME> --sql <SELECT ...> [--json] \| frozen <MODEL> [--sync] [--json] \| governance <MODEL> open\|governed [--json] \| composition <MODEL> on\|off [--json] \| logging [on\|off] [--session] [--json] \| history [--limit <N>] [--json] \| suggestions <MODEL> [--all] [--json] \| propose <MODEL> --kind <K> --object-type <T> [--object <O>] --change <json> --why <text> [--json] \| review <ID> certified\|rejected --why <text> [--json] \| import-databricks <MODEL> --file <yaml> [--apply] [--json] \| import-osi --file <json> [--json]` | The semantic layer (Exasol Semantic Views) from the command line: a model's fields, structured requests compiled to SQL, verified questions, fusion of the same rows kept in two sources, and the column maps the model carries. |
+| `exakit board`    | `recheck <NAME> [--update] [--json] \| list [--json] \| starter [<NAME>] [--rules '<json>'] [--json] \| show <NAME> [--json] \| pin <NAME> --page <PAGE> --question <text> --sql <SELECT ...> \| --sql-file <file> [--title <text>] [--kind kpi\|bar\|line\|table] [--json] \| edit <NAME> <TILE> --sql <SELECT ...> \| --sql-file <file> [--title <text>] \| move <NAME> <TILE> <PAGE> \| remove <NAME> <TILE> \| kind <NAME> <TILE> <kpi\|bar\|line\|table> \| preview <NAME> [--rules '<json>'] [--app-file <file>] [--json] \| publish <NAME> --figures-checked [--app-file <file>] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | A dashboard of several pages from approved answers, on Dash Server: pin answers to pages, arrange them, preview it, publish it.                                                                                                  |
+| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                                               |
 
 ## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
 
@@ -7923,6 +7954,7 @@ nb.docs(nb.describe)     # open one command's page from a notebook
 | [`nb.notebooks`](/data-scientist/development/reference/kit-facts#notebooks)                              | The kit's notebooks in order (\{id, persona, step, title, summary, file}), from its notebook catalog; only `persona`'s when given.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | [`nb.noun`](/data-scientist/development/reference/readout#noun)                                          | What a row is, from the descriptor's grain: "one row per order line" -> "order lines" (`one=True`: "order line"), "one row per store and week" -> "store weeks"; at most three words, up to a comma or a word such as "in" or "per"; "rows" when the descriptor does not say.                                                                                                                                                                                                                                                                                                                                       |
 | [`nb.open_chosen`](/data-scientist/development/reference/chosen#open_chosen)                             | Each chosen table opened (`use_table`), by name: \{"SCHEMA.TABLE": table}.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| [`nb.partition_coverage`](/data-scientist/development/reference/semantic#partition_coverage)             | Rows of a date-split source outside its window, which no answer counts; \[] when all is well.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | [`nb.persona_plan`](/data-scientist/development/reference/kit-facts#persona_plan)                        | What a persona (this kit's, when not named) brings that is still missing here: `exakit persona plan --json` - \{persona, datasets\{loaded, pending}, addons\{installed, pending, unavailable}, nothing_pending}.                                                                                                                                                                                                                                                                                                                                                                                                    |
 | [`nb.personas`](/data-scientist/development/reference/kit-facts#personas)                                | The kit's personas (personas/\*.json): \{id, title, summary, datasets, addons, visible}.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | [`nb.pin`](/data-scientist/development/reference/board#pin)                                              | Put an approved answer on a page of a dashboard: its SQL exactly as approved, shown as `kind` (kpi, bar, line or table; by default what the answer looks like).                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -9402,6 +9434,8 @@ nb.fusion_document(
     *,
     key: str | None=None,
     wins: str='model',
+    mapping: dict[str, str] | None=None,
+    split: dict[str, str] | None=None,
 ) -> dict[str, Any]
 ```
 
@@ -9409,7 +9443,10 @@ The fusion document saying `other` (a table of another source) holds the same th
 of the published `model`), at the same grain: a second copy of the entity, matched by its key (`key`: its
 column in `other` when it is named differently), every field bound there (a column of the same name, else
 empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative,
-`wins="other"` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document).
+`wins="other"` makes the other one win. When the two use different ids, `mapping` names the table that pairs
+them: \{"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}. When `other` holds the older
+rows, `split` says from when this table answers: \{"column": "ORDER_DATE", "at": "2026-01-01"}. Nothing is
+written: check it with nb.fuse(connection, model, document).
 
 ## nb.governance_mode [#governance_mode]
 
@@ -9469,6 +9506,14 @@ is shown each table's name and its columns' names, types and roles - never a row
 ("S.T.COL=S.T.KEY", or nb.find_links' own). Only an answer about a table or a link you named is kept. Nothing is
 written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
 is set up.
+
+## nb.partition_coverage [#partition_coverage]
+
+```python
+nb.partition_coverage(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Rows of a date-split source outside its window, which no answer counts; \[] when all is well.
 
 ## nb.propose_change [#propose_change]
 
@@ -9568,6 +9613,7 @@ nb.semantic_model(
     instructions: list | None=None,
     replace_links: bool=False,
     hidden: dict[str, list[str]] | None=None,
+    synonyms: dict[str, list[str]] | None=None,
 ) -> SemanticModel
 ```
 
@@ -9584,7 +9630,9 @@ What Semantic Views needs from you: `grains` (\{SCHEMA.TABLE: "one row is one or
 (MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), `starts` (the tables questions start from),
 `metrics` (\[\{"table", "name", "how": "sum"|"count"|"average", "column", "where": \{"column", "values"}, "about"}])
 `instructions` (rules for AI tools, as text or \{"table", "text"}) and `hidden` (\{SCHEMA.TABLE: \[COLUMN]}:
-never shown in answers - Semantic Views' MASK policy - but usable in filters). nb.draft_data_map drafts them with AI;
+never shown in answers - Semantic Views' MASK policy - but usable in filters) and `synonyms` (\{field: \["sales"]}:
+your words for a field). A link may say "join": "INNER" (default LEFT) and "fanout": ALLOCATE, DEDUPLICATE or
+REFERENCE_ONLY. nb.draft_data_map drafts them with AI;
 Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
 have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user.
 

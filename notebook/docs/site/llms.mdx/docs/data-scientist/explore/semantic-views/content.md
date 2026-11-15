@@ -162,6 +162,23 @@ exakit semantic restore-version all_data 3
 
 A link taken away or of another type, a key or a semantic view taken away: each is changed in place with Semantic Views' own scripts (`REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS`, `REMOVE_SEMANTIC_OBJECT`), so trusted questions, grants and the query log stay. Only a table taken away, or another description of the whole map, rebuilds it, because Semantic Views has no script for those.
 
+### Links: rows without a match, and one row meeting several [#links-rows-without-a-match-and-one-row-meeting-several]
+
+Each link also says, beside its type:
+
+| Choice                                                      | Means                                                            | In Semantic Views                           |
+| ----------------------------------------------------------- | ---------------------------------------------------------------- | ------------------------------------------- |
+| Rows without a match: keep them                             | an order with no customer still counts (left join, the default)  | `LEFT`                                      |
+| Rows without a match: leave them out                        | only orders that have a customer count                           | `INNER`                                     |
+| When one row meets several: refuse to count twice           | the default: a question that would multiply an amount is refused | no policy                                   |
+| Share the amount out, count it once, only to look values up | what Semantic Views does instead                                 | `ALLOCATE`, `DEDUPLICATE`, `REFERENCE_ONLY` |
+
+Changing them changes the link in place (`SET_RELATIONSHIP`).
+
+### Your words for a field [#your-words-for-a-field]
+
+Under **Metrics**, give a field the words people use for it: `total_amount` is also *sales*, *revenue*. Search and AI tools find it by them. They go into the field's own definition, or, for a metric of your own, through `ADD_SYNONYM`.
+
 ### More from Semantic Views [#more-from-semantic-views]
 
 Under **More from Semantic Views** in the card, in the notebook's *More from Semantic Views* cell, and with `exakit semantic`, each of these reads or does one thing when you ask:
@@ -431,6 +448,20 @@ chosen_tables[str(source_data.fact_table)] = source_data
 ```
 
 ## The same thing in two sources [#the-same-thing-in-two-sources]
+
+Three ways two sources can hold the same thing, chosen under **How they relate**:
+
+| How they relate                | What you give                                                                                                       | In Semantic Views                                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| The same rows, the same ids    | the other table, and its key when named differently                                                                 | an identity bound `DIRECT`                                                                                                                    |
+| The same rows, different ids   | the table that pairs the ids (`CRM.CUSTOMER_XREF`), its column with the other source's id and its column with yours | an identity bound `MAPPED` through that certified table                                                                                       |
+| The other holds the older rows | the date both hold and the day your table answers from                                                              | a date split: each side answers its own period (coverage); `exakit semantic coverage` lists rows outside their window, which no answer counts |
+
+```bash
+exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key ACCOUNT_ID \
+  --mapping-table VS_CRM.CUSTOMER_XREF --mapping-local ACCOUNT_ID --mapping-key CUSTOMER_ID
+exakit semantic fuse all_data --table MY_DATA.ORDERS --same-as VS_LAKE.ORDERS_ARCHIVE --split-column ORDER_DATE --split-at 2026-01-01
+```
 
 Customers in the warehouse and in a CRM, or orders here and in a lakehouse, are the same rows kept in two places. Declare them one entity with two sources, using Exasol Semantic Views *fusion*. Requests are then answered from either copy. For a value both copies hold, the side you pick wins.
 

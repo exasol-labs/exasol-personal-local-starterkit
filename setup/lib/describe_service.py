@@ -602,7 +602,8 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                    table_notes: dict[str, str] | None = None, statements: list[str] | None = None,
                    grains: dict[str, str] | None = None, starts: list[str] | None = None, metrics: list | None = None,
                    instructions: list | None = None, replace_links: bool = False,
-                   hidden: dict[str, list[str]] | None = None) -> dict[str, Any]:
+                   hidden: dict[str, list[str]] | None = None,
+                   synonyms: dict[str, list[str]] | None = None) -> dict[str, Any]:
     """A semantic model over tables of any schemas (sample data, loaded files, external sources), built from their
     approved column maps and the links given as ``S.T.COL=S.T.KEY`` (with each schema's approved links too). A link
     may also be a dict as find_links returns it ({"from", "to", ...its evidence}) with an optional "note" in a
@@ -613,7 +614,9 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     What you say about the data map: ``grains`` ({SCHEMA.TABLE: "one row is ..."}), a link's "type" (MANY_TO_ONE or
     ONE_TO_ONE), ``starts`` (the tables questions start from), ``metrics`` ([{table, name, how, column, where,
     about}]: sm.user_metrics), ``instructions`` (texts, or {table, text}) and ``hidden`` ({SCHEMA.TABLE: [COLUMN]}:
-    kept out of answers by Semantic Views' MASK policy, still usable in filters). Semantic Views checks all of it when it
+    kept out of answers by Semantic Views' MASK policy, still usable in filters) and ``synonyms`` ({field: [words]}).
+    A link may say how it joins: "join" (LEFT, the default, or INNER) and "fanout" (ALLOCATE, DEDUPLICATE or
+    REFERENCE_ONLY: what to do when one row meets several). Semantic Views checks all of it when it
     is saved. ``replace_links``: the links given are all of them (the data map card), not added to the kept ones."""
     from descriptor import semantic_model as sm
 
@@ -660,7 +663,14 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
             kind = str(spec.get("type") or spec.get("cardinality") or "").upper().replace("-", "_")
             if kind and kind not in ("MANY_TO_ONE", "ONE_TO_ONE"):
                 raise Refused(f"A link's type is MANY_TO_ONE or ONE_TO_ONE, not '{kind}'.")
-            joins.append({"from": source, "to": target, "evidence": evidence, **({"cardinality": kind} if kind else {})})
+            join_type = str(spec.get("join") or spec.get("join_type") or "LEFT").upper()
+            fanout = str(spec.get("fanout") or "").upper().replace("-", "_") or None
+            if join_type not in ("LEFT", "INNER"):
+                raise Refused(f"A link joins LEFT or INNER, not '{join_type}'.")
+            if fanout not in (None, "ALLOCATE", "DEDUPLICATE", "REFERENCE_ONLY"):
+                raise Refused(f"A link's fanout is ALLOCATE, DEDUPLICATE or REFERENCE_ONLY, not '{fanout}'.")
+            joins.append({"from": source, "to": target, "evidence": evidence, "join_type": join_type,
+                          **({"fanout": fanout} if fanout else {}), **({"cardinality": kind} if kind else {})})
             continue
         source, sep, target = spec.partition("=")
         if not sep or source.count(".") != 2 or target.count(".") != 2:
@@ -697,7 +707,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     proposal = semantic_ai(spec, chat) if ai else {"labels": {}, "extra": [], "refused": [], "error": None}
     if proposal["labels"]:
         publishing.apply_labels(spec, proposal["labels"])
-    yours = publishing.your_definitions(spec, metrics, instructions, hidden)
+    yours = publishing.your_definitions(spec, metrics, instructions, hidden, synonyms)
     for table in skipped:
         spec["notes"].append(f"{table} has no approved column map, so it is not in the model: exakit describe {table}")
     for link in (discovered or {}).get("links") or []:
@@ -718,7 +728,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
             built = publishing.all_spec(rows, tables=names, links=joins, table_notes=said, description=description,
                                         labels=proposal["labels"], extra=proposal["extra"] or None, grains=grains,
                                         starts=starts, metrics=metrics, instructions=instructions, replace_links=replace_links,
-                                        hidden=hidden)
+                                        hidden=hidden, synonyms=synonyms)
             planned_spec = built[0] if built else spec
             if built:
                 found["summary"], yours = sm.summary(planned_spec), built[2][len(proposal["extra"]):]
@@ -734,7 +744,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     inputs = {"tables": names, "links": joins, "name": name, "description": description, "table_notes": said,
               "labels": proposal["labels"], "extra": proposal["extra"], "grains": dict(grains or {}),
               "starts": list(starts or []), "metrics": list(metrics or []), "instructions": list(instructions or []),
-              "hidden": dict(hidden or {})}
+              "hidden": dict(hidden or {}), "synonyms": dict(synonyms or {})}
     try:
         if spec["model"] == publishing.ALL_MODEL:
             # the model of all your data: what is given here joins every approved table and what was confirmed before
@@ -742,7 +752,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
                                             table_notes=said, description=description, labels=proposal["labels"],
                                             extra=proposal["extra"] or None, progress=progress, grains=grains,
                                             starts=starts, metrics=metrics, instructions=instructions,
-                                            replace_links=replace_links, hidden=hidden)
+                                            replace_links=replace_links, hidden=hidden, synonyms=synonyms)
         else:
             result = publishing.publish_model(conn.execute, rows, spec, inputs, reader=os.environ.get(READER_VARIABLE),
                                               extra=proposal["extra"] + yours, progress=progress)
@@ -1256,6 +1266,7 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
         exported = fusion(conn, name)
         result["document"] = exported
         result["health"] = fusion_health(conn, name)
+        result["coverage"] = partition_coverage(conn, name)
         kept = publishing.kept(name)
         if kept and exported:
             kept["fusion"] = exported
@@ -1369,11 +1380,12 @@ def restore_data_map(conn, version: int, model: str = "all_data") -> dict[str, A
     i = wanted.get("inputs") or {}
     return semantic_model(conn, model, list(i.get("tables") or []), list(i.get("links") or []), description=i.get("description"),
                           table_notes=i.get("table_notes"), grains=i.get("grains"), starts=i.get("starts"), metrics=i.get("metrics"),
-                          instructions=i.get("instructions"), hidden=i.get("hidden"), replace_links=True)
+                          instructions=i.get("instructions"), hidden=i.get("hidden"), synonyms=i.get("synonyms"), replace_links=True)
 
 
 def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None,
-                    wins: str = "model") -> dict[str, Any]:
+                    wins: str = "model", mapping: dict[str, str] | None = None,
+                    split: dict[str, str] | None = None) -> dict[str, Any]:
     """The fusion document for "``other`` holds the same thing as ``table``": ``table`` is an entity of the published
     ``model``, ``other`` (SCHEMA.TABLE, any source) another copy of it at the same grain - a CRM extract beside the
     warehouse's customers, the same orders in a lakehouse.
@@ -1386,9 +1398,20 @@ def fusion_document(conn, model: str, table: str, other: str, *, key: str | None
     - ``wins``: "model" keeps ``table`` authoritative, "other" makes ``other`` the one that wins. An attribute both hold
       is RECONCILEd (the authoritative value wins, conflicts are reported as warnings).
 
+    Two other cases, each Semantic Views' own fusion level:
+
+    - ``mapping`` - the two use DIFFERENT ids (the CRM's ACCOUNT_ID for the warehouse's CUSTOMER_ID): a table that
+      pairs them, {"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"} - the column holding
+      ``other``'s id and the one holding this table's. Bound as a MAPPED identity through that certified table.
+    - ``split`` - ``other`` holds the OLDER rows of the same thing (an archive, a lakehouse): {"column": "ORDER_DATE",
+      "at": "2026-01-01"}. This table answers from that date on, ``other`` before it (a temporal partition: each
+      side's coverage, checked by CHECK_PARTITION_COVERAGE). Not together with a mapping (SEMANTIC_ADMIN_215).
+
     Nothing is written: check it with fuse(..., dry_run=True) - the product validates it against the data."""
     from descriptor import semantic_model as sm
 
+    if mapping and split:
+        raise Refused("Semantic Views takes either different ids (a mapping table) or older rows (a date split) for one table, not both.")
     kept = publishing.kept(sm.model_name(model))
     if not kept:
         raise NotFound(f"The kit has not published a model named {sm.model_name(model)} here: publish it first.")
@@ -1438,10 +1461,49 @@ def fusion_document(conn, model: str, table: str, other: str, *, key: str | None
                                 "data_type": sm.sql_type(types[other_key])}
         primary["identity_binding"] = {"source_expression": sm.column_sql(alias, own_key), "binding_kind": "DIRECT"}
         representation["identity_binding"] = {"source_expression": sm.column_sql(alias, other_key), "binding_kind": "DIRECT"}
+    if mapping:
+        xref_schema, xref_name = split_table(str(mapping.get("table") or ""))
+        local, semantic = str(mapping.get("local") or "").upper(), str(mapping.get("key") or "").upper()
+        xref_types = {c["column"].upper(): c["type"] for c in _columns(conn, xref_schema, xref_name)[0]}
+        if local not in xref_types or semantic not in xref_types:
+            raise Refused(f"{xref_schema}.{xref_name} needs both columns: {local or 'the other id'} and {semantic or 'this id'}.")
+        document["identity"] = {"name": sm.identifier(f"{entity['name']}_id", "id"), "kind": "GLOBAL",
+                                "data_type": sm.sql_type(xref_types[semantic])}
+        primary["identity_binding"] = {"source_expression": sm.column_sql(alias, own_key), "binding_kind": "DIRECT"}
+        representation["identity_binding"] = {"source_expression": sm.column_sql(alias, other_key), "binding_kind": "MAPPED",
+                                              "mapping": {"source_schema": xref_schema, "source_object": xref_name,
+                                                          "source_local_column": local, "semantic_key_column": semantic,
+                                                          "certification_status": "CERTIFIED"}}
+    if split:
+        column, at = str(split.get("column") or "").upper(), str(split.get("at") or "").strip().replace("T", " ")
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2})?", at):
+            raise Refused("The split date is YYYY-MM-DD (or YYYY-MM-DD HH:MI:SS).")
+        if column not in types:
+            raise Refused(f"{other_schema}.{other_name} has no column {column}: the split is on a date both tables hold.")
+        at = at if len(at) > 10 else f"{at} 00:00:00"
+        side = sm.column_sql(alias, column)
+        for item in (primary, representation):          # partitions: no winner, no reconciling, no identity
+            item.pop("authority", None)
+            item.pop("identity_binding", None)
+        document.pop("identity", None)
+        policies = []
+        primary["coverage"] = {"predicate": f"{side} >= TIMESTAMP '{at}'", "valid_from": at}
+        representation["coverage"] = {"predicate": f"{side} < TIMESTAMP '{at}'", "valid_to": at}
     document["representations"] = [primary, representation]
     if policies:
         document["attribute_policies"] = policies
     return {"entities": {entity["name"]: document}}
+
+
+def partition_coverage(conn, model: str) -> list[dict[str, Any]]:
+    """Rows kept in a date-split source outside its window, which no answer counts (CHECK_PARTITION_COVERAGE): one row
+    per source holding such rows, with how many rows and how many keys no other source covers. [] when all is well."""
+    from descriptor import semantic_model as sm
+
+    try:
+        return _up(_rows(conn, sm._script("CHECK_PARTITION_COVERAGE", sm.model_name(model))))
+    except Exception:                       # noqa: BLE001 - no date split, or an older product
+        return []
 
 
 def fusion(conn, model: str) -> dict[str, Any] | None:

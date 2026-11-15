@@ -1609,7 +1609,8 @@ class SeveralTablesTest(unittest.TestCase):
         views.on_sv_preview(form)
         action, given = self.sent[-1]
         self.assertEqual("semantic.save_map", action)
-        self.assertEqual(([{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "ONE_TO_ONE", "note": "the state"}],
+        self.assertEqual(([{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "ONE_TO_ONE", "note": "the state",
+                            "join": "LEFT"}],
                           {"MY_DATA.TARGETS": "one state's target"}, ["AMAZON.ORDER_LINES"], ["Revenue includes tax"], "Orders and targets", True),
                          (given["links"], given["grains"], given["starts"], given["instructions"], given["description"], given["preview"]))
         self.assertEqual("completed_revenue", given["metrics"][0]["name"])
@@ -1654,6 +1655,28 @@ class SeveralTablesTest(unittest.TestCase):
                                   "dm_t_max_age": "6 HOURS"})
         self.assertIn(("semantic.totals_store", {"view": "ORDER_LINES", "metrics": ["total_amount", "order_lines_count"],
                                                  "dimensions": ["ship_state"], "max_age": "6 HOURS"}), self.sent)
+
+    def test_your_words_and_the_two_sources_choices_reach_semantic_views(self):
+        views = self._views()
+        with self.assertRaisesRegex(ValueError, "Name the field"):
+            views.on_dm_add_words({"dm_syn_field": "total_amount"})
+        views.on_dm_add_words({"dm_syn_field": "Total_Amount", "dm_syn_words": "sales, revenue"})
+        views.on_dm_add_words({"dm_syn_field": "total_amount", "dm_syn_words": "revenue, turnover"})
+        self.assertEqual({"total_amount": ["sales", "revenue", "turnover"]}, views.dm["synonyms"])
+        self.answers["semantic.save_map"] = mock.Mock(sql=["x"])
+        views.on_sv_preview({})
+        self.assertEqual({"total_amount": ["sales", "revenue", "turnover"]}, self.sent[-1][1]["synonyms"])
+        base = {"sv_fuse_table": "AMAZON.ORDER_LINES", "sv_fuse_other": "VS_LAKE.ORDER_LINES"}
+        with self.assertRaisesRegex(ValueError, "pairing the ids"):
+            views._fusion_inputs({**base, "sv_fuse_how": "mapped"})
+        found = views._fusion_inputs({**base, "sv_fuse_how": "split", "sv_fuse_split_column": "order_date", "sv_fuse_split_at": "2026-01-01"})
+        self.assertEqual((None, (("at", "2026-01-01"), ("column", "ORDER_DATE"))), found[5:])
+        self.answers["semantic.fusion_doc"] = {"entities": {}}
+        self.answers["semantic.fuse_check"] = {"status": "ok", "dry_run": True}
+        views.on_sv_fuse_check({**base, "sv_fuse_how": "mapped", "sv_fuse_xref": "CRM.XREF", "sv_fuse_local": "account_id",
+                                "sv_fuse_semantic": "customer_id"})
+        drawn = next(given for action, given in self.sent if action == "semantic.fusion_doc")
+        self.assertEqual(({"table": "CRM.XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}, None), (drawn["mapping"], drawn["split"]))
 
     def test_one_button_fills_every_table_and_drafts_the_data_map_without_reading_a_row(self):
         """Fill everything in with AI: each chosen table's column map answer (kept per table), then one call drafting

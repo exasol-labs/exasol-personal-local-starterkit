@@ -563,6 +563,26 @@ class SemanticModelTest(unittest.TestCase):
         self.assertIn("'ENTITY', 'orders'", sent[1])
         self.assertIn("CREATE SEMANTIC MODEL shop", sent[2], "the whole model as Semantic Views exports it")
 
+    def test_join_rules_and_your_words_go_to_semantic_views(self):
+        tables = [semantic_model.table_input("TPCH.ORDERS", self.ORDERS, {"O_TOTALPRICE": "DECIMAL(15,2)", "O_ORDERDATE": "DATE"}),
+                  semantic_model.table_input("TPCH.CUSTOMER", self.CUSTOMER, {})]
+        link = {"from": "TPCH.ORDERS.O_CUSTKEY", "to": "TPCH.CUSTOMER.C_CUSTKEY"}
+        left = semantic_model.build(tables, [link], "shop")
+        inner = semantic_model.build(tables, [dict(link, join_type="INNER", fanout="REFERENCE_ONLY")], "shop")
+        self.assertTrue(any("'MANY_TO_ONE', 'INNER', 'REFERENCE_ONLY')" in x for x in semantic_model.statements(inner)))
+        step = semantic_model.changes(left, inner)
+        self.assertIn("SET_RELATIONSHIP('shop', 'orders_to_customer', NULL, 'MANY_TO_ONE', 'INNER', 'REFERENCE_ONLY')", " ".join(step),
+                      "join rules change in place")
+        back = semantic_model.changes(inner, left)
+        self.assertIn("'MANY_TO_ONE', 'LEFT', 'NONE')", " ".join(back), "a fanout policy taken away is cleared")
+        calls, refused = semantic_model.user_synonyms(left, {"total_o_totalprice": ["sales", "revenue"], "open_value": ["open"], "nope": ["x"]},
+                                                      [{"name": "open_value"}])
+        metric = next(m for m in left["objects"][0]["metrics"] if m["name"] == "total_o_totalprice")
+        self.assertEqual(["sales", "revenue"], metric["synonyms"][-2:], "in the field's own definition, after the ones it had")
+        self.assertIn("'sales', 'revenue')", semantic_model.definition(left, left["objects"][0]))
+        self.assertEqual([{"type": "METRIC", "name": "open_value", "synonym": "open"}], calls, "a metric of yours: ADD_SYNONYM")
+        self.assertEqual(["synonyms for nope: no field of that name in your data map"], refused)
+
     def test_the_ai_draft_keeps_only_real_names_and_reads_no_row(self):
         """One call drafts the data map from the approved column maps on this computer; whatever names no real table
         or column is dropped and said. The prompt holds names, roles, notes and known values only."""

@@ -187,6 +187,8 @@ nb.fusion_document(
     *,
     key: str | None=None,
     wins: str='model',
+    mapping: dict[str, str] | None=None,
+    split: dict[str, str] | None=None,
 ) -> dict[str, Any]
 ```
 
@@ -194,7 +196,10 @@ The fusion document saying `other` (a table of another source) holds the same th
 of the published `model`), at the same grain: a second copy of the entity, matched by its key (`key`: its
 column in `other` when it is named differently), every field bound there (a column of the same name, else
 empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative,
-`wins="other"` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document).
+`wins="other"` makes the other one win. When the two use different ids, `mapping` names the table that pairs
+them: \{"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}. When `other` holds the older
+rows, `split` says from when this table answers: \{"column": "ORDER_DATE", "at": "2026-01-01"}. Nothing is
+written: check it with nb.fuse(connection, model, document).
 
 ## nb.governance_mode [#governance_mode]
 
@@ -254,6 +259,14 @@ is shown each table's name and its columns' names, types and roles - never a row
 ("S.T.COL=S.T.KEY", or nb.find_links' own). Only an answer about a table or a link you named is kept. Nothing is
 written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
 is set up.
+
+## nb.partition_coverage [#partition_coverage]
+
+```python
+nb.partition_coverage(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Rows of a date-split source outside its window, which no answer counts; \[] when all is well.
 
 ## nb.propose_change [#propose_change]
 
@@ -353,6 +366,7 @@ nb.semantic_model(
     instructions: list | None=None,
     replace_links: bool=False,
     hidden: dict[str, list[str]] | None=None,
+    synonyms: dict[str, list[str]] | None=None,
 ) -> SemanticModel
 ```
 
@@ -369,7 +383,9 @@ What Semantic Views needs from you: `grains` (\{SCHEMA.TABLE: "one row is one or
 (MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), `starts` (the tables questions start from),
 `metrics` (\[\{"table", "name", "how": "sum"|"count"|"average", "column", "where": \{"column", "values"}, "about"}])
 `instructions` (rules for AI tools, as text or \{"table", "text"}) and `hidden` (\{SCHEMA.TABLE: \[COLUMN]}:
-never shown in answers - Semantic Views' MASK policy - but usable in filters). nb.draft_data_map drafts them with AI;
+never shown in answers - Semantic Views' MASK policy - but usable in filters) and `synonyms` (\{field: \["sales"]}:
+your words for a field). A link may say "join": "INNER" (default LEFT) and "fanout": ALLOCATE, DEDUPLICATE or
+REFERENCE_ONLY. nb.draft_data_map drafts them with AI;
 Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
 have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user.
 
