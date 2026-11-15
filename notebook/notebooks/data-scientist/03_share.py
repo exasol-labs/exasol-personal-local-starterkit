@@ -14,7 +14,6 @@
 # </div>
 
 # %% tags=["exakit-guide", "skip-ci"]
-# Share and hand off: the guided view of this page. Guided / Code, top right, switches to the code cells below.
 import exakit.guide as guide
 
 guide.share()
@@ -35,23 +34,25 @@ guide.share()
 #
 # Builds a dashboard on Dash Server, then packs the work into one folder. No AI model is needed. This notebook installs and starts Dash Server.
 
+# %% [markdown]
+# `DATASET`: `None` is the dataset approved last. `TITLE` and `APP_NAME`: `None` names them after the data.
+
 # %%
 import exakit.nb as nb
 
-DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or an approved descriptor of your own
-TITLE = None     # None: named after the data ("<dataset> by <column>"); or a title of your own
-APP_NAME = None  # or a name of your own; the default includes the approved dataset ID and the column
+DATASET = None
+TITLE = None
+APP_NAME = None
 
 dataset_id = nb.chosen_dataset(DATASET)
-nb.continue_workflow("share")   # the quickstart's workflow, or the last one: nothing to paste
+nb.continue_workflow("share")
 
 connection = nb.connect()
 dataset = nb.dataset(connection, dataset_id)
 dataset.require_approved("share")
-GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()
 if GROUP_ROLE != "category":
     print(f"{dataset.id} has no category; the dashboard counts rows per {GROUP_ROLE} ({GROUP_COLUMN}).")
-# Everything below is named after the data: the column it counts by, and what one row is.
 GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
 dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
 app_name = APP_NAME or (dataset.id.replace("_", "-")[:30] + "-by-" + GROUP_HEADER.lower().replace("_", "-"))[:60]
@@ -104,14 +105,22 @@ else:
 #
 # The answers you pinned in `02_ask_your_data` (**Pin to dashboard**, or `nb.pin`) make one dashboard: a tab per page, a tile per answer, its SQL exactly as approved. The filters on a page are the columns all its tiles return. Only the open tab is queried, its tiles in parallel, and each result is kept for five minutes, so moving between tabs and filtering does not query again. `board.move(tile, page)` and `board.remove(tile)` change it before it is shared; a preview comes first, and it goes live only after you check the figures.
 
+# %% [markdown]
+# | Setting | What it does |
+# |---|---|
+# | `STARTER_BOARD` | `True`: make `overview` from your approved column maps, a page per table |
+# | `BOARD_NAME` | `None`: the dashboard changed last; or its name |
+# | `BOARD_FIGURES_CHECKED` | `True` only after you checked the preview's figures: it goes live |
+# | `MOVE_TILE`, `REMOVE_TILE` | `("a1b2c3d4", "Delivery")` moves a tile to a page; `"a1b2c3d4"` takes it off |
+
 # %%
-STARTER_BOARD = False        # True: make "overview" from your approved column maps - a page per table, no question asked
+STARTER_BOARD = False
 if STARTER_BOARD:
     board = nb.starter_board(connection, name="overview")
-BOARD_NAME = None            # None: the dashboard changed last; or a name, such as "sales-overview"
+BOARD_NAME = None
 BOARD_FIGURES_CHECKED = False
-MOVE_TILE = None             # a tile to another page: ("a1b2c3d4", "Delivery")
-REMOVE_TILE = None           # a tile to take off: "a1b2c3d4"
+MOVE_TILE = None
+REMOVE_TILE = None
 boards = nb.boards()
 if boards:
     board = nb.board(BOARD_NAME or boards[0]["name"])

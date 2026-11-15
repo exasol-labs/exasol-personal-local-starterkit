@@ -27,7 +27,6 @@ def _(mo):
 @app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
-    # Your kit and your data: the guided view of this page. Guided / Code, top right, switches to the code cells below.
     import exakit.guide as guide
 
     guide.start()
@@ -83,33 +82,46 @@ def _():
 
 @app.cell
 def _(nb):
-    # What the kit has, read live: the same calls the Home card shows.
-    components = nb.components()            # the kit's parts, their versions and pending updates
-    addons = nb.addons()                    # the marketplace's add-ons and their state
-    ai_clients = nb.ai_clients()            # the AI clients the kit can connect, and which are connected
-    sample_datasets = nb.sample_datasets()  # the kit's sample datasets, and which are loaded
-    loaded_files = nb.loaded_files()        # the files you loaded with exakit data-load: table, rows, file
-    sources = nb.sources()                  # the external sources connected (exakit connect), read live: nothing copied
-    notebooks = nb.notebooks("data-scientist")   # this persona's notebooks, in order
-    persona_plan = nb.persona_plan()        # what this kit's personas bring that is still missing
-    approved = nb.approved_datasets()       # the column maps approved so far
-    workflows = nb.list_workflows()         # every workflow log; the last one's events:
+    components = nb.components()
+    addons = nb.addons()
+    ai_clients = nb.ai_clients()
+    sample_datasets = nb.sample_datasets()
+    loaded_files = nb.loaded_files()
+    sources = nb.sources()
+    notebooks = nb.notebooks("data-scientist")
+    persona_plan = nb.persona_plan()
+    approved = nb.approved_datasets()
+    workflows = nb.list_workflows()
     workflow_events = nb.workflow_log(workflows[-1]["id"]) if workflows else []
     model, tracing = nb.model_settings(), nb.tracing()
     [(c["id"], c["installed"], c["status"]) for c in components]
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `START_DATABASE` | start the database after a restart of this computer |
+    | `ADD_ON` | an add-on to install and start: one of `[a["id"] for a in addons]` |
+    | `LOAD`, `LOAD_SCHEMA` | a kit dataset, a file or a folder to load, and the schema it lands in |
+    | `SERVICE` | a service to start, then its log |
+    | `CHECK_AI` | check the AI clients' connection to the database |
+    | `UPDATE_KIT` | bring the kit and its add-ons up to date |
+    """)
+    return
+
+
 @app.cell
 def _(nb):
-    # Change the kit from here: set what you want, run the cell; each runs as `exakit` would, its log in the cell.
-    START_DATABASE = False   # start the database after a restart of this computer
-    ADD_ON = ""              # an add-on to install and start, e.g. one of [a["id"] for a in addons]
-    LOAD = ""                # a kit dataset (sample_datasets), a file or a folder, loaded with exakit data-load
-    LOAD_SCHEMA = ""         # where a file or folder lands (empty: STARTER_KIT, exakit's default)
-    SERVICE = ""             # a service to start (kit_state["services"]), then its log
-    CHECK_AI = False         # check the AI clients' connection to the database (mcp-doctor)
-    UPDATE_KIT = False       # bring the kit and its add-ons up to date
+    START_DATABASE = False
+    ADD_ON = ""
+    LOAD = ""
+    LOAD_SCHEMA = ""
+    SERVICE = ""
+    CHECK_AI = False
+    UPDATE_KIT = False
     if START_DATABASE:
         nb.exakit("start")
     if ADD_ON:
@@ -126,18 +138,30 @@ def _(nb):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `PROVIDER` | one of `providers`: `"anthropic"`, `"openai"`, `"gemini"`, `"ollama"` |
+    | `SHOW_MODELS` | list the models your key may use; the key is asked in a hidden box |
+    | `MODEL_ID`, `EFFORT` | the model, and its effort where it takes one |
+    | `PROVIDER_BASE_URL` | empty: the provider's own address |
+    | `LANGFUSE_BASE_URL` | where model calls are traced, such as `https://cloud.langfuse.com` |
+    | `FORGET` | delete what was remembered |
+    """)
+    return
+
+
 @app.cell
 def _(nb):
-    # Your AI model and Langfuse tracing, remembered for every notebook of this kit (readable by you only). The keys are
-    # asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered. The Home card's AI model
-    # row does the same with menus: pick the provider, give the key, pick the model and its effort.
-    providers = {p["id"]: p for p in nb.model_providers()}   # the providers the kit knows, with their addresses
-    PROVIDER = ""            # one of providers, e.g. "anthropic", "openai", "gemini", "ollama"
-    SHOW_MODELS = False      # True: list the models your key may use (the key is asked in a hidden box)
-    MODEL_ID = ""            # one of those models
-    EFFORT = ""              # where the model takes one (nb.effort_levels(PROVIDER, MODEL_ID)): "low", "medium", "high"
-    PROVIDER_BASE_URL = ""   # empty: the provider's own address; or any Chat Completions address of your own
-    LANGFUSE_BASE_URL = ""   # e.g. "https://cloud.langfuse.com"
+    providers = {p["id"]: p for p in nb.model_providers()}
+    PROVIDER = ""
+    SHOW_MODELS = False
+    MODEL_ID = ""
+    EFFORT = ""
+    PROVIDER_BASE_URL = ""
+    LANGFUSE_BASE_URL = ""
     FORGET = False
     if PROVIDER and not PROVIDER_BASE_URL:
         PROVIDER_BASE_URL = providers[PROVIDER]["base_url"]
@@ -225,7 +249,7 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
+    SAMPLE = "amazon_sales"
     sample_data = nb.load_sample(connection, SAMPLE)
     return (sample_data,)
 
@@ -244,9 +268,9 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
-    MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
-    MY_TABLE = ""    # or a table already in the database, e.g. "MY_DATA.ORDERS" (nb.data_map lists them)
+    MY_DATA = ""
+    MY_SCHEMA = ""
+    MY_TABLE = ""
     own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
                 else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
     return (own_data,)
@@ -266,20 +290,35 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: load
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `CONNECTOR` | the kind of source: `[c["id"] for c in connectors]`, such as `"postgresql"` or `"snowflake"` |
+    | `SOURCE_NAME` | its name: the tables appear as `VS_<NAME>` |
+    | `SOURCE_SETTINGS` | for a source with several kinds in one, such as `{"catalog": "unity", "files": "s3"}` |
+    | `SOURCE_URL` | its connection string; a password in it is used, never shown |
+    | `SOURCE_INPUTS` | what the string did not give, such as `{"user": "reader"}` |
+    """)
+    return
+
+
 @app.cell
 def _(nb):
     # Cell tags: load
-    connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
-    connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
-    source_tips = nb.source_engine("catalog", "--public-ip")["events"]   # this computer's public IP, to allow at a cloud source
-    CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
-    SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
-    SOURCE_SETTINGS = {}   # a source with several kinds in one: {"catalog": "unity", "files": "s3"} for a Lakehouse (connector_forms["lakehouse"]["tree"] lists the picks)
+    connectors = nb.connectors()
+    connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}
+    source_tips = nb.source_engine("catalog", "--public-ip")["events"]
+    CONNECTOR = ""
+    SOURCE_NAME = ""
+    SOURCE_SETTINGS = {}
     if CONNECTOR and SOURCE_SETTINGS:
-        connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)   # what that combination asks
-    SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)
+        connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)
+    SOURCE_URL = ""
     source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL, **SOURCE_SETTINGS) if CONNECTOR and SOURCE_URL else None
-    SOURCE_INPUTS = {}  # what the string did not give (source_reading["missing"]), e.g. {"user": "reader"}; no string: every input
+    SOURCE_INPUTS = {}
     SOURCE_INPUTS = {**SOURCE_SETTINGS, **({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
     return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
 
@@ -301,7 +340,7 @@ def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
 @app.cell
 def _(connected, connection, nb):
     # Cell tags: load
-    SOURCE = None   # e.g. "VS_SALES.ORDERS" (None after a connect above: the new source's tables)
+    SOURCE = None
     source_data = nb.load_source(connection, SOURCE or connected)
     return (source_data,)
 
@@ -350,9 +389,17 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `OPEN_APPROVED`: a dataset approved before, by its id (`nb.approved_datasets()` lists them).
+    """)
+    return
+
+
 @app.cell
 def _(connection, nb):
-    OPEN_APPROVED = ''  # or a dataset approved before, by its id, e.g. "amazon_sales" (nb.approved_datasets() lists them)
+    OPEN_APPROVED = ''
     if OPEN_APPROVED:
         _chosen_data = nb.dataset(connection, OPEN_APPROVED)
     remembered = nb.remember_chosen(_chosen_data)

@@ -174,7 +174,7 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
+    SAMPLE = "amazon_sales"
     sample_data = nb.load_sample(connection, SAMPLE)
     return (sample_data,)
 
@@ -193,9 +193,9 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    MY_DATA = ""     # a file or a folder, e.g. "~/sales-data/orders.csv" or "~/sales-data" (Excel works too)
-    MY_SCHEMA = ""   # the schema, e.g. "SALES" (empty: the folder's name, ~/sales-data -> SALES_DATA)
-    MY_TABLE = ""    # or a table already in the database, e.g. "MY_DATA.ORDERS" (nb.data_map lists them)
+    MY_DATA = ""
+    MY_SCHEMA = ""
+    MY_TABLE = ""
     own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
                 else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
     return (own_data,)
@@ -215,20 +215,35 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: load
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `CONNECTOR` | the kind of source: `[c["id"] for c in connectors]`, such as `"postgresql"` or `"snowflake"` |
+    | `SOURCE_NAME` | its name: the tables appear as `VS_<NAME>` |
+    | `SOURCE_SETTINGS` | for a source with several kinds in one, such as `{"catalog": "unity", "files": "s3"}` |
+    | `SOURCE_URL` | its connection string; a password in it is used, never shown |
+    | `SOURCE_INPUTS` | what the string did not give, such as `{"user": "reader"}` |
+    """)
+    return
+
+
 @app.cell
 def _(nb):
     # Cell tags: load
-    connectors = nb.connectors()   # every kind of source CONNECTOR takes: [c["id"] for c in connectors]
-    connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}   # what each asks, required ones marked
-    source_tips = nb.source_engine("catalog", "--public-ip")["events"]   # this computer's public IP, to allow at a cloud source
-    CONNECTOR = ""     # e.g. "postgresql", "mysql", "snowflake" (empty: already connected, or no source)
-    SOURCE_NAME = ""   # e.g. "sales": the tables appear as VS_SALES
-    SOURCE_SETTINGS = {}   # a source with several kinds in one: {"catalog": "unity", "files": "s3"} for a Lakehouse (connector_forms["lakehouse"]["tree"] lists the picks)
+    connectors = nb.connectors()
+    connector_forms = {c["id"]: nb.connector_inputs(c["id"]) for c in connectors}
+    source_tips = nb.source_engine("catalog", "--public-ip")["events"]
+    CONNECTOR = ""
+    SOURCE_NAME = ""
+    SOURCE_SETTINGS = {}
     if CONNECTOR and SOURCE_SETTINGS:
-        connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)   # what that combination asks
-    SOURCE_URL = ""    # its connection string, e.g. "postgres://reader@192.168.64.1:5432/shop" (a password in it is used, never shown)
+        connector_forms[CONNECTOR] = nb.connector_inputs(CONNECTOR, **SOURCE_SETTINGS)
+    SOURCE_URL = ""
     source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL, **SOURCE_SETTINGS) if CONNECTOR and SOURCE_URL else None
-    SOURCE_INPUTS = {}  # what the string did not give (source_reading["missing"]), e.g. {"user": "reader"}; no string: every input
+    SOURCE_INPUTS = {}
     SOURCE_INPUTS = {**SOURCE_SETTINGS, **({"url": SOURCE_URL} if SOURCE_URL else {}), **SOURCE_INPUTS}
     return CONNECTOR, SOURCE_INPUTS, SOURCE_NAME
 
@@ -250,7 +265,7 @@ def _(CONNECTOR, SOURCE_INPUTS, SOURCE_NAME, nb):
 @app.cell
 def _(connected, connection, nb):
     # Cell tags: load
-    SOURCE = None   # e.g. "VS_SALES.ORDERS" (None after a connect above: the new source's tables)
+    SOURCE = None
     source_data = nb.load_source(connection, SOURCE or connected)
     return (source_data,)
 
@@ -333,28 +348,39 @@ def _(chosen_data, connection, nb):
     return (role_review,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `AI_CHECK = True`: your AI model completes the draft from names, types and the kit's evidence, never a row. `AI_APPROVE = True`: approve with its answer.
+    """)
+    return
+
+
 @app.cell
 def _(nb, role_review):
     # Cell tags: review
-    # Optional: let your AI model (set up on the Home card, or nb.model_setup) complete the draft. It is shown column
-    # names, types and the kit's measured evidence - never a row, never a sensitive column - and answers with the roles it
-    # would change and why, the column for each slot, and one sentence per column saying what it holds. It never picks
-    # what to predict or what makes a row unique. Nothing changes until you approve: AI_APPROVE approves with its answer.
     AI_CHECK = False
     AI_APPROVE = False
     if AI_CHECK:
-        # several tables from several sources: together=[the other tables' reviews] lets it read them next to this one
         ai_map = nb.fill_column_map(role_review)
         if AI_APPROVE:
             role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
     return (AI_CHECK,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `ROLE_CHANGES`: `{"COLUMN": "role"}`. `SLOT_CHANGES`: `{"target": "COLUMN"}`. Empty: the picker above stands.
+    """)
+    return
+
+
 @app.cell
 def _(role_review):
     # Cell tags: review
-    # Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
-    # slots, {"target": "COLUMN"}. Empty: the picker above (or an approval already saved) stands.
     ROLE_CHANGES = {}
     SLOT_CHANGES = {}
     if ROLE_CHANGES or SLOT_CHANGES:
@@ -373,8 +399,8 @@ def _(nb, role_review):
 @app.cell
 def _(connection, dataset, nb):
     # Cell tags: review
-    leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
-    versions = nb.column_map_versions(dataset.id)              # every saved version; approving one's roles again restores it
+    leaking = nb.leakage_check(connection, dataset)
+    versions = nb.column_map_versions(dataset.id)
     return
 
 
@@ -392,7 +418,7 @@ def _(mo):
 @app.cell
 def _(connection, dataset, nb):
     # Cell tags: review
-    dataset  # read after the approval above, so this map shows it
+    dataset
     nb.data_map(connection)
     return
 
@@ -414,20 +440,34 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `SEMANTIC_NAME` | `all_data`: every approved table of every source |
+    | `SEMANTIC_TABLES` | the tables, such as `"VS_LOGISTICS.COURIER_DAILY"` |
+    | `SEMANTIC_LINKS` | links of your own: `"S.T.COL=S.T.KEY"`, or `{"from", "to", "note"}` |
+    | `SEMANTIC_TABLE_NOTES` | what each table is, in a sentence |
+    | `SEMANTIC_SCHEMAS` | whole schemas instead: every approved table of each |
+    | `PUBLISH_SEMANTIC` | `True`: save it; `False`: a preview only |
+    """)
+    return
+
+
 @app.cell
 def _(AI_CHECK, connection, dataset, nb):
     # Cell tags: review
-    SEMANTIC_NAME = "all_data"                    # all_data: every approved table of every source, kept current by each approval
-    SEMANTIC_TABLES = [dataset.fact_table]        # add tables of this or other schemas: "VS_LOGISTICS.COURIER_DAILY", "MY_DATA.TARGETS"
-    SEMANTIC_LINKS = []                           # your own: "MY_DATA.ORDERS.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE", or {"from": ..., "to": ..., "note": "why"}
-    SEMANTIC_TABLE_NOTES = {}                     # what each table is, in a sentence: {"MY_DATA.TARGETS": "The monthly target per state."}
+    SEMANTIC_NAME = "all_data"
+    SEMANTIC_TABLES = [dataset.fact_table]
+    SEMANTIC_LINKS = []
+    SEMANTIC_TABLE_NOTES = {}
     PUBLISH_SEMANTIC = False
-    SEMANTIC_SCHEMAS = []                         # or whole schemas: every approved table of each, e.g. ["MY_DATA", "VS_LOGISTICS"]
-    # Links between the tables you listed, found from the values (two tables of one schema are compared too), each with its evidence.
+    SEMANTIC_SCHEMAS = []
     found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
-    # The links the model uses: yours, and the found ones the data backs. A found link carries its evidence into the model.
     model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
-    if AI_CHECK:      # your AI model says what each table and link is, and names the model (names, types and roles only)
+    if AI_CHECK:
         model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)
         SEMANTIC_TABLE_NOTES = {**model_notes["tables"], **SEMANTIC_TABLE_NOTES}
     semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=model_links, table_notes=SEMANTIC_TABLE_NOTES,
@@ -439,9 +479,9 @@ def _(AI_CHECK, connection, dataset, nb):
 @app.cell
 def _(PUBLISH_SEMANTIC, SEMANTIC_NAME, connection, nb):
     # Cell tags: review
-    semantic_models = nb.semantic_models(connection)       # every model in the database; "refreshable" ones the kit built
+    semantic_models = nb.semantic_models(connection)
     if PUBLISH_SEMANTIC:
-        refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
+        refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)
     semantic_models
     return
 
@@ -457,16 +497,25 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `APPLY_FUSION = True` applies it after the check.
+    """)
+    return
+
+
 @app.cell
 def _(SEMANTIC_NAME, connection, nb):
     # Cell tags: review
-    FUSE_TABLE = ""          # a table of the model, such as "MY_DATA.CUSTOMERS"
-    FUSE_OTHER = ""          # the same rows in another source, such as "VS_CRM.CUSTOMERS"
-    FUSE_KEY = None          # its key column, when it is not named like the model's key
+    FUSE_TABLE = ""
+    FUSE_OTHER = ""
+    FUSE_KEY = None
     APPLY_FUSION = False
     if FUSE_TABLE and FUSE_OTHER:
         fusion_document = nb.fusion_document(connection, SEMANTIC_NAME, FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model")
-        fusion_check = nb.fuse(connection, SEMANTIC_NAME, fusion_document)                 # a dry run: nothing changes
+        fusion_check = nb.fuse(connection, SEMANTIC_NAME, fusion_document)
         if APPLY_FUSION and fusion_check["status"] != "error":
             fusion_applied = nb.fuse(connection, SEMANTIC_NAME, fusion_document, dry_run=False)
     return

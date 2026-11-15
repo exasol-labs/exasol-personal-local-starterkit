@@ -14,7 +14,6 @@
 # </div>
 
 # %% tags=["exakit-guide", "skip-ci"]
-# Understand, explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
 import exakit.guide as guide
 
 guide.explore()
@@ -35,22 +34,34 @@ guide.explore()
 #
 # Each query is built from the approved column map, so no cell names a column. If the data has no date or no text, the step that needs it skips and says why. Settings are in the first cell. The AI model has its own cell. The AI step at the end is optional and off.
 
+# %% [markdown]
+# | Setting | What it does |
+# |---|---|
+# | `DATASET` | `None`: the tables chosen in the quickstart; or `"fraud_transactions"`, or a file of your own |
+# | `USE_AI_THEMES` | `True`: your AI model sorts the texts into themes |
+# | `USE_JOINED`, `USE_PREPARED` | `True`: create the joined or the cleaned view proposed under Prepare, and explore that |
+# | `JOINED_SQL`, `CLEANING_SQL` | your own version of that view: the CREATE VIEW printed under Prepare, edited |
+# | `PLACEHOLDER_VALUES` | values that mean "not known"; `word*` matches anything starting with the word |
+# | `RARE_TARGET` | a target in fewer rows than this share is rare: judge a model by ROC AUC |
+# | `DATE_FORMATS`, `TIMESTAMP_FORMATS` | how a date written as text is read |
+# | `DROP_COPIES`, `CAST_TYPES` | the cleaned view drops copied rows, and gives text columns of numbers or dates their type |
+# | `GIVES_IT_AWAY` | a value whose target rate is this or more (or one minus this or less) decides the target |
+
 # %%
-DATASET = None   # None: the tables chosen in the quickstart (else the dataset approved last, else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
-USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
-USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
-USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
-JOINED_SQL = None      # your own joined view: the CREATE VIEW printed under Prepare, as a string, edited
-CLEANING_SQL = None    # your own cleaned view: the CREATE VIEW printed under Prepare, as a string, edited
-# The rules the checks and the cleaning use. Change any of them and run the cells below again.
+DATASET = None
+USE_AI_THEMES = False
+USE_JOINED = False
+USE_PREPARED = False
+JOINED_SQL = None
+CLEANING_SQL = None
 PLACEHOLDER_VALUES = ["unknown*", "invalid*", "n/a", "na", "none", "null", "nil", "missing", "not available",
-                      "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]   # mean "not known"; "word*" = starts with
-RARE_TARGET = 0.10     # a target in under 10% (or over 90%) of rows is rare: judge a model by ROC AUC, not accuracy
-DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]   # how a date written as text is read
+                      "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]
+RARE_TARGET = 0.10
+DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]
 TIMESTAMP_FORMATS = ["YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD HH24:MI"]
-DROP_COPIES = True     # the cleaned view drops rows that copy another row (one of each is kept)
-CAST_TYPES = True      # the cleaned view gives a text column of numbers, dates or true/false its type
-GIVES_IT_AWAY = 0.99   # a value whose target rate is 99% or more (or 1% or less) decides the target on its own
+DROP_COPIES = True
+CAST_TYPES = True
+GIVES_IT_AWAY = 0.99
 
 # %% [markdown]
 # ## Optional · Your AI model and Langfuse
@@ -61,12 +72,15 @@ GIVES_IT_AWAY = 0.99   # a value whose target rate is 99% or more (or 1% or less
 # - **Not in the cell:** the API key and the two Langfuse keys. A hidden box asks for them. They stay in this kernel only.
 # - **Not sure what to set?** Run `nb.model_setup()`. It asks for anything missing, with the keys in a hidden box, and prints the terminal lines that set them for every notebook.
 
+# %% [markdown]
+# `MODEL_ID`, for example `"claude-opus-5-5"`; `PROVIDER_BASE_URL`, any Chat Completions address; `LANGFUSE_BASE_URL`, where the calls are traced. Empty: no model.
+
 # %%
 import exakit.nb as nb
 
-MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
-PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
-LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+MODEL_ID = ""
+PROVIDER_BASE_URL = ""
+LANGFUSE_BASE_URL = ""
 nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
 
 # %% [markdown]
@@ -78,13 +92,13 @@ nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
 import os
 import exakit.nb as nb
 
-workflow_id = nb.continue_workflow("explore")   # the quickstart's workflow, or the last one: nothing to paste
+workflow_id = nb.continue_workflow("explore")
 connection = nb.connect()
-chosen_tables = nb.open_chosen(connection)      # the tables the quickstart chose, by name (nb.chosen_tables() lists them)
+chosen_tables = nb.open_chosen(connection)
 if DATASET or not chosen_tables:
-    chosen_data = nb.chosen_dataset(DATASET)   # a name: the review below opens it (a file of your own is drafted there)
+    chosen_data = nb.chosen_dataset(DATASET)
 else:
-    chosen_data = next(iter(chosen_tables.values()))   # another one: chosen_data = chosen_tables["SCHEMA.TABLE"]
+    chosen_data = next(iter(chosen_tables.values()))
 
 # %% [include] ../00_shared/data_paths.py review
 
@@ -96,7 +110,7 @@ else:
 
 # %%
 APPROVE_ALL = False
-ALL_CHOICES = None            # the columns to change: {"VS_SALES.ORDERS": {"STATUS": "category"}}
+ALL_CHOICES = None
 if APPROVE_ALL and chosen_tables:
     role_reviews = {table: nb.review_roles(connection, data) for table, data in chosen_tables.items()}
     schema_summary = nb.schema_review(role_reviews)
@@ -111,8 +125,8 @@ if APPROVE_ALL and chosen_tables:
 # Fusion: data from several places in one model. Every source connected with `exakit connect` (S3, Snowflake, MongoDB, PostgreSQL and the rest) is listed here, read live where it lives. Name a table of one in `ADD_SOURCE` to add it to the tables above; the card's **Add a source or table** does the same and connects a new source too.
 
 # %%
-sources = nb.sources()                          # every connected source: its schema (VS_<NAME>) and its connector
-ADD_SOURCE = ""                                 # a table of a connected source, such as "VS_SALES.ORDERS"
+sources = nb.sources()
+ADD_SOURCE = ""
 if ADD_SOURCE:
     source_data = nb.load_source(connection, ADD_SOURCE)
     chosen_tables[str(source_data.fact_table)] = source_data
@@ -126,13 +140,13 @@ print("Sources: " + (", ".join(f"{s['schema']} ({s.get('connector_name') or s.ge
 
 # %%
 missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
-GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()
 if GROUP_ROLE != "category":
     print(f"No category ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
 if "label" in missing_roles:
     print(f"No target ({missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
-GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: the group column and what a row counts
-LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None   # the target column, then _PCT
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
+LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None
 LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
 first_rows = nb.sql(connection, f"""
 SELECT {GROUP_COLUMN} AS {GROUP_HEADER},
@@ -147,7 +161,7 @@ nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER
 first_rows
 
 # %%
-loaded_dataset = role_review.dataset(draft_ok=True)   # the table as loaded; `dataset` below is what the steps read
+loaded_dataset = role_review.dataset(draft_ok=True)
 
 # %% [markdown]
 # ## Step 3 · Prepare the data
@@ -194,7 +208,7 @@ joined_view_proposal
 typed_view_proposal = nb.typed_view(connection, joined_dataset, placeholder_values=PLACEHOLDER_VALUES, date_formats=DATE_FORMATS,
                                     timestamp_formats=TIMESTAMP_FORMATS, drop_copies=DROP_COPIES, cast_types=CAST_TYPES)
 dataset = (typed_view_proposal.create(connection, sql=CLEANING_SQL)
-           if USE_PREPARED and (typed_view_proposal.needed or CLEANING_SQL) else joined_dataset)   # what every step below reads
+           if USE_PREPARED and (typed_view_proposal.needed or CLEANING_SQL) else joined_dataset)
 typed_view_proposal
 
 # %% [markdown]
@@ -211,10 +225,10 @@ typed_view_proposal
 ENTITY_COLUMN = dataset.col("entity") if dataset.has("entity") else None
 CATEGORY_COLUMN = dataset.col("category") if dataset.has("category") else None
 TEXT_SQL = dataset.text_sql() if dataset.has("text") else None
-DATE_COLUMN = dataset.col("date") if dataset.has("date") else None      # a role no column fits is None here, never guessed
+DATE_COLUMN = dataset.col("date") if dataset.has("date") else None
 LABEL_COLUMN = dataset.col("label") if dataset.has("label") else None
 missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing if not dataset.has(missing["role"])}
-SHOWN = {"date": "time", "label": "target"}   # the column map's names for these two roles
+SHOWN = {"date": "time", "label": "target"}
 missing_line = "; ".join(f"no {SHOWN.get(role, role)}: {reason}" for role, reason in missing_roles.items())
 for role in ("entity", "category", "date", "label", "text"):
     if role in missing_roles:
@@ -227,8 +241,6 @@ for role in ("entity", "category", "date", "label", "text"):
 
 # %%
 landscape = landscape_grid = None
-# Result columns are named after the data (SHIP_STATE, ORDER_LINES, CANCELLED_PCT); a note under each result says
-# what its numbers mean.
 COUNT_HEADER = nb.count_name(dataset)
 ENTITY_HEADER = nb.name(ENTITY_COLUMN) if ENTITY_COLUMN else None
 CATEGORY_HEADER = nb.name(CATEGORY_COLUMN) if CATEGORY_COLUMN else None
@@ -269,8 +281,8 @@ landscape_grid
 # When this table links to another table (the links you saved in step 2), its rows can be compared by a group kept there, such as orders by the customer's segment. `nb.linked_groups` lists those groups, each with the table and system it comes from. With no saved link the list is empty and this cell does nothing.
 
 # %%
-linked = nb.linked_groups(dataset)          # each: the table, its group column and the columns the link joins on
-LINKED_GROUP = linked[0] if linked else None                # or another of them
+linked = nb.linked_groups(dataset)
+LINKED_GROUP = linked[0] if linked else None
 groups = None
 if LINKED_GROUP:
     GROUP_HEADER = nb.name(LINKED_GROUP["column"])
@@ -335,14 +347,11 @@ LEAKING_COLUMNS = nb.leakage_check(connection, dataset, pure=GIVES_IT_AWAY)
 
 # %%
 MODEL_ROW_LIMIT = 20000
-# The features the model reads, each only when its role exists and does not give the target away: the category and the
-# entity as text, then the month of the date.
 USE_CATEGORY = dataset.has("category") and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
 USE_ENTITY = dataset.has("entity") and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
 CATEGORY_FEATURE = f"CAST({dataset.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ""
 ENTITY_FEATURE = f"CAST({dataset.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ""
 MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset.col('date')}) AS MONTH_,\n       " if dataset.has("date") else ""
-# Which rows: the newest by date, else the first by the key - the same rows on every rerun either way.
 KEY_COLUMN = dataset.descriptor.slots.get("key")
 ROW_ORDER = f"{dataset.col('date')} DESC" if dataset.has("date") else (f'"{KEY_COLUMN}"' if KEY_COLUMN else "1")
 
@@ -351,7 +360,6 @@ if not (dataset.has("label") and (USE_CATEGORY or USE_ENTITY)):
     print(f"Skipped - the small model predicts the target from the category and entity, so it needs a target and a "
           f"category or entity that does not give the target away ({missing_line or 'see the cell above'}).")
 else:
-    # What each feature is called on screen: the column it comes from, or "month".
     FEATURE_LABELS = {"MONTH_": "month", "CATEGORY_": (CATEGORY_COLUMN or "").strip('"'), "ENTITY_": (ENTITY_COLUMN or "").strip('"')}
     if not DATE_COLUMN:
         print("No date: the model reads the first rows by the key and leaves the month out.")
@@ -414,7 +422,7 @@ if model is not None:
         feature, value = name.split("_", 1)[0] + "_", name.split("__", 1)[1]
         return f"{FEATURE_LABELS[feature]} = {value}"
 
-    CLUES_PER_SIDE = min(8, len(feature_names) // 2)        # each side its own values: few values are split, never shown twice
+    CLUES_PER_SIDE = min(8, len(feature_names) // 2)
     print(f"Make {LABEL_COLUMN} = 1 more likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[-CLUES_PER_SIDE:]][::-1]))
     print(f"Make {LABEL_COLUMN} = 1 less likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[:CLUES_PER_SIDE]]))
 
@@ -424,15 +432,15 @@ if model is not None:
 # What the **Build a model** card runs: one task - predict yes or no, predict a number, find natural groups or find unusual rows - with every model of that task trained on the same split ("all"), or one model you name. Columns that give the answer away and personal data are left out. Then feature ideas, each tried on the same split before it is kept.
 
 # %% tags=["skip-ci"]
-LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
-lab_data = nb.lab_data(connection, dataset)   # read once; lab_data.left_out says what was left out and why
+LAB_TASK = "predict_yes_no"
+lab_data = nb.lab_data(connection, dataset)
 kept_features = {}
 lab = nb.model_lab(connection, dataset, LAB_TASK, model="all", target_number=None, data=lab_data, features=kept_features)
 print(lab.note or lab)
 lab.board if LAB_TASK in ("predict_yes_no", "predict_number") else lab.result
 
 # %% tags=["skip-ci"]
-ideas = nb.feature_ideas(lab, ai=False, conn=connection)   # ai=True: your AI model adds more (names and roles only)
+ideas = nb.feature_ideas(lab, ai=False, conn=connection)
 for index, idea in enumerate(ideas[:3] if LAB_TASK in ("predict_yes_no", "predict_number") else []):
     tried = nb.try_feature(lab, ideas[index])
     print(f"{idea.title}: {tried['text']}")
@@ -440,7 +448,7 @@ for index, idea in enumerate(ideas[:3] if LAB_TASK in ("predict_yes_no", "predic
         kept_features[ideas[index].id] = tried["series"]
     else:
         kept_features.pop(ideas[index].id, None)
-kept_features   # run the model lab cell again to train with them
+kept_features
 
 # %% [markdown]
 # ## Optional · Themes in the texts where the target is 1 (AI)
@@ -452,7 +460,7 @@ kept_features   # run the model lab cell again to train with them
 # To turn it on, fill in the model cell above and run it. Then set `USE_AI_THEMES = True` in the first cell. It makes two model calls. A live source asks before it sends anything. With `LANGFUSE_BASE_URL` set, both calls go into one trace, `explore-themes`.
 
 # %%
-SAMPLE_TEXTS = 20      # per side: the newest texts where the target is 1, and as many where it is 0
+SAMPLE_TEXTS = 20
 text_sample = themes = None
 NEWEST_FIRST = f"{dataset.col('date')} DESC" if dataset.has("date") else dataset.col("entity") if dataset.has("entity") else "1"
 PER_LABEL = f"PARTITION BY {dataset.col('label')} " if dataset.has("label") else ""

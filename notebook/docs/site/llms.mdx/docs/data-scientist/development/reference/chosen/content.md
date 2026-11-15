@@ -18,8 +18,6 @@ nb.chosen_tables() -> list[str]
 
 The tables the quickstart chose last ("SCHEMA.TABLE", first one first); empty when none was noted.
 
-**Used in:** `data-scientist/01_explore`
-
 ## nb.open_chosen [#open_chosen]
 
 ```python

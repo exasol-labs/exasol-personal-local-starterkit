@@ -27,7 +27,6 @@ def _(mo):
 @app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
-    # Understand, explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
     import exakit.guide as guide
 
     guide.explore()
@@ -61,23 +60,40 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `DATASET` | `None`: the tables chosen in the quickstart; or `"fraud_transactions"`, or a file of your own |
+    | `USE_AI_THEMES` | `True`: your AI model sorts the texts into themes |
+    | `USE_JOINED`, `USE_PREPARED` | `True`: create the joined or the cleaned view proposed under Prepare, and explore that |
+    | `JOINED_SQL`, `CLEANING_SQL` | your own version of that view: the CREATE VIEW printed under Prepare, edited |
+    | `PLACEHOLDER_VALUES` | values that mean "not known"; `word*` matches anything starting with the word |
+    | `RARE_TARGET` | a target in fewer rows than this share is rare: judge a model by ROC AUC |
+    | `DATE_FORMATS`, `TIMESTAMP_FORMATS` | how a date written as text is read |
+    | `DROP_COPIES`, `CAST_TYPES` | the cleaned view drops copied rows, and gives text columns of numbers or dates their type |
+    | `GIVES_IT_AWAY` | a value whose target rate is this or more (or one minus this or less) decides the target |
+    """)
+    return
+
+
 @app.cell
 def _():
-    DATASET = None   # None: the tables chosen in the quickstart (else the dataset approved last, else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
-    USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
-    USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
-    USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
-    JOINED_SQL = None      # your own joined view: the CREATE VIEW printed under Prepare, as a string, edited
-    CLEANING_SQL = None    # your own cleaned view: the CREATE VIEW printed under Prepare, as a string, edited
-    # The rules the checks and the cleaning use. Change any of them and run the cells below again.
+    DATASET = None
+    USE_AI_THEMES = False
+    USE_JOINED = False
+    USE_PREPARED = False
+    JOINED_SQL = None
+    CLEANING_SQL = None
     PLACEHOLDER_VALUES = ["unknown*", "invalid*", "n/a", "na", "none", "null", "nil", "missing", "not available",
-                          "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]   # mean "not known"; "word*" = starts with
-    RARE_TARGET = 0.10     # a target in under 10% (or over 90%) of rows is rare: judge a model by ROC AUC, not accuracy
-    DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]   # how a date written as text is read
+                          "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]
+    RARE_TARGET = 0.10
+    DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]
     TIMESTAMP_FORMATS = ["YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD HH24:MI"]
-    DROP_COPIES = True     # the cleaned view drops rows that copy another row (one of each is kept)
-    CAST_TYPES = True      # the cleaned view gives a text column of numbers, dates or true/false its type
-    GIVES_IT_AWAY = 0.99   # a value whose target rate is 99% or more (or 1% or less) decides the target on its own
+    DROP_COPIES = True
+    CAST_TYPES = True
+    GIVES_IT_AWAY = 0.99
     return (
         CAST_TYPES,
         CLEANING_SQL,
@@ -109,13 +125,21 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `MODEL_ID`, for example `"claude-opus-5-5"`; `PROVIDER_BASE_URL`, any Chat Completions address; `LANGFUSE_BASE_URL`, where the calls are traced. Empty: no model.
+    """)
+    return
+
+
 @app.cell
 def _():
     import exakit.nb as nb
 
-    MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
-    PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
-    LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+    MODEL_ID = ""
+    PROVIDER_BASE_URL = ""
+    LANGFUSE_BASE_URL = ""
     nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
     return (nb,)
 
@@ -135,11 +159,11 @@ def _(DATASET, nb):
     import os
     workflow_id = nb.continue_workflow('explore')
     connection = nb.connect()
-    chosen_tables = nb.open_chosen(connection)  # the quickstart's workflow, or the last one: nothing to paste
+    chosen_tables = nb.open_chosen(connection)
     if DATASET or not chosen_tables:
-        chosen_data = nb.chosen_dataset(DATASET)  # the tables the quickstart chose, by name (nb.chosen_tables() lists them)
+        chosen_data = nb.chosen_dataset(DATASET)
     else:
-        chosen_data = next(iter(chosen_tables.values()))  # a name: the review below opens it (a file of your own is drafted there)  # another one: chosen_data = chosen_tables["SCHEMA.TABLE"]
+        chosen_data = next(iter(chosen_tables.values()))
     return chosen_data, chosen_tables, connection
 
 
@@ -187,28 +211,39 @@ def _(chosen_data, connection, nb):
     return (role_review,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `AI_CHECK = True`: your AI model completes the draft from names, types and the kit's evidence, never a row. `AI_APPROVE = True`: approve with its answer.
+    """)
+    return
+
+
 @app.cell
 def _(nb, role_review):
     # Cell tags: review
-    # Optional: let your AI model (set up on the Home card, or nb.model_setup) complete the draft. It is shown column
-    # names, types and the kit's measured evidence - never a row, never a sensitive column - and answers with the roles it
-    # would change and why, the column for each slot, and one sentence per column saying what it holds. It never picks
-    # what to predict or what makes a row unique. Nothing changes until you approve: AI_APPROVE approves with its answer.
     AI_CHECK = False
     AI_APPROVE = False
     if AI_CHECK:
-        # several tables from several sources: together=[the other tables' reviews] lets it read them next to this one
         ai_map = nb.fill_column_map(role_review)
         if AI_APPROVE:
             role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
     return (AI_CHECK,)
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `ROLE_CHANGES`: `{"COLUMN": "role"}`. `SLOT_CHANGES`: `{"target": "COLUMN"}`. Empty: the picker above stands.
+    """)
+    return
+
+
 @app.cell
 def _(role_review):
     # Cell tags: review
-    # Or approve in code - what Approve in the column map card does: the roles you change, {"COLUMN": "role"}, and the
-    # slots, {"target": "COLUMN"}. Empty: the picker above (or an approval already saved) stands.
     ROLE_CHANGES = {}
     SLOT_CHANGES = {}
     if ROLE_CHANGES or SLOT_CHANGES:
@@ -227,8 +262,8 @@ def _(nb, role_review):
 @app.cell
 def _(connection, dataset, nb):
     # Cell tags: review
-    leaking = nb.leakage_check(connection, dataset)            # columns that give the outcome away: left out of a model
-    versions = nb.column_map_versions(dataset.id)              # every saved version; approving one's roles again restores it
+    leaking = nb.leakage_check(connection, dataset)
+    versions = nb.column_map_versions(dataset.id)
     return
 
 
@@ -246,7 +281,7 @@ def _(mo):
 @app.cell
 def _(connection, dataset, nb):
     # Cell tags: review
-    dataset  # read after the approval above, so this map shows it
+    dataset
     nb.data_map(connection)
     return
 
@@ -268,20 +303,34 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `SEMANTIC_NAME` | `all_data`: every approved table of every source |
+    | `SEMANTIC_TABLES` | the tables, such as `"VS_LOGISTICS.COURIER_DAILY"` |
+    | `SEMANTIC_LINKS` | links of your own: `"S.T.COL=S.T.KEY"`, or `{"from", "to", "note"}` |
+    | `SEMANTIC_TABLE_NOTES` | what each table is, in a sentence |
+    | `SEMANTIC_SCHEMAS` | whole schemas instead: every approved table of each |
+    | `PUBLISH_SEMANTIC` | `True`: save it; `False`: a preview only |
+    """)
+    return
+
+
 @app.cell
 def _(AI_CHECK, connection, dataset, nb):
     # Cell tags: review
-    SEMANTIC_NAME = "all_data"                    # all_data: every approved table of every source, kept current by each approval
-    SEMANTIC_TABLES = [dataset.fact_table]        # add tables of this or other schemas: "VS_LOGISTICS.COURIER_DAILY", "MY_DATA.TARGETS"
-    SEMANTIC_LINKS = []                           # your own: "MY_DATA.ORDERS.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE", or {"from": ..., "to": ..., "note": "why"}
-    SEMANTIC_TABLE_NOTES = {}                     # what each table is, in a sentence: {"MY_DATA.TARGETS": "The monthly target per state."}
+    SEMANTIC_NAME = "all_data"
+    SEMANTIC_TABLES = [dataset.fact_table]
+    SEMANTIC_LINKS = []
+    SEMANTIC_TABLE_NOTES = {}
     PUBLISH_SEMANTIC = False
-    SEMANTIC_SCHEMAS = []                         # or whole schemas: every approved table of each, e.g. ["MY_DATA", "VS_LOGISTICS"]
-    # Links between the tables you listed, found from the values (two tables of one schema are compared too), each with its evidence.
+    SEMANTIC_SCHEMAS = []
     found_links = nb.find_links(connection, tables=SEMANTIC_TABLES, ai=None) if len(SEMANTIC_TABLES) > 1 else None
-    # The links the model uses: yours, and the found ones the data backs. A found link carries its evidence into the model.
     model_links = SEMANTIC_LINKS + [link for link in (found_links or {}).get("links", []) if link["confidence"] == "high"]
-    if AI_CHECK:      # your AI model says what each table and link is, and names the model (names, types and roles only)
+    if AI_CHECK:
         model_notes = nb.model_notes(connection, SEMANTIC_TABLES, links=model_links)
         SEMANTIC_TABLE_NOTES = {**model_notes["tables"], **SEMANTIC_TABLE_NOTES}
     semantic = nb.semantic_model(connection, SEMANTIC_NAME, tables=SEMANTIC_TABLES, links=model_links, table_notes=SEMANTIC_TABLE_NOTES,
@@ -293,9 +342,9 @@ def _(AI_CHECK, connection, dataset, nb):
 @app.cell
 def _(PUBLISH_SEMANTIC, SEMANTIC_NAME, connection, nb):
     # Cell tags: review
-    semantic_models = nb.semantic_models(connection)       # every model in the database; "refreshable" ones the kit built
+    semantic_models = nb.semantic_models(connection)
     if PUBLISH_SEMANTIC:
-        refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)   # rebuild it after a link or a column map changed
+        refreshed = nb.refresh_semantic(connection, SEMANTIC_NAME)
     semantic_models
     return
 
@@ -311,16 +360,25 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `APPLY_FUSION = True` applies it after the check.
+    """)
+    return
+
+
 @app.cell
 def _(SEMANTIC_NAME, connection, nb):
     # Cell tags: review
-    FUSE_TABLE = ""          # a table of the model, such as "MY_DATA.CUSTOMERS"
-    FUSE_OTHER = ""          # the same rows in another source, such as "VS_CRM.CUSTOMERS"
-    FUSE_KEY = None          # its key column, when it is not named like the model's key
+    FUSE_TABLE = ""
+    FUSE_OTHER = ""
+    FUSE_KEY = None
     APPLY_FUSION = False
     if FUSE_TABLE and FUSE_OTHER:
         fusion_document = nb.fusion_document(connection, SEMANTIC_NAME, FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model")
-        fusion_check = nb.fuse(connection, SEMANTIC_NAME, fusion_document)                 # a dry run: nothing changes
+        fusion_check = nb.fuse(connection, SEMANTIC_NAME, fusion_document)
         if APPLY_FUSION and fusion_check["status"] != "error":
             fusion_applied = nb.fuse(connection, SEMANTIC_NAME, fusion_document, dry_run=False)
     return
@@ -339,7 +397,7 @@ def _(mo):
 @app.cell
 def _(chosen_data, chosen_tables, connection, nb):
     APPROVE_ALL = False
-    ALL_CHOICES = None  # the columns to change: {"VS_SALES.ORDERS": {"STATUS": "category"}}
+    ALL_CHOICES = None
     if APPROVE_ALL and chosen_tables:
         role_reviews = {table: nb.review_roles(connection, data) for table, data in chosen_tables.items()}
         schema_summary = nb.schema_review(role_reviews)
@@ -361,8 +419,8 @@ def _(mo):
 
 @app.cell
 def _(chosen_tables, connection, nb):
-    sources = nb.sources()                          # every connected source: its schema (VS_<NAME>) and its connector
-    ADD_SOURCE = ""                                 # a table of a connected source, such as "VS_SALES.ORDERS"
+    sources = nb.sources()
+    ADD_SOURCE = ""
     if ADD_SOURCE:
         source_data = nb.load_source(connection, ADD_SOURCE)
         chosen_tables[str(source_data.fact_table)] = source_data
@@ -402,7 +460,7 @@ def _(connection, dataset_1, nb):
 
 @app.cell
 def _(role_review):
-    loaded_dataset = role_review.dataset(draft_ok=True)   # the table as loaded; `dataset` below is what the steps read
+    loaded_dataset = role_review.dataset(draft_ok=True)
     return (loaded_dataset,)
 
 
@@ -496,7 +554,7 @@ def _(
 ):
     typed_view_proposal = nb.typed_view(connection, joined_dataset, placeholder_values=PLACEHOLDER_VALUES, date_formats=DATE_FORMATS, timestamp_formats=TIMESTAMP_FORMATS, drop_copies=DROP_COPIES, cast_types=CAST_TYPES)
     dataset_2 = typed_view_proposal.create(connection, sql=CLEANING_SQL) if USE_PREPARED and (typed_view_proposal.needed or CLEANING_SQL) else joined_dataset
-    typed_view_proposal  # what every step below reads
+    typed_view_proposal
     return (dataset_2,)
 
 
@@ -706,14 +764,11 @@ def _(
     nb,
 ):
     MODEL_ROW_LIMIT = 20000
-    # The features the model reads, each only when its role exists and does not give the target away: the category and the
-    # entity as text, then the month of the date.
     USE_CATEGORY = dataset_2.has('category') and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
     USE_ENTITY = dataset_2.has('entity') and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
     CATEGORY_FEATURE = f"CAST({dataset_2.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ''
     ENTITY_FEATURE = f"CAST({dataset_2.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ''
     MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset_2.col('date')}) AS MONTH_,\n       " if dataset_2.has('date') else ''
-    # Which rows: the newest by date, else the first by the key - the same rows on every rerun either way.
     KEY_COLUMN = dataset_2.descriptor.slots.get('key')
     ROW_ORDER = f"{dataset_2.col('date')} DESC" if dataset_2.has('date') else f'"{KEY_COLUMN}"' if KEY_COLUMN else '1'
     model = None
@@ -722,7 +777,7 @@ def _(
     else:
         FEATURE_LABELS = {'MONTH_': 'month', 'CATEGORY_': (CATEGORY_COLUMN or '').strip('"'), 'ENTITY_': (ENTITY_COLUMN or '').strip('"')}
         if not DATE_COLUMN:
-            print('No date: the model reads the first rows by the key and leaves the month out.')  # What each feature is called on screen: the column it comes from, or "month".
+            print('No date: the model reads the first rows by the key and leaves the month out.')
         model_rows = nb.sql(connection, f'\nSELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL_COLUMN} AS LABEL_\nFROM {dataset_2.fact_table}\nWHERE {LABEL_COLUMN} IS NOT NULL\nORDER BY {ROW_ORDER}\nLIMIT {MODEL_ROW_LIMIT}')
         nb.show_sql()
         from sklearn.linear_model import LogisticRegression
@@ -808,7 +863,7 @@ def _(FEATURE_LABELS, LABEL_COLUMN, feature_columns, model):
             feature, value = name.split("_", 1)[0] + "_", name.split("__", 1)[1]
             return f"{FEATURE_LABELS[feature]} = {value}"
 
-        CLUES_PER_SIDE = min(8, len(feature_names) // 2)        # each side its own values: few values are split, never shown twice
+        CLUES_PER_SIDE = min(8, len(feature_names) // 2)
         print(f"Make {LABEL_COLUMN} = 1 more likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[-CLUES_PER_SIDE:]][::-1]))
         print(f"Make {LABEL_COLUMN} = 1 less likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[:CLUES_PER_SIDE]]))
     return
@@ -827,8 +882,8 @@ def _(mo):
 @app.cell
 def _(connection, dataset_2, nb):
     # Cell tags: skip-ci
-    LAB_TASK = 'predict_yes_no'  # or "predict_number", "find_groups", "find_unusual"
-    lab_data = nb.lab_data(connection, dataset_2)  # read once; lab_data.left_out says what was left out and why
+    LAB_TASK = 'predict_yes_no'
+    lab_data = nb.lab_data(connection, dataset_2)
     kept_features = {}
     lab = nb.model_lab(connection, dataset_2, LAB_TASK, model='all', target_number=None, data=lab_data, features=kept_features)
     print(lab.note or lab)
@@ -839,7 +894,7 @@ def _(connection, dataset_2, nb):
 @app.cell
 def _(LAB_TASK, connection, kept_features, lab, nb):
     # Cell tags: skip-ci
-    ideas = nb.feature_ideas(lab, ai=False, conn=connection)   # ai=True: your AI model adds more (names and roles only)
+    ideas = nb.feature_ideas(lab, ai=False, conn=connection)
     for index, idea in enumerate(ideas[:3] if LAB_TASK in ("predict_yes_no", "predict_number") else []):
         tried = nb.try_feature(lab, ideas[index])
         print(f"{idea.title}: {tried['text']}")
@@ -847,7 +902,7 @@ def _(LAB_TASK, connection, kept_features, lab, nb):
             kept_features[ideas[index].id] = tried["series"]
         else:
             kept_features.pop(ideas[index].id, None)
-    kept_features   # run the model lab cell again to train with them
+    kept_features
     return
 
 
@@ -875,7 +930,7 @@ def _(
     missing_line,
     nb,
 ):
-    SAMPLE_TEXTS = 20  # per side: the newest texts where the target is 1, and as many where it is 0
+    SAMPLE_TEXTS = 20
     text_sample = themes = None
     NEWEST_FIRST = f"{dataset_2.col('date')} DESC" if dataset_2.has('date') else dataset_2.col('entity') if dataset_2.has('entity') else '1'
     PER_LABEL = f"PARTITION BY {dataset_2.col('label')} " if dataset_2.has('label') else ''

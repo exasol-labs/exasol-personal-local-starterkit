@@ -14,7 +14,6 @@
 # </div>
 
 # %% tags=["exakit-guide", "skip-ci"]
-# Your kit and your data: the guided view of this page. Guided / Code, top right, switches to the code cells below.
 import exakit.guide as guide
 
 guide.start()
@@ -48,30 +47,38 @@ import exakit.nb as nb
 kit_state = nb.kit_check()
 
 # %%
-# What the kit has, read live: the same calls the Home card shows.
-components = nb.components()            # the kit's parts, their versions and pending updates
-addons = nb.addons()                    # the marketplace's add-ons and their state
-ai_clients = nb.ai_clients()            # the AI clients the kit can connect, and which are connected
-sample_datasets = nb.sample_datasets()  # the kit's sample datasets, and which are loaded
-loaded_files = nb.loaded_files()        # the files you loaded with exakit data-load: table, rows, file
-sources = nb.sources()                  # the external sources connected (exakit connect), read live: nothing copied
-notebooks = nb.notebooks("data-scientist")   # this persona's notebooks, in order
-persona_plan = nb.persona_plan()        # what this kit's personas bring that is still missing
-approved = nb.approved_datasets()       # the column maps approved so far
-workflows = nb.list_workflows()         # every workflow log; the last one's events:
+components = nb.components()
+addons = nb.addons()
+ai_clients = nb.ai_clients()
+sample_datasets = nb.sample_datasets()
+loaded_files = nb.loaded_files()
+sources = nb.sources()
+notebooks = nb.notebooks("data-scientist")
+persona_plan = nb.persona_plan()
+approved = nb.approved_datasets()
+workflows = nb.list_workflows()
 workflow_events = nb.workflow_log(workflows[-1]["id"]) if workflows else []
 model, tracing = nb.model_settings(), nb.tracing()
 [(c["id"], c["installed"], c["status"]) for c in components]
 
+# %% [markdown]
+# | Setting | What it does |
+# |---|---|
+# | `START_DATABASE` | start the database after a restart of this computer |
+# | `ADD_ON` | an add-on to install and start: one of `[a["id"] for a in addons]` |
+# | `LOAD`, `LOAD_SCHEMA` | a kit dataset, a file or a folder to load, and the schema it lands in |
+# | `SERVICE` | a service to start, then its log |
+# | `CHECK_AI` | check the AI clients' connection to the database |
+# | `UPDATE_KIT` | bring the kit and its add-ons up to date |
+
 # %%
-# Change the kit from here: set what you want, run the cell; each runs as `exakit` would, its log in the cell.
-START_DATABASE = False   # start the database after a restart of this computer
-ADD_ON = ""              # an add-on to install and start, e.g. one of [a["id"] for a in addons]
-LOAD = ""                # a kit dataset (sample_datasets), a file or a folder, loaded with exakit data-load
-LOAD_SCHEMA = ""         # where a file or folder lands (empty: STARTER_KIT, exakit's default)
-SERVICE = ""             # a service to start (kit_state["services"]), then its log
-CHECK_AI = False         # check the AI clients' connection to the database (mcp-doctor)
-UPDATE_KIT = False       # bring the kit and its add-ons up to date
+START_DATABASE = False
+ADD_ON = ""
+LOAD = ""
+LOAD_SCHEMA = ""
+SERVICE = ""
+CHECK_AI = False
+UPDATE_KIT = False
 if START_DATABASE:
     nb.exakit("start")
 if ADD_ON:
@@ -86,17 +93,24 @@ if CHECK_AI:
 if UPDATE_KIT:
     nb.kit_update()
 
+# %% [markdown]
+# | Setting | What it does |
+# |---|---|
+# | `PROVIDER` | one of `providers`: `"anthropic"`, `"openai"`, `"gemini"`, `"ollama"` |
+# | `SHOW_MODELS` | list the models your key may use; the key is asked in a hidden box |
+# | `MODEL_ID`, `EFFORT` | the model, and its effort where it takes one |
+# | `PROVIDER_BASE_URL` | empty: the provider's own address |
+# | `LANGFUSE_BASE_URL` | where model calls are traced, such as `https://cloud.langfuse.com` |
+# | `FORGET` | delete what was remembered |
+
 # %%
-# Your AI model and Langfuse tracing, remembered for every notebook of this kit (readable by you only). The keys are
-# asked in a hidden box. Empty values change nothing; FORGET deletes what was remembered. The Home card's AI model
-# row does the same with menus: pick the provider, give the key, pick the model and its effort.
-providers = {p["id"]: p for p in nb.model_providers()}   # the providers the kit knows, with their addresses
-PROVIDER = ""            # one of providers, e.g. "anthropic", "openai", "gemini", "ollama"
-SHOW_MODELS = False      # True: list the models your key may use (the key is asked in a hidden box)
-MODEL_ID = ""            # one of those models
-EFFORT = ""              # where the model takes one (nb.effort_levels(PROVIDER, MODEL_ID)): "low", "medium", "high"
-PROVIDER_BASE_URL = ""   # empty: the provider's own address; or any Chat Completions address of your own
-LANGFUSE_BASE_URL = ""   # e.g. "https://cloud.langfuse.com"
+providers = {p["id"]: p for p in nb.model_providers()}
+PROVIDER = ""
+SHOW_MODELS = False
+MODEL_ID = ""
+EFFORT = ""
+PROVIDER_BASE_URL = ""
+LANGFUSE_BASE_URL = ""
 FORGET = False
 if PROVIDER and not PROVIDER_BASE_URL:
     PROVIDER_BASE_URL = providers[PROVIDER]["base_url"]
@@ -135,8 +149,11 @@ print(f"Workflow {workflow_id}: every step below is recorded under it.")
 #
 # `01_explore` opens the tables chosen here: their column maps and semantic views are its first step. Several tables? Put them all in: `nb.remember_chosen(chosen_tables)`.
 
+# %% [markdown]
+# `OPEN_APPROVED`: a dataset approved before, by its id (`nb.approved_datasets()` lists them).
+
 # %%
-OPEN_APPROVED = ""   # or a dataset approved before, by its id, e.g. "amazon_sales" (nb.approved_datasets() lists them)
+OPEN_APPROVED = ""
 if OPEN_APPROVED:
     chosen_data = nb.dataset(connection, OPEN_APPROVED)
 remembered = nb.remember_chosen(chosen_data)

@@ -28,11 +28,23 @@ ds = prepared.create(conn)             # the view, described and approved; the d
 ## nb.typed_view [#typed_view]
 
 ```python
-nb.typed_view(conn, ds) -> TypedView
+nb.typed_view(
+    conn,
+    ds,
+    *,
+    placeholder_values: list[str] | None=None,
+    date_formats=None,
+    timestamp_formats=None,
+    drop_copies: bool=True,
+    cast_types: bool=True,
+) -> TypedView
 ```
 
 The proposal for `ds`'s table: its types, its cleaning and the CREATE VIEW, built from the data and the
-descriptor. Only SELECTs run; nothing is created until `create()`.
+descriptor. Only SELECTs run; nothing is created until `create()`. The rules come from the notebook's cell:
+`placeholder_values` (the values that mean "not known" and become NULL), `date_formats` and
+`timestamp_formats` (how a date written as text is recognised), `drop_copies` (drop rows that copy another)
+and `cast_types` (give a text column of numbers or dates its type).
 
 **Used in:** `data-scientist/01_explore`
 
@@ -45,13 +57,13 @@ class nb.TypedView
 The proposal. `changes` and `cleaning` say what the view does differently from the table, `sql` is the
 CREATE VIEW that `create()` runs - nothing has run before that.
 
-| Member                | What it is                                                                                                                                                            |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dataset`             | `Any`                                                                                                                                                                 |
-| `view`                | `str`                                                                                                                                                                 |
-| `sql`                 | `str`                                                                                                                                                                 |
-| `changes`             | `list[Change]`                                                                                                                                                        |
-| `cleaning`            | `list[str]`                                                                                                                                                           |
-| `created`             | `Any`                                                                                                                                                                 |
-| `needed`              | Whether the view would differ from the table at all.                                                                                                                  |
-| `create(conn) -> Any` | Create the view (after the user has read it), describe it, carry the table's roles over and approve them; returns the view's dataset, which the later steps then use. |
+| Member                                       | What it is                                                                                                                                                            |
+| -------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset`                                    | `Any`                                                                                                                                                                 |
+| `view`                                       | `str`                                                                                                                                                                 |
+| `sql`                                        | `str`                                                                                                                                                                 |
+| `changes`                                    | `list[Change]`                                                                                                                                                        |
+| `cleaning`                                   | `list[str]`                                                                                                                                                           |
+| `created`                                    | `Any`                                                                                                                                                                 |
+| `needed`                                     | Whether the view would differ from the table at all.                                                                                                                  |
+| `create(conn, sql: str \| None=None) -> Any` | Create the view (after the user has read it), describe it, carry the table's roles over and approve them; returns the view's dataset, which the later steps then use. |

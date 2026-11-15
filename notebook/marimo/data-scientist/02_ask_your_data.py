@@ -27,7 +27,6 @@ def _(mo):
 @app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
-    # Ask in plain words: the guided view of this page. Guided / Code, top right, switches to the code cells below.
     import exakit.guide as guide
 
     guide.ask()
@@ -63,16 +62,24 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `DATASET`: `None` is the dataset approved last. `QUESTION`: your question in words. `DRAFT_WITH_MODEL = True`: your AI model drafts the SQL from the column map; no rows are sent.
+    """)
+    return
+
+
 @app.cell
 def _():
     import exakit.nb as nb
 
-    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own approved descriptor
+    DATASET = None
     QUESTION = "How many rows are in each category?"
-    DRAFT_WITH_MODEL = False  # True: your model drafts the SQL (set it up in the model cell below); no rows are sent
+    DRAFT_WITH_MODEL = False
 
     dataset_id = nb.chosen_dataset(DATASET)
-    nb.continue_workflow("questions")   # the quickstart's workflow, or the last one: nothing to paste
+    nb.continue_workflow("questions")
 
     connection = nb.connect()
     dataset = nb.dataset(connection, dataset_id)
@@ -110,11 +117,19 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `MODEL_ID`, for example `"claude-opus-5-5"`; `PROVIDER_BASE_URL`, any Chat Completions address; `LANGFUSE_BASE_URL`, where the calls are traced. Empty: no model.
+    """)
+    return
+
+
 @app.cell
 def _(nb):
-    MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
-    PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
-    LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+    MODEL_ID = ""
+    PROVIDER_BASE_URL = ""
+    LANGFUSE_BASE_URL = ""
     nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
     return
 
@@ -129,19 +144,27 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `DRAFT_WITH_RULES = True`: the kit's rules draft the question, no AI model needed. `EDITED_SQL`: your own SQL for it, which you then approve.
+    """)
+    return
+
+
 @app.cell
 def _(DRAFT_WITH_MODEL, QUESTION, connection, dataset, nb):
-    GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
-    GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
+    GROUP_ROLE, GROUP_COLUMN = dataset.group_by()
+    GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
     starter_sql = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
     if GROUP_ROLE != "category":
         print(f"{dataset.id} has no category; the starter SQL counts rows per {GROUP_ROLE} ({GROUP_COLUMN}).")
-    DRAFT_WITH_RULES = False   # no AI model needed: the kit's rules draft QUESTION from the column map (nothing leaves this computer)
+    DRAFT_WITH_RULES = False
     if DRAFT_WITH_RULES:
         proposal = nb.draft_question(connection, dataset, QUESTION)
     else:
         proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql, conn=connection)
-    EDITED_SQL = ""            # your own SQL for this question: it replaces the proposal's, not approved yet
+    EDITED_SQL = ""
     if EDITED_SQL:
         proposal.edit(EDITED_SQL)
     proposal
@@ -150,7 +173,7 @@ def _(DRAFT_WITH_MODEL, QUESTION, connection, dataset, nb):
 
 @app.cell
 def _(dataset, nb):
-    examples = nb.example_questions(dataset)   # questions this column map can answer: try one as QUESTION
+    examples = nb.example_questions(dataset)
     examples
     return
 
@@ -180,7 +203,6 @@ def _(connection, dataset, nb, proposal):
     else:
         answer = None
         print("Not approved: no query ran. Review the proposal above, then set APPROVE_SQL = True and run this cell again.")
-    # The answer to read: money in the data's own currency, counts with separators, shares as %. `answer` keeps the numbers.
     currency = nb.currency_of(connection, dataset)
     nb.formatted(answer, dataset, currency) if answer is not None else None
     return (answer,)
@@ -196,9 +218,17 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `PIN_TO`: a dashboard and a page, such as `("sales-overview", "Revenue")`. `KEEP_AS_VERIFIED = True` keeps the question as a trusted question.
+    """)
+    return
+
+
 @app.cell
 def _(answer, connection, nb, proposal):
-    PIN_TO = None                     # a dashboard and a page, such as ("sales-overview", "Revenue")
+    PIN_TO = None
     KEEP_AS_VERIFIED = False
     if answer is not None:
         insights = nb.insights(answer)
