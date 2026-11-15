@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -287,6 +287,22 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
         log_event("semantic.fusion", model=model, entities=sorted(declaration.get("entities") or {}))
     print(("Checked (nothing changed): " if dry_run else "Applied: ") + (found["status"] or "")
           + (f" - {found['message']}" if found["message"] else ""))
+    return found
+
+
+def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[str, Any]:
+    """A view you already wrote (SCHEMA.VIEW over one table: plain columns grouped, SUM / COUNT / AVG / MIN / MAX)
+    made a semantic view of ``model`` (ADOPT_VIEW): plain columns become dimensions, aggregates metrics, comments
+    their descriptions. Adopt it again after the view changes. ``dry_run=True`` shows the view and the statement only.
+    A model the kit builds from your column maps is refused: give the adopted view a model of its own."""
+    from .workflow import log_event
+
+    found = _service().adopt_view(conn, model, view, dry_run=dry_run)
+    if dry_run:
+        print(f"{view}:\n{found['view_sql']}\n\nAdopting it runs:\n{found['sql']}")
+        return found
+    log_event("semantic.adopt", model=found["model"], view=view)
+    print(f"Adopted {view} into {found['model']} as {found['object']}: {found['dimensions']} dimensions, {found['metrics']} metrics.")
     return found
 
 

@@ -4,6 +4,7 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **A view you already wrote becomes part of your data map.** `exakit semantic adopt <MODEL> <SCHEMA.VIEW>` (`nb.adopt_view` in a notebook) hands a view that groups one table to Semantic Views (`ADOPT_VIEW`): its plain columns become dimensions, its `SUM`, `COUNT`, `AVG`, `MIN` and `MAX` become metrics, its comments their descriptions, in a model of its own. `--dry-run` shows the view and the statement first. A view of another shape, or a model the kit builds from your column maps, is refused with the reason.
 - **The guided cards use the rules you set in the notebook.** Every card action passes the same settings the cells do, so a rule changed in a settings cell changes what the card does too:
   - **Column map:** `ROLE_RULES`.
   - **Links:** `LINK_RULES`.

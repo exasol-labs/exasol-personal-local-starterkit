@@ -90,6 +90,21 @@ class SemanticTest(unittest.TestCase):
         self.assertEqual((0, ["EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('m')", "EXECUTE SCRIPT SEMANTIC_ADMIN.PUBLISH_MODEL('m')"]),
                          (code, ran.call_args.kwargs["statements"]))
 
+    def test_adopt_shows_the_view_on_a_dry_run_and_adopts_it_without(self):
+        planned = {"model": "logistics", "object": "SHIPPING", "dimensions": None, "metrics": None, "status": "dry_run", "ddl": [],
+                   "view_sql": "SELECT ship_mode, SUM(freight) AS freight FROM MART.ORDERS GROUP BY 1",
+                   "sql": "EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW('logistics', 'MART_SEMANTIC', 'SHIPPING')"}
+        with mock.patch.object(cli.svc, "adopt_view", return_value=planned) as adopted:
+            code, out, _ = run("semantic", "adopt", "logistics", "MART_SEMANTIC.SHIPPING", "--dry-run")
+        self.assertEqual((0, ("logistics", "MART_SEMANTIC.SHIPPING"), True), (code, adopted.call_args.args[1:], adopted.call_args.kwargs["dry_run"]))
+        self.assertIn("ADOPT_VIEW('logistics'", out)
+        done = dict(planned, status="published", dimensions=1, metrics=1)
+        with mock.patch.object(cli.svc, "adopt_view", return_value=done) as adopted:
+            code, out, _ = run("semantic", "adopt", "logistics", "MART_SEMANTIC.SHIPPING")
+        self.assertFalse(adopted.call_args.kwargs["dry_run"])
+        self.assertIn("1 dimensions, 1 metrics", out)
+        self.assertEqual(2, run("semantic", "adopt", "logistics")[0])
+
     def test_unknown_actions_and_options_are_refused_with_exit_2(self):
         self.assertEqual(2, run("semantic", "nope")[0])
         self.assertEqual(2, run("semantic", "fields", "all_data", "--nosuch")[0])

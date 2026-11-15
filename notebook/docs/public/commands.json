@@ -2,6 +2,7 @@
   "across_sql": "/data-scientist/development/reference/across#across_sql",
   "addon_ready": "/data-scientist/development/reference/kit-commands#addon_ready",
   "addons": "/data-scientist/development/reference/kit-facts#addons",
+  "adopt_view": "/data-scientist/development/reference/semantic#adopt_view",
   "ai_clients": "/data-scientist/development/reference/kit-facts#ai_clients",
   "approve_all": "/data-scientist/development/reference/role-picker#approve_all",
   "approved_datasets": "/data-scientist/development/reference/descriptor-store#approved_datasets",

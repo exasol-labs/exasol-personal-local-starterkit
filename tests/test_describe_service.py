@@ -378,6 +378,36 @@ class SemanticSurfaces(unittest.TestCase):
         with self.assertRaises(svc.Refused):
             svc.compile_request(ok, {"model": "sales"})
 
+    def test_a_view_you_wrote_is_adopted_and_a_refusal_says_why(self):
+        view = [{"VIEW_SCHEMA": "MART_SEMANTIC", "VIEW_NAME": "SHIPPING",
+                 "VIEW_TEXT": "CREATE VIEW SHIPPING AS SELECT ship_mode, SUM(freight) AS freight FROM MART.ORDERS GROUP BY 1"}]
+        conn = self.Conn({"EXA_ALL_VIEWS": view, "ADOPT_VIEW": [{"MODEL_NAME": "logistics", "OBJECT_NAME": "SHIPPING", "DIMENSIONS": 1,
+                                                                  "METRICS": 1, "STATUS": "PUBLISHED", "DDL": "CREATE_MODEL;\nPUBLISH"}]})
+        planned = svc.adopt_view(conn, "Logistics", "mart_semantic.shipping", dry_run=True)
+        self.assertEqual(("dry_run", "EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW('logistics', 'MART_SEMANTIC', 'SHIPPING')"),
+                         (planned["status"], planned["sql"]))
+        self.assertFalse(any("ADOPT_VIEW" in sql for sql in conn.sent), "a dry run reads the view only")
+        self.assertIn("SUM(freight)", planned["view_sql"])
+        found = svc.adopt_view(conn, "logistics", "MART_SEMANTIC.SHIPPING")
+        self.assertEqual(("logistics", "SHIPPING", 1, 1, "published", ["CREATE_MODEL", "PUBLISH"]),
+                         (found["model"], found["object"], found["dimensions"], found["metrics"], found["status"], found["ddl"]))
+
+        class Refusing(self.Conn):
+            def execute(self, sql):
+                if "ADOPT_VIEW" in sql:
+                    raise RuntimeError("[SEMANTIC_ADMIN_229] the view has a join")
+                return super().execute(sql)
+        with self.assertRaisesRegex(svc.Refused, "another shape.*SEMANTIC_ADMIN_229"):
+            svc.adopt_view(Refusing({"EXA_ALL_VIEWS": view}), "logistics", "MART_SEMANTIC.SHIPPING")
+        with self.assertRaises(svc.NotFound):
+            svc.adopt_view(self.Conn({}), "logistics", "MART_SEMANTIC.NOPE")
+        with self.assertRaisesRegex(svc.Refused, "SCHEMA.VIEW"):
+            svc.adopt_view(conn, "logistics", "SHIPPING")
+        from descriptor import publish
+        publish.keep({"model": "sales"}, {"tables": []})
+        with self.assertRaisesRegex(svc.Refused, "column maps"):
+            svc.adopt_view(conn, "sales", "MART_SEMANTIC.SHIPPING")
+
     def test_a_verified_question_is_compiled_first_and_kept_beside_the_model(self):
         from descriptor import publish
         publish.keep({"model": "sales"}, {"tables": []})

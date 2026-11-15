@@ -1033,6 +1033,58 @@ def fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool = True)
     return result
 
 
+ADOPT_CODES = {
+    "SEMANTIC_ADMIN_228": "the view does not exist or this user cannot see it",
+    "SEMANTIC_ADMIN_229": "the view has another shape: one table, plain columns grouped, and SUM, COUNT, AVG, MIN or MAX",
+    "SEMANTIC_ADMIN_230": "a semantic view of that name already reads another table",
+    "SEMANTIC_ADMIN_231": "the model has an entity of that name over another table",
+    "SEMANTIC_ADMIN_232": "a view, column or table name cannot be a semantic name (such as one with a space)",
+    "SEMANTIC_ADMIN_233": "the model has no free name left for the table",
+    "SEMANTIC_DDL_095": "a metric of that name is already in the model",
+    "SEMANTIC_DDL_096": "a dimension of that name already means something else in the model",
+}
+
+
+def adopt_view(conn, model: str, view: str, *, dry_run: bool = False) -> dict[str, Any]:
+    """A view you already wrote (SCHEMA.VIEW: one table, plain columns grouped, SUM / COUNT / AVG / MIN / MAX) made a
+    semantic view of ``model`` by SEMANTIC_ADMIN.ADOPT_VIEW: plain columns become dimensions, aggregates metrics, the
+    view's and columns' comments their descriptions. The model is created when it does not exist; adopting again after
+    the view changed follows it. A model the kit builds from column maps is refused: its next rebuild would drop the
+    adopted view. ``dry_run`` reads the view only. {model, object, dimensions, metrics, status, ddl, view_sql, sql}."""
+    from descriptor import semantic_model as sm
+
+    schema, dot, name = str(view or "").strip().partition(".")
+    if not dot or not schema or not name or "." in name:
+        raise Refused("Name the view as SCHEMA.VIEW.")
+    target = sm.model_name(model)
+    if publishing.kept(target) is not None:
+        raise Refused(f"{target} is a model the kit builds from your column maps; adopt the view into a model of its own.")
+    found = _rows(conn, "SELECT VIEW_SCHEMA, VIEW_NAME, VIEW_TEXT FROM SYS.EXA_ALL_VIEWS "
+                        f"WHERE VIEW_SCHEMA IN ({sm.literal(schema)}, {sm.literal(schema.upper())}) "
+                        f"AND VIEW_NAME IN ({sm.literal(name)}, {sm.literal(name.upper())})")
+    if not found:
+        raise NotFound(f"There is no view {schema}.{name} that this user can see.")
+    row = {str(k).upper(): v for k, v in found[0].items()}
+    statement = sm._script("ADOPT_VIEW", target, str(row["VIEW_SCHEMA"]), str(row["VIEW_NAME"]))
+    result = {"model": target, "object": str(row["VIEW_NAME"]), "dimensions": None, "metrics": None,
+              "status": "dry_run" if dry_run else None, "ddl": [], "view_sql": " ".join(str(row.get("VIEW_TEXT") or "").split()),
+              "sql": statement}
+    if dry_run:
+        return result
+    try:
+        answer = _script_row(conn, statement)
+    except Exception as err:
+        text = " ".join(str(err).split())
+        code = next((c for c in ADOPT_CODES if c in text), None)
+        raise Refused(f"Semantic Views did not adopt {schema}.{name}: "
+                      + (f"{ADOPT_CODES[code]} ({code})." if code else text[:400])) from err
+    ddl = answer.get("DDL")
+    result.update(object=str(answer.get("OBJECT_NAME") or result["object"]), dimensions=answer.get("DIMENSIONS"),
+                  metrics=answer.get("METRICS"), status=str(answer.get("STATUS") or "").lower() or "unknown",
+                  ddl=[s.strip() for s in str(ddl or "").split(";\n") if s.strip()])
+    return result
+
+
 def fusion_document(conn, model: str, table: str, other: str, *, key: str | None = None,
                     wins: str = "model") -> dict[str, Any]:
     """The fusion document for "``other`` holds the same thing as ``table``": ``table`` is an entity of the published

@@ -283,6 +283,21 @@ exakit semantic refresh all_data
 
 The kit's `exakit` skill tells AI clients to read `all_data` first and to use these commands rather than their own SQL against the semantic layer. Before every write, the client shows you the request, the document or the SQL and waits for your yes.
 
+### A view you already wrote [#a-view-you-already-wrote]
+
+If you already have a view that groups one table, Semantic Views can adopt it as it is. Plain columns become dimensions, `SUM`, `COUNT`, `AVG`, `MIN` and `MAX` become metrics, and the view's comments become their descriptions:
+
+```bash
+exakit semantic adopt logistics MART_SEMANTIC.SHIPPING --dry-run   # the view and the statement, nothing changes
+exakit semantic adopt logistics MART_SEMANTIC.SHIPPING             # model logistics, semantic view SHIPPING
+```
+
+```python
+nb.adopt_view(connection, "logistics", "MART_SEMANTIC.SHIPPING")
+```
+
+Run it again after you change the view. It goes into a model of its own: one the kit builds from your column maps is refused, because the next approval would build that model again without it. A view with a join, a `WHERE` or several tables is refused with the reason; for those, approve the tables' column maps and the kit writes the model with its links.
+
 ### Column maps are in the model too [#column-maps-are-in-the-model-too]
 
 Every model the kit publishes keeps each table's approved column map on that table's entity: the approved text, under `column_map_v<version>`. A new approval adds the next version, so the model holds the history as well. The kit's store is the version control: drafts, approvals, who approved and when. The two are kept together, and either one restores the other:

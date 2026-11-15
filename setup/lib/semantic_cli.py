@@ -14,6 +14,7 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic refresh <MODEL>                             changed in place, or rebuilt when it is gone
     exakit semantic plan <MODEL> --table S.T... [--link S.T.COL=S.T.KEY]...   every statement saving it runs
     exakit semantic run <MODEL> --sql-file F                    your own version of those statements
+    exakit semantic adopt <MODEL> <SCHEMA.VIEW> [--dry-run]     a view you already wrote, made a semantic view
 
     exakit board list | show <NAME>
     exakit board starter [NAME] [--rules '{"GROUPS": 5}']       a page per approved table, from the column maps (default: overview)
@@ -44,7 +45,7 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 
 import describe_service as svc  # noqa: E402
 
-FLAGS = {"--json": "json", "--apply": "apply", "--write": "write", "--figures-checked": "figures_checked"}
+FLAGS = {"--json": "json", "--apply": "apply", "--dry-run": "dry_run", "--write": "write", "--figures-checked": "figures_checked"}
 VALUED = {"--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
@@ -182,12 +183,20 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         statements = [p.strip() for p in text.split(";\n") if p.strip().rstrip(";")]
         found = _connected(lambda c: svc.semantic_model(c, model, [], statements=[p.rstrip(";") for p in statements]))
         return found, f"Ran {len(statements)} statements for {model}."
+    if action == "adopt":
+        model, view = _need(words, 2, "exakit semantic adopt <MODEL> <SCHEMA.VIEW> [--dry-run]")
+        found = _connected(lambda c: svc.adopt_view(c, model, view, dry_run=bool(opts.get("dry_run"))))
+        if found["status"] == "dry_run":
+            return found, (f"{view} as written:\n{found['view_sql']}\n\nAdopting it runs:\n{found['sql']};"
+                           "\nRun it again without --dry-run after the user agrees.")
+        return found, (f"Adopted {view} into {found['model']} as {found['object']}: {found['dimensions']} dimensions, "
+                       f"{found['metrics']} metrics ({found['status']}).\nAsk it: exakit semantic fields {found['model']}")
     if action == "refresh":
         model, = _need(words, 1, "exakit semantic refresh <MODEL>")
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
     raise Refused(f"Unknown action '{action}' (models, fields, compile, verify, verified, fuse, fusion, column-maps, "
-                  "restore-maps, refresh).")
+                  "restore-maps, refresh, plan, run, adopt).")
 
 
 # --- exakit board -----------------------------------------------------------------------------------------------------

@@ -36,6 +36,18 @@ The work is the kit's describe service (the one `exakit describe --model` runs),
 the kit builds is marked as such; one of the same name somebody else made is never touched.
 
 
+## nb.adopt_view [#adopt_view]
+
+```python
+nb.adopt_view(conn, model: str, view: str, *, dry_run: bool=False) -> dict[str, Any]
+```
+
+A view you already wrote (SCHEMA.VIEW over one table: plain columns grouped, SUM / COUNT / AVG / MIN / MAX)
+made a semantic view of `model` (ADOPT_VIEW): plain columns become dimensions, aggregates metrics, comments
+their descriptions. Adopt it again after the view changes. `dry_run=True` shows the view and the statement only.
+A model the kit builds from your column maps is refused: give the adopted view a model of its own.
+
+
 ## nb.column_maps_in_model [#column_maps_in_model]
 
 ```python
