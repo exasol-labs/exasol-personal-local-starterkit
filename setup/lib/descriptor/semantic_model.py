@@ -218,7 +218,7 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             entity = f"{entity}_{index}"
         used.add(entity)
         origin = dict(table.get("origin") or {})
-        record = {"name": entity, "schema": schema.upper(), "table": object_name.upper(), "alias": f"t{index}",
+        record = {"name": entity, "schema": schema, "table": object_name, "alias": f"t{index}",
                   "key": [k for k in table.get("key") or [] if k], "virtual": bool(table.get("virtual")),
                   "grain": grains.get(f"{schema}.{object_name}".upper()) or table.get("grain") or f"one row of {schema}.{object_name}",
                   "description": (table.get("description") or f"{schema}.{object_name}").rstrip(".") + ". "
@@ -779,7 +779,7 @@ HOW = ("sum", "count", "average")
 
 def _view_of(spec: dict[str, Any], table: str) -> dict[str, Any] | None:
     schema, _, name = str(table).upper().partition(".")
-    entity = next((e for e in spec["entities"] if (e["schema"], e["table"]) == (schema, name)), None)
+    entity = next((e for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema, name)), None)
     return next((o for o in spec["objects"] if entity and o["root"] == entity["name"]), None)
 
 
@@ -863,7 +863,7 @@ def field_policies(spec: dict[str, Any], hidden: dict[str, Iterable[str]] | None
     found, refused = [], []
     for table, columns in (hidden or {}).items():
         schema, _, name = str(table).upper().partition(".")
-        entity = next((e for e in spec["entities"] if (e["schema"], e["table"]) == (schema, name)), None)
+        entity = next((e for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema, name)), None)
         for column in columns or []:
             hits = [{"object": o["name"], "field": d["name"]} for o in spec["objects"] for d in o["dimensions"]
                     if entity and d.get("entity") == entity["name"] and _field_of([d], column)]
@@ -907,7 +907,7 @@ def user_instructions(spec: dict[str, Any], instructions: Iterable[Any]) -> list
         if not text:
             continue
         schema, _, name = str(table or "").upper().partition(".")
-        entity = next((e["name"] for e in spec["entities"] if (e["schema"], e["table"]) == (schema, name)), None)
+        entity = next((e["name"] for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema, name)), None)
         found.append({"entity": entity, "scope": "ENTITY" if entity else "MODEL", "kind": "GENERAL", "priority": 20, "text": text})
     return found
 

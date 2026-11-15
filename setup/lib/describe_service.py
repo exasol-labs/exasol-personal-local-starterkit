@@ -114,6 +114,9 @@ def split_table(table: str) -> tuple[str, str]:
     def part(text: str) -> str:
         return text[1:-1].replace('""', '"') if text.startswith('"') else text.upper()
 
+    if not match.group(1).startswith('"') and not match.group(2).startswith('"'):
+        schema, _, name = flow.table_name(f"{match.group(1)}.{match.group(2)}").partition(".")
+        return schema, name                  # a table the kit knows by another spelling keeps it
     return part(match.group(1)), part(match.group(2))
 
 
@@ -599,6 +602,22 @@ def semantic_ai(spec: dict[str, Any], chat=None) -> dict[str, Any]:
     return {"labels": labels, "extra": extra, "refused": refused, "error": None}
 
 
+def _link_end(text: str) -> str:
+    """SCHEMA.TABLE.COLUMN as the database spells it: the table by flow.table_name (a source's lower-case table keeps
+    its spelling), the column by the table's approved column map, matched regardless of case."""
+    text = str(text or "").strip()
+    if text.count(".") != 2:
+        return text.upper()
+    table, _, column = text.rpartition(".")
+    table = flow.table_name(table)
+    try:
+        doc = publishing._load(store.current(table) or "")
+        column = next((c for c in doc.get("columns") or {} if c.upper() == column.upper()), column.upper())
+    except Exception:                       # noqa: BLE001 - no approved map: the plain name, upper-cased
+        column = column.upper()
+    return f"{table}.{column}"
+
+
 def semantic_model(conn, name: str, tables: list[str], links: list | None = None, *, ai: bool = False,
                    dry_run: bool = False, description: str | None = None, chat=None, progress=None,
                    schemas: list[str] | None = None, discover: bool = False,
@@ -652,7 +671,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
     joins = []
     for spec in links or []:
         if isinstance(spec, dict):
-            source, target = str(spec.get("from") or "").strip().upper(), str(spec.get("to") or "").strip().upper()
+            source, target = _link_end(str(spec.get("from") or "")), _link_end(str(spec.get("to") or ""))
             if source.count(".") != 2 or target.count(".") != 2:
                 raise Refused(f"A link names SCHEMA.TABLE.COLUMN on both sides, not '{source}' and '{target}'.")
             evidence = {k: spec[k] for k in ("proposed_by", "found", "checked", "share", "key_evidence", "from_live",
@@ -678,7 +697,7 @@ def semantic_model(conn, name: str, tables: list[str], links: list | None = None
         source, sep, target = spec.partition("=")
         if not sep or source.count(".") != 2 or target.count(".") != 2:
             raise Refused(f"--link takes SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY, not '{spec}'.")
-        joins.append({"from": source.strip().upper(), "to": target.strip().upper(),
+        joins.append({"from": _link_end(source), "to": _link_end(target),
                       "evidence": {"proposed_by": "you", "note": "given with --link"}})
     discovered: dict[str, Any] | None = None
     model_schemas = sorted({n.split(".", 1)[0] for n in names})
@@ -883,7 +902,7 @@ def data_map_inputs(tables: list[str], model: str = "all_data", conn=None) -> di
     """What the data map card shows for these tables (publish.data_map_inputs), from this computer. With ``conn``, the
     model is the record: a column map or the data map this computer does not have is put back from it first (one
     catalog read, only then)."""
-    wanted = [str(t).upper() for t in tables]
+    wanted = [flow.table_name(str(t)) for t in tables]
     found = publishing.data_map_inputs(wanted, sm_name(model))
     if conn is None or (found["saved"] and not found["missing"]):
         return found
@@ -918,7 +937,7 @@ def draft_data_map(tables: list[str], chat=None) -> dict[str, Any]:
                           "or set one up with nb.model_setup().")
         chat = _chat
     try:
-        return publishing.draft_data_map([str(t).upper() for t in tables], chat)
+        return publishing.draft_data_map([flow.table_name(str(t)) for t in tables], chat)
     except sm.ModelRefused as err:
         raise Refused(str(err)) from err
 
@@ -1498,12 +1517,12 @@ def fusion_document(conn, model: str, table: str, other: str, *, key: str | None
         raise NotFound(f"The kit has not published a model named {sm.model_name(model)} here: publish it first.")
     spec = kept["spec"]
     schema, name = split_table(table)
-    entity = next((e for e in spec["entities"] if (e["schema"], e["table"]) == (schema.upper(), name.upper())), None)
+    entity = next((e for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema.upper(), name.upper())), None)
     if entity is None:
         raise Refused(f"{schema}.{name} is not in the model {spec['model']}: add it to the model first.")
     if not entity["key"]:
         raise Refused(f"{schema}.{name} has no key in its column map: the same thing in two places is matched by its key.")
-    other_schema, other_name = split_table(other)
+    other_schema, other_name = split_table(flow.resolve_table(lambda sql: _rows(conn, sql), other))
     if (other_schema, other_name) == (schema, name):
         raise Refused("Pick a table of another source: this is the model's own copy.")
     columns, virtual = _columns(conn, other_schema, other_name)
@@ -1543,7 +1562,7 @@ def fusion_document(conn, model: str, table: str, other: str, *, key: str | None
         primary["identity_binding"] = {"source_expression": sm.column_sql(alias, own_key), "binding_kind": "DIRECT"}
         representation["identity_binding"] = {"source_expression": sm.column_sql(alias, other_key), "binding_kind": "DIRECT"}
     if mapping:
-        xref_schema, xref_name = split_table(str(mapping.get("table") or ""))
+        xref_schema, xref_name = split_table(flow.resolve_table(lambda sql: _rows(conn, sql), str(mapping.get("table") or "")))
         local, semantic = str(mapping.get("local") or "").upper(), str(mapping.get("key") or "").upper()
         xref_types = {c["column"].upper(): c["type"] for c in _columns(conn, xref_schema, xref_name)[0]}
         if local not in xref_types or semantic not in xref_types:

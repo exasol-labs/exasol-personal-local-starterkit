@@ -467,6 +467,33 @@ class SemanticSurfaces(unittest.TestCase):
         self.assertEqual({"MODEL": "a", "METRIC:total_amount": "b"}, svc.definition_hashes(conn, "sales"))
         self.assertEqual(({}, []), (svc.definition_hashes(self.Conn({}), "sales"), svc.request_contract(self.Conn({}))))
 
+    def test_a_sources_lower_case_table_keeps_its_spelling(self):
+        """A MySQL or PostgreSQL source names its tables in lower case (category_costs): a plain name finds it once the
+        database or the store has shown how it is spelt, and a link's column keeps the column map's spelling."""
+        from descriptor import flow, store
+        flow._TRUE_CASE.clear()
+        flow._STORE_READ.clear()
+        self.assertEqual("VS_CATALOG.CATEGORY_COSTS", flow.table_name("vs_catalog.category_costs"), "nothing known: upper case")
+        calls = []
+
+        def run(sql):
+            calls.append(sql)
+            if "COLUMN_TABLE = 'CATEGORY_COSTS'" in sql:
+                return []
+            return [{"S": "VS_CATALOG", "T": "category_costs"}]
+        self.assertEqual("VS_CATALOG.category_costs", flow.resolve_table(run, "VS_CATALOG.CATEGORY_COSTS"))
+        self.assertEqual("VS_CATALOG.category_costs", flow.table_name("vs_catalog.Category_Costs"), "remembered")
+        self.assertEqual(("VS_CATALOG", "category_costs"), svc.split_table("VS_CATALOG.CATEGORY_COSTS"))
+        store.write_version("VS_CATALOG.category_costs", 1, 'descriptor: 1\ncolumns:\n  "category": {role: "key"}\n')
+        store.replace_current("VS_CATALOG.category_costs", 'descriptor: 1\ncolumns:\n  "category": {role: "key"}\n')
+        self.assertEqual("VS_CATALOG.category_costs.category", svc._link_end("vs_catalog.CATEGORY_COSTS.CATEGORY"))
+        flow._TRUE_CASE.clear()
+        flow._STORE_READ.clear()
+        self.assertEqual("VS_CATALOG.category_costs", flow.table_name("VS_CATALOG.CATEGORY_COSTS"),
+                         "a new process knows an approved table's spelling from the store")
+        flow._TRUE_CASE.clear()
+        flow._STORE_READ.clear()
+
     def test_fusion_health_and_feedback_are_semantic_views_own(self):
         conn = self.Conn({"CHECK_FUSION_HEALTH": [{"ENTITY_NAME": "customers", "ATTRIBUTE_NAME": "region", "FUSION_STRATEGY": "COALESCE",
                                                    "TOTAL_KEYS": 10, "FROM_FIRST_SOURCE": 8, "FILLED": 1, "UNRESOLVED": 1}]})

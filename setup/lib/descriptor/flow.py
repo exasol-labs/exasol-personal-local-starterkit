@@ -47,13 +47,63 @@ def _rules():
     return descriptor_rules
 
 
+_TRUE_CASE: dict[str, str] = {}      # SCHEMA.TABLE upper-cased -> as the database spells it, for names not upper-case
+_STORE_READ: set[str] = set()
+
+
+def remember_table(full: str) -> None:
+    """Keep how the database spells a table whose name is not upper-case (a MySQL or PostgreSQL source's
+    category_costs): a plain SCHEMA.TABLE then means that table, not CATEGORY_COSTS."""
+    if full and full != full.upper():
+        _TRUE_CASE[full.upper()] = full
+
+
+def _from_store() -> None:
+    """The store's folders keep each approved table's own spelling: what the kit approved is known by name."""
+    root = store.kit_home() / store.FOLDER
+    if str(root) in _STORE_READ:
+        return
+    _STORE_READ.add(str(root))
+    try:
+        for entry in root.iterdir() if root.is_dir() else []:
+            if entry.is_dir() and "." in entry.name:
+                remember_table(entry.name)
+    except OSError:
+        pass
+
+
 def table_name(table: str) -> str:
-    """SCHEMA.TABLE as the database spells it: a plain part upper-cased, a quoted part kept."""
+    """SCHEMA.TABLE as the database spells it: a quoted part kept; a plain part upper-cased, unless the kit knows the
+    table by another spelling (a source whose tables are lower-case: resolve_table, or the store)."""
     match = re.match(r'^\s*("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_]*)\s*\.\s*("(?:[^"]|"")+"|[A-Za-z_][A-Za-z0-9_]*)\s*$', table or "")
     if not match:
         raise ValueError(f"Name the table as SCHEMA.TABLE, not '{table}'.")
     parts = [p[1:-1].replace('""', '"') if p.startswith('"') else p.upper() for p in match.groups()]
-    return ".".join(parts)
+    joined = ".".join(parts)
+    if any(p.startswith('"') for p in match.groups()):
+        return joined
+    _from_store()
+    return _TRUE_CASE.get(joined.upper(), joined)
+
+
+def resolve_table(run: Callable[[str], list[dict[str, Any]]], table: str) -> str:
+    """table_name, checked against the database: when no table has that spelling but exactly one has it in another
+    case (category_costs for CATEGORY_COSTS), that one, remembered for the names that follow."""
+    name = table_name(table)
+    schema, _, obj = name.partition(".")
+    lit = lambda text: "'" + str(text).replace("'", "''") + "'"
+    try:
+        if run(f"SELECT 1 FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = {lit(schema)} AND COLUMN_TABLE = {lit(obj)} LIMIT 1"):
+            return name
+        found = run("SELECT DISTINCT COLUMN_SCHEMA AS S, COLUMN_TABLE AS T FROM SYS.EXA_ALL_COLUMNS "
+                    f"WHERE UPPER(COLUMN_SCHEMA) = {lit(schema.upper())} AND UPPER(COLUMN_TABLE) = {lit(obj.upper())}")
+    except Exception:                       # noqa: BLE001 - the name as written: the caller says what is missing
+        return name
+    if len(found) == 1:
+        row = {str(k).upper(): v for k, v in found[0].items()}
+        name = f"{row['S']}.{row['T']}"
+        remember_table(name)
+    return name
 
 
 def dataset_id(table: str) -> str:
@@ -106,7 +156,7 @@ def describe(run: Callable[[str], list[dict[str, Any]]], table: str, *, dataset:
              home=None) -> dict[str, Any]:
     """{status: approved|draft, doc, profile, changed, previous}: the approved descriptor when the table still
     matches it, else a fresh draft (carried over from the approved one where the columns did not change)."""
-    table = table_name(table)
+    table = resolve_table(run, table)
     approved_text = store.current(table, home)
     approved = load(approved_text) if approved_text else None
     if approved and not force and live_digest(run, table) == approved["source"]["schema_digest"]:

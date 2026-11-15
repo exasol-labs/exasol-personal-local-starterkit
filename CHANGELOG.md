@@ -4,6 +4,7 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **A source whose tables are named in lower case works end to end.** A MySQL or PostgreSQL source's `category_costs` is described, approved, linked and modelled by its own spelling, found from a plain name the database or the store has shown; a link's column keeps the column map's spelling. Checked live against a MySQL source joined to local data.
 - **A sample dataset loads on a kit installed from a private repository.** When its own release cannot be reached without a token, the kit fetches the same archive from the public kit's release; the SHA-256 checks it either way.
 - **The Home card says where you left off.** "In Start here: your kit and your data you chose your data · 2 minutes ago · then: Understand and explore", from the workflow log, and its button opens the notebook you were in.
 - **The explore notebook starts with Choose your data** (Step 1 of 4): what the quickstart chose stays, and what you tick is added beside it.

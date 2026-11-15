@@ -29,6 +29,13 @@ from typing import Any, Callable
 from . import semantic_model as sm
 from . import store
 
+
+def flow_table(table: str) -> str:
+    """SCHEMA.TABLE as the database spells it (flow.table_name: a source's lower-case table keeps its spelling)."""
+    from . import flow
+
+    return flow.table_name(table)
+
 FOLDER = "semantic"
 
 Run = Callable[[str], list[dict[str, Any]]]
@@ -628,7 +635,7 @@ def data_map_inputs(tables: list[str], model: str = ALL_MODEL, home: Path | None
     instructions, the description."""
     found: dict[str, Any] = {"tables": {}, "missing": []}
     for table in tables:
-        name = str(table).upper()
+        name = flow_table(str(table))
         text = store.current(name, home) or store.current(str(table), home)
         if not text:
             found["missing"].append(name)
@@ -645,7 +652,7 @@ def data_map_inputs(tables: list[str], model: str = ALL_MODEL, home: Path | None
     had = kept(model, home)
     found["saved"] = had is not None
     saved = (had or {}).get("inputs") or {}
-    inside = lambda column: str(column).upper().rsplit(".", 1)[0] in found["tables"]
+    inside = lambda column: str(column).rsplit(".", 1)[0].upper() in {t.upper() for t in found["tables"]}
     found.update({
         "grains": {t: g for t, g in (saved.get("grains") or {}).items() if t in found["tables"]},
         "table_notes": {t: n for t, n in (saved.get("table_notes") or {}).items() if t in found["tables"]},
@@ -695,15 +702,19 @@ def draft_data_map(tables: list[str], chat: Callable[[str], str], home: Path | N
         raise sm.ModelRefused(f"The AI's answer was not JSON ({str(err)[:120]}); press the button again.") from None
     answer = answer if isinstance(answer, dict) else {}
     columns = {t: {c["name"].upper(): c for c in v["columns"]} for t, v in known.items()}
-    column_of = lambda full: (lambda t, c: columns.get(t, {}).get(c))(*(str(full).upper().rsplit(".", 1) + [""])[:2])
+    canon_of = {t.upper(): t for t in known}             # a source's lower-case table keeps its own spelling
+    canon = lambda text: canon_of.get(str(text).upper(), str(text).upper())
+    column_of = lambda full: (lambda t, c: columns.get(canon(t), {}).get(c.upper()))(*(str(full).rsplit(".", 1) + [""])[:2])
     refused: list[str] = []
-    said = lambda key: {str(t).upper(): " ".join(str(v).split())[:300] for t, v in (answer.get(key) or {}).items()
-                        if str(t).upper() in known and str(v).strip()} if isinstance(answer.get(key), dict) else {}
+    said = lambda key: {canon(t): " ".join(str(v).split())[:300] for t, v in (answer.get(key) or {}).items()
+                        if canon(t) in known and str(v).strip()} if isinstance(answer.get(key), dict) else {}
     links = []
     for link in answer.get("links") or []:
         if not isinstance(link, dict):
             continue
-        source, target = str(link.get("from") or "").upper(), str(link.get("to") or "").upper()
+        source, target = str(link.get("from") or ""), str(link.get("to") or "")
+        source = f"{canon(source.rsplit('.', 1)[0])}.{(column_of(source) or {}).get('name', source.rsplit('.', 1)[-1])}" if "." in source else source
+        target = f"{canon(target.rsplit('.', 1)[0])}.{(column_of(target) or {}).get('name', target.rsplit('.', 1)[-1])}" if "." in target else target
         kind = str(link.get("type") or "MANY_TO_ONE").upper().replace("-", "_")
         if not column_of(source) or not column_of(target) or source.rsplit(".", 1)[0] == target.rsplit(".", 1)[0]:
             refused.append(f"link {source} -> {target}: not a column of one table and a column of another")
@@ -714,7 +725,7 @@ def draft_data_map(tables: list[str], chat: Callable[[str], str], home: Path | N
     for m in answer.get("metrics") or []:
         if not isinstance(m, dict):
             continue
-        table, how = str(m.get("table") or "").upper(), str(m.get("how") or "sum").lower()
+        table, how = canon(m.get("table") or ""), str(m.get("how") or "sum").lower()
         column = columns.get(table, {}).get(str(m.get("column") or "").upper())
         where = m.get("where") if isinstance(m.get("where"), dict) else {}
         by = columns.get(table, {}).get(str(where.get("column") or "").upper()) if where else None
@@ -730,10 +741,10 @@ def draft_data_map(tables: list[str], chat: Callable[[str], str], home: Path | N
                         "about": " ".join(str(m.get("about") or "").split())[:300], "by": "ai"})
     return {"description": " ".join(str(answer.get("description") or "").split())[:300],
             "table_notes": said("table_notes"), "grains": said("grains"), "links": links,
-            "starts": [str(t).upper() for t in answer.get("starts") or [] if str(t).upper() in known],
+            "starts": [canon(t) for t in answer.get("starts") or [] if canon(t) in known],
             "metrics": metrics,
             "instructions": [" ".join(str(i).split())[:500] for i in answer.get("instructions") or [] if str(i).strip()][:10],
             "hidden": {t: [columns[t][str(c).upper()]["name"] for c in cs if str(c).upper() in columns.get(t, {})]
-                       for t, cs in ((str(t).upper(), cs) for t, cs in (answer.get("hidden") or {}).items()
+                       for t, cs in ((canon(t), cs) for t, cs in (answer.get("hidden") or {}).items()
                                      if isinstance(answer.get("hidden"), dict) and isinstance(cs, list)) if t in known},
             "refused": refused}
