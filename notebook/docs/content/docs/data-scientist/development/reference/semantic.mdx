@@ -507,6 +507,20 @@ nb.totals_status(conn, name: str, status: str, model: str='all_data') -> dict[st
 Turn stored totals off (INACTIVE), on (ACTIVE), or mark them STALE.
 
 
+## nb.valid_combinations [#valid_combinations]
+
+```python
+nb.valid_combinations(
+    conn,
+    object_name: str,
+    metrics: list[str] | None=None,
+    model: str='all_data',
+) -> list[dict[str, Any]]
+```
+
+Which metric may be grouped by which dimension, as Semantic Views proves it: [\{metric, dimension, valid, reason\}].
+
+
 ## nb.validate_data_map [#validate_data_map]
 
 ```python

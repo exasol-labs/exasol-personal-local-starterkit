@@ -364,6 +364,8 @@ The kit's `exakit` skill tells AI clients to read `all_data` first and to use th
 
 Ask gives your AI Semantic Views' own glossary of the semantic view (`GET_BUSINESS_GLOSSARY`): what each field means and the rules for AI tools, as the product writes it. Under **How it is put together**, its own explanation of the answer (`EXPLAIN_COMPILED_SQL`) comes first. When you approve an answer, or write other SQL instead, that is recorded with the request in Semantic Views (`RECORD_AGENT_FEEDBACK`), so whoever looks after the data map sees what needed a change.
 
+Before anything is compiled, Ask checks each metric and dimension the AI picked against what Semantic Views allows (`VALID_COMBINATIONS_FOR_AGENT`). A pair it refuses, such as a cost recorded once per order grouped by product, goes back to the AI once, with the product's reason and the dimensions each metric may be grouped by. When the AI still finds no allowed pair, Ask says which pair and why, and nothing is compiled. `exakit semantic combinations all_data ORDER_LINES` lists them.
+
 ### What you see before you approve an answer [#what-you-see-before-you-approve-an-answer]
 
 Every answer in Ask says whether your data map checked it:

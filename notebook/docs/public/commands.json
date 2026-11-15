@@ -179,6 +179,7 @@
   "use_mlflow": "/data-scientist/development/reference/setup-env#use_mlflow",
   "use_model": "/data-scientist/development/reference/setup-env#use_model",
   "use_table": "/data-scientist/development/reference/own-file#use_table",
+  "valid_combinations": "/data-scientist/development/reference/semantic#valid_combinations",
   "validate_data_map": "/data-scientist/development/reference/semantic#validate_data_map",
   "verified_questions": "/data-scientist/development/reference/semantic#verified_questions",
   "verify_question": "/data-scientist/development/reference/semantic#verify_question",

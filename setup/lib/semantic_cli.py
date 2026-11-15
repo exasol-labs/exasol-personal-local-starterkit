@@ -12,6 +12,7 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic fuse <MODEL> --table S.T --same-as S.T --mapping-table S.XREF --mapping-local COL --mapping-key COL
     exakit semantic fuse <MODEL> --table S.T --same-as S.ARCHIVE --split-column DATE_COL --split-at 2026-01-01
     exakit semantic coverage <MODEL>                            rows of a date split outside their window
+    exakit semantic combinations <MODEL> <VIEW> [--metric M]... which metric may be grouped by which dimension
     exakit semantic fusion <MODEL>                              its whole fusion layer, exported
     exakit semantic column-maps <MODEL>                         the approved column maps the model carries
     exakit semantic restore-maps <MODEL> [--write]              the kit's store put back from the model
@@ -191,6 +192,12 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         state = ("Applied" if not found["dry_run"] else "Checked, nothing changed") if found["status"] != "error" else "Refused"
         return found, (f"{state}: {found['status']}" + (f" - {found['message']}" if found.get("message") else "")
                        + ("\nApply it with --apply after the user agrees." if found["dry_run"] and found["status"] != "error" else ""))
+    if action == "combinations":
+        model, view = _need(words, 2, "exakit semantic combinations <MODEL> <VIEW> [--metric M]")
+        metrics = [m for m in (opts.get("metric") or "").split(",") if m] or None
+        found = _connected(lambda c: svc.valid_combinations(c, model, view, metrics))
+        return found, "\n".join(f"{'yes' if x['valid'] else 'no ':<4} {x['metric']} by {x['dimension']}"
+                                + (f" ({x['reason']})" if x["reason"] and not x["valid"] else "") for x in found) or "Nothing listed."
     if action == "coverage":
         model, = _need(words, 1, "exakit semantic coverage <MODEL>")
         found = _connected(lambda c: svc.partition_coverage(c, model))
@@ -338,7 +345,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
     raise Refused(f"Unknown action '{action}' (models, fields, search, compile, verify, verified, fuse, fusion, column-maps, "
-                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version, totals, freeze, frozen, governance, composition, logging, history, suggestions, propose, review, import-databricks, import-osi, coverage).")
+                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version, totals, freeze, frozen, governance, composition, logging, history, suggestions, propose, review, import-databricks, import-osi, coverage, combinations).")
 
 
 # --- exakit board -----------------------------------------------------------------------------------------------------

@@ -448,6 +448,13 @@ class SemanticSurfaces(unittest.TestCase):
         with self.assertRaises(svc.NotFound):
             svc.restore_data_map(conn, 9)
 
+    def test_allowed_combinations_are_semantic_views_own(self):
+        conn = self.Conn({"VALID_COMBINATIONS_FOR_AGENT": [{"METRIC_NAME": "m", "DIMENSION_NAME": "d", "IS_VALID": False, "REASON_CODE": "FANOUT"}]})
+        self.assertEqual([{"metric": "m", "dimension": "d", "valid": False, "reason": "FANOUT"}],
+                         svc.valid_combinations(conn, "sales", "orders", ["m"]))
+        self.assertIn("METRIC_NAME IN ('m')", conn.sent[-1])
+        self.assertEqual([], svc.valid_combinations(self.Conn({}), "sales", "orders"))
+
     def test_fusion_health_and_feedback_are_semantic_views_own(self):
         conn = self.Conn({"CHECK_FUSION_HEALTH": [{"ENTITY_NAME": "customers", "ATTRIBUTE_NAME": "region", "FUSION_STRATEGY": "COALESCE",
                                                    "TOTAL_KEYS": 10, "FROM_FIRST_SOURCE": 8, "FILLED": 1, "UNRESOLVED": 1}]})

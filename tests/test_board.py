@@ -270,6 +270,30 @@ class DataMapChecksTest(unittest.TestCase):
         patch.start()
         self.addCleanup(patch.stop)
 
+    def test_a_pair_semantic_views_refuses_goes_back_to_the_ai_once(self):
+        semantic = {"model": "sales", "object": "ORDERS", "view": "SEM.ORDERS", "conn": object(),
+                    "dimensions": [{"name": "state"}, {"name": "product"}], "metrics": [{"name": "order_cost"}]}
+        answers = [json.dumps({"metrics": ["order_cost"], "dimensions": ["product"]}),
+                   json.dumps({"metrics": ["order_cost"], "dimensions": ["state"]})]
+        client = mock.Mock()
+        client.chat.completions.create.side_effect = lambda **_k: types.SimpleNamespace(
+            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content=answers.pop(0)))])
+        self.service.glossary.return_value = ""
+        self.service.valid_combinations.return_value = [
+            {"metric": "order_cost", "dimension": "product", "valid": False, "reason": "FANOUT"},
+            {"metric": "order_cost", "dimension": "state", "valid": True, "reason": ""}]
+        self.service.compile_request.return_value = {"status": "ok", "sql": "SELECT 1", "explained": [], "request_id": 3}
+        request, *_rest = self.ask._ask_request(client, "m", {}, semantic, "order cost by product?")
+        self.assertEqual(["state"], request["dimensions"], "the second answer, with an allowed pair")
+        second = client.chat.completions.create.call_args.kwargs["messages"][-1]["content"]
+        self.assertIn("FANOUT", second)
+        self.assertIn('"order_cost": ["state"]', second, "what each metric may be grouped by")
+        answers[:] = [json.dumps({"metrics": ["order_cost"], "dimensions": ["product"]})] * 2
+        self.service.compile_request.reset_mock()
+        with self.assertRaisesRegex(ValueError, "does not allow order_cost by product"):
+            self.ask._ask_request(client, "m", {}, semantic, "order cost by product?")
+        self.service.compile_request.assert_not_called()
+
     def test_a_large_data_map_is_searched_and_a_small_one_shown_whole(self):
         many = {"model": "all_data", "object": "ORDERS", "view": "SEM.ORDERS", "conn": object(),
                 "metrics": [{"name": f"m{i}"} for i in range(20)] + [{"name": "total_revenue"}],

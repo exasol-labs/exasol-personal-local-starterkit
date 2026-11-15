@@ -4,6 +4,7 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **Ask checks the AI's metric and dimension pairs against what Semantic Views allows** (`VALID_COMBINATIONS_FOR_AGENT`) before compiling. A refused pair goes back to the AI once with the product's reason and the allowed dimensions; `exakit semantic combinations` lists them.
 - **The last of Semantic Views' features, in the card, the notebook and `exakit semantic fuse`.**
   - **Different ids across sources:** a table pairing them, bound as a certified `MAPPED` identity.
   - **Older rows in another source:** a date split, each side answering its own period, checked by `CHECK_PARTITION_COVERAGE` (`exakit semantic coverage`).

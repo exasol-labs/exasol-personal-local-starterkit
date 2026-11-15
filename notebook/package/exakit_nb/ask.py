@@ -352,6 +352,28 @@ _STOP = {"the", "and", "for", "per", "what", "which", "how", "many", "much", "sh
          "is", "me", "a", "an", "top", "most", "least", "by", "over", "between", "last", "first"}
 
 
+def _not_allowed(semantic: dict[str, Any], parsed: dict[str, Any]) -> dict[str, Any] | None:
+    """The metric and dimension pairs of an AI's request that Semantic Views refuses (VALID_COMBINATIONS_FOR_AGENT),
+    and what each of its metrics may be grouped by. None when every pair is allowed or the list cannot be read."""
+    metrics = [str(m) for m in parsed.get("metrics") or []]
+    dims = [str(d) for d in parsed.get("dimensions") or []]
+    if not semantic.get("conn") or not metrics or not dims:
+        return None
+    try:
+        from .semantic import _service
+
+        combos = _service().valid_combinations(semantic["conn"], semantic["model"], semantic["object"], metrics)
+    except Exception:                       # noqa: BLE001 - the compile still refuses what is not allowed
+        return None
+    if not isinstance(combos, list):
+        return None
+    pairs = [c for c in combos if c["dimension"] in dims and not c["valid"]]
+    if not pairs:
+        return None
+    allowed = {m: sorted(c["dimension"] for c in combos if c["metric"] == m and c["valid"]) for m in metrics}
+    return {"pairs": pairs, "allowed": allowed}
+
+
 def _glossary(semantic: dict[str, Any], mode: str) -> str:
     """Semantic Views' own glossary of the semantic view (GET_BUSINESS_GLOSSARY): what each field means and the
     model's instructions, written by the product for an AI. "" when it cannot be read; the field list stands."""
@@ -495,6 +517,28 @@ def _ask_request(client, model: str, options: dict, semantic: dict[str, Any], qu
     parsed = json.loads(fences[0] if len(fences) == 1 else raw)
     if not isinstance(parsed, dict) or not parsed.get("metrics"):
         raise ValueError("; ".join(str(d) for d in (parsed or {}).get("doubts") or []) or "the question is outside the model")
+    refused = _not_allowed(semantic, parsed)
+    if refused:
+        # Semantic Views proves which metric may be grouped by which dimension: the AI hears which pairs it refuses,
+        # why, and what each metric may be grouped by, and answers once more
+        answer = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "system", "content": rules["REQUEST_SYSTEM"]},
+                      {"role": "user", "content": json.dumps(prompt)},
+                      {"role": "assistant", "content": raw},
+                      {"role": "user", "content": json.dumps({"not_allowed": refused["pairs"], "allowed": refused["allowed"],
+                                                              "rules": "Semantic Views refuses these metric and dimension pairs. "
+                                                                       "Answer again with allowed pairs only, or empty metrics "
+                                                                       "and the reason in doubts."})}], **options)
+        raw = answer.choices[0].message.content or ""
+        fences = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.S | re.I)
+        parsed = json.loads(fences[0] if len(fences) == 1 else raw)
+        if not isinstance(parsed, dict) or not parsed.get("metrics"):
+            raise ValueError("; ".join(str(d) for d in (parsed or {}).get("doubts") or []) or "the question is outside the model")
+        again = _not_allowed(semantic, parsed)
+        if again:
+            raise ValueError("Semantic Views does not allow " + "; ".join(f"{x['metric']} by {x['dimension']} ({x['reason']})"
+                                                                           for x in again["pairs"][:4]))
     request = {"model": semantic["model"], "object": semantic["object"]}
     for key in ("metrics", "dimensions", "filters", "having", "order_by"):
         if isinstance(parsed.get(key), list) and parsed[key]:

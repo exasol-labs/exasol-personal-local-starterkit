@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "store_totals", "refresh_totals", "totals_status", "list_totals", "freeze_view", "frozen_views", "governance_mode", "derived_composition", "query_logging", "query_history", "propose_change", "suggestions", "review_change", "import_databricks", "import_osi", "partition_coverage", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "store_totals", "refresh_totals", "totals_status", "list_totals", "freeze_view", "frozen_views", "governance_mode", "derived_composition", "query_logging", "query_history", "propose_change", "suggestions", "review_change", "import_databricks", "import_osi", "partition_coverage", "valid_combinations", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -562,3 +562,8 @@ def import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]:
 def partition_coverage(conn, model: str = "all_data") -> list[dict[str, Any]]:
     """Rows of a date-split source outside its window, which no answer counts; [] when all is well."""
     return _service().partition_coverage(conn, model)
+
+
+def valid_combinations(conn, object_name: str, metrics: list[str] | None = None, model: str = "all_data") -> list[dict[str, Any]]:
+    """Which metric may be grouped by which dimension, as Semantic Views proves it: [{metric, dimension, valid, reason}]."""
+    return _service().valid_combinations(conn, model, object_name, metrics)

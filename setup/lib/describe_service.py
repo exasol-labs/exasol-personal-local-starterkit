@@ -1147,6 +1147,22 @@ def validate_model(conn, model: str) -> dict[str, Any]:
     return found
 
 
+def valid_combinations(conn, model: str, object_name: str, metrics: list[str] | None = None) -> list[dict[str, Any]]:
+    """Which metric may be grouped by which dimension, as Semantic Views proves it (SEMANTIC_AGENT.VALID_COMBINATIONS_FOR_AGENT):
+    [{metric, dimension, valid, reason}]. [] when it cannot be read (an older product: the compile still refuses)."""
+    from descriptor import semantic_model as sm
+
+    only = (" AND METRIC_NAME IN (" + ", ".join(sm.literal(m) for m in metrics) + ")") if metrics else ""
+    try:
+        rows = _up(_rows(conn, "SELECT METRIC_NAME, DIMENSION_NAME, IS_VALID, REASON_CODE FROM SEMANTIC_AGENT.VALID_COMBINATIONS_FOR_AGENT "
+                               f"WHERE UPPER(MODEL_NAME) = UPPER({sm.literal(sm.model_name(model))}) "
+                               f"AND UPPER(OBJECT_NAME) = UPPER({sm.literal(object_name)}){only}"))
+    except Exception:                       # noqa: BLE001
+        return []
+    return [{"metric": str(r.get("METRIC_NAME") or ""), "dimension": str(r.get("DIMENSION_NAME") or ""),
+             "valid": bool(r.get("IS_VALID")), "reason": str(r.get("REASON_CODE") or "")} for r in rows]
+
+
 def explain_metric(conn, model: str, object_name: str, metric: str) -> list[dict[str, str]]:
     """A metric as Semantic Views explains it (EXPLAIN_SEMANTIC_METRIC): its definition, lineage, the dimensions it
     can be grouped by and its validation state. [{section, item, detail}]."""
