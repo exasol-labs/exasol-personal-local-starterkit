@@ -20,6 +20,19 @@ person or an AI client, doing exactly what the notebook cards do (the same funct
     exakit semantic validate <MODEL>                            what Semantic Views finds wrong with it
     exakit semantic versions <MODEL>                            every saved version, kept in the model
     exakit semantic restore-version <MODEL> <N>                 save version N again (it becomes the newest)
+    exakit semantic totals <MODEL> [--store VIEW --metric M... --dimension D... [--name N] [--max-age "6 HOURS"]]
+    exakit semantic totals <MODEL> --refresh N | --off N | --on N   pre-built totals for speed
+    exakit semantic freeze <SCHEMA.NAME> --sql "SELECT ... FROM SEMANTIC_X.V ..."   a view for BI tools
+    exakit semantic frozen <MODEL> [--sync]                     the frozen views, stale ones retired with --sync
+    exakit semantic governance <MODEL> open|governed            report, or refuse, unprotected sources
+    exakit semantic composition <MODEL> on|off                  semantic views joined like tables in plain SQL
+    exakit semantic logging [on|off] [--session]                Semantic Views' query log
+    exakit semantic history [--limit N]                         what was asked, newest first
+    exakit semantic suggestions <MODEL> [--all]                 suggested changes waiting for review
+    exakit semantic propose <MODEL> --kind K --object-type T [--object O] --change '<json>' --why "..."
+    exakit semantic review <ID> certified|rejected --why "..."
+    exakit semantic import-databricks <MODEL> --file F [--apply]
+    exakit semantic import-osi --file F
     exakit semantic explain <MODEL> <VIEW> <METRIC>             a metric as Semantic Views explains it
 
     exakit board list | show <NAME>
@@ -52,8 +65,8 @@ if PACKAGE.is_dir() and str(PACKAGE) not in sys.path:
 
 import describe_service as svc  # noqa: E402
 
-FLAGS = {"--json": "json", "--apply": "apply", "--dry-run": "dry_run", "--update": "update", "--write": "write", "--figures-checked": "figures_checked"}
-VALUED = {"--model", "--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
+FLAGS = {"--json": "json", "--sync": "sync", "--session": "session", "--all": "all", "--apply": "apply", "--dry-run": "dry_run", "--update": "update", "--write": "write", "--figures-checked": "figures_checked"}
+VALUED = {"--model", "--store", "--metric", "--dimension", "--max-age", "--refresh", "--off", "--on", "--limit", "--kind", "--object-type", "--object", "--change", "--why", "--file", "--app-file", "--rules", "--link", "--object", "--name", "--question", "--request", "--request-file", "--table", "--same-as", "--key", "--wins",
           "--document", "--page", "--sql", "--sql-file", "--title", "--kind"}
 
 
@@ -73,7 +86,7 @@ def parse(args: list[str]) -> tuple[list[str], dict[str, Any]]:
             if i + 1 >= len(args):
                 raise Refused(f"{arg} needs a value.")
             key = arg[2:].replace("-", "_")
-            opts[key] = f"{opts[key]},{args[i + 1]}" if key in ("table", "link") and opts.get(key) else args[i + 1]
+            opts[key] = f"{opts[key]},{args[i + 1]}" if key in ("table", "link", "metric", "dimension") and opts.get(key) else args[i + 1]
             i += 1
         elif arg.startswith("--"):
             raise Refused(f"Unknown option '{arg}'. See: exakit help {'semantic' if 'semantic' in sys.argv[1:2] else 'board'}")
@@ -197,6 +210,81 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         statements = [p.strip() for p in text.split(";\n") if p.strip().rstrip(";")]
         found = _connected(lambda c: svc.semantic_model(c, model, [], statements=[p.rstrip(";") for p in statements]))
         return found, f"Ran {len(statements)} statements for {model}."
+    if action == "totals":
+        model, = _need(words, 1, "exakit semantic totals <MODEL> [--store VIEW --metric M --dimension D] | --refresh N | --off N | --on N")
+        listed = lambda key: [x for x in (opts.get(key) or "").split(",") if x]
+        if opts.get("store"):
+            found = _connected(lambda c: svc.store_totals(c, model, opts["store"], listed("metric"), listed("dimension"),
+                                                          name=opts.get("name"), max_age=opts.get("max_age") or "1 DAYS"))
+            return found, f"Stored {found['table']} and registered it with {model}; refresh it with --refresh {found['name']}."
+        for key, status in (("refresh", None), ("off", "INACTIVE"), ("on", "ACTIVE")):
+            if opts.get(key):
+                found = _connected(lambda c: svc.refresh_totals(c, model, opts[key]) if status is None
+                                   else svc.totals_status(c, model, opts[key], status))
+                return found, f"{opts[key]}: {'refreshed' if status is None else status.lower()}."
+        found = _connected(lambda c: svc.list_totals(c, model))
+        return found, "\n".join(json.dumps(r, default=str) for r in found) or f"{model} has no stored totals."
+    if action == "freeze":
+        view, = _need(words, 1, "exakit semantic freeze <SCHEMA.NAME> --sql \"SELECT ... FROM SEMANTIC_X.V\"")
+        found = _connected(lambda c: svc.freeze_view(c, view, opts.get("sql") or ""))
+        return found, f"Frozen: {found['view']} answers for anyone with SELECT on it, no preprocessor needed."
+    if action == "frozen":
+        model, = _need(words, 1, "exakit semantic frozen <MODEL> [--sync]")
+        found = _connected(lambda c: svc.frozen_views(c, model, sync=bool(opts.get("sync"))))
+        return found, "\n".join(f"{v['status']:<10} {v['view']} {v['detail']}".rstrip() for v in found) or "No frozen views."
+    if action == "governance":
+        model, mode = _need(words, 2, "exakit semantic governance <MODEL> open|governed")
+        found = _connected(lambda c: svc.governance_mode(c, model, mode))
+        return found, f"{model} is {found['mode']}; Semantic Views finds {found['errors']} error(s)." + "".join(
+            f"\n{i['severity']} {i['rule']}: {i['message']}" for i in found["issues"])
+    if action == "composition":
+        model, state = _need(words, 2, "exakit semantic composition <MODEL> on|off")
+        if state not in ("on", "off"):
+            raise Refused("composition is on or off.")
+        found = _connected(lambda c: svc.derived_composition(c, model, state == "on"))
+        return found, f"Joining {model}'s semantic views in plain SQL: {state}."
+    if action == "logging":
+        if len(words) > 1 or (words and words[0] not in ("on", "off")):
+            raise Refused("Usage: exakit semantic logging [on|off] [--session]")
+        on = None if not words else words[0] == "on"
+        found = _connected(lambda c: svc.query_logging(c, on, "SESSION" if opts.get("session") else "DEPLOYMENT"))
+        return found, f"Query logging: {found['effective']} (database {found['deployment']}, this session {found['session'] or 'as the database'})."
+    if action == "history":
+        found = _connected(lambda c: svc.query_history(c, int(opts.get("limit") or 50)))
+        return found, "\n".join(json.dumps(r, default=str) for r in found["requests"] + found["statements"]) or "Nothing logged yet."
+    if action == "suggestions":
+        model, = _need(words, 1, "exakit semantic suggestions <MODEL> [--all]")
+        found = _connected(lambda c: svc.suggestions(c, model, not opts.get("all")))
+        return found, "\n".join(json.dumps(r, default=str) for r in found) or "No suggestions waiting."
+    if action == "propose":
+        model, = _need(words, 1, "exakit semantic propose <MODEL> --kind K --object-type T [--object O] --change '<json>' --why \"...\"")
+        change = _json_arg(opts, name="change")
+        found = _connected(lambda c: svc.propose_change(c, model, opts.get("kind") or "", opts.get("object_type") or "",
+                                                        opts.get("object"), change, opts.get("why") or ""))
+        return found, f"Suggestion {found['id']} kept for review ({found['status']})."
+    if action == "review":
+        number, decision = _need(words, 2, "exakit semantic review <ID> certified|rejected --why \"...\"")
+        if not number.isdigit():
+            raise Refused("The suggestion id is a number, as exakit semantic suggestions lists it.")
+        found = _connected(lambda c: svc.review_change(c, int(number), decision, opts.get("why") or ""))
+        return found, f"Suggestion {number}: {found['status']}."
+    if action == "import-databricks":
+        model, = _need(words, 1, "exakit semantic import-databricks <MODEL> --file F [--apply]")
+        if not opts.get("file"):
+            raise Refused("--file is needed: the metric view's YAML.")
+        text = Path(opts["file"]).expanduser().read_text(encoding="utf-8")
+        found = _connected(lambda c: svc.import_databricks(c, model, text, apply=bool(opts.get("apply"))))
+        return found, (found.get("ddl") or "") + (f"\n{found['error']}" if found.get("error") else "") + (
+            "" if found["applied"] else "\nCreate it with --apply after the user agrees.")
+    if action == "import-osi":
+        if not opts.get("file"):
+            raise Refused("--file is needed: the OSI import plan (JSON).")
+        try:
+            plan = json.loads(Path(opts["file"]).expanduser().read_text(encoding="utf-8"))
+        except ValueError as err:
+            raise Refused(f"The plan is not JSON ({err}).") from err
+        found = _connected(lambda c: svc.import_osi(c, plan))
+        return found, "\n".join(f"{r['status']:<10} {r['operation'] or ''} {r['target'] or ''} {r['message']}".rstrip() for r in found)
     if action == "versions":
         model, = _need(words, 1, "exakit semantic versions <MODEL>")
         found = _connected(lambda c: svc.data_map_versions(c, model))
@@ -239,7 +327,7 @@ def semantic(action: str, words: list[str], opts: dict[str, Any]) -> tuple[Any, 
         found = _connected(lambda c: svc.refresh_model(c, model))
         return found, f"Refreshed {found['view']} ({found.get('mode', 'rebuilt')})"
     raise Refused(f"Unknown action '{action}' (models, fields, search, compile, verify, verified, fuse, fusion, column-maps, "
-                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version).")
+                  "restore-maps, refresh, plan, run, adopt, draft, validate, explain, versions, restore-version, totals, freeze, frozen, governance, composition, logging, history, suggestions, propose, review, import-databricks, import-osi).")
 
 
 # --- exakit board -----------------------------------------------------------------------------------------------------

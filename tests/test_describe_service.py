@@ -456,6 +456,58 @@ class SemanticSurfaces(unittest.TestCase):
         self.assertIn("RECORD_AGENT_FEEDBACK('AGENT_REQUEST', 5, 'ACCEPTED', 'ok', NULL)", conn.sent[-1])
         self.assertFalse(svc.record_feedback(conn, None, "ACCEPTED"))
 
+    def test_stored_totals_are_compiled_stored_registered_and_refreshed_by_semantic_views(self):
+        from descriptor import publish
+        publish.keep({"model": "all_data", "objects": [{"metrics": [{"name": "total_amount", "kind": "ADDITIVE"},
+                                                                    {"name": "avg_amount", "kind": "RATIO"}]}]}, {"tables": []})
+        conn = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT s AS SHIP_STATE, x AS TOTAL_AMOUNT FROM T"}],
+                          "EXA_ALL_COLUMNS": [{"COLUMN_NAME": "SHIP_STATE"}, {"COLUMN_NAME": "TOTAL_AMOUNT"}, {"COLUMN_NAME": "AVG_AMOUNT"}]})
+        found = svc.store_totals(conn, "all_data", "order_lines", ["total_amount", "avg_amount"], ["ship_state"], max_age="6 hours")
+        sent = " | ".join(conn.sent)
+        self.assertIn('CREATE OR REPLACE TABLE EXAKIT_TOTALS."ORDER_LINES_SHIP_STATE" AS SELECT s AS SHIP_STATE', sent)
+        self.assertIn("REGISTER_MATERIALIZATION('all_data', 'order_lines_ship_state', 'EXAKIT_TOTALS', 'ORDER_LINES_SHIP_STATE', 'AGGREGATE', 'MAX_AGE 6 HOURS')", sent)
+        self.assertEqual(["DIRECT", "SUM", "NONE"], [c["rollup"] for c in found["columns"]], "only additive metrics roll up")
+        self.assertIn("MARK_MATERIALIZATION_REFRESHED('all_data', 'order_lines_ship_state', NULL, NULL)", sent)
+        self.assertIn("'totals_order_lines_ship_state')", sent, "kept in the model, so a rebuild registers it again")
+        with self.assertRaisesRegex(svc.Refused, "MINUTES, HOURS or DAYS"):
+            svc.store_totals(conn, "all_data", "order_lines", ["total_amount"], [], max_age="soon")
+        record = {"name": "t", "schema": "EXAKIT_TOTALS", "table": "T", "sql": "SELECT 1", "max_age": "1 DAYS", "columns": []}
+        later = self.Conn({"GET_CUSTOM_EXTENSIONS": [{"SCOPE_TYPE": "MODEL", "EXTENSION_NAME": "totals_t", "DATA_JSON": json.dumps(record)}]})
+        svc.refresh_totals(later, "all_data", "t")
+        self.assertEqual(['DELETE FROM EXAKIT_TOTALS."T"', 'INSERT INTO EXAKIT_TOTALS."T" SELECT 1'], later.sent[1:3])
+        with self.assertRaises(svc.NotFound):
+            svc.refresh_totals(later, "all_data", "nope")
+
+    def test_frozen_views_governance_logging_suggestions_and_imports(self):
+        conn = self.Conn({"CHECK_FROZEN_VIEWS": [{"VIEW_SCHEMA": "BI", "VIEW_NAME": "R", "STATUS": "STALE", "DETAIL": "metric changed"}],
+                          "SET_QUERY_LOGGING": [{"DEPLOYMENT_VALUE": "ON", "SESSION_VALUE": None, "EFFECTIVE_VALUE": "ON"}],
+                          "MODEL_EVOLUTION_SUGGESTIONS": [{"SUGGESTION_ID": 1, "REVIEW_STATUS": "PENDING"}, {"SUGGESTION_ID": 2, "REVIEW_STATUS": "CERTIFIED"}],
+                          "REVIEW_MODEL_EVOLUTION": [{"SUGGESTION_ID": 1, "REVIEW_STATUS": "CERTIFIED"}],
+                          "VALIDATE_MODEL": []})
+        made = svc.freeze_view(conn, "bi.revenue", "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state;")
+        self.assertEqual("BI.REVENUE", made["view"])
+        at = conn.sent.index("EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()")
+        self.assertTrue(conn.sent[at + 1].startswith("CREATE OR REPLACE VIEW BI.REVENUE AS SELECT ship_state"))
+        self.assertEqual("EXECUTE SCRIPT SEMANTIC_ADMIN.DISABLE_SEMANTIC_SQL()", conn.sent[at + 2], "the preprocessor is switched off after")
+        with self.assertRaisesRegex(svc.Refused, "one SELECT over a semantic view"):
+            svc.freeze_view(conn, "bi.x", "SELECT 1 FROM DUAL")
+        self.assertEqual([("BI.R", "STALE")], [(v["view"], v["status"]) for v in svc.frozen_views(conn, "all_data")])
+        self.assertEqual("GOVERNED", svc.governance_mode(conn, "all_data", "governed")["mode"])
+        with self.assertRaises(svc.Refused):
+            svc.governance_mode(conn, "all_data", "strict")
+        self.assertEqual("ON", svc.query_logging(conn, True)["effective"])
+        self.assertIn("SET_QUERY_LOGGING('DEPLOYMENT', 'ON')", conn.sent[-1])
+        self.assertEqual([1], [r["SUGGESTION_ID"] for r in svc.suggestions(conn, "all_data")], "only those waiting")
+        self.assertEqual("CERTIFIED", svc.review_change(conn, 1, "certified", "matches finance")["status"])
+        with self.assertRaises(svc.Refused):
+            svc.review_change(conn, 1, "certified", "")
+        from descriptor import publish
+        publish.keep({"model": "all_data"}, {"tables": []})
+        with self.assertRaisesRegex(svc.Refused, "a model of its own"):
+            svc.import_databricks(conn, "all_data", "version: 0.1")
+        with self.assertRaises(svc.Refused):
+            svc.import_osi(conn, {"no": "operations"})
+
     def test_a_verified_question_is_compiled_first_and_kept_beside_the_model(self):
         from descriptor import publish
         publish.keep({"model": "sales"}, {"tables": []})

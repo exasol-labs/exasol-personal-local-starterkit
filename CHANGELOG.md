@@ -4,6 +4,13 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **The rest of Semantic Views, from the card, a notebook cell and `exakit semantic`.** Each reads or does one thing when you ask:
+  - **Suggested changes** are listed for review and certified or rejected with a note (`PROPOSE_MODEL_EVOLUTION`, `REVIEW_MODEL_EVOLUTION`); feedback on answers lands there too.
+  - **Stored totals for speed** are kept in `EXAKIT_TOTALS` and registered with the model, refreshed and turned off (`REGISTER_MATERIALIZATION`, `ADD_MATERIALIZATION_COLUMN`, `MARK_MATERIALIZATION_REFRESHED`, `SET_MATERIALIZATION_STATUS`). They are registered again after a rebuild.
+  - **Views for BI tools** are compiled once into plain SQL and kept current (`CHECK_FROZEN_VIEWS`, `SYNC_FROZEN_VIEWS`).
+  - **Governance** is open or governed (`SET_MODEL_GOVERNANCE_MODE`), and semantic views may be joined in plain SQL (`SET_MODEL_DERIVED_COMPOSITION`).
+  - **The query log** is turned on or off and read (`SET_QUERY_LOGGING`).
+  - **Imports** take a Databricks metric view or an OSI plan (`IMPORT_DATABRICKS_METRIC_VIEW`, `APPLY_NORMALIZED_OSI_IMPORT`).
 - **Semantic Views does the work the kit used to do itself.**
   - **Checks:** saving your data map runs `VALIDATE_MODEL` and `CHECK_METRIC_TYPES` and lists what they find in their own words; **Check my data map** and `exakit semantic validate` run them again.
   - **Changes:** a link, key or semantic view taken away, or a link of another type, is changed in place with `REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS` and `REMOVE_SEMANTIC_OBJECT` instead of rebuilding the model, so trusted questions and grants stay.

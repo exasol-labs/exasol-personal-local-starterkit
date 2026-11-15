@@ -550,6 +550,59 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
+    ### More from Semantic Views
+
+    | Setting | What it does |
+    |---|---|
+    | `STORE_TOTALS` | `{"view": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["ship_state"], "max_age": "1 DAYS"}`: pre-built totals for speed, stored in `EXAKIT_TOTALS`; Semantic Views answers from them while they are fresh |
+    | `REFRESH_TOTALS` | the name of stored totals to fill again from the live tables |
+    | `FREEZE_VIEWS` | `{"BI.REVENUE_BY_STATE": "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state"}`: views for BI tools, compiled once into plain SQL |
+    | `GOVERNANCE_MODE` | `"OPEN"`: Semantic Views reports sources read without their own row and column policy; `"GOVERNED"`: it refuses them |
+    | `QUERY_LOGGING` | `True` or `False`: Semantic Views' own log of Semantic SQL statements |
+    | `REVIEW_SUGGESTIONS` | `{12: ("CERTIFIED", "why")}`: your decision on a suggested change (from feedback on answers, AI tools, colleagues) |
+    | `IMPORT_DATABRICKS` | `{"model": "finance", "file": "metric_view.yaml", "apply": False}`: a Databricks metric view as a model of its own |
+    """)
+    return
+
+
+@app.cell
+def _(connection, nb):
+    # Cell tags: review
+    STORE_TOTALS = None
+    REFRESH_TOTALS = None
+    FREEZE_VIEWS = {}
+    GOVERNANCE_MODE = None
+    QUERY_LOGGING = None
+    REVIEW_SUGGESTIONS = {}
+    IMPORT_DATABRICKS = None
+    if STORE_TOTALS:
+        stored_totals = nb.store_totals(connection, STORE_TOTALS["view"], STORE_TOTALS["metrics"], STORE_TOTALS["dimensions"],
+                                        max_age=STORE_TOTALS.get("max_age", "1 DAYS"))
+    if REFRESH_TOTALS:
+        refreshed_totals = nb.refresh_totals(connection, REFRESH_TOTALS)
+    for frozen_name, frozen_sql in FREEZE_VIEWS.items():
+        frozen = nb.freeze_view(connection, frozen_name, frozen_sql)
+    if GOVERNANCE_MODE:
+        governance = nb.governance_mode(connection, GOVERNANCE_MODE)
+    if QUERY_LOGGING is not None:
+        query_log_setting = nb.query_logging(connection, QUERY_LOGGING)
+    for suggestion_id, (decision, note) in REVIEW_SUGGESTIONS.items():
+        reviewed = nb.review_change(connection, suggestion_id, decision, note)
+    if IMPORT_DATABRICKS:
+        with open(IMPORT_DATABRICKS["file"], encoding="utf-8") as metric_view:
+            imported = nb.import_databricks(connection, IMPORT_DATABRICKS["model"], metric_view.read(), apply=IMPORT_DATABRICKS.get("apply", False))
+    totals = nb.list_totals(connection)
+    frozen_views = nb.frozen_views(connection, sync=False)
+    data_map_suggestions = nb.suggestions(connection)
+    history = nb.query_history(connection)
+    data_map_suggestions
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
     ### The same thing in two sources
 
     When another source holds the same rows as a table of the model - customers in the warehouse and in a CRM, orders here and in a lakehouse - declare them one thing with two sources (Exasol Semantic Views **fusion**). Requests are then answered from either, and for a value both hold the side you pick wins. `nb.fuse` checks it against the data first and changes nothing; `APPLY_FUSION = True` applies it, and the document is kept beside the model so a rebuild puts it back.

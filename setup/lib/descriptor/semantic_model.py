@@ -712,6 +712,16 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
             "statements": len(sent), "mode": mode, "notes": list(spec.get("notes") or []), "warnings": warnings}
 
 
+def materialization_statements(model: str, record: dict[str, Any]) -> list[str]:
+    """What registers stored totals with a model, in order: REGISTER_MATERIALIZATION, each column
+    (ADD_MATERIALIZATION_COLUMN), then MARK_MATERIALIZATION_REFRESHED - also after the model was rebuilt."""
+    found = [_script("REGISTER_MATERIALIZATION", model, record["name"], record["schema"], record["table"], "AGGREGATE",
+                     f"MAX_AGE {record['max_age']}")]
+    found += [_script("ADD_MATERIALIZATION_COLUMN", model, record["name"], c["kind"], c["field"], c["column"], c["rollup"])
+              for c in record["columns"]]
+    return found + [_script("MARK_MATERIALIZATION_REFRESHED", model, record["name"], None, None)]
+
+
 READER_ROLE = "EXAKIT_SEMANTIC_READERS"
 
 

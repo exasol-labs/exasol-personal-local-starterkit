@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 from html import escape
 from typing import Any
 
-__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
+__all__ = ["SemanticModel", "adopt_view", "data_map_inputs", "draft_data_map", "validate_data_map", "explain_metric", "data_map_versions", "restore_data_map", "store_totals", "refresh_totals", "totals_status", "list_totals", "freeze_view", "frozen_views", "governance_mode", "derived_composition", "query_logging", "query_history", "propose_change", "suggestions", "review_change", "import_databricks", "import_osi", "compile_request", "find_links", "column_maps_in_model", "fuse", "fusion", "fusion_document", "model_fields", "restore_column_maps", "model_notes",
            "refresh_semantic", "semantic_model", "semantic_models", "semantic_sql", "verified_questions", "verify_question"]
 
 ADDON = "semantic-views"
@@ -469,3 +469,84 @@ def model_notes(conn, tables: list[str], links: list | None = None, *, show: boo
         if notes["name"] or notes["about"]:
             print(f"  model {notes['name'] or '(no name)'}: {notes['about']}")
     return notes
+
+
+# -- the rest of Semantic Views, each a thin call to the kit's service ---------------------------------------------------
+
+def store_totals(conn, object_name: str, metrics: list[str], dimensions: list[str], *, name: str | None = None,
+                 max_age: str = "1 DAYS", model: str = "all_data") -> dict[str, Any]:
+    """Pre-built totals for speed: the metrics by the dimensions, stored once in EXAKIT_TOTALS and registered with your
+    data map; Semantic Views answers from them when a question fits, and reads the live tables once they are older
+    than ``max_age``. Refresh with nb.refresh_totals."""
+    return _service().store_totals(conn, model, object_name, list(metrics), list(dimensions), name=name, max_age=max_age)
+
+
+def refresh_totals(conn, name: str, model: str = "all_data") -> dict[str, Any]:
+    """Fill stored totals again from the live tables."""
+    return _service().refresh_totals(conn, model, name)
+
+
+def totals_status(conn, name: str, status: str, model: str = "all_data") -> dict[str, Any]:
+    """Turn stored totals off (INACTIVE), on (ACTIVE), or mark them STALE."""
+    return _service().totals_status(conn, model, name, status)
+
+
+def list_totals(conn, model: str = "all_data") -> list[dict[str, Any]]:
+    """Your data map's stored totals, with their state and freshness, as Semantic Views keeps them."""
+    return _service().list_totals(conn, model)
+
+
+def freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]:
+    """A view for BI tools: Semantic SQL compiled once by Semantic Views and stored as plain SQL (SCHEMA.NAME)."""
+    return _service().freeze_view(conn, view, semantic_sql)
+
+
+def frozen_views(conn, model: str = "all_data", *, sync: bool = False) -> list[dict[str, Any]]:
+    """The views frozen from your data map and whether each still matches it; ``sync`` retires the stale ones."""
+    return _service().frozen_views(conn, model, sync=sync)
+
+
+def governance_mode(conn, mode: str, model: str = "all_data") -> dict[str, Any]:
+    """OPEN (Semantic Views reports unprotected sources) or GOVERNED (it refuses them); then what validation says."""
+    return _service().governance_mode(conn, model, mode)
+
+
+def derived_composition(conn, allowed: bool, model: str = "all_data") -> dict[str, Any]:
+    """Whether your semantic views may be joined like tables in ordinary SQL."""
+    return _service().derived_composition(conn, model, allowed)
+
+
+def query_logging(conn, on: bool | None = None, scope: str = "DEPLOYMENT") -> dict[str, Any]:
+    """Semantic Views' log of Semantic SQL statements: on, off, or None to read the setting."""
+    return _service().query_logging(conn, on, scope)
+
+
+def query_history(conn, limit: int = 50) -> dict[str, list[dict[str, Any]]]:
+    """What was asked of your data map, newest first: requests and Semantic SQL statements, as Semantic Views logged them."""
+    return _service().query_history(conn, limit)
+
+
+def propose_change(conn, kind: str, object_type: str, object_name: str | None, change: dict[str, Any], rationale: str,
+                   model: str = "all_data") -> dict[str, Any]:
+    """A suggested change to your data map, kept by Semantic Views for review; nothing changes until it is certified."""
+    return _service().propose_change(conn, model, kind, object_type, object_name, change, rationale)
+
+
+def suggestions(conn, model: str = "all_data", pending_only: bool = True) -> list[dict[str, Any]]:
+    """The suggested changes waiting for review: from feedback on answers, AI tools and colleagues."""
+    return _service().suggestions(conn, model, pending_only)
+
+
+def review_change(conn, suggestion_id: int, decision: str, note: str) -> dict[str, Any]:
+    """Certify or reject a suggested change, with a note."""
+    return _service().review_change(conn, suggestion_id, decision, note)
+
+
+def import_databricks(conn, model: str, yaml_text: str, *, apply: bool = False) -> dict[str, Any]:
+    """A Databricks metric view (its YAML) as a model of your own: shown first, created only with ``apply``."""
+    return _service().import_databricks(conn, model, yaml_text, apply=apply)
+
+
+def import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """An import plan from another semantic layer (OSI's normalized form), applied and validated."""
+    return _service().import_osi(conn, plan)

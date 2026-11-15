@@ -1635,6 +1635,26 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual(["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], views.warnings, "what Semantic Views said, word for word")
         self.assertTrue(views.saved)
 
+    def test_more_from_semantic_views_reads_only_when_asked_and_records_decisions(self):
+        inputs = json.loads(json.dumps(self.INPUTS))
+        inputs["saved"] = True
+        views = self._views(inputs)
+        self.assertIn("More from Semantic Views", json.dumps(self._build(views)))
+        self.assertEqual(["semantic.inputs"], [a for a, _ in self.sent], "nothing of it is read until a button is pressed")
+        self.answers["semantic.suggestions"] = [{"SUGGESTION_ID": 4, "OBJECT_NAME": "completed_revenue", "REVIEW_STATUS": "PENDING"}]
+        self.answers["semantic.review"] = {"status": "CERTIFIED"}
+        views.on_dm_suggestions({})
+        with self.assertRaisesRegex(ValueError, "Say why"):
+            views.on_dm_review_send({"dm_review_id": "4", "dm_review_decision": "CERTIFIED", "dm_review_note": " "})
+        views.on_dm_review_send({"dm_review_id": "4", "dm_review_decision": "REJECTED", "dm_review_note": "counts tax twice"})
+        self.assertIn(("semantic.review", {"suggestion": 4, "decision": "REJECTED", "note": "counts tax twice"}), self.sent)
+        self.answers["semantic.totals_store"] = {"table": "EXAKIT_TOTALS.T", "name": "t"}
+        self.answers["semantic.totals_list"] = []
+        views.on_dm_totals_store({"dm_t_view": "ORDER_LINES", "dm_t_metrics": "total_amount, order_lines_count", "dm_t_dimensions": "ship_state",
+                                  "dm_t_max_age": "6 HOURS"})
+        self.assertIn(("semantic.totals_store", {"view": "ORDER_LINES", "metrics": ["total_amount", "order_lines_count"],
+                                                 "dimensions": ["ship_state"], "max_age": "6 HOURS"}), self.sent)
+
     def test_one_button_fills_every_table_and_drafts_the_data_map_without_reading_a_row(self):
         """Fill everything in with AI: each chosen table's column map answer (kept per table), then one call drafting
         the data map - grains, links with their type, starts, metrics, rules - from names, roles, notes and known values.

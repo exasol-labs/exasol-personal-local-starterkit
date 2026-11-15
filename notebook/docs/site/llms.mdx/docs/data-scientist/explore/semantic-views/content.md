@@ -162,6 +162,34 @@ exakit semantic restore-version all_data 3
 
 A link taken away or of another type, a key or a semantic view taken away: each is changed in place with Semantic Views' own scripts (`REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS`, `REMOVE_SEMANTIC_OBJECT`), so trusted questions, grants and the query log stay. Only a table taken away, or another description of the whole map, rebuilds it, because Semantic Views has no script for those.
 
+### More from Semantic Views [#more-from-semantic-views]
+
+Under **More from Semantic Views** in the card, in the notebook's *More from Semantic Views* cell, and with `exakit semantic`, each of these reads or does one thing when you ask:
+
+| What                    | What it does                                                                                                                                                                                                  | Semantic Views scripts                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Suggested changes       | Lists the changes waiting for review: from feedback on answers (your own SQL instead of the compiled one), AI tools and colleagues. Certify or reject each with a note                                        | `PROPOSE_MODEL_EVOLUTION`, `REVIEW_MODEL_EVOLUTION`                                                                      |
+| Stored totals for speed | The metrics by some dimensions, stored once in `EXAKIT_TOTALS`. Semantic Views answers from them when a question fits and they are fresh, and reads the live tables otherwise. Refresh them, or turn them off | `REGISTER_MATERIALIZATION`, `ADD_MATERIALIZATION_COLUMN`, `MARK_MATERIALIZATION_REFRESHED`, `SET_MATERIALIZATION_STATUS` |
+| Views for BI tools      | Semantic SQL compiled once and stored as a plain view, which Tableau or Power BI read with no preprocessor. When a definition it uses changes, Semantic Views retires it                                      | `CHECK_FROZEN_VIEWS`, `SYNC_FROZEN_VIEWS`                                                                                |
+| Governance              | `OPEN` reports the sources read without their own row and column policy; `GOVERNED` refuses them                                                                                                              | `SET_MODEL_GOVERNANCE_MODE`                                                                                              |
+| Plain-SQL joins         | Whether semantic views may be joined like tables in ordinary SQL                                                                                                                                              | `SET_MODEL_DERIVED_COMPOSITION`                                                                                          |
+| The query log           | Semantic Views' own log of Semantic SQL statements, and what was asked                                                                                                                                        | `SET_QUERY_LOGGING`                                                                                                      |
+| Imports                 | A Databricks metric view, or a plan from another semantic layer in OSI form, as a model of its own                                                                                                            | `IMPORT_DATABRICKS_METRIC_VIEW`, `APPLY_NORMALIZED_OSI_IMPORT`                                                           |
+
+```bash
+exakit semantic suggestions all_data
+exakit semantic review 12 certified --why "Matches how finance counts it"
+exakit semantic totals all_data --store ORDER_LINES --metric total_amount --dimension ship_state --max-age "6 HOURS"
+exakit semantic totals all_data --refresh order_lines_ship_state
+exakit semantic freeze BI.REVENUE_BY_STATE --sql "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state"
+exakit semantic frozen all_data --sync
+exakit semantic governance all_data governed
+exakit semantic logging on
+exakit semantic import-databricks finance --file metric_view.yaml          # shown first; --apply creates it
+```
+
+Stored totals are registered with your data map again when it has to be rebuilt.
+
 ### Who may read it [#who-may-read-it]
 
 Saving grants the data map to the kit's read-only user the way Semantic Views grants it: `GRANT_MODEL_ROLE` to the role `EXAKIT_SEMANTIC_READERS`, which that user has. The SQL Semantic Views writes reads your tables with the asking user's rights; the read-only user may read every table (`SELECT ANY TABLE`), external sources included.

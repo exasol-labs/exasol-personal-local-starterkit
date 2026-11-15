@@ -85,6 +85,14 @@ nb.data_map_versions(conn, model: str='all_data') -> list[dict[str, Any]]
 Every saved version of your data map, from the model itself, newest first: \{version, saved_at, tables, links,
 metrics, definitions}. Each holds what you said and the whole model as Semantic Views exported it.
 
+## nb.derived_composition [#derived_composition]
+
+```python
+nb.derived_composition(conn, allowed: bool, model: str='all_data') -> dict[str, Any]
+```
+
+Whether your semantic views may be joined like tables in ordinary SQL.
+
 ## nb.draft_data_map [#draft_data_map]
 
 ```python
@@ -134,6 +142,22 @@ pairs from names, types and notes; `check` is pairs you have in mind ("S.T.COL=S
 the data and comes back with its evidence or under "rejected". Returns \{links, partial, ...}; a link's
 `confidence` is "low" for plain numbers, which match by chance: confirm those before using them.
 
+## nb.freeze_view [#freeze_view]
+
+```python
+nb.freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]
+```
+
+A view for BI tools: Semantic SQL compiled once by Semantic Views and stored as plain SQL (SCHEMA.NAME).
+
+## nb.frozen_views [#frozen_views]
+
+```python
+nb.frozen_views(conn, model: str='all_data', *, sync: bool=False) -> list[dict[str, Any]]
+```
+
+The views frozen from your data map and whether each still matches it; `sync` retires the stale ones.
+
 ## nb.fuse [#fuse]
 
 ```python
@@ -172,6 +196,38 @@ column in `other` when it is named differently), every field bound there (a colu
 empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative,
 `wins="other"` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document).
 
+## nb.governance_mode [#governance_mode]
+
+```python
+nb.governance_mode(conn, mode: str, model: str='all_data') -> dict[str, Any]
+```
+
+OPEN (Semantic Views reports unprotected sources) or GOVERNED (it refuses them); then what validation says.
+
+## nb.import_databricks [#import_databricks]
+
+```python
+nb.import_databricks(conn, model: str, yaml_text: str, *, apply: bool=False) -> dict[str, Any]
+```
+
+A Databricks metric view (its YAML) as a model of your own: shown first, created only with `apply`.
+
+## nb.import_osi [#import_osi]
+
+```python
+nb.import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]
+```
+
+An import plan from another semantic layer (OSI's normalized form), applied and validated.
+
+## nb.list_totals [#list_totals]
+
+```python
+nb.list_totals(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Your data map's stored totals, with their state and freshness, as Semantic Views keeps them.
+
 ## nb.model_fields [#model_fields]
 
 ```python
@@ -199,6 +255,38 @@ is shown each table's name and its columns' names, types and roles - never a row
 written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
 is set up.
 
+## nb.propose_change [#propose_change]
+
+```python
+nb.propose_change(
+    conn,
+    kind: str,
+    object_type: str,
+    object_name: str | None,
+    change: dict[str, Any],
+    rationale: str,
+    model: str='all_data',
+) -> dict[str, Any]
+```
+
+A suggested change to your data map, kept by Semantic Views for review; nothing changes until it is certified.
+
+## nb.query_history [#query_history]
+
+```python
+nb.query_history(conn, limit: int=50) -> dict[str, list[dict[str, Any]]]
+```
+
+What was asked of your data map, newest first: requests and Semantic SQL statements, as Semantic Views logged them.
+
+## nb.query_logging [#query_logging]
+
+```python
+nb.query_logging(conn, on: bool | None=None, scope: str='DEPLOYMENT') -> dict[str, Any]
+```
+
+Semantic Views' log of Semantic SQL statements: on, off, or None to read the setting.
+
 ## nb.refresh_semantic [#refresh_semantic]
 
 ```python
@@ -208,6 +296,14 @@ nb.refresh_semantic(conn, name: str) -> dict[str, Any]
 Bring a model the kit published up to date with the column maps and links approved since (`exakit describe --model NAME --refresh`): changed in place, or built again from the kit's store when the model is gone from the
 database - with its verified questions and fusion put back. Approving a column map refreshes every model it is
 in by itself.
+
+## nb.refresh_totals [#refresh_totals]
+
+```python
+nb.refresh_totals(conn, name: str, model: str='all_data') -> dict[str, Any]
+```
+
+Fill stored totals again from the live tables.
 
 ## nb.restore_column_maps [#restore_column_maps]
 
@@ -226,6 +322,14 @@ nb.restore_data_map(conn, version: int, model: str='all_data') -> dict[str, Any]
 ```
 
 Save an earlier version of your data map again (it becomes the newest version).
+
+## nb.review_change [#review_change]
+
+```python
+nb.review_change(conn, suggestion_id: int, decision: str, note: str) -> dict[str, Any]
+```
+
+Certify or reject a suggested change, with a note.
 
 ## nb.semantic_model [#semantic_model]
 
@@ -312,6 +416,41 @@ A semantic model: what it holds (`spec`), what the AI proposed, and - once publi
 | `spec`                                |                                                                                                     |
 | `fields`                              | One row per dimension and metric: view, kind, name, display name, what it is.                       |
 | `publish(conn=None) -> SemanticModel` | Build the previewed model in the database (the AI's proposal is asked again only if none was kept). |
+
+## nb.store_totals [#store_totals]
+
+```python
+nb.store_totals(
+    conn,
+    object_name: str,
+    metrics: list[str],
+    dimensions: list[str],
+    *,
+    name: str | None=None,
+    max_age: str='1 DAYS',
+    model: str='all_data',
+) -> dict[str, Any]
+```
+
+Pre-built totals for speed: the metrics by the dimensions, stored once in EXAKIT_TOTALS and registered with your
+data map; Semantic Views answers from them when a question fits, and reads the live tables once they are older
+than `max_age`. Refresh with nb.refresh_totals.
+
+## nb.suggestions [#suggestions]
+
+```python
+nb.suggestions(conn, model: str='all_data', pending_only: bool=True) -> list[dict[str, Any]]
+```
+
+The suggested changes waiting for review: from feedback on answers, AI tools and colleagues.
+
+## nb.totals_status [#totals_status]
+
+```python
+nb.totals_status(conn, name: str, status: str, model: str='all_data') -> dict[str, Any]
+```
+
+Turn stored totals off (INACTIVE), on (ACTIVE), or mark them STALE.
 
 ## nb.validate_data_map [#validate_data_map]
 

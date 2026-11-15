@@ -1665,3 +1665,255 @@ def main(argv: list[str]) -> int:
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
+
+
+# --- the rest of Semantic Views: stored totals, frozen views for BI tools, governance, logs, suggestions, imports -------
+
+def _up(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [{str(k).upper(): v for k, v in r.items()} for r in rows]
+
+
+def _sv(conn, sql: str, what: str) -> list[dict[str, Any]]:
+    try:
+        return _up(_rows(conn, sql))
+    except Exception as err:
+        raise Refused(f"Semantic Views refused {what}: {' '.join(str(err).split())[:300]}") from err
+
+
+TOTALS_SCHEMA = "EXAKIT_TOTALS"
+
+
+def store_totals(conn, model: str, object_name: str, metrics: list[str], dimensions: list[str], *, name: str | None = None,
+                 max_age: str = "1 DAYS") -> dict[str, Any]:
+    """Pre-built totals for speed: the metrics by the dimensions, compiled by Semantic Views (COMPILE_REQUEST_JSON),
+    stored once as a table in EXAKIT_TOTALS and registered as the model's materialization (REGISTER_MATERIALIZATION,
+    ADD_MATERIALIZATION_COLUMN, MARK_MATERIALIZATION_REFRESHED). A question at that grain or coarser is then answered
+    from the stored totals; Semantic Views decides when, and reads the live tables once they are older than
+    ``max_age`` ("6 HOURS", "1 DAYS"). Additive metrics roll up (SUM); others are used only at exactly this grain."""
+    from descriptor import semantic_model as sm
+
+    model_ = sm.model_name(model)
+    if not metrics:
+        raise Refused("Name at least one metric to store.")
+    if not re.fullmatch(r"\d{1,4} (MINUTES|HOURS|DAYS)", str(max_age).strip().upper()):
+        raise Refused("max_age is a number and MINUTES, HOURS or DAYS, such as 6 HOURS.")
+    request = {"model": model_, "object": str(object_name).upper(), "metrics": list(metrics), "dimensions": list(dimensions)}
+    compiled = compile_request(conn, request)
+    if compiled["status"] != "ok":
+        raise Refused(f"Semantic Views cannot compile these totals: {compiled['error']}")
+    table = sm.identifier(name or f"{object_name}_{'_'.join(dimensions) or 'all'}", "totals").upper()[:100]
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {TOTALS_SCHEMA}")
+    conn.execute(f'CREATE OR REPLACE TABLE {TOTALS_SCHEMA}."{table}" AS {compiled["sql"]}')
+    have = {str(r["COLUMN_NAME"]).upper(): str(r["COLUMN_NAME"]) for r in _up(_rows(conn,
+            f"SELECT COLUMN_NAME FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '{TOTALS_SCHEMA}' AND COLUMN_TABLE = {sm.literal(table)}"))}
+    spec = (publishing.kept(model_) or {}).get("spec") or {}
+    additive = {m["name"] for o in spec.get("objects") or [] for m in o.get("metrics") or [] if m.get("kind") == "ADDITIVE"}
+    columns = []
+    for kind, names in (("DIMENSION", dimensions), ("METRIC", metrics)):
+        for field_name in names:
+            column = have.get(str(field_name).upper())
+            if not column:
+                conn.execute(f'DROP TABLE IF EXISTS {TOTALS_SCHEMA}."{table}"')
+                raise Refused(f"The compiled totals have no column {field_name}: store them with other fields.")
+            columns.append({"kind": kind, "field": field_name, "column": column,
+                            "rollup": "DIRECT" if kind == "DIMENSION" else ("SUM" if field_name in additive else "NONE")})
+    record = {"name": table.lower(), "schema": TOTALS_SCHEMA, "table": table, "max_age": max_age.upper(), "sql": compiled["sql"],
+              "request": request, "columns": columns}
+    for sql in sm.materialization_statements(model_, record):
+        _sv(conn, sql, f"the totals {table}")
+    conn.execute(sm._script("ADD_CUSTOM_EXTENSION", model_, "MODEL", None, "exakit", json.dumps(record), "EXAKIT", f"totals_{table.lower()}"))
+    return {"name": table.lower(), "table": f"{TOTALS_SCHEMA}.{table}", "columns": columns, "max_age": max_age.upper()}
+
+
+def _totals_record(conn, model: str, name: str) -> dict[str, Any]:
+    found = next((x["data"] for x in publishing.extensions(lambda sql: _rows(conn, sql), model, rf"totals_{re.escape(str(name).lower())}")
+                  if isinstance(x["data"], dict)), None)
+    if not found:
+        raise NotFound(f"{model} has no stored totals named {name}: exakit semantic totals {model}")
+    return found
+
+
+def refresh_totals(conn, model: str, name: str) -> dict[str, Any]:
+    """Fill stored totals again from the live tables, with the SQL Semantic Views compiled for them, and tell it they
+    are fresh (MARK_MATERIALIZATION_REFRESHED)."""
+    from descriptor import semantic_model as sm
+
+    record = _totals_record(conn, model, name)
+    conn.execute(f'DELETE FROM {record["schema"]}."{record["table"]}"')
+    conn.execute(f'INSERT INTO {record["schema"]}."{record["table"]}" {record["sql"]}')
+    _sv(conn, sm._script("MARK_MATERIALIZATION_REFRESHED", sm.model_name(model), record["name"], None, None), "the refresh")
+    return {"name": record["name"], "table": f"{record['schema']}.{record['table']}", "refreshed": True}
+
+
+def totals_status(conn, model: str, name: str, status: str) -> dict[str, Any]:
+    """Turn stored totals off (INACTIVE), on (ACTIVE) or mark them STALE (SET_MATERIALIZATION_STATUS)."""
+    from descriptor import semantic_model as sm
+
+    status = str(status).upper()
+    if status not in ("ACTIVE", "INACTIVE", "STALE"):
+        raise Refused("The status is ACTIVE, INACTIVE or STALE.")
+    _sv(conn, sm._script("SET_MATERIALIZATION_STATUS", sm.model_name(model), str(name).lower(), status), "the status")
+    return {"name": str(name).lower(), "status": status}
+
+
+def list_totals(conn, model: str) -> list[dict[str, Any]]:
+    """The model's stored totals as Semantic Views keeps them (SEMANTIC_CATALOG.MATERIALIZATIONS): status, freshness."""
+    from descriptor import semantic_model as sm
+
+    try:
+        return _up(_rows(conn, f"SELECT * FROM SEMANTIC_CATALOG.MATERIALIZATIONS WHERE UPPER(MODEL_NAME) = UPPER({sm.literal(sm.model_name(model))})"))
+    except Exception:                       # noqa: BLE001 - none yet, or an older product
+        return []
+
+
+def freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]:
+    """A view for BI tools (Tableau, Power BI) over your data map: ``semantic_sql`` (SELECT ... FROM SEMANTIC_<MODEL>.<VIEW>
+    ...) compiled by Semantic Views once and stored as plain SQL, so it answers with no preprocessor. It is frozen:
+    when a definition it uses changes, Semantic Views retires it (CHECK_FROZEN_VIEWS, SYNC_FROZEN_VIEWS) and you
+    create it again. ``view`` is SCHEMA.NAME."""
+    from descriptor import semantic_model as sm
+
+    schema, dot, name = str(view or "").strip().partition(".")
+    text = " ".join(str(semantic_sql or "").split()).rstrip(";")
+    if not dot or not sm._IDENT.match(schema) or not sm._IDENT.match(name):
+        raise Refused("Name the view as SCHEMA.NAME.")
+    if not re.match(r"(?is)^select\b", text) or ";" in text or not re.search(r"(?i)\bSEMANTIC_\w+\.\w+", text):
+        raise Refused("A frozen view is one SELECT over a semantic view (FROM SEMANTIC_<MODEL>.<VIEW>).")
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema.upper()}")
+    conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()")
+    try:
+        conn.execute(f"CREATE OR REPLACE VIEW {schema.upper()}.{name.upper()} AS {text}")
+    except Exception as err:
+        raise Refused(f"Semantic Views did not freeze it: {' '.join(str(err).split())[:300]}") from err
+    finally:
+        conn.execute("EXECUTE SCRIPT SEMANTIC_ADMIN.DISABLE_SEMANTIC_SQL()")
+    return {"view": f"{schema.upper()}.{name.upper()}", "sql": text}
+
+
+def frozen_views(conn, model: str, *, sync: bool = False) -> list[dict[str, Any]]:
+    """The views frozen from a model and whether each still matches it (CHECK_FROZEN_VIEWS: CURRENT, STALE, DROPPED);
+    ``sync`` retires the stale ones and puts back the ones that match again (SYNC_FROZEN_VIEWS)."""
+    from descriptor import semantic_model as sm
+
+    rows = _sv(conn, sm._script("SYNC_FROZEN_VIEWS" if sync else "CHECK_FROZEN_VIEWS", sm.model_name(model)), "the frozen views")
+    return [{"view": f"{r.get('VIEW_SCHEMA') or ''}.{r.get('VIEW_NAME') or ''}".strip("."), "status": str(r.get("STATUS") or r.get("ACTION") or ""),
+             "detail": " ".join(str(r.get("DETAIL") or r.get("MESSAGE") or "").split())} for r in rows]
+
+
+def governance_mode(conn, model: str, mode: str) -> dict[str, Any]:
+    """OPEN (Semantic Views reports which sources a model reads unprotected) or GOVERNED (it refuses them: every source
+    must be a view that carries its row and column policy) - SET_MODEL_GOVERNANCE_MODE, then a validation that says
+    what the mode costs."""
+    from descriptor import semantic_model as sm
+
+    mode = str(mode).upper()
+    if mode not in ("OPEN", "GOVERNED"):
+        raise Refused("The governance mode is OPEN or GOVERNED.")
+    _sv(conn, sm._script("SET_MODEL_GOVERNANCE_MODE", sm.model_name(model), mode), "the governance mode")
+    return dict(validate_model(conn, model), mode=mode)
+
+
+def derived_composition(conn, model: str, allowed: bool) -> dict[str, Any]:
+    """Whether the model's semantic views may be joined like tables in ordinary SQL (SET_MODEL_DERIVED_COMPOSITION)."""
+    from descriptor import semantic_model as sm
+
+    _sv(conn, sm._script("SET_MODEL_DERIVED_COMPOSITION", sm.model_name(model), bool(allowed)), "the setting")
+    return {"model": sm.model_name(model), "derived_composition": bool(allowed)}
+
+
+def query_logging(conn, on: bool | None = None, scope: str = "DEPLOYMENT") -> dict[str, Any]:
+    """Semantic Views' own log of Semantic SQL statements (SET_QUERY_LOGGING): ``on`` True or False changes it for the
+    database (DEPLOYMENT) or this session (SESSION); None only reads it. {deployment, session, effective}."""
+    from descriptor import semantic_model as sm
+
+    scope = str(scope).upper()
+    if scope not in ("DEPLOYMENT", "SESSION"):
+        raise Refused("The scope is DEPLOYMENT or SESSION.")
+    value = None if on is None else ("ON" if on else "OFF")
+    row = (_sv(conn, sm._script("SET_QUERY_LOGGING", "SESSION" if value is None else scope, value), "the logging setting") or [{}])[0]
+    return {"deployment": row.get("DEPLOYMENT_VALUE"), "session": row.get("SESSION_VALUE"), "effective": row.get("EFFECTIVE_VALUE")}
+
+
+def query_history(conn, limit: int = 50) -> dict[str, list[dict[str, Any]]]:
+    """What was asked of the semantic layer, as Semantic Views logged it: structured requests and compiles
+    (SEMANTIC_AGENT.REQUEST_HISTORY_FOR_AGENT) and Semantic SQL statements (SEMANTIC_SOURCE.MY_QUERY_LOG), newest first."""
+    limit = max(1, min(int(limit), 500))
+    found: dict[str, list[dict[str, Any]]] = {"requests": [], "statements": []}
+    for key, sql in (("requests", f"SELECT * FROM SEMANTIC_AGENT.REQUEST_HISTORY_FOR_AGENT ORDER BY STARTED_AT DESC LIMIT {limit}"),
+                     ("statements", f"SELECT * FROM SEMANTIC_SOURCE.MY_QUERY_LOG ORDER BY QUERY_LOG_ID DESC LIMIT {limit}")):
+        try:
+            found[key] = _up(_rows(conn, sql))
+        except Exception:                   # noqa: BLE001 - logging off, or an older product
+            pass
+    return found
+
+
+SUGGESTION_KINDS = ("NEW_CONCEPT", "NEW_IDENTITY", "REPRESENTATION_EQUIVALENCE", "AUTHORITY_CHANGE", "DRIFT_REPAIR")
+
+
+def propose_change(conn, model: str, kind: str, object_type: str, object_name: str | None, change: dict[str, Any],
+                   rationale: str) -> dict[str, Any]:
+    """A suggested change to the model, kept by Semantic Views for review (PROPOSE_MODEL_EVOLUTION): an AI's or a
+    colleague's. Nothing in the model changes until it is certified and applied."""
+    from descriptor import semantic_model as sm
+
+    kind = str(kind).upper()
+    if kind not in SUGGESTION_KINDS:
+        raise Refused(f"The kind is one of {', '.join(SUGGESTION_KINDS)}.")
+    if not isinstance(change, dict) or not str(rationale or "").strip():
+        raise Refused("A suggestion is a change as a JSON object and the reason for it.")
+    row = (_sv(conn, sm._script("PROPOSE_MODEL_EVOLUTION", sm.model_name(model), kind, str(object_type).upper(), object_name,
+                                 json.dumps(change, ensure_ascii=False), " ".join(str(rationale).split())), "the suggestion") or [{}])[0]
+    return {"id": row.get("SUGGESTION_ID"), "status": row.get("REVIEW_STATUS"), "duplicate": bool(row.get("IS_DUPLICATE"))}
+
+
+def suggestions(conn, model: str, pending_only: bool = True) -> list[dict[str, Any]]:
+    """The suggested changes Semantic Views keeps for a model (SEMANTIC_CATALOG.MODEL_EVOLUTION_SUGGESTIONS) - from
+    feedback on answers, from AI tools, from colleagues - with whether each is still current (IS_STALE)."""
+    from descriptor import semantic_model as sm
+
+    try:
+        rows = _up(_rows(conn, "SELECT * FROM SEMANTIC_CATALOG.MODEL_EVOLUTION_SUGGESTIONS WHERE UPPER(MODEL_NAME) = "
+                               f"UPPER({sm.literal(sm.model_name(model))})"))
+    except Exception:                       # noqa: BLE001
+        return []
+    return [r for r in rows if not pending_only or str(r.get("REVIEW_STATUS") or "").upper() == "PENDING"]
+
+
+def review_change(conn, suggestion_id: int, decision: str, note: str) -> dict[str, Any]:
+    """Your decision on a suggested change (REVIEW_MODEL_EVOLUTION): CERTIFIED or REJECTED, with a note. Semantic
+    Views refuses to certify one made against an earlier definition of the model."""
+    decision = str(decision).upper()
+    if decision not in ("CERTIFIED", "REJECTED") or not str(note or "").strip():
+        raise Refused("The decision is CERTIFIED or REJECTED, with a note saying why.")
+    from descriptor import semantic_model as sm
+
+    row = (_sv(conn, f"EXECUTE SCRIPT SEMANTIC_ADMIN.REVIEW_MODEL_EVOLUTION({int(suggestion_id)}, {sm.literal(decision)}, "
+                     f"{sm.literal(' '.join(str(note).split()))})", "the review") or [{}])[0]
+    return {"id": row.get("SUGGESTION_ID"), "status": row.get("REVIEW_STATUS"), "activation": row.get("ACTIVATION_STATUS")}
+
+
+def import_databricks(conn, model: str, yaml_text: str, *, apply: bool = False) -> dict[str, Any]:
+    """A Databricks Unity Catalog metric view (its YAML) as a model of your own (IMPORT_DATABRICKS_METRIC_VIEW):
+    translated to Semantic DDL and shown; created only with ``apply``. A model the kit builds is refused."""
+    from descriptor import semantic_model as sm
+
+    name = sm.model_name(model)
+    if publishing.kept(name) is not None:
+        raise Refused(f"{name} is a model the kit builds from your column maps: import into a model of its own.")
+    row = (_sv(conn, sm._script("IMPORT_DATABRICKS_METRIC_VIEW", str(yaml_text), name, None, bool(apply)), "the import") or [{}])[0]
+    return {"status": str(row.get("STATUS") or "").lower(), "model": row.get("MODEL_NAME") or name, "ddl": row.get("GENERATED_DDL"),
+            "error": " ".join(f"{row.get('ERROR_CODE') or ''} {row.get('ERROR_MESSAGE') or ''}".split()) or None,
+            "diagnostics": row.get("DIAGNOSTICS_JSON"), "applied": bool(apply)}
+
+
+def import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]:
+    """An import plan from another semantic layer, in OSI's normalized form (APPLY_NORMALIZED_OSI_IMPORT): applied
+    operation by operation and validated after; one row per operation, the last the validation."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("operations"), list):
+        raise Refused('An OSI import plan is {"operations": [{operation, target, arguments, source_path}, ...]}.')
+    from descriptor import semantic_model as sm
+
+    rows = _sv(conn, sm._script("APPLY_NORMALIZED_OSI_IMPORT", json.dumps(plan, ensure_ascii=False), True, False), "the import")
+    return [{"status": str(r.get("STATUS") or ""), "index": r.get("OPERATION_INDEX"), "operation": r.get("OPERATION_NAME"),
+             "target": r.get("TARGET"), "message": " ".join(str(r.get("MESSAGE") or "").split())} for r in rows]

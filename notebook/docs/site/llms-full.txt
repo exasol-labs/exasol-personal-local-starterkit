@@ -682,6 +682,424 @@ exakit status              # is the database up?
 The same help is built into the kit, so it always matches the version you have.
 
 
+# Build the dashboard query (/data-scientist/communicate/dashboard-query)
+
+
+
+A dashboard starts from one query. The notebook builds that query from the approved column map, so the group and the count follow the roles you approved and not a name you typed.
+
+## The code [#the-code]
+
+In `03_share`, the dataset's roles build the query. The group is the category, the count is named after the grain, and the title and name follow from both:
+
+```python
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()             # CATEGORY for amazon_sales
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
+dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
+dashboard_query = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
+dashboard_draft = nb.share(dataset, dashboard_query, dashboard_title, app_name, measure="count")
+```
+
+`dataset.group_by()` returns the category. When the dataset has no category, it uses the entity, and then the target. The notebook prints a line when that happens.
+
+## What it produces for amazon_sales [#what-it-produces-for-amazon_sales]
+
+* The query: `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`
+* The title: "amazon_sales by category"
+* The name: `amazon-sales-by-category`
+
+The count is called `ORDER_LINES` because the column map's grain says "one row per order line". The name comes from the grain, through `nb.count_name`.
+
+`TITLE` and `APP_NAME` at the top of the notebook replace the generated title and name. The name identifies the dashboard on Dash Server.
+
+## Before anything is sent [#before-anything-is-sent]
+
+The notebook prints the query and its digest first, so you can read the SQL before it goes anywhere. Nothing is sent to Dash Server until you run the next cell.
+
+## Next [#next]
+
+Build the preview and check it on [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Back to [Communicate and deploy](/data-scientist/communicate).
+
+
+# Deploying a model (/data-scientist/communicate/deploying-a-model)
+
+
+
+## Deploying a model [#deploying-a-model]
+
+The kit does not deploy a model from these notebooks.
+
+* The lab's fitted model is kept only in your kernel. Nothing saves or serves it. See [Saving, MLflow and training in the database](/data-scientist/model/saving-and-mlflow).
+* `nb.use_model` and `nb.forget_model` look like they are about a model, but they are about the AI model endpoint and the Langfuse keys. They do not save or delete a trained model.
+* Scoring a model inside the database is the ML Engineer's path. It needs the udf-devkit add-on (`exakit marketplace udf-devkit`), which provides a Python container for training and scoring.
+* `exakit model put <file>` copies a model file into the bucket folder that the database's functions read, and `exakit model list` shows what is there. `nb.model_list()` returns the same list in a notebook.
+* The ML Engineer's training runs `nb.prepare_training`, which is described on the [model page](/data-scientist/model/saving-and-mlflow). It writes the coefficients of a trained logistic regression beside the training hand-off, so a scoring notebook can read them without MLflow.
+
+If you need a model in production, that path is the one the kit has. The Data Scientist notebooks stop at the result, the dashboard and the hand-off.
+
+Back to [Communicate and deploy](/data-scientist/communicate).
+
+
+# The hand-off bundle (/data-scientist/communicate/hand-off-bundle)
+
+
+
+## The hand-off bundle [#the-hand-off-bundle]
+
+`nb.handoff_bundle(connection, dataset)` writes one folder to `~/.exasol-starter-kit/bundles/<workflow id>/`, with a zip beside it. It needs no Dash Server and holds no password. The folder is named after the workflow. A bundle made with no workflow is named after the dataset.
+
+<Flow
+  caption="From the approved roles to a folder a colleague can repeat"
+  steps="[
+  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml and the schema map, as approved&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
+  { title: &#x22;Every query the workflow ran&#x22;, text: &#x22;queries.sql, each query with its SHA-256 and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The log and the README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Nothing in it is a password&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## What is in the bundle [#what-is-in-the-bundle]
+
+| File              | What it is                                                                                                                                                                                            |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `README.md`       | What the data is, which column map version the numbers rest on, which questions were approved, which dashboards were previewed or published, which model traces were made, and how to repeat the work |
+| `descriptor.yaml` | The approved column map, copied from the kit's store                                                                                                                                                  |
+| `schema-map.json` | The approved schema map, when the schema has one                                                                                                                                                      |
+| `queries.sql`     | Every distinct query the workflow ran, each with its SHA-256 and row count                                                                                                                            |
+| `workflow.jsonl`  | The workflow log, as it is                                                                                                                                                                            |
+
+For `amazon_sales`, the folder holds the approved column map, the queries the workflow ran, the workflow log and the README.
+
+## Writing it [#writing-it]
+
+```python
+handoff = nb.handoff_bundle(connection, dataset)
+```
+
+Running it again for the same workflow replaces the folder and the zip. It is a snapshot. Nothing in it checks itself against the data later. The page on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off) describes the one check the kit makes, and the bundle has no such check.
+
+## Repeating the work [#repeating-the-work]
+
+A colleague follows the README:
+
+1. Load the same table. For a kit dataset, run `exakit data-load <id>`.
+2. Open the approved column map with `nb.dataset(connection, "<id>")`, or `exakit describe <id> --show`.
+3. Run the statements in `queries.sql` in order.
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [The training hand-off](/data-scientist/communicate/training-hand-off).
+
+
+# Communicate and deploy (/data-scientist/communicate)
+
+
+
+Communicating a result means two things: showing the figures to people who will not open the notebook, and leaving enough behind that someone else can repeat the work. The kit does both. A dashboard goes up on Dash Server, a kit add-on that the notebook installs and starts for you. It goes up as a preview first, and only a person can publish it. The hand-off bundle is one folder and a zip, and it needs no server. The kit does not deploy a model from these notebooks. The page on deploying a model explains what exists and where it lives.
+
+## The flow [#the-flow]
+
+<Flow
+  caption="A dashboard: preview first, publish only after you check it"
+  steps="[
+  { title: &#x22;One checked result&#x22;, text: &#x22;A query you have read, built from the approved roles&#x22;, code: &#x22;dashboard_draft = nb.share(dataset, dashboard_query, title, name, measure=\&#x22;count\&#x22;)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/dashboard-query&#x22; },
+  { title: &#x22;Preview on Dash Server&#x22;, text: &#x22;Built from the approved roles, with the query and its lineage&#x22;, code: &#x22;dashboard_draft.preview(dash_server)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
+  { title: &#x22;Exasol runs the query&#x22;, text: &#x22;As the kit's read-only user, through Dash Server's profile&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;You check the figures&#x22;, text: &#x22;Categories and counts match the SQL. Filters update the charts and the table.&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/what-a-reader-sees&#x22; },
+  { title: &#x22;Publish&#x22;, text: &#x22;Only after you confirm, the exact healthy preview is promoted&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
+]"
+/>
+
+<Flow
+  caption="The hand-off folder: what is in it and how a colleague uses it"
+  steps="[
+  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml, the roles and their versions&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
+  { title: &#x22;Every query the work ran&#x22;, text: &#x22;queries.sql, each with its digest and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/hand-off-bundle&#x22; },
+  { title: &#x22;The log and a README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Under the kit's home. Nothing in it is a password.&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## Where you do it [#where-you-do-it]
+
+| Guided view                                                                              | Notebook code                                                                                                                                 | Terminal                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `03_share`: the **Share** card has the steps Dash Server, Preview, Publish and Hand off. | `03_share`: `nb.share`, `dashboard_draft.preview`, `dashboard_draft.confirm`, `nb.handoff_bundle`. `nb.dash_tools()` connects to Dash Server. | `exakit marketplace dash-server` installs the add-on. `exakit start dash-server` starts it. `exakit status --json` gives its address. `exakit workflow show <id>` lists the workflow's steps. The bundle has no command of its own. |
+
+The publish step is off by default in `03_share`. `FIGURES_CHECKED = False` stops the publish. The cell tells you to "open the healthy preview and check the figures before promoting." Set it to `True` only after you have checked the preview.
+
+## How we used it [#how-we-used-it]
+
+The worked example is `amazon_sales`, a result that counts order lines by category. The notebook builds the query from the approved roles, previews it, and writes the hand-off folder. The steps are on [Build the dashboard query](/data-scientist/communicate/dashboard-query).
+
+For `amazon_sales` the query is `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`. The descriptor records nine distinct values for `CATEGORY`. The chart groups the smallest categories as Other when more than eight rows are shown, so check that grouped figure against the SQL as well.
+
+## In this stage [#in-this-stage]
+
+<Cards>
+  <Card title="Build the dashboard query" href="/data-scientist/communicate/dashboard-query" description="The query the notebook builds from the roles, and its title and name" />
+
+  <Card title="Preview, check, publish" href="/data-scientist/communicate/preview-check-publish" description="The order the code enforces, and what each step checks" />
+
+  <Card title="What a reader sees" href="/data-scientist/communicate/what-a-reader-sees" description="The filters, charts and table on the dashboard page" />
+
+  <Card title="The hand-off bundle" href="/data-scientist/communicate/hand-off-bundle" description="The folder and zip a colleague uses to repeat the work" />
+
+  <Card title="The training hand-off" href="/data-scientist/communicate/training-hand-off" description="The file the ML Engineer's training reads, and its split rule" />
+
+  <Card title="Deploying a model" href="/data-scientist/communicate/deploying-a-model" description="What the kit does and does not deploy" />
+
+  <Card title="When it goes wrong" href="/data-scientist/communicate/troubleshooting" description="Dash Server, workflow and publish problems, and their fixes" />
+</Cards>
+
+## What you have at the end [#what-you-have-at-the-end]
+
+A dashboard, first as a preview and then, after you check it, as a live address that you keep with the workflow id. You also have one hand-off folder and its zip. The next step is to notice when the data, the column map or the model changes: [Monitor and iterate](/data-scientist/monitor).
+
+<StageNav n="7" />
+
+
+# A dashboard of several pages (/data-scientist/communicate/multi-page-dashboard)
+
+
+
+The answers you approve in Ask can make one dashboard: a tab per page, a tile per answer, and filters on each page. Each tile's SQL is exactly as you approved it, and runs as the read-only user.
+
+## Pin answers to pages [#pin-answers-to-pages]
+
+In `02_ask_your_data`, after an answer runs, **Pin to dashboard** puts it on a page. Name the dashboard and the page. A new page name makes a new page. The same SQL pinned to a page again replaces its tile there.
+
+A tile is shown the way the answer looks:
+
+| Answer                               | Tile  |
+| ------------------------------------ | ----- |
+| One number                           | KPI   |
+| A date and a number                  | Line  |
+| A label and a number (up to 50 rows) | Bars  |
+| Anything else                        | Table |
+
+```python
+nb.pin(proposal, answer, board="sales-overview", page="Revenue")
+board = nb.board("sales-overview")
+print(board)                                  # its pages and tiles, each tile by its id
+board.move("a1b2c3d4", "Delivery").save()     # to another page (a new name makes a new page)
+board.remove("a1b2c3d4").save()
+board.show_as("a1b2c3d4", "table").save()
+nb.boards()                                   # every dashboard being put together, the last one changed first
+```
+
+The board is kept in `~/.exasol-starter-kit/boards/<name>.json`.
+
+## Preview, check, publish [#preview-check-publish]
+
+In `03_share`, **Make a dashboard** offers **A dashboard of several pages**. Pick the dashboard. Its pages and tiles are listed, and a tile can be moved to another page or taken off. **Make a preview** builds it on Dash Server and runs its health check. Open the preview, check the figures against the queries shown, tick both boxes, and **Publish**. These are the same steps as for one query, described in [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
+
+```python
+board_draft = nb.board("sales-overview").share()     # every tile's SQL is printed first
+dash_server = nb.dash_tools()
+board_preview = board_draft.preview(dash_server)
+board_live = board_draft.confirm(dash_server, figures_checked=True)
+```
+
+The app holds the following files, and no credentials:
+
+| File                 | What it is                                                        |
+| -------------------- | ----------------------------------------------------------------- |
+| `app.py`             | The dashboard                                                     |
+| `BOARD.json`         | Its pages, tiles and filters                                      |
+| `queries/<tile>.sql` | One file per tile: the approved SQL, unchanged                    |
+| `REVISION.json`      | The lineage: the board, the workflow, and every tile's SQL digest |
+
+If a tile's SQL no longer matches its digest, the preview is refused.
+
+## From the command line, or an AI client [#from-the-command-line-or-an-ai-client]
+
+The same dashboard, built with `exakit board`. Pinning SQL is your approval of it, so an AI client shows you each query first.
+
+```bash
+exakit board pin sales-overview --page Revenue --question "Revenue by state?" \
+  --sql "SELECT STATE, SUM(AMOUNT) AS REVENUE FROM SHOP.ORDERS GROUP BY 1"
+exakit board show sales-overview
+exakit board move sales-overview a1b2c3d4 Delivery
+exakit board preview sales-overview                    # a health-checked preview, and its address
+exakit board publish sales-overview --figures-checked  # only after you checked the preview's figures
+```
+
+`pin` runs the query once through the read-only service to see its shape: a KPI, bars, a line or a table, and the columns a page can be filtered by. `--kind` sets the shape yourself. `publish` refuses a dashboard that changed since its preview.
+
+## Why it does not hang [#why-it-does-not-hang]
+
+* **Only the open tab is queried.** A page's tiles run in parallel, at most four at a time.
+* **A result is kept for five minutes.** Moving between tabs, and back, does not query again. **Refresh** queries the open tab again.
+* **Filters narrow the kept rows.** A page's filters are the columns every tile on it returns, such as a state or a category. Picking values filters each tile's rows without a new query. A tile without that column is left as it is.
+* **A slow query does not hold the page.** After 25 seconds its tile says it is still running. The answer is kept when it comes, so it shows on the next refresh. The query is not sent twice.
+* **Each result is capped** at 5,000 rows, and a table tile shows 1,000.
+
+Back to [Communicate and deploy](/data-scientist/communicate). Previous: [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
+
+
+# Preview, check, publish (/data-scientist/communicate/preview-check-publish)
+
+
+
+## Preview, check, publish [#preview-check-publish]
+
+The code enforces the order. You cannot skip a step.
+
+<Flow
+  caption="The order is enforced: a preview that was not checked is never published"
+  steps="[
+  { title: &#x22;Preview&#x22;, text: &#x22;The kit checks the workflow, the read-only identity and Dash Server's profile, then creates the preview&#x22;, code: &#x22;print(\&#x22;Preview:\&#x22;, dash_server.url + preview_path)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Check&#x22;, text: &#x22;Open the preview and compare the figures with the SQL&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;Publish&#x22;, text: &#x22;confirm refuses unless figures_checked is True and the preview is healthy&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22; },
+]"
+/>
+
+## Before you preview: Dash Server [#before-you-preview-dash-server]
+
+The notebook calls `nb.dash_tools()`, which starts Dash Server if it is stopped. Dash Server is a kit add-on. The add-on is installed with `exakit marketplace dash-server`. The [add-ons page](/kit/tools/add-ons) explains how add-ons work.
+
+```python
+dash_server = nb.dash_tools()                     # starts Dash Server if it is stopped
+preview_path = dashboard_draft.preview(dash_server)
+print("Preview:", dash_server.url + preview_path)
+```
+
+### Preview [#preview]
+
+`preview` checks four things before it creates anything:
+
+* that the workflow is the one the dashboard was made in
+* that the read-only identity is validated
+* that Dash Server's profile is the kit's read-only user on the kit's database
+* that the dashboard's name is not already taken by a dashboard that belongs to another dataset, or that has no readable lineage
+
+Then it creates the preview, confirms that the built copy holds the approved SQL and lineage files unchanged, and runs a health check. A preview that fails the health check is marked unhealthy, and the kit will not publish it.
+
+### Check [#check]
+
+Open the preview and compare the figures with the SQL. Use the page described on [What a reader sees](/data-scientist/communicate/what-a-reader-sees). The chart's grouped Other figure is one to check against the query. Only a person can make this check. The notebook never does it for you.
+
+### Publish [#publish]
+
+`FIGURES_CHECKED` is `False` in `03_share`. Set it to `True` after the check, and run the cell. In code:
+
+```python
+live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
+```
+
+`confirm` refuses unless `figures_checked=True` and the preview is healthy. It promotes that exact revision, starts the app if it is not mounted, and checks the live address. If the live check fails, the error says to roll back in Dash Server.
+
+In automated runs the check is never set, so nothing is published without a person.
+
+## The workflow log [#the-workflow-log]
+
+Each preview and each publish adds a line to the workflow log, with the query's digest, the descriptor version and the revision number. The kinds are listed on [The workflow log](/data-scientist/monitor/the-workflow-log).
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [What a reader sees](/data-scientist/communicate/what-a-reader-sees).
+
+
+# The training hand-off (/data-scientist/communicate/training-hand-off)
+
+
+
+## The training hand-off [#the-training-hand-off]
+
+The training hand-off is the ML Engineer's file. It is one JSON file with the feature view, the target, the split and the training SQL. The Data Scientist notebooks do not write it. The ML Engineer's notebook writes one if none exists.
+
+```python
+path = nb.write_handoff(conn, ds)     # writes the file and returns its path
+```
+
+`nb.write_handoff(conn, ds)` writes the file to `~/.exasol-starter-kit/handoffs/<id>-v<n>.json`, where `<n>` is the descriptor's version. `nb.read_handoff` reads it back. The file names a table, columns, SQL and digests. It never names a host, a user or a password.
+
+## The split [#the-split]
+
+Two rules decide how the rows are split for training:
+
+* **A date in the column map gives a time split.** This is the default. The oldest rows train the model and the newest rows test it.
+* **No date means no time split.** The kit refuses a time split that the data cannot support, and names the fix. A dataset with no date, such as `fraud_transactions`, needs a split named on purpose: `nb.write_handoff(conn, ds, split="random")`.
+
+The kit does not choose a random split for you. `split="random"` is a reproducible hash of each row's role columns, so the same rows always give the same split.
+
+## When the hand-off goes stale [#when-the-hand-off-goes-stale]
+
+A hand-off that no longer matches the column map or the data is refused. The check and the fix are on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+
+Back to [Communicate and deploy](/data-scientist/communicate). Next: [Deploying a model](/data-scientist/communicate/deploying-a-model).
+
+
+# Troubleshooting (/data-scientist/communicate/troubleshooting)
+
+
+
+Each entry quotes the message or describes the step that stops.
+
+<Accordions type="multiple">
+  <Accordion title="Dash Server is stopped or missing">
+    The notebook installs and starts it when you call `nb.dash_tools()` or `nb.addon_ready("dash-server")`. To do it yourself, run `exakit marketplace dash-server`, then `exakit start dash-server`, then `exakit status` to confirm. See [Add-ons](/kit/tools/add-ons).
+  </Accordion>
+
+  <Accordion title="Resume the workflow before previewing or promoting">
+    The dashboard belongs to the workflow it was made in. Run `nb.continue_workflow("share")` in this notebook, or resume the workflow with `nb.workflow(resume="wf-...")`, and try again.
+  </Accordion>
+
+  <Accordion title="The read-only identity is not validated, or the profile is wrong">
+    The preview needs the kit's read-only user to be validated. Run `exakit mcp-doctor` to check it. When the message says the profile must validate as the read-only user, run `exakit mcp-setup`, then restart Dash Server.
+  </Accordion>
+
+  <Accordion title="The dashboard name already exists without readable lineage">
+    The error reads "choose another APP_NAME". The name is taken by a dashboard the kit did not make, or one made for another dataset. Choose another `APP_NAME`. The kit never overwrites a dashboard that belongs to a different dataset.
+  </Accordion>
+
+  <Accordion title="The preview is unhealthy">
+    The health check failed, so the kit will not publish it. The error reads "Dash Server preview is unhealthy". Open the Dash Server log with `exakit logs dash-server`, fix the cause, and run the preview again.
+  </Accordion>
+
+  <Accordion title="confirm asks you to open the healthy preview">
+    `confirm` was called without `figures_checked=True`, or the preview is not healthy. Check the figures against the SQL, then confirm again. See [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
+  </Accordion>
+
+  <Accordion title="The live dashboard failed its health check">
+    The error reads "use app_rollback in Dash Server". The published revision is not healthy. Roll back there, then check the preview again before you publish another revision.
+  </Accordion>
+
+  <Accordion title="The hand-off is refused as stale">
+    The training hand-off no longer matches the column map or the data. Read the line the kit prints, then write the hand-off again with `nb.write_handoff(conn, ds)`. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+  </Accordion>
+</Accordions>
+
+Back to [Communicate and deploy](/data-scientist/communicate).
+
+
+# What a reader sees (/data-scientist/communicate/what-a-reader-sees)
+
+
+
+## What a reader sees [#what-a-reader-sees]
+
+The dashboard is a view of the reviewed SQL result. It is not a new calculation over the table. Its page says so.
+
+* **Filters.** Categories, a Show setting (10 by default), Sort by, and Chart layout (horizontal or vertical bars). Top N applies after the filters. **Reset filters** clears them.
+* **Category comparison.** A bar chart of the values in the current selection.
+* **Composition.** A share-of-total chart. The kit draws it only when you pass `measure="count"`, because a total of a measure that is not a count has no meaning. With more than eight rows shown, the note says smaller categories are grouped as Other.
+* **Behind the charts.** The same filtered rows as a table, sortable, with **Export CSV**.
+
+## Check the figures against the SQL [#check-the-figures-against-the-sql]
+
+When you check a preview, compare three things with the query on [Build the dashboard query](/data-scientist/communicate/dashboard-query):
+
+1. The category names in the table match the values in the query's first column.
+2. The counts match the counts the query returns. `nb.show_sql()` prints the last query the notebook ran.
+3. The composition chart's Other group equals the sum of the categories it groups.
+
+```python
+nb.show_sql()   # the SQL the last query ran
+```
+
+Back to [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Next: [The hand-off bundle](/data-scientist/communicate/hand-off-bundle).
+
+
 # Add a command (/data-scientist/development/add-a-command)
 
 
@@ -1475,424 +1893,6 @@ Each entry quotes the warning or describes the score you see.
 Back to [Evaluate](/data-scientist/evaluate).
 
 
-# Build the dashboard query (/data-scientist/communicate/dashboard-query)
-
-
-
-A dashboard starts from one query. The notebook builds that query from the approved column map, so the group and the count follow the roles you approved and not a name you typed.
-
-## The code [#the-code]
-
-In `03_share`, the dataset's roles build the query. The group is the category, the count is named after the grain, and the title and name follow from both:
-
-```python
-GROUP_ROLE, GROUP_COLUMN = dataset.group_by()             # CATEGORY for amazon_sales
-GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
-dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
-dashboard_query = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
-dashboard_draft = nb.share(dataset, dashboard_query, dashboard_title, app_name, measure="count")
-```
-
-`dataset.group_by()` returns the category. When the dataset has no category, it uses the entity, and then the target. The notebook prints a line when that happens.
-
-## What it produces for amazon_sales [#what-it-produces-for-amazon_sales]
-
-* The query: `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`
-* The title: "amazon_sales by category"
-* The name: `amazon-sales-by-category`
-
-The count is called `ORDER_LINES` because the column map's grain says "one row per order line". The name comes from the grain, through `nb.count_name`.
-
-`TITLE` and `APP_NAME` at the top of the notebook replace the generated title and name. The name identifies the dashboard on Dash Server.
-
-## Before anything is sent [#before-anything-is-sent]
-
-The notebook prints the query and its digest first, so you can read the SQL before it goes anywhere. Nothing is sent to Dash Server until you run the next cell.
-
-## Next [#next]
-
-Build the preview and check it on [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Back to [Communicate and deploy](/data-scientist/communicate).
-
-
-# Deploying a model (/data-scientist/communicate/deploying-a-model)
-
-
-
-## Deploying a model [#deploying-a-model]
-
-The kit does not deploy a model from these notebooks.
-
-* The lab's fitted model is kept only in your kernel. Nothing saves or serves it. See [Saving, MLflow and training in the database](/data-scientist/model/saving-and-mlflow).
-* `nb.use_model` and `nb.forget_model` look like they are about a model, but they are about the AI model endpoint and the Langfuse keys. They do not save or delete a trained model.
-* Scoring a model inside the database is the ML Engineer's path. It needs the udf-devkit add-on (`exakit marketplace udf-devkit`), which provides a Python container for training and scoring.
-* `exakit model put <file>` copies a model file into the bucket folder that the database's functions read, and `exakit model list` shows what is there. `nb.model_list()` returns the same list in a notebook.
-* The ML Engineer's training runs `nb.prepare_training`, which is described on the [model page](/data-scientist/model/saving-and-mlflow). It writes the coefficients of a trained logistic regression beside the training hand-off, so a scoring notebook can read them without MLflow.
-
-If you need a model in production, that path is the one the kit has. The Data Scientist notebooks stop at the result, the dashboard and the hand-off.
-
-Back to [Communicate and deploy](/data-scientist/communicate).
-
-
-# The hand-off bundle (/data-scientist/communicate/hand-off-bundle)
-
-
-
-## The hand-off bundle [#the-hand-off-bundle]
-
-`nb.handoff_bundle(connection, dataset)` writes one folder to `~/.exasol-starter-kit/bundles/<workflow id>/`, with a zip beside it. It needs no Dash Server and holds no password. The folder is named after the workflow. A bundle made with no workflow is named after the dataset.
-
-<Flow
-  caption="From the approved roles to a folder a colleague can repeat"
-  steps="[
-  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml and the schema map, as approved&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
-  { title: &#x22;Every query the workflow ran&#x22;, text: &#x22;queries.sql, each query with its SHA-256 and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;The log and the README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Nothing in it is a password&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## What is in the bundle [#what-is-in-the-bundle]
-
-| File              | What it is                                                                                                                                                                                            |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `README.md`       | What the data is, which column map version the numbers rest on, which questions were approved, which dashboards were previewed or published, which model traces were made, and how to repeat the work |
-| `descriptor.yaml` | The approved column map, copied from the kit's store                                                                                                                                                  |
-| `schema-map.json` | The approved schema map, when the schema has one                                                                                                                                                      |
-| `queries.sql`     | Every distinct query the workflow ran, each with its SHA-256 and row count                                                                                                                            |
-| `workflow.jsonl`  | The workflow log, as it is                                                                                                                                                                            |
-
-For `amazon_sales`, the folder holds the approved column map, the queries the workflow ran, the workflow log and the README.
-
-## Writing it [#writing-it]
-
-```python
-handoff = nb.handoff_bundle(connection, dataset)
-```
-
-Running it again for the same workflow replaces the folder and the zip. It is a snapshot. Nothing in it checks itself against the data later. The page on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off) describes the one check the kit makes, and the bundle has no such check.
-
-## Repeating the work [#repeating-the-work]
-
-A colleague follows the README:
-
-1. Load the same table. For a kit dataset, run `exakit data-load <id>`.
-2. Open the approved column map with `nb.dataset(connection, "<id>")`, or `exakit describe <id> --show`.
-3. Run the statements in `queries.sql` in order.
-
-Back to [Communicate and deploy](/data-scientist/communicate). Next: [The training hand-off](/data-scientist/communicate/training-hand-off).
-
-
-# Communicate and deploy (/data-scientist/communicate)
-
-
-
-Communicating a result means two things: showing the figures to people who will not open the notebook, and leaving enough behind that someone else can repeat the work. The kit does both. A dashboard goes up on Dash Server, a kit add-on that the notebook installs and starts for you. It goes up as a preview first, and only a person can publish it. The hand-off bundle is one folder and a zip, and it needs no server. The kit does not deploy a model from these notebooks. The page on deploying a model explains what exists and where it lives.
-
-## The flow [#the-flow]
-
-<Flow
-  caption="A dashboard: preview first, publish only after you check it"
-  steps="[
-  { title: &#x22;One checked result&#x22;, text: &#x22;A query you have read, built from the approved roles&#x22;, code: &#x22;dashboard_draft = nb.share(dataset, dashboard_query, title, name, measure=\&#x22;count\&#x22;)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/dashboard-query&#x22; },
-  { title: &#x22;Preview on Dash Server&#x22;, text: &#x22;Built from the approved roles, with the query and its lineage&#x22;, code: &#x22;dashboard_draft.preview(dash_server)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
-  { title: &#x22;Exasol runs the query&#x22;, text: &#x22;As the kit's read-only user, through Dash Server's profile&#x22;, tone: &#x22;db&#x22; },
-  { title: &#x22;You check the figures&#x22;, text: &#x22;Categories and counts match the SQL. Filters update the charts and the table.&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/communicate/what-a-reader-sees&#x22; },
-  { title: &#x22;Publish&#x22;, text: &#x22;Only after you confirm, the exact healthy preview is promoted&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/preview-check-publish&#x22; },
-]"
-/>
-
-<Flow
-  caption="The hand-off folder: what is in it and how a colleague uses it"
-  steps="[
-  { title: &#x22;The approved column map&#x22;, text: &#x22;descriptor.yaml, the roles and their versions&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
-  { title: &#x22;Every query the work ran&#x22;, text: &#x22;queries.sql, each with its digest and row count&#x22;, code: &#x22;handoff = nb.handoff_bundle(connection, dataset)&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate/hand-off-bundle&#x22; },
-  { title: &#x22;The log and a README&#x22;, text: &#x22;workflow.jsonl and README.md, which say what was approved and published&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;One folder and a zip&#x22;, text: &#x22;Under the kit's home. Nothing in it is a password.&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;A colleague repeats the work&#x22;, text: &#x22;From the README, with the same column map and queries&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## Where you do it [#where-you-do-it]
-
-| Guided view                                                                              | Notebook code                                                                                                                                 | Terminal                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `03_share`: the **Share** card has the steps Dash Server, Preview, Publish and Hand off. | `03_share`: `nb.share`, `dashboard_draft.preview`, `dashboard_draft.confirm`, `nb.handoff_bundle`. `nb.dash_tools()` connects to Dash Server. | `exakit marketplace dash-server` installs the add-on. `exakit start dash-server` starts it. `exakit status --json` gives its address. `exakit workflow show <id>` lists the workflow's steps. The bundle has no command of its own. |
-
-The publish step is off by default in `03_share`. `FIGURES_CHECKED = False` stops the publish. The cell tells you to "open the healthy preview and check the figures before promoting." Set it to `True` only after you have checked the preview.
-
-## How we used it [#how-we-used-it]
-
-The worked example is `amazon_sales`, a result that counts order lines by category. The notebook builds the query from the approved roles, previews it, and writes the hand-off folder. The steps are on [Build the dashboard query](/data-scientist/communicate/dashboard-query).
-
-For `amazon_sales` the query is `SELECT CATEGORY AS CATEGORY, COUNT(*) AS ORDER_LINES FROM AMAZON.ORDER_LINES GROUP BY 1 ORDER BY ORDER_LINES DESC`. The descriptor records nine distinct values for `CATEGORY`. The chart groups the smallest categories as Other when more than eight rows are shown, so check that grouped figure against the SQL as well.
-
-## In this stage [#in-this-stage]
-
-<Cards>
-  <Card title="Build the dashboard query" href="/data-scientist/communicate/dashboard-query" description="The query the notebook builds from the roles, and its title and name" />
-
-  <Card title="Preview, check, publish" href="/data-scientist/communicate/preview-check-publish" description="The order the code enforces, and what each step checks" />
-
-  <Card title="What a reader sees" href="/data-scientist/communicate/what-a-reader-sees" description="The filters, charts and table on the dashboard page" />
-
-  <Card title="The hand-off bundle" href="/data-scientist/communicate/hand-off-bundle" description="The folder and zip a colleague uses to repeat the work" />
-
-  <Card title="The training hand-off" href="/data-scientist/communicate/training-hand-off" description="The file the ML Engineer's training reads, and its split rule" />
-
-  <Card title="Deploying a model" href="/data-scientist/communicate/deploying-a-model" description="What the kit does and does not deploy" />
-
-  <Card title="When it goes wrong" href="/data-scientist/communicate/troubleshooting" description="Dash Server, workflow and publish problems, and their fixes" />
-</Cards>
-
-## What you have at the end [#what-you-have-at-the-end]
-
-A dashboard, first as a preview and then, after you check it, as a live address that you keep with the workflow id. You also have one hand-off folder and its zip. The next step is to notice when the data, the column map or the model changes: [Monitor and iterate](/data-scientist/monitor).
-
-<StageNav n="7" />
-
-
-# A dashboard of several pages (/data-scientist/communicate/multi-page-dashboard)
-
-
-
-The answers you approve in Ask can make one dashboard: a tab per page, a tile per answer, and filters on each page. Each tile's SQL is exactly as you approved it, and runs as the read-only user.
-
-## Pin answers to pages [#pin-answers-to-pages]
-
-In `02_ask_your_data`, after an answer runs, **Pin to dashboard** puts it on a page. Name the dashboard and the page. A new page name makes a new page. The same SQL pinned to a page again replaces its tile there.
-
-A tile is shown the way the answer looks:
-
-| Answer                               | Tile  |
-| ------------------------------------ | ----- |
-| One number                           | KPI   |
-| A date and a number                  | Line  |
-| A label and a number (up to 50 rows) | Bars  |
-| Anything else                        | Table |
-
-```python
-nb.pin(proposal, answer, board="sales-overview", page="Revenue")
-board = nb.board("sales-overview")
-print(board)                                  # its pages and tiles, each tile by its id
-board.move("a1b2c3d4", "Delivery").save()     # to another page (a new name makes a new page)
-board.remove("a1b2c3d4").save()
-board.show_as("a1b2c3d4", "table").save()
-nb.boards()                                   # every dashboard being put together, the last one changed first
-```
-
-The board is kept in `~/.exasol-starter-kit/boards/<name>.json`.
-
-## Preview, check, publish [#preview-check-publish]
-
-In `03_share`, **Make a dashboard** offers **A dashboard of several pages**. Pick the dashboard. Its pages and tiles are listed, and a tile can be moved to another page or taken off. **Make a preview** builds it on Dash Server and runs its health check. Open the preview, check the figures against the queries shown, tick both boxes, and **Publish**. These are the same steps as for one query, described in [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
-
-```python
-board_draft = nb.board("sales-overview").share()     # every tile's SQL is printed first
-dash_server = nb.dash_tools()
-board_preview = board_draft.preview(dash_server)
-board_live = board_draft.confirm(dash_server, figures_checked=True)
-```
-
-The app holds the following files, and no credentials:
-
-| File                 | What it is                                                        |
-| -------------------- | ----------------------------------------------------------------- |
-| `app.py`             | The dashboard                                                     |
-| `BOARD.json`         | Its pages, tiles and filters                                      |
-| `queries/<tile>.sql` | One file per tile: the approved SQL, unchanged                    |
-| `REVISION.json`      | The lineage: the board, the workflow, and every tile's SQL digest |
-
-If a tile's SQL no longer matches its digest, the preview is refused.
-
-## From the command line, or an AI client [#from-the-command-line-or-an-ai-client]
-
-The same dashboard, built with `exakit board`. Pinning SQL is your approval of it, so an AI client shows you each query first.
-
-```bash
-exakit board pin sales-overview --page Revenue --question "Revenue by state?" \
-  --sql "SELECT STATE, SUM(AMOUNT) AS REVENUE FROM SHOP.ORDERS GROUP BY 1"
-exakit board show sales-overview
-exakit board move sales-overview a1b2c3d4 Delivery
-exakit board preview sales-overview                    # a health-checked preview, and its address
-exakit board publish sales-overview --figures-checked  # only after you checked the preview's figures
-```
-
-`pin` runs the query once through the read-only service to see its shape: a KPI, bars, a line or a table, and the columns a page can be filtered by. `--kind` sets the shape yourself. `publish` refuses a dashboard that changed since its preview.
-
-## Why it does not hang [#why-it-does-not-hang]
-
-* **Only the open tab is queried.** A page's tiles run in parallel, at most four at a time.
-* **A result is kept for five minutes.** Moving between tabs, and back, does not query again. **Refresh** queries the open tab again.
-* **Filters narrow the kept rows.** A page's filters are the columns every tile on it returns, such as a state or a category. Picking values filters each tile's rows without a new query. A tile without that column is left as it is.
-* **A slow query does not hold the page.** After 25 seconds its tile says it is still running. The answer is kept when it comes, so it shows on the next refresh. The query is not sent twice.
-* **Each result is capped** at 5,000 rows, and a table tile shows 1,000.
-
-Back to [Communicate and deploy](/data-scientist/communicate). Previous: [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
-
-
-# Preview, check, publish (/data-scientist/communicate/preview-check-publish)
-
-
-
-## Preview, check, publish [#preview-check-publish]
-
-The code enforces the order. You cannot skip a step.
-
-<Flow
-  caption="The order is enforced: a preview that was not checked is never published"
-  steps="[
-  { title: &#x22;Preview&#x22;, text: &#x22;The kit checks the workflow, the read-only identity and Dash Server's profile, then creates the preview&#x22;, code: &#x22;print(\&#x22;Preview:\&#x22;, dash_server.url + preview_path)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Check&#x22;, text: &#x22;Open the preview and compare the figures with the SQL&#x22;, tone: &#x22;you&#x22; },
-  { title: &#x22;Publish&#x22;, text: &#x22;confirm refuses unless figures_checked is True and the preview is healthy&#x22;, code: &#x22;dashboard_draft.confirm(dash_server, figures_checked=True)&#x22;, tone: &#x22;kit&#x22; },
-]"
-/>
-
-## Before you preview: Dash Server [#before-you-preview-dash-server]
-
-The notebook calls `nb.dash_tools()`, which starts Dash Server if it is stopped. Dash Server is a kit add-on. The add-on is installed with `exakit marketplace dash-server`. The [add-ons page](/kit/tools/add-ons) explains how add-ons work.
-
-```python
-dash_server = nb.dash_tools()                     # starts Dash Server if it is stopped
-preview_path = dashboard_draft.preview(dash_server)
-print("Preview:", dash_server.url + preview_path)
-```
-
-### Preview [#preview]
-
-`preview` checks four things before it creates anything:
-
-* that the workflow is the one the dashboard was made in
-* that the read-only identity is validated
-* that Dash Server's profile is the kit's read-only user on the kit's database
-* that the dashboard's name is not already taken by a dashboard that belongs to another dataset, or that has no readable lineage
-
-Then it creates the preview, confirms that the built copy holds the approved SQL and lineage files unchanged, and runs a health check. A preview that fails the health check is marked unhealthy, and the kit will not publish it.
-
-### Check [#check]
-
-Open the preview and compare the figures with the SQL. Use the page described on [What a reader sees](/data-scientist/communicate/what-a-reader-sees). The chart's grouped Other figure is one to check against the query. Only a person can make this check. The notebook never does it for you.
-
-### Publish [#publish]
-
-`FIGURES_CHECKED` is `False` in `03_share`. Set it to `True` after the check, and run the cell. In code:
-
-```python
-live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
-```
-
-`confirm` refuses unless `figures_checked=True` and the preview is healthy. It promotes that exact revision, starts the app if it is not mounted, and checks the live address. If the live check fails, the error says to roll back in Dash Server.
-
-In automated runs the check is never set, so nothing is published without a person.
-
-## The workflow log [#the-workflow-log]
-
-Each preview and each publish adds a line to the workflow log, with the query's digest, the descriptor version and the revision number. The kinds are listed on [The workflow log](/data-scientist/monitor/the-workflow-log).
-
-Back to [Communicate and deploy](/data-scientist/communicate). Next: [What a reader sees](/data-scientist/communicate/what-a-reader-sees).
-
-
-# The training hand-off (/data-scientist/communicate/training-hand-off)
-
-
-
-## The training hand-off [#the-training-hand-off]
-
-The training hand-off is the ML Engineer's file. It is one JSON file with the feature view, the target, the split and the training SQL. The Data Scientist notebooks do not write it. The ML Engineer's notebook writes one if none exists.
-
-```python
-path = nb.write_handoff(conn, ds)     # writes the file and returns its path
-```
-
-`nb.write_handoff(conn, ds)` writes the file to `~/.exasol-starter-kit/handoffs/<id>-v<n>.json`, where `<n>` is the descriptor's version. `nb.read_handoff` reads it back. The file names a table, columns, SQL and digests. It never names a host, a user or a password.
-
-## The split [#the-split]
-
-Two rules decide how the rows are split for training:
-
-* **A date in the column map gives a time split.** This is the default. The oldest rows train the model and the newest rows test it.
-* **No date means no time split.** The kit refuses a time split that the data cannot support, and names the fix. A dataset with no date, such as `fraud_transactions`, needs a split named on purpose: `nb.write_handoff(conn, ds, split="random")`.
-
-The kit does not choose a random split for you. `split="random"` is a reproducible hash of each row's role columns, so the same rows always give the same split.
-
-## When the hand-off goes stale [#when-the-hand-off-goes-stale]
-
-A hand-off that no longer matches the column map or the data is refused. The check and the fix are on [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
-
-Back to [Communicate and deploy](/data-scientist/communicate). Next: [Deploying a model](/data-scientist/communicate/deploying-a-model).
-
-
-# Troubleshooting (/data-scientist/communicate/troubleshooting)
-
-
-
-Each entry quotes the message or describes the step that stops.
-
-<Accordions type="multiple">
-  <Accordion title="Dash Server is stopped or missing">
-    The notebook installs and starts it when you call `nb.dash_tools()` or `nb.addon_ready("dash-server")`. To do it yourself, run `exakit marketplace dash-server`, then `exakit start dash-server`, then `exakit status` to confirm. See [Add-ons](/kit/tools/add-ons).
-  </Accordion>
-
-  <Accordion title="Resume the workflow before previewing or promoting">
-    The dashboard belongs to the workflow it was made in. Run `nb.continue_workflow("share")` in this notebook, or resume the workflow with `nb.workflow(resume="wf-...")`, and try again.
-  </Accordion>
-
-  <Accordion title="The read-only identity is not validated, or the profile is wrong">
-    The preview needs the kit's read-only user to be validated. Run `exakit mcp-doctor` to check it. When the message says the profile must validate as the read-only user, run `exakit mcp-setup`, then restart Dash Server.
-  </Accordion>
-
-  <Accordion title="The dashboard name already exists without readable lineage">
-    The error reads "choose another APP_NAME". The name is taken by a dashboard the kit did not make, or one made for another dataset. Choose another `APP_NAME`. The kit never overwrites a dashboard that belongs to a different dataset.
-  </Accordion>
-
-  <Accordion title="The preview is unhealthy">
-    The health check failed, so the kit will not publish it. The error reads "Dash Server preview is unhealthy". Open the Dash Server log with `exakit logs dash-server`, fix the cause, and run the preview again.
-  </Accordion>
-
-  <Accordion title="confirm asks you to open the healthy preview">
-    `confirm` was called without `figures_checked=True`, or the preview is not healthy. Check the figures against the SQL, then confirm again. See [Preview, check, publish](/data-scientist/communicate/preview-check-publish).
-  </Accordion>
-
-  <Accordion title="The live dashboard failed its health check">
-    The error reads "use app_rollback in Dash Server". The published revision is not healthy. Roll back there, then check the preview again before you publish another revision.
-  </Accordion>
-
-  <Accordion title="The hand-off is refused as stale">
-    The training hand-off no longer matches the column map or the data. Read the line the kit prints, then write the hand-off again with `nb.write_handoff(conn, ds)`. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
-  </Accordion>
-</Accordions>
-
-Back to [Communicate and deploy](/data-scientist/communicate).
-
-
-# What a reader sees (/data-scientist/communicate/what-a-reader-sees)
-
-
-
-## What a reader sees [#what-a-reader-sees]
-
-The dashboard is a view of the reviewed SQL result. It is not a new calculation over the table. Its page says so.
-
-* **Filters.** Categories, a Show setting (10 by default), Sort by, and Chart layout (horizontal or vertical bars). Top N applies after the filters. **Reset filters** clears them.
-* **Category comparison.** A bar chart of the values in the current selection.
-* **Composition.** A share-of-total chart. The kit draws it only when you pass `measure="count"`, because a total of a measure that is not a count has no meaning. With more than eight rows shown, the note says smaller categories are grouped as Other.
-* **Behind the charts.** The same filtered rows as a table, sortable, with **Export CSV**.
-
-## Check the figures against the SQL [#check-the-figures-against-the-sql]
-
-When you check a preview, compare three things with the query on [Build the dashboard query](/data-scientist/communicate/dashboard-query):
-
-1. The category names in the table match the values in the query's first column.
-2. The counts match the counts the query returns. `nb.show_sql()` prints the last query the notebook ran.
-3. The composition chart's Other group equals the sum of the categories it groups.
-
-```python
-nb.show_sql()   # the SQL the last query ran
-```
-
-Back to [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Next: [The hand-off bundle](/data-scientist/communicate/hand-off-bundle).
-
-
 # Approve the column map (/data-scientist/explore/approve-the-column-map)
 
 
@@ -2615,6 +2615,34 @@ exakit semantic restore-version all_data 3
 ### Changed in place by Semantic Views [#changed-in-place-by-semantic-views]
 
 A link taken away or of another type, a key or a semantic view taken away: each is changed in place with Semantic Views' own scripts (`REMOVE_RELATIONSHIP`, `SET_RELATIONSHIP`, `REMOVE_UNIQUE_KEY_WITH_COLUMNS`, `REMOVE_SEMANTIC_OBJECT`), so trusted questions, grants and the query log stay. Only a table taken away, or another description of the whole map, rebuilds it, because Semantic Views has no script for those.
+
+### More from Semantic Views [#more-from-semantic-views]
+
+Under **More from Semantic Views** in the card, in the notebook's *More from Semantic Views* cell, and with `exakit semantic`, each of these reads or does one thing when you ask:
+
+| What                    | What it does                                                                                                                                                                                                  | Semantic Views scripts                                                                                                   |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| Suggested changes       | Lists the changes waiting for review: from feedback on answers (your own SQL instead of the compiled one), AI tools and colleagues. Certify or reject each with a note                                        | `PROPOSE_MODEL_EVOLUTION`, `REVIEW_MODEL_EVOLUTION`                                                                      |
+| Stored totals for speed | The metrics by some dimensions, stored once in `EXAKIT_TOTALS`. Semantic Views answers from them when a question fits and they are fresh, and reads the live tables otherwise. Refresh them, or turn them off | `REGISTER_MATERIALIZATION`, `ADD_MATERIALIZATION_COLUMN`, `MARK_MATERIALIZATION_REFRESHED`, `SET_MATERIALIZATION_STATUS` |
+| Views for BI tools      | Semantic SQL compiled once and stored as a plain view, which Tableau or Power BI read with no preprocessor. When a definition it uses changes, Semantic Views retires it                                      | `CHECK_FROZEN_VIEWS`, `SYNC_FROZEN_VIEWS`                                                                                |
+| Governance              | `OPEN` reports the sources read without their own row and column policy; `GOVERNED` refuses them                                                                                                              | `SET_MODEL_GOVERNANCE_MODE`                                                                                              |
+| Plain-SQL joins         | Whether semantic views may be joined like tables in ordinary SQL                                                                                                                                              | `SET_MODEL_DERIVED_COMPOSITION`                                                                                          |
+| The query log           | Semantic Views' own log of Semantic SQL statements, and what was asked                                                                                                                                        | `SET_QUERY_LOGGING`                                                                                                      |
+| Imports                 | A Databricks metric view, or a plan from another semantic layer in OSI form, as a model of its own                                                                                                            | `IMPORT_DATABRICKS_METRIC_VIEW`, `APPLY_NORMALIZED_OSI_IMPORT`                                                           |
+
+```bash
+exakit semantic suggestions all_data
+exakit semantic review 12 certified --why "Matches how finance counts it"
+exakit semantic totals all_data --store ORDER_LINES --metric total_amount --dimension ship_state --max-age "6 HOURS"
+exakit semantic totals all_data --refresh order_lines_ship_state
+exakit semantic freeze BI.REVENUE_BY_STATE --sql "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state"
+exakit semantic frozen all_data --sync
+exakit semantic governance all_data governed
+exakit semantic logging on
+exakit semantic import-databricks finance --file metric_view.yaml          # shown first; --apply creates it
+```
+
+Stored totals are registered with your data map again when it has to be rebuilt.
 
 ### Who may read it [#who-may-read-it]
 
@@ -3418,338 +3446,6 @@ The roles are a draft until you approve them. The approval is covered in [Explor
 Back to [Get the data](/data-scientist/get-the-data). Next: [External sources](/data-scientist/get-the-data/external-sources).
 
 
-# Monitor and iterate (/data-scientist/monitor)
-
-
-
-Monitoring means noticing that something has changed since you last looked, and deciding what to redo. A table gets a new column. A column map is approved again. A model is retrained on newer rows. In most data science work this loop never ends. The kit helps with the record and with the checks it can make when you run a step again. It does not watch your data in the background, it does not detect drift, and it does not retrain anything on its own. You do the iterating, and the kit tells you where to go back to.
-
-<Flow
-  caption="Something changed: the kit notices when you run a step, you act, and you go back to the right stage"
-  steps="[
-  { title: &#x22;The table changes&#x22;, text: &#x22;A column is added, removed, renamed or retyped, or the rows change&#x22;, tone: &#x22;db&#x22; },
-  { title: &#x22;The kit notices when you describe it&#x22;, text: &#x22;The column names and types are compared with the approved version. A change returns a draft.&#x22;, code: 'nb.describe(&#x22;AMAZON.ORDER_LINES&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/monitor/what-changed&#x22; },
-  { title: &#x22;You approve a new version&#x22;, text: &#x22;Changed columns are flagged low confidence. Review them, then approve.&#x22;, code: &#x22;role_review.approve(choices, slots)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/explore&#x22; },
-  { title: &#x22;The semantic model is rebuilt&#x22;, text: &#x22;Every model the table is in is refreshed by the approval&#x22;, tone: &#x22;db&#x22;, href: &#x22;/kit/data/semantic-views&#x22; },
-  { title: &#x22;Back to the stage the change affects&#x22;, text: &#x22;Prepare, Explore, Model or Evaluate, as the change dictates&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
-]"
-/>
-
-## Where you do it [#where-you-do-it]
-
-| Guided view                                                                                                                                                                                                           | Notebook code                                                                                                                                                                                           | Terminal                                                                                                                                                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The workflow list and log in the quickstart's cards. The column map card's **History** lists its versions, and **Restore** saves an older version's choices as a new one. A published model has a **Refresh** action. | `nb.list_workflows()`, `nb.workflow_log(id)`, `nb.continue_workflow(...)`, `nb.column_map_versions(id)`, `nb.refresh_semantic(conn, name)`, `nb.handoff_is_stale(...)`, `nb.tracing()`, `nb.trace(...)` | `exakit workflow list`, `exakit workflow show <id>`, `exakit describe <id> --versions`, `exakit describe <id> --show --version <n>`, `exakit describe --model <NAME> --refresh` |
-
-## How we used it [#how-we-used-it]
-
-Suppose someone adds a column to `AMAZON.ORDER_LINES`. The kit does not notice until you describe the table again. Here is how you find out and what you do, in four steps:
-
-```python
-workflow_id = nb.continue_workflow("explore")   # this kernel's workflow, or the last one on this computer
-events = nb.workflow_log(workflow_id)           # every line, in order
-draft = nb.describe("AMAZON.ORDER_LINES")       # a draft if the table changed since its approval
-versions = nb.column_map_versions("amazon_sales")
-```
-
-The workflow log shows what the last run did. The describe call returns a draft when the schema changed, and the changed columns say so. You review the draft, correct what is wrong, and approve. The approval writes the next version and rebuilds every semantic model the table is in. Then run the notebooks again, from the first cell. They read the newest approval.
-
-## In this stage [#in-this-stage]
-
-<Cards>
-  <Card title="What changed, and where you go" href="/data-scientist/monitor/what-changed" description="Each kind of change, what the kit notices, and which stage to return to" />
-
-  <Card title="The workflow log" href="/data-scientist/monitor/the-workflow-log" description="The record each workflow keeps, and which workflow a notebook continues" />
-
-  <Card title="Versions and semantic models" href="/data-scientist/monitor/versions-and-semantic-models" description="Every saved column map version, restoring one, and refreshing a semantic model" />
-
-  <Card title="A training hand-off that went stale" href="/data-scientist/monitor/stale-hand-off" description="How the kit refuses an old training hand-off, and how to write a new one" />
-
-  <Card title="Tracing model calls" href="/data-scientist/monitor/tracing" description="Each model call as a trace in your Langfuse project" />
-
-  <Card title="Rerunning, and what the kit does not do" href="/data-scientist/monitor/rerunning-and-limits" description="What moves when you rerun, and the limits to know before you schedule anything" />
-
-  <Card title="When it goes wrong" href="/data-scientist/monitor/troubleshooting" description="Approval, staleness and log problems, and their fixes" />
-</Cards>
-
-## What you have at the end [#what-you-have-at-the-end]
-
-A record of what each run did, a column map whose versions you can read and restore, a semantic model that matches the approved roles, and a plain list of what needs redoing. The loop has no end. When something changes, go back to the stage in the table on [What changed, and where you go](/data-scientist/monitor/what-changed) and work forward from there.
-
-<StageNav n="8" />
-
-
-# Rerunning, and what the kit does not do (/data-scientist/monitor/rerunning-and-limits)
-
-
-
-## Rerunning the notebooks [#rerunning-the-notebooks]
-
-Run a notebook again to see what has changed. These are the things that move:
-
-* `DATASET = None` picks up the dataset approved last. Approve a different one in `01_explore`, then run the first cell of the other notebook again to follow it. To pin a dataset, set `DATASET = "..."` in the notebook.
-* The baseline reads the newest 20,000 rows, and the lab reads the newest 50,000, when the table has a date. New rows change which rows the models see.
-* The log grows. Every rerun adds lines to the same workflow.
-* Dashboards and hand-off bundles are not rebuilt by a rerun. Make a new draft and a new bundle when the result changes.
-
-After you update the kit, restart the kernel. A running kernel keeps the helpers it loaded before the update. In JupyterLab, choose **Kernel**, then **Restart Kernel**.
-
-## What the kit does not do [#what-the-kit-does-not-do]
-
-Be clear about these limits before you rely on the kit for a recurring job.
-
-* **It does not detect drift.** It does not compare this month's data with last month's, and it does not warn you when a score falls.
-* **It does not retrain.** A model is trained when you run its cell, and nothing runs it again on a schedule.
-* **It does not watch the database.** Nothing checks the table between your runs.
-* **It does not alert.** Tracing and the log record what happened. They do not send a message.
-
-Monitoring the data over time is a job you schedule yourself, with your own tools. The kit gives you the record to read and the steps to redo.
-
-Back to [Monitor and iterate](/data-scientist/monitor).
-
-
-# A training hand-off that went stale (/data-scientist/monitor/stale-hand-off)
-
-
-
-## A training hand-off that went stale [#a-training-hand-off-that-went-stale]
-
-The training hand-off is written with `nb.write_handoff` on the ML Engineer's side, and read by the training step. A hand-off is a snapshot. When the column map or the rows change after it was written, the hand-off is stale. The kit can tell you that, and refuses to train on it.
-
-<Flow
-  caption="A training hand-off that went stale"
-  steps="[
-  { title: &#x22;You write a training hand-off&#x22;, text: &#x22;The feature view, the target and the split, in one file&#x22;, code: &#x22;nb.write_handoff(conn, ds)&#x22;, tone: &#x22;you&#x22; },
-  { title: &#x22;The data or the column map changes&#x22;, text: &#x22;A new version, or new rows&#x22;, tone: &#x22;db&#x22; },
-  { title: &#x22;The kit compares them&#x22;, text: &#x22;The descriptor version and digest first, then the data digest&#x22;, code: &#x22;nb.handoff_is_stale(conn, handoff, ds)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;It names what changed&#x22;, text: &#x22;The line says what changed, and the fix&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;You write it again&#x22;, text: &#x22;A new file, and the old one stays&#x22;, code: &#x22;nb.write_handoff(conn, ds)&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## What the check looks at [#what-the-check-looks-at]
-
-`nb.handoff_is_stale(conn, handoff, ds)` returns `None` when the hand-off still describes the dataset and its data. Otherwise it returns one line that says what changed and what to do. It checks, in this order:
-
-* **The hand-off is for another descriptor.** The line names both ids.
-* **The descriptor's version changed**, or its digest did. The line gives both versions, such as v2 to v3.
-* **The data no longer matches.** With a connection, the check compares the data digest. A mismatch means the rows or the dates differ.
-
-## The fix [#the-fix]
-
-The fix in every case is the same: write it again with `nb.write_handoff(conn, ds)`. The old file stays where it is. The file name carries the descriptor version, so the new one is saved beside the old one.
-
-The training step on the ML Engineer's side refuses a stale hand-off and prints the same line. Check the line first, so you know whether the change was to the column map or to the data.
-
-## The hand-off bundle has no such check [#the-hand-off-bundle-has-no-such-check]
-
-The hand-off bundle, from [The hand-off bundle](/data-scientist/communicate/hand-off-bundle), is a snapshot too. It has no staleness check. Write a new one when the work changes.
-
-Back to [Monitor and iterate](/data-scientist/monitor). Next: [Tracing model calls](/data-scientist/monitor/tracing).
-
-
-# The workflow log (/data-scientist/monitor/the-workflow-log)
-
-
-
-A workflow is the record of one piece of work across the notebooks. Its log is the file where each helper that does something writes a line. The [workflows reference](/kit/tools/workflows) describes the workflow as a kit feature. This page covers what the log holds.
-
-## The workflow log [#the-workflow-log]
-
-Every workflow has one log, `~/.exasol-starter-kit/workflows/<id>.jsonl`: one JSON object per line, append-only, readable by you only. While a workflow is active, each helper that does something adds a line. The kinds you will see are:
-
-| Kind                                 | Written when                                                                               |
-| ------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `start`                              | A workflow begins, with its name, the kit version, and the Python and platform             |
-| `step`                               | A later notebook continues the work                                                        |
-| `sql`                                | A statement runs, with its digest and row count                                            |
-| `describe.draft`, `describe.approve` | A column map is drafted, or approved as a new version                                      |
-| `model`                              | A model is trained and scored, with its row count and, where the note shows one, its score |
-| `trace`                              | A model call is traced to Langfuse, with the trace id                                      |
-| `handoff`                            | A training hand-off or a hand-off bundle is written                                        |
-| `dashboard.revision`                 | A dashboard is previewed or published                                                      |
-| `ask.approve`, `ask.answer`          | A question's SQL is approved, and its answer is read                                       |
-| `mlflow.run`                         | An MLflow run is recorded, on the in-database training path                                |
-
-Read it with the commands in the table on [Monitor and iterate](/data-scientist/monitor), or in a notebook:
-
-```python
-workflow_id = nb.continue_workflow("explore")   # this kernel's workflow, or the last one on this computer
-events = nb.workflow_log(workflow_id)           # every line, in order
-```
-
-```bash
-exakit workflow show wf-20261027-3f9a1c
-```
-
-## What the log never holds [#what-the-log-never-holds]
-
-The log never holds a credential. The helpers refuse any field named password, token, secret or api_key, and a connection string with a password in it. SQL that looks credential-bearing, such as a statement with a PASSWORD or API_KEY column, is logged with its text replaced and its digest kept, and a warning is shown.
-
-A log that cannot be written warns, and the cell goes on. Logging never fails the work it describes.
-
-## When nothing is written [#when-nothing-is-written]
-
-Without an active workflow nothing is written. There are no implicit workflows.
-
-## Which workflow a notebook continues [#which-workflow-a-notebook-continues]
-
-* `nb.continue_workflow(name)` continues this kernel's workflow. Failing that, it takes the one in `EXAKIT_WORKFLOW_ID`, then the last one started on this computer. It starts a new one only when none exists.
-* The quickstart's workflow cell resumes the workflow of this kernel, when there is one. In a new kernel, it starts a new workflow.
-* `nb.workflow(resume="wf-...")` continues a named workflow from another kernel.
-* `nb.list_workflows()` and `exakit workflow list` show every workflow on this computer.
-
-The helpers are in the [workflow reference](/data-scientist/development/reference/workflow).
-
-Back to [Monitor and iterate](/data-scientist/monitor). Next: [Versions and semantic models](/data-scientist/monitor/versions-and-semantic-models).
-
-
-# Tracing model calls (/data-scientist/monitor/tracing)
-
-
-
-## Tracing model calls [#tracing-model-calls]
-
-With Langfuse set up, each model call is one trace in your own Langfuse project, with its input, output, token use and time. Langfuse is the tracing service the kit connects to. Set it up on [AI and Langfuse](/data-scientist/set-up/ai-and-langfuse).
-
-Check whether tracing is on:
-
-```python
-nb.tracing()        # True when the three Langfuse settings are set
-```
-
-Pass a block to group several calls into one trace:
-
-```python
-with nb.trace(connection, dataset=dataset):
-    ideas = nb.feature_ideas(lab, ai=True)
-```
-
-Each trace is tagged with the database session, the workflow id and, with a dataset, its id and descriptor version. When the block ends, the kit prints the trace id and where to find it, and adds a `trace` line to the [workflow log](/data-scientist/monitor/the-workflow-log). The secret key is never printed or logged.
-
-Tracing lets you compare runs by their cost, time and answers. It does not alert you to anything.
-
-Back to [Monitor and iterate](/data-scientist/monitor). Next: [Rerunning, and what the kit does not do](/data-scientist/monitor/rerunning-and-limits).
-
-
-# Troubleshooting (/data-scientist/monitor/troubleshooting)
-
-
-
-Each entry quotes the message the kit shows, or describes the step that stops.
-
-<Accordions type="multiple">
-  <Accordion title="Another dataset was approved while this notebook was open">
-    You approved another dataset in another notebook while this one was open. Run this notebook's first cell again. It switches to the newly approved dataset.
-  </Accordion>
-
-  <Accordion title="A step says the column map is not approved">
-    The step raised `DescriptorNotApproved`. Explore, Ask and Share do not read a draft. Open `01_explore`, review the map and approve it. The roles and the approval are described on [Explore](/data-scientist/explore).
-  </Accordion>
-
-  <Accordion title="approve says the table changed since it was described">
-    The table's columns or types changed after you described it. Run `nb.describe(...)` again, review the new draft, and approve it. See [What changed, and where you go](/data-scientist/monitor/what-changed).
-  </Accordion>
-
-  <Accordion title="Approved, but the semantic model was not published">
-    The approval stands, but the semantic model could not be rebuilt. The message says why. Fix the cause, then run `exakit describe <id> --comments`. See [Versions and semantic models](/data-scientist/monitor/versions-and-semantic-models).
-  </Accordion>
-
-  <Accordion title="After an update, nothing changed">
-    A running kernel keeps the helpers it loaded before the update. Restart it: in JupyterLab, **Kernel**, then **Restart Kernel**.
-  </Accordion>
-
-  <Accordion title="Find what a cell ran">
-    ```python
-    nb.show_sql()                              # the SQL the last query ran
-    nb.workflow_log(nb.current_workflow())     # everything this workflow did
-    ```
-  </Accordion>
-
-  <Accordion title="The training hand-off is refused as stale">
-    `handoff_is_stale` named what changed. Write the hand-off again with `nb.write_handoff(conn, ds)`. Check the line first, so you know whether the change was to the column map or to the data. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
-  </Accordion>
-</Accordions>
-
-Back to [Monitor and iterate](/data-scientist/monitor).
-
-
-# Versions and semantic models (/data-scientist/monitor/versions-and-semantic-models)
-
-
-
-This page covers two things that change together: the saved versions of a column map, and the semantic model that is built from the approved version.
-
-## Versions, and restoring one [#versions-and-restoring-one]
-
-Every approval is a new version. Nothing is overwritten.
-
-* `nb.column_map_versions(id)` lists each version with its approval time, its roles, its slots and its evidence.
-* `nb.current_version(id)` gives the approved one.
-* In the column map card of `01_explore`, **History** lists the versions. **Restore** applies an older version's choices and saves them as a new version. The card says which version it restored and which new one it saved.
-* In code, restoring means approving that version's roles again. The version the kit saves is the newest.
-
-```python
-versions = nb.column_map_versions("amazon_sales")   # every saved version, oldest first, with its roles
-```
-
-```bash
-exakit describe <id> --versions
-exakit describe <id> --show --version <n>
-```
-
-## Semantic models [#semantic-models]
-
-Approving a column map rebuilds every semantic model its table is in, so AI clients read the same meaning. The model is in Exasol Semantic Views. The [semantic views page](/kit/data/semantic-views) describes the feature.
-
-A link between tables is not part of a column map. So after you add or remove one, refresh the model yourself:
-
-```python
-nb.refresh_semantic(connection, "sales_360")    # rebuild a model the kit published
-```
-
-```bash
-exakit describe --model sales_360 --refresh
-```
-
-`nb.semantic_models(connection)` lists every model in the database. If publishing fails, the approval still stands and the message says why. Run `exakit describe <id> --comments` to publish it again.
-
-Back to [Monitor and iterate](/data-scientist/monitor). Next: [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
-
-
-# What changed, and where you go (/data-scientist/monitor/what-changed)
-
-
-
-Not every change is noticed. This table says, for each kind of change, what the kit notices on its own and what it does not. The last column names the stage to return to.
-
-## What changed, what the kit notices, where you go [#what-changed-what-the-kit-notices-where-you-go]
-
-| What changed                               | What the kit notices                                                                                                           | What you do                                           | Go back to                                                     |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | -------------------------------------------------------------- |
-| Columns added, removed, renamed or retyped | `describe` returns a draft, because the schema digest no longer matches                                                        | Review the draft and approve a new version            | [Explore](/data-scientist/explore): the column map             |
-| New roles in an approved column map        | Every semantic model the table is in is rebuilt by the approval                                                                | Check the result of the new roles                     | [Model](/data-scientist/model), to see the effect on the score |
-| Rows changed, with no column change        | Nothing on its own. Approval checks the data again, and a training hand-off is refused when its data digest no longer matches. | Run Prepare and Explore again, and look at what moved | [Prepare](/data-scientist/prepare)                             |
-| A new table, or a new link between tables  | Nothing, until the model is rebuilt                                                                                            | Refresh the semantic model                            | [Semantic views](/kit/data/semantic-views)                     |
-| The model's inputs or settings changed     | Nothing. The fitted model is not saved, so each run trains it again.                                                           | Rerun the lab, then score it again                    | [Model](/data-scientist/model)                                 |
-| The dashboard's query changed              | Nothing. The preview was made from the old query.                                                                              | Make a new dashboard draft and preview it             | [Communicate and deploy](/data-scientist/communicate)          |
-| The AI model or its settings changed       | Nothing                                                                                                                        | Run `nb.model_settings()` to check what is set        | [Set up Exasol](/data-scientist/set-up)                        |
-
-## The table changed [#the-table-changed]
-
-`nb.describe` compares the table's column names and types with the approved version. If they match, the approved version comes back. If they do not, it makes a draft:
-
-* Roles for the columns whose name and type did not change are carried over.
-* Changed or new columns are flagged with low confidence, and the evidence says the column changed since the approved version.
-* The approved version stays approved for the old columns. Nothing is overwritten.
-
-`approve` refuses if the table changed since it was described, and says to describe it again. Explore, Ask and Share read only an approved column map. If a step reports that the map is not approved, open `01_explore` and approve it.
-
-The kit checks columns and types when you describe. It does not compare every row on each run. Rows are checked when you approve, and again by a training hand-off's staleness check.
-
-Back to [Monitor and iterate](/data-scientist/monitor). Next: [The workflow log](/data-scientist/monitor/the-workflow-log).
-
-
 # Your AI model in this stage (/data-scientist/model/ai-model)
 
 
@@ -4222,6 +3918,338 @@ Each entry quotes the message the kit prints, or describes the step that stops.
 </Accordions>
 
 Back to [Model](/data-scientist/model).
+
+
+# Monitor and iterate (/data-scientist/monitor)
+
+
+
+Monitoring means noticing that something has changed since you last looked, and deciding what to redo. A table gets a new column. A column map is approved again. A model is retrained on newer rows. In most data science work this loop never ends. The kit helps with the record and with the checks it can make when you run a step again. It does not watch your data in the background, it does not detect drift, and it does not retrain anything on its own. You do the iterating, and the kit tells you where to go back to.
+
+<Flow
+  caption="Something changed: the kit notices when you run a step, you act, and you go back to the right stage"
+  steps="[
+  { title: &#x22;The table changes&#x22;, text: &#x22;A column is added, removed, renamed or retyped, or the rows change&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;The kit notices when you describe it&#x22;, text: &#x22;The column names and types are compared with the approved version. A change returns a draft.&#x22;, code: 'nb.describe(&#x22;AMAZON.ORDER_LINES&#x22;)', tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/monitor/what-changed&#x22; },
+  { title: &#x22;You approve a new version&#x22;, text: &#x22;Changed columns are flagged low confidence. Review them, then approve.&#x22;, code: &#x22;role_review.approve(choices, slots)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/explore&#x22; },
+  { title: &#x22;The semantic model is rebuilt&#x22;, text: &#x22;Every model the table is in is refreshed by the approval&#x22;, tone: &#x22;db&#x22;, href: &#x22;/kit/data/semantic-views&#x22; },
+  { title: &#x22;Back to the stage the change affects&#x22;, text: &#x22;Prepare, Explore, Model or Evaluate, as the change dictates&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/prepare&#x22; },
+]"
+/>
+
+## Where you do it [#where-you-do-it]
+
+| Guided view                                                                                                                                                                                                           | Notebook code                                                                                                                                                                                           | Terminal                                                                                                                                                                        |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The workflow list and log in the quickstart's cards. The column map card's **History** lists its versions, and **Restore** saves an older version's choices as a new one. A published model has a **Refresh** action. | `nb.list_workflows()`, `nb.workflow_log(id)`, `nb.continue_workflow(...)`, `nb.column_map_versions(id)`, `nb.refresh_semantic(conn, name)`, `nb.handoff_is_stale(...)`, `nb.tracing()`, `nb.trace(...)` | `exakit workflow list`, `exakit workflow show <id>`, `exakit describe <id> --versions`, `exakit describe <id> --show --version <n>`, `exakit describe --model <NAME> --refresh` |
+
+## How we used it [#how-we-used-it]
+
+Suppose someone adds a column to `AMAZON.ORDER_LINES`. The kit does not notice until you describe the table again. Here is how you find out and what you do, in four steps:
+
+```python
+workflow_id = nb.continue_workflow("explore")   # this kernel's workflow, or the last one on this computer
+events = nb.workflow_log(workflow_id)           # every line, in order
+draft = nb.describe("AMAZON.ORDER_LINES")       # a draft if the table changed since its approval
+versions = nb.column_map_versions("amazon_sales")
+```
+
+The workflow log shows what the last run did. The describe call returns a draft when the schema changed, and the changed columns say so. You review the draft, correct what is wrong, and approve. The approval writes the next version and rebuilds every semantic model the table is in. Then run the notebooks again, from the first cell. They read the newest approval.
+
+## In this stage [#in-this-stage]
+
+<Cards>
+  <Card title="What changed, and where you go" href="/data-scientist/monitor/what-changed" description="Each kind of change, what the kit notices, and which stage to return to" />
+
+  <Card title="The workflow log" href="/data-scientist/monitor/the-workflow-log" description="The record each workflow keeps, and which workflow a notebook continues" />
+
+  <Card title="Versions and semantic models" href="/data-scientist/monitor/versions-and-semantic-models" description="Every saved column map version, restoring one, and refreshing a semantic model" />
+
+  <Card title="A training hand-off that went stale" href="/data-scientist/monitor/stale-hand-off" description="How the kit refuses an old training hand-off, and how to write a new one" />
+
+  <Card title="Tracing model calls" href="/data-scientist/monitor/tracing" description="Each model call as a trace in your Langfuse project" />
+
+  <Card title="Rerunning, and what the kit does not do" href="/data-scientist/monitor/rerunning-and-limits" description="What moves when you rerun, and the limits to know before you schedule anything" />
+
+  <Card title="When it goes wrong" href="/data-scientist/monitor/troubleshooting" description="Approval, staleness and log problems, and their fixes" />
+</Cards>
+
+## What you have at the end [#what-you-have-at-the-end]
+
+A record of what each run did, a column map whose versions you can read and restore, a semantic model that matches the approved roles, and a plain list of what needs redoing. The loop has no end. When something changes, go back to the stage in the table on [What changed, and where you go](/data-scientist/monitor/what-changed) and work forward from there.
+
+<StageNav n="8" />
+
+
+# Rerunning, and what the kit does not do (/data-scientist/monitor/rerunning-and-limits)
+
+
+
+## Rerunning the notebooks [#rerunning-the-notebooks]
+
+Run a notebook again to see what has changed. These are the things that move:
+
+* `DATASET = None` picks up the dataset approved last. Approve a different one in `01_explore`, then run the first cell of the other notebook again to follow it. To pin a dataset, set `DATASET = "..."` in the notebook.
+* The baseline reads the newest 20,000 rows, and the lab reads the newest 50,000, when the table has a date. New rows change which rows the models see.
+* The log grows. Every rerun adds lines to the same workflow.
+* Dashboards and hand-off bundles are not rebuilt by a rerun. Make a new draft and a new bundle when the result changes.
+
+After you update the kit, restart the kernel. A running kernel keeps the helpers it loaded before the update. In JupyterLab, choose **Kernel**, then **Restart Kernel**.
+
+## What the kit does not do [#what-the-kit-does-not-do]
+
+Be clear about these limits before you rely on the kit for a recurring job.
+
+* **It does not detect drift.** It does not compare this month's data with last month's, and it does not warn you when a score falls.
+* **It does not retrain.** A model is trained when you run its cell, and nothing runs it again on a schedule.
+* **It does not watch the database.** Nothing checks the table between your runs.
+* **It does not alert.** Tracing and the log record what happened. They do not send a message.
+
+Monitoring the data over time is a job you schedule yourself, with your own tools. The kit gives you the record to read and the steps to redo.
+
+Back to [Monitor and iterate](/data-scientist/monitor).
+
+
+# A training hand-off that went stale (/data-scientist/monitor/stale-hand-off)
+
+
+
+## A training hand-off that went stale [#a-training-hand-off-that-went-stale]
+
+The training hand-off is written with `nb.write_handoff` on the ML Engineer's side, and read by the training step. A hand-off is a snapshot. When the column map or the rows change after it was written, the hand-off is stale. The kit can tell you that, and refuses to train on it.
+
+<Flow
+  caption="A training hand-off that went stale"
+  steps="[
+  { title: &#x22;You write a training hand-off&#x22;, text: &#x22;The feature view, the target and the split, in one file&#x22;, code: &#x22;nb.write_handoff(conn, ds)&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;The data or the column map changes&#x22;, text: &#x22;A new version, or new rows&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;The kit compares them&#x22;, text: &#x22;The descriptor version and digest first, then the data digest&#x22;, code: &#x22;nb.handoff_is_stale(conn, handoff, ds)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;It names what changed&#x22;, text: &#x22;The line says what changed, and the fix&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;You write it again&#x22;, text: &#x22;A new file, and the old one stays&#x22;, code: &#x22;nb.write_handoff(conn, ds)&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## What the check looks at [#what-the-check-looks-at]
+
+`nb.handoff_is_stale(conn, handoff, ds)` returns `None` when the hand-off still describes the dataset and its data. Otherwise it returns one line that says what changed and what to do. It checks, in this order:
+
+* **The hand-off is for another descriptor.** The line names both ids.
+* **The descriptor's version changed**, or its digest did. The line gives both versions, such as v2 to v3.
+* **The data no longer matches.** With a connection, the check compares the data digest. A mismatch means the rows or the dates differ.
+
+## The fix [#the-fix]
+
+The fix in every case is the same: write it again with `nb.write_handoff(conn, ds)`. The old file stays where it is. The file name carries the descriptor version, so the new one is saved beside the old one.
+
+The training step on the ML Engineer's side refuses a stale hand-off and prints the same line. Check the line first, so you know whether the change was to the column map or to the data.
+
+## The hand-off bundle has no such check [#the-hand-off-bundle-has-no-such-check]
+
+The hand-off bundle, from [The hand-off bundle](/data-scientist/communicate/hand-off-bundle), is a snapshot too. It has no staleness check. Write a new one when the work changes.
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [Tracing model calls](/data-scientist/monitor/tracing).
+
+
+# The workflow log (/data-scientist/monitor/the-workflow-log)
+
+
+
+A workflow is the record of one piece of work across the notebooks. Its log is the file where each helper that does something writes a line. The [workflows reference](/kit/tools/workflows) describes the workflow as a kit feature. This page covers what the log holds.
+
+## The workflow log [#the-workflow-log]
+
+Every workflow has one log, `~/.exasol-starter-kit/workflows/<id>.jsonl`: one JSON object per line, append-only, readable by you only. While a workflow is active, each helper that does something adds a line. The kinds you will see are:
+
+| Kind                                 | Written when                                                                               |
+| ------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `start`                              | A workflow begins, with its name, the kit version, and the Python and platform             |
+| `step`                               | A later notebook continues the work                                                        |
+| `sql`                                | A statement runs, with its digest and row count                                            |
+| `describe.draft`, `describe.approve` | A column map is drafted, or approved as a new version                                      |
+| `model`                              | A model is trained and scored, with its row count and, where the note shows one, its score |
+| `trace`                              | A model call is traced to Langfuse, with the trace id                                      |
+| `handoff`                            | A training hand-off or a hand-off bundle is written                                        |
+| `dashboard.revision`                 | A dashboard is previewed or published                                                      |
+| `ask.approve`, `ask.answer`          | A question's SQL is approved, and its answer is read                                       |
+| `mlflow.run`                         | An MLflow run is recorded, on the in-database training path                                |
+
+Read it with the commands in the table on [Monitor and iterate](/data-scientist/monitor), or in a notebook:
+
+```python
+workflow_id = nb.continue_workflow("explore")   # this kernel's workflow, or the last one on this computer
+events = nb.workflow_log(workflow_id)           # every line, in order
+```
+
+```bash
+exakit workflow show wf-20261027-3f9a1c
+```
+
+## What the log never holds [#what-the-log-never-holds]
+
+The log never holds a credential. The helpers refuse any field named password, token, secret or api_key, and a connection string with a password in it. SQL that looks credential-bearing, such as a statement with a PASSWORD or API_KEY column, is logged with its text replaced and its digest kept, and a warning is shown.
+
+A log that cannot be written warns, and the cell goes on. Logging never fails the work it describes.
+
+## When nothing is written [#when-nothing-is-written]
+
+Without an active workflow nothing is written. There are no implicit workflows.
+
+## Which workflow a notebook continues [#which-workflow-a-notebook-continues]
+
+* `nb.continue_workflow(name)` continues this kernel's workflow. Failing that, it takes the one in `EXAKIT_WORKFLOW_ID`, then the last one started on this computer. It starts a new one only when none exists.
+* The quickstart's workflow cell resumes the workflow of this kernel, when there is one. In a new kernel, it starts a new workflow.
+* `nb.workflow(resume="wf-...")` continues a named workflow from another kernel.
+* `nb.list_workflows()` and `exakit workflow list` show every workflow on this computer.
+
+The helpers are in the [workflow reference](/data-scientist/development/reference/workflow).
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [Versions and semantic models](/data-scientist/monitor/versions-and-semantic-models).
+
+
+# Tracing model calls (/data-scientist/monitor/tracing)
+
+
+
+## Tracing model calls [#tracing-model-calls]
+
+With Langfuse set up, each model call is one trace in your own Langfuse project, with its input, output, token use and time. Langfuse is the tracing service the kit connects to. Set it up on [AI and Langfuse](/data-scientist/set-up/ai-and-langfuse).
+
+Check whether tracing is on:
+
+```python
+nb.tracing()        # True when the three Langfuse settings are set
+```
+
+Pass a block to group several calls into one trace:
+
+```python
+with nb.trace(connection, dataset=dataset):
+    ideas = nb.feature_ideas(lab, ai=True)
+```
+
+Each trace is tagged with the database session, the workflow id and, with a dataset, its id and descriptor version. When the block ends, the kit prints the trace id and where to find it, and adds a `trace` line to the [workflow log](/data-scientist/monitor/the-workflow-log). The secret key is never printed or logged.
+
+Tracing lets you compare runs by their cost, time and answers. It does not alert you to anything.
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [Rerunning, and what the kit does not do](/data-scientist/monitor/rerunning-and-limits).
+
+
+# Troubleshooting (/data-scientist/monitor/troubleshooting)
+
+
+
+Each entry quotes the message the kit shows, or describes the step that stops.
+
+<Accordions type="multiple">
+  <Accordion title="Another dataset was approved while this notebook was open">
+    You approved another dataset in another notebook while this one was open. Run this notebook's first cell again. It switches to the newly approved dataset.
+  </Accordion>
+
+  <Accordion title="A step says the column map is not approved">
+    The step raised `DescriptorNotApproved`. Explore, Ask and Share do not read a draft. Open `01_explore`, review the map and approve it. The roles and the approval are described on [Explore](/data-scientist/explore).
+  </Accordion>
+
+  <Accordion title="approve says the table changed since it was described">
+    The table's columns or types changed after you described it. Run `nb.describe(...)` again, review the new draft, and approve it. See [What changed, and where you go](/data-scientist/monitor/what-changed).
+  </Accordion>
+
+  <Accordion title="Approved, but the semantic model was not published">
+    The approval stands, but the semantic model could not be rebuilt. The message says why. Fix the cause, then run `exakit describe <id> --comments`. See [Versions and semantic models](/data-scientist/monitor/versions-and-semantic-models).
+  </Accordion>
+
+  <Accordion title="After an update, nothing changed">
+    A running kernel keeps the helpers it loaded before the update. Restart it: in JupyterLab, **Kernel**, then **Restart Kernel**.
+  </Accordion>
+
+  <Accordion title="Find what a cell ran">
+    ```python
+    nb.show_sql()                              # the SQL the last query ran
+    nb.workflow_log(nb.current_workflow())     # everything this workflow did
+    ```
+  </Accordion>
+
+  <Accordion title="The training hand-off is refused as stale">
+    `handoff_is_stale` named what changed. Write the hand-off again with `nb.write_handoff(conn, ds)`. Check the line first, so you know whether the change was to the column map or to the data. See [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+  </Accordion>
+</Accordions>
+
+Back to [Monitor and iterate](/data-scientist/monitor).
+
+
+# Versions and semantic models (/data-scientist/monitor/versions-and-semantic-models)
+
+
+
+This page covers two things that change together: the saved versions of a column map, and the semantic model that is built from the approved version.
+
+## Versions, and restoring one [#versions-and-restoring-one]
+
+Every approval is a new version. Nothing is overwritten.
+
+* `nb.column_map_versions(id)` lists each version with its approval time, its roles, its slots and its evidence.
+* `nb.current_version(id)` gives the approved one.
+* In the column map card of `01_explore`, **History** lists the versions. **Restore** applies an older version's choices and saves them as a new version. The card says which version it restored and which new one it saved.
+* In code, restoring means approving that version's roles again. The version the kit saves is the newest.
+
+```python
+versions = nb.column_map_versions("amazon_sales")   # every saved version, oldest first, with its roles
+```
+
+```bash
+exakit describe <id> --versions
+exakit describe <id> --show --version <n>
+```
+
+## Semantic models [#semantic-models]
+
+Approving a column map rebuilds every semantic model its table is in, so AI clients read the same meaning. The model is in Exasol Semantic Views. The [semantic views page](/kit/data/semantic-views) describes the feature.
+
+A link between tables is not part of a column map. So after you add or remove one, refresh the model yourself:
+
+```python
+nb.refresh_semantic(connection, "sales_360")    # rebuild a model the kit published
+```
+
+```bash
+exakit describe --model sales_360 --refresh
+```
+
+`nb.semantic_models(connection)` lists every model in the database. If publishing fails, the approval still stands and the message says why. Run `exakit describe <id> --comments` to publish it again.
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [A training hand-off that went stale](/data-scientist/monitor/stale-hand-off).
+
+
+# What changed, and where you go (/data-scientist/monitor/what-changed)
+
+
+
+Not every change is noticed. This table says, for each kind of change, what the kit notices on its own and what it does not. The last column names the stage to return to.
+
+## What changed, what the kit notices, where you go [#what-changed-what-the-kit-notices-where-you-go]
+
+| What changed                               | What the kit notices                                                                                                           | What you do                                           | Go back to                                                     |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | -------------------------------------------------------------- |
+| Columns added, removed, renamed or retyped | `describe` returns a draft, because the schema digest no longer matches                                                        | Review the draft and approve a new version            | [Explore](/data-scientist/explore): the column map             |
+| New roles in an approved column map        | Every semantic model the table is in is rebuilt by the approval                                                                | Check the result of the new roles                     | [Model](/data-scientist/model), to see the effect on the score |
+| Rows changed, with no column change        | Nothing on its own. Approval checks the data again, and a training hand-off is refused when its data digest no longer matches. | Run Prepare and Explore again, and look at what moved | [Prepare](/data-scientist/prepare)                             |
+| A new table, or a new link between tables  | Nothing, until the model is rebuilt                                                                                            | Refresh the semantic model                            | [Semantic views](/kit/data/semantic-views)                     |
+| The model's inputs or settings changed     | Nothing. The fitted model is not saved, so each run trains it again.                                                           | Rerun the lab, then score it again                    | [Model](/data-scientist/model)                                 |
+| The dashboard's query changed              | Nothing. The preview was made from the old query.                                                                              | Make a new dashboard draft and preview it             | [Communicate and deploy](/data-scientist/communicate)          |
+| The AI model or its settings changed       | Nothing                                                                                                                        | Run `nb.model_settings()` to check what is set        | [Set up Exasol](/data-scientist/set-up)                        |
+
+## The table changed [#the-table-changed]
+
+`nb.describe` compares the table's column names and types with the approved version. If they match, the approved version comes back. If they do not, it makes a draft:
+
+* Roles for the columns whose name and type did not change are carried over.
+* Changed or new columns are flagged with low confidence, and the evidence says the column changed since the approved version.
+* The approved version stays approved for the old columns. Nothing is overwritten.
+
+`approve` refuses if the table changed since it was described, and says to describe it again. Explore, Ask and Share read only an approved column map. If a step reports that the map is not approved, open `01_explore` and approve it.
+
+The kit checks columns and types when you describe. It does not compare every row on each run. Rows are checked when you approve, and again by a training hand-off's staleness check.
+
+Back to [Monitor and iterate](/data-scientist/monitor). Next: [The workflow log](/data-scientist/monitor/the-workflow-log).
 
 
 # A typed, cleaned view (/data-scientist/prepare/cleaned-views)
@@ -6227,14 +6255,14 @@ searches them.
 
 ## Personas and notebooks [#personas-and-notebooks]
 
-| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | What it does                                                                                                                                                                                                                     |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                                                      |
-| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                                                |
-| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]`                                                                                                                                                                                                                        | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients.                                |
-| `exakit semantic` | `models [--json] \| fields <MODEL> [--json] \| search <words> [--model <MODEL>] [--json] \| compile '<request json>' \| --request-file <file> [--json] \| verify <MODEL> --object <OBJECT> --name <NAME> --question <text> --request '<json>' [--json] \| verified <MODEL> [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> [--key <COLUMN>] [--wins model\|other] [--apply] [--json] \| fuse <MODEL> --document <file> [--apply] [--json] \| fusion <MODEL> [--json] \| column-maps <MODEL> [--json] \| restore-maps <MODEL> [--write] [--json] \| refresh <MODEL> [--json] \| plan <MODEL> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--json] \| run <MODEL> --sql-file <file> [--json] \| adopt <MODEL> <SCHEMA.VIEW> [--dry-run] [--json] \| draft --table <SCHEMA.TABLE>... [--json] \| validate <MODEL> [--json] \| explain <MODEL> <VIEW> <METRIC> [--json] \| versions <MODEL> [--json] \| restore-version <MODEL> <N> [--json]` | The semantic layer (Exasol Semantic Views) from the command line: a model's fields, structured requests compiled to SQL, verified questions, fusion of the same rows kept in two sources, and the column maps the model carries. |
-| `exakit board`    | `recheck <NAME> [--update] [--json] \| list [--json] \| starter [<NAME>] [--rules '<json>'] [--json] \| show <NAME> [--json] \| pin <NAME> --page <PAGE> --question <text> --sql <SELECT ...> \| --sql-file <file> [--title <text>] [--kind kpi\|bar\|line\|table] [--json] \| edit <NAME> <TILE> --sql <SELECT ...> \| --sql-file <file> [--title <text>] \| move <NAME> <TILE> <PAGE> \| remove <NAME> <TILE> \| kind <NAME> <TILE> <kpi\|bar\|line\|table> \| preview <NAME> [--rules '<json>'] [--app-file <file>] [--json] \| publish <NAME> --figures-checked [--app-file <file>] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                     | A dashboard of several pages from approved answers, on Dash Server: pin answers to pages, arrange them, preview it, publish it.                                                                                                  |
-| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                                               |
+| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | What it does                                                                                                                                                                                                                     |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                                                      |
+| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                                                |
+| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients.                                |
+| `exakit semantic` | `models [--json] \| fields <MODEL> [--json] \| search <words> [--model <MODEL>] [--json] \| compile '<request json>' \| --request-file <file> [--json] \| verify <MODEL> --object <OBJECT> --name <NAME> --question <text> --request '<json>' [--json] \| verified <MODEL> [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> [--key <COLUMN>] [--wins model\|other] [--apply] [--json] \| fuse <MODEL> --document <file> [--apply] [--json] \| fusion <MODEL> [--json] \| column-maps <MODEL> [--json] \| restore-maps <MODEL> [--write] [--json] \| refresh <MODEL> [--json] \| plan <MODEL> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--json] \| run <MODEL> --sql-file <file> [--json] \| adopt <MODEL> <SCHEMA.VIEW> [--dry-run] [--json] \| draft --table <SCHEMA.TABLE>... [--json] \| validate <MODEL> [--json] \| explain <MODEL> <VIEW> <METRIC> [--json] \| versions <MODEL> [--json] \| restore-version <MODEL> <N> [--json] \| totals <MODEL> [--store <VIEW> --metric <M>... --dimension <D>... [--name <N>] [--max-age <n UNIT>] \| --refresh <N> \| --off <N> \| --on <N>] [--json] \| freeze <SCHEMA.NAME> --sql <SELECT ...> [--json] \| frozen <MODEL> [--sync] [--json] \| governance <MODEL> open\|governed [--json] \| composition <MODEL> on\|off [--json] \| logging [on\|off] [--session] [--json] \| history [--limit <N>] [--json] \| suggestions <MODEL> [--all] [--json] \| propose <MODEL> --kind <K> --object-type <T> [--object <O>] --change <json> --why <text> [--json] \| review <ID> certified\|rejected --why <text> [--json] \| import-databricks <MODEL> --file <yaml> [--apply] [--json] \| import-osi --file <json> [--json]` | The semantic layer (Exasol Semantic Views) from the command line: a model's fields, structured requests compiled to SQL, verified questions, fusion of the same rows kept in two sources, and the column maps the model carries. |
+| `exakit board`    | `recheck <NAME> [--update] [--json] \| list [--json] \| starter [<NAME>] [--rules '<json>'] [--json] \| show <NAME> [--json] \| pin <NAME> --page <PAGE> --question <text> --sql <SELECT ...> \| --sql-file <file> [--title <text>] [--kind kpi\|bar\|line\|table] [--json] \| edit <NAME> <TILE> --sql <SELECT ...> \| --sql-file <file> [--title <text>] \| move <NAME> <TILE> <PAGE> \| remove <NAME> <TILE> \| kind <NAME> <TILE> <kpi\|bar\|line\|table> \| preview <NAME> [--rules '<json>'] [--app-file <file>] [--json] \| publish <NAME> --figures-checked [--app-file <file>] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | A dashboard of several pages from approved answers, on Dash Server: pin answers to pages, arrange them, preview it, publish it.                                                                                                  |
+| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                                               |
 
 ## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
 
@@ -7821,6 +7849,7 @@ nb.docs(nb.describe)     # open one command's page from a notebook
 | [`nb.DataMap`](/data-scientist/development/reference/data-map#DataMap)                                   | What data_map found: tables, columns and links, each a list of dicts; DataFrames through the properties.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | [`nb.Dataset`](/data-scientist/development/reference/dataset#Dataset)                                    | A validated descriptor whose every role the database holds, with the SQL names the notebooks build queries from.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | [`nb.dataset`](/data-scientist/development/reference/dataset#dataset)                                    | The dataset `name`, checked against the database: a kit dataset id, a descriptor file or its folder, or a data file of your own (CSV, Parquet or JSON) with its descriptor beside it, which is loaded first (load_own_file).                                                                                                                                                                                                                                                                                                                                                                                        |
+| [`nb.derived_composition`](/data-scientist/development/reference/semantic#derived_composition)           | Whether your semantic views may be joined like tables in ordinary SQL.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | [`nb.describe`](/data-scientist/development/reference/describe#describe)                                 | Describe `SCHEMA.TABLE` (or a dataset id's table): the approved descriptor when the table still matches it, else a fresh draft.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | [`nb.describe_schema`](/data-scientist/development/reference/schema-map#describe_schema)                 | The schema of `dataset_or_schema` (a dataset, or a schema name) as found now: its tables, rows and keys, and every many-to-one link between them with its evidence.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | [`nb.descriptor_store_dir`](/data-scientist/development/reference/descriptor-store#descriptor_store_dir) | The folder that holds the versions of the descriptor `id` (whether or not it exists yet); an id that is not a dataset id is refused, so no path is built from it.                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -7842,13 +7871,18 @@ nb.docs(nb.describe)     # open one command's page from a notebook
 | [`nb.forget_model`](/data-scientist/development/reference/setup-env#forget_model)                        | Delete what use_model(..., remember=True) saved (the model, Langfuse, or both) and clear it from this kernel.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | [`nb.format_value`](/data-scientist/development/reference/number-format#format_value)                    | One value written out as `fmt` (column_format) says; text, an empty value or a non-number as it is.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | [`nb.formatted`](/data-scientist/development/reference/number-format#formatted)                          | A copy of a result with every number written out for reading (money in its currency, counts with separators, shares as %); the result itself is unchanged.                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| [`nb.freeze_view`](/data-scientist/development/reference/semantic#freeze_view)                           | A view for BI tools: Semantic SQL compiled once by Semantic Views and stored as plain SQL (SCHEMA.NAME).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| [`nb.frozen_views`](/data-scientist/development/reference/semantic#frozen_views)                         | The views frozen from your data map and whether each still matches it; `sync` retires the stale ones.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | [`nb.fuse`](/data-scientist/development/reference/semantic#fuse)                                         | The same thing in several sources, declared once (APPLY_FUSION_DECLARATION): `dry_run=True` (the default) checks it against the data and changes nothing; `dry_run=False` applies it and keeps the exported document beside the model, so a rebuild puts it back.                                                                                                                                                                                                                                                                                                                                                   |
 | [`nb.fusion`](/data-scientist/development/reference/semantic#fusion)                                     | The model's whole fusion layer, exported as one document (None when it has none).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | [`nb.fusion_document`](/data-scientist/development/reference/semantic#fusion_document)                   | The fusion document saying `other` (a table of another source) holds the same thing as `table` (an entity of the published `model`), at the same grain: a second copy of the entity, matched by its key (`key`: its column in `other` when it is named differently), every field bound there (a column of the same name, else empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative, `wins="other"` makes the other one win.                                                                                                                                 |
+| [`nb.governance_mode`](/data-scientist/development/reference/semantic#governance_mode)                   | OPEN (Semantic Views reports unprotected sources) or GOVERNED (it refuses them); then what validation says.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | [`nb.handoff_bundle`](/data-scientist/development/reference/handoff-bundle#handoff_bundle)               | Write the bundle for `ds` and the workflow (the active one, else the last one on this machine, else none) into `folder` (default `$EXAKIT_HOME/bundles/<workflow id>/`; a bundle for no workflow is named after the dataset) and, with `zip_it`, a zip beside it.                                                                                                                                                                                                                                                                                                                                                   |
 | [`nb.handoff_from`](/data-scientist/development/reference/handoff#handoff_from)                          | The handoff record for `ds` as design 4 shapes it, built now and returned, nothing written: the descriptor's id, version, digest (`digest_kind` says whether it is the table digest or the file's) and source; the data digest (`data_digest_kind`); the feature view; the label and its positive class (`label` overrides it); the split (`time` over the date role by default; `split="random"` for a hash split, the only way to get one - without a date role and without that, a ValueError names the fix; `split.explicit` records the choice) and `train_share`; the training SQL; input and output schemas. |
 | [`nb.handoff_is_stale`](/data-scientist/development/reference/handoff#handoff_is_stale)                  | None when `handoff` still describes `ds` and its data; else the line 01_train prints before it refuses: the descriptor's version or digest changed (recomputed from `ds`: the same kind the handoff recorded), or - with a connection - the data digest no longer matches.                                                                                                                                                                                                                                                                                                                                          |
 | [`nb.HandoffBundle`](/data-scientist/development/reference/handoff-bundle#HandoffBundle)                 | Where the bundle is and what is in it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| [`nb.import_databricks`](/data-scientist/development/reference/semantic#import_databricks)               | A Databricks metric view (its YAML) as a model of your own: shown first, created only with `apply`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| [`nb.import_osi`](/data-scientist/development/reference/semantic#import_osi)                             | An import plan from another semantic layer (OSI's normalized form), applied and validated.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | [`nb.insight_rules`](/data-scientist/development/reference/insights#insight_rules)                       | The rules the insights are worked out with, to copy, change and pass (nb.insights(answer, rules=\{...})):                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | [`nb.insights`](/data-scientist/development/reference/insights#insights)                                 | Up to SENTENCES sentences about a result (a pandas DataFrame, or rows as a list of dicts); `rules` changes the rules (nb.insight_rules() lists them).                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | [`nb.JoinedView`](/data-scientist/development/reference/schema-map#JoinedView)                           | The proposal for one wide view.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -7863,6 +7897,7 @@ nb.docs(nb.describe)     # open one command's page from a notebook
 | [`nb.link_rules`](/data-scientist/development/reference/describe#link_rules)                             | The rules links between tables are found with, as a dict to copy, change and pass: nb.find_links(connection, tables=\[...], rules=\{"MIN_SHARE": 0.8}).                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | [`nb.linked_groups`](/data-scientist/development/reference/across#linked_groups)                         | The groups this table can be compared by that live in another table: for every saved link from the dataset's table, each category or flag column of the table it points at (never a personal-data one).                                                                                                                                                                                                                                                                                                                                                                                                             |
 | [`nb.list_schemas`](/data-scientist/development/reference/quickstart#list_schemas)                       | Every schema with its number of tables, virtual ones (connected sources) marked.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [`nb.list_totals`](/data-scientist/development/reference/semantic#list_totals)                           | Your data map's stored totals, with their state and freshness, as Semantic Views keeps them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | [`nb.list_versions`](/data-scientist/development/reference/descriptor-store#list_versions)               | The version numbers stored for `id` (every v\<n>.yaml), ascending; empty when none is stored.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | [`nb.list_workflows`](/data-scientist/development/reference/workflow#list_workflows)                     | One summary per log in the workflows folder, oldest first: id, name (from its start line), started, last (first and last timestamps) and events (the line count).                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | [`nb.load_own_file`](/data-scientist/development/reference/own-file#load_own_file)                       | `rules` changes how the file is loaded (nb.load_rules() lists them); the rest as \_load_own_file.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -7893,14 +7928,19 @@ nb.docs(nb.describe)     # open one command's page from a notebook
 | [`nb.pin`](/data-scientist/development/reference/board#pin)                                              | Put an approved answer on a page of a dashboard: its SQL exactly as approved, shown as `kind` (kpi, bar, line or table; by default what the answer looks like).                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | [`nb.prepare_training`](/data-scientist/development/reference/ml-train#prepare_training)                 | Refuse stale input, create the view, drop constant features and render the UDF and training SELECT.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | [`nb.Proposal`](/data-scientist/development/reference/ask#Proposal)                                      | A question with the SQL proposed for it.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| [`nb.propose_change`](/data-scientist/development/reference/semantic#propose_change)                     | A suggested change to your data map, kept by Semantic Views for review; nothing changes until it is certified.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | [`nb.provider_models`](/data-scientist/development/reference/providers#provider_models)                  | The chat models this key may use, sorted, from the provider's own list (one GET to the provider).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| [`nb.query_history`](/data-scientist/development/reference/semantic#query_history)                       | What was asked of your data map, newest first: requests and Semantic SQL statements, as Semantic Views logged them.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| [`nb.query_logging`](/data-scientist/development/reference/semantic#query_logging)                       | Semantic Views' log of Semantic SQL statements: on, off, or None to read the setting.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | [`nb.read_connection_string`](/data-scientist/development/reference/sources#read_connection_string)      | Read a source's connection string exactly as `exakit connect --url` does: it is handed to the kit's engine (its `paste` command, on standard input, never as an argument).                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | [`nb.read_from`](/data-scientist/development/reference/across#read_from)                                 | The systems a query reads, in the order it names them: every SCHEMA.TABLE after FROM or JOIN, looked up in the kit's record of connected sources.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | [`nb.read_handoff`](/data-scientist/development/reference/handoff#read_handoff)                          | The handoff as a dict: from a path to the file, from `<id>-v<n>` (that version's file), or from a descriptor id (the file with the highest version in the handoffs folder).                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | [`nb.refresh_semantic`](/data-scientist/development/reference/semantic#refresh_semantic)                 | Bring a model the kit published up to date with the column maps and links approved since (`exakit describe --model NAME --refresh`): changed in place, or built again from the kit's store when the model is gone from the database - with its verified questions and fusion put back.                                                                                                                                                                                                                                                                                                                              |
+| [`nb.refresh_totals`](/data-scientist/development/reference/semantic#refresh_totals)                     | Fill stored totals again from the live tables.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | [`nb.remember_chosen`](/data-scientist/development/reference/chosen#remember_chosen)                     | Note the tables chosen here as the ones the next notebook opens: each a dataset, a loaded table or a "SCHEMA.TABLE" name (a dict of them, as `chosen_tables` holds, gives its keys).                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | [`nb.restore_column_maps`](/data-scientist/development/reference/semantic#restore_column_maps)           | Put the kit's store back from the model (a computer replaced, the store deleted): each table whose store has no column map, or an older one, gets the model's.                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | [`nb.restore_data_map`](/data-scientist/development/reference/semantic#restore_data_map)                 | Save an earlier version of your data map again (it becomes the newest version).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| [`nb.review_change`](/data-scientist/development/reference/semantic#review_change)                       | Certify or reject a suggested change, with a note.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | [`nb.review_roles`](/data-scientist/development/reference/role-picker#review_roles)                      | Profile the loaded sample, file or connected table, show evidence and role choices, then await approval.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | [`nb.role_rules`](/data-scientist/development/reference/describe#role_rules)                             | The rules a column map is drafted with - thresholds and the words in a column's name that suggest a role - as a dict to copy, change and pass: nb.review_roles(connection, data, rules=\{"CATEGORY_DISTINCT": 100}).                                                                                                                                                                                                                                                                                                                                                                                                |
 | [`nb.RoleReview`](/data-scientist/development/reference/role-picker#RoleReview)                          | One proposal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
@@ -7924,9 +7964,12 @@ nb.docs(nb.describe)     # open one command's page from a notebook
 | [`nb.sql`](/data-scientist/development/reference/core#sql)                                               | Run a query and return its rows as a pandas DataFrame; the statement is remembered for show_sql().                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | [`nb.starter_board`](/data-scientist/development/reference/board#starter_board)                          | A dashboard to start from, made from the approved column maps with no question asked: a page per table (how many rows, each measure's total, rows and totals per group, rows over time); a table that links to another one (the links saved in your data map) also shows its rows per group of that table.                                                                                                                                                                                                                                                                                                          |
 | [`nb.starter_rules`](/data-scientist/development/reference/board#starter_rules)                          | The rules a starter dashboard is made with, to copy, change and pass (nb.starter_board(..., rules=\{...})):                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| [`nb.store_totals`](/data-scientist/development/reference/semantic#store_totals)                         | Pre-built totals for speed: the metrics by the dimensions, stored once in EXAKIT_TOTALS and registered with your data map; Semantic Views answers from them when a question fits, and reads the live tables once they are older than `max_age`.                                                                                                                                                                                                                                                                                                                                                                     |
+| [`nb.suggestions`](/data-scientist/development/reference/semantic#suggestions)                           | The suggested changes waiting for review: from feedback on answers, AI tools and colleagues.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | [`nb.systems`](/data-scientist/development/reference/across#systems)                                     | \{SCHEMA.TABLE: the system it lives in}: a connected source's own name (Snowflake, MongoDB, PostgreSQL, Amazon S3 ...) for a table read live, else "this database".                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | [`nb.test_source`](/data-scientist/development/reference/sources#test_source)                            | Test a source before connecting it, changing nothing: first the kit's own check of every input (\`exakit connect ...                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | [`nb.themes`](/data-scientist/development/reference/themes#themes)                                       | Sort each side's texts into themes with `endpoint` = (client, model) from nb.model_client(); return the table (a pandas DataFrame when pandas is there, else a list of rows) and print the note.                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| [`nb.totals_status`](/data-scientist/development/reference/semantic#totals_status)                       | Turn stored totals off (INACTIVE), on (ACTIVE), or mark them STALE.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | [`nb.trace`](/data-scientist/development/reference/core#trace)                                           | Group the model calls made inside the block into one trace in the user's own Langfuse project, tagged with the database session, the sample SQL, the workflow id and, given a dataset, its id, descriptor digest and descriptor version (trace_tags).                                                                                                                                                                                                                                                                                                                                                               |
 | [`nb.tracing`](/data-scientist/development/reference/core#tracing)                                       | Whether LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL (or LANGFUSE_HOST) are all set, so trace() records to the user's Langfuse.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | [`nb.TrainingPlan`](/data-scientist/development/reference/ml-train#TrainingPlan)                         | What in-database training will run, prepared from an approved, fresh handoff: the feature view and its columns, the script that creates the training UDF, the training SQL and its parameters.                                                                                                                                                                                                                                                                                                                                                                                                                      |
@@ -9257,6 +9300,14 @@ nb.data_map_versions(conn, model: str='all_data') -> list[dict[str, Any]]
 Every saved version of your data map, from the model itself, newest first: \{version, saved_at, tables, links,
 metrics, definitions}. Each holds what you said and the whole model as Semantic Views exported it.
 
+## nb.derived_composition [#derived_composition]
+
+```python
+nb.derived_composition(conn, allowed: bool, model: str='all_data') -> dict[str, Any]
+```
+
+Whether your semantic views may be joined like tables in ordinary SQL.
+
 ## nb.draft_data_map [#draft_data_map]
 
 ```python
@@ -9306,6 +9357,22 @@ pairs from names, types and notes; `check` is pairs you have in mind ("S.T.COL=S
 the data and comes back with its evidence or under "rejected". Returns \{links, partial, ...}; a link's
 `confidence` is "low" for plain numbers, which match by chance: confirm those before using them.
 
+## nb.freeze_view [#freeze_view]
+
+```python
+nb.freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]
+```
+
+A view for BI tools: Semantic SQL compiled once by Semantic Views and stored as plain SQL (SCHEMA.NAME).
+
+## nb.frozen_views [#frozen_views]
+
+```python
+nb.frozen_views(conn, model: str='all_data', *, sync: bool=False) -> list[dict[str, Any]]
+```
+
+The views frozen from your data map and whether each still matches it; `sync` retires the stale ones.
+
 ## nb.fuse [#fuse]
 
 ```python
@@ -9344,6 +9411,38 @@ column in `other` when it is named differently), every field bound there (a colu
 empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative,
 `wins="other"` makes the other one win. Nothing is written: check it with nb.fuse(connection, model, document).
 
+## nb.governance_mode [#governance_mode]
+
+```python
+nb.governance_mode(conn, mode: str, model: str='all_data') -> dict[str, Any]
+```
+
+OPEN (Semantic Views reports unprotected sources) or GOVERNED (it refuses them); then what validation says.
+
+## nb.import_databricks [#import_databricks]
+
+```python
+nb.import_databricks(conn, model: str, yaml_text: str, *, apply: bool=False) -> dict[str, Any]
+```
+
+A Databricks metric view (its YAML) as a model of your own: shown first, created only with `apply`.
+
+## nb.import_osi [#import_osi]
+
+```python
+nb.import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]
+```
+
+An import plan from another semantic layer (OSI's normalized form), applied and validated.
+
+## nb.list_totals [#list_totals]
+
+```python
+nb.list_totals(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Your data map's stored totals, with their state and freshness, as Semantic Views keeps them.
+
 ## nb.model_fields [#model_fields]
 
 ```python
@@ -9371,6 +9470,38 @@ is shown each table's name and its columns' names, types and roles - never a row
 written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
 is set up.
 
+## nb.propose_change [#propose_change]
+
+```python
+nb.propose_change(
+    conn,
+    kind: str,
+    object_type: str,
+    object_name: str | None,
+    change: dict[str, Any],
+    rationale: str,
+    model: str='all_data',
+) -> dict[str, Any]
+```
+
+A suggested change to your data map, kept by Semantic Views for review; nothing changes until it is certified.
+
+## nb.query_history [#query_history]
+
+```python
+nb.query_history(conn, limit: int=50) -> dict[str, list[dict[str, Any]]]
+```
+
+What was asked of your data map, newest first: requests and Semantic SQL statements, as Semantic Views logged them.
+
+## nb.query_logging [#query_logging]
+
+```python
+nb.query_logging(conn, on: bool | None=None, scope: str='DEPLOYMENT') -> dict[str, Any]
+```
+
+Semantic Views' log of Semantic SQL statements: on, off, or None to read the setting.
+
 ## nb.refresh_semantic [#refresh_semantic]
 
 ```python
@@ -9380,6 +9511,14 @@ nb.refresh_semantic(conn, name: str) -> dict[str, Any]
 Bring a model the kit published up to date with the column maps and links approved since (`exakit describe --model NAME --refresh`): changed in place, or built again from the kit's store when the model is gone from the
 database - with its verified questions and fusion put back. Approving a column map refreshes every model it is
 in by itself.
+
+## nb.refresh_totals [#refresh_totals]
+
+```python
+nb.refresh_totals(conn, name: str, model: str='all_data') -> dict[str, Any]
+```
+
+Fill stored totals again from the live tables.
 
 ## nb.restore_column_maps [#restore_column_maps]
 
@@ -9398,6 +9537,14 @@ nb.restore_data_map(conn, version: int, model: str='all_data') -> dict[str, Any]
 ```
 
 Save an earlier version of your data map again (it becomes the newest version).
+
+## nb.review_change [#review_change]
+
+```python
+nb.review_change(conn, suggestion_id: int, decision: str, note: str) -> dict[str, Any]
+```
+
+Certify or reject a suggested change, with a note.
 
 ## nb.semantic_model [#semantic_model]
 
@@ -9484,6 +9631,41 @@ A semantic model: what it holds (`spec`), what the AI proposed, and - once publi
 | `spec`                                |                                                                                                     |
 | `fields`                              | One row per dimension and metric: view, kind, name, display name, what it is.                       |
 | `publish(conn=None) -> SemanticModel` | Build the previewed model in the database (the AI's proposal is asked again only if none was kept). |
+
+## nb.store_totals [#store_totals]
+
+```python
+nb.store_totals(
+    conn,
+    object_name: str,
+    metrics: list[str],
+    dimensions: list[str],
+    *,
+    name: str | None=None,
+    max_age: str='1 DAYS',
+    model: str='all_data',
+) -> dict[str, Any]
+```
+
+Pre-built totals for speed: the metrics by the dimensions, stored once in EXAKIT_TOTALS and registered with your
+data map; Semantic Views answers from them when a question fits, and reads the live tables once they are older
+than `max_age`. Refresh with nb.refresh_totals.
+
+## nb.suggestions [#suggestions]
+
+```python
+nb.suggestions(conn, model: str='all_data', pending_only: bool=True) -> list[dict[str, Any]]
+```
+
+The suggested changes waiting for review: from feedback on answers, AI tools and colleagues.
+
+## nb.totals_status [#totals_status]
+
+```python
+nb.totals_status(conn, name: str, status: str, model: str='all_data') -> dict[str, Any]
+```
+
+Turn stored totals off (INACTIVE), on (ACTIVE), or mark them STALE.
 
 ## nb.validate_data_map [#validate_data_map]
 

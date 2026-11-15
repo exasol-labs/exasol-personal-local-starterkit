@@ -113,6 +113,18 @@ ACTIONS: dict[str, Action] = {
                                 "instructions={instructions}, hidden={hidden}, description={description}, replace_links=True, ai=False, "
                                 "preview={preview})", "semantic"),
     "semantic.validate": Action("01_explore", "data_map_check = nb.validate_data_map(connection)", "data_map_check", False),
+    # the rest of Semantic Views: stored totals, views for BI tools, governance, the query log, suggested changes
+    "semantic.totals_store": Action("01_explore", "stored_totals = nb.store_totals(connection, {view}, {metrics}, {dimensions}, max_age={max_age})",
+                                    "stored_totals"),
+    "semantic.totals_list": Action("01_explore", "totals = nb.list_totals(connection)", "totals", False),
+    "semantic.totals_refresh": Action("01_explore", "refreshed_totals = nb.refresh_totals(connection, {name})", "refreshed_totals"),
+    "semantic.freeze": Action("01_explore", "frozen = nb.freeze_view(connection, {view}, {sql})", "frozen"),
+    "semantic.frozen": Action("01_explore", "frozen_views = nb.frozen_views(connection, sync={sync})", "frozen_views"),
+    "semantic.governance": Action("01_explore", "governance = nb.governance_mode(connection, {mode})", "governance"),
+    "semantic.logging": Action("01_explore", "query_log_setting = nb.query_logging(connection, {on})", "query_log_setting"),
+    "semantic.history": Action("01_explore", "history = nb.query_history(connection)", "history", False),
+    "semantic.suggestions": Action("01_explore", "data_map_suggestions = nb.suggestions(connection)", "data_map_suggestions", False),
+    "semantic.review": Action("01_explore", "reviewed = nb.review_change(connection, {suggestion}, {decision}, {note})", "reviewed"),
     # step 2 (01_explore) opens the tables the quickstart chose, each by name, and moves between them
     "understand.open": Action("01_explore", "chosen_tables = nb.open_chosen(connection)", "chosen_tables", False),
     "understand.switch": Action("01_explore", "chosen_data = chosen_tables[{table}]", "chosen_data", False),

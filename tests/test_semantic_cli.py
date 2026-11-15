@@ -105,6 +105,24 @@ class SemanticTest(unittest.TestCase):
         self.assertIn("1 dimensions, 1 metrics", out)
         self.assertEqual(2, run("semantic", "adopt", "logistics")[0])
 
+    def test_the_rest_of_semantic_views_reaches_the_service(self):
+        with mock.patch.object(cli.svc, "store_totals", return_value={"table": "EXAKIT_TOTALS.T", "name": "t"}) as stored:
+            code, out, _ = run("semantic", "totals", "all_data", "--store", "ORDER_LINES", "--metric", "total_amount",
+                               "--metric", "order_lines_count", "--dimension", "ship_state", "--max-age", "6 HOURS")
+        self.assertEqual((0, ["total_amount", "order_lines_count"], ["ship_state"], "6 HOURS"),
+                         (code, stored.call_args.args[3], stored.call_args.args[4], stored.call_args.kwargs["max_age"]))
+        with mock.patch.object(cli.svc, "totals_status", return_value={}) as status:
+            run("semantic", "totals", "all_data", "--off", "t")
+        self.assertEqual("INACTIVE", status.call_args.args[3])
+        with mock.patch.object(cli.svc, "review_change", return_value={"status": "REJECTED"}) as review:
+            code, out, _ = run("semantic", "review", "7", "rejected", "--why", "double counts")
+        self.assertEqual((0, (7, "rejected", "double counts")), (code, review.call_args.args[1:]))
+        self.assertEqual(2, run("semantic", "review", "x", "rejected")[0])
+        with mock.patch.object(cli.svc, "query_logging", return_value={"effective": "OFF", "deployment": "OFF", "session": None}) as logging_:
+            run("semantic", "logging", "off", "--session")
+        self.assertEqual((False, "SESSION"), logging_.call_args.args[1:])
+        self.assertEqual(2, run("semantic", "composition", "all_data", "maybe")[0])
+
     def test_unknown_actions_and_options_are_refused_with_exit_2(self):
         self.assertEqual(2, run("semantic", "nope")[0])
         self.assertEqual(2, run("semantic", "fields", "all_data", "--nosuch")[0])

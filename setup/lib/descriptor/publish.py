@@ -298,6 +298,14 @@ def _versioned(execute: Callable[[str], Any], rows: Run, model: str, inputs: dic
                                    json.dumps(ext["data"], ensure_ascii=False, default=str), "EXAKIT", ext["name"]))
             except Exception:                   # noqa: BLE001 - a version of a table no longer in the model
                 said.append(f"{ext['name']} of {scope or model} could not be kept: its part is no longer in the model")
+                continue
+            if ext["name"].startswith("totals_") and isinstance(ext["data"], dict):
+                try:                            # stored totals: registered with the rebuilt model again
+                    for sql in sm.materialization_statements(model, ext["data"]):
+                        execute(sql)
+                except Exception as err:        # noqa: BLE001
+                    said.append(f"stored totals {ext['data'].get('name')} are not used until stored again: "
+                                f"{' '.join(str(err).split())[:160]}")
     versions = [x["data"] for x in carried if x["name"].startswith("data_map_v") and isinstance(x["data"], dict)]
     latest = max(versions, key=lambda d: d.get("version") or 0, default=None)
     same = lambda a, b: json.dumps(a or {}, sort_keys=True, default=str) == json.dumps(b or {}, sort_keys=True, default=str)
@@ -330,7 +338,7 @@ def publish_model(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any]
     before = kept(spec["model"], home) or {}
     previous = before.get("spec")
     governance = {k: before[k] for k in ("verified", "instructions", "fusion") if before.get(k)}
-    carried = extensions(rows, spec["model"], r"(data_map|column_map)_v\d+") if sm.existing(rows, spec["model"]) else []
+    carried = extensions(rows, spec["model"], r"(data_map|column_map)_v\d+|totals_\w+") if sm.existing(rows, spec["model"]) else []
     result = sm.apply(execute, rows, spec, reader=reader, previous=previous, extra=extra, progress=progress,
                       kept=governance, previous_extra=(before.get("inputs") or {}).get("extra"))
     version, said = _versioned(execute, rows, spec["model"], inputs, carried, result.get("mode") == "rebuilt")

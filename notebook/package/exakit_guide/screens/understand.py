@@ -1460,6 +1460,7 @@ class SemanticViews(Screen):
     fusion_for: tuple = ()
     report: dict | None = None           # what Semantic Views found wrong (nb.validate_data_map), after a save or a check
     versions: list | None = None         # the saved versions, from the model (nb.data_map_versions), when asked for
+    more: dict = {}                      # what the More from Semantic Views buttons read: suggestions, totals, frozen views, log
 
     @staticmethod
     def _empty() -> dict:
@@ -1670,6 +1671,8 @@ class SemanticViews(Screen):
                                                      {"id": "dm_versions", "label": "Versions", "busy": "Reading the versions…",
                                                       "tip": "Every save that changed something is a version, kept in the model itself."}]})
         blocks += self._report_blocks() + self._version_blocks()
+        if self.saved:
+            blocks.append({"t": "details", "title": "More from Semantic Views", "blocks": self._more_blocks()})
         if self.preview_text:
             blocks.append({"t": "details", "title": "What saving runs", "blocks": [{"t": "pre", "v": self.preview_text}]})
         fusion = self._fusion_blocks()
@@ -1708,6 +1711,107 @@ class SemanticViews(Screen):
                 {"t": "fields", "items": [{"id": "dm_version", "type": "select", "label": "Save this version again",
                                            "value": options[min(1, len(options) - 1)]["value"], "options": options}]},
                 {"t": "actions", "items": [{"id": "dm_restore", "label": "Save it again", "busy": "Saving…"}]}]
+
+    def _more_blocks(self) -> list[dict]:
+        """Stored totals, views for BI tools, governance, the query log and suggested changes: each a button that reads
+        or does one thing, nothing on its own."""
+        more, blocks = self.more or {}, []
+        table = lambda rows: {"t": "table", "columns": sorted({k for r in rows for k in r})[:7],
+                              "rows": [[str(r.get(k, ""))[:80] for k in sorted({k for r in rows for k in r})[:7]] for r in rows[:30]]}
+        blocks += [{"t": "subhead", "v": "Suggested changes", "tip": "From feedback on answers (your own SQL instead of the "
+                    "compiled one), AI tools and colleagues. Certify or reject each; Semantic Views keeps the decision."},
+                   {"t": "actions", "items": [{"id": "dm_suggestions", "label": "Show the suggestions", "busy": "Reading…"}]}]
+        if "suggestions" in more:
+            rows = more["suggestions"]
+            blocks.append(table(rows) if rows else {"t": "p", "muted": True, "v": "No suggestion is waiting."})
+            if rows:
+                blocks += [{"t": "fields", "items": [{"id": "dm_review", "type": "group", "cols": 3, "fields": [
+                               {"id": "dm_review_id", "type": "select", "label": "Suggestion", "value": str(rows[0].get("SUGGESTION_ID")),
+                                "options": [{"value": str(r.get("SUGGESTION_ID")), "label": f"{r.get('SUGGESTION_ID')} · {r.get('OBJECT_NAME') or r.get('SUGGESTION_KIND')}"} for r in rows]},
+                               {"id": "dm_review_decision", "type": "select", "label": "Decision", "value": "CERTIFIED",
+                                "options": [{"value": "CERTIFIED", "label": "certify"}, {"value": "REJECTED", "label": "reject"}]},
+                               {"id": "dm_review_note", "type": "text", "label": "Why", "placeholder": "Matches how finance counts it"}]}]},
+                           {"t": "actions", "items": [{"id": "dm_review_send", "label": "Record the decision", "busy": "Recording…"}]}]
+        starts = [t.rsplit(".", 1)[1] for t in (self.dm.get("starts") or list(self.facts["tables"]))]
+        blocks += [{"t": "subhead", "v": "Stored totals for speed", "tip": "The metrics by the dimensions, stored once in "
+                    "EXAKIT_TOTALS. Semantic Views answers from them when a question fits and they are fresh, and reads the live "
+                    "tables otherwise."},
+                   {"t": "fields", "items": [{"id": "dm_totals", "type": "group", "cols": 2, "fields": [
+                       {"id": "dm_t_view", "type": "select", "label": "Semantic view", "value": starts[0] if starts else "",
+                        "options": [{"value": v, "label": v} for v in starts]},
+                       {"id": "dm_t_max_age", "type": "select", "label": "Use them for", "value": "1 DAYS",
+                        "options": [{"value": x, "label": x.lower()} for x in ("1 HOURS", "6 HOURS", "1 DAYS", "7 DAYS")]},
+                       {"id": "dm_t_metrics", "type": "text", "label": "Metrics (comma-separated)", "placeholder": "total_amount, order_lines_count"},
+                       {"id": "dm_t_dimensions", "type": "text", "label": "By (comma-separated)", "placeholder": "ship_state, order_date_month"}]}]},
+                   {"t": "actions", "items": [{"id": "dm_totals_store", "label": "Store them", "busy": "Storing…"},
+                                              {"id": "dm_totals_list", "label": "Show stored totals", "busy": "Reading…"}]}]
+        if "totals" in more:
+            blocks.append(table(more["totals"]) if more["totals"] else {"t": "p", "muted": True, "v": "No stored totals yet."})
+        blocks += [{"t": "subhead", "v": "Views for BI tools", "tip": "Semantic SQL compiled once and stored as a plain view: "
+                    "Tableau or Power BI read it with no preprocessor. When a definition it uses changes, Semantic Views retires it."},
+                   {"t": "fields", "items": [{"id": "dm_freeze", "type": "group", "cols": 2, "fields": [
+                       {"id": "dm_f_view", "type": "text", "label": "View (SCHEMA.NAME)", "placeholder": "BI.REVENUE_BY_STATE"},
+                       {"id": "dm_f_sql", "type": "text", "label": "Semantic SQL",
+                        "placeholder": f"SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.{starts[0] if starts else 'ORDERS'} GROUP BY ship_state"}]}]},
+                   {"t": "actions", "items": [{"id": "dm_freeze_make", "label": "Make the view", "busy": "Compiling…"},
+                                              {"id": "dm_frozen_check", "label": "Check the views", "busy": "Checking…"}]}]
+        if "frozen" in more:
+            blocks.append(table(more["frozen"]) if more["frozen"] else {"t": "p", "muted": True, "v": "No view is frozen from your data map."})
+        blocks += [{"t": "subhead", "v": "Governance and the query log", "tip": "OPEN: Semantic Views reports sources read "
+                    "without their own row and column policy. GOVERNED: it refuses them. The query log keeps every Semantic SQL statement."},
+                   {"t": "fields", "items": [{"id": "dm_gov_mode", "type": "select", "label": "Governance", "value": "OPEN",
+                                              "options": [{"value": "OPEN", "label": "open: report"}, {"value": "GOVERNED", "label": "governed: refuse"}]}]},
+                   {"t": "actions", "items": [{"id": "dm_governance", "label": "Set it", "busy": "Setting and checking…"},
+                                              {"id": "dm_logging_on", "label": "Log queries"}, {"id": "dm_logging_off", "label": "Stop logging"},
+                                              {"id": "dm_history", "label": "Show what was asked", "busy": "Reading…"}]}]
+        if "history" in more:
+            rows = (more["history"].get("requests") or []) + (more["history"].get("statements") or [])
+            blocks.append(table(rows) if rows else {"t": "p", "muted": True, "v": "Nothing logged yet."})
+        return blocks
+
+    def on_dm_suggestions(self, _v: dict) -> None:
+        self.more = {**(self.more or {}), "suggestions": list(actions.run("semantic.suggestions") or [])}
+
+    def on_dm_review_send(self, v: dict) -> None:
+        if not str(v.get("dm_review_note") or "").strip():
+            raise ValueError("Say why, in a few words: Semantic Views keeps it with the decision.")
+        actions.run("semantic.review", suggestion=int(v.get("dm_review_id")), decision=str(v.get("dm_review_decision") or "CERTIFIED"),
+                    note=str(v.get("dm_review_note")))
+        self.on_dm_suggestions(v)
+
+    def on_dm_totals_store(self, v: dict) -> None:
+        split = lambda key: [x.strip() for x in str(v.get(key) or "").split(",") if x.strip()]
+        if not split("dm_t_metrics"):
+            raise ValueError("Name at least one metric, as your data map calls it (total_amount).")
+        found = actions.run("semantic.totals_store", view=str(v.get("dm_t_view") or ""), metrics=split("dm_t_metrics"),
+                            dimensions=split("dm_t_dimensions"), max_age=str(v.get("dm_t_max_age") or "1 DAYS"))
+        self.flash = {"kind": "ok", "v": f"Stored {found['table']}: questions that fit are answered from it while it is fresh."}
+        self.on_dm_totals_list(v)
+
+    def on_dm_totals_list(self, _v: dict) -> None:
+        self.more = {**(self.more or {}), "totals": list(actions.run("semantic.totals_list") or [])}
+
+    def on_dm_freeze_make(self, v: dict) -> None:
+        found = actions.run("semantic.freeze", view=str(v.get("dm_f_view") or ""), sql=str(v.get("dm_f_sql") or ""))
+        self.flash = {"kind": "ok", "v": f"{found['view']} is ready for BI tools: plain SQL, no preprocessor needed."}
+        self.on_dm_frozen_check(v)
+
+    def on_dm_frozen_check(self, _v: dict) -> None:
+        self.more = {**(self.more or {}), "frozen": list(actions.run("semantic.frozen", sync=False) or [])}
+
+    def on_dm_governance(self, v: dict) -> None:
+        self.report = dict(actions.run("semantic.governance", mode=str(v.get("dm_gov_mode") or "OPEN")))
+
+    def on_dm_logging_on(self, _v: dict) -> None:
+        found = actions.run("semantic.logging", on=True)
+        self.flash = {"kind": "ok", "v": f"Query logging: {found.get('effective')}."}
+
+    def on_dm_logging_off(self, _v: dict) -> None:
+        found = actions.run("semantic.logging", on=False)
+        self.flash = {"kind": "ok", "v": f"Query logging: {found.get('effective')}."}
+
+    def on_dm_history(self, _v: dict) -> None:
+        self.more = {**(self.more or {}), "history": dict(actions.run("semantic.history") or {})}
 
     def on_dm_versions(self, _v: dict) -> None:
         found = actions.run("semantic.versions")
