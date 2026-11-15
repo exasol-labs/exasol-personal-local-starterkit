@@ -1602,13 +1602,14 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual([("semantic.inputs", {"tables": ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "MY_DATA.DRAFTS"]})], self.sent)
         blocks = self._build(views)
         heads = [b["v"] for b in blocks if b["t"] == "subhead"]
-        self.assertEqual(["Your data map", "1 · Your tables", "2 · How they connect", "3 · Where questions start", "4 · Metrics",
-                          "5 · Rules for AI tools"], heads)
+        self.assertEqual(["1 · Tables", "2 · Relationships", "3 · Entry points", "4 · Metrics", "5 · Business rules"], heads)
+        self.assertEqual(("head", "Semantic model"), (blocks[0]["t"], blocks[0]["title"]))
+        self.assertEqual("Advanced", next(b for b in blocks if b["t"] == "details")["title"], "advanced settings start closed")
         self.assertIn("MY_DATA.DRAFTS", next(b["v"] for b in blocks if b["t"] == "msg"), "a table to approve first is named")
         grains = {f["id"]: f["value"] for b in blocks if b["t"] == "fields" for g in b["items"] if g.get("type") == "group"
                   for f in g["fields"] if f["id"].startswith("dmgrain")}
         self.assertEqual({"dmgrain1:AMAZON.ORDER_LINES": "one order line", "dmgrain1:MY_DATA.TARGETS": ""}, grains)
-        self.assertIn("No links yet.", json.dumps(blocks))
+        self.assertIn("No relationships yet.", json.dumps(blocks))
         keys = next(f for b in blocks if b["t"] == "fields" for g in b["items"] if g["id"] == "dm_new_link" for f in g["fields"]
                     if f["id"] == "dm_to_col")["options_from"]["map"]["MY_DATA.TARGETS"]
         self.assertEqual("STATE (key)", keys[0]["label"], "a link ends on the other table's key, listed first")
@@ -1663,7 +1664,7 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual("semantic.validate", self.sent[-1][0], "Semantic Views checks it right after the save")
         built = json.dumps(self._build(views))
         self.assertIn("SEMANTIC_MODEL_076", built)
-        self.assertIn("Check my data map", built)
+        self.assertIn('"label": "Validate"', built)
         self.assertEqual(["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], views.warnings, "what Semantic Views said, word for word")
         self.assertTrue(views.saved)
 

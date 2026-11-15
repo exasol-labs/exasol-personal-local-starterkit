@@ -105,15 +105,15 @@ Measured values are for this database and these tables. Your numbers differ if y
 
 ## One model across sources [#one-model-across-sources]
 
-In the guided view, open **Understand** and scroll to **Your data map**. It asks for exactly what Exasol Semantic Views needs to answer questions across your tables, and nothing is worked out for you. It opens from your approved column maps on this computer, so there is nothing to wait for.
+In the explore notebook's guided view, the **Semantic model** card follows **Column roles**. It asks for exactly what Exasol Semantic Views needs to answer questions across your tables, and nothing is worked out for you. It opens from your approved column maps on this computer, so there is nothing to wait for.
 
-| Section                   | What you say                                                                                                  | Why Semantic Views needs it                                 |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
-| 1 · Your tables           | What one row of each table is (its grain), and what the table is. The key comes from the column map.          | So an amount is never counted once per row of another table |
-| 2 · How they connect      | This column holds that table's key: pick both from lists, and the type, many-to-one or one-to-one             | A join that would multiply an amount is refused             |
-| 3 · Where questions start | The tables questions begin from. Empty: the tables with an amount                                             | Each becomes a semantic view that reaches the linked tables |
-| 4 · Metrics               | A name, how (sum, number of rows, average), of which column, and only the rows where a column has some values | "Completed revenue" is defined once, the same for everyone  |
-| 5 · Rules for AI tools    | What anyone asking must know, in a sentence each                                                              | AI tools read them with the fields                          |
+| Section            | What you say                                                                                                  | Why Semantic Views needs it                                 |
+| ------------------ | ------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
+| 1 · Tables         | What one row of each table is (its grain), and what the table is. The key comes from the column map.          | So an amount is never counted once per row of another table |
+| 2 · Relationships  | This column holds that table's key: pick both from lists, and the type, many-to-one or one-to-one             | A join that would multiply an amount is refused             |
+| 3 · Entry points   | The tables questions begin from. Empty: the tables with an amount                                             | Each becomes a semantic view that reaches the linked tables |
+| 4 · Metrics        | A name, how (sum, number of rows, average), of which column, and only the rows where a column has some values | "Completed revenue" is defined once, the same for everyone  |
+| 5 · Business rules | What anyone asking must know, in a sentence each                                                              | AI tools read them with the fields                          |
 
 **Fill everything in with AI**, at the top of the page, drafts all five from names, roles, notes and the values the column maps saw. It never reads a row and never scans values. Each suggestion is marked *suggested by AI*: untick what is wrong, change what is close.
 
@@ -198,7 +198,7 @@ exakit semantic suggestions all_data
 exakit semantic review 12 certified --why "Matches how finance counts it"
 exakit semantic totals all_data --store ORDER_LINES --metric total_amount --dimension ship_state --max-age "6 HOURS"
 exakit semantic totals all_data --refresh order_lines_ship_state
-exakit semantic freeze BI.REVENUE_BY_STATE --sql "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state"
+exakit semantic freeze BI.REVENUE_BY_STATE --sql "SELECT ship_state, total_amount FROM SEM_ALL_DATA.ORDER_LINES GROUP BY ship_state"
 exakit semantic frozen all_data --sync
 exakit semantic governance all_data governed
 exakit semantic logging on

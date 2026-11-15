@@ -186,6 +186,9 @@
 .guide-empty { display: flex; gap: 9px; align-items: center; padding: 18px; border: 1px dashed var(--guide-border-strong); border-radius: 12px; color: var(--guide-muted); }
 .guide-divider { border: 0; border-top: 1px solid var(--guide-border); margin: 24px 0 0 !important; }
 .guide-subhead { font-size: 16px; font-weight: 620; }
+/* a section after content: room above and a rule, so each section reads as its own part */
+* + .guide-subhead { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--guide-border); }
+.guide-details-body > .guide-subhead:first-child { border-top: none; padding-top: 0; margin-top: 4px; }
 .guide-note { font-size: 13.5px; color: var(--guide-muted); white-space: pre-line; padding-left: 12px; border-left: 2px solid var(--guide-accent); }
 .guide-pre, .guide-codebox pre { margin: 0; font-family: var(--guide-mono); font-size: 12px; line-height: 1.55; white-space: pre-wrap; color: var(--guide-text); background: var(--guide-surface); border-radius: 8px; padding: 10px 12px; max-height: 300px; overflow: auto; }
 .guide-codebox-title { font-size: 12px; font-weight: 600; color: var(--guide-muted); margin-bottom: 6px; }
@@ -548,7 +551,8 @@
 .guide-field-edit .guide-dd { max-width: none; }
 /* a form: section titles, and short answers two to a row */
 .guide-form-heading { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; padding-top: 12px; border-top: 1px solid var(--guide-border); font-size: 13.5px; font-weight: 600; color: var(--guide-text); }
-.guide-formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px 16px; align-items: start; }
+.guide-formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px 16px; align-items: end; }
+.guide-formgrid .guide-form-heading { grid-column: 1 / -1; margin-top: 6px; }
 .guide-formgrid .guide-input, .guide-formgrid .guide-dd { max-width: none; width: 100%; }
 .guide-formgrid .guide-field-wide { grid-column: 1 / -1; }
 .guide-formgrid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }

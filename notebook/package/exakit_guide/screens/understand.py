@@ -1040,8 +1040,10 @@ class ColumnMap(Screen):
             self._switch_to(left[0])
 
     def _blocks(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "What each column means",
-                "sub": "The kit looked at every column. Answer three questions, then approve. You can change your mind later."}
+        head = {"t": "head", "kicker": KICKER, "title": "Column roles",
+                "sub": "The role of every column of each table you chose, as the kit read it from the data. Confirm the "
+                       "prediction target, the columns it was unsure of and the column settings, then approve: every later "
+                       "step works from the approved roles. You can change them later; each approval is a new version."}
         rv = SESSION.review
         if rv is None:
             return [head, {"t": "empty", "v": "Choose your data above first."}]
@@ -1557,69 +1559,61 @@ class SemanticViews(Screen):
 
     # -- the form ---------------------------------------------------------------------------------------------------
     def build(self) -> list[dict]:
-        blocks: list[dict] = [{"t": "subhead", "v": "Your data map",
-                               "tip": "What Exasol Semantic Views needs to answer questions across your tables: what one row "
-                                      "of each is, how they connect, where questions start, the metrics, and rules for AI "
-                                      "tools. You fill it in (or press Fill everything in with AI above, then check it). "
-                                      "Save hands it to Semantic Views, which checks it and says what is wrong."}]
+        blocks: list[dict] = [{"t": "head", "kicker": KICKER, "title": "Semantic model",
+                               "sub": "How your approved tables become one model in Exasol Semantic Views: the grain of each "
+                                      "table, the relationships between them, the entry points questions start from, your "
+                                      "metrics and your business rules. Save hands it to Semantic Views, which validates it."}]
         if self.loading:
-            return blocks + [{"t": "empty", "v": "Reading your column maps…"}]
+            return blocks + [{"t": "empty", "v": "Reading your column roles…"}]
         if self.error:
-            return blocks + [{"t": "msg", "kind": "warn", "v": f"Your column maps could not be read: {self.error}"},
+            return blocks + [{"t": "msg", "kind": "warn", "v": f"Your column roles could not be read: {self.error}"},
                              {"t": "actions", "items": [{"id": "sv_reload", "label": "Read them again"}]}]
         tables = list(self.facts["tables"])
         if self.facts["missing"]:
-            blocks.append({"t": "msg", "kind": "info", "v": "Approve the column map of " + ", ".join(self.facts["missing"])
-                                                              + " above, and it joins your data map."})
+            blocks.append({"t": "msg", "kind": "info", "v": "Approve the column roles of " + ", ".join(self.facts["missing"])
+                                                              + " above, and the table joins the model."})
         if not tables:
             return blocks
-        # 1 · the tables
+        # 1 · Tables
         rows = []
         for t in tables:
             key = ", ".join((self.facts["tables"][t].get("key") or [])) or "no key"
             rows.append({"id": self._id("t", t), "type": "group", "cols": 2, "fields": [
-                {"id": self._id("grain", t), "type": "text", "label": f"{t} · key {key} · one row is",
-                 "value": self.dm["grains"].get(t) or self.facts["tables"][t].get("grain") or "",
-                 "placeholder": "one order line"},
-                {"id": self._id("note", t), "type": "text", "label": "What the table is (optional)",
+                {"id": self._id("th", t), "type": "heading", "v": f"{t}  ·  key {key}"},
+                {"id": self._id("grain", t), "type": "text", "label": "Grain (one row is)",
+                 "value": self.dm["grains"].get(t) or self.facts["tables"][t].get("grain") or "", "placeholder": "one order line"},
+                {"id": self._id("note", t), "type": "text", "label": "Description (optional)",
                  "value": self.dm["table_notes"].get(t) or "", "placeholder": "Every order line of the online shop"}]})
-        hide = [{"id": self._id("hide", t), "type": "picks", "label": f"{t}: hide in answers (optional)",
-                 "value": list((self.dm.get("hidden") or {}).get(t) or []),
-                 "options": [{"value": c["name"], "label": c["name"]} for c in self._of_role(t, ("category", "identifier", "key", "flag", "time"))]}
-                for t in tables if self._of_role(t, ("category", "identifier", "key", "flag", "time"))]
-        blocks += [{"t": "subhead", "v": "1 · Your tables", "tip": "What one row of each table is. Semantic Views uses it so an "
-                    "amount is never counted once per row of another table. The key comes from the column map. A column "
-                    "you hide (a customer's name) is never shown in an answer, but questions can still filter on it; a "
-                    "column the column map marks as personal data is not in your data map at all."},
+        blocks += [{"t": "subhead", "v": "1 · Tables", "tip": "The grain says what one row of a table is. Semantic Views uses "
+                    "it so an amount is never counted once per row of another table. The key comes from the column roles."},
                    {"t": "fields", "items": rows}]
-        if hide:
-            blocks.append({"t": "details", "title": "Hide columns in answers", "blocks": [{"t": "fields", "items": hide}]})
-        # 2 · the links
-        blocks.append({"t": "subhead", "v": "2 · How they connect", "tip": "A link says: this column holds the key of that "
-                       "table. Many-to-one: many rows here, one there (order lines to orders). One-to-one: each value once on "
-                       "both sides. Nothing is guessed: add the ones you know, or take the AI's suggestions above."})
+        # 2 · Relationships
+        blocks.append({"t": "subhead", "v": "2 · Relationships", "tip": "A relationship says: this column holds the key of "
+                       "that table. Many-to-one: many rows here, one there (order lines to orders). One-to-one: each value once "
+                       "on both sides. Nothing is guessed: add the ones you know, or take the AI's suggestions above."})
         if self.links:
-            labels = {"you": "yours", "ai": "suggested by AI", "values": "found from the values"}
-            blocks.append({"t": "fields", "items": [{"id": self._id("links"), "type": "picks", "label": "Links (untick to remove)",
+            labels = {"you": "added by you", "ai": "suggested by AI", "values": "found from the values"}
+            blocks.append({"t": "fields", "items": [{"id": self._id("links"), "type": "picks", "label": "Relationships (untick to remove)",
                            "value": [str(i) for i in range(len(self.links))],
                            "options": [{"value": str(i), "label": f"{l['from']} → {l['to']}",
-                                        "hint": " · ".join(x for x in (labels.get(l.get("by") or "you", "yours"),
+                                        "hint": " · ".join(x for x in (labels.get(l.get("by") or "you", "added by you"),
                                                                        self.checked.get(f"{l['from']}={l['to']}")) if x)}
                                        for i, l in enumerate(self.links)]}]})
             blocks.append({"t": "fields", "items": [{"id": self._id("l", str(i)), "type": "group", "cols": 2, "fields": [
-                {"id": self._id("ltype", str(i)), "type": "select", "label": f"{l['from'].rsplit('.', 1)[0]} → {l['to'].rsplit('.', 1)[0]}",
-                 "value": l.get("type") or "MANY_TO_ONE",
-                 "options": [{"value": "MANY_TO_ONE", "label": "many-to-one"}, {"value": "ONE_TO_ONE", "label": "one-to-one"}]},
-                {"id": self._id("lnote", str(i)), "type": "text", "label": "Why they belong together (optional)",
-                 "value": l.get("note") or "", "placeholder": "the order each line belongs to"},
-                {"id": self._id("ljoin", str(i)), "type": "select", "label": "Rows without a match", "value": l.get("join") or "LEFT",
-                 "options": [{"value": "LEFT", "label": "keep them (left join)"}, {"value": "INNER", "label": "leave them out (inner join)"}]},
-                {"id": self._id("lfan", str(i)), "type": "select", "label": "When one row meets several", "value": l.get("fanout") or "",
-                 "options": [{"value": "", "label": "refuse to count twice (default)"}, {"value": "ALLOCATE", "label": "share the amount out"},
-                             {"value": "DEDUPLICATE", "label": "count it once"}, {"value": "REFERENCE_ONLY", "label": "only to look values up"}]}]}
+                {"id": self._id("lh", str(i)), "type": "heading", "v": f"{l['from']} → {l['to']}"},
+                {"id": self._id("ltype", str(i)), "type": "select", "label": "Cardinality", "value": l.get("type") or "MANY_TO_ONE",
+                 "options": [{"value": "MANY_TO_ONE", "label": "Many-to-one"}, {"value": "ONE_TO_ONE", "label": "One-to-one"}]},
+                {"id": self._id("ljoin", str(i)), "type": "select", "label": "Unmatched rows", "value": l.get("join") or "LEFT",
+                 "options": [{"value": "LEFT", "label": "Keep (left join)"}, {"value": "INNER", "label": "Exclude (inner join)"}]},
+                {"id": self._id("lfan", str(i)), "type": "select", "label": "Fan-out", "value": l.get("fanout") or "",
+                 "options": [{"value": "", "label": "Refuse double counting (default)"}, {"value": "ALLOCATE", "label": "Allocate"},
+                             {"value": "DEDUPLICATE", "label": "Deduplicate"}, {"value": "REFERENCE_ONLY", "label": "Reference only"}]},
+                {"id": self._id("lnote", str(i)), "type": "text", "label": "Note (optional)",
+                 "value": l.get("note") or "", "placeholder": "The order each line belongs to"}]}
                 for i, l in enumerate(self.links)]})
         else:
-            blocks.append({"t": "p", "muted": True, "v": "No links yet." + ("" if len(tables) > 1 else " Add another table above to link it.")})
+            blocks.append({"t": "p", "muted": True, "v": "No relationships yet." + ("" if len(tables) > 1 else
+                                                                                    " Choose a second table above to relate it.")})
         if len(tables) > 1:
             options = [{"value": t, "label": t} for t in tables]
             every = {t: [{"value": c["name"], "label": c["name"]} for c in self.facts["tables"][t]["columns"]] for t in tables}
@@ -1627,24 +1621,25 @@ class SemanticViews(Screen):
                         for c in sorted(self.facts["tables"][t]["columns"], key=lambda c: c["name"] not in (self.facts["tables"][t].get("key") or []))]
                     for t in tables}
             blocks += [{"t": "fields", "items": [{"id": "dm_new_link", "type": "group", "cols": 2, "fields": [
+                           {"id": "dm_new_link_h", "type": "heading", "v": "Add a relationship"},
                            {"id": "dm_from_table", "type": "select", "label": "From table", "value": tables[0], "options": options},
-                           {"id": "dm_from_col", "type": "select", "label": "Its column", "options_from": {"field": "dm_from_table", "map": every}},
+                           {"id": "dm_from_col", "type": "select", "label": "Column", "options_from": {"field": "dm_from_table", "map": every}},
                            {"id": "dm_to_table", "type": "select", "label": "To table", "value": tables[1], "options": options},
-                           {"id": "dm_to_col", "type": "select", "label": "Its key", "options_from": {"field": "dm_to_table", "map": keys}},
-                           {"id": "dm_link_type", "type": "select", "label": "Type", "value": "MANY_TO_ONE",
-                            "options": [{"value": "MANY_TO_ONE", "label": "many-to-one"}, {"value": "ONE_TO_ONE", "label": "one-to-one"}]}]}]},
-                       {"t": "actions", "items": [{"id": "dm_add_link", "label": "Add the link"}]
+                           {"id": "dm_to_col", "type": "select", "label": "Key", "options_from": {"field": "dm_to_table", "map": keys}},
+                           {"id": "dm_link_type", "type": "select", "label": "Cardinality", "value": "MANY_TO_ONE",
+                            "options": [{"value": "MANY_TO_ONE", "label": "Many-to-one"}, {"value": "ONE_TO_ONE", "label": "One-to-one"}]}]}]},
+                       {"t": "actions", "items": [{"id": "dm_add_link", "label": "Add the relationship"}]
                         + ([{"id": "dm_check", "label": "Check with data", "busy": "Counting…",
-                             "tip": "One bounded count per ticked link: how many of its values are found in the key. Optional."}]
+                             "tip": "One bounded count per relationship: how many of its values are found in the key. Optional."}]
                            if self.links else [])}]
-        # 3 · where questions start
-        blocks += [{"t": "subhead", "v": "3 · Where questions start", "tip": "Each ticked table becomes a semantic view: a "
-                    "question starts there and reaches the linked tables. Leave it empty for the tables with an amount."},
+        # 3 · Entry points
+        blocks += [{"t": "subhead", "v": "3 · Entry points", "tip": "Each ticked table becomes a semantic view: a question "
+                    "starts there and reaches the related tables. Leave it empty to use the tables with an amount."},
                    {"t": "fields", "items": [{"id": self._id("starts"), "type": "picks", "label": "Questions start from",
                                               "value": list(self.dm.get("starts") or []), "options": [{"value": t, "label": t} for t in tables]}]}]
-        # 4 · metrics
-        blocks.append({"t": "subhead", "v": "4 · Metrics", "tip": "Every table already has its number of rows, and the total and "
-                       "average of each amount column. Add the ones your business means, with a condition where one fits: "
+        # 4 · Metrics
+        blocks.append({"t": "subhead", "v": "4 · Metrics", "tip": "Every table already has its row count and the total and "
+                       "average of each amount column. Add the ones your business defines, with a condition where one fits: "
                        "completed revenue = sum of AMOUNT where STATUS is COMPLETED."})
         if self.dm.get("metrics"):
             blocks.append({"t": "fields", "items": [{"id": self._id("metrics"), "type": "picks", "label": "Your metrics (untick to remove)",
@@ -1652,60 +1647,78 @@ class SemanticViews(Screen):
                            "options": [{"value": str(i), "label": m["name"], "hint": self._said(m)} for i, m in enumerate(self.dm["metrics"])]}]})
         options = [{"value": t, "label": t} for t in tables]
         amounts = {t: [{"value": c["name"], "label": c["name"]} for c in self._of_role(t, ("measure",))] for t in tables}
-        groups = {t: [{"value": "", "label": "(every row)"}] + [{"value": c["name"], "label": c["name"]}
-                                                               for c in self._of_role(t, ("category", "flag", "time", "identifier", "key"))] for t in tables}
+        groups = {t: [{"value": "", "label": "Every row"}] + [{"value": c["name"], "label": c["name"]}
+                                                             for c in self._of_role(t, ("category", "flag", "time", "identifier", "key"))] for t in tables}
         known = "; ".join(f"{c['name']}: {', '.join(c['values'][:6])}" for t in tables for c in self._of_role(t, ("category", "flag")) if c.get("values"))
         blocks += [{"t": "fields", "items": [{"id": "dm_new_metric", "type": "group", "cols": 2, "fields": [
+                       {"id": "dm_new_metric_h", "type": "heading", "v": "Add a metric"},
                        {"id": "dm_m_table", "type": "select", "label": "Table", "value": tables[0], "options": options},
                        {"id": "dm_m_name", "type": "text", "label": "Name", "placeholder": "completed_revenue"},
-                       {"id": "dm_m_how", "type": "select", "label": "How", "value": "sum", "options": [{"value": k, "label": l} for k, l in self.HOW]},
-                       {"id": "dm_m_column", "type": "select", "label": "Of the column (sum, average)",
+                       {"id": "dm_m_how", "type": "select", "label": "Aggregation", "value": "sum", "options": [{"value": k, "label": l} for k, l in self.HOW]},
+                       {"id": "dm_m_column", "type": "select", "label": "Column",
                         "options_from": {"field": "dm_m_table", "map": amounts}, "empty": "This table has no amount column: use Number of rows."},
-                       {"id": "dm_m_where", "type": "select", "label": "Only rows where", "options_from": {"field": "dm_m_table", "map": groups}},
-                       {"id": "dm_m_values", "type": "text", "label": "is (values, comma-separated)", "placeholder": known[:120] or "COMPLETED"},
-                       {"id": "dm_m_about", "type": "text", "label": "What it means (optional)", "placeholder": "Revenue of completed orders, tax included"}]}]},
+                       {"id": "dm_m_where", "type": "select", "label": "Filter column", "options_from": {"field": "dm_m_table", "map": groups}},
+                       {"id": "dm_m_values", "type": "text", "label": "Filter values (comma-separated)", "placeholder": known[:120] or "COMPLETED"},
+                       {"id": "dm_m_about", "type": "text", "label": "Description (optional)", "wide": True,
+                        "placeholder": "Revenue of completed orders, tax included"}]}]},
                    {"t": "actions", "items": [{"id": "dm_add_metric", "label": "Add the metric"}]}]
-        words = self.dm.get("synonyms") or {}
-        if words:
-            blocks.append({"t": "fields", "items": [{"id": self._id("syn"), "type": "picks", "label": "Your words for fields (untick to remove)",
-                           "value": list(words), "options": [{"value": f, "label": f, "hint": ", ".join(w)} for f, w in words.items()]}]})
-        blocks += [{"t": "fields", "items": [{"id": "dm_synonyms", "type": "group", "cols": 2, "fields": [
-                       {"id": "dm_syn_field", "type": "text", "label": "Field (as your data map names it)", "placeholder": "total_amount"},
-                       {"id": "dm_syn_words", "type": "text", "label": "Also called (comma-separated)", "placeholder": "sales, revenue, turnover"}]}]},
-                   {"t": "actions", "items": [{"id": "dm_add_words", "label": "Add the words",
-                                               "tip": "Search and AI tools find the field by these words too."}]}]
-        # 5 · rules for AI tools, and the description
+        # 5 · Business rules
         rules = list(self.dm.get("instructions") or []) + [""]
-        blocks += [{"t": "subhead", "v": "5 · Rules for AI tools", "tip": "What anyone asking your data must know, in a sentence "
+        blocks += [{"t": "subhead", "v": "5 · Business rules", "tip": "What anyone asking your data must know, one sentence "
                     "each. AI tools read them with the fields."},
                    {"t": "fields", "items": [{"id": self._id("rule", str(i)), "type": "text", "wide": True,
-                                              "label": "A rule" if text else "Add a rule (optional)", "value": text,
+                                              "label": f"Rule {i + 1}" if text else "New rule (optional)", "value": text,
                                               "placeholder": "Revenue excludes tax and refunds"} for i, text in enumerate(rules)]
-                    + [{"id": self._id("about"), "type": "text", "wide": True, "label": "What your data is about (optional)",
+                    + [{"id": self._id("about"), "type": "text", "wide": True, "label": "Model description (optional)",
                         "value": self.dm.get("description") or "", "placeholder": "Orders, their customers and deliveries"}]},
-                   {"t": "actions", "items": [{"id": "sv_preview", "label": "Show what saving runs", "busy": "Building…"},
-                                              {"id": "sv_publish", "label": "Save to your data map", "primary": True,
-                                               "busy": "Saving and checking…"}]}]
+                   {"t": "actions", "items": [{"id": "sv_publish", "label": "Save the semantic model", "primary": True,
+                                               "busy": "Saving and validating…"},
+                                              {"id": "sv_preview", "label": "Show the statements", "busy": "Building…"}]
+                    + ([{"id": "dm_validate", "label": "Validate", "busy": "Semantic Views is validating…",
+                         "tip": "Semantic Views validates the model again and lists every problem in its own words."}] if self.saved else [])}]
         if self.result_text:
             blocks.append({"t": "msg", "kind": "ok", "keep": True, "v": self.result_text})
         if self.warnings:
             blocks.append({"t": "msg", "kind": "warn", "keep": True, "v": "Semantic Views said: " + " · ".join(self.warnings)})
-        if self.saved:
-            blocks.append({"t": "actions", "items": [{"id": "dm_validate", "label": "Check my data map", "busy": "Semantic Views is checking…",
-                                                      "tip": "Semantic Views validates it again and lists every problem in its own words."},
-                                                     {"id": "dm_versions", "label": "Versions", "busy": "Reading the versions…",
-                                                      "tip": "Every save that changed something is a version, kept in the model itself."}]})
-        blocks += self._report_blocks() + self._version_blocks()
-        if self.saved:
-            blocks.append({"t": "details", "title": "More from Semantic Views", "blocks": self._more_blocks()})
+        blocks += self._report_blocks()
         if self.preview_text:
-            blocks.append({"t": "details", "title": "What saving runs", "blocks": [{"t": "pre", "v": self.preview_text}]})
-        fusion = self._fusion_blocks()
-        if fusion:
-            blocks.append({"t": "details", "title": "The same thing in two sources", "blocks": fusion[1:]})
+            blocks.append({"t": "details", "title": "The statements saving runs", "blocks": [{"t": "pre", "v": self.preview_text}]})
+        blocks.append({"t": "details", "title": "Advanced", "blocks": self._advanced_blocks(tables)})
         blocks.append({"t": "code", "code_only": True, "title": "The code behind this card",
                        "v": actions.code("semantic.save_map", **self._save_args(self.dm, preview=False))})
         return blocks
+
+    def _advanced_blocks(self, tables: list[str]) -> list[dict]:
+        """What most models do without: hidden columns, synonyms, the same data in two sources, versions and the rest
+        of Semantic Views - one closed section."""
+        found: list[dict] = []
+        hide = [{"id": self._id("hide", t), "type": "picks", "label": t, "value": list((self.dm.get("hidden") or {}).get(t) or []),
+                 "options": [{"value": c["name"], "label": c["name"]} for c in self._of_role(t, ("category", "identifier", "key", "flag", "time"))]}
+                for t in tables if self._of_role(t, ("category", "identifier", "key", "flag", "time"))]
+        if hide:
+            found += [{"t": "subhead", "v": "Hidden columns", "tip": "Never shown in an answer, still usable in a filter "
+                       "(Semantic Views' MASK policy). A column the column roles mark as personal data is not in the model at all."},
+                      {"t": "fields", "items": hide}]
+        words = self.dm.get("synonyms") or {}
+        found.append({"t": "subhead", "v": "Synonyms", "tip": "Other words people use for a field. Search and AI tools find "
+                      "the field by them too."})
+        if words:
+            found.append({"t": "fields", "items": [{"id": self._id("syn"), "type": "picks", "label": "Synonyms (untick to remove)",
+                          "value": list(words), "options": [{"value": f, "label": f, "hint": ", ".join(w)} for f, w in words.items()]}]})
+        found += [{"t": "fields", "items": [{"id": "dm_synonyms", "type": "group", "cols": 2, "fields": [
+                      {"id": "dm_syn_field", "type": "text", "label": "Field", "placeholder": "total_amount"},
+                      {"id": "dm_syn_words", "type": "text", "label": "Synonyms (comma-separated)", "placeholder": "sales, revenue, turnover"}]}]},
+                  {"t": "actions", "items": [{"id": "dm_add_words", "label": "Add the synonyms"}]}]
+        fusion = self._fusion_blocks()
+        if fusion:
+            found += [{"t": "subhead", "v": "The same data in two sources"}] + fusion[1:]
+        if self.saved:
+            found += [{"t": "subhead", "v": "Versions", "tip": "Every save that changed something is a version, kept in the "
+                       "model itself. Saving an older one again makes it the newest."},
+                      {"t": "actions", "items": [{"id": "dm_versions", "label": "Show the versions", "busy": "Reading…"}]}]
+            found += self._version_blocks()
+            found += [{"t": "subhead", "v": "More from Semantic Views"}] + self._more_blocks()
+        return found
 
     def _report_blocks(self) -> list[dict]:
         """What Semantic Views found, in its own words: each issue, each metric whose type differs, each suggestion."""
@@ -1745,7 +1758,7 @@ class SemanticViews(Screen):
                               "rows": [[str(r.get(k, ""))[:80] for k in sorted({k for r in rows for k in r})[:7]] for r in rows[:30]]}
         blocks += [{"t": "subhead", "v": "Suggested changes", "tip": "From feedback on answers (your own SQL instead of the "
                     "compiled one), AI tools and colleagues. Certify or reject each; Semantic Views keeps the decision."},
-                   {"t": "actions", "items": [{"id": "dm_suggestions", "label": "Show the suggestions", "busy": "Reading…"}]}]
+                   {"t": "actions", "items": [{"id": "dm_suggestions", "label": "Show suggested changes", "busy": "Reading…"}]}]
         if "suggestions" in more:
             rows = more["suggestions"]
             blocks.append(table(rows) if rows else {"t": "p", "muted": True, "v": "No suggestion is waiting."})
@@ -1754,9 +1767,9 @@ class SemanticViews(Screen):
                                {"id": "dm_review_id", "type": "select", "label": "Suggestion", "value": str(rows[0].get("SUGGESTION_ID")),
                                 "options": [{"value": str(r.get("SUGGESTION_ID")), "label": f"{r.get('SUGGESTION_ID')} · {r.get('OBJECT_NAME') or r.get('SUGGESTION_KIND')}"} for r in rows]},
                                {"id": "dm_review_decision", "type": "select", "label": "Decision", "value": "CERTIFIED",
-                                "options": [{"value": "CERTIFIED", "label": "certify"}, {"value": "REJECTED", "label": "reject"}]},
-                               {"id": "dm_review_note", "type": "text", "label": "Why", "placeholder": "Matches how finance counts it"}]}]},
-                           {"t": "actions", "items": [{"id": "dm_review_send", "label": "Record the decision", "busy": "Recording…"}]}]
+                                "options": [{"value": "CERTIFIED", "label": "Certify"}, {"value": "REJECTED", "label": "Reject"}]},
+                               {"id": "dm_review_note", "type": "text", "label": "Review note", "placeholder": "Matches how finance counts it"}]}]},
+                           {"t": "actions", "items": [{"id": "dm_review_send", "label": "Record decision", "busy": "Recording…"}]}]
         starts = [t.rsplit(".", 1)[1] for t in (self.dm.get("starts") or list(self.facts["tables"]))]
         blocks += [{"t": "subhead", "v": "Stored totals for speed", "tip": "The metrics by the dimensions, stored once in "
                     "EXAKIT_TOTALS. Semantic Views answers from them when a question fits and they are fresh, and reads the live "
@@ -1764,31 +1777,31 @@ class SemanticViews(Screen):
                    {"t": "fields", "items": [{"id": "dm_totals", "type": "group", "cols": 2, "fields": [
                        {"id": "dm_t_view", "type": "select", "label": "Semantic view", "value": starts[0] if starts else "",
                         "options": [{"value": v, "label": v} for v in starts]},
-                       {"id": "dm_t_max_age", "type": "select", "label": "Use them for", "value": "1 DAYS",
-                        "options": [{"value": x, "label": x.lower()} for x in ("1 HOURS", "6 HOURS", "1 DAYS", "7 DAYS")]},
+                       {"id": "dm_t_max_age", "type": "select", "label": "Freshness", "value": "1 DAYS",
+                        "options": [{"value": x, "label": y} for x, y in (("1 HOURS", "1 hour"), ("6 HOURS", "6 hours"), ("1 DAYS", "1 day"), ("7 DAYS", "7 days"))]},
                        {"id": "dm_t_metrics", "type": "text", "label": "Metrics (comma-separated)", "placeholder": "total_amount, order_lines_count"},
-                       {"id": "dm_t_dimensions", "type": "text", "label": "By (comma-separated)", "placeholder": "ship_state, order_date_month"}]}]},
-                   {"t": "actions", "items": [{"id": "dm_totals_store", "label": "Store them", "busy": "Storing…"},
-                                              {"id": "dm_totals_list", "label": "Show stored totals", "busy": "Reading…"}]}]
+                       {"id": "dm_t_dimensions", "type": "text", "label": "Dimensions (comma-separated)", "placeholder": "ship_state, order_date_month"}]}]},
+                   {"t": "actions", "items": [{"id": "dm_totals_store", "label": "Store totals", "busy": "Storing…"},
+                                              {"id": "dm_totals_list", "label": "List stored totals", "busy": "Reading…"}]}]
         if "totals" in more:
             blocks.append(table(more["totals"]) if more["totals"] else {"t": "p", "muted": True, "v": "No stored totals yet."})
         blocks += [{"t": "subhead", "v": "Views for BI tools", "tip": "Semantic SQL compiled once and stored as a plain view: "
                     "Tableau or Power BI read it with no preprocessor. When a definition it uses changes, Semantic Views retires it."},
                    {"t": "fields", "items": [{"id": "dm_freeze", "type": "group", "cols": 2, "fields": [
-                       {"id": "dm_f_view", "type": "text", "label": "View (SCHEMA.NAME)", "placeholder": "BI.REVENUE_BY_STATE"},
+                       {"id": "dm_f_view", "type": "text", "label": "View name (SCHEMA.NAME)", "placeholder": "BI.REVENUE_BY_STATE"},
                        {"id": "dm_f_sql", "type": "text", "label": "Semantic SQL",
                         "placeholder": f"SELECT ship_state, total_amount FROM SEM_ALL_DATA.{starts[0] if starts else 'ORDERS'} GROUP BY ship_state"}]}]},
-                   {"t": "actions", "items": [{"id": "dm_freeze_make", "label": "Make the view", "busy": "Compiling…"},
-                                              {"id": "dm_frozen_check", "label": "Check the views", "busy": "Checking…"}]}]
+                   {"t": "actions", "items": [{"id": "dm_freeze_make", "label": "Create the view", "busy": "Compiling…"},
+                                              {"id": "dm_frozen_check", "label": "Check view status", "busy": "Checking…"}]}]
         if "frozen" in more:
             blocks.append(table(more["frozen"]) if more["frozen"] else {"t": "p", "muted": True, "v": "No view is frozen from your data map."})
         blocks += [{"t": "subhead", "v": "Governance and the query log", "tip": "OPEN: Semantic Views reports sources read "
                     "without their own row and column policy. GOVERNED: it refuses them. The query log keeps every Semantic SQL statement."},
                    {"t": "fields", "items": [{"id": "dm_gov_mode", "type": "select", "label": "Governance", "value": "OPEN",
-                                              "options": [{"value": "OPEN", "label": "open: report"}, {"value": "GOVERNED", "label": "governed: refuse"}]}]},
-                   {"t": "actions", "items": [{"id": "dm_governance", "label": "Set it", "busy": "Setting and checking…"},
-                                              {"id": "dm_logging_on", "label": "Log queries"}, {"id": "dm_logging_off", "label": "Stop logging"},
-                                              {"id": "dm_history", "label": "Show what was asked", "busy": "Reading…"}]}]
+                                              "options": [{"value": "OPEN", "label": "Open (report)"}, {"value": "GOVERNED", "label": "Governed (enforce)"}]}]},
+                   {"t": "actions", "items": [{"id": "dm_governance", "label": "Apply", "busy": "Setting and checking…"},
+                                              {"id": "dm_logging_on", "label": "Enable query log"}, {"id": "dm_logging_off", "label": "Disable query log"},
+                                              {"id": "dm_history", "label": "Query history", "busy": "Reading…"}]}]
         if "history" in more:
             rows = (more["history"].get("requests") or []) + (more["history"].get("statements") or [])
             blocks.append(table(rows) if rows else {"t": "p", "muted": True, "v": "Nothing logged yet."})
@@ -2007,33 +2020,34 @@ class SemanticViews(Screen):
             return []
         every = [{"value": t["table"], "label": t["table"]} for t in self.tables]
         approved = [{"value": t, "label": t} for t in self.facts["tables"]]
-        by_table = {t["table"]: [{"value": "", "label": "(the same name as the key)"}]
+        by_table = {t["table"]: [{"value": "", "label": "Same name as the key"}]
                     + [{"value": c, "label": c} for c in self.columns.get(t["table"], [])] for t in self.tables}
+        by_table[""] = [{"value": "", "label": "Pick the other table first"}]
         blocks = [{"t": "subhead", "v": "The same thing in two sources"},
                   {"t": "fields", "items": [{"id": "sv_fuse", "type": "group", "fields": [
                       {"id": "sv_fuse_table", "type": "select", "label": "Your table", "value": approved[0]["value"] if approved else "",
                        "options": approved},
-                      {"id": "sv_fuse_other", "type": "select", "label": "The same rows in", "value": "", "options": every,
+                      {"id": "sv_fuse_other", "type": "select", "label": "Other source table", "value": "", "options": every,
                        "placeholder": "Pick the other source's table…"},
-                      {"id": "sv_fuse_key", "type": "select", "label": "Its key column",
+                      {"id": "sv_fuse_key", "type": "select", "label": "Its key column (if named differently)",
                        "options_from": {"field": "sv_fuse_other", "map": by_table}, "empty": "Pick the table first."},
-                      {"id": "sv_fuse_wins", "type": "select", "label": "When both hold a value", "value": "model",
-                       "options": [{"value": "model", "label": "your table wins"}, {"value": "other", "label": "the other source wins"}]},
-                      {"id": "sv_fuse_how", "type": "select", "label": "How they relate", "value": "same",
-                       "options": [{"value": "same", "label": "the same rows, the same ids"},
-                                   {"value": "mapped", "label": "the same rows, different ids (a table pairs them)"},
-                                   {"value": "split", "label": "the other holds the older rows"}]},
-                      {"id": "sv_fuse_xref", "type": "select", "label": "The table pairing the ids", "value": "", "options": every,
+                      {"id": "sv_fuse_wins", "type": "select", "label": "Precedence", "value": "model",
+                       "options": [{"value": "model", "label": "Your table wins"}, {"value": "other", "label": "The other source wins"}]},
+                      {"id": "sv_fuse_how", "type": "select", "label": "Relation", "value": "same",
+                       "options": [{"value": "same", "label": "Same rows, same ids"},
+                                   {"value": "mapped", "label": "Same rows, different ids (mapping table)"},
+                                   {"value": "split", "label": "The other source holds the older rows"}]},
+                      {"id": "sv_fuse_xref", "type": "select", "label": "Mapping table", "value": "", "options": every,
                        "show_if": {"field": "sv_fuse_how", "equals": "mapped"}},
-                      {"id": "sv_fuse_local", "type": "text", "label": "Its column with the other source's id", "placeholder": "ACCOUNT_ID",
+                      {"id": "sv_fuse_local", "type": "text", "label": "Mapping: other source id column", "placeholder": "ACCOUNT_ID",
                        "show_if": {"field": "sv_fuse_how", "equals": "mapped"}},
-                      {"id": "sv_fuse_semantic", "type": "text", "label": "Its column with your table's id", "placeholder": "CUSTOMER_ID",
+                      {"id": "sv_fuse_semantic", "type": "text", "label": "Mapping: your id column", "placeholder": "CUSTOMER_ID",
                        "show_if": {"field": "sv_fuse_how", "equals": "mapped"}},
-                      {"id": "sv_fuse_split_column", "type": "text", "label": "The date both hold", "placeholder": "ORDER_DATE",
+                      {"id": "sv_fuse_split_column", "type": "text", "label": "Split date column", "placeholder": "ORDER_DATE",
                        "show_if": {"field": "sv_fuse_how", "equals": "split"}},
-                      {"id": "sv_fuse_split_at", "type": "text", "label": "Your table answers from", "placeholder": "2026-01-01",
+                      {"id": "sv_fuse_split_at", "type": "text", "label": "Your table answers from (date)", "placeholder": "2026-01-01",
                        "show_if": {"field": "sv_fuse_how", "equals": "split"}}]}]},
-                  {"t": "actions", "items": [{"id": "sv_fuse_check", "label": "Check against the data", "busy": "Checking (nothing changes)…"}]
+                  {"t": "actions", "items": [{"id": "sv_fuse_check", "label": "Validate against the data", "busy": "Checking (nothing changes)…"}]
                    + ([{"id": "sv_fuse_apply", "label": "Apply", "primary": True, "busy": "Applying…"}]
                       if self.fusion_said and self.fusion_said.get("dry_run") and self.fusion_said.get("status") != "error" else [])}]
         if self.fusion_said:
@@ -2214,7 +2228,7 @@ def understand():
     means and your data map over the tables chosen."""
     from ..card import show
 
-    return show(ExploreChoose(), AiHelp(), Understand(), docs="explore")
+    return show(ExploreChoose(), AiHelp(), Understand(), SemanticViews(), docs="explore")
 
 
 # =====================================================================================================
@@ -2274,7 +2288,6 @@ class Understand(Screen):
         super().__init__()
         SESSION.listen(self)
         self.map = _part(_MapPart, self)
-        self.views = _part(_ViewsPart, self)
         self.refresh()
         import threading
 
@@ -2409,22 +2422,17 @@ class Understand(Screen):
         raise AttributeError(name)
 
     def build(self) -> list[dict]:
-        if self.map is None or self.views is None:
-            return [{"t": "head", "kicker": KICKER, "title": "What each column means"}]
+        if self.map is None:
+            return [{"t": "head", "kicker": KICKER, "title": "Column roles"}]
         top = self.map.build()
         if self.loading:
-            top = top[:1] + [{"t": "empty", "v": "Opening the tables chosen in the quickstart…"}]
+            top = top[:1] + [{"t": "empty", "v": "Opening the tables you chose…"}]
         if self.error:
             top = top[:1] + [{"t": "msg", "kind": "warn", "v": f"The chosen tables could not be opened: {self.error}. "
-                                                               "Choose your data in the quickstart again."}]
-        top = top[:1] + [self._flow()] + self._adding_blocks() + top[1:]
-        bottom = self.views.build()
-        head = bottom[0] if bottom and bottom[0].get("t") == "head" else None
-        rest = bottom[1:] if head else bottom
-        for part, blocks in ((self.map, top), (self.views, rest)):
-            if part.flash:                    # said by a part's background read: shown with its part
-                blocks.insert(1 if blocks is top else 0, {"t": "msg", **{k: v for k, v in part.flash.items() if k != "said"}})
-        return top + rest
+                                                               "Choose your data again above."}]
+        if self.map.flash:                    # said by the part's background read: shown with it
+            top.insert(1, {"t": "msg", **{k: v for k, v in self.map.flash.items() if k != "said"}})
+        return top
 
     def _adding_blocks(self) -> list[dict]:
         """The add-a-source part, under the flow while it is open: the quickstart's choice of data, without its title."""

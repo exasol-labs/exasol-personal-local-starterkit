@@ -197,7 +197,7 @@ class Prepare(Screen):
         self.kit_said = "\n".join(x for x in (said, SESSION.said) if x)
 
     def build(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "Is the data clean?",
+        head = {"t": "head", "kicker": KICKER, "title": "Data quality",
                 "sub": "The kit checked every row. It can make a cleaned copy (a view); your table stays as it is."}
         if SESSION.dataset is not None and self.waiting:
             return _waiting(head, "checking every row")
@@ -373,7 +373,7 @@ class Compare(Screen):
         self.trend = {"title": title, "points": pts, "pct": bool(pct_h), "note": note, "sql": sql}
 
     def build(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "Compare groups and see trends",
+        head = {"t": "head", "kicker": KICKER, "title": "Group comparison and trends",
                 "sub": "Where the outcome is higher or lower, and how it changes over time."}
         if SESSION.dataset is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
@@ -453,7 +453,7 @@ class Predict(Screen):
         return opts
 
     def build(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "Build a model",
+        head = {"t": "head", "kicker": KICKER, "title": "Predictive model",
                 "sub": "Choose what to do, which model and how to split the data. Or keep the recommendations."}
         if SESSION.dataset is not None and self.waiting:
             return _waiting(head, "reading the rows to train on")
@@ -702,12 +702,55 @@ class Ideas(Screen):
                       else "The AI didn't suggest anything usable for this data."}
 
 
+class _WorkingPart(WorkingOn):
+    """The table the analysis cards use, as the top of the Data quality card: the same choice and code as Working on."""
+    owner = None
+
+    def refresh(self) -> None:
+        if self.owner is not None:
+            self.owner.refresh()
+
+
+class DataQuality(Prepare):
+    """Data quality, with the table to analyse at its top: one of the tables whose column roles are approved, the one
+    every card below (comparison, model, feature ideas) works on."""
+
+    def __init__(self) -> None:
+        part = _WorkingPart.__new__(_WorkingPart)
+        part.owner = self
+        self.working = None
+        super().__init__()
+        part.__init__()
+        self.working = part
+        self.refresh()
+
+    def build(self) -> list[dict]:
+        blocks = super().build()
+        part = self.__dict__.get("working")
+        if part is None:
+            return blocks
+        picked = [dict(b, fields=[dict(f, label="Table to analyse") for f in b.get("fields") or []])
+                  if b.get("t") == "inline_form" else b
+                  for b in part.build()[1:] if b.get("t") in ("summary_row", "inline_form", "msg", "empty")]
+        if part.flash:
+            picked.insert(0, {"t": "msg", **{k: v for k, v in part.flash.items() if k != "said"}})
+        return blocks[:1] + picked + blocks[1:]
+
+    def on_switch(self, v: dict) -> None:
+        self.working.flash = None
+        try:
+            WorkingOn.on_switch(self.working, v)
+        finally:
+            if self.working.flash:
+                self.flash, self.working.flash = self.working.flash, None
+
+
 def explore():
     """Step 2 in the guided view: choose your data (more beside the quickstart's), the one AI button and one card for what each column means and the semantic views
     over the tables chosen in the quickstart; then check and clean, compare, predict and test feature ideas on the
     table approved there."""
     from ..card import show
-    from .understand import AiHelp, ExploreChoose, Understand
+    from .understand import AiHelp, ExploreChoose, SemanticViews, Understand
 
     understand = Understand()        # first: it opens the quickstart's tables, the cards below wait for it
-    return show(ExploreChoose(), AiHelp(), understand, WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="prepare")
+    return show(ExploreChoose(), AiHelp(), understand, SemanticViews(), DataQuality(), Compare(), Predict(), Ideas(), docs="prepare")

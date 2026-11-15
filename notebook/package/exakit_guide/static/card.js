@@ -796,7 +796,7 @@ function render({ model, el }) {
       const none = { value: "", label: "Nothing, just explore", text: "Look at counts and trends without predicting anything.", verdict: "none" };
       const q1 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "1"), h("div", {},
-          h("div", { class: "guide-q-title" }, "What do you want to predict?", tipMark("Pick a yes-or-no column. Everything else helps explain it. The kit never picks this for you.")))),
+          h("div", { class: "guide-q-title" }, "Prediction target", tipMark("Pick a yes-or-no column. Everything else helps explain it. The kit never picks this for you.")))),
         b.no_target_reason && !targets.length ? h("div", { class: "guide-explain" }, icon("info"), b.no_target_reason) : null,
         h("div", { class: "guide-targets", role: "radiogroup" }, [...targets.map(tCard), tCard(none)]));
 
@@ -814,7 +814,7 @@ function render({ model, el }) {
       };
       const q2 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "2"), h("div", {},
-          h("div", { class: "guide-q-title" }, "Check the kit's guesses",
+          h("div", { class: "guide-q-title" }, "Columns to confirm",
             h("span", { class: `guide-chip ${guesses.length ? "guide-chip-warn" : "guide-chip-ok-soft"}` }, guesses.length ? `${guesses.length} to check` : "Nothing to check"),
             tipMark(guesses.length ? "The kit wasn't sure about these columns. Keep its guess or pick another." : "The kit is confident about every column.")))),
         guesses.length ? h("div", { class: "guide-guesses" }, guesses.map(guessRow)) : null);
@@ -861,7 +861,7 @@ function render({ model, el }) {
       };
       const q3 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "3"), h("div", {},
-          h("div", { class: "guide-q-title" }, "The other choices", tipMark("The kit filled these in. Change them only if they look wrong.")))),
+          h("div", { class: "guide-q-title" }, "Column settings", tipMark("The kit filled these in. Change them only if they look wrong.")))),
         h("div", { class: "guide-slotgrid" }, b.slots.map(slotRow)));
 
       // All columns, folded
