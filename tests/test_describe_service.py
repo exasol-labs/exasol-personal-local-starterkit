@@ -394,7 +394,7 @@ class SemanticSurfaces(unittest.TestCase):
 
         class Refusing(self.Conn):
             def execute(self, sql):
-                if "ADOPT_VIEW" in sql:
+                if "EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW" in sql:
                     raise RuntimeError("[SEMANTIC_ADMIN_229] the view has a join")
                 return super().execute(sql)
         with self.assertRaisesRegex(svc.Refused, "another shape.*SEMANTIC_ADMIN_229"):
