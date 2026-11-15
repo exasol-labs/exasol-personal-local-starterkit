@@ -321,6 +321,35 @@ class AskRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not an insight rule"):
             insights(frame, rules={"NOPE": 1})
 
+
+@unittest.skipUnless(pd is not None, "pandas is not installed here (the kit's notebook environment has it)")
+class LoadRulesTest(unittest.TestCase):
+    """How a file is loaded, and how a table is read for its column map, can be changed for one load or one draft."""
+
+    def test_the_load_rules_apply_to_one_load_and_come_back(self):
+        import importlib
+        own = importlib.import_module("exakit_nb.own_file")
+        seen = {}
+
+        def load(path, table, descriptor=None, *, conn=None, replace=False, missing_ok=False):
+            frame = pd.DataFrame({"NOTE": ["a" * 40], "WHEN": ["2026-01-02"]})
+            seen.update(types=own._prepare(frame), replace=replace, schema=own.LOAD_RULES["DEFAULT_SCHEMA"])
+        with mock.patch.object(own, "_load_own_file", side_effect=load):
+            own.load_own_file("x.csv", None, rules={"MAX_VARCHAR": 10, "REPLACE": True, "DEFAULT_SCHEMA": "SALES"})
+        self.assertEqual(([("NOTE", "VARCHAR(10)"), ("WHEN", "VARCHAR(10)")], True, "SALES"), (seen["types"], seen["replace"], seen["schema"]))
+        self.assertEqual(own.LOAD_RULES, own.load_rules(), "back to the defaults")
+        self.assertEqual("MY_DATA", own.LOAD_RULES["DEFAULT_SCHEMA"])
+        with self.assertRaisesRegex(ValueError, "not a load rule"):
+            own.load_own_file("x.csv", None, rules={"NOPE": 1})
+
+    def test_how_a_table_is_read_is_part_of_the_column_map_rules(self):
+        sys.path.insert(0, str(ROOT / "setup" / "lib"))
+        from descriptor import profile, rules
+        self.assertEqual(10000, rules.role_rules()["VIRTUAL_ROWS"])
+        with rules.using({"VIRTUAL_ROWS": 500, "CATEGORY_DISTINCT": 60}):
+            self.assertEqual(500, profile.VIRTUAL_ROWS)
+        self.assertEqual(10000, profile.VIRTUAL_ROWS)
+
 @unittest.skipUnless(HAVE_DASH, "dash is not installed here (the dashboard's environment has it)")
 class BoardAppTest(unittest.TestCase):
     """The uploaded app.py, run against a stand-in for Dash Server's helper that counts the queries."""

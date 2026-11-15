@@ -88,6 +88,7 @@
   "list_versions": "/data-scientist/development/reference/descriptor-store#list_versions",
   "list_workflows": "/data-scientist/development/reference/workflow#list_workflows",
   "load_own_file": "/data-scientist/development/reference/own-file#load_own_file",
+  "load_rules": "/data-scientist/development/reference/own-file#load_rules",
   "load_sample": "/data-scientist/development/reference/quickstart#load_sample",
   "load_source": "/data-scientist/development/reference/quickstart#load_source",
   "loaded_files": "/data-scientist/development/reference/kit-facts#loaded_files",

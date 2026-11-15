@@ -4,6 +4,7 @@
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
+- **How the quickstart loads and reads your data is yours to change.** `nb.load_rules()` lists how your own files are loaded: the schema a file lands in when none is named, whether a file loads again over a table of that name, the widest a text column is made, and when a text column is read as a date. `LOAD_RULES` in the load cell (`nb.load_own_file(..., rules=)`) changes the ones you name. How a table is read for its column map is now part of `nb.role_rules()` and `ROLE_RULES`: `VIRTUAL_ROWS` (the rows read of a source read live), `TOP_VALUES` and `VALUES_DISTINCT` (the values listed per column) and `EXACT_WITHIN`. The quickstart's kit cell already shows the `exakit` commands it runs.
 - **How the dashboards behave is yours to change, down to their source.**
   - **The rules:** `nb.dashboard_rules()` lists:
     - how long a result is kept and how long a tab waits for a query;

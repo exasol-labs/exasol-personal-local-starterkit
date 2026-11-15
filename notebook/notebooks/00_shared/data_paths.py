@@ -44,14 +44,15 @@ sample_data = nb.load_sample(connection, SAMPLE)
 # %% [markdown] tags=["load"]
 # **Load your own data (optional):** set `MY_DATA` to a CSV, Parquet or JSON file, or to a folder of them. Empty skips it.
 #
-# Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded.
+# Each file becomes one table named after the file, in a schema named after its folder (`MY_SCHEMA` names another). A folder loads like `exakit data-load`. Running the cell again skips what is already loaded. `MY_TABLE` uses a table already in the database instead. `LOAD_RULES` changes how a file is loaded, such as `{"REPLACE": True, "DATE_SHARE": 0.8}`; `nb.load_rules()` lists every rule.
 
 # %% tags=["load"]
 MY_DATA = ""
 MY_SCHEMA = ""
 MY_TABLE = ""
+LOAD_RULES = {}
 own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
-            else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
+            else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True, rules=LOAD_RULES))
 
 # %% [markdown] tags=["load"]
 # **An external source (optional):** a table in Postgres, MySQL, Snowflake and others, read live through a virtual schema. Nothing is copied.
