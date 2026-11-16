@@ -983,7 +983,9 @@ function Get-ExakitOrphanAutostartEntries {
 # path, or one that names the launcher's exact full path <BinDir>\<id>.cmd as a
 # path token (at the start or after a quote or space, and followed by a quote,
 # a space or the end). The bin dir and the id on their own are no proof: a
-# C:\other\<id>.cmd, or <id>.cmd.bak, is not the kit's launcher.
+# C:\other\<id>.cmd, or <id>.cmd.bak, is not the kit's launcher. Both proofs
+# count only for a cmd.exe: an editor or viewer (notepad.exe, Code.exe) that
+# has the entry or the launcher open names the same path and is never stopped.
 function Get-ExakitOrphanAutostartPids {
     param([string]$Id, [string]$Entry)
     $ours = @()
@@ -997,6 +999,7 @@ function Get-ExakitOrphanAutostartPids {
         $cmd = "" + $p.CommandLine
         if (-not $cmd) { continue }
         if ([int]$p.ProcessId -eq $PID) { continue }
+        if (-not (("" + $p.Name) -ieq "cmd.exe")) { continue }
         if ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $ours += [int]$p.ProcessId; continue }
         if ($launcherRe -and [regex]::IsMatch($cmd, $launcherRe, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $ours += [int]$p.ProcessId }
     }
@@ -2092,13 +2095,13 @@ function Invoke-ExakitUninstallRun {
     }
 }
 
-# Get-ExakitProcessList - every process as {ProcessId, ParentProcessId,
+# Get-ExakitProcessList - every process as {ProcessId, ParentProcessId, Name,
 # CommandLine}. Its own function so the uninstall suites can hand in a fixed
 # list; nothing else here enumerates processes.
 function Get-ExakitProcessList {
     try {
         return @(Get-CimInstance Win32_Process -ErrorAction Stop |
-            Select-Object ProcessId, ParentProcessId, CommandLine)
+            Select-Object ProcessId, ParentProcessId, Name, CommandLine)
     } catch { return @() }
 }
 

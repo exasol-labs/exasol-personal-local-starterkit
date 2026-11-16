@@ -394,25 +394,32 @@ function Seed-Startup {
     foreach ($f in @($orphan, $foreign, $nearMiss)) { Set-Content -Path $f -Value "@echo off" }
     $target = Join-Path $script:BinDir "dash-server.cmd"
     $script:fakeProcs = @(
-        [pscustomobject]@{ ProcessId = 4711; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$orphan`"" },
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4711; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$orphan`"" },
         # What the entry leaves running: `start "" /min <launcher>` ran the
         # kit's launcher by its exact full path (any case). Stopped.
-        [pscustomobject]@{ ProcessId = 4714; ParentProcessId = 1; CommandLine = "C:\Windows\system32\cmd.exe /c `"`"$($target.ToUpper())`" --port 8000`"" },
-        [pscustomobject]@{ ProcessId = 4715; ParentProcessId = 1; CommandLine = "cmd.exe /c $target" },
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4714; ParentProcessId = 1; CommandLine = "C:\Windows\system32\cmd.exe /c `"`"$($target.ToUpper())`" --port 8000`"" },
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4715; ParentProcessId = 1; CommandLine = "cmd.exe /c $target" },
         # Near misses: the bin dir and the id, but not the launcher's path as a
         # whole path token. Never stopped.
-        [pscustomobject]@{ ProcessId = 4716; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$target.bak`"" },
-        [pscustomobject]@{ ProcessId = 4717; ParentProcessId = 1; CommandLine = "cmd.exe /c `"X$target`"" },
-        [pscustomobject]@{ ProcessId = 4718; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$($script:BinDir)\dash-server2.cmd`"" },
-        [pscustomobject]@{ ProcessId = 4712; ParentProcessId = 1; CommandLine = "cmd.exe /c C:\other\dash-server.cmd" },
-        [pscustomobject]@{ ProcessId = 4713; ParentProcessId = 1; CommandLine = "notepad.exe" })
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4716; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$target.bak`"" },
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4717; ParentProcessId = 1; CommandLine = "cmd.exe /c `"X$target`"" },
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4718; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$($script:BinDir)\dash-server2.cmd`"" },
+        [pscustomobject]@{ Name = "cmd.exe"; ProcessId = 4712; ParentProcessId = 1; CommandLine = "cmd.exe /c C:\other\dash-server.cmd" },
+        [pscustomobject]@{ Name = "notepad.exe"; ProcessId = 4713; ParentProcessId = 1; CommandLine = "notepad.exe" },
+        # An editor or viewer that has the entry or the launcher open names the
+        # exact path, but is not a cmd.exe running it. Never stopped.
+        [pscustomobject]@{ Name = "notepad.exe"; ProcessId = 4719; ParentProcessId = 1; CommandLine = "notepad.exe $target" },
+        [pscustomobject]@{ Name = "Code.exe"; ProcessId = 4720; ParentProcessId = 1; CommandLine = "`"C:\Program Files\Microsoft VS Code\Code.exe`" `"$target`"" },
+        [pscustomobject]@{ Name = "notepad.exe"; ProcessId = 4721; ParentProcessId = 1; CommandLine = "notepad.exe `"$orphan`"" },
+        # The name is compared without case.
+        [pscustomobject]@{ Name = "CMD.EXE"; ProcessId = 4722; ParentProcessId = 1; CommandLine = "CMD.EXE /c `"$target`"" })
     $script:stopped = @()
 }
 # (o1) dry run lists the orphan and its process, removes and stops nothing.
 Seed-Kit; Seed-Deploy; Seed-Startup; $env:STUB_DESTROY_REMOVES = "1"
 Invoke-ExakitUninstallRun -DryRun
 Has   "o1: dry run lists the orphaned entry" "will remove: the leftover automatic-start entry for dash-server ($orphan)" $script:out
-Has   "o1: and the process still running from it" "will stop: the leftover dash-server process (pids 4711 4714 4715)" $script:out
+Has   "o1: and the process still running from it" "will stop: the leftover dash-server process (pids 4711 4714 4715 4722)" $script:out
 Lacks "o1: a foreign entry is not listed" "OneDrive" $script:out
 Lacks "o1: nor a near-miss prefix" "exakitfoo" $script:out
 Check "o1: dry run keeps the orphan" "True" (Test-Path $orphan)
@@ -422,7 +429,7 @@ Seed-Kit; Seed-Deploy; Seed-Startup
 Invoke-ExakitUninstallRun
 Check "o2: the orphaned entry is gone" "False" (Test-Path $orphan)
 Has   "o2: the removal is recorded" "dash-server: leftover automatic-start entry removed" $script:out
-Check "o2: only the kit's processes are stopped" "4711 4714 4715" (@($script:stopped) -join " ")
+Check "o2: only the kit's processes are stopped" "4711 4714 4715 4722" (@($script:stopped) -join " ")
 Check "o2: a foreign entry stays" "True" (Test-Path $foreign)
 Check "o2: a near-miss prefix stays" "True" (Test-Path $nearMiss)
 $script:fakeProcs = @(); $script:stopped = @()
