@@ -485,6 +485,16 @@ Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun
 Check "i2c: both tags of one image are removed" "2" (@($script:engCalls | Where-Object { $_ -like "docker rmi exasol/nano:*" }).Count)
 Has   "i2c: the second tag by its name" "docker rmi exasol/nano:latest" ($script:engCalls -join "; ")
+# (i2d) a <none> exasol/nano row whose id also carries a user's tag from
+# another repository: podman would delete that tag with an rmi by id. Kept.
+$env:STUB_DOCKER_IMAGES = ""
+$env:STUB_PODMAN_IMAGES = @('docker.io/exasol/nano|<none>|aaa999|812MB', 'localhost/myorg/foo|1|aaa999|812MB', 'docker.io/exasol/nano|<none>|bbb888|800MB') -join "`n"
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun
+Lacks "i2d: no rmi by id for an image a user's tag shares" "podman rmi aaa999" $script:engCalls
+Has   "i2d: it is reported kept" "kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag" $script:out
+Has   "i2d: a <none> row with no other name still goes" "podman rmi bbb888" $script:engCalls
+Lacks "i2d: the user's tag is never named" "myorg" $script:engCalls
 $env:STUB_PODMAN_IMAGES = $savedPodman; $env:STUB_DOCKER_IMAGES = $savedDocker
 # (i7) another deployment still runs from the image: no engine is asked.
 Seed-Kit; Seed-Deploy; $script:engCalls = @()

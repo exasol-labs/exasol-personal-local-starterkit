@@ -1789,6 +1789,20 @@ function Invoke-ExakitUninstallKitImages {
             # under podman).
             $ref = "${listed}:$tag"
             if ((-not $tag) -or ($tag -eq "<none>")) { $ref = $parts[2] }
+            # A <none> row whose id another repository also names (the user
+            # tagged the kit's image): podman's rmi by id deletes an image
+            # with a single name, the user's tag with it. Kept.
+            if ($ref -eq $parts[2]) {
+                $foreign = @($allLines | Where-Object {
+                    $q = $_.Trim() -split '\|'
+                    $qr = $q[0]
+                    if ($qr.StartsWith("docker.io/")) { $qr = $qr.Substring(10) }
+                    $q.Count -ge 3 -and $q[2] -eq $parts[2] -and ($kitRepos -notcontains $qr) })
+                if ($foreign.Count -gt 0) {
+                    Info "kept image $name (id $($parts[2])): it also carries another repository's tag"
+                    continue
+                }
+            }
             if ($DryRun) {
                 $sizeNote = ""
                 if ($size) { $sizeNote = " ($size)" }
