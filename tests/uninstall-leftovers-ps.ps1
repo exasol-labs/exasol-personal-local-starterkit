@@ -144,9 +144,24 @@ function Invoke-ExakitLogged {
 }
 function Invoke-ExakitBounded {
     param([string]$FilePath, [string[]]$Arguments = @(), [string]$ArgumentString = "", [int]$TimeoutSeconds = 8)
-    if ([System.IO.Path]::GetFileNameWithoutExtension($FilePath) -eq "docker") { return $env:STUB_DOCKER_PS }
+    $eng = [System.IO.Path]::GetFileNameWithoutExtension($FilePath)
+    # `images` prints STUB_<ENGINE>_IMAGES (repo|tag|id|size rows), or answers
+    # $null (no answer) when STUB_<ENGINE>_RC=1; `rmi` is recorded and fails
+    # for a ref named in STUB_RMI_FAIL.
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "images") {
+        $script:engCalls += "$eng images"
+        if ([Environment]::GetEnvironmentVariable("STUB_$($eng.ToUpper())_RC") -eq "1") { return $null }
+        return ("" + [Environment]::GetEnvironmentVariable("STUB_$($eng.ToUpper())_IMAGES"))
+    }
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "rmi") {
+        $script:engCalls += "$eng " + ($Arguments -join " ")
+        if ((" " + $env:STUB_RMI_FAIL + " ").Contains(" " + $Arguments[1] + " ")) { return $null }
+        return "Untagged"
+    }
+    if ($eng -eq "docker") { return $env:STUB_DOCKER_PS }
     return ""
 }
+$script:engCalls = @()
 
 function Seed-Deploy {
     if (Test-Path $script:PersonalDeployDir) { Remove-Item -Recurse -Force $script:PersonalDeployDir }
@@ -328,6 +343,60 @@ Check "o2: a foreign entry stays" "True" (Test-Path $foreign)
 Check "o2: a near-miss prefix stays" "True" (Test-Path $nearMiss)
 $script:fakeProcs = @(); $script:stopped = @()
 if (Test-Path $startup) { Remove-Item -Recurse -Force $startup }
+
+Write-Host ""
+Write-Host "Invoke-ExakitUninstallRun removes the kit's container images, and only those:"
+$dockerImgs = @('exasol/nano|2026.2.0-nano.8|aaa111|812MB', 'exasol/mcp-server|<none>|bbb222|426MB',
+    'exasol/nanoX|1|ccc333|1MB', 'library/postgres|16|ddd444|400MB', 'someone/exasol/nano|1|eee555|1MB') -join "`n"
+$env:STUB_DOCKER_IMAGES = $dockerImgs
+$env:STUB_PODMAN_IMAGES = 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
+# (i1) dry run: the kit's images listed with engine and size, nothing removed.
+Seed-Kit; Seed-Deploy; $env:STUB_DESTROY_REMOVES = "1"; $script:engCalls = @()
+Invoke-ExakitUninstallRun -DryRun
+Has   "i1: dry run lists exasol/nano" "will remove: docker image exasol/nano:2026.2.0-nano.8 (812MB)" $script:out
+Has   "i1: dry run lists the untagged mcp-server" "will remove: docker image exasol/mcp-server:<none> (426MB)" $script:out
+Has   "i1: dry run lists podman's copy" "will remove: podman image exasol/nano:2026.2.0-nano.8 (812MB)" $script:out
+Lacks "i1: a foreign image is not listed" "postgres" $script:out
+Lacks "i1: nor a near-miss repository" "nanoX" $script:out
+Lacks "i1: nor one that only ends in exasol/nano" "someone/" $script:out
+Lacks "i1: dry run runs no rmi" "rmi" $script:engCalls
+# (i2) real run: rmi without -f for each kit image, never for a foreign one.
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun
+Has   "i2: exasol/nano removed by name" "docker rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
+Has   "i2: the untagged image removed by id" "docker rmi bbb222" $script:engCalls
+Has   "i2: podman's copy removed" "podman rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
+Lacks "i2: never with -f" "rmi -f" $script:engCalls
+Lacks "i2: never --force" "--force" $script:engCalls
+Lacks "i2: a foreign image is untouched" "ddd444" $script:engCalls
+Lacks "i2: by name either" "postgres" $script:engCalls
+Lacks "i2: a near-miss repository is untouched" "ccc333" $script:engCalls
+Lacks "i2: an image ending in exasol/nano is untouched" "eee555" $script:engCalls
+Has   "i2: the removal is recorded" "Container images removed (docker): exasol/nano:2026.2.0-nano.8, exasol/mcp-server:<none>" $script:out
+Check "i2: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+# (i3) rmi refused (a container still uses it): kept, one hint, not flagged.
+Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
+Invoke-ExakitUninstallRun
+Has   "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: still used by a container; remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
+Has   "i3: the other image still goes" "Container images removed (docker): exasol/mcp-server:<none>" $script:out
+Check "i3: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+$env:STUB_RMI_FAIL = ""
+# (i4) the engine does not answer: one hint.
+Seed-Kit; Seed-Deploy; $env:STUB_DOCKER_RC = "1"
+Invoke-ExakitUninstallRun
+Has   "i4: an engine that does not answer gets a hint" "Could not ask docker for the kit's container images" $script:out
+Check "i4: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+$env:STUB_DOCKER_RC = ""
+# (i5) no engine at all: one hint.
+$noEngineDir = Join-Path $sandbox "noengines"
+New-Item -ItemType Directory -Force -Path $noEngineDir | Out-Null
+$env:PATH = $noEngineDir
+Seed-Kit; Seed-Deploy
+Invoke-ExakitUninstallRun
+Has   "i5: no engine gets a hint" "Neither docker nor podman is on PATH" $script:out
+Check "i5: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+$env:PATH = $engineDir
+$env:STUB_DOCKER_IMAGES = ""; $env:STUB_PODMAN_IMAGES = ""
 
 Write-Host ""
 Write-Host "Invoke-CmdUninstall -Yes only says complete when it is:"
