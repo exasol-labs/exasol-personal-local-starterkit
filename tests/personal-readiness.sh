@@ -312,6 +312,19 @@ check "deploy dir / -> refused" 1 "$(prd "/" "/usr/lib/x")"
 check "deploy dir // -> refused" 1 "$(prd "//" "/usr/lib/x")"
 check "deploy dir = HOME -> refused" 1 "$(prd "$PRD_HOME" "$PRD_HOME/.zshrc")"
 check "deploy dir = HOME/ -> refused" 1 "$(prd "$PRD_HOME/" "$PRD_HOME/.zshrc")"
+check "deploy dir = an ancestor of HOME -> refused" 1 "$(prd "$TMP" "$PRD_HOME/.zshrc")"
+check "deploy dir = an ancestor of HOME/ -> refused" 1 "$(prd "$TMP/" "$PRD_HOME/.zshrc")"
+# A mixed-case HOME on a case-insensitive APFS volume: bash 3.2's pwd -P keeps
+# the case as typed, so a case-variant of HOME must still be refused.
+MIX_HOME="$TMP/MixHome"; mkdir -p "$MIX_HOME"
+if [ "$(uname -s)" = "Darwin" ] && [ -d "$TMP/mixhome" ]; then
+    check "deploy dir = HOME in other case (macOS) -> refused" 1 \
+        "$(rc_of "$(probe STUB_DEPLOY_DIR="$TMP/mixhome" HOME="$MIX_HOME" LSOF_PATHS="$TMP/mixhome/.zshrc" -- 'lsof(){ printf "n%s\n" "$LSOF_PATHS"; }; _personal_runner_of_this_deployment 4242')")"
+    check "deploy dir = an ancestor of HOME in other case (macOS) -> refused" 1 \
+        "$(rc_of "$(probe STUB_DEPLOY_DIR="$(printf '%s' "$TMP" | tr '[:lower:]' '[:upper:]')" HOME="$MIX_HOME" LSOF_PATHS="$(printf '%s' "$TMP" | tr '[:lower:]' '[:upper:]')/MixHome/.zshrc" -- 'lsof(){ printf "n%s\n" "$LSOF_PATHS"; }; _personal_runner_of_this_deployment 4242')")"
+else
+    echo "  skip mixed-case HOME: not a case-insensitive macOS volume"
+fi
 check "deploy dir empty -> refused" 1 "$(rc_of "$(probe STUB_DEPLOY_DIR= HOME="$PRD_HOME" -- 'EXAKIT_PERSONAL_DEPLOY_DIR=; lsof(){ printf "n/x\n"; }; _personal_runner_of_this_deployment 4242')")"
 
 echo "personal_start: deployment_failed while the kit's own runner still runs the VM"

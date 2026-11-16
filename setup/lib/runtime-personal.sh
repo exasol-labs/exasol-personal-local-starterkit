@@ -1230,9 +1230,11 @@ EXAKIT_PERSONAL_RUNNER_STOP_WAIT="${EXAKIT_PERSONAL_RUNNER_STOP_WAIT:-20}"
 # same launcher cache can serve another deployment (another directory, another
 # port mapping), and stopping it would stop someone else's VM. lsof is the
 # only witness; where it cannot answer, nothing is proven and 1 is returned.
-# A deploy dir that would prove everything - empty, "/" or $HOME itself (any
-# process with a file open in the home folder would count) - proves nothing:
-# 1. A match is the directory itself or a path below it with a "/" after it,
+# A deploy dir that would prove everything - empty, "/", $HOME itself or an
+# ancestor of $HOME such as /Users or /home (any process with a file open in
+# the home folder would count) - proves nothing: 1. On macOS the HOME check
+# ignores case: APFS is case-insensitive and bash 3.2's pwd -P keeps the case
+# as typed, so /users/me is the same folder as /Users/me. A match is the directory itself or a path below it with a "/" after it,
 # so a sibling like <dir>2 never counts.
 _personal_runner_of_this_deployment() {
     _prd_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
@@ -1244,7 +1246,15 @@ _personal_runner_of_this_deployment() {
     [ "$_prd_phys" != "/" ] || return 1
     if [ -n "${HOME:-}" ]; then
         _prd_home="$(cd "$HOME" 2>/dev/null && pwd -P)"
-        [ -z "$_prd_home" ] || [ "$_prd_phys" != "$_prd_home" ] || return 1
+        _prd_cmp="$_prd_phys"
+        if [ "$(uname -s 2>/dev/null)" = "Darwin" ]; then
+            _prd_home="$(printf '%s' "$_prd_home" | tr '[:upper:]' '[:lower:]')"
+            _prd_cmp="$(printf '%s' "$_prd_cmp" | tr '[:upper:]' '[:lower:]')"
+        fi
+        if [ -n "$_prd_home" ]; then
+            [ "$_prd_cmp" != "$_prd_home" ] || return 1
+            case "$_prd_home" in "$_prd_cmp"/*) return 1 ;; esac
+        fi
     fi
     _prd_paths="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
 $(lsof -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p')"
