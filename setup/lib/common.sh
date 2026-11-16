@@ -12761,20 +12761,22 @@ EXAKIT_UM_PANEL_EOF
 # the kit's read-only MCP user and EXA_DSN is a loopback address on THIS
 # deployment's port (<port>, the caller's personal_db_port; empty means no
 # port is known and nothing qualifies). The
-# environment is read from /proc/<pid>/environ (Linux) or `ps -E` (macOS);
+# environment is read from /proc/<pid>/environ (Linux; EXAKIT_PROC_ROOT
+# overrides /proc for the tests) or `ps -E` (macOS);
 # where neither answers, nothing qualifies and nothing is stopped. No
 # PowerShell twin: Windows cannot read another process's environment, so the
 # Windows uninstall only asks the user to restart open AI clients.
 _exakit_kit_mcp_server_pids() {
     _kmp_user="${EXAKIT_MCP_USER:-mcp_readonly}"
     _kmp_port="${1:-}"
+    _kmp_proc="${EXAKIT_PROC_ROOT:-/proc}"
     case "$_kmp_port" in ''|*[!0-9]*) return 0 ;; esac
     ps -axww -o pid=,command= 2>/dev/null | while read -r _kmp_pid _kmp_cmd; do
         case "$_kmp_cmd" in *exasol-mcp-server*) ;; *) continue ;; esac
         case "$_kmp_pid" in ''|*[!0-9]*) continue ;; esac
         [ "$_kmp_pid" != "$$" ] || continue
-        if [ -r "/proc/$_kmp_pid/environ" ]; then
-            _kmp_env=" $(tr '\0' ' ' < "/proc/$_kmp_pid/environ" 2>/dev/null) "
+        if [ -r "$_kmp_proc/$_kmp_pid/environ" ]; then
+            _kmp_env=" $(tr '\0' ' ' < "$_kmp_proc/$_kmp_pid/environ" 2>/dev/null) "
         else
             # `ps -E` prints the command line FIRST, then the environment: an
             # EXA_USER=... in the arguments would pass for the environment.

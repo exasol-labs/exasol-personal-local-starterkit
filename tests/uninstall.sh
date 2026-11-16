@@ -319,6 +319,41 @@ check "real run stops the kit's process" "1" "$(printf '%s\n' "$_p" | grep -cx '
 check "the kit's user and DSN in the arguments only: not matched" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999996')"
 check "and only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 check "and says so" "1" "$(printf '%s\n' "$_p" | grep -c '^OK Stopped .*4999991')"
+# The Linux branch: /proc/<pid>/environ, NUL-separated, read from a fake proc
+# root. The arguments there carry nothing; only the environment counts, and a
+# process whose environ is the kit's is stopped even when ps -E would say no.
+mkdir -p "$SANDBOX/proc/4999992" "$SANDBOX/proc/4999996" "$SANDBOX/proc/4999991"
+printf 'PATH=/bin\0EXA_DSN=127.0.0.1:8563\0EXA_USER=mcp_readonly\0' > "$SANDBOX/proc/4999992/environ"
+printf 'PATH=/bin\0' > "$SANDBOX/proc/4999996/environ"
+printf 'PATH=/bin\0EXA_DSN=127.0.0.1:8563\0EXA_USER=analyst\0' > "$SANDBOX/proc/4999991/environ"
+_p="$(EXAKIT_PROC_ROOT="$SANDBOX/proc" _procs 0 2>&1)"
+check "/proc: the environ with the kit's user and DSN is stopped" "1" "$(printf '%s\n' "$_p" | grep -cx 'KILL 4999992')"
+check "/proc: arguments only, environ without them: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999996')"
+check "/proc: environ wins over ps -E (another user there)" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999991')"
+check "/proc: only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+# And the real /proc on Linux: a real child carrying the kit's environment,
+# found by the real ps. The stop is still only recorded. Skipped elsewhere.
+if [ "$(uname -s)" = Linux ] && [ -r /proc/self/environ ]; then
+    printf '#!/bin/sh\nsleep 30\n' > "$SANDBOX/exasol-mcp-server"
+    chmod +x "$SANDBOX/exasol-mcp-server"
+    env EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563 "$SANDBOX/exasol-mcp-server" &
+    _real_pid=$!
+    sleep 0.5
+    _p="$(SANDBOX="$SANDBOX" ROOT="$ROOT" bash <<'REAL'
+set -u
+info(){ :; }; ok_step(){ :; }
+for _fn in _exakit_kit_mcp_server_pids _exakit_stop_pid _exakit_uninstall_mcp_processes; do
+    eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+done
+_exakit_stop_pid(){ printf 'KILL %s\n' "$1"; }
+_exakit_uninstall_mcp_processes 0 8563
+REAL
+)"
+    check "real /proc: the child with the kit's environment is found" "1" "$(printf '%s\n' "$_p" | grep -cx "KILL $_real_pid")"
+    pkill -P "$_real_pid" 2>/dev/null; kill "$_real_pid" 2>/dev/null; wait "$_real_pid" 2>/dev/null
+else
+    echo "  (not Linux: the real /proc check is skipped)"
+fi
 _p="$(PORT=9999 _procs 0 2>&1)"
 check "another port than the deployment's: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 _p="$(PORT= _procs 0 2>&1)"
