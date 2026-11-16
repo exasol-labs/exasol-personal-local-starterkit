@@ -785,6 +785,44 @@ check "  ...exit 3" "rc=3" "$(printf '%s' "$_out" | tail -1)"
 _out="$(doctor stopped 1 1)"
 lacks "launcher says stopped: no checks" "MCP doctor" "$_out"
 lacks "  ...and no stale-record warning" "records this deployment as failed" "$_out"
+# --json: stdout is one JSON document carrying remedy "exakit start" and its
+# hint; the warning goes to stderr. The MCP subsystem is stubbed, the stamp
+# that adds the remedy is the real Python from common.sh.
+sed -n "/<<'EXAKIT_MCP_STAMP_PY'/,/^EXAKIT_MCP_STAMP_PY\$/p" "$ROOT/setup/lib/common.sh" | sed '1d;$d' > "$TMP/stamp.py"
+doctor_json() { # doctor_json <state> <answers> <own> -> stdout to $TMP/dj.out, stderr to $TMP/dj.err, rc echoed
+    _dst="$1" _dans="$2" _down="$3"
+    (
+        for _fn in _mcp_doctor_failed_record_but_answers _mcp_doctor_db_reachable cmd_mcp_doctor; do
+            eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit")"
+        done
+        EXAKIT_MANIFEST="$TMP/doctor-manifest.json"; : > "$EXAKIT_MANIFEST"
+        _runtime_type() { printf 'personal'; }
+        exakit_installation_runtime_type() { printf 'personal'; }
+        exakit_init_logging() { :; }
+        exakit_runtime_remedy() { printf 'exakit start\n'; }
+        exakit_runtime_is_running() { return 1; }
+        personal_launcher_state() { printf '%s' "$_dst"; }
+        personal_db_answers() { [ "$_dans" = 1 ]; }
+        _personal_port_held_by_own_runner() { [ "$_down" = 1 ]; }
+        exakit_mcp_operation() {
+            printf '{"operation": "doctor", "findings": []}' > "$TMP/dj.result"
+            python3 "$TMP/stamp.py" "$TMP/dj.result"
+        }
+        warn() { printf 'WARN %s\n' "$*" >&2; }; info() { printf 'INFO %s\n' "$*" >&2; }
+        cmd_mcp_doctor --json
+    ) > "$TMP/dj.out" 2> "$TMP/dj.err"
+    echo "$?"
+}
+_rc="$(doctor_json deployment_failed 1 1)"
+check "--json, failed record but answers: exit 0" 0 "$_rc"
+check "  ...stdout is one valid JSON object" ok "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("ok" if isinstance(d, dict) else "no")' "$TMP/dj.out" 2>&1)"
+check "  ...remedy is exakit start" "exakit start" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("remedy"))' "$TMP/dj.out" 2>&1)"
+contains "  ...remedy_hint names the stale record" "still records this deployment as failed although its database answers; exakit start repairs the record" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("remedy_hint"))' "$TMP/dj.out" 2>&1)"
+contains "  ...the warning is on stderr" "WARN The launcher records this deployment as failed" "$(cat "$TMP/dj.err")"
+lacks "  ...and not on stdout" "WARN" "$(cat "$TMP/dj.out")"
+_rc="$(doctor_json running_unused 1 1 2>/dev/null)"
+check "--json, launcher not failed: exit 3" 3 "$_rc"
+lacks "  ...no stale-record remedy hint" "remedy_hint" "$(cat "$TMP/dj.out")"
 check "personal_deployment_running still never consults the runner" 0 "$(sed -n '/^personal_deployment_running()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '_personal_port_held_by_own_runner')"
 
 echo "passed: $PASS, failed: $FAIL"

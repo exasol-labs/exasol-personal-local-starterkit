@@ -294,6 +294,7 @@ Then see `skills/local-agent-ready-starter/SKILL.md` for the full query-loop dis
 ### Exit codes, precisely
 
 - `status`, `info --json`, `mcp-doctor`: `0` running · `3` database not running (also `3` with `"status": "installing"` while the installer runs) · `4` not installed. The code **is** the answer.
+- One exception (macOS/Linux): when the launcher records the deployment as failed but its database answers and the port is held by the kit's own runner, `mcp-doctor` runs its checks and can exit `0` while `status` says `stopped`; it warns once on stderr, and `--json` carries `"remedy": "exakit start"` with a `remedy_hint` - run `exakit start` to repair the record.
 - A kit that is not where `exakit` looks (no install, or `EXAKIT_HOME` pointing elsewhere) answers `4`, with the same JSON shape when `--json` is given.
 - `version` and `mcp-status`: `0` ok · `4` not installed. They report on versions and configs, which a stopped database does not change; do not read database health off them.
 - Bad input exits `2` and records nothing: an unknown subcommand, an unknown option to **any** command, a statement `exakit sql` refuses (`--json` answers `{"ok": false, "error": ..., "rejected": true}`), an unsupported data file. `last_failure` is only for a step of your install that did not finish — and no query writes it, however it fails.

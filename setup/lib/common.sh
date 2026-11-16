@@ -10312,6 +10312,13 @@ except (OSError, ValueError):
 if not isinstance(doc, dict):
     sys.exit(1)
 doc.setdefault("installed", True)
+# A remedy the caller knows better than the findings do: mcp-doctor over a
+# deployment the launcher records as failed while its database answers.
+import os
+if os.environ.get("EXAKIT_MCP_RESULT_REMEDY"):
+    doc["remedy"] = os.environ["EXAKIT_MCP_RESULT_REMEDY"]
+    if os.environ.get("EXAKIT_MCP_RESULT_REMEDY_HINT"):
+        doc["remedy_hint"] = os.environ["EXAKIT_MCP_RESULT_REMEDY_HINT"]
 if "remedy" not in doc:
     # From a WARNING or ERROR finding only. Taking the first next_action made a
     # healthy machine answer "Install the client..." off an INFO finding about
