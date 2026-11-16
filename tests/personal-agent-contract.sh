@@ -823,6 +823,14 @@ lacks "  ...and not on stdout" "WARN" "$(cat "$TMP/dj.out")"
 _rc="$(doctor_json running_unused 1 1 2>/dev/null)"
 check "--json, launcher not failed: exit 3" 3 "$_rc"
 lacks "  ...no stale-record remedy hint" "remedy_hint" "$(cat "$TMP/dj.out")"
+# A client remedy the doctor found itself wins over the stale-record remedy
+# (AGK-R3-03); the stale-record one fills in only when there is none.
+printf '{"operation": "doctor", "findings": [{"severity": "error", "recommended_action": "exakit mcp-setup codex", "scope": {"path": "/x/config.toml"}}]}' > "$TMP/dj.own"
+_own="$(EXAKIT_MCP_RESULT_REMEDY="exakit start" EXAKIT_MCP_RESULT_REMEDY_HINT="stale record" python3 "$TMP/stamp.py" "$TMP/dj.own")"
+check "a doctor's own client remedy is kept over the override" "exakit mcp-setup codex" "$(printf '%s' "$_own" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("remedy"))')"
+lacks "  ...and the override's hint is not attached to it" "stale record" "$_own"
+printf '{"operation": "doctor", "findings": []}' > "$TMP/dj.none"
+check "no remedy of its own: the override fills in" "exakit start" "$(EXAKIT_MCP_RESULT_REMEDY="exakit start" python3 "$TMP/stamp.py" "$TMP/dj.none" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("remedy"))')"
 # An override inherited from the caller's environment is cleared: a healthy
 # run's JSON carries no stale-record remedy (MAC-R3-02).
 _dj_healthy() {
