@@ -6650,9 +6650,11 @@ _exakit_marketplace_apply_python() {
     mkfifo "$_mpa_dir/events" || { rm -rf "$_mpa_dir"; return 1; }
     # The activity line comes back for an install (it went after the install's own two).
     [ -z "${EXAKIT_ADDON_TABLE_STATE:-}" ] || [ -e "$EXAKIT_ADDON_TABLE_STATE.activity" ] || : > "$EXAKIT_ADDON_TABLE_STATE.activity"
+    _mpa_table_shown=0
     EXAKIT_ADDON_TABLE_LIVE=0
     if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
         ui_table_begin "$EXAKIT_ADDON_TABLE_STATE" && EXAKIT_ADDON_TABLE_LIVE=1
+        _mpa_table_shown="$EXAKIT_ADDON_TABLE_LIVE"
     fi
     # Python owns the lifecycle. This adapter only paints the existing table
     # from live phase records and drains the final messages after it stops.
@@ -6771,7 +6773,13 @@ warn|$_mpa_id did not finish: $_mpa_detail"
     fi
     while IFS='|' read -r _mpa_kind _mpa_message; do
         [ -n "$_mpa_kind" ] || continue
-        if [ "$_mpa_kind" = ok ]; then ok "$_mpa_message"; else warn "$_mpa_message"; fi
+        # The table's rows already say each one's result ("✓ SQL jobs in ..."): with
+        # the table on screen the line goes to the log; a warning still shows.
+        if [ "$_mpa_kind" = ok ]; then
+            if [ "$_mpa_table_shown" = 1 ]; then _exakit_log_file "OK    $_mpa_message"; else ok "$_mpa_message"; fi
+        else
+            warn "$_mpa_message"
+        fi
     done <<EXAKIT_MPA_NOTES
 $_mpa_notes
 EXAKIT_MPA_NOTES

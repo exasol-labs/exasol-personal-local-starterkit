@@ -7442,8 +7442,10 @@ function Invoke-ExakitMarketplaceApplyPython {
     # answer; explicit answers reach Python unmodified for batch validation.
     if (-not $env:EXAKIT_NOTEBOOK_FRONTENDS) { Invoke-ExakitMarketplaceQuestions -Ids $Ids }
     $script:ExakitAddonTableLive = $false
+    $tableShown = $false
     if ($null -ne $script:ExakitAddonTable) {
         $script:ExakitAddonTableLive = [bool](Start-ExakitTable -Table $script:ExakitAddonTable)
+        $tableShown = $script:ExakitAddonTableLive
     }
     $notes = [System.Collections.Generic.List[object]]::new()
     $root = Get-ExakitMarketplaceRoot
@@ -7593,7 +7595,9 @@ function Invoke-ExakitMarketplaceApplyPython {
         return
     }
     foreach ($note in $notes) {
-        if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text }
+        # The table's rows already say each one's result: with the table on screen the line goes to the log; a
+        # warning still shows. Twin of the same rule in _exakit_marketplace_apply_python.
+        if ($note.Kind -eq 'ok') { if ($tableShown) { Write-ExakitLog "OK" $note.Text } else { Ok $note.Text } } else { Warn2 $note.Text }
     }
     if ($code -ne 0) {
         if (-not $script:ExakitApplyFailureEvent -and $script:ExakitApplyLastError) {
