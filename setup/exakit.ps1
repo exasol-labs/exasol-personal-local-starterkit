@@ -1859,6 +1859,9 @@ function Invoke-ExakitUninstallRun {
 
     # 1) Database + all data.
     $type = Get-RuntimeType
+    # Only a run that found a deployment may remove the engine's images (step
+    # 1c): a sandboxed home (the test suites) must never reach the real ones.
+    $unHadDeploy = [bool]($script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir))
     if ($type) {
         if ($DryRun) {
             Info "  will remove: local Exasol $type deployment and ALL its data"
@@ -1918,7 +1921,7 @@ function Invoke-ExakitUninstallRun {
     #     are gone (a full uninstall only; removing just the database keeps
     #     them, so a re-install does not pull them again). Twin of step 1c in
     #     exakit_uninstall_run.
-    if ($type -eq "personal") { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
+    if ($type -eq "personal" -and $unHadDeploy) { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
 
     # 2) Managed MCP configuration in the AI clients. Best-effort.
     if (Get-Command Invoke-McpOperation -ErrorAction SilentlyContinue) {

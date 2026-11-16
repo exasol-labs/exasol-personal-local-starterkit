@@ -13015,6 +13015,12 @@ exakit_uninstall_run() {
     # 1) Database + all data. Uses the runtime removal helper (always --data),
     #    which for Personal also reaps any orphaned runner daemon on the DB port.
     _type="$(manifest_get runtime.type 2>/dev/null || true)"
+    # Whether this machine really had a deployment when the uninstall began:
+    # the container images (step 1c) belong to the engine, not to the kit's
+    # home, so only a run that found a deployment may remove them - a sandboxed
+    # HOME (the test suites) must never reach the real engine's images.
+    _un_had_deploy=0
+    [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && _un_had_deploy=1
     if [ -n "$_type" ]; then
         # Named BEFORE the removal, not only in the record line after it: on
         # `--yes` there is no gate to read, so this line is the last chance to
@@ -13090,7 +13096,7 @@ exakit_uninstall_run() {
     # 1c) The container images the deployment ran from, once its containers
     #     are gone (a full uninstall only; removing just the database keeps
     #     them, so a re-install does not pull them again).
-    if [ "$_type" = personal ] && command -v _exakit_uninstall_kit_images >/dev/null 2>&1; then
+    if [ "$_type" = personal ] && [ "$_un_had_deploy" = 1 ] && command -v _exakit_uninstall_kit_images >/dev/null 2>&1; then
         _exakit_uninstall_kit_images "$_dry"
     fi
 
