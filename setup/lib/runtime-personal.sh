@@ -1230,12 +1230,22 @@ EXAKIT_PERSONAL_RUNNER_STOP_WAIT="${EXAKIT_PERSONAL_RUNNER_STOP_WAIT:-20}"
 # same launcher cache can serve another deployment (another directory, another
 # port mapping), and stopping it would stop someone else's VM. lsof is the
 # only witness; where it cannot answer, nothing is proven and 1 is returned.
+# A deploy dir that would prove everything - empty, "/" or $HOME itself (any
+# process with a file open in the home folder would count) - proves nothing:
+# 1. A match is the directory itself or a path below it with a "/" after it,
+# so a sibling like <dir>2 never counts.
 _personal_runner_of_this_deployment() {
     _prd_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
     [ -n "$_prd_dir" ] && [ -d "$_prd_dir" ] || return 1
-    _prd_dir="${_prd_dir%/}"
+    while [ "${_prd_dir%/}" != "$_prd_dir" ]; do _prd_dir="${_prd_dir%/}"; done
+    [ -n "$_prd_dir" ] || return 1
     _prd_phys="$(cd "$_prd_dir" 2>/dev/null && pwd -P)"
-    [ -n "$_prd_phys" ] || _prd_phys="$_prd_dir"
+    [ -n "$_prd_phys" ] || return 1
+    [ "$_prd_phys" != "/" ] || return 1
+    if [ -n "${HOME:-}" ]; then
+        _prd_home="$(cd "$HOME" 2>/dev/null && pwd -P)"
+        [ -z "$_prd_home" ] || [ "$_prd_phys" != "$_prd_home" ] || return 1
+    fi
     _prd_paths="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
 $(lsof -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p')"
     _prd_hit=1

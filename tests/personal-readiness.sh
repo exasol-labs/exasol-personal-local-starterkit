@@ -299,6 +299,21 @@ _out="$(probe STUB_STATE=stopped -- 'personal_start')"
 check "stopped -> the ordinary start" 0 "$(rc_of "$_out")"
 contains "  ...start was run" "RUN exasol-stub start" "$(cat "$TMP/calls")"
 
+echo "_personal_runner_of_this_deployment: a deploy dir that proves everything proves nothing"
+# lsof stubbed: the "runner" has its cwd and files in $LSOF_PATHS.
+PRD_HOME="$TMP/prdhome"; PRD_DEPLOY="$TMP/prddeploy/default"; mkdir -p "$PRD_HOME" "$PRD_DEPLOY" "$TMP/prddeploy/default2"
+prd() { # prd <deploy-dir> <path the process has open>
+    rc_of "$(probe STUB_DEPLOY_DIR="$1" HOME="$PRD_HOME" LSOF_PATHS="$2" -- 'lsof(){ printf "n%s\n" "$LSOF_PATHS"; }; _personal_runner_of_this_deployment 4242')"
+}
+check "the deploy dir itself -> proven" 0 "$(prd "$PRD_DEPLOY" "$PRD_DEPLOY")"
+check "a file below it -> proven" 0 "$(prd "$PRD_DEPLOY/" "$PRD_DEPLOY/disk.img")"
+check "a sibling sharing the prefix -> not proven" 1 "$(prd "$PRD_DEPLOY" "${PRD_DEPLOY}2/disk.img")"
+check "deploy dir / -> refused" 1 "$(prd "/" "/usr/lib/x")"
+check "deploy dir // -> refused" 1 "$(prd "//" "/usr/lib/x")"
+check "deploy dir = HOME -> refused" 1 "$(prd "$PRD_HOME" "$PRD_HOME/.zshrc")"
+check "deploy dir = HOME/ -> refused" 1 "$(prd "$PRD_HOME/" "$PRD_HOME/.zshrc")"
+check "deploy dir empty -> refused" 1 "$(rc_of "$(probe STUB_DEPLOY_DIR= HOME="$PRD_HOME" -- 'EXAKIT_PERSONAL_DEPLOY_DIR=; lsof(){ printf "n/x\n"; }; _personal_runner_of_this_deployment 4242')")"
+
 echo "personal_start: deployment_failed while the kit's own runner still runs the VM"
 # What an older kit left behind on a user's Mac: the launcher records
 # deployment_failed, its runner (executed from the launcher's cache) still
