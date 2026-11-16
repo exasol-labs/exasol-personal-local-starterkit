@@ -210,9 +210,12 @@ foreach ($d in (Import-Functions -File (Join-Path $repo "setup/lib/dash-server.p
 function Resolve-DashServerPort { }
 function Get-ExakitComponentAvailable($id) { return "9.9.9" }
 function Get-DashServerInstalledVersion { return "9.9.9" }
-$script:portOurs = $true; $script:stopped = 0; $script:started = 0
-function Test-DashServerPortIsOurs { return $script:portOurs }
-function Stop-DashServer { $script:stopped++; $script:running = @(); return $true }
+$script:portOurs = $true; $script:stopped = 0; $script:started = 0; $script:stoppedIds = @()
+function Get-DashServerOurPortPids { if ($script:portOurs) { return @(2147483001) } return @() }
+function Stop-DashServerPid { param([int]$Id) $script:stopped++; $script:stoppedIds += $Id; $script:running = @() }
+# The pid-file path must never be used here: a stale recorded pid can belong
+# to another process after a reboot.
+function Stop-DashServer { throw "Restart-DashServerForStagedLauncher must not call Stop-DashServer" }
 # The real Start-DashServer applies a staged launcher before it starts one
 # (pinned under "static" below); the stub does the same and starts nothing.
 function Start-DashServer { $script:started++; Complete-ExakitAddonLauncherUpdate -Path (Get-DashServerLauncherPath); return $true }
@@ -224,6 +227,7 @@ $dsOld = "@echo off`r`nrem an older launcher`r`n"
 $script:running = @(2147483001); $script:helperScript = $null; $script:said = @()
 Update-DashServer
 Check "ours: the server is stopped once" "1" $script:stopped
+Check "ours: only the pid proven on our port is stopped" "2147483001" (@($script:stoppedIds) -join ",")
 Check "ours: and started again" "1" $script:started
 Check "ours: the new launcher is in place" "True" ([System.IO.File]::ReadAllText($dsPath) -eq $dsNew)
 Check "ours: no .new is left" "False" (Test-Path -LiteralPath "$dsPath.new")
