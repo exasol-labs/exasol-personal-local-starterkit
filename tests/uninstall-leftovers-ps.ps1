@@ -485,6 +485,15 @@ Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun
 Check "i2b: one rmi for one image id" "1" (@($script:engCalls | Where-Object { $_ -like "podman rmi*" }).Count)
 Lacks "i2b: the duplicate row is not reported kept" "kept image" $script:out
+# (i2b') the same, with the <none> row listed FIRST: tagged rows still go
+# first, so the tag is removed by name and the <none> twin is skipped.
+$env:STUB_PODMAN_IMAGES = @('docker.io/exasol/nano|<none>|fff666|812MB', 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB') -join "`n"
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun
+Check "i2b': <none> listed first: one rmi" "1" (@($script:engCalls | Where-Object { $_ -like "podman rmi*" }).Count)
+Has   "i2b': and it is the tag, by name" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" $script:engCalls
+Lacks "i2b': no rmi by id" "podman rmi fff666" $script:engCalls
+Lacks "i2b': nothing reported kept" "kept image" $script:out
 # (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
 $env:STUB_PODMAN_IMAGES = ""
 $env:STUB_DOCKER_IMAGES = @('exasol/nano|2026.2.0|abc123|812MB', 'exasol/nano|latest|abc123|812MB') -join "`n"

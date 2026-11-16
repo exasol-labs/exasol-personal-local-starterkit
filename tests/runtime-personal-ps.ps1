@@ -271,6 +271,22 @@ function Test-PersonalTlsAnswers { return $true }
 $hint = Get-PersonalForeignDbHint
 Check "...and names WSL when something does" $true ($hint -like "*inside WSL*")
 
+# The real Invoke-ExakitBounded on a tiny real child (this PowerShell): the
+# outcome it records is what the teardown warning names.
+Write-Host ""
+Write-Host "Invoke-ExakitBounded records why a call gave no answer"
+$selfExe = (Get-Process -Id $PID).Path
+[void](Invoke-ExakitBounded -FilePath $selfExe -Arguments @("-NoProfile", "-Command", "exit 0") -TimeoutSeconds 30)
+Check "a clean exit -> ok" "ok" $script:ExakitBoundedOutcome
+$r = Invoke-ExakitBounded -FilePath $selfExe -Arguments @("-NoProfile", "-Command", "exit 125") -TimeoutSeconds 30
+Check "a non-zero exit -> exit 125" "exit 125" $script:ExakitBoundedOutcome
+Check "  ...and no answer" $true ($null -eq $r)
+$r = Invoke-ExakitBounded -FilePath $selfExe -Arguments @("-NoProfile", "-Command", "Start-Sleep -Seconds 20") -TimeoutSeconds 1
+Check "no answer in time -> timeout" "timeout" $script:ExakitBoundedOutcome
+Check "  ...and no answer" $true ($null -eq $r)
+$r = Invoke-ExakitBounded -FilePath (Join-Path $work "no-such-engine-here") -TimeoutSeconds 5
+Check "a program that cannot be run -> error" "error" $script:ExakitBoundedOutcome
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL), skipped: $($script:SKIP)"
