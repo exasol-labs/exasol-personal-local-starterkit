@@ -4106,6 +4106,23 @@ function Invoke-CmdSql {
 # which exits 1 and records a failure note, so an agent reading the exit code
 # saw a broken kit where there was only a typo. Same output as
 # Assert-ExakitKnownOptions.
+# Test-ExakitMcpDoctorFailedRecordAnswers - true when the launcher records the
+# deployment as deployment_failed, yet its database answers the probe AND the
+# port is provably held by this deployment's own runner. mcp-doctor then checks
+# against that database and names the stale record in one warning; the status
+# itself (Test-PersonalDeploymentRunning) is unchanged. The runner proof is
+# Test-PersonalPortHeldByOwnRunner, the twin of
+# _personal_port_held_by_own_runner; where no such proof exists on this side,
+# nothing is proven and the answer is false. Twin of
+# _mcp_doctor_failed_record_but_answers in setup/exakit.
+function Test-ExakitMcpDoctorFailedRecordAnswers([string]$RuntimeType) {
+    if ($RuntimeType -ne "personal") { return $false }
+    if (-not (Get-Command Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue)) { return $false }
+    if ((Get-PersonalLauncherState) -ne "deployment_failed") { return $false }
+    if (-not (Test-PersonalDbAnswers)) { return $false }
+    return [bool](Test-PersonalPortHeldByOwnRunner)
+}
+
 function Stop-ExakitBadOption([string]$Msg) {
     # Delegates rather than duplicating. This function and Deny-ExakitInput
     # were written independently for the same defect - a bad option answered
@@ -4414,6 +4431,14 @@ try {
             $doctorArgs = @($RestArgs | Where-Object { $_ -notin @("--json", "-j") })
             $doctorType = Get-RuntimeType
             $doctorUp = ($doctorType -eq "personal" -and (Get-PersonalStatus) -eq "running")
+            if (-not $doctorUp -and (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType $doctorType)) {
+                $doctorStale = "The launcher records this deployment as failed although its database answers - repair the record with: exakit start"
+                # --json keeps stdout one object: the warning goes to stderr
+                # there, as the shell twin's warn() does everywhere.
+                if ($doctorJson) { [Console]::Error.WriteLine("      ! $doctorStale"); Write-ExakitLog "WARN" $doctorStale }
+                else { Warn2 $doctorStale }
+                $doctorUp = $true
+            }
             if (-not $doctorUp) {
                 if ($doctorJson) {
                     # The same three keys every --json state answer carries.

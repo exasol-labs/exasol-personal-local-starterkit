@@ -2046,6 +2046,32 @@ cmd_mcp_remove() {
     exakit_mcp_operation uninstall "$@" || die "Could not remove the MCP entries"
 }
 
+# _mcp_doctor_failed_record_but_answers - 0 when the launcher records this
+# deployment as deployment_failed, yet its database answers the probe AND
+# every listener on the port is provably this deployment's own runner
+# (_personal_port_held_by_own_runner). personal_deployment_running rightly
+# calls that "not running" - the launcher's word outranks the port - but the
+# MCP checks run against the database itself, which is up. Twin of
+# Test-ExakitMcpDoctorFailedRecordAnswers in setup/exakit.ps1.
+_mcp_doctor_failed_record_but_answers() {
+    [ "$(exakit_installation_runtime_type 2>/dev/null || true)" = personal ] || return 1
+    command -v personal_launcher_state >/dev/null 2>&1 || return 1
+    command -v _personal_port_held_by_own_runner >/dev/null 2>&1 || return 1
+    [ "$(personal_launcher_state 2>/dev/null || true)" = deployment_failed ] || return 1
+    personal_db_answers >/dev/null 2>&1 || return 1
+    _personal_port_held_by_own_runner
+}
+
+# _mcp_doctor_db_reachable - whether mcp-doctor has a database to check
+# against: running, or the failed record above, which is named in one warning
+# so the user can repair the record.
+_mcp_doctor_db_reachable() {
+    exakit_runtime_is_running && return 0
+    _mcp_doctor_failed_record_but_answers || return 1
+    warn "The launcher records this deployment as failed although its database answers - repair the record with: exakit start"
+    return 0
+}
+
 cmd_mcp_doctor() {
     # Parse BEFORE the install check: the check's own answer has to honour
     # --json, and it has to exit 4 rather than 1. Reversing these two lines is
@@ -2075,7 +2101,7 @@ cmd_mcp_doctor() {
         exit 3
     fi
     exakit_init_logging
-    if ! exakit_runtime_is_running; then
+    if ! _mcp_doctor_db_reachable; then
         if [ "$_cmd_json" -eq 1 ]; then
             # Same three keys as every other --json answer from a state query
             # (installed / status / remedy), so one parser handles all of them.
