@@ -3204,7 +3204,9 @@ personal_teardown_leftovers() {
     fi
     if [ -e "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; then
         _ptl_add "the deployment directory $EXAKIT_PERSONAL_DEPLOY_DIR (the database and ALL its data)"
-        _ptl_dir="rm -rf '$EXAKIT_PERSONAL_DEPLOY_DIR'"
+        # A quote in the path is closed, escaped and reopened ('\'') so the
+        # remedy pastes as one argument, like the PowerShell twin's ''.
+        _ptl_dir="rm -rf '$(printf '%s' "$EXAKIT_PERSONAL_DEPLOY_DIR" | sed "s/'/'\\\\''/g")'"
     fi
     EXAKIT_TEARDOWN_REMEDY=""
     [ -n "$_ptl_kill" ] && EXAKIT_TEARDOWN_REMEDY="kill $_ptl_kill"

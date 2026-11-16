@@ -13109,7 +13109,7 @@ exakit_uninstall_run() {
         if [ "$_dry" != "1" ] && [ -e "$_un_dd" ]; then
             EXAKIT_UNINSTALL_DB_LEFT=1
             EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $_un_dd (the database and ALL its data)"
-            EXAKIT_TEARDOWN_REMEDY="rm -rf '$_un_dd'"
+            EXAKIT_TEARDOWN_REMEDY="rm -rf '$(printf '%s' "$_un_dd" | sed "s/'/'\\\\''/g")'"
         fi
     fi
 

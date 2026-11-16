@@ -338,6 +338,30 @@ check "dry run: no hints" "0" "$(printf '%s\n' "$_h" | grep -c 'Restart any AI c
 check "the engine prints the hints (dry-aware)" "1" "$(grep -c '_exakit_uninstall_closing_hints "\$_dry"$' "$ROOT/setup/lib/common.sh")"
 check "the engine stops the processes" "1" "$(grep -c '_exakit_uninstall_mcp_processes "\$_dry"$' "$ROOT/setup/lib/common.sh")"
 
+# --- the leftover remedy survives a quote in the path ----------------------
+echo
+echo "the rm -rf remedy quotes a path that holds a single quote:"
+_qdir="$SANDBOX/it's deploy"
+mkdir -p "$_qdir/sub"
+_r="$(SANDBOX="$SANDBOX" ROOT="$ROOT" Q="$_qdir" bash <<'QUOTE'
+set -u
+HOME="$SANDBOX/q-home"; EXAKIT_BIN_DIR="$HOME/.local/bin"; EXAKIT_HOME="$HOME/.exasol-starter-kit"
+info(){ :; }; warn(){ :; }; error(){ :; }; ok(){ :; }; die(){ exit 1; }
+manifest_get(){ :; }; manifest_set(){ :; }; manifest_del(){ :; }
+detect_os(){ printf macos; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$Q"
+source "$ROOT/setup/lib/runtime-personal.sh"
+lsof(){ return 0; }
+personal_teardown_leftovers "" 1 || :
+printf '%s' "$EXAKIT_TEARDOWN_REMEDY"
+QUOTE
+)"
+check "remedy escapes the quote" "rm -rf '$SANDBOX/it'\\''s deploy'" "$_r"
+eval "$_r"
+check "and pasted, it removes exactly that directory" "0" "$([ -e "$_qdir" ] && echo 1 || echo 0)"
+# The no-runtime branch in the engine builds the same remedy the same way.
+check "engine no-runtime remedy escapes quotes too" "1" "$(grep -c "EXAKIT_TEARDOWN_REMEDY=\"rm -rf '\$(printf '%s' \"\$_un_dd\" | sed \"s/'/'\\\\\\\\\\\\\\\\''/g\")'\"" "$ROOT/setup/lib/common.sh")"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
