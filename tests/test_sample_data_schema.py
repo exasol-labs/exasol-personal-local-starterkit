@@ -241,10 +241,10 @@ class LoadWiringTests(unittest.TestCase):
         self.assertIn('-Label "Upload a file or folder: CSV/Parquet/JSON"', ps1)
         # The same table shows an external source on both: pickable where the
         # virtual-schema module can run, else disabled with the reason.
-        self.assertIn("plain|Connect an external source|0|idle|", bash)
-        self.assertIn("plain|Connect an external source - %s|0|disabled|", bash)
-        self.assertIn('-Label "Connect an external source"', ps1)
-        self.assertIn('-Label "Connect an external source - $why"', ps1)
+        self.assertIn("plain|Federation: Connect other data sources|0|idle|", bash)
+        self.assertIn("plain|Federation: Connect other data sources - %s|0|disabled|", bash)
+        self.assertIn('-Label "Federation: Connect other data sources"', ps1)
+        self.assertIn('-Label "Federation: Connect other data sources - $why"', ps1)
         for text in (bash, ps1):
             self.assertNotIn("coming soon", text)
         self.assertIn("Import-ExakitLocalJson -Path $path -Target $target", ps1)

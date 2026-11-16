@@ -82,7 +82,7 @@ replay() { # replay <keys> [VAR=value ...] — the scenario's final screen and a
 
 # The scenario's rows, with tpch, energy and amazon_sales still to load:
 #   1 Sample datasets (parent)  2 tpch  3 energy  4 amazon_sales
-#   5 Your file or folder       6 Connect an external source (disabled)  7 Skip
+#   5 Your file or folder       6 Federation: Connect other data sources (disabled)  7 Skip
 # The cursor starts on row 2, past the parent.
 echo "one table answers the data question (a real pty):"
 if command -v python3 >/dev/null 2>&1; then
@@ -133,15 +133,15 @@ if command -v python3 >/dev/null 2>&1; then
     has "the description is shown in full" "Online orders" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
     has "nor your own file" "Upload a file or folder: CSV/Parquet/JSON" "$out"
-    has "nor the external source" "Connect an external source - unavailable" "$out"
+    has "nor the external source" "Federation: Connect other data sources - unavailable" "$out"
     lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Data to load ─/,/╰/p')"
     has "the persona's dataset is the one picked" "SELECTION=amazon_sales" "$out"
 
     echo "the external row, where virtual schemas can run (a real pty):"
     out="$(replay 'jjjj \r' DQ_VS=1)"
     has "the cursor stops on it, Space ticks it, it answers external" "SELECTION=tpch,energy,amazon_sales,external" "$out"
-    has "...under its own name" "Connect an external source" "$out"
-    lacks "...with no reason after it" "Connect an external source -" "$out"
+    has "...under its own name" "Federation: Connect other data sources" "$out"
+    lacks "...with no reason after it" "Federation: Connect other data sources -" "$out"
     # The installer's own step, picked at the table: the real wizard entry
     # point runs the command beside the library - here a stub - with nothing
     # after `connect`, the same as typing `exakit connect`.
@@ -191,10 +191,10 @@ rows() { # rows <pending-ids...> — kind|label|state per row, then the id per r
     )
 }
 check "parent, datasets, your file, external (disabled), Skip" \
-    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - unavailable|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
+    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Federation: Connect other data sources - unavailable|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
     "$(rows tpch energy)"
 check "every sample loaded: the parent is a disabled row that says so" \
-    "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - unavailable|disabled;plain|Skip|idle;~,local,,," \
+    "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Federation: Connect other data sources - unavailable|disabled;plain|Skip|idle;~,local,,," \
     "$(rows)"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\nenergy|Energy\n'; }; exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s~%s' "$(exakit_data_table_row energy)" "$(exakit_data_table_row local)" "$EXAKIT_TABLE_GROUP" "$EXAKIT_TABLE_EXCLUSIVE") )"
@@ -284,10 +284,10 @@ vs_rows() { # vs_rows <pyexasol:yes|no> [defs:yes|no] — the external row's lab
         printf '%s~%s' "$(sed -n 4p "$WORK/table" | cut -d'|' -f2,4)" "$(printf '%s' "$EXAKIT_TABLE_IDS" | sed -n 4p)"
     )
 }
-check "the module and the kit's pyexasol: pickable, under its own name" "Connect an external source|idle~external" "$(vs_rows yes)"
-check "no pyexasol: disabled, and says so" "Connect an external source - no pyexasol|disabled~" "$(vs_rows no)"
-check "no definitions in this kit copy: disabled, and says so" "Connect an external source - unavailable|disabled~" "$(vs_rows yes no)"
-check "the module not loaded at all: disabled" "Connect an external source - unavailable|disabled~" \
+check "the module and the kit's pyexasol: pickable, under its own name" "Federation: Connect other data sources|idle~external" "$(vs_rows yes)"
+check "no pyexasol: disabled, and says so" "Federation: Connect other data sources - no pyexasol|disabled~" "$(vs_rows no)"
+check "no definitions in this kit copy: disabled, and says so" "Federation: Connect other data sources - unavailable|disabled~" "$(vs_rows yes no)"
+check "the module not loaded at all: disabled" "Federation: Connect other data sources - unavailable|disabled~" \
     "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$(sed -n 4p "$WORK/table" | cut -d'|' -f2,4)" "$(printf '%s' "$EXAKIT_TABLE_IDS" | sed -n 4p)") )"
 for _setup in setup-macos.sh setup-linux.sh; do
@@ -403,7 +403,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_DESC" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the descriptions go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip;~;Orders, customers, parts;Online orders;;;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Federation: Connect other data sources - unavailable;Skip;~;Orders, customers, parts;Online orders;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'not_a_dataset|A dataset with no conf\n'; }
         exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_DESC") )"
 check "no description, no Description column" "0" "$out"
