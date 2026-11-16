@@ -977,20 +977,18 @@ function Get-ExakitOrphanAutostartEntries {
 }
 
 # Get-ExakitOrphanAutostartPids <id> <entry> - processes still running from an
-# orphaned entry. Only clearly the kit's: the command line names the entry
-# itself, or names both the kit's bin dir and the add-on id.
+# orphaned entry. Only a command line that names the orphaned Startup entry's
+# full path counts. The kit's bin dir plus the add-on id is no proof: the user's
+# own `dash-server` started by hand names both, and it is not the leftover.
 function Get-ExakitOrphanAutostartPids {
     param([string]$Id, [string]$Entry)
     $ours = @()
+    if (-not $Entry) { return @() }
     foreach ($p in @(Get-ExakitProcessList)) {
         $cmd = "" + $p.CommandLine
         if (-not $cmd) { continue }
         if ([int]$p.ProcessId -eq $PID) { continue }
-        $byEntry = $Entry -and ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
-        $byTarget = $script:BinDir -and
-            ($cmd.IndexOf($script:BinDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and
-            ($cmd.IndexOf($Id, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
-        if ($byEntry -or $byTarget) { $ours += [int]$p.ProcessId }
+        if ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $ours += [int]$p.ProcessId }
     }
     return @($ours | Sort-Object -Unique)
 }

@@ -377,7 +377,10 @@ function Seed-Startup {
     foreach ($f in @($orphan, $foreign, $nearMiss)) { Set-Content -Path $f -Value "@echo off" }
     $target = Join-Path $script:BinDir "dash-server.cmd"
     $script:fakeProcs = @(
-        [pscustomobject]@{ ProcessId = 4711; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$target`" --port 8000" },
+        [pscustomobject]@{ ProcessId = 4711; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$orphan`"" },
+        # Names the kit's bin dir and the add-on id but not the orphaned entry:
+        # a dash-server the user started by hand. Never stopped.
+        [pscustomobject]@{ ProcessId = 4714; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$target`" --port 8000" },
         [pscustomobject]@{ ProcessId = 4712; ParentProcessId = 1; CommandLine = "cmd.exe /c C:\other\dash-server.cmd" },
         [pscustomobject]@{ ProcessId = 4713; ParentProcessId = 1; CommandLine = "notepad.exe" })
     $script:stopped = @()
