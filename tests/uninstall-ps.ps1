@@ -224,9 +224,13 @@ $script:said = @()
 Write-ExakitUninstallClosingHints
 Check "the restart advice is printed" "1" (@($script:said | Where-Object { $_ -like "Restart any AI client that was open*" }).Count)
 Check "the uv cache hint is printed" "1" (@($script:said | Where-Object { $_ -like "*cache clean exasol-mcp-server" }).Count)
+# A dry run says nothing: --yes runs the plan first, so hints there printed twice.
+$script:said = @()
+Write-ExakitUninstallClosingHints -DryRun
+Check "dry run: no hints" "0" $script:said.Count
 $src = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
 Check "the engine stops the processes" "True" ($src -match 'Invoke-ExakitUninstallMcpProcesses -DryRun:\$DryRun')
-Check "the engine prints the hints" "True" ($src -match '(?m)^\s+Write-ExakitUninstallClosingHints\s*$')
+Check "the engine prints the hints" "True" ($src -match '(?m)^\s+Write-ExakitUninstallClosingHints -DryRun:\$DryRun\s*$')
 
 # --- the permission rules: every one the kit ever wrote, and only those ---
 Write-Host ""

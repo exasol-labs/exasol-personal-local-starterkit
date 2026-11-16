@@ -12805,7 +12805,11 @@ _exakit_uninstall_mcp_processes() {
 # _exakit_uninstall_closing_hints - what uninstall leaves on purpose:
 # open AI clients still hold the removed MCP entry, and uv keeps the MCP server
 # package in its own cache (~200 MB), which is uv's to clean, not ours.
+# Silent on a dry run: they are advice for after a real removal, and --yes runs
+# the plan first, so printing them there too said them twice. Twin of
+# Write-ExakitUninstallClosingHints.
 _exakit_uninstall_closing_hints() {
+    [ "${1:-0}" = "1" ] && return 0
     _uch_uv="uv"
     if ! command -v uv >/dev/null 2>&1 && [ -x "${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv" ]; then
         _uch_uv="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv"
@@ -13190,7 +13194,7 @@ exakit_uninstall_run() {
     [ -n "$_un_bins_gone" ] && _done "Commands removed from $EXAKIT_BIN_DIR: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"
-    command -v _exakit_uninstall_closing_hints >/dev/null 2>&1 && _exakit_uninstall_closing_hints
+    command -v _exakit_uninstall_closing_hints >/dev/null 2>&1 && _exakit_uninstall_closing_hints "$_dry"
     # Said last, and said plainly, because it is the one thing the reader cannot
     # find out afterwards: the logfile that held the per-path detail lived inside
     # the kit home this run has just deleted, so the lines above are the only
