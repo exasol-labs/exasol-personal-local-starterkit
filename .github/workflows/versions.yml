@@ -966,6 +966,7 @@ jobs:
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/shim-update-ps.ps1
+            pwsh -NoProfile -File tests/addon-launcher-ps.ps1
             pwsh -NoProfile -File tests/uninstall-leftovers-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1

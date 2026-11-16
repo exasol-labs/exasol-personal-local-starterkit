@@ -232,8 +232,7 @@ function Write-DbtExasolLauncher {
     } catch {
         return (Write-DbtExasolNotInstalled "could not create $script:BinDir for the dbt-exasol launcher")
     }
-    $lines = @(
-        "@echo off"
+    $lines = @("@echo off") + @(Get-ExakitAddonLauncherGuard -Id "dbt-exasol" -Target $exe) + @(
         # setlocal, AND THAT IS NOT BOILERPLATE. A .cmd invoked from an
         # interactive cmd.exe runs in THAT process, so every `set` here escapes
         # into the user's console and is inherited by everything they run
@@ -270,9 +269,9 @@ function Write-DbtExasolLauncher {
     # written". Same approach as Set-ExakitCmdShim, including its fallback: a
     # machine whose OEM code page cannot be resolved keeps the old behaviour
     # rather than losing the file.
-    $oemEnc = Get-ExakitOemEncoding
-    if ($oemEnc) { [System.IO.File]::WriteAllText((Get-DbtExasolLauncherPath), ($lines -join "`r`n"), $oemEnc) }
-    else { Set-Content -Path (Get-DbtExasolLauncherPath) -Value ($lines -join "`r`n") -Encoding Ascii }
+    # Never in place under a running copy, either: Write-ExakitAddonLauncher
+    # (exakit-common.ps1) defers the swap while a cmd.exe runs this launcher.
+    Write-ExakitAddonLauncher -Path (Get-DbtExasolLauncherPath) -Content ($lines -join "`r`n")
     } catch {
         return (Write-DbtExasolNotInstalled "could not write the launcher at $(Get-DbtExasolLauncherPath)")
     }
