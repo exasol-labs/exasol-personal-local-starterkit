@@ -47,7 +47,15 @@ PASS=0
 FAIL=0
 TMP="$(mktemp -d)"
 CHILDREN=""
-cleanup() { for _p in $CHILDREN; do kill -9 "$_p" 2>/dev/null || true; done; rm -rf "$TMP"; }
+# Listeners started inside $(...) (start_listener) run in a subshell, where an
+# append to CHILDREN is lost - they leaked past the run. Every listener pid
+# also goes into this file, which the EXIT trap reads and kills.
+CHILD_PIDS="$TMP/child-pids"
+: > "$CHILD_PIDS"
+cleanup() {
+    for _p in $CHILDREN $(cat "$CHILD_PIDS" 2>/dev/null); do kill -9 "$_p" 2>/dev/null || true; done
+    rm -rf "$TMP"
+}
 trap cleanup EXIT
 
 check() { # check <label> <expected> <actual>
@@ -311,7 +319,7 @@ cp "$TMP/tls_server.py" "$RDIR/launcher"
 cp "$TMP/tls_server.py" "$TMP/elsewhere/exasol-local-runner-copy"
 start_listener() { # start_listener <script> <port> [cwd] -> pid, once the port is held
     (cd "${3:-$TMP}" && exec python3 "$1" "$2" "$TMP/cert.pem" "$TMP/key.pem") >/dev/null 2>&1 &
-    _lp=$!; CHILDREN="$CHILDREN $_lp"
+    _lp=$!; echo "$_lp" >> "$CHILD_PIDS"
     _w=0; until (exec 3<>"/dev/tcp/127.0.0.1/$2") 2>/dev/null; do _w=$((_w + 1)); [ "$_w" -ge 40 ] && break; sleep 0.25; done
     echo "$_lp"
 }
