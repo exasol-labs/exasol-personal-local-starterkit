@@ -5837,6 +5837,7 @@ _exakit_addon_table_cleanup() {
     rm -f "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_STATE.new" \
           "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop" \
           "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    UI_TABLE_NOBOX=""
     EXAKIT_ADDON_TABLE_STATE=""
     UI_TABLE_COL2=""
     UI_TABLE_COL2_YIELDS=0
@@ -6273,6 +6274,8 @@ EXAKIT_MM_COVERED
         if [ "$_mm_auto_rows" != " " ]; then
             UI_TABLE_COL3=""
             UI_TABLE_NOBOX="$_mm_auto_rows"
+            # Nothing is ticked while the two install: the question comes after.
+            ui_table_tick "$EXAKIT_ADDON_TABLE_STATE" ""
             UI_TABLE_LINES=0
             # The spinner's line becomes the blank line above the table.
             [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && ui_spin_end
@@ -6290,7 +6293,9 @@ EXAKIT_MM_COVERED
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
     # The Description helps the choice and goes once it is made (see below).
     UI_TABLE_COL3=""
-    UI_TABLE_NOBOX=""
+    # The two keep no checkbox while the rest install in the same table; the
+    # table is gone once this returns (_exakit_addon_table_cleanup).
+    [ "$_mm_auto_done" = 1 ] || UI_TABLE_NOBOX=""
     if [ "$_mm_auto_done" = 1 ]; then
         # What the two installs had to say: the table's rows already say it, so the
         # log keeps the lines (a warning still shows).
@@ -6651,8 +6656,12 @@ _exakit_marketplace_apply_python() {
       export EXAKIT_MARKETPLACE_ACTIVITY_FILE
       EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)"
       export EXAKIT_MARKETPLACE_VERSIONS_DOC
+      # No terminal for the installs to read (their questions were asked before the
+      # table): a child that resets the terminal's echo would otherwise let every
+      # key pressed meanwhile print a line into the frame, which then redraws one
+      # line lower each time.
       _exakit_marketplace_run_python mutate "$_mpa_root/marketplace/apply.py" "$1" --stream \
-          >"$_mpa_dir/events" 2>"$_mpa_dir/stderr"
+          </dev/null >"$_mpa_dir/events" 2>"$_mpa_dir/stderr"
       printf '%s\n' "$?" >"$_mpa_dir/exit"
     ) &
     _mpa_pid=$!

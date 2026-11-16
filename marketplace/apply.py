@@ -164,12 +164,15 @@ def _apply_side_by_side(ctx: KitContext, group: list[str], modules: dict[str, ob
     with ThreadPoolExecutor(max_workers=min(WORKERS, len(pending)), thread_name_prefix="exakit-addon") as pool:
         futures: dict[str, Future] = {addon_id: pool.submit(_install_held, ctx, addon_id, turns[addon_id])
                                       for addon_id in pending}
+        # Every one of them is installing NOW: each row gets its bar at once, side by side. What they say (the
+        # activity line, the log) still comes out one add-on after the other, in selection order.
+        for addon_id in pending:
+            emit(Event(addon_id, "installing"))
         for addon_id in group:
             if addon_id not in futures:
                 results.append(_apply_one(ctx, addon_id, modules[addon_id], emit))
                 continue
             _point_activity_at(addon_id)
-            emit(Event(addon_id, "installing"))
             turns[addon_id].go_live()
             error, seconds = futures[addon_id].result()
             finishing = time.monotonic()

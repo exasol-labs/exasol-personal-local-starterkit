@@ -74,6 +74,11 @@ class FakeAddons:
         return 0, None
 
 
+def _settled(stream: str) -> str:
+    """The stream without its "installing" records: where those stand is the one way a side-by-side turn differs."""
+    return "\n".join(line for line in stream.splitlines() if not re.match(r"@@EXAKIT\|[^|]+\|installing\|", line))
+
+
 class ParallelApplyTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -117,7 +122,12 @@ class ParallelApplyTest(unittest.TestCase):
     def test_stream_receipts_and_log_match_a_serial_install(self) -> None:
         serial = self.run_apply(PERSONA, parallel=False)
         parallel = self.run_apply(PERSONA, parallel=True)
-        self.assertEqual(serial[0], parallel[0])          # the platform's live records, activity lines included
+        # The platform's live records, activity lines included, as a serial install's - except that every add-on of a
+        # side-by-side turn says "installing" when its worker starts, so each row has its bar at once.
+        self.assertEqual(_settled(serial[0]), _settled(parallel[0]))
+        lines = parallel[0].splitlines()
+        self.assertLess(lines.index("@@EXAKIT|json-tables|installing||N"), lines.index("  • dash-server: fetching"),
+                        "both bars start before either says what it is doing")
         self.assertEqual(serial[1], parallel[1])          # manifest.json receipts
         self.assertEqual(serial[2], parallel[2])          # marketplace.log, add-on by add-on
         order = [line.split("|")[1] for line in parallel[0].splitlines() if line.startswith("@@EXAKIT|")]
@@ -129,7 +139,8 @@ class ParallelApplyTest(unittest.TestCase):
         stream = self.run_apply(PERSONA, parallel=True)[0].splitlines()
         for addon_id in PERSONA.split(","):
             start = stream.index(f"@@EXAKIT|{addon_id}|installing||N")
-            self.assertEqual(f"  • {addon_id}: fetching", stream[start + 1])
+            done_at = next(i for i, line in enumerate(stream) if line.startswith(f"@@EXAKIT|{addon_id}|done|"))
+            self.assertIn(f"  • {addon_id}: fetching", stream[start:done_at])
             done = next(i for i, line in enumerate(stream) if line.startswith(f"@@EXAKIT|{addon_id}|done|"))
             self.assertIn(f"  • {addon_id}: built", stream[start:done])
 
@@ -137,7 +148,7 @@ class ParallelApplyTest(unittest.TestCase):
         serial = self.run_apply(PERSONA, parallel=False, fake=FakeAddons(fail="json-tables"))
         parallel = self.run_apply(PERSONA, parallel=True, fake=FakeAddons(fail="json-tables"))
         self.assertEqual(1, parallel[5])
-        self.assertEqual(serial[0], parallel[0])
+        self.assertEqual(_settled(serial[0]), _settled(parallel[0]))
         self.assertEqual(serial[1], parallel[1])
         self.assertIn("@@EXAKIT|json-tables|failed|json-tables download failed|N", parallel[0])
         self.assertIn("@@EXAKIT|notebook|done|notebook summary|N", parallel[0])

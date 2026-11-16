@@ -7068,7 +7068,8 @@ function Show-ExakitMarketplaceMenu {
             -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent $groupParent `
             -GroupFirst $groupFirst -GroupLast $groupLast -GroupMode "all" -OnScreen $onScreen)
     } finally {
-        $script:UiTableNoBox = @()
+        # The two keep no checkbox while the rest install in the same table.
+        if (-not $autoDone) { $script:UiTableNoBox = @() }
     }
     if ($autoDone) {
         # What the two installs had to say: the table's rows already say it, so the
@@ -7134,7 +7135,7 @@ function Show-ExakitMarketplaceMenu {
         $keys = @($pickedKids | Where-Object { $_.StartsWith($id + ":") } | ForEach-Object { $_.Substring($id.Length + 1) })
         & $addon.ChildrenPickedFn -Keys $keys
     }
-    Invoke-ExakitMarketplaceApply -Ids $picked
+    try { Invoke-ExakitMarketplaceApply -Ids $picked } finally { $script:UiTableNoBox = @() }
 }
 
 # Show-ExakitMarketplaceList - the READ-ONLY answer to "what add-ons exist and
@@ -7461,7 +7462,9 @@ function Invoke-ExakitMarketplaceApplyPython {
         if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
         $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
         Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_FILE -ErrorAction SilentlyContinue
-        & $uv run --python $script:ManagedPythonVersion --no-project python $runner ($Ids -join ',') --stream 2>&1 |
+        # No console input for the installs (their questions were asked before the table): a child that turned the
+        # console's echo back on would let every key pressed meanwhile push the frame down. Twin of </dev/null.
+        $null | & $uv run --python $script:ManagedPythonVersion --no-project python $runner ($Ids -join ',') --stream 2>&1 |
             ForEach-Object {
                 $line = "$_"
                 if ($line.StartsWith('@@EXAKIT|')) {
