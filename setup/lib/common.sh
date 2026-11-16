@@ -12758,13 +12758,17 @@ EXAKIT_UM_PANEL_EOF
 # PROOF, NOT A NAME MATCH. Another tool may run its own exasol-mcp-server, so a
 # process qualifies only when its command line names exasol-mcp-server AND its
 # environment carries what the kit wrote into every client config: EXA_USER is
-# the kit's read-only MCP user and EXA_DSN is a loopback address. The
+# the kit's read-only MCP user and EXA_DSN is a loopback address on THIS
+# deployment's port (<port>, the caller's personal_db_port; empty means no
+# port is known and nothing qualifies). The
 # environment is read from /proc/<pid>/environ (Linux) or `ps -E` (macOS);
 # where neither answers, nothing qualifies and nothing is stopped. No
 # PowerShell twin: Windows cannot read another process's environment, so the
 # Windows uninstall only asks the user to restart open AI clients.
 _exakit_kit_mcp_server_pids() {
     _kmp_user="${EXAKIT_MCP_USER:-mcp_readonly}"
+    _kmp_port="${1:-}"
+    case "$_kmp_port" in ''|*[!0-9]*) return 0 ;; esac
     ps -axww -o pid=,command= 2>/dev/null | while read -r _kmp_pid _kmp_cmd; do
         case "$_kmp_cmd" in *exasol-mcp-server*) ;; *) continue ;; esac
         case "$_kmp_pid" in ''|*[!0-9]*) continue ;; esac
@@ -12776,17 +12780,18 @@ _exakit_kit_mcp_server_pids() {
         fi
         case "$_kmp_env" in *" EXA_USER=$_kmp_user "*) ;; *) continue ;; esac
         case "$_kmp_env" in
-            *" EXA_DSN=127.0.0.1:"*|*" EXA_DSN=localhost:"*|*" EXA_DSN=[::1]:"*)
+            *" EXA_DSN=127.0.0.1:$_kmp_port "*|*" EXA_DSN=localhost:$_kmp_port "*|*" EXA_DSN=[::1]:$_kmp_port "*)
                 printf '%s\n' "$_kmp_pid" ;;
         esac
     done
 }
 _exakit_stop_pid() { kill -TERM "$1" 2>/dev/null; }
 
-# _exakit_uninstall_mcp_processes <dry> - stop the kit's own MCP servers
-# (TERM), or in a dry run name them.
+# _exakit_uninstall_mcp_processes <dry> <port> - stop the kit's own MCP
+# servers (TERM), or in a dry run name them. <port> is the deployment's
+# database port, captured before the deployment was removed.
 _exakit_uninstall_mcp_processes() {
-    _ump_pids="$(_exakit_kit_mcp_server_pids 2>/dev/null | tr '\n' ' ')"
+    _ump_pids="$(_exakit_kit_mcp_server_pids "${2:-}" 2>/dev/null | tr '\n' ' ')"
     _ump_pids="${_ump_pids% }"
     [ -n "$_ump_pids" ] || return 0
     _ump_n=0
@@ -13035,6 +13040,11 @@ exakit_uninstall_run() {
     # HOME (the test suites) must never reach the real engine's images.
     _un_had_deploy=0
     [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && _un_had_deploy=1
+    # The deployment's port, read while its deployment.json still exists:
+    # step 2b proves an MCP server is the kit's by EXA_DSN on this port.
+    _un_mcp_port=""
+    [ "$_un_had_deploy" = 1 ] && command -v personal_db_port >/dev/null 2>&1 && \
+        _un_mcp_port="$(personal_db_port 2>/dev/null || true)"
     if [ -n "$_type" ]; then
         # Named BEFORE the removal, not only in the record line after it: on
         # `--yes` there is no gate to read, so this line is the last chance to
@@ -13142,8 +13152,12 @@ exakit_uninstall_run() {
         _done "MCP entry removed from the AI clients the kit manages: ${_un_mcp_clients:-all managed clients}"
     fi
     # 2b) MCP servers the open AI clients still run for the kit, now pointed
-    #     at nothing. Only processes proven to be the kit's (see the helper).
-    command -v _exakit_uninstall_mcp_processes >/dev/null 2>&1 && _exakit_uninstall_mcp_processes "$_dry"
+    #     at nothing. Only processes proven to be the kit's (see the helper),
+    #     and only when this run found a deployment: a sandboxed HOME (the
+    #     test suites) must never reach the real machine's processes.
+    if [ "$_un_had_deploy" = 1 ] && command -v _exakit_uninstall_mcp_processes >/dev/null 2>&1; then
+        _exakit_uninstall_mcp_processes "$_dry" "$_un_mcp_port"
+    fi
 
     # 3) Installed AI skills (shared with the selectable uninstall menu).
     _exakit_remove_installed_skills "$_dry"

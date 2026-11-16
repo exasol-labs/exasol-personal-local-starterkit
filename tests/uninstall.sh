@@ -300,7 +300,7 @@ for _fn in _exakit_kit_mcp_server_pids _exakit_stop_pid _exakit_uninstall_mcp_pr
     eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
 _exakit_stop_pid(){ printf 'KILL %s\n' "$1"; }
-_exakit_uninstall_mcp_processes "$DRY"
+_exakit_uninstall_mcp_processes "$DRY" "${PORT-8563}"
 PROCS
 }
 _p="$(_procs 1 2>&1)"
@@ -310,6 +310,10 @@ _p="$(_procs 0 2>&1)"
 check "real run stops the kit's process" "1" "$(printf '%s\n' "$_p" | grep -cx 'KILL 4999991')"
 check "and only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 check "and says so" "1" "$(printf '%s\n' "$_p" | grep -c '^OK Stopped .*4999991')"
+_p="$(PORT=9999 _procs 0 2>&1)"
+check "another port than the deployment's: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+_p="$(PORT= _procs 0 2>&1)"
+check "no known port: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 
 # --- the closing hints: restart the clients, and uv's cache ----------------
 echo
@@ -336,7 +340,8 @@ _h="$(_hints "$SANDBOX/uvbin:/usr/bin:/bin" 1 2>&1)"
 check "dry run: no hints" "0" "$(printf '%s\n' "$_h" | grep -c 'Restart any AI client\|cache clean exasol-mcp-server')"
 # Wired into the engine, after the spinner, on both sides.
 check "the engine prints the hints (dry-aware)" "1" "$(grep -c '_exakit_uninstall_closing_hints "\$_dry"$' "$ROOT/setup/lib/common.sh")"
-check "the engine stops the processes" "1" "$(grep -c '_exakit_uninstall_mcp_processes "\$_dry"$' "$ROOT/setup/lib/common.sh")"
+check "the engine stops the processes" "1" "$(grep -c '_exakit_uninstall_mcp_processes "\$_dry" "\$_un_mcp_port"$' "$ROOT/setup/lib/common.sh")"
+check "...only when the run found a deployment" "1" "$(grep -c 'if \[ "\$_un_had_deploy" = 1 \] && command -v _exakit_uninstall_mcp_processes' "$ROOT/setup/lib/common.sh")"
 
 # --- the leftover remedy survives a quote in the path ----------------------
 echo
