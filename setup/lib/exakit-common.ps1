@@ -3531,11 +3531,17 @@ $recheckBlock
 # offset, and the new content there can be the self-delete line. If a waited
 # process is still alive (a bounded wait ran out), keep the old file.
 foreach (`$id in @($pidList)) { if (`$id -and (Get-Process -Id `$id -ErrorAction SilentlyContinue)) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; exit } }
-# The target gone (an uninstall ran meanwhile): do not bring it back.
-if (-not (Test-Path -LiteralPath '$qShim')) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; exit }
+# One atomic File.Replace: it needs the target to exist, so a target removed
+# meanwhile (an uninstall ran) is never brought back, and there is no moment
+# with no file at the target. NullString, not a plain null: PowerShell passes
+# null to a string parameter as an empty string, which Replace rejects as a
+# backup path. Target
+# gone: .new is dropped. Any other failure
+# (a scanner holding .new): the old file and .new both stay.
 for (`$n = 0; `$n -lt 20; `$n++) {
     if (-not (Test-Path -LiteralPath '$qNew')) { break }
-    try { Move-Item -LiteralPath '$qNew' -Destination '$qShim' -Force -ErrorAction Stop; break } catch {}
+    if (-not (Test-Path -LiteralPath '$qShim')) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; break }
+    try { [System.IO.File]::Replace('$qNew', '$qShim', [System.Management.Automation.Language.NullString]::Value); break } catch {}
     Start-Sleep -Milliseconds 500
 }
 "@

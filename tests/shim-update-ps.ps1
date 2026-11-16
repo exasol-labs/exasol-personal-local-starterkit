@@ -232,6 +232,22 @@ Invoke-HelperChild
 Check "target removed before the move: exakit.cmd not recreated" "False" (Test-Path -LiteralPath $shimPath)
 Check "target removed before the move: exakit.cmd.new removed" "False" (Test-Path -LiteralPath $newPath)
 
+# The swap is one File.Replace: a .new that cannot be applied (here a directory
+# in its place, as a stand-in for a file a scanner holds) leaves the old
+# exakit.cmd in place and the .new where it is - never no exakit.cmd at all.
+Check "the helper swaps with File.Replace, not Move-Item" "True" ($defs["Write-ExakitCmdShimDeferred"].Contains('[System.IO.File]::Replace(') -and -not $defs["Write-ExakitCmdShimDeferred"].Contains('Move-Item'))
+Write-OldShim
+Remove-Item -Force -Recurse -LiteralPath $newPath -ErrorAction SilentlyContinue
+$script:helperScript = $null
+[void](Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $newShim -WaitPids @(2147483000))
+Remove-Item -Force -LiteralPath $newPath
+New-Item -ItemType Directory -Force -Path $newPath | Out-Null
+Set-Content -Path (Join-Path $newPath "held") -Value "x"
+Invoke-HelperChild
+Check "a .new that cannot be applied: exakit.cmd is still the old one" "True" ((Test-Path -LiteralPath $shimPath -PathType Leaf) -and ([System.IO.File]::ReadAllText($shimPath) -eq $oldShim))
+Check "a .new that cannot be applied: the .new stays" "True" (Test-Path -LiteralPath $newPath)
+Remove-Item -Force -Recurse -LiteralPath $newPath -ErrorAction SilentlyContinue
+
 # The helper's recheck: a PowerShell running the kit's exakit.ps1 that starts
 # after the staged swap (an `exakit` typed at an interactive cmd.exe prompt) is
 # waited for before the move. The child gets a process table naming a real,
