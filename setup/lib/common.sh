@@ -12776,7 +12776,16 @@ _exakit_kit_mcp_server_pids() {
         if [ -r "/proc/$_kmp_pid/environ" ]; then
             _kmp_env=" $(tr '\0' ' ' < "/proc/$_kmp_pid/environ" 2>/dev/null) "
         else
-            _kmp_env=" $(ps -E -ww -o command= -p "$_kmp_pid" 2>/dev/null) "
+            # `ps -E` prints the command line FIRST, then the environment: an
+            # EXA_USER=... in the arguments would pass for the environment.
+            # Strip the plain command text off the front; when it is not the
+            # prefix (the process changed between the two reads), nothing is
+            # proven.
+            _kmp_plain="$(ps -ww -o command= -p "$_kmp_pid" 2>/dev/null)"
+            _kmp_raw="$(ps -E -ww -o command= -p "$_kmp_pid" 2>/dev/null)"
+            [ -n "$_kmp_plain" ] || continue
+            case "$_kmp_raw" in "$_kmp_plain"*) ;; *) continue ;; esac
+            _kmp_env=" ${_kmp_raw#"$_kmp_plain"} "
         fi
         case "$_kmp_env" in *" EXA_USER=$_kmp_user "*) ;; *) continue ;; esac
         case "$_kmp_env" in
