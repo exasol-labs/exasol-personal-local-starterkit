@@ -327,6 +327,19 @@ else
 fi
 check "deploy dir empty -> refused" 1 "$(rc_of "$(probe STUB_DEPLOY_DIR= HOME="$PRD_HOME" -- 'EXAKIT_PERSONAL_DEPLOY_DIR=; lsof(){ printf "n/x\n"; }; _personal_runner_of_this_deployment 4242')")"
 
+echo "personal_stop_runner_of_failed_deployment: no KILL for a pid that is no longer proven"
+# A process that ignores TERM. It was proven when the stop began; by the KILL
+# it no longer is (another start's runner, or a reused pid). It is not forced.
+( trap '' TERM; exec sleep 30 ) & _tpid=$!; echo "$_tpid" >> "$CHILD_PIDS"
+_out="$(probe TPID="$_tpid" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=1 -- '_personal_port_held_by_own_runner() { _ppo_pids="$TPID"; }; _personal_is_own_runner_pid() { return 1; }; personal_launcher_cache_dir() { echo /nonexistent-cache; }; personal_db_port_pids() { echo "$TPID"; }; personal_stop_runner_of_failed_deployment')"
+contains "a pid no longer proven is named, not forced" "is no longer proven to be this deployment's runner - it was not forced" "$_out"
+check    "  ...and it is still alive" 0 "$(kill -0 "$_tpid" 2>/dev/null; echo $?)"
+# The same process still proven (and on the port): forced, as before.
+_out="$(probe TPID="$_tpid" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=1 -- '_personal_port_held_by_own_runner() { _ppo_pids="$TPID"; }; _personal_is_own_runner_pid() { return 0; }; personal_launcher_cache_dir() { echo /nonexistent-cache; }; personal_db_port_pids() { kill -0 "$TPID" 2>/dev/null && echo "$TPID"; }; personal_stop_runner_of_failed_deployment')"
+contains "a pid still proven is forced" "did not exit within 1s - forcing it" "$_out"
+_w=0; while kill -0 "$_tpid" 2>/dev/null && [ "$_w" -lt 20 ]; do sleep 0.1; _w=$((_w + 1)); done
+check    "  ...and it is gone" 1 "$(kill -0 "$_tpid" 2>/dev/null; echo $?)"
+
 echo "personal_start: deployment_failed while the kit's own runner still runs the VM"
 # What an older kit left behind on a user's Mac: the launcher records
 # deployment_failed, its runner (executed from the launcher's cache) still

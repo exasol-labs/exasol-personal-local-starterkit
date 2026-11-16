@@ -1282,14 +1282,20 @@ _personal_port_held_by_own_runner() {
     _ppo_found="$(personal_db_port_pids)"
     [ -n "$_ppo_found" ] || return 1
     for _ppo_pid in $_ppo_found; do
-        _personal_is_runner_process "$_ppo_pid" || return 1
-        case "$(ps -p "$_ppo_pid" -o command= 2>/dev/null || true)" in
-            *"$_ppo_cache"/*exasol-local-runner*) ;;
-            *) return 1 ;;
-        esac
-        _personal_runner_of_this_deployment "$_ppo_pid" || return 1
+        _personal_is_own_runner_pid "$_ppo_pid" "$_ppo_cache" || return 1
     done
     _ppo_pids="$_ppo_found"
+}
+
+# _personal_is_own_runner_pid PID CACHE - 0 when PID is the launcher's runner,
+# executed from CACHE, and proven to work for this deployment.
+_personal_is_own_runner_pid() {
+    _personal_is_runner_process "$1" || return 1
+    case "$(ps -p "$1" -o command= 2>/dev/null || true)" in
+        *"$2"/*exasol-local-runner*) ;;
+        *) return 1 ;;
+    esac
+    _personal_runner_of_this_deployment "$1" || return 1
 }
 
 personal_stop_runner_of_failed_deployment() {
@@ -1311,8 +1317,16 @@ personal_stop_runner_of_failed_deployment() {
         sleep 1
         _psr_waited=$((_psr_waited + 1))
     done
+    _psr_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
     for _psr_pid in $_psr_pids; do
         if kill -0 "$_psr_pid" 2>/dev/null; then
+            # Proven again before a KILL: after the wait the pid may be another
+            # process, or another start's runner that no longer holds the port.
+            if [ -z "$_psr_cache" ] || ! _personal_is_own_runner_pid "$_psr_pid" "$_psr_cache" ||
+               ! printf ' %s ' $(personal_db_port_pids) | grep -q " $_psr_pid "; then
+                warn "Process $_psr_pid is still running but is no longer proven to be this deployment's runner - it was not forced."
+                continue
+            fi
             warn "The runner (pid $_psr_pid) did not exit within ${EXAKIT_PERSONAL_RUNNER_STOP_WAIT}s - forcing it."
             pkill -9 -P "$_psr_pid" 2>/dev/null || true
             kill -9 "$_psr_pid" 2>/dev/null || true
