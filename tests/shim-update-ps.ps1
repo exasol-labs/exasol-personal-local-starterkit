@@ -27,7 +27,7 @@ $cAst = [System.Management.Automation.Language.Parser]::ParseFile($commonPath, [
 $names = @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim",
            "Test-ExakitCmdShimCurrent", "Write-ExakitCmdShimFile", "Get-ExakitShimLauncherPids",
            "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell", "Get-ExakitLauncherRunningPids",
-           "Get-ExakitKitScriptRunningPids")
+           "Get-ExakitKitScriptRunningPids", "Invoke-ExakitFileReplace")
 $defs = @{}
 foreach ($name in $names) {
     $def = $cAst.FindAll({ param($n)
@@ -235,7 +235,8 @@ Check "target removed before the move: exakit.cmd.new removed" "False" (Test-Pat
 # The swap is one File.Replace: a .new that cannot be applied (here a directory
 # in its place, as a stand-in for a file a scanner holds) leaves the old
 # exakit.cmd in place and the .new where it is - never no exakit.cmd at all.
-Check "the helper swaps with File.Replace, not Move-Item" "True" ($defs["Write-ExakitCmdShimDeferred"].Contains('[System.IO.File]::Replace(') -and -not $defs["Write-ExakitCmdShimDeferred"].Contains('Move-Item'))
+Check "the helper swaps with File.Replace" "True" ($defs["Invoke-ExakitFileReplace"].Contains('[System.IO.File]::Replace(') -and $defs["Write-ExakitCmdShimDeferred"].Contains('Invoke-ExakitFileReplace -New'))
+Check "the helper moves .new only after a failed Replace left the target gone" "1" ([regex]::Matches($defs["Write-ExakitCmdShimDeferred"], 'Move-Item').Count)
 Write-OldShim
 Remove-Item -Force -Recurse -LiteralPath $newPath -ErrorAction SilentlyContinue
 $script:helperScript = $null
@@ -247,6 +248,19 @@ Invoke-HelperChild
 Check "a .new that cannot be applied: exakit.cmd is still the old one" "True" ((Test-Path -LiteralPath $shimPath -PathType Leaf) -and ([System.IO.File]::ReadAllText($shimPath) -eq $oldShim))
 Check "a .new that cannot be applied: the .new stays" "True" (Test-Path -LiteralPath $newPath)
 Remove-Item -Force -Recurse -LiteralPath $newPath -ErrorAction SilentlyContinue
+
+# ReplaceFile's half failure (1176/1177): Replace throws after the target is
+# gone, with .new still under its own name. exakit.cmd existed before the
+# Replace, so .new becomes exakit.cmd; .new is never dropped there.
+function Invoke-ExakitFileReplace { param([string]$New, [string]$Target) Remove-Item -Force -LiteralPath $Target; throw "unable to move the replacement file (1176)" }
+Write-OldShim
+$script:helperScript = $null
+[void](Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $newShim -WaitPids @(2147483000))
+Check "half-failed Replace: the helper carries the replace it was given" "True" ("$script:helperScript".Contains("unable to move the replacement file"))
+Invoke-HelperChild
+Check "half-failed Replace: .new becomes exakit.cmd" "True" ((Test-Path -LiteralPath $shimPath -PathType Leaf) -and ([System.IO.File]::ReadAllText($shimPath) -eq $newShim))
+Check "half-failed Replace: no .new is left" "False" (Test-Path -LiteralPath $newPath)
+Invoke-Expression $defs["Invoke-ExakitFileReplace"]
 
 # The helper's recheck: a PowerShell running the kit's exakit.ps1 that starts
 # after the staged swap (an `exakit` typed at an interactive cmd.exe prompt) is

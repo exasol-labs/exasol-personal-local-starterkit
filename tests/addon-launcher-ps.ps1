@@ -38,7 +38,8 @@ function Import-Functions {
 
 $commonNames = @("Get-ExakitOemEncoding", "Write-ExakitCmdShimFile", "Write-ExakitCmdShimDeferred",
                  "Start-ExakitDetachedPowerShell", "Get-ExakitAddonLauncherGuard",
-                 "Get-ExakitLauncherRunningPids", "Write-ExakitAddonLauncher", "Complete-ExakitAddonLauncherUpdate")
+                 "Get-ExakitLauncherRunningPids", "Write-ExakitAddonLauncher", "Complete-ExakitAddonLauncherUpdate",
+                 "Invoke-ExakitFileReplace")
 $defs = @(Import-Functions -File (Join-Path $repo "setup/lib/exakit-common.ps1") -Names $commonNames)
 $defs += @(Import-Functions -File (Join-Path $repo "setup/lib/dash-server.ps1") -Names @("Get-DashServerLauncherPath", "Write-DashServerLauncher"))
 $defs += @(Import-Functions -File (Join-Path $repo "setup/lib/dbt-exasol.ps1") -Names @("Get-DbtExasolLauncherPath", "Write-DbtExasolLauncher"))
@@ -144,6 +145,24 @@ foreach ($c in $cases) {
     Complete-ExakitAddonLauncherUpdate -Path $c.Path
     Check "$($c.Id): stale .new: a removed launcher is not recreated" "False" (Test-Path -LiteralPath $c.Path)
     Remove-Item -Force -LiteralPath "$($c.Path).new" -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($c.Path, $keep, [System.Text.Encoding]::ASCII)
+    # ReplaceFile's half failure (1176/1177): Replace throws after the launcher
+    # is gone, with .new still there. The launcher existed before the Replace,
+    # so .new becomes it - at the next start and in the helper - and is never
+    # dropped there.
+    function Invoke-ExakitFileReplace { param([string]$New, [string]$Target) Remove-Item -Force -LiteralPath $Target; throw "unable to move the replacement file (1176)" }
+    [System.IO.File]::WriteAllText($c.Path, $old, [System.Text.Encoding]::ASCII)
+    Set-Content -Path "$($c.Path).new" -Value "staged"
+    Complete-ExakitAddonLauncherUpdate -Path $c.Path
+    Check "$($c.Id): half-failed Replace at start: .new becomes the launcher" "True" ((Test-Path -LiteralPath $c.Path) -and ([System.IO.File]::ReadAllText($c.Path).Trim() -eq "staged"))
+    Check "$($c.Id): half-failed Replace at start: no .new is left" "False" (Test-Path -LiteralPath "$($c.Path).new")
+    [System.IO.File]::WriteAllText($c.Path, $old, [System.Text.Encoding]::ASCII)
+    $script:running = @(2147483001); $script:helperScript = $null
+    [void](& $c.Write)
+    & ([scriptblock]::Create($script:helperScript))
+    Check "$($c.Id): half-failed Replace in the helper: .new becomes the launcher" "True" ((Test-Path -LiteralPath $c.Path) -and ([System.IO.File]::ReadAllText($c.Path) -eq $text))
+    Check "$($c.Id): half-failed Replace in the helper: no .new is left" "False" (Test-Path -LiteralPath "$($c.Path).new")
+    foreach ($d in (Import-Functions -File (Join-Path $repo "setup/lib/exakit-common.ps1") -Names @("Invoke-ExakitFileReplace"))) { Invoke-Expression $d }
     [System.IO.File]::WriteAllText($c.Path, $keep, [System.Text.Encoding]::ASCII)
     $script:running = @(2147483001)
 
