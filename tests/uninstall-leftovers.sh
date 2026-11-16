@@ -255,6 +255,10 @@ for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_recorded_db_port 
 done
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
 exakit_unmark_step(){ :; }
+# STUB_MCP_REC=1: record the port the MCP-process stop is handed, stop nothing.
+if [ "\${STUB_MCP_REC:-0}" = 1 ]; then
+    _exakit_uninstall_mcp_processes(){ printf 'MCPSTOP dry=%s port=[%s]\n' "\$1" "\$2"; }
+fi
 if [ -n "\${STUB_COMPONENT:-}" ]; then
     _exakit_uninstall_component "\$STUB_COMPONENT" "\${STUB_DRY:-0}"
 else
@@ -441,6 +445,16 @@ lacks    "i1: a foreign image is not listed" "postgres" "$out"
 lacks    "i1: nor a near-miss repository" "nanoX" "$out"
 lacks    "i1: nor one that only ends in exasol/nano" "someone/" "$out"
 lacks    "i1: dry run runs no rmi" "rmi" "$(cat "$TMP/engcalls" 2>/dev/null)"
+# (m1) a deployment without deployment.json: the MCP-process stop gets no
+# port, so nothing on 8563 (another database's MCP server) is stopped.
+rm -f "$TMP/engcalls"; rm -rf "$DEPLOY"; mkdir -p "$DEPLOY"
+out="$(STUB_OS=linux STUB_MCP_REC=1 bash "$TMP/run.sh" 2>&1)"
+contains "m1: no deployment.json: the MCP stop gets an empty port" "MCPSTOP dry=0 port=[]" "$out"
+lacks    "m1: never the 8563 default" "port=[8563]" "$out"
+# (m2) the recorded port is the one used.
+rm -f "$TMP/engcalls"; rm -rf "$DEPLOY"; mkdir -p "$DEPLOY"; printf '{"deploymentId": "exa-test1", "connection": {"dbPort": 18563}}\n' > "$DEPLOY/deployment.json"
+out="$(STUB_OS=linux STUB_MCP_REC=1 bash "$TMP/run.sh" 2>&1)"
+contains "m2: deployment.json's dbPort is handed on" "MCPSTOP dry=0 port=[18563]" "$out"
 # (i2) real run: rmi without -f for each kit image, never for a foreign one.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
@@ -462,6 +476,14 @@ rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB' 'docker.io/exasol/nano|<none>|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2b: one rmi for one image id" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2b: the duplicate row is not reported kept" "kept image" "$out"
+# (i2b') the same, with the <none> row listed FIRST: tagged rows still go
+# first, so the tag is removed by name and the <none> twin is skipped.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|fff666|812MB' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
+check    "i2b': <none> listed first: one rmi" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
+contains "i2b': and it is the tag, by name" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
+lacks    "i2b': no rmi by id" "podman rmi fff666" "$(cat "$TMP/engcalls" 2>/dev/null)"
+lacks    "i2b': nothing reported kept" "kept image" "$out"
 # (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$(printf '%s\n' 'exasol/nano|2026.2.0|abc123|812MB' 'exasol/nano|latest|abc123|812MB')" bash "$TMP/run.sh" 2>&1)"

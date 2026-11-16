@@ -502,6 +502,10 @@ if command -v pwsh >/dev/null 2>&1; then
     _ps_help="$(ROOT="$ROOT" pwsh -NoProfile -Command '. (Join-Path $env:ROOT "setup/lib/help.ps1"); $script:LibDir = Join-Path $env:ROOT "setup/lib"; [void](Show-ExakitHelpCommand -Name "uninstall")' 2>&1)"
     has "Show-ExakitHelpCommand (PowerShell) lists the exit codes too" "Exit codes" "$_ps_help"
     has "  ...code 1 with its meaning" "1  something remains" "$_ps_help"
+    # Numeric order, as in bash: the 0 line comes before the 1 line.
+    _ps_l0="$(printf '%s\n' "$_ps_help" | grep -n '^ *0  ' | head -1 | cut -d: -f1)"
+    _ps_l1="$(printf '%s\n' "$_ps_help" | grep -n '^ *1  ' | head -1 | cut -d: -f1)"
+    has "  ...exit codes in numeric order (0 before 1)" "yes" "$([ -n "$_ps_l0" ] && [ -n "$_ps_l1" ] && [ "$_ps_l0" -lt "$_ps_l1" ] && echo yes || echo no)"
     # An empty exit_codes {} prints no bare "Exit codes" header (bash prints
     # nothing for an empty dict either).
     _ps_empty="$(ROOT="$ROOT" pwsh -NoProfile -Command '. (Join-Path $env:ROOT "setup/lib/help.ps1"); function Get-ExakitHelpDocuments { @{ exakit = [pscustomobject]@{ commands = @([pscustomobject]@{ command = "probe"; summary = "probe entry"; exit_codes = [pscustomobject]@{} }) } } }; [void](Show-ExakitHelpCommand -Name "probe")' 2>&1)"
