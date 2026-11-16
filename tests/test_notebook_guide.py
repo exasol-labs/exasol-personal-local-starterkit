@@ -32,7 +32,11 @@ SOURCES = ROOT / "notebook" / "notebooks"
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(PACKAGE))
 
-import notebooks as build_tool  # noqa: E402
+# tools/notebooks.py, under a name of its own (notebook/kit/notebooks.py is "notebooks" in another suite, and the
+# first one imported in a run would win)
+_spec = importlib.util.spec_from_file_location("kit_build_notebooks", ROOT / "tools" / "notebooks.py")
+build_tool = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(build_tool)
 
 HAVE_ANYWIDGET = importlib.util.find_spec("anywidget") is not None
 HAVE_SKLEARN = importlib.util.find_spec("sklearn") is not None and importlib.util.find_spec("numpy") is not None

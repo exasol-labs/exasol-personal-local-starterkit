@@ -474,7 +474,12 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
     class MarimoRoleReview(RoleReview, mo.ui.dictionary):
         def __init__(self, draft, conn, file):
             RoleReview.__init__(self, draft, conn, file)
-            kit_list = _kit_list(mo)
+            try:
+                self._build(_kit_list(mo), draft)
+            except NotImplementedError:          # this marimo copies each element it holds, and a widget cannot be
+                self._build(None, draft)         # copied (marimo 0.25): marimo's own dropdowns, the same choices
+
+        def _build(self, kit_list, draft):
             labels, explanations, suggested = self.labels(), self.explanations(), self.suggestions()
             low = self.low_confidence()
             dropdowns = {}

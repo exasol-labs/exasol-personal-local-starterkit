@@ -469,7 +469,9 @@ class LoadRulesTest(unittest.TestCase):
             seen.update(types=own._prepare(frame), replace=replace, schema=own.LOAD_RULES["DEFAULT_SCHEMA"])
         with mock.patch.object(own, "_load_own_file", side_effect=load):
             own.load_own_file("x.csv", None, rules={"MAX_VARCHAR": 10, "REPLACE": True, "DEFAULT_SCHEMA": "SALES"})
-        self.assertEqual(([("NOTE", "VARCHAR(10)"), ("WHEN", "VARCHAR(10)")], True, "SALES"), (seen["types"], seen["replace"], seen["schema"]))
+        # MAX_VARCHAR caps the text column; a column of dates is kept as DATE (own_file._prepare: the first load
+        # agrees with the column map that follows), so the cap does not touch it
+        self.assertEqual(([("NOTE", "VARCHAR(10)"), ("WHEN", "DATE")], True, "SALES"), (seen["types"], seen["replace"], seen["schema"]))
         self.assertEqual(own.LOAD_RULES, own.load_rules(), "back to the defaults")
         self.assertEqual("MY_DATA", own.LOAD_RULES["DEFAULT_SCHEMA"])
         with self.assertRaisesRegex(ValueError, "not a load rule"):
