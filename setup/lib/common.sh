@@ -10312,13 +10312,7 @@ except (OSError, ValueError):
 if not isinstance(doc, dict):
     sys.exit(1)
 doc.setdefault("installed", True)
-# A remedy the caller knows better than the findings do: mcp-doctor over a
-# deployment the launcher records as failed while its database answers.
 import os
-if os.environ.get("EXAKIT_MCP_RESULT_REMEDY"):
-    doc["remedy"] = os.environ["EXAKIT_MCP_RESULT_REMEDY"]
-    if os.environ.get("EXAKIT_MCP_RESULT_REMEDY_HINT"):
-        doc["remedy_hint"] = os.environ["EXAKIT_MCP_RESULT_REMEDY_HINT"]
 if "remedy" not in doc:
     # From a WARNING or ERROR finding only. Taking the first next_action made a
     # healthy machine answer "Install the client..." off an INFO finding about
@@ -10339,6 +10333,13 @@ if "remedy" not in doc:
         candidates.append((RANK[severity], 0 if scope.get("path") else 1, index, finding["recommended_action"]))
     remedy = min(candidates)[3] if candidates else None
     doc["remedy"] = remedy
+# The caller's remedy (mcp-doctor over a deployment the launcher records as
+# failed while its database answers) only where the doctor found none of its
+# own: a client fix it found is not hidden behind exakit start.
+if doc.get("remedy") is None and os.environ.get("EXAKIT_MCP_RESULT_REMEDY"):
+    doc["remedy"] = os.environ["EXAKIT_MCP_RESULT_REMEDY"]
+    if os.environ.get("EXAKIT_MCP_RESULT_REMEDY_HINT"):
+        doc["remedy_hint"] = os.environ["EXAKIT_MCP_RESULT_REMEDY_HINT"]
 print(json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False))
 EXAKIT_MCP_STAMP_PY
     }
