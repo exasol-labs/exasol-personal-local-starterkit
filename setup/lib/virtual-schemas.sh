@@ -1307,7 +1307,7 @@ for n, e in enumerate(entries):
             row(mid + "-corner", "files: %s (automatic)" % auto, "note", "")
             specs.append("%d:%d:%d:collapse" % (ca, ca + 1, ca + 1))
             continue
-        shown = [f for f in files if f["id"] in c["files"] or f.get("supported") is False]
+        shown = [f for f in files if f["id"] in c["files"]]
         for j, f in enumerate(shown):
             leaf = mid + "-" + ("corner" if j == len(shown) - 1 else "tee")
             if f.get("supported") is False:
@@ -1352,7 +1352,7 @@ $_evp_id"
     EXAKIT_TABLE_DEFAULTS=""            # nothing ticked: a connect is always a choice
     EXAKIT_TABLE_GROUP="$_evp_group"
     EXAKIT_TABLE_EXCLUSIVE="$_evp_skip"
-    UI_TABLE_TITLE="Connect external sources"
+    UI_TABLE_TITLE="Federation: Select data sources"
     [ "$_evp_mode" = guides ] && UI_TABLE_TITLE="Connector guides"
     UI_TABLE_COL1="Source"; UI_TABLE_COL2=""; UI_TABLE_COL3=""
     UI_TABLE_MENU_START=1               # no "Select All" row to step past
@@ -1361,8 +1361,6 @@ $_evp_id"
         info "Tick one or more connectors; Enter shows each one's guide."
     else
         _exakit_vs_clock_check
-        printf '\n'
-        info "Tick one or more sources; the details for each are asked next."
     fi
     printf '\n'
     # The Source column alone: nothing runs in this menu's rows, so it has no
@@ -2589,13 +2587,13 @@ for w in p["warnings"]:
         [ -n "$_evt_pip" ] && _evt_ip="$_evt_pip"
         sed 1d "$_EVT_DIR/review" > "$_EVT_DIR/review.say"
         # The name is [a-z0-9_] (the form checked it), safe in a sed replacement.
-        # The per-source public IP line is the Tip's: left out.
+        # The per-source public IP line is the Whitelist IP line's: left out.
         grep -v "^INFO This computer's public IP is " "$_EVT_DIR/plan.$_evt_i" \
             | sed -n "s/^INFO /INFO ${_EVT_S_NAME[$_evt_i]}: /p" >> "$_EVT_DIR/review.say"
         _exakit_vs_render "$_EVT_DIR/review.say"
     done
     [ -n "$_evt_named" ] && [ -n "$_evt_ip" ] && \
-        info "Tip: cloud sources see you as $_evt_ip - allow it if the source has an IP allowlist."
+        info "Whitelist IP: $_evt_ip"
     _evt_state="$_EVT_DIR/sources"
     # shellcheck disable=SC2086 — indexes
     _exakit_vs_tui_table "$_evt_state" "Connect $_EVT_COUNT source$([ "$_EVT_COUNT" = 1 ] || printf s)" $_evt_all
@@ -2620,8 +2618,6 @@ for w in p["warnings"]:
     # footer and the question - or under what the database was prepared with
     # shellcheck disable=SC2086 — indexes
     _exakit_vs_tui_live "$_evt_state" "$_evt_over" $_evt_all
-    # The live table drew over the footer.
-    [ "${_EVT_LIVE:-0}" = 1 ] && _exakit_vs_tui_footer
 
     # A language container (a download and a restart), or the restart Docker's
     # DNS repair needs: said once, below the table - picking the sources was the
@@ -2680,7 +2676,8 @@ for w in p["warnings"]:
             printf '%s\t%s\n' "${_EVT_S_NAME[$_evt_i]}" "$_EVT_DIR/run.$_evt_i.json"
         done > "$_EVT_DIR/hints"
         _exakit_vs_query_list "$_EVT_DIR/hints" "$_evt_n"
-        info "Manage with: exakit source show <name> (every action: exakit help source)"
+        printf '\n'
+        info "Manage it: exakit source"
     fi
     # Nothing secret outlives the command in this shell.
     for _evt_i in $_evt_all; do _EVT_S_SECRET[$_evt_i]=""; _EVT_S_STORAGE[$_evt_i]=""; done
@@ -3269,20 +3266,14 @@ _exakit_vs_word() {
 # kind of source names and types what it sends (the connector's tips) is
 # exakit source show's. ⇄ twin: Show-ExakitVsQueryList.
 _exakit_vs_query_list() {
-    if [ "$2" = 1 ]; then info "Query it like any schema:"; else info "Query them like any schema:"; fi
+    info "Query it:"
     while IFS="$(printf '\t')" read -r _eql_name _eql_json; do
         [ -n "$_eql_name" ] || continue
-        _eql_last="$_eql_name"
         _eql_q="$(run_python_any -c 'import json, sys
 print(json.load(open(sys.argv[1]))["example"])' "$_eql_json" 2>/dev/null)"
         [ -n "$_eql_q" ] || _eql_q="SELECT * FROM VS_$(printf '%s' "$_eql_name" | tr 'a-z' 'A-Z').<table> LIMIT 10"
         printf '        exakit sql %s\n' "$(_exakit_vs_quoted "$_eql_q")"
     done < "$1"
-    if [ "$2" = 1 ]; then
-        info "Type and naming notes for it: exakit source show $_eql_last"
-    else
-        info "Type and naming notes for each source: exakit source show <name>"
-    fi
 }
 
 # _exakit_vs_quoted <text> — the text in single quotes, each ' in it as '\''.
