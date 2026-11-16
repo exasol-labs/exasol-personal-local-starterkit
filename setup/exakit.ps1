@@ -1803,15 +1803,6 @@ function Invoke-ExakitUninstallKitImages {
                     continue
                 }
             }
-            # A container (any state) still made from it: another deployment's,
-            # possibly one this kit cannot see (a WSL distro on a shared Docker
-            # Desktop). Kept, with no "remove later" advice to take it away.
-            $users = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
-                -Arguments @("ps", "-a", "-q", "--filter", "ancestor=$ref")
-            if ($null -ne $users -and ("" + $users).Trim()) {
-                Info "Kept image ${name}: a container still uses it (another deployment?)."
-                continue
-            }
             if ($DryRun) {
                 $sizeNote = ""
                 if ($size) { $sizeNote = " ($size)" }

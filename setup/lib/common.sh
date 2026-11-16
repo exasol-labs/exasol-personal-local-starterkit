@@ -12934,13 +12934,6 @@ _exakit_uninstall_kit_images() {
                 info "Kept image $_kr_name (id $_kr_id): it also carries another repository's tag."
                 continue
             fi
-            # A container (any state) still made from it: another deployment's,
-            # possibly one this kit cannot see (Windows on a shared Docker
-            # Desktop). Kept, with no "remove later" advice to take it away.
-            if [ -n "$(exakit_run_bounded 30 "$_kim_eng" ps -a -q --filter "ancestor=$_kr_ref" 2>/dev/null)" ]; then
-                info "Kept image $_kr_name: a container still uses it (another deployment?)."
-                continue
-            fi
             if [ "$_kim_dry" = "1" ]; then
                 info "  will remove: $_kim_eng image $_kr_name${_kr_size:+ ($_kr_size)}"
                 continue
