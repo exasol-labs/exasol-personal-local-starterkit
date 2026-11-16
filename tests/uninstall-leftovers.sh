@@ -85,7 +85,7 @@ exit 0
 STUB
 # docker / podman: `ps -a` lists STUB_DOCKER_PS / STUB_PODMAN_PS. On PATH ahead
 # of any real engine, so no real container is ever listed or touched.
-printf '#!/usr/bin/env bash\n[ "$1" = ps ] && printf "%%s\\n" "${STUB_DOCKER_PS:-}"\nexit 0\n' > "$TMP/bin/docker"
+printf '#!/usr/bin/env bash\n[ -n "${STUB_DOCKER_FAIL:-}" ] && { echo "$STUB_DOCKER_FAIL" >&2; exit 1; }\n[ "$1" = ps ] && printf "%%s\\n" "${STUB_DOCKER_PS:-}"\nexit 0\n' > "$TMP/bin/docker"
 printf '#!/usr/bin/env bash\n[ "$1" = ps ] && printf "%%s\\n" "${STUB_PODMAN_PS:-}"\nexit 0\n' > "$TMP/bin/podman"
 chmod +x "$TMP/bin/exasol" "$TMP/bin/docker" "$TMP/bin/podman"
 
@@ -118,6 +118,7 @@ rc=\$?
 printf 'RC=%s\n' "\$rc"
 printf 'LEFT=%s\n' "\${EXAKIT_TEARDOWN_LEFTOVERS:-}" | tr '\n' ';'; printf '\n'
 printf 'REMEDY=%s\n' "\${EXAKIT_TEARDOWN_REMEDY:-}"
+printf 'WARNINGS=%s\n' "\${EXAKIT_TEARDOWN_WARNINGS:-}"
 HARNESS
 
 teardown() { # env... -> output of the harness
@@ -177,6 +178,17 @@ contains "g: the remedy removes it" "docker rm -f exa-test1-db-1" "$out"
 lacks    "g: an unrelated container is not touched" "somebody-else" "$out"
 lacks    "g: nor one whose name merely starts with the id" "exa-test10" "$out"
 
+# (g2) Linux: the engine refuses (not in the docker group): a warning with
+# the command to check by hand, never a leftover, and the run still succeeds.
+seed_deploy
+out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_DOCKER_FAIL="permission denied while trying to connect to the Docker daemon socket")"
+contains "g2: an engine that refuses is not a leftover" "RC=0" "$out"
+contains "g2: nothing is counted left over" "LEFT=;" "$out"
+contains "g2: but it is a warning with the check command" "WARNINGS=could not check docker for the deployment's container (permission denied while trying to connect to the Docker daemon socket); check with: docker ps -a --filter name=exa-test1" "$out"
+out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
+contains "g2: an engine that answers gives no warning" "WARNINGS=" "$out"
+lacks    "g2: none at all" "could not check" "$out"
+
 # (f) nothing was ever deployed: success, nothing destroyed.
 rm -rf "$DEPLOY"
 out="$(teardown)"
@@ -228,6 +240,7 @@ manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || ech
 exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
 personal_teardown(){
+    EXAKIT_TEARDOWN_WARNINGS="\${STUB_TW:-}"
     if [ "\${STUB_TD_RC:-0}" = 0 ]; then rm -rf "$DEPLOY"; EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi
     EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $DEPLOY"
     EXAKIT_TEARDOWN_REMEDY="rm -rf '$DEPLOY'"
@@ -253,6 +266,9 @@ contains "with the one command that removes it" "rm -rf '$DEPLOY'" "$out"
 out="$(STUB_TD_RC=0 bash "$TMP/run.sh" 2>&1)"
 contains "a clean teardown still says 'Database removed'" "Database removed" "$out"
 contains "and answers 0" "RC=0" "$out"
+out="$(STUB_TD_RC=0 STUB_TW="could not check docker for the deployment's container (exit 1); check with: docker ps -a --filter name=exa-test1" bash "$TMP/run.sh" 2>&1)"
+contains "a container check that could not run is warned under the record line" "WARN could not check docker for the deployment's container (exit 1)" "$out"
+contains "and alone still answers 0" "RC=0" "$out"
 # No runtime in the manifest (an interrupted install) and the deployment on
 # disk: nothing removes it, so the run must not answer 0 either.
 seed_deploy

@@ -2034,11 +2034,19 @@ function Find-PersonalTeardownLeftovers {
     param([string]$Id = "")
     $left = @()
     $steps = @()
+    # An engine that hangs or refuses answers $null: a warning with the command
+    # to check by hand, never a leftover (it alone does not fail the run).
+    # Twin of EXAKIT_TEARDOWN_WARNINGS in personal_teardown_leftovers.
+    $warnings = @()
     if ($Id) {
         foreach ($engineName in @("docker", "podman")) {
             $engineCmd = Get-Command $engineName -ErrorAction SilentlyContinue
             if (-not $engineCmd) { continue }
             $names = Invoke-ExakitBounded -FilePath $engineCmd.Source -TimeoutSeconds 15 -Arguments @("ps", "-a", "--format", "{{.Names}}")
+            if ($null -eq $names) {
+                $warnings += "could not check $engineName for the deployment's container (no answer within 15s, or it refused); check with: $engineName ps -a --filter name=$Id"
+                continue
+            }
             foreach ($line in @(("" + ($names -join "`n")) -split "`r?`n")) {
                 $n = $line.Trim()
                 if (-not $n) { continue }
@@ -2055,6 +2063,7 @@ function Find-PersonalTeardownLeftovers {
     }
     $script:PersonalTeardownLeftovers = $left
     $script:PersonalTeardownRemedy = ($steps -join "; ")
+    $script:PersonalTeardownWarnings = $warnings
 }
 
 # Get-PersonalLauncherCacheDir - the launcher's download cache (the Nano image,

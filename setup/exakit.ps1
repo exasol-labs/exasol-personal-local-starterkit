@@ -1883,6 +1883,7 @@ function Invoke-ExakitUninstallRun {
                     # the caller does not print success.
                     $script:PersonalTeardownLeftovers = @()
                     $script:PersonalTeardownRemedy = ""
+                    $script:PersonalTeardownWarnings = @()
                     try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" }
                     if (@($script:PersonalTeardownLeftovers).Count -gt 0) { $script:ExakitUninstallDbLeft = $true }
                 }
@@ -1891,6 +1892,9 @@ function Invoke-ExakitUninstallRun {
             if (-not $script:ExakitUninstallDbLeft) {
                 RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
             }
+            # A container check that could not run is said right under that
+            # line, never folded into it.
+            foreach ($tw in @($script:PersonalTeardownWarnings)) { if ($tw) { Warn2 $tw } }
         }
         # 1b) What the launcher leaves beside the deployment: its download cache
         #     and the state folders the deployment lived in. Only once the

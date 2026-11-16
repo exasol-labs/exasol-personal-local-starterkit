@@ -13053,7 +13053,14 @@ exakit_uninstall_run() {
         case "$_type" in
             personal)
                 [ "$EXAKIT_UNINSTALL_DB_LEFT" = 1 ] || \
-                    _done "Database removed: the local Exasol Personal deployment and all its data" ;;
+                    _done "Database removed: the local Exasol Personal deployment and all its data"
+                # A container check that could not run is said right under
+                # that line, never folded into it.
+                if [ "$_dry" != "1" ] && [ -n "${EXAKIT_TEARDOWN_WARNINGS:-}" ]; then
+                    printf '%s\n' "$EXAKIT_TEARDOWN_WARNINGS" | while IFS= read -r _un_tw; do
+                        [ -n "$_un_tw" ] && warn "$_un_tw"
+                    done
+                fi ;;
             *)        : ;;
         esac
         # 1b) What the launcher leaves beside the deployment: its download
