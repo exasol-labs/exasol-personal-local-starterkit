@@ -185,7 +185,10 @@ The files live in `~/.exasol-starter-kit/credentials/`.
 
 `exakit uninstall` is the one destructive command here. A full uninstall removes
 the database **and its data**, the managed AI-client configs, the skills the kit
-placed and the binaries.
+placed and the binaries. It also removes the launcher download cache, empty
+`~/.exasol` folders, the kit's autostart entries (orphaned ones too), the
+`exasol/nano` image when no container uses it, and the kit's own MCP server
+processes on macOS/Linux.
 
 ```bash
 exakit uninstall --dry-run        # the full plan; changes nothing
@@ -198,6 +201,8 @@ exakit uninstall --yes            # no prompts — only with explicit consent
   only way to see what would go.
 - **Never pass `--yes` on your own initiative.** The interactive flow has a
   confirmation summary and a typed gate for a reason; `--yes` removes both.
+- **Read the exit code.** `0` = everything removed. `1` = something remains: the
+  output names what, plus one command that removes it. Never report `1` as done.
 - Removing one add-on is `exakit uninstall <addon-id>` — reach for that before
   anything wider when the user only wants one tool gone.
 - Uninstall does not remove `uv`/`uvx` (shared tools) and it does not edit the

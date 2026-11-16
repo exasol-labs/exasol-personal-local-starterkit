@@ -352,12 +352,16 @@
       "options": "[--yes] [--dry-run] [<addon-id>]",
       "summary": "Remove what the kit installed.",
       "description": "Pick what to remove (Skip, each add-on, or EVERYTHING) with a confirmation summary and a typed gate. --dry-run previews the full plan and changes nothing. Removing one add-on only: exakit uninstall <addon-id> [--yes] - the rest of the kit is untouched.",
-      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries.",
+      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries, plus the launcher download cache, empty ~/.exasol folders, the kit's autostart entries (orphaned ones too), the exasol/nano image when no container uses it, and the kit's own MCP server processes on macOS/Linux.",
       "examples": [
         "exakit uninstall --dry-run",
         "exakit uninstall --yes",
         "exakit uninstall json-tables --yes"
-      ]
+      ],
+      "exit_codes": {
+        "0": "everything removed",
+        "1": "something remains - what remains and one command that removes it are printed"
+      }
     },
     {
       "command": "help",
