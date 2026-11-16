@@ -32,7 +32,7 @@ if (Test-Path $legacyModule) { . $legacyModule }
 $coreSetupModule = Join-Path $LibDir "core-setup.ps1"
 if (Test-Path $coreSetupModule) { . $coreSetupModule }
 if (Test-Path (Join-Path $LibDir "persona.ps1")) { . (Join-Path $LibDir "persona.ps1") }
-# The data table's "Connect an external source" row: whether it can be picked
+# The data table's "Federation: Connect other data sources" row: whether it can be picked
 # (Test-ExakitVsAvailable) and the wizard it runs (Invoke-ExakitVsConnectWizard).
 # Twin of the virtual-schemas.sh load in setup-macos.sh / setup-linux.sh.
 if (Test-Path (Join-Path $LibDir "virtual-schemas.ps1")) { . (Join-Path $LibDir "virtual-schemas.ps1") }

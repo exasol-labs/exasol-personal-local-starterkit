@@ -1163,7 +1163,7 @@ function Format-ExakitVsSqlLine {
 function Show-ExakitVsQueryList {
     param([object[]]$Items = @())
     $all = @($Items)
-    if ($all.Count -eq 1) { Info "Query it like any schema:" } else { Info "Query them like any schema:" }
+    Info "Query it:"
     foreach ($it in $all) {
         $q = ""
         $r = $it.Result
@@ -1171,8 +1171,6 @@ function Show-ExakitVsQueryList {
         if (-not $q) { $q = "SELECT * FROM VS_" + ("" + $it.Name).ToUpperInvariant() + ".<table> LIMIT 10" }
         Write-Host ("        " + (Format-ExakitVsSqlLine -Query $q))
     }
-    if ($all.Count -eq 1) { Info ("Type and naming notes for it: exakit source show " + $all[0].Name) }
-    else { Info "Type and naming notes for each source: exakit source show <name>" }
 }
 
 # Show-ExakitVsQueryHints - the one source's query line, for the line-by-line
@@ -1697,7 +1695,7 @@ function Invoke-ExakitVsPick {
     # cat:<catalog>[:<files>], file:<catalog>:<files>, or "" for a row nobody
     # picks). Twin of _exakit_vs_pick.
     $entries = @(@($catalog.connectors) | Where-Object { $folds -notcontains ("" + $_.id) })
-    $menuTitle = "Connect external sources"
+    $menuTitle = "Federation: Select data sources"
     if ($Guides) { $menuTitle = "Connector guides" }
     $t = New-ExakitTable -Title $menuTitle -Col1 "Source"
     # The Source column alone: nothing runs in this menu's rows, so it has no
@@ -1745,7 +1743,7 @@ function Invoke-ExakitVsPick {
                 $groups += ("{0}:{1}:{2}:collapse" -f $ca, ($ca + 1), ($ca + 1))
                 continue
             }
-            $shown = @($files | Where-Object { ($allowed -contains ("" + $_.id)) -or (Test-ExakitVsUnsupported $_) })
+            $shown = @($files | Where-Object { $allowed -contains ("" + $_.id) })
             for ($j = 0; $j -lt $shown.Count; $j++) {
                 $f = $shown[$j]
                 $leaf = $mid + "-tee"
@@ -1771,8 +1769,6 @@ function Invoke-ExakitVsPick {
         Info "Tick one or more connectors; Enter shows each one's guide."
     } else {
         Show-ExakitVsClockCheck
-        Write-Host ""
-        Info "Tick one or more sources; the details for each are asked next."
     }
     Write-Host ""
     # ? on a row: its connector's guide (a Lakehouse catalog, store or note
@@ -3026,7 +3022,7 @@ function Invoke-ExakitVsTuiFlow {
         foreach ($warning in @($plan.warnings)) { if ($warning) { Warn2 ("{0}: {1}" -f $plan.name, $warning) } }
         foreach ($note in @($s.PlanInfo)) { if ($note) { Info ("{0}: {1}" -f $plan.name, $note) } }
     }
-    if ($Source -and $ip) { Info ("Tip: cloud sources see you as {0} - allow it if the source has an IP allowlist." -f $ip) }
+    if ($Source -and $ip) { Info ("Whitelist IP: {0}" -f $ip) }
     $plural = "s"; if ($sources.Count -eq 1) { $plural = "" }
     $t = New-ExakitVsTuiTable -Title ("Connect {0} source{1}" -f $sources.Count, $plural) -Sources $sources
     Show-ExakitTable -Table $t -Cursor 0
@@ -3045,8 +3041,6 @@ function Invoke-ExakitVsTuiFlow {
     # footer and the question - or under what the database was prepared with
     $script:EvtLive = $false
     Invoke-ExakitVsTuiRun -Table $t -Sources $sources -OnScreen $over
-    # The live table drew over the footer.
-    if ($script:EvtLive) { [void](Write-ExakitVsTuiFooter) }
     # A language container (a download and a restart), or the restart Docker's
     # DNS repair needs, that the step above did not make: said once, below the
     # table - picking the sources was the permission, so nothing is asked -
@@ -3084,7 +3078,8 @@ function Invoke-ExakitVsTuiFlow {
     $done = @($sources | Where-Object { $_.Outcome -eq "ok" })
     if ($done.Count -gt 0) {
         Show-ExakitVsQueryList -Items @($done | ForEach-Object { @{ Name = $_.Name; Result = $_.Result } })
-        Info "Manage with: exakit source show <name> (every action: exakit help source)"
+        Write-Host ""
+        Info "Manage it: exakit source"
     }
     # Nothing secret outlives the command in this session.
     foreach ($s in $sources) { $s.Secret = $null; $s.Storage = $null }

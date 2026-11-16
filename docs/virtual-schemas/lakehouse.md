@@ -68,7 +68,7 @@ The second choice is the **files**: how Exasol opens the data files.
 | `vended` | Let the catalog give access | the catalog hands out short-lived storage access per table |
 | `s3` | Amazon S3 / S3-compatible | your S3 access key, plus an endpoint for a non-AWS store |
 | `azure` | Azure ADLS Gen2 | your storage account key or a SAS |
-| (none) | Google Cloud Storage - not supported yet | shown in the menu, cannot be picked |
+| (none) | Google Cloud Storage - not supported yet | not shown in the menu, cannot be picked |
 
 ### The 9 combinations that work
 
