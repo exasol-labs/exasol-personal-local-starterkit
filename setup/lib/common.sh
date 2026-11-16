@@ -12923,6 +12923,16 @@ _exakit_uninstall_kit_images() {
             # Otherwise the exact reference the engine listed (docker.io/...
             # under podman), so rmi names the very image it was shown.
             case "$_kr_tag" in ''|'<none>') _kr_ref="$_kr_id" ;; *) _kr_ref="${_kr_listed:-$_kr_repo}:$_kr_tag" ;; esac
+            # A <none> row whose id another repository also names (the user
+            # tagged the kit's image): podman's rmi by id deletes an image
+            # with a single name, the user's tag with it. Kept.
+            if [ "$_kr_ref" = "$_kr_id" ] && printf '%s\n' "$_kim_list" | awk -F'|' -v id="$_kr_id" -v repos="$EXAKIT_KIT_IMAGE_REPOS" '
+                BEGIN { n = split(repos, r, " ") }
+                $3 == id { b = $1; sub(/^docker\.io\//, "", b); k = 0; for (i = 1; i <= n; i++) if (b == r[i]) k = 1; if (!k) f = 1 }
+                END { exit f ? 0 : 1 }'; then
+                info "kept image $_kr_name (id $_kr_id): it also carries another repository's tag"
+                continue
+            fi
             if [ "$_kim_dry" = "1" ]; then
                 info "  will remove: $_kim_eng image $_kr_name${_kr_size:+ ($_kr_size)}"
                 continue

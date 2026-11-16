@@ -466,6 +466,14 @@ rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$(printf '%s\n' 'exasol/nano|2026.2.0|abc123|812MB' 'exasol/nano|latest|abc123|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2c: both tags of one image are removed" "2" "$(grep -c '^docker rmi exasol/nano:' "$TMP/engcalls" 2>/dev/null)"
 contains "i2c: the second tag by its name" "docker rmi exasol/nano:latest" "$(cat "$TMP/engcalls" 2>/dev/null)"
+# (i2d) a <none> exasol/nano row whose id also carries a user's tag from
+# another repository: podman would delete that tag with an rmi by id. Kept.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|aaa999|812MB' 'localhost/myorg/foo|1|aaa999|812MB' 'docker.io/exasol/nano|<none>|bbb888|800MB')" bash "$TMP/run.sh" 2>&1)"
+lacks    "i2d: no rmi by id for an image a user's tag shares" "podman rmi aaa999" "$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "i2d: it is reported kept" "kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag" "$out"
+contains "i2d: a <none> row with no other name still goes" "podman rmi bbb888" "$(cat "$TMP/engcalls" 2>/dev/null)"
+lacks    "i2d: the user's tag is never named" "myorg" "$(grep rmi "$TMP/engcalls" 2>/dev/null)"
 # (i3) rmi refused (a container still uses it): kept, one hint, exit unchanged.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
