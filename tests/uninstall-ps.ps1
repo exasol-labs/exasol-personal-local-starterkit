@@ -305,6 +305,7 @@ foreach ($name in @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-Ex
 # Windows - the real probe answers "under it" by its fail-safe rule.)
 function Get-ExakitShimLauncherPids { param([string]$ShimPath) return @() }
 function Get-ExakitLauncherRunningPids { param([string]$Path) return @() }
+function Get-ExakitKitScriptRunningPids { param([string]$Path) return @() }
 $shimBin = Join-Path $sandbox "shimbin"
 $savedBin = $script:BinDir
 $script:BinDir = $shimBin
