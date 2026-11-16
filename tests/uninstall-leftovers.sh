@@ -408,6 +408,7 @@ for _e in docker podman; do
 printf '$_e %s\n' "\$*" >> "$TMP/engcalls"
 case "\$1" in
     images) printf '%s\n' "\${STUB_${_uc}_IMAGES:-}"; exit "\${STUB_${_uc}_RC:-0}" ;;
+    ps) case "\$*" in *ancestor=*) for _r in \${STUB_IN_USE:-}; do case "\$*" in *"ancestor=\$_r") echo c0ffee ;; esac; done ;; esac ;;
     rmi) case " \${STUB_RMI_FAIL:-} " in *" \$2 "*) echo "conflict: image is being used by running container abc" >&2; exit 1 ;; esac ;;
 esac
 exit 0
@@ -474,6 +475,20 @@ lacks    "i2d: no rmi by id for an image a user's tag shares" "podman rmi aaa999
 contains "i2d: it is reported kept" "kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag" "$out"
 contains "i2d: a <none> row with no other name still goes" "podman rmi bbb888" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2d: the user's tag is never named" "myorg" "$(grep rmi "$TMP/engcalls" 2>/dev/null)"
+# (i2e) a container (any state) still uses an image: kept, no rmi, and no
+# "remove later" advice that would take it from that deployment.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_IN_USE="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
+contains "i2e: a container's image is asked about with ps -a" "docker ps -a -q --filter ancestor=exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
+lacks    "i2e: no rmi for an image a container uses" "docker rmi exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "i2e: it is reported kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" "$out"
+lacks    "i2e: with no remove-later advice" "remove later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
+contains "i2e: the unused image still goes" "docker rmi ggg777" "$(cat "$TMP/engcalls" 2>/dev/null)"
+# (i2f) the same in a dry run: not listed as "will remove".
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_IN_USE="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
+lacks    "i2f: dry run does not promise to remove an image in use" "will remove: docker image exasol/nano:2026.2.0-nano.8" "$out"
+contains "i2f: dry run says it is kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" "$out"
 # (i3) rmi refused (a container still uses it): kept, one hint, exit unchanged.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"

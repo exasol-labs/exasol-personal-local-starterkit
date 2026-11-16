@@ -158,6 +158,13 @@ function Invoke-ExakitBounded {
         if ((" " + $env:STUB_RMI_FAIL + " ").Contains(" " + $Arguments[1] + " ")) { return $null }
         return "Untagged"
     }
+    # `ps ... --filter ancestor=<ref>`: a container id for a ref named in
+    # STUB_IN_USE, nothing otherwise.
+    if ($Arguments.Count -gt 0 -and $Arguments[0] -eq "ps" -and ($Arguments -join " ") -match 'ancestor=(\S+)') {
+        $script:engCalls += "$eng " + ($Arguments -join " ")
+        if ((" " + $env:STUB_IN_USE + " ").Contains(" " + $Matches[1] + " ")) { return "c0ffee" }
+        return ""
+    }
     if ($eng -eq "docker") {
         if ($env:STUB_DOCKER_PS_FAIL -eq "1") {
             if ($env:STUB_DOCKER_PS_OUTCOME) { $script:ExakitBoundedOutcome = $env:STUB_DOCKER_PS_OUTCOME }
@@ -514,6 +521,21 @@ if (Test-Path $script:PersonalDeployDir) { Remove-Item -Recurse -Force $script:P
 Seed-Kit; $script:engCalls = @(); $script:out = @()
 Invoke-ExakitUninstallRun
 Check "i9: no deployment dir, no engine call" "0" (@($script:engCalls).Count)
+# (i2e) a container (any state) still uses an image: kept, no rmi, and no
+# "remove later" advice that would take it from that deployment.
+Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_IN_USE = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
+Invoke-ExakitUninstallRun
+Has   "i2e: a container's image is asked about with ps -a" "docker ps -a -q --filter ancestor=exasol/nano:2026.2.0-nano.8" $script:engCalls
+Lacks "i2e: no rmi for an image a container uses" "docker rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
+Has   "i2e: it is reported kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" $script:out
+Lacks "i2e: with no remove-later advice" "remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
+Has   "i2e: the unused image still goes" "docker rmi ggg777" $script:engCalls
+# (i2f) the same in a dry run: not listed as "will remove".
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun -DryRun
+Lacks "i2f: dry run does not promise to remove an image in use" "will remove: docker image exasol/nano:2026.2.0-nano.8" $script:out
+Has   "i2f: dry run says it is kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" $script:out
+$env:STUB_IN_USE = ""; $env:STUB_PODMAN_IMAGES = $savedPodman
 # (i3) rmi refused (a container still uses it): kept, one hint, not flagged.
 Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
 Invoke-ExakitUninstallRun
