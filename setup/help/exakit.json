@@ -359,10 +359,10 @@
         "exakit uninstall json-tables --yes"
       ],
       "exit_codes": {
-        "0": "done (the database is gone; a printed line may name one thing to finish by hand), a dry run, or nothing to do",
+        "0": "done (the database is gone; a printed line may name one thing to finish by hand), a dry run, or nothing to do - also a full uninstall that removed nothing (Skip, nothing selected, cancelled, or no terminal), which says so",
         "1": "something remains - what remains and one command that removes it are printed",
-        "2": "bad option or unknown add-on id",
-        "5": "declined - not confirmed, nothing was removed (macOS/Linux)"
+        "2": "unknown add-on id, or an unknown option (macOS/Linux only: Windows ignores it, so spell --dry-run exactly)",
+        "5": "declined - exakit uninstall <addon-id> not confirmed, nothing was removed (macOS/Linux; Windows answers 0)"
       }
     },
     {

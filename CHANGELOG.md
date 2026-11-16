@@ -14,7 +14,9 @@
   cache, empty `~/.exasol` folders, autostart entries (orphaned ones too), the
   kit's `exasol/nano` image when no container uses it (Docker/Podman hosts),
   the legacy permission rules - and says plainly when something stays.
-  Exit codes: `0` done, `1` something remains, `2` bad option, `5` declined.
+  Exit codes: `0` done (also a full uninstall that removed nothing, which
+  says so), `1` something remains, `2` unknown add-on id or (macOS/Linux) an
+  unknown option, `5` a declined `exakit uninstall <addon-id>` (macOS/Linux).
 - **Windows.** `mcp-doctor` and `mcp-setup` work from AI agent shells (the
   BOM fix). Launchers left behind by an uninstall remove themselves, and the
   `exakit.cmd` refresh never swaps the file under a running copy.
