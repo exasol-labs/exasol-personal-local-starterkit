@@ -3356,6 +3356,10 @@ function Write-ExakitCmdShimFile {
 # A cmd.exe whose own command line does not name the shim is an interactive
 # shell that ran it in-process: it never exits, so it is not waited for (the
 # batch it was running finishes within moments of its child returning).
+#
+# Fail safe: when the chain cannot be read (the WMI query fails), the answer is
+# "under the shim" with this process to wait for - deferring the swap costs one
+# helper, writing in place under a running shim deletes it.
 function Get-ExakitShimLauncherPids {
     param([string]$ShimPath)
     $chain = @()
@@ -3364,7 +3368,11 @@ function Get-ExakitShimLauncherPids {
     for ($depth = 0; $depth -lt 12 -and $cur; $depth++) {
         try {
             $p = Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction Stop
-        } catch { break }
+        } catch {
+            $launched = $true
+            $chain += [int]$PID
+            break
+        }
         if (-not $p) { break }
         $cl = "$($p.CommandLine)"
         $namesShim = ($ShimPath -and $cl.IndexOf($ShimPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
@@ -3413,8 +3421,9 @@ function Start-ExakitDetachedPowerShell {
 # A current shim is left alone. Outside the shim (install.ps1, a direct
 # setup-windows.ps1 run) it is written in place. Under it (exakit update,
 # exakit repair-runtime, anything Get-ExakitShimLauncherPids finds the shim
-# behind) the new content goes to exakit.cmd.new and a detached helper moves it
-# over exakit.cmd once the launcher chain has exited. If no helper can be
+# behind, or any other process whose command line names exakit.cmd's path) the
+# new content goes to exakit.cmd.new and a detached helper moves it over
+# exakit.cmd once all of those have exited. If no helper can be
 # started, exakit.cmd.new is removed and the old shim - which still works - is
 # kept; the next update or install tries again.
 function Set-ExakitCmdShim {
@@ -3429,7 +3438,12 @@ function Set-ExakitCmdShim {
         return $shimPath
     }
     $waitPids = @()
-    if (Test-Path -LiteralPath $shimPath) { $waitPids = @(Get-ExakitShimLauncherPids -ShimPath $shimPath) }
+    if (Test-Path -LiteralPath $shimPath) {
+        # Own launcher chain, plus any other process running exakit.cmd by its
+        # path right now (a second window's `exakit start`, a Startup entry).
+        $waitPids = @(@(Get-ExakitShimLauncherPids -ShimPath $shimPath) +
+                      @(Get-ExakitLauncherRunningPids -Path $shimPath) | Sort-Object -Unique)
+    }
     if ($waitPids.Count -eq 0) {
         # Not under the shim: in place, and a leftover .new from an earlier
         # deferred swap that never ran is dropped rather than applied later.
@@ -3437,7 +3451,7 @@ function Set-ExakitCmdShim {
         Write-ExakitCmdShimFile -Path $shimPath -Content $content
         return $shimPath
     }
-    Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $content -WaitPids $waitPids | Out-Null
+    Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $content -WaitPids $waitPids -Recheck | Out-Null
     return $shimPath
 }
 

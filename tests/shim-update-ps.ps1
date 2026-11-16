@@ -26,7 +26,7 @@ $cErr = $null; $cTok = $null
 $cAst = [System.Management.Automation.Language.Parser]::ParseFile($commonPath, [ref]$cTok, [ref]$cErr)
 $names = @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim",
            "Test-ExakitCmdShimCurrent", "Write-ExakitCmdShimFile", "Get-ExakitShimLauncherPids",
-           "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell")
+           "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell", "Get-ExakitLauncherRunningPids")
 $defs = @{}
 foreach ($name in $names) {
     $def = $cAst.FindAll({ param($n)
@@ -112,6 +112,27 @@ Set-Content -Path $newPath -Value "stale"
 [void](Set-ExakitCmdShim -PsTarget $target)
 Check "install: written in place" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $newShim)
 Check "install: a leftover exakit.cmd.new is removed" "False" (Test-Path -LiteralPath $newPath)
+
+# --- fail safe: an unreadable chain defers; another running exakit.cmd defers
+Write-Host ""
+Write-Host "fail safe"
+. Import-ShimFunctions
+function Get-CimInstance { throw "WMI unavailable" }
+$lp = @(Get-ExakitShimLauncherPids -ShimPath $shimPath)
+Check "WMI fails: the chain counts as under the shim" "$PID" ($lp -join ",")
+Remove-Item Function:\Get-CimInstance
+function Get-ExakitShimLauncherPids { param([string]$ShimPath) return @() }
+function Get-ExakitLauncherRunningPids { param([string]$Path) return @(2147483001) }
+function Start-ExakitDetachedPowerShell { param([string]$Script) $script:helperScript = $Script; return $true }
+$script:helperScript = $null
+Write-OldShim
+[void](Set-ExakitCmdShim -PsTarget $target)
+Check "another process runs exakit.cmd: not rewritten in place" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $oldShim)
+Check "another process runs exakit.cmd: the helper waits for it" "True" ("$script:helperScript".Contains("2147483001"))
+Check "the shim helper rechecks for a fresh exakit.cmd run" "True" ("$script:helperScript".Contains("Get-CimInstance Win32_Process"))
+Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+. Import-ShimFunctions
+function Start-ExakitDetachedPowerShell { param([string]$Script) $script:helperScript = $Script; return $script:helperOk }
 
 # --- the helper never moves under a live waited process or onto a removed target
 Write-Host ""
