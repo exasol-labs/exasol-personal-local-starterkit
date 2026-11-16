@@ -913,11 +913,23 @@ personal_db_answers() {
 # 27-second first-boot budget ran out on exactly that, and a port-open wait
 # returned the instant the container started. openssl where it exists (macOS,
 # nearly every Linux), python3 otherwise, the bare port as the last resort.
+#
+# THE OUTPUT IS THE ANSWER, NEVER openssl's EXIT STATUS. macOS ships LibreSSL
+# as /usr/bin/openssl, and its s_client exits 1 after a completed handshake
+# when stdin reaches EOF. Piped into `grep -q` under the `set -o pipefail`
+# of setup/exakit and the setup scripts, that 1 failed the probe against a
+# database that was up - so a slow first boot was never recovered and
+# `exakit status` called the database's own port "held by another process". `grep -q` also closes the
+# pipe at its match and can SIGPIPE (141) the client: the same trap as
+# personal_help_names_token. So the output is captured, then tested.
 personal_tls_answers() {
     _pta_port="$(personal_db_port)"
     if command -v openssl >/dev/null 2>&1; then
-        exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" openssl s_client -connect "127.0.0.1:$_pta_port" </dev/null 2>/dev/null | grep -q 'BEGIN CERTIFICATE'
-        return $?
+        _pta_out="$(exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" openssl s_client -connect "127.0.0.1:$_pta_port" </dev/null 2>/dev/null || true)"
+        case "$_pta_out" in
+            *'BEGIN CERTIFICATE'*) return 0 ;;
+        esac
+        return 1
     fi
     if command -v python3 >/dev/null 2>&1; then
         exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" python3 -c 'import socket, ssl, sys
@@ -1385,6 +1397,18 @@ personal_recover_slow_first_boot() {
         sleep 5
     done
     ok "The database answered after $(( $(date +%s 2>/dev/null || echo 0) - _prs_t0 ))s"
+    # NOTHING TO RECONCILE when the launcher already says its database is up:
+    # a deploy over a running VM is what the launcher answers with "VM is
+    # already running" and a record that then refuses every command, stop
+    # included. Its own ready state plus the handshake is the same evidence
+    # personal_deployment_running accepts as ours. Any other answer - failed,
+    # unknown, empty - still gets the reconcile below.
+    case "$(personal_launcher_state 2>/dev/null || true)" in
+        database_ready|running)
+            ok "The launcher's record agrees with the running database"
+            return 0
+            ;;
+    esac
     EXAKIT_ACTIVE_LABEL="Reconciling the launcher's record"
     # THE RECONCILE IS THE OWNERSHIP PROOF. A handshake says a database answers
     # on the port, not whose: with Windows and WSL sharing one network stack it
