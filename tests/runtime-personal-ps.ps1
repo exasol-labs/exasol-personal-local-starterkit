@@ -192,7 +192,16 @@ if (-not $openssl) {
     $free.Stop()
     $server = $null
     try {
-        $null = & $openssl.Source req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" -keyout $key -out $crt 2>&1
+        # A Continue window: openssl req writes its progress dots to stderr,
+        # and Windows PowerShell 5.1 under 'Stop' turns any native stderr
+        # line into a terminating NativeCommandError.
+        $eapSaved = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try {
+            $null = & $openssl.Source req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" -keyout $key -out $crt 2>&1
+        } finally {
+            $ErrorActionPreference = $eapSaved
+        }
         $emptyIn = Join-Path $tlsDir "stdin.txt"
         Set-Content -Path $emptyIn -Value "" -Encoding Ascii
         $server = Start-Process -FilePath $openssl.Source -PassThru -NoNewWindow `
