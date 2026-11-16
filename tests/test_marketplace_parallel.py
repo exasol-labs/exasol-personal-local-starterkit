@@ -17,6 +17,16 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
+sys.path.insert(0, str(ROOT / "tests"))
+from release_kit import kit_with_hidden_parts_on  # noqa: E402
+
+# The notebook add-on is hidden in this release; how it installs beside the others is still the kit's.
+_KIT_DIR = tempfile.TemporaryDirectory()
+KIT = kit_with_hidden_parts_on(Path(_KIT_DIR.name) / "kit")
+
+
+def tearDownModule() -> None:
+    _KIT_DIR.cleanup()
 import apply as market_apply  # noqa: E402
 from service import _module  # noqa: E402
 from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
@@ -74,7 +84,7 @@ class ParallelApplyTest(unittest.TestCase):
         home = Path(self.temp.name) / f"{name}-{'parallel' if parallel else 'serial'}"
         home.mkdir()
         (home / "manifest.json").write_text('{"components":{}}\n', encoding="utf-8")
-        ctx = KitContext(ROOT, home, home / "bin", Manifest(home / "manifest.json"), Path("uv"))
+        ctx = KitContext(KIT, home, home / "bin", Manifest(home / "manifest.json"), Path("uv"))
         fake = fake or FakeAddons()
         out = io.StringIO()
         env = {"EXAKIT_MARKETPLACE_PARALLEL": "1" if parallel else "0", "EXAKIT_NOTEBOOK_FRONTENDS": "jupyterlab"}
@@ -142,7 +152,7 @@ class ParallelApplyTest(unittest.TestCase):
         self.assertEqual({"notebook"}, fake.overlaps["semantic-views"])
 
     def test_groups(self) -> None:
-        modules = {addon_id: _module(ROOT, addon_id)[1] for addon_id in
+        modules = {addon_id: _module(KIT, addon_id)[1] for addon_id in
                    ("dash-server", "json-tables", "exasol-scheduler", "semantic-views", "notebook", "dbt-exasol")}
         ids = list(modules)
         with patch.dict(os.environ, {"EXAKIT_MARKETPLACE_PARALLEL": "1"}):

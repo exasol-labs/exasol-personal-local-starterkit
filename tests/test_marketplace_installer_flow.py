@@ -18,8 +18,17 @@ from runtime import KitContext, Manifest
 
 
 class InstallerFlowTest(unittest.TestCase):
-    def test_question_then_selected_persona_preselects_data_and_addons(self):
-        self.assertEqual([('question', '', '')], plan(ROOT, {}, interactive=True))
+    def test_the_install_never_asks_and_sets_up_general_quietly(self):
+        actions = plan(ROOT, {}, interactive=True)
+        self.assertEqual([('set', 'EXAKIT_PERSONA', 'general'),
+                          ('set', 'EXAKIT_DATASETS_PRESELECT', 'tpch,energy,weather'),
+                          ('record', 'general', ''), ('set', 'EXAKIT_PERSONA_ACTIVE', '1'),
+                          ('data', '', '')], actions)
+        self.assertNotIn('question', [action[0] for action in actions])
+        self.assertNotIn('notice', [action[0] for action in actions], "no persona is named on screen")
+        self.assertEqual(actions, plan(ROOT, {}), "headless: the same")
+
+    def test_a_persona_named_explicitly_still_preselects_its_data_and_addons(self):
         actions = plan(ROOT, {'EXAKIT_PERSONA': 'ml-engineer'}, phase='selected')
         self.assertIn(('set', 'EXAKIT_DATASETS_PRESELECT', 'amazon_sales,fraud_transactions'), actions)
         self.assertIn(('set', 'EXAKIT_MARKETPLACE_PRESELECT', 'notebook,udf-devkit'), actions)
@@ -27,15 +36,16 @@ class InstallerFlowTest(unittest.TestCase):
         self.assertEqual(('data', '', ''), actions[-1])
         self.assertNotIn('install', [action[0] for action in actions])
 
-    def test_headless_and_cancel_keep_default_data_without_persona_record(self):
-        for phase in ('begin', 'selected'):
-            self.assertEqual([('set', 'EXAKIT_DATASETS_PRESELECT', 'tpch,energy,weather'),
-                              ('data', '', '')], plan(ROOT, {}, phase=phase))
+    def test_selected_without_a_persona_keeps_default_data_without_record(self):
+        self.assertEqual([('set', 'EXAKIT_DATASETS_PRESELECT', 'tpch,energy,weather'),
+                          ('data', '', '')], plan(ROOT, {}, phase='selected'))
 
-    def test_explicit_answers_do_not_reopen_question_or_change_preselection(self):
+    def test_explicit_answers_do_not_change_preselection(self):
         env = {'EXAKIT_DATASETS': 'tpch', 'EXAKIT_MARKETPLACE_ADDONS': 'none',
                'EXAKIT_DATASETS_PRESELECT': 'weather'}
-        self.assertEqual([('data', '', '')], plan(ROOT, env, interactive=True))
+        actions = plan(ROOT, env, interactive=True)
+        self.assertEqual([('set', 'EXAKIT_PERSONA', 'general'), ('record', 'general', ''),
+                          ('set', 'EXAKIT_PERSONA_ACTIVE', '1'), ('data', '', '')], actions)
         env['EXAKIT_PERSONA'] = 'data-scientist'
         actions = plan(ROOT, env, phase='selected')
         self.assertFalse(any(action[0] == 'set' and action[1].endswith('PRESELECT') for action in actions))

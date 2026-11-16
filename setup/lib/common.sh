@@ -510,8 +510,8 @@ info_step() {
 #
 # Two spaces, the same column as begin_step's own arrow, because that is what it
 # IS: a top-level heading with its own children under it. At four it sat in the
-# action gutter, level with the "Explore marketplace ?" question it introduces,
-# and the two read as siblings when one contains the other. The glyph is the
+# action gutter, level with the rows it introduces, and the two read as siblings
+# when one contains the other. The glyph is the
 # step header's, in the tick's green rather than the accent, and degrades to ">"
 # in plain mode like every other arrow. Never gated by EXAKIT_QUIET_DETAIL:
 # nothing that uses it runs inside a one-line step.
@@ -5961,7 +5961,7 @@ exakit_marketplace_menu() {
     # The interactive selection and its progress view share one Textual app.
     # Explicit environment answers stay headless and enter the Python batch
     # controller through the platform progress adapter below.
-    if [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] && \
+    if [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] && [ "${EXAKIT_MARKETPLACE_NO_TEXTUAL:-0}" != 1 ] && \
        [ "${UI_TABLE_AUTO:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
         _mm_root="$(_exakit_marketplace_root)"
         _mm_state="$(mktemp "${TMPDIR:-/tmp}/exakit-market-state.XXXXXX")" || _mm_state=""
@@ -6502,13 +6502,22 @@ exakit_marketplace_offer() {
         _exakit_addon_system_present "$_mo_id" && continue
         _mo_ids="${_mo_ids:+$_mo_ids,}$_mo_id"
     done
-    [ -n "$_mo_ids" ] || return 0
-    _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"
-    # The checks the table does not need, behind it: the About cache for `exakit marketplace` later.
+    # The checks the tables do not need, behind them: the About cache the second table reads.
     ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
+    # Nothing to install and nobody to ask: nothing on screen.
+    [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || return 0
     heading "Add-ons"
-    EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="$_mo_ids" EXAKIT_MARKETPLACE_PRESELECT="$_mo_ids" \
-        UI_TABLE_AUTO=1 exakit_marketplace_menu || true
+    if [ -n "$_mo_ids" ]; then
+        _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"
+        EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="$_mo_ids" EXAKIT_MARKETPLACE_PRESELECT="$_mo_ids" \
+            UI_TABLE_AUTO=1 exakit_marketplace_menu || true
+    fi
+    # Then the rest of the marketplace, on a terminal: every add-on listed (the two
+    # above as installed), nothing ticked, and it waits for a pick - Enter alone is Skip.
+    if [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; then
+        EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none EXAKIT_MARKETPLACE_NO_TEXTUAL=1 \
+            exakit_marketplace_menu || true
+    fi
     return 0
 }
 
@@ -12124,10 +12133,24 @@ EOF
             _setup_status=$?
         fi
         ui_spin_end
-        _mcp_auto_ok="$(_exakit_mcp_result_states "$_result_file" 2>/dev/null | grep -c ' configured$' || true)"
+        _mcp_auto_names=""
+        for _mcp_auto_id in $(_exakit_mcp_result_states "$_result_file" 2>/dev/null | sed -n 's/ configured$//p'); do
+            case "$_mcp_auto_id" in
+                claude_desktop) _mcp_auto_name="Claude (desktop app)" ;;
+                claude_code)    _mcp_auto_name="Claude Code" ;;
+                codex)          _mcp_auto_name="Codex" ;;
+                cursor)         _mcp_auto_name="Cursor" ;;
+                vscode_copilot) _mcp_auto_name="GitHub Copilot" ;;
+                gemini_cli)     _mcp_auto_name="Gemini CLI" ;;
+                opencode)       _mcp_auto_name="OpenCode" ;;
+                continue)       _mcp_auto_name="Continue" ;;
+                *)              _mcp_auto_name="$_mcp_auto_id" ;;
+            esac
+            _mcp_auto_names="${_mcp_auto_names:+$_mcp_auto_names, }$_mcp_auto_name"
+        done
         rm -f "$_result_file"
         [ "$_setup_status" -eq 0 ] || return "$_setup_status"
-        ok "AI clients connected: ${_mcp_auto_ok:-0}"
+        ok "AI clients connected: ${_mcp_auto_names:-none}"
         exakit_clear_soft_failure mcp_clients
         return 0
     fi
@@ -12442,27 +12465,6 @@ _exakit_offer_notes() {
 # before the file was looked at, so EXAKIT_PERSONA plus EXAKIT_DATA_FILE loaded
 # the persona's datasets and dropped the file without a word. Then the external
 # source, which unattended is only ever the command to run.
-# _exakit_auto_sample_data <kit_root> — the install's sample load: the preselected
-# datasets not loaded yet, named once ("Sample datasets (tpch, energy, weather)"),
-# each loaded with its own progress bar and no line of its own.
-_exakit_auto_sample_data() {
-    case "${EXAKIT_DATASETS_PRESELECT:-}" in ''|none) return 0 ;; esac
-    _asd_pending=" $(exakit_pending_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
-    _asd_ids=""
-    for _asd_id in $(printf '%s' "$EXAKIT_DATASETS_PRESELECT" | tr ',' ' '); do
-        case "$_asd_pending" in *" $_asd_id "*) _asd_ids="${_asd_ids:+$_asd_ids }$_asd_id" ;; esac
-    done
-    [ -n "$_asd_ids" ] || return 0
-    info "Sample datasets ($(printf '%s' "$_asd_ids" | sed 's/ /, /g'))"
-    for _asd_id in $_asd_ids; do
-        if ! ( EXAKIT_DATA_AUTO=1 exakit_load_dataset "$_kit_root" "$_asd_id" ); then
-            _exakit_offer_fail "loading dataset '$_asd_id' did not finish (see the log)"
-        fi
-    done
-    [ "$_data_failed" -eq 0 ] || warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
-    return 0
-}
-
 _exakit_offer_answered_rest() {
     if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
         info "Loading a local file (EXAKIT_DATA_FILE)."
@@ -12567,16 +12569,6 @@ exakit_maybe_offer_data_load() {
             warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
             _exakit_offer_fail "the bundled sample data did not finish loading (see the log)"
         fi
-        _exakit_offer_answered_rest 0
-        return "$_data_failed"
-    fi
-
-    # THE INSTALL LOADS THE SAMPLES, IT DOES NOT ASK. Nobody named datasets, so
-    # the default persona's ones (EXAKIT_DATASETS_PRESELECT) that are not loaded
-    # yet load as they are: one line naming them, then each one's progress bar.
-    # `exakit data-load` run by hand keeps the table below.
-    if [ "${EXAKIT_INSTALL_AUTO_DATA:-0}" = 1 ]; then
-        _exakit_auto_sample_data "$_kit_root"
         _exakit_offer_answered_rest 0
         return "$_data_failed"
     fi
@@ -13423,7 +13415,9 @@ kit_shared_steps() {
             exakit_clear_soft_failure mcp_clients
         fi
         exakit_clear_failure_note
-        if ! ( exakit_maybe_offer_skills_install ); then
+        # The skills are placed without a word on screen (the log keeps every line): the
+        # AI clients connected above are the step's last line. A warning still shows.
+        if ! ( EXAKIT_QUIET_DETAIL=1; exakit_maybe_offer_skills_install ); then
             exakit_record_soft_failure skills "exakit skills-install" \
                 "$(exakit_take_failure_note)" "AI skills"
         else

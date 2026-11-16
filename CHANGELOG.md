@@ -6,10 +6,10 @@
 
 - **No persona question.** The install sets up the General persona without asking or naming it. Data Scientist and ML Engineer are disabled (`"visible": false`): not offered, not listed and refused by name; an install that recorded one keeps working.
 - **The notebook add-on is hidden.** Disabled in `marketplace/catalog.json` like udf-devkit: not shown and not installable from the marketplace.
-- **The sample datasets load without a menu.** One line names them ("Sample datasets (tpch, energy, weather)"), then each one's progress bar. `exakit data-load` keeps its menu.
+- **The data table is shorter.** After pyexasol, "Data to load" asks as before, with the samples as ONE row named by what it loads ("Sample datasets (tpch, energy, weather)", ticked, no tree under it), then uploading a file or folder, an external source and Skip. The samples' load shows on that one row. `exakit data-load` keeps the full tree.
 - **Loading a folder no longer prints "ignored: N of other kinds"** for files that were never data.
-- **No "Explore marketplace?" question.** Dash Server and JSON Tables are installed at the end of the install when missing: their rows are drawn at once from the catalog's own descriptions, install side by side, and the About cache refreshes in the background.
-- **The AI bridge step connects every AI client found here without a table.** "Setting up AI bridge (MCP server, clients and skills)", the server and read-only lines, then a spinner while each client's file is written by a worker of its own, and one result line. `exakit mcp-setup` keeps its table.
+- **No "Explore marketplace?" question.** Dash Server and JSON Tables are installed at the end of the install when missing, without asking: their rows are drawn at once from the catalog's own descriptions and install side by side, while the About cache refreshes in the background. Then, on a terminal, the rest of the marketplace is listed with nothing ticked and waits for a pick (Enter alone is Skip).
+- **The AI bridge step connects every AI client found here without a table.** "Setting up AI bridge (MCP server, clients and skills)", the server and read-only lines, then a spinner while each client's file is written by a worker of its own, and one line naming the clients connected ("AI clients connected: Claude Code, Codex, ..."). The skills are placed without lines of their own (the log keeps them). `exakit mcp-setup` keeps its table.
 
 ### A data scientist skill, skills for every AI client, and clearer data failures
 

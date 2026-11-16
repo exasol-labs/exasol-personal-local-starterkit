@@ -22,29 +22,8 @@ from model import Addon  # noqa: E402
 from runtime import KitContext, Manifest  # noqa: E402
 
 
-def kit_with_ml_engineer(where: Path) -> Path:
-    """A kit root that is this checkout with the ML Engineer and its udf-devkit add-on switched on. Both ship
-    disabled on this branch ("visible": false, kept, not removed); the add sequence it exercises - UDF add-on, MLflow
-    service - is still the kit's, so it stays tested."""
-    where.mkdir()
-    for entry in ROOT.iterdir():
-        if entry.name in (".git", "personas", "marketplace"):
-            continue
-        try:
-            (where / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
-        except OSError:                                    # no symlinks here (Windows without the right): a copy
-            (shutil.copytree if entry.is_dir() else shutil.copy2)(entry, where / entry.name)
-    shutil.copytree(ROOT / "personas", where / "personas")
-    ml = where / "personas" / "ml-engineer.json"
-    ml.write_text(json.dumps({**json.loads(ml.read_text(encoding="utf-8")), "visible": True}), encoding="utf-8")
-    shutil.copytree(ROOT / "marketplace", where / "marketplace", ignore=shutil.ignore_patterns("__pycache__"))
-    catalog = where / "marketplace" / "catalog.json"
-    doc = json.loads(catalog.read_text(encoding="utf-8"))
-    for row in doc["addons"]:
-        if row["id"] == "udf-devkit":
-            row["visible"] = True
-    catalog.write_text(json.dumps(doc), encoding="utf-8")
-    return where
+sys.path.insert(0, str(ROOT / "tests"))
+from release_kit import kit_with_hidden_parts_on as kit_with_ml_engineer  # noqa: E402  (every hidden part on)
 
 
 class PersonaApplyTest(unittest.TestCase):
@@ -248,7 +227,7 @@ class PersonaApplyTest(unittest.TestCase):
         self.assertEqual(["mlflow"], calls)
 
     def test_public_add_apply_remove_preserve_shared_files(self) -> None:
-        commands = entrypoints()
+        commands = entrypoints(self.ctx.root)     # Data Scientist is disabled in the shipped kit; this one has it on
         self.assertTrue(commands)
         shared = self.home / 'notebooks' / 'my-work.ipynb'
         shared.parent.mkdir()

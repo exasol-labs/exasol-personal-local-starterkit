@@ -605,8 +605,8 @@ function InfoStep([string]$Msg) {
 #
 # Two spaces, the same column as Begin-ExakitStep's own arrow, because that is
 # what it IS: a top-level heading with its own children under it. At four it sat
-# in the action gutter, level with the "Explore marketplace ?" question it
-# introduces, and the two read as siblings when one contains the other.
+# in the action gutter, level with the rows it introduces, and the two read as
+# siblings when one contains the other.
 # Never gated by ExakitQuietDetail: nothing that uses it runs inside a one-line
 # step. Twin of heading in common.sh.
 function Write-ExakitHeading([string]$Msg) {
@@ -6715,7 +6715,7 @@ function Test-ExakitTextualInline {
 }
 
 function Show-ExakitMarketplaceMenu {
-    if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and
+    if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and $env:EXAKIT_MARKETPLACE_NO_TEXTUAL -ne '1' -and
         $env:UI_TABLE_AUTO -ne '1' -and (Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and
         $env:EXAKIT_NO_FANCY -ne '1' -and (Test-ExakitTextualInline)) {
         $root = Get-ExakitMarketplaceRoot
@@ -7598,8 +7598,28 @@ function Request-ExakitMarketplaceOffer {
         if (Test-ExakitAddonSystemPresent $id) { continue }
         $ids += $id
     }
-    if ($ids.Count -eq 0) { return }
+    # Nothing to install and nobody to ask: nothing on screen.
+    if ($ids.Count -eq 0 -and -not ((Test-ExakitInteractive) -and (Test-ExakitMarketplaceHasPending))) { return }
     Write-ExakitHeading "Add-ons"
+    if ($ids.Count -gt 0) { Install-ExakitAutoAddons -Ids $ids }
+    # Then the rest of the marketplace, on a console: every add-on listed (the two
+    # above as installed), nothing ticked, and it waits for a pick - Enter alone is
+    # Skip. Twin of the same stage in exakit_marketplace_offer.
+    if ((Test-ExakitInteractive) -and (Test-ExakitMarketplaceHasPending)) {
+        $env:EXAKIT_MARKETPLACE_PRESELECT = "none"
+        $env:EXAKIT_MARKETPLACE_NO_TEXTUAL = "1"
+        Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+        try { Show-ExakitMarketplaceMenu } catch { Warn2 "The marketplace did not finish cleanly: $_" } finally {
+            Remove-Item env:EXAKIT_MARKETPLACE_PRESELECT -ErrorAction SilentlyContinue
+            Remove-Item env:EXAKIT_MARKETPLACE_NO_TEXTUAL -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Install-ExakitAutoAddons - the add-ons every kit gets, drawn ticked and
+# installed at once, side by side. Twin of the first stage of exakit_marketplace_offer.
+function Install-ExakitAutoAddons {
+    param([string[]]$Ids)
     $env:EXAKIT_MARKETPLACE_REASONS = (@(Get-ExakitMarketplaceCatalogAbout -Ids $ids) -join "`n")
     $env:EXAKIT_MARKETPLACE_ONLY = ($ids -join ',')
     $previousPreselect = $env:EXAKIT_MARKETPLACE_PRESELECT

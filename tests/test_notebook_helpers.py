@@ -289,13 +289,14 @@ class CopyTest(unittest.TestCase):
 
     def test_copied_once_then_the_users(self):
         with tempfile.TemporaryDirectory() as tmp:
-            added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
+            # A kit set up as the Data Scientist (disabled in this release: only such a kit gets its notebooks).
+            added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp), {"data-scientist"})
             self.assertIn("data-scientist/00_quickstart.ipynb", added)
             self.assertEqual(problems, [])
             base = Path(tmp) / "starter-kit-notebooks"
             self.assertIn("data-scientist/00_quickstart.ipynb", (base / ".kit-copied").read_text(encoding="utf-8").split())
             (base / "data-scientist" / "00_quickstart.ipynb").unlink()
-            self.assertEqual(kit_notebooks.copy("jupyter", ROOT, Path(tmp)), ([], []))
+            self.assertEqual(kit_notebooks.copy("jupyter", ROOT, Path(tmp), {"data-scientist"}), ([], []))
             self.assertFalse((base / "data-scientist" / "00_quickstart.ipynb").exists(), "deleted by the user: not copied again")
 
     def test_a_kit_that_existed_before_the_record_counts_what_is_there(self):

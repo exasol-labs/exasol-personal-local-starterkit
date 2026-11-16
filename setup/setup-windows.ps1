@@ -359,7 +359,12 @@ try {
         [void](Invoke-ExakitBestEffort -Component "skills" -Repair "exakit skills-install" `
             -Label "AI skills" `
             -Warning "Skills install did not finish cleanly." `
-            -Body { Request-ExakitSkillsInstallOffer })
+            -Body {
+                # The skills are placed without a word on screen (the log keeps every line): the AI
+                # clients connected above are the step's last line. A warning still shows.
+                $script:ExakitQuietDetail = $true
+                try { Request-ExakitSkillsInstallOffer } finally { $script:ExakitQuietDetail = $false }
+            })
     }
 
     # --- step 6: pyexasol (Exasol Python driver) --------------------------------

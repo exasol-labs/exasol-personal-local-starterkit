@@ -3580,8 +3580,7 @@ exakit_load_dataset_dir() {
 
     # The table already names the dataset in its own row, so announcing it again
     # would be the same fact twice — and the line would scroll the table.
-    # The install's own sample load (EXAKIT_DATA_AUTO) named them all on one line.
-    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ] || [ "${EXAKIT_DATA_AUTO:-0}" = 1 ]; then
+    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ]; then
         _exakit_log_file "INFO  Loading the '$_ld_id' dataset into schema $_ld_schema"
     else
         info "Loading the '$_ld_id' dataset into schema $_ld_schema"
@@ -3964,6 +3963,7 @@ exakit_data_samples_select() {
     for _dls_row in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         _dls_id="$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed -n "${_dls_row}p")"
         [ -n "$_dls_id" ] || continue
+        [ "$_dls_id" = samples ] && _dls_id="$EXAKIT_TABLE_SAMPLE_IDS"
         EXAKIT_DATA_LOAD_SELECTION="${EXAKIT_DATA_LOAD_SELECTION:+$EXAKIT_DATA_LOAD_SELECTION,}$_dls_id"
     done
     # Nothing picked, nothing to show progress in: the table is done.
@@ -4084,7 +4084,27 @@ exakit_data_table_build() {
     _dtb_count="$(grep -c '.' "$_dtb_pend" 2>/dev/null)"
     case "$_dtb_count" in ''|*[!0-9]*) _dtb_count=0 ;; esac
     _dtb_n=0
-    if [ "$_dtb_count" -gt 0 ]; then
+    EXAKIT_TABLE_SAMPLE_IDS=""
+    if [ "$_dtb_count" -gt 0 ] && [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ]; then
+        # THE INSTALL'S FORM: one row for the samples, named by what it loads
+        # ("Sample datasets (tpch, energy, weather)"), no tree under it - the
+        # default persona's datasets still to load, else every pending one. Its
+        # load shows on that one row, dataset after dataset.
+        while IFS='|' read -r _dtb_id _dtb_label; do
+            [ -n "$_dtb_id" ] || continue
+            if [ -n "${EXAKIT_DATASETS_PRESELECT:-}" ] && [ "$EXAKIT_DATASETS_PRESELECT" != none ]; then
+                case ",$EXAKIT_DATASETS_PRESELECT," in *",$_dtb_id,"*) ;; *) continue ;; esac
+            fi
+            EXAKIT_TABLE_SAMPLE_IDS="${EXAKIT_TABLE_SAMPLE_IDS:+$EXAKIT_TABLE_SAMPLE_IDS,}$_dtb_id"
+        done < "$_dtb_pend"
+        [ -n "$EXAKIT_TABLE_SAMPLE_IDS" ] || EXAKIT_TABLE_SAMPLE_IDS="$(cut -d'|' -f1 "$_dtb_pend" | tr '\n' ',' | sed 's/,$//')"
+        printf 'plain|Sample datasets (%s)|1|idle|||||| \n' "$(printf '%s' "$EXAKIT_TABLE_SAMPLE_IDS" | sed 's/,/, /g')" >> "$_dtb_f"
+        EXAKIT_TABLE_IDS="samples
+"
+        _dtb_n=1
+        EXAKIT_TABLE_GROUP=""
+        EXAKIT_TABLE_DEFAULTS="1"
+    elif [ "$_dtb_count" -gt 0 ]; then
         # The parent row: ticking it ticks every dataset under it, unticking
         # one releases it (EXAKIT_TABLE_GROUP mode "all").
         printf 'group|Sample datasets|1|idle|||||| \n' >> "$_dtb_f"
@@ -4212,6 +4232,10 @@ EXAKIT_DTP_EOF
 
 # exakit_data_table_row <dataset-id> — which row that dataset is on, or 0.
 exakit_data_table_row() {
+    case ",${EXAKIT_TABLE_SAMPLE_IDS:-}," in
+        ,,) ;;
+        *",$1,"*) set -- samples ;;          # the install's one sample row carries every one of them
+    esac
     _dtr_i=0
     while IFS= read -r _dtr_id; do
         _dtr_i=$(( _dtr_i + 1 ))

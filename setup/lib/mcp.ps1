@@ -1290,8 +1290,12 @@ function Invoke-McpSetup {
         Start-ExakitSpinner "Connecting AI clients"
         try { $resultJson = Invoke-McpSetupCli -Clients $pending } finally { Stop-ExakitSpinner }
         if (-not $resultJson) { return $false }
-        $connected = @(Get-McpConfiguredClients -ResultJson $resultJson)
-        Ok "AI clients connected: $($connected.Count)"
+        $labels = @{ "claude_desktop" = "Claude (desktop app)"; "claude_code" = "Claude Code"; "codex" = "Codex";
+            "cursor" = "Cursor"; "vscode_copilot" = "GitHub Copilot"; "gemini_cli" = "Gemini CLI";
+            "opencode" = "OpenCode"; "continue" = "Continue" }
+        $names = @(Get-McpConfiguredClients -ResultJson $resultJson | ForEach-Object { if ($labels.ContainsKey($_)) { $labels[$_] } else { $_ } })
+        if ($names.Count -eq 0) { $names = @("none") }
+        Ok "AI clients connected: $($names -join ', ')"
         if (Get-Command Clear-ExakitSoftFailure -ErrorAction SilentlyContinue) { Clear-ExakitSoftFailure -Component "mcp_clients" }
         return $true
     }

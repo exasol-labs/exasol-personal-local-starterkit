@@ -111,8 +111,8 @@ class AdapterDryRunTest(unittest.TestCase):
             with self.subTest(host=command[0]):
                 result = subprocess.run(command, env=self._environment(), capture_output=True,
                                         text=True, timeout=20)
-                # The ML Engineer is disabled on this branch (kept, "visible": false): not offered.
-                self.assertEqual(["data-scientist", "general"], result.stdout.splitlines(), result.stderr)
+                # Data Scientist and ML Engineer are disabled in this release (kept, "visible": false): not offered.
+                self.assertEqual(["general"], result.stdout.splitlines(), result.stderr)
 
     @unittest.skipIf(os.name == "nt", "Unix PTY; Windows uses its console tests")
     def test_bash_persona_and_marketplace_menus_use_candidate_source(self) -> None:
@@ -311,6 +311,11 @@ class AdapterDryRunTest(unittest.TestCase):
         for name in ("setup", "marketplace", "personas", "data"):
             shutil.copytree(ROOT / name, checkout / name)
         shutil.copy2(ROOT / "versions.json", checkout / "versions.json")
+        # The selection checks need an installable notebook (its frontends are what is wrong below); the release
+        # hides it (visible: false), and a hidden add-on is skipped before its answers are validated.
+        catalog = json.loads((checkout / "marketplace/catalog.json").read_text(encoding="utf-8"))
+        next(row for row in catalog["addons"] if row["id"] == "notebook")["visible"] = True
+        (checkout / "marketplace/catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
         home = self.base / "fault kit"
         home.mkdir()
         (home / "manifest.json").write_text("{}\n")

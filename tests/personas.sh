@@ -8,6 +8,12 @@ PASS=0
 FAIL=0
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# This release disables the Data Scientist (and the ML Engineer); what a persona does once offered is still the
+# kit's, so these checks run on a copy of the kit with the Data Scientist switched back on (tests/release_kit.py).
+SHIPPED_ROOT="$ROOT"
+ROOT="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/tests"); from pathlib import Path
+from release_kit import kit_with_hidden_parts_on
+print(kit_with_hidden_parts_on(Path(sys.argv[2]), personas=("data-scientist",), addons=()))' "$SHIPPED_ROOT" "$WORK/release-kit")"
 
 check() { # check <label> <expected> <actual>
     if [ "$2" = "$3" ]; then
@@ -246,7 +252,7 @@ check "the question ends with General, ticked to begin with, combinable (no excl
 out="$( (unset EXAKIT_PERSONA EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT
         exakit_persona_data() { :; }; exakit_persona_flow "$ROOT" </dev/null >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${EXAKIT_PERSONA:-}") )"
-check "no terminal, no persona: the default personas' datasets, nothing recorded" "tpch,energy,weather||" "$out"
+check "no persona named: General, quietly - its datasets, no add-ons" "tpch,energy,weather||general" "$out"
 out="$( (unset EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT; exakit_persona_data() { :; }
         export EXAKIT_PERSONA=bare; exakit_persona_flow "$WORK/kit3" selected >/dev/null 2>&1; printf '%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}") )"
 check "a persona with no datasets ticks none (and offers no add-ons)" "none|" "$out"
@@ -338,6 +344,8 @@ _json() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read().rsplit("|rc
 out="$(_cli persona list --json)"
 contains "persona list --json exits 0" "|rc=0" "$out"
 check "...and lists every persona it offers" "data-scientist,general" "$(printf '%s' "$out" | _json '",".join(p["id"] for p in d["personas"])')"
+_shipped="$(EXAKIT_NO_UPDATE_NOTICE=1 bash "$SHIPPED_ROOT/setup/exakit" persona list --json 2>/dev/null)"
+check "the shipped kit offers General alone" "general" "$(printf '%s' "$_shipped" | python3 -c 'import json,sys; print(",".join(p["id"] for p in json.load(sys.stdin)["personas"]))')"
 out="$(_cli persona show ml-engineer --json)"
 check "persona show --json names the notebooks it brings, in order" \
     "ml-engineer/00_quickstart.ipynb,ml-engineer/01_train.ipynb,ml-engineer/02_rust_score.ipynb,ml-engineer/03_score_external_model.ipynb" \

@@ -232,7 +232,8 @@ check "none installs nothing" "rc=0 called=" "$(run_menu none)"
 check "naming one addon installs only it" "rc=0 called=dash-server" "$(run_menu dash-server)"
 # udf-devkit is hidden for now ("visible": false, kept for the ML Engineer): "all" leaves it out. semantic-views
 # installs into the kit's database, and this test's kit records none: not applicable here, so "all" skips it too.
-check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook" "$(run_menu all)"
+# notebook is hidden in this release (visible: false): "all" is every add-on on offer.
+check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables" "$(run_menu all)"
 _unknown_out="$( (run_menu not-a-tool) 2>&1 || true)"
 check "an unknown id refuses" "yes" "$( (EXAKIT_MARKETPLACE_ADDONS=not-a-tool exakit_marketplace_menu >/dev/null 2>&1); [ $? -ne 0 ] && echo yes || echo no )"
 # An installer that fails must not report success.
@@ -459,10 +460,10 @@ check "kit launcher on PATH is NOT a system install" "no" "$( (
 rm -f "$EXAKIT_BIN_DIR/dash-server"
 
 echo "the closing offer (post-install):"
-# Non-interactive (no TTY): the offer degrades to the one-line hint.
-_offer_notty="$( (exakit_marketplace_offer) 2>&1 )"
-has "no TTY -> one-line hint, no prompt" "exakit marketplace" "$_offer_notty"
-lacks "no TTY -> no yes/no question" "marketplace now" "$_offer_notty"
+# Non-interactive (no TTY): never a question - the closing add-ons are installed, not offered.
+_offer_notty="$( (exakit_marketplace_menu() { printf 'MENU %s\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }; exakit_marketplace_offer) 2>&1 )"
+lacks "no TTY -> no yes/no question" "Explore marketplace" "$_offer_notty"
+lacks "no TTY -> no 'marketplace now'" "marketplace now" "$_offer_notty"
 # A scripted answer installs without asking.
 check "EXAKIT_MARKETPLACE_ADDONS pre-answers the offer" "rc=0 called=dash-server" "$( (
     . "$ROOT/tests/lib/mock-addon-events.sh"
@@ -482,10 +483,16 @@ check "nothing pending -> the offer is silent" "" "$( (
 # Soft failures: the hint, never the "done and working" celebration.
 _offer_soft="$( (
     EXAKIT_SOFT_FAILED="pyexasol"
+    exakit_marketplace_menu() { printf 'MENU %s\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }
     exakit_marketplace_offer 2>&1
 ) )"
 lacks "soft failures -> no victory lap" "done and working" "$_offer_soft"
-has "soft failures -> still hints at the marketplace" "exakit marketplace" "$_offer_soft"
+# Only a database that never installed holds the closing add-ons back.
+check "a failed database -> no add-ons at all" "" "$( (
+    exakit_soft_failed() { [ "$1" = runtime ]; }
+    exakit_marketplace_menu() { printf 'MENU\n'; }
+    exakit_marketplace_offer 2>&1
+) )"
 
 echo "module missing from this kit copy (old kit updated over the wire):"
 # The env answer names a real add-on whose module file did not ship: the
@@ -563,8 +570,17 @@ cat >/dev/null 2>&1 || true
 exit 0
 DRAINSTUBEOF
 chmod +x "$WORK/drain-bin/code"
-# The last offered registry row is the canary (a hidden one is never a version-table target).
-_drain_last="$(_exakit_registry | awk -F'|' '$4 == 1 { id = $1 } END { print id }')"
+# The last registry row this machine offers is the canary (a hidden or inapplicable one is never a
+# version-table target).
+# In a subshell: the add-ons' answers are remembered for the run (the hook memo), and the checks
+# below change what those answers would be.
+_drain_last="$( (
+    _drain_found=""
+    for _drain_id in $(exakit_marketplace_addons | cut -d'|' -f1); do
+        _exakit_addon_offerable "$_drain_id" && _drain_found="$_drain_id"
+    done
+    printf '%s' "$_drain_found"
+) )"
 _drain_last_fn="$(printf '%s' "$_drain_last" | tr '-' '_')"
 check "the canary is registered after exasol-vscode" "yes" \
     "$(exakit_marketplace_addons | cut -d'|' -f1 | sed -n '/^exasol-vscode$/,$p' | grep -qx "$_drain_last" && [ "$_drain_last" != exasol-vscode ] && echo yes || echo no)"
@@ -1508,6 +1524,8 @@ offer() { # offer <installed ids> — what exakit_marketplace_offer hands the me
         heading() { printf 'HEADING %s\n' "$1"; }
         ui_checkbox_menu() { printf 'ASKED\n'; }
         exakit_marketplace_menu() { printf 'MENU ONLY=[%s] TICKED=[%s] AUTO=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${UI_TABLE_AUTO:-}"; }
+        _exakit_prompt_tty() { [ -n "${OFFER_TTY:-}" ] && printf '/dev/tty'; }
+        exakit_marketplace_has_pending() { [ -n "${OFFER_PENDING:-}" ]; }
         unset EXAKIT_MARKETPLACE_ADDONS EXAKIT_SOFT_FAILED EXAKIT_MARKETPLACE_PRESELECT
         INSTALLED_IDS="$1" exakit_marketplace_offer
     )
@@ -1516,9 +1534,16 @@ check "both missing: both installed, ticked, no question" \
     "HEADING Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
 check "one there: only the other"  "MENU ONLY=[json-tables] TICKED=[json-tables] AUTO=[1]" "$(offer dash-server | grep MENU)"
 check "both there: nothing at all" "" "$(offer "dash-server json-tables")"
+check "on a terminal, the rest of the marketplace waits for a pick, nothing ticked" \
+    "HEADING Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]|MENU ONLY=[] TICKED=[none] AUTO=[]" \
+    "$(OFFER_TTY=1 OFFER_PENDING=1 offer "" | tr '\n' '|' | sed 's/|$//')"
+check "...also when the two are there already" "HEADING Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
+    "$(OFFER_TTY=1 OFFER_PENDING=1 offer "dash-server json-tables" | tr '\n' '|' | sed 's/|$//')"
 _ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
-has "the Windows twin narrows to the missing ones" '$env:EXAKIT_MARKETPLACE_ONLY = ($ids -join' "$_ps_offer"
-has "...and draws them ticked, unasked"           '$env:UI_TABLE_AUTO = "1"'                  "$_ps_offer"
+_ps_auto="$(sed -n '/^function Install-ExakitAutoAddons/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
+has "the Windows twin narrows to the missing ones" '$env:EXAKIT_MARKETPLACE_ONLY = ($ids -join' "$_ps_auto"
+has "...and draws them ticked, unasked"           '$env:UI_TABLE_AUTO = "1"'                  "$_ps_auto"
+has "...then the rest, nothing ticked"            '$env:EXAKIT_MARKETPLACE_PRESELECT = "none"' "$_ps_offer"
 lacks "...with no question"                       'Read-ExakitCheckboxMenu'                     "$_ps_offer"
 
 echo "passed: $PASS, failed: $FAIL"
