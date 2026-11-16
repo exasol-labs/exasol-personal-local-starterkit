@@ -187,8 +187,11 @@ The files live in `~/.exasol-starter-kit/credentials/`.
 the database **and its data**, the managed AI-client configs, the skills the kit
 placed and the binaries. It also removes the launcher download cache, empty
 `~/.exasol` folders, the kit's autostart entries (orphaned ones too), the
-`exasol/nano` image when no container uses it, and the kit's own MCP server
-processes on macOS/Linux.
+`exasol/nano` image when no container uses it (on Linux/WSL/Windows with
+Docker or Podman; macOS runs the database in the launcher's VM), and the kit's
+own MCP server processes on macOS/Linux. Exit 0 can come with a warning line
+when the container engine could not be asked: nothing is known to remain, and
+the line names the command to check by hand.
 
 ```bash
 exakit uninstall --dry-run        # the full plan; changes nothing
