@@ -2042,9 +2042,17 @@ function Find-PersonalTeardownLeftovers {
         foreach ($engineName in @("docker", "podman")) {
             $engineCmd = Get-Command $engineName -ErrorAction SilentlyContinue
             if (-not $engineCmd) { continue }
+            $script:ExakitBoundedOutcome = ""
             $names = Invoke-ExakitBounded -FilePath $engineCmd.Source -TimeoutSeconds 15 -Arguments @("ps", "-a", "--format", "{{.Names}}")
             if ($null -eq $names) {
-                $warnings += "could not check $engineName for the deployment's container (no answer within 15s, or it refused); check with: $engineName ps -a --filter name=$Id"
+                # Why, where Invoke-ExakitBounded says: a hang and a refusal
+                # are different things to check. Twin of _ptl_why.
+                $why = "no answer within 15s, or it refused"
+                $outcome = "" + $script:ExakitBoundedOutcome
+                if ($outcome -eq "timeout") { $why = "no answer within 15s" }
+                elseif ($outcome -like "exit *") { $why = "it refused: $outcome" }
+                elseif ($outcome -eq "error") { $why = "it could not be run" }
+                $warnings += "could not check $engineName for the deployment's container ($why); check with: $engineName ps -a --filter name=$Id"
                 continue
             }
             foreach ($line in @(("" + ($names -join "`n")) -split "`r?`n")) {

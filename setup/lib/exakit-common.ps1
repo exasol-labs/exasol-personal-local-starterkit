@@ -2382,6 +2382,10 @@ function Write-ExakitSoftFailures {
 #
 # Uses Process directly rather than Start-Job: a job pays PowerShell startup per
 # call, and WaitForExit(ms) is the one primitive that is honest about giving up.
+#
+# $script:ExakitBoundedOutcome says why the last call answered what it did:
+# "ok", "timeout", "exit <code>" or "error" (it could not be run), so a caller
+# can tell a hang from a refusal without a second run.
 function Invoke-ExakitBounded {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -2421,6 +2425,7 @@ function Invoke-ExakitBounded {
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $process = $null
+    $script:ExakitBoundedOutcome = "error"
     try {
         $process = [System.Diagnostics.Process]::Start($info)
         # BOTH pipes on tasks, and both started before the wait. Redirecting a
@@ -2437,10 +2442,12 @@ function Invoke-ExakitBounded {
         $errReader = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try { $process.Kill() } catch { }
+            $script:ExakitBoundedOutcome = "timeout"
             Write-ExakitLog "WARN" "$FilePath did not answer within ${TimeoutSeconds}s; giving up"
             return $null
         }
         if ($process.ExitCode -ne 0) {
+            $script:ExakitBoundedOutcome = "exit $($process.ExitCode)"
             # Now that it is drained, stderr is worth keeping: a probe that
             # failed for a nameable reason used to fail namelessly.
             $errText = ""
@@ -2450,6 +2457,7 @@ function Invoke-ExakitBounded {
             }
             return $null
         }
+        $script:ExakitBoundedOutcome = "ok"
         return $reader.Result
     } catch {
         Write-ExakitLog "WARN" "$FilePath could not be run: $_"

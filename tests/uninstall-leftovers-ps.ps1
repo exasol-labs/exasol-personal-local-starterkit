@@ -159,7 +159,10 @@ function Invoke-ExakitBounded {
         return "Untagged"
     }
     if ($eng -eq "docker") {
-        if ($env:STUB_DOCKER_PS_FAIL -eq "1") { return $null }
+        if ($env:STUB_DOCKER_PS_FAIL -eq "1") {
+            if ($env:STUB_DOCKER_PS_OUTCOME) { $script:ExakitBoundedOutcome = $env:STUB_DOCKER_PS_OUTCOME }
+            return $null
+        }
         # "" + : Windows PowerShell 5.1 deletes a variable set to "", so an
         # unset stub reads as an engine that answered with no containers.
         return ("" + $env:STUB_DOCKER_PS)
@@ -253,6 +256,14 @@ Check "g2: the database is not flagged" "False" ("" + $script:ExakitUninstallDbL
 Seed-Kit; Seed-Deploy; $script:out = @()
 Invoke-ExakitUninstallComponent -Key "database"
 Has   "g2: database only: warns as well" "WARN could not check docker for the deployment's container" $script:out
+# The reason is told apart where the bounded runner says which it was.
+Seed-Deploy; $env:STUB_DOCKER_PS_OUTCOME = "timeout"
+Remove-Personal
+Has   "g2: a hang is named as one" "could not check docker for the deployment's container (no answer within 15s); check with:" (@($script:PersonalTeardownWarnings) -join "; ")
+Seed-Deploy; $env:STUB_DOCKER_PS_OUTCOME = "exit 125"
+Remove-Personal
+Has   "g2: a refusal is named as one, with its exit code" "could not check docker for the deployment's container (it refused: exit 125); check with:" (@($script:PersonalTeardownWarnings) -join "; ")
+$env:STUB_DOCKER_PS_OUTCOME = ""
 $env:STUB_DOCKER_PS_FAIL = ""
 Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
 Remove-Personal
