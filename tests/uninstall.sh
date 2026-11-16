@@ -370,6 +370,39 @@ _p="$(PORT=9999 _procs 0 2>&1)"
 check "another port than the deployment's: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 _p="$(PORT= _procs 0 2>&1)"
 check "no known port: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+# QAT-R2-01: the port guard itself - empty and non-numeric match nothing.
+_p="$(PORT=85x3 _procs 0 2>&1)"
+check "a non-numeric port: nothing stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+_kpids() { # _kpids <port> -> the pids _exakit_kit_mcp_server_pids prints
+    SANDBOX="$SANDBOX" ROOT="$ROOT" KP="$1" bash <<'KP'
+set -u
+PATH="$SANDBOX/psbin:$PATH"
+eval "$(awk '/^_exakit_kit_mcp_server_pids\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+_exakit_kit_mcp_server_pids "$KP"
+KP
+}
+check "the pid lookup with the deployment's port finds the kit's one" "4999991" "$(_kpids 8563 | tr '\n' ' ' | sed 's/ $//')"
+check "the pid lookup with an empty port: nothing" "" "$(_kpids "")"
+check "the pid lookup with port 85x3: nothing" "" "$(_kpids 85x3)"
+# MAC-R2-02: the port comes ONLY from deployment.json - no 8563 fallback.
+_rport() { # _rport <deploy-dir>
+    ROOT="$ROOT" D="$1" bash <<'RP'
+set -u
+eval "$(awk '/^_exakit_uninstall_recorded_db_port\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+_exakit_uninstall_recorded_db_port "$D"
+RP
+}
+mkdir -p "$SANDBOX/rp/none" "$SANDBOX/rp/num" "$SANDBOX/rp/bad"
+printf '{"deploymentId": "x", "dbPort": 9563}\n' > "$SANDBOX/rp/num/deployment.json"
+printf '{"deploymentId": "x", "dbPort": "auto"}\n' > "$SANDBOX/rp/bad/deployment.json"
+check "deploy dir with deployment.json: its dbPort" "9563" "$(_rport "$SANDBOX/rp/num")"
+check "deploy dir without deployment.json: no port (no stop)" "" "$(_rport "$SANDBOX/rp/none")"
+check "deployment.json without a numeric dbPort: no port" "" "$(_rport "$SANDBOX/rp/bad")"
+check "no deploy dir: no port" "" "$(_rport "")"
+_p="$(PORT="$(_rport "$SANDBOX/rp/none")" _procs 0 2>&1)"
+check "deploy dir without deployment.json: no MCP process stopped" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+check "the engine takes the port only from deployment.json" "1" "$(grep -c '_un_mcp_port="$(_exakit_uninstall_recorded_db_port "$EXAKIT_PERSONAL_DEPLOY_DIR")"' "$ROOT/setup/lib/common.sh")"
+check "...never through personal_db_port's fallback" "0" "$(grep -c '_un_mcp_port="$(personal_db_port' "$ROOT/setup/lib/common.sh")"
 
 # --- the closing hints: restart the clients, and uv's cache ----------------
 echo
