@@ -1802,6 +1802,9 @@ function Invoke-ExakitUninstallRun {
         }
         RecordRemoved "MCP entry removed from the AI clients the kit manages: $mcpClientList"
     }
+    # 2b) MCP servers the open AI clients still run for the kit, now pointed at
+    #     nothing. Only processes proven to be the kit's (see the helper).
+    Invoke-ExakitUninstallMcpProcesses -DryRun:$DryRun
 
     # 3) Installed AI skills: the live kit list, or what the install recorded
     #    once the checkout is gone. One helper, shared with the selectable
@@ -1889,6 +1892,7 @@ function Invoke-ExakitUninstallRun {
         Stop-ExakitSpinner
         $script:ExakitQuietDetail = $unPrevQuiet
     }
+    Write-ExakitUninstallClosingHints
     # Said last, and said plainly, because it is the one thing the reader cannot
     # find out afterwards: the logfile that held the per-path detail lived inside
     # the kit home this run has just deleted, so the lines above are the only
@@ -1902,6 +1906,86 @@ function Invoke-ExakitUninstallRun {
         Write-Host ""
         Write-ExakitUninstallLeftoverReport
     }
+}
+
+# Get-ExakitProcessList - every process as {ProcessId, ParentProcessId,
+# CommandLine}. Its own function so the uninstall suites can hand in a fixed
+# list; nothing else here enumerates processes.
+function Get-ExakitProcessList {
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction Stop |
+            Select-Object ProcessId, ParentProcessId, CommandLine)
+    } catch { return @() }
+}
+
+# Get-ExakitKitMcpServerPids - pids of running exasol-mcp-server processes this
+# kit configured. An AI client that was open during the uninstall keeps its MCP
+# server alive, pointed at a database that is gone.
+#
+# PROOF, NOT A NAME MATCH. Windows does not expose another process's
+# environment, so the bash twin's EXA_USER/EXA_DSN proof is unavailable here.
+# A process qualifies only when its command line names exasol-mcp-server AND a
+# path only this kit wrote: the kit home, or the kit's own uvx.exe in its bin
+# dir (the command every client config the kit writes launches). The server
+# that uvx starts is taken with it only as a direct child that also names
+# exasol-mcp-server. Anything else is left running. Twin of
+# _exakit_kit_mcp_server_pids.
+function Get-ExakitKitMcpServerPids {
+    $kitMarks = @($script:ExakitHome, (Join-Path $script:BinDir "uvx.exe"), (Join-Path $script:BinDir "uvx"))
+    $procs = @(Get-ExakitProcessList)
+    $ours = @()
+    foreach ($p in $procs) {
+        $cmd = "" + $p.CommandLine
+        if ($cmd -notlike "*exasol-mcp-server*") { continue }
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        foreach ($mark in $kitMarks) {
+            if ($mark -and $cmd.IndexOf($mark, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+                $ours += [int]$p.ProcessId; break
+            }
+        }
+    }
+    foreach ($p in $procs) {
+        $cmd = "" + $p.CommandLine
+        if ($cmd -notlike "*exasol-mcp-server*") { continue }
+        if (($ours -contains [int]$p.ParentProcessId) -and ($ours -notcontains [int]$p.ProcessId)) {
+            $ours += [int]$p.ProcessId
+        }
+    }
+    return @($ours | Sort-Object -Unique)
+}
+
+function Stop-ExakitPidQuiet {
+    param([int]$Id)
+    try { Stop-Process -Id $Id -ErrorAction Stop; return $true } catch { return $false }
+}
+
+# Invoke-ExakitUninstallMcpProcesses - stop the kit's own MCP servers, or in a
+# dry run name them. Twin of _exakit_uninstall_mcp_processes.
+function Invoke-ExakitUninstallMcpProcesses {
+    param([switch]$DryRun)
+    $ids = @(Get-ExakitKitMcpServerPids)
+    if ($ids.Count -eq 0) { return }
+    if ($DryRun) {
+        Info "  will stop: $($ids.Count) exasol-mcp-server processes (pids $($ids -join ' '))"
+        return
+    }
+    $gone = @()
+    foreach ($id in $ids) { if (Stop-ExakitPidQuiet -Id $id) { $gone += $id } }
+    if ($gone.Count -gt 0) { OkStep "Stopped the kit's exasol-mcp-server processes (pids $($gone -join ' '))" }
+}
+
+# Write-ExakitUninstallClosingHints - what uninstall leaves on purpose: open AI
+# clients still hold the removed MCP entry, and uv keeps the MCP server package
+# in its own cache, which is uv's to clean. Twin of
+# _exakit_uninstall_closing_hints.
+function Write-ExakitUninstallClosingHints {
+    $uv = "uv"
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        $kitUv = Join-Path $script:BinDir "uv.exe"
+        if (Test-Path -LiteralPath $kitUv) { $uv = "& '" + $kitUv + "'" }
+    }
+    Info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
+    Info "uv keeps the MCP server package in its cache; free that space with: $uv cache clean exasol-mcp-server"
 }
 
 # Delete the CLI binaries from a short-lived detached PowerShell that first

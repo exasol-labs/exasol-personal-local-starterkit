@@ -115,6 +115,15 @@ function Remove-ExakitReadonlyAllowlist { return "REMOVED 0" }
 # harness with no console would only get in the way.
 function Start-ExakitSpinner { param([string]$Label) }
 function Stop-ExakitSpinner { }
+# The process list is a FIXTURE, never the machine's: a real run here would
+# enumerate - and stop - the exasol-mcp-server of whatever AI client is open on
+# the box running the suite. Stops are recorded, never sent. Empty by default.
+$script:procFixture = @()
+$script:stopped = @()
+function Get-ExakitProcessList { return $script:procFixture }
+function Stop-ExakitPidQuiet { param([int]$Id) $script:stopped += $Id; return $true }
+# Info is silent above; the cases below need what it said.
+$script:said = @()
 
 function Seed {
     if (Test-Path $sandbox) { Remove-Item -Recurse -Force $sandbox }
@@ -174,6 +183,79 @@ Check "real: bystander kept"    "yes" (Ex (Join-Path $script:BinDir "some-other-
 # --- idempotent second run on empty tree ---------------------------------
 $ok = $true; try { Invoke-ExakitUninstallRun } catch { $ok = $false }
 Check "idempotent second run" "True" ("" + $ok)
+
+# --- MCP servers the open AI clients still run for the kit ----------------
+# Only a process whose command line names exasol-mcp-server AND the kit's own
+# uvx (or kit home) is the kit's; the uvx child that names the server goes with
+# it. Someone else's exasol-mcp-server is left running.
+Write-Host ""
+Write-Host "uninstall stops only the kit's own exasol-mcp-server processes:"
+function Info($m) { $script:said += "$m" }
+function OkStep($m) { $script:said += "OK $m" }
+$kitUvx = Join-Path $script:BinDir "uvx.exe"
+$script:procFixture = @(
+    [pscustomobject]@{ ProcessId = 501; ParentProcessId = 1;   CommandLine = "`"$kitUvx`" exasol-mcp-server@1.2.0" },
+    [pscustomobject]@{ ProcessId = 502; ParentProcessId = 501; CommandLine = "C:\cache\uv\archive-v0\x\Scripts\python.exe C:\cache\uv\archive-v0\x\Scripts\exasol-mcp-server" },
+    [pscustomobject]@{ ProcessId = 601; ParentProcessId = 1;   CommandLine = "C:\other\uvx.exe exasol-mcp-server@1.2.0" },
+    [pscustomobject]@{ ProcessId = 602; ParentProcessId = 601; CommandLine = "C:\cache\python.exe exasol-mcp-server" },
+    [pscustomobject]@{ ProcessId = 701; ParentProcessId = 501; CommandLine = "C:\Windows\conhost.exe" })
+$script:said = @(); $script:stopped = @()
+Invoke-ExakitUninstallMcpProcesses -DryRun
+Check "dry: the kit's two processes are named" "1" (@($script:said | Where-Object { $_ -eq "  will stop: 2 exasol-mcp-server processes (pids 501 502)" }).Count)
+Check "dry: nothing stopped" "0" $script:stopped.Count
+$script:said = @(); $script:stopped = @()
+Invoke-ExakitUninstallMcpProcesses
+Check "real: the kit's uvx and its server stopped" "501 502" ($script:stopped -join ' ')
+Check "real: and said so" "1" (@($script:said | Where-Object { $_ -like "OK Stopped *501 502*" }).Count)
+$script:procFixture = @()
+
+# --- the closing hints ---------------------------------------------------
+Write-Host ""
+Write-Host "uninstall ends with the restart advice and the uv cache hint:"
+$script:said = @()
+Write-ExakitUninstallClosingHints
+Check "the restart advice is printed" "1" (@($script:said | Where-Object { $_ -like "Restart any AI client that was open*" }).Count)
+Check "the uv cache hint is printed" "1" (@($script:said | Where-Object { $_ -like "*cache clean exasol-mcp-server" }).Count)
+$src = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "the engine stops the processes" "True" ($src -match 'Invoke-ExakitUninstallMcpProcesses -DryRun:\$DryRun')
+Check "the engine prints the hints" "True" ($src -match '(?m)^\s+Write-ExakitUninstallClosingHints\s*$')
+
+# --- the permission rules: every one the kit ever wrote, and only those ---
+Write-Host ""
+Write-Host "uninstall removes every permission rule the kit wrote, and no other:"
+$common = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$null, [ref]$null)
+foreach ($f in $common.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        @("Remove-ExakitReadonlyAllowlist", "Test-ExakitLegacyAllowlistRule", "Write-ExakitSettingsJson") -contains $n.Name }, $true)) {
+    Invoke-Expression $f.Extent.Text
+}
+$rulesHome = Join-Path $sandbox "rules-home"
+function Get-ExakitAgentHome { return $rulesHome }
+New-Item -ItemType Directory -Force -Path (Join-Path $rulesHome ".claude") | Out-Null
+$settings = Join-Path $rulesHome ".claude\settings.json"
+@'
+{
+  "model": "keep-me",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(exakit mcp-validate:*)",
+      "Bash(~/.local/bin/exakit mcp-validate:*)",
+      "Bash($HOME/.local/bin/exakit mcp-validate:*)",
+      "Bash(exakit.cmd mcp-validate:*)",
+      "Bash(exakit status:*)",
+      "mcp__exasol",
+      "Bash(exakit-other mcp-validate:*)"
+    ],
+    "deny": ["Bash(rm -rf:*)", "PowerShell(exakit uninstall:*)"]
+  }
+}
+'@ | Set-Content -LiteralPath $settings
+Check "the removal counts all seven kit rules" "REMOVED 7" (Remove-ExakitReadonlyAllowlist)
+$doc = Get-Content -Raw $settings | ConvertFrom-Json
+$left = @($doc.permissions.allow) + @($doc.permissions.deny)
+Check "only the user's rules are left" "Bash(git status:*)|Bash(exakit-other mcp-validate:*)|Bash(rm -rf:*)" ($left -join '|')
+Check "the rest of the file is kept" "keep-me" $doc.model
 
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""

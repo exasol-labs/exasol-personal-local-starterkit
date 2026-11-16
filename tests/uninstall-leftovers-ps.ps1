@@ -115,6 +115,8 @@ function Remove-ExakitReadonlyAllowlist { return "REMOVED 0" }
 function Invoke-McpOperation { param($Operation, $InputArgs) return $true }
 function Start-ExakitSpinner { param([string]$Label) }
 function Stop-ExakitSpinner { }
+# Never the machine's processes: a real list would stop the open AI client's MCP server.
+function Get-ExakitProcessList { return @() }
 function Remove-ExakitBinariesDeferred { param([string[]]$Paths) foreach ($f in $Paths) { Remove-Item -Force -ErrorAction SilentlyContinue $f } }
 # The launcher. STUB_INFO_OK / STUB_DESTROY_RC / STUB_DESTROY_REMOVES as in the
 # bash suite.

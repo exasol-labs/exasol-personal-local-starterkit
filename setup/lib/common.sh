@@ -8475,6 +8475,9 @@ ALLOW.append("mcp__exasol")
 # recommend.
 DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
 
+import re
+LEGACY = re.compile(r"^(Bash|PowerShell)\((~/\.local/bin/|\$HOME/\.local/bin/)?exakit(\.cmd)? (update-check|mcp-validate)(:\*)?\)$")
+
 doc = {}
 if os.path.exists(path):
     try:
@@ -8496,6 +8499,13 @@ for key, wanted in (("allow", ALLOW), ("deny", DENY)):
     existing = permissions.setdefault(key, [])
     if not isinstance(existing, list):
         continue
+    # Rules for commands that no longer exist were left behind by earlier kits;
+    # drop them on the way through and count that as a change. Twin of the
+    # Test-ExakitLegacyAllowlistRule filter in Set-ExakitReadonlyAllowlist.
+    stale = [entry for entry in existing if isinstance(entry, str) and LEGACY.match(entry)]
+    for entry in stale:
+        existing.remove(entry)
+        added += 1
     for entry in wanted:
         if entry not in existing:
             existing.append(entry)
@@ -8535,6 +8545,15 @@ for prefix in PREFIXES:
     ALLOW.append("Bash(%s skills --json)" % prefix)
 ALLOW.append("mcp__exasol")
 DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
+# Rules earlier kits wrote for commands this kit no longer has (`update-check`
+# merged into `version`, `mcp-validate` into `mcp-doctor`), in every spelling
+# they were written in. The current lists above never name them, so uninstall
+# printed "permission rules removed" and left all three mcp-validate rules
+# behind. Same pattern as Test-ExakitLegacyAllowlistRule in exakit-common.ps1.
+import re
+LEGACY = re.compile(r"^(Bash|PowerShell)\((~/\.local/bin/|\$HOME/\.local/bin/)?exakit(\.cmd)? (update-check|mcp-validate)(:\*)?\)$")
+def is_ours(entry, ours):
+    return entry in ours or (isinstance(entry, str) and LEGACY.match(entry) is not None)
 try:
     with open(path) as handle:
         doc = json.load(handle)
@@ -8550,7 +8569,7 @@ for key, ours in (("allow", ALLOW), ("deny", DENY)):
     existing = permissions.get(key)
     if not isinstance(existing, list):
         continue
-    kept = [entry for entry in existing if entry not in ours]
+    kept = [entry for entry in existing if not is_ours(entry, ours)]
     removed += len(existing) - len(kept)
     permissions[key] = kept
 if removed:
@@ -12682,6 +12701,69 @@ EXAKIT_UM_PANEL_EOF
     return 0
 }
 
+# _exakit_kit_mcp_server_pids - the pids of running exasol-mcp-server processes
+# that THIS kit configured, one per line. An AI client that was open during the
+# uninstall keeps its MCP server alive, pointed at a database that is gone.
+#
+# PROOF, NOT A NAME MATCH. Another tool may run its own exasol-mcp-server, so a
+# process qualifies only when its command line names exasol-mcp-server AND its
+# environment carries what the kit wrote into every client config: EXA_USER is
+# the kit's read-only MCP user and EXA_DSN is a loopback address. The
+# environment is read from /proc/<pid>/environ (Linux) or `ps -E` (macOS);
+# where neither answers, nothing qualifies and nothing is stopped. Twin of
+# Get-ExakitKitMcpServerPids.
+_exakit_kit_mcp_server_pids() {
+    _kmp_user="${EXAKIT_MCP_USER:-mcp_readonly}"
+    ps -axww -o pid=,command= 2>/dev/null | while read -r _kmp_pid _kmp_cmd; do
+        case "$_kmp_cmd" in *exasol-mcp-server*) ;; *) continue ;; esac
+        case "$_kmp_pid" in ''|*[!0-9]*) continue ;; esac
+        [ "$_kmp_pid" != "$$" ] || continue
+        if [ -r "/proc/$_kmp_pid/environ" ]; then
+            _kmp_env=" $(tr '\0' ' ' < "/proc/$_kmp_pid/environ" 2>/dev/null) "
+        else
+            _kmp_env=" $(ps -E -ww -o command= -p "$_kmp_pid" 2>/dev/null) "
+        fi
+        case "$_kmp_env" in *" EXA_USER=$_kmp_user "*) ;; *) continue ;; esac
+        case "$_kmp_env" in
+            *" EXA_DSN=127.0.0.1:"*|*" EXA_DSN=localhost:"*|*" EXA_DSN=[::1]:"*)
+                printf '%s\n' "$_kmp_pid" ;;
+        esac
+    done
+}
+_exakit_stop_pid() { kill -TERM "$1" 2>/dev/null; }
+
+# _exakit_uninstall_mcp_processes <dry> - stop the kit's own MCP servers
+# (TERM), or in a dry run name them.
+_exakit_uninstall_mcp_processes() {
+    _ump_pids="$(_exakit_kit_mcp_server_pids 2>/dev/null | tr '\n' ' ')"
+    _ump_pids="${_ump_pids% }"
+    [ -n "$_ump_pids" ] || return 0
+    _ump_n=0
+    for _ump_pid in $_ump_pids; do _ump_n=$((_ump_n + 1)); done
+    if [ "$1" = "1" ]; then
+        info "  will stop: $_ump_n exasol-mcp-server processes (pids $_ump_pids)"
+        return 0
+    fi
+    _ump_gone=""
+    for _ump_pid in $_ump_pids; do
+        _exakit_stop_pid "$_ump_pid" && _ump_gone="${_ump_gone:+$_ump_gone }$_ump_pid"
+    done
+    [ -n "$_ump_gone" ] && ok_step "Stopped the kit's exasol-mcp-server processes (pids $_ump_gone)"
+    return 0
+}
+
+# _exakit_uninstall_closing_hints - what uninstall leaves on purpose:
+# open AI clients still hold the removed MCP entry, and uv keeps the MCP server
+# package in its own cache (~200 MB), which is uv's to clean, not ours.
+_exakit_uninstall_closing_hints() {
+    _uch_uv="uv"
+    if ! command -v uv >/dev/null 2>&1 && [ -x "${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv" ]; then
+        _uch_uv="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv"
+    fi
+    info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
+    info "uv keeps the MCP server package in its cache; free that space with: $_uch_uv cache clean exasol-mcp-server"
+}
+
 exakit_uninstall_run() {
     _dry="${1:-0}"
     EXAKIT_UNINSTALL_DB_LEFT=0
@@ -12904,6 +12986,9 @@ exakit_uninstall_run() {
         fi
         _done "MCP entry removed from the AI clients the kit manages: ${_un_mcp_clients:-all managed clients}"
     fi
+    # 2b) MCP servers the open AI clients still run for the kit, now pointed
+    #     at nothing. Only processes proven to be the kit's (see the helper).
+    command -v _exakit_uninstall_mcp_processes >/dev/null 2>&1 && _exakit_uninstall_mcp_processes "$_dry"
 
     # 3) Installed AI skills (shared with the selectable uninstall menu).
     _exakit_remove_installed_skills "$_dry"
@@ -12955,6 +13040,7 @@ exakit_uninstall_run() {
     [ -n "$_un_bins_gone" ] && _done "Commands removed from $EXAKIT_BIN_DIR: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"
+    command -v _exakit_uninstall_closing_hints >/dev/null 2>&1 && _exakit_uninstall_closing_hints
     # Said last, and said plainly, because it is the one thing the reader cannot
     # find out afterwards: the logfile that held the per-path detail lived inside
     # the kit home this run has just deleted, so the lines above are the only
