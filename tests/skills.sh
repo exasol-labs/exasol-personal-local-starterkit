@@ -502,6 +502,11 @@ if command -v pwsh >/dev/null 2>&1; then
     _ps_help="$(ROOT="$ROOT" pwsh -NoProfile -Command '. (Join-Path $env:ROOT "setup/lib/help.ps1"); $script:LibDir = Join-Path $env:ROOT "setup/lib"; [void](Show-ExakitHelpCommand -Name "uninstall")' 2>&1)"
     has "Show-ExakitHelpCommand (PowerShell) lists the exit codes too" "Exit codes" "$_ps_help"
     has "  ...code 1 with its meaning" "1  something remains" "$_ps_help"
+    # An empty exit_codes {} prints no bare "Exit codes" header (bash prints
+    # nothing for an empty dict either).
+    _ps_empty="$(ROOT="$ROOT" pwsh -NoProfile -Command '. (Join-Path $env:ROOT "setup/lib/help.ps1"); function Get-ExakitHelpDocuments { @{ exakit = [pscustomobject]@{ commands = @([pscustomobject]@{ command = "probe"; summary = "probe entry"; exit_codes = [pscustomobject]@{} }) } } }; [void](Show-ExakitHelpCommand -Name "probe")' 2>&1)"
+    has "an empty exit_codes entry still renders its page (PowerShell)" "probe entry" "$_ps_empty"
+    lacks "an empty exit_codes {} prints no Exit codes header (PowerShell)" "Exit codes" "$_ps_empty"
 else
     has "Show-ExakitHelpCommand renders exit_codes" 'Write-Host "    Exit codes"' "$(cat "$ROOT/setup/lib/help.ps1")"
 fi
