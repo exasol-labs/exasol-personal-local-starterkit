@@ -2224,6 +2224,9 @@ function Invoke-CmdUninstall {
                 (Get-Command $addonEntry.UninstallFn -ErrorAction SilentlyContinue)) {
                 [void](& $addonEntry.UninstallFn -DryRun)
             }
+            # The staged launcher refresh goes too (Invoke-ExakitUninstallComponent).
+            $stagedLauncher = Join-Path $script:BinDir "$Addon.cmd.new"
+            if (Test-Path -LiteralPath $stagedLauncher) { Info "  will remove: staged launcher $stagedLauncher" }
             return
         }
         if (-not $AssumeYes) {
@@ -2484,6 +2487,9 @@ function Invoke-ExakitUninstallComponent {
                 # ...and so does its BOOT ENTRY - left behind, it kept firing a
                 # launcher that no longer exists on every login, forever.
                 try { Unregister-ExakitAutostart -Id $Key } catch { }
+                # ...and a staged <id>.cmd.new whose refresh helper never ran
+                # (logoff, reboot): the full run removes it, so this one does.
+                Remove-Item -Force -LiteralPath (Join-Path $script:BinDir "$Key.cmd.new") -ErrorAction SilentlyContinue
             } else {
                 Warn2 "The $Key module carries no uninstall - update the kit: exakit update"
             }
