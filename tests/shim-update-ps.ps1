@@ -203,6 +203,28 @@ Invoke-HelperChild
 Check "target removed before the move: exakit.cmd not recreated" "False" (Test-Path -LiteralPath $shimPath)
 Check "target removed before the move: exakit.cmd.new removed" "False" (Test-Path -LiteralPath $newPath)
 
+# A path with a typographic apostrophe (U+2019, which PowerShell also reads as
+# a single quote) must not end the quoted path in the helper: escaping only the
+# ASCII quote broke the script ("missing the terminator") or let the path run
+# as code. Built with [char] so this file stays ASCII.
+$qDir = Join-Path $sandbox ("O" + [char]0x2019 + "Brien; Write-Output INJECTED; " + [char]0x2019 + "x")
+New-Item -ItemType Directory -Force -Path $qDir | Out-Null
+$qShimPath = Join-Path $qDir "exakit.cmd"
+[System.IO.File]::WriteAllText($qShimPath, $oldShim, [System.Text.Encoding]::ASCII)
+$script:helperScript = $null
+[void](Write-ExakitCmdShimDeferred -ShimPath $qShimPath -Content $newShim -WaitPids @(2147483000))
+$qErr = $null
+[void][System.Management.Automation.Language.Parser]::ParseInput($script:helperScript, [ref]$null, [ref]$qErr)
+Check "U+2019 in the path: the helper script parses" "0" (@($qErr).Count)
+$prevOut = $null
+$f = Join-Path $sandbox ("helper-" + [guid]::NewGuid() + ".ps1")
+[System.IO.File]::WriteAllText($f, $script:helperScript, (New-Object System.Text.UTF8Encoding $true))
+$prevOut = & $selfExe -NoProfile -File $f 2>&1 | Out-String
+Remove-Item -Force -LiteralPath $f -ErrorAction SilentlyContinue
+Check "U+2019 in the path: nothing in it runs as code" "False" ($prevOut -match 'INJECTED')
+Check "U+2019 in the path: the path round-trips and the new shim lands" "True" ((Test-Path -LiteralPath $qShimPath) -and ([System.IO.File]::ReadAllText($qShimPath) -eq $newShim))
+Check "U+2019 in the path: exakit.cmd.new is gone" "False" (Test-Path -LiteralPath "$qShimPath.new")
+
 # --- behavioral (Windows only): a real update from an old-format shim -------
 Write-Host ""
 Write-Host "cmd.exe (Windows only)"
