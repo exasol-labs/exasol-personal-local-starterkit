@@ -1957,9 +1957,11 @@ function Invoke-ExakitUninstallRun {
         }
         RecordRemoved "MCP entry removed from the AI clients the kit manages: $mcpClientList"
     }
-    # 2b) MCP servers the open AI clients still run for the kit, now pointed at
-    #     nothing. Only processes proven to be the kit's (see the helper).
-    Invoke-ExakitUninstallMcpProcesses -DryRun:$DryRun
+    # 2b) MCP servers an open AI client still runs are NOT stopped here.
+    #     Windows does not expose another process's environment, so the bash
+    #     side's EXA_USER/EXA_DSN proof of ownership is unavailable, and a
+    #     command-line match cannot prove a server is the kit's. The closing
+    #     hints ask the user to restart any AI client that was open instead.
 
     # 3) Installed AI skills: the live kit list, or what the install recorded
     #    once the checkout is gone. One helper, shared with the selectable
@@ -2076,60 +2078,9 @@ function Get-ExakitProcessList {
     } catch { return @() }
 }
 
-# Get-ExakitKitMcpServerPids - pids of running exasol-mcp-server processes this
-# kit configured. An AI client that was open during the uninstall keeps its MCP
-# server alive, pointed at a database that is gone.
-#
-# PROOF, NOT A NAME MATCH. Windows does not expose another process's
-# environment, so the bash twin's EXA_USER/EXA_DSN proof is unavailable here.
-# A process qualifies only when its command line names exasol-mcp-server AND a
-# path only this kit wrote: the kit home, or the kit's own uvx.exe in its bin
-# dir (the command every client config the kit writes launches). The server
-# that uvx starts is taken with it only as a direct child that also names
-# exasol-mcp-server. Anything else is left running. Twin of
-# _exakit_kit_mcp_server_pids.
-function Get-ExakitKitMcpServerPids {
-    $kitMarks = @($script:ExakitHome, (Join-Path $script:BinDir "uvx.exe"), (Join-Path $script:BinDir "uvx"))
-    $procs = @(Get-ExakitProcessList)
-    $ours = @()
-    foreach ($p in $procs) {
-        $cmd = "" + $p.CommandLine
-        if ($cmd -notlike "*exasol-mcp-server*") { continue }
-        if ([int]$p.ProcessId -eq $PID) { continue }
-        foreach ($mark in $kitMarks) {
-            if ($mark -and $cmd.IndexOf($mark, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
-                $ours += [int]$p.ProcessId; break
-            }
-        }
-    }
-    foreach ($p in $procs) {
-        $cmd = "" + $p.CommandLine
-        if ($cmd -notlike "*exasol-mcp-server*") { continue }
-        if (($ours -contains [int]$p.ParentProcessId) -and ($ours -notcontains [int]$p.ProcessId)) {
-            $ours += [int]$p.ProcessId
-        }
-    }
-    return @($ours | Sort-Object -Unique)
-}
-
 function Stop-ExakitPidQuiet {
     param([int]$Id)
     try { Stop-Process -Id $Id -ErrorAction Stop; return $true } catch { return $false }
-}
-
-# Invoke-ExakitUninstallMcpProcesses - stop the kit's own MCP servers, or in a
-# dry run name them. Twin of _exakit_uninstall_mcp_processes.
-function Invoke-ExakitUninstallMcpProcesses {
-    param([switch]$DryRun)
-    $ids = @(Get-ExakitKitMcpServerPids)
-    if ($ids.Count -eq 0) { return }
-    if ($DryRun) {
-        Info "  will stop: $($ids.Count) exasol-mcp-server processes (pids $($ids -join ' '))"
-        return
-    }
-    $gone = @()
-    foreach ($id in $ids) { if (Stop-ExakitPidQuiet -Id $id) { $gone += $id } }
-    if ($gone.Count -gt 0) { OkStep "Stopped the kit's exasol-mcp-server processes (pids $($gone -join ' '))" }
 }
 
 # Write-ExakitUninstallClosingHints - what uninstall leaves on purpose: open AI

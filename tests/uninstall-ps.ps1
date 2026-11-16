@@ -192,30 +192,33 @@ Check "real: bystander kept"    "yes" (Ex (Join-Path $script:BinDir "some-other-
 $ok = $true; try { Invoke-ExakitUninstallRun } catch { $ok = $false }
 Check "idempotent second run" "True" ("" + $ok)
 
-# --- MCP servers the open AI clients still run for the kit ----------------
-# Only a process whose command line names exasol-mcp-server AND the kit's own
-# uvx (or kit home) is the kit's; the uvx child that names the server goes with
-# it. Someone else's exasol-mcp-server is left running.
+# --- MCP servers the open AI clients still run are never stopped ---------
+# Windows cannot read another process's environment, so ownership of an
+# exasol-mcp-server cannot be proven. Uninstall (dry or real) neither names nor
+# stops one, even one whose command line names the kit's own uvx; the closing
+# hints ask the user to restart the AI client instead.
 Write-Host ""
-Write-Host "uninstall stops only the kit's own exasol-mcp-server processes:"
+Write-Host "uninstall never stops exasol-mcp-server processes:"
 function Info($m) { $script:said += "$m" }
 function OkStep($m) { $script:said += "OK $m" }
 $kitUvx = Join-Path $script:BinDir "uvx.exe"
 $script:procFixture = @(
     [pscustomobject]@{ ProcessId = 501; ParentProcessId = 1;   CommandLine = "`"$kitUvx`" exasol-mcp-server@1.2.0" },
     [pscustomobject]@{ ProcessId = 502; ParentProcessId = 501; CommandLine = "C:\cache\uv\archive-v0\x\Scripts\python.exe C:\cache\uv\archive-v0\x\Scripts\exasol-mcp-server" },
-    [pscustomobject]@{ ProcessId = 601; ParentProcessId = 1;   CommandLine = "C:\other\uvx.exe exasol-mcp-server@1.2.0" },
-    [pscustomobject]@{ ProcessId = 602; ParentProcessId = 601; CommandLine = "C:\cache\python.exe exasol-mcp-server" },
-    [pscustomobject]@{ ProcessId = 701; ParentProcessId = 501; CommandLine = "C:\Windows\conhost.exe" })
+    [pscustomobject]@{ ProcessId = 601; ParentProcessId = 1;   CommandLine = "C:\other\uvx.exe exasol-mcp-server@1.2.0" })
+Seed
 $script:said = @(); $script:stopped = @()
-Invoke-ExakitUninstallMcpProcesses -DryRun
-Check "dry: the kit's two processes are named" "1" (@($script:said | Where-Object { $_ -eq "  will stop: 2 exasol-mcp-server processes (pids 501 502)" }).Count)
+Invoke-ExakitUninstallRun -DryRun
+Check "dry: no MCP process is listed" "0" (@($script:said | Where-Object { $_ -like "*exasol-mcp-server process*" }).Count)
 Check "dry: nothing stopped" "0" $script:stopped.Count
+Seed
 $script:said = @(); $script:stopped = @()
-Invoke-ExakitUninstallMcpProcesses
-Check "real: the kit's uvx and its server stopped" "501 502" ($script:stopped -join ' ')
-Check "real: and said so" "1" (@($script:said | Where-Object { $_ -like "OK Stopped *501 502*" }).Count)
+Invoke-ExakitUninstallRun
+Check "real: no MCP process is stopped" "0" $script:stopped.Count
+Check "real: none reported stopped" "0" (@($script:said | Where-Object { $_ -like "*Stopped the kit's exasol-mcp-server*" }).Count)
 $script:procFixture = @()
+$srcMcp = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "the engine has no MCP process stop" "False" ($srcMcp -match 'Invoke-ExakitUninstallMcpProcesses|Get-ExakitKitMcpServerPids')
 
 # --- the closing hints ---------------------------------------------------
 Write-Host ""
@@ -229,7 +232,6 @@ $script:said = @()
 Write-ExakitUninstallClosingHints -DryRun
 Check "dry run: no hints" "0" $script:said.Count
 $src = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
-Check "the engine stops the processes" "True" ($src -match 'Invoke-ExakitUninstallMcpProcesses -DryRun:\$DryRun')
 Check "the engine prints the hints" "True" ($src -match '(?m)^\s+Write-ExakitUninstallClosingHints -DryRun:\$DryRun\s*$')
 
 # --- the permission rules: every one the kit ever wrote, and only those ---
