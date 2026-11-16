@@ -219,6 +219,122 @@ check "a relative EXAKIT_HOME is refused"      "REFUSE" "$(_guard "relative/kit"
 check "the filesystem root is refused"         "REFUSE" "$(_guard "/")"
 check "the home directory itself is refused"   "REFUSE" "$(_guard "$SANDBOX/guard-home")"
 
+# --- the permission rules: every one the kit ever wrote, and only those ----
+# THE BUG: --dry-run promised "the exakit permission rules" would go, and a
+# real run left Bash(exakit mcp-validate:*) in all three spellings behind:
+# the removal knew only the CURRENT rule set, and mcp-validate (merged into
+# mcp-doctor) was written by earlier kits.
+echo
+echo "uninstall removes every permission rule the kit wrote, and no other:"
+_rules() { # _rules -> the allow+deny lists after the removal, one per line
+    SANDBOX="$SANDBOX" ROOT="$ROOT" bash <<'RULES'
+set -u
+HOME="$SANDBOX/rules-home"; export HOME
+mkdir -p "$HOME/.claude"
+cat > "$HOME/.claude/settings.json" <<'JSON'
+{
+  "model": "keep-me",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(exakit mcp-validate:*)",
+      "Bash(~/.local/bin/exakit mcp-validate:*)",
+      "Bash($HOME/.local/bin/exakit mcp-validate:*)",
+      "Bash(exakit update-check:*)",
+      "Bash(exakit status:*)",
+      "Bash(~/.local/bin/exakit skills --json)",
+      "mcp__exasol",
+      "Bash(exakit-other mcp-validate:*)"
+    ],
+    "deny": ["Bash(rm -rf:*)", "Bash($HOME/.local/bin/exakit uninstall:*)"]
+  }
+}
+JSON
+exakit_can_run_python(){ return 0; }
+run_python(){ python3 "$@"; }
+eval "$(awk '/^exakit_remove_readonly_allowlist\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+exakit_remove_readonly_allowlist
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("model="+d["model"]); [print(r) for r in d["permissions"]["allow"]+d["permissions"]["deny"]]' "$HOME/.claude/settings.json"
+RULES
+}
+_r="$(_rules 2>&1)"
+check "the removal counts all eight kit rules" "1" "$(printf '%s\n' "$_r" | grep -cx 'REMOVED 8')"
+for _gone in "Bash(exakit mcp-validate:*)" "Bash(~/.local/bin/exakit mcp-validate:*)" \
+             "Bash(\$HOME/.local/bin/exakit mcp-validate:*)" "Bash(exakit update-check:*)"; do
+    check "legacy rule removed: $_gone" "0" "$(printf '%s\n' "$_r" | grep -cxF "$_gone")"
+done
+for _kept in "Bash(git status:*)" "Bash(rm -rf:*)" "Bash(exakit-other mcp-validate:*)" "model=keep-me"; do
+    check "user entry kept: $_kept" "1" "$(printf '%s\n' "$_r" | grep -cxF "$_kept")"
+done
+
+# --- MCP servers the open AI clients still run for the kit -----------------
+# THE BUG: Claude Desktop / Claude Code kept their exasol-mcp-server running,
+# pointed at the database uninstall had just deleted. Only a process PROVEN to
+# be the kit's may be stopped: its environment carries the kit's MCP user and
+# a loopback DSN. A second exasol-mcp-server (someone else's) must survive.
+# ps is a stub on PATH and the stop is recorded, never sent; the pids are above
+# the kernel's pid_max, so no real /proc entry can answer for them.
+echo
+echo "uninstall stops only the kit's own exasol-mcp-server processes:"
+mkdir -p "$SANDBOX/psbin"
+cat > "$SANDBOX/psbin/ps" <<'PS'
+#!/bin/sh
+case "$*" in
+    "-axww -o pid=,command=")
+        printf '%s\n' "  101 /Applications/Claude.app/Contents/MacOS/Claude" \
+            "4999991 /Users/u/.local/bin/uvx exasol-mcp-server@1.2.0" \
+            "4999992 /opt/other/uvx exasol-mcp-server@1.2.0" \
+            "4999993 grep exasol-mcp-server" ;;
+    *"-p 4999991") printf '%s\n' "/Users/u/.local/bin/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:8563 EXA_USER=mcp_readonly EXA_PASSWORD=x" ;;
+    *"-p 4999992") printf '%s\n' "/opt/other/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=db.example.com:8563 EXA_USER=analyst" ;;
+    *"-p 4999993") printf '%s\n' "grep exasol-mcp-server PATH=/bin" ;;
+esac
+PS
+chmod +x "$SANDBOX/psbin/ps"
+_procs() { # _procs <dry> -> what the helper said, then the recorded stops
+    SANDBOX="$SANDBOX" ROOT="$ROOT" DRY="$1" bash <<'PROCS'
+set -u
+PATH="$SANDBOX/psbin:$PATH"
+info(){ printf 'INFO %s\n' "$*"; }; ok_step(){ printf 'OK %s\n' "$*"; }
+for _fn in _exakit_kit_mcp_server_pids _exakit_stop_pid _exakit_uninstall_mcp_processes; do
+    eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+done
+_exakit_stop_pid(){ printf 'KILL %s\n' "$1"; }
+_exakit_uninstall_mcp_processes "$DRY"
+PROCS
+}
+_p="$(_procs 1 2>&1)"
+check "dry run names the kit's one process" "1" "$(printf '%s\n' "$_p" | grep -cxF 'INFO   will stop: 1 exasol-mcp-server processes (pids 4999991)')"
+check "dry run stops nothing" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+_p="$(_procs 0 2>&1)"
+check "real run stops the kit's process" "1" "$(printf '%s\n' "$_p" | grep -cx 'KILL 4999991')"
+check "and only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
+check "and says so" "1" "$(printf '%s\n' "$_p" | grep -c '^OK Stopped .*4999991')"
+
+# --- the closing hints: restart the clients, and uv's cache ----------------
+echo
+echo "uninstall ends with the restart advice and the uv cache hint:"
+_hints() { # _hints <PATH>
+    SANDBOX="$SANDBOX" ROOT="$ROOT" P="$1" bash <<'HINTS'
+set -u
+HOME="$SANDBOX/hint-home"; EXAKIT_BIN_DIR="$HOME/.local/bin"
+mkdir -p "$EXAKIT_BIN_DIR"; printf '#!/bin/sh\n' > "$EXAKIT_BIN_DIR/uv"; chmod +x "$EXAKIT_BIN_DIR/uv"
+info(){ printf 'INFO %s\n' "$*"; }
+eval "$(awk '/^_exakit_uninstall_closing_hints\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+PATH="$P"
+_exakit_uninstall_closing_hints
+HINTS
+}
+_h="$(_hints "/usr/bin:/bin" 2>&1)"
+check "the restart advice is printed" "1" "$(printf '%s\n' "$_h" | grep -c 'Restart any AI client that was open')"
+check "uv not on PATH: the kit's uv is named" "1" "$(printf '%s\n' "$_h" | grep -cF "$SANDBOX/hint-home/.local/bin/uv cache clean exasol-mcp-server")"
+mkdir -p "$SANDBOX/uvbin"; printf '#!/bin/sh\n' > "$SANDBOX/uvbin/uv"; chmod +x "$SANDBOX/uvbin/uv"
+_h="$(_hints "$SANDBOX/uvbin:/usr/bin:/bin" 2>&1)"
+check "uv on PATH: the bare command" "1" "$(printf '%s\n' "$_h" | grep -cF 'with: uv cache clean exasol-mcp-server')"
+# Wired into the engine, after the spinner, on both sides.
+check "the engine prints the hints" "1" "$(grep -c '_exakit_uninstall_closing_hints$' "$ROOT/setup/lib/common.sh")"
+check "the engine stops the processes" "1" "$(grep -c '_exakit_uninstall_mcp_processes "\$_dry"$' "$ROOT/setup/lib/common.sh")"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
