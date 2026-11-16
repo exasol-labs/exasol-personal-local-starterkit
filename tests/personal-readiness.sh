@@ -316,6 +316,7 @@ check "deploy dir = HOME/ -> refused" 1 "$(prd "$PRD_HOME/" "$PRD_HOME/.zshrc")"
 # after pwd -P resolves it (a plain "/" is refused earlier, as empty).
 ln -s / "$TMP/rootlink"; ln -s "$PRD_HOME" "$TMP/homelink"
 check "deploy dir = a symlink to / -> refused" 1 "$(prd "$TMP/rootlink" "/usr/lib/x")"
+check "deploy dir = a symlink to /, process cwd / -> refused" 1 "$(prd "$TMP/rootlink" "/")"
 check "deploy dir = a symlink to HOME -> refused" 1 "$(prd "$TMP/homelink" "$PRD_HOME/.zshrc")"
 check "deploy dir = an ancestor of HOME -> refused" 1 "$(prd "$TMP" "$PRD_HOME/.zshrc")"
 check "deploy dir = an ancestor of HOME/ -> refused" 1 "$(prd "$TMP/" "$PRD_HOME/.zshrc")"
