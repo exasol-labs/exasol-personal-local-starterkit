@@ -3865,7 +3865,7 @@ exakit_load_dataset_dir() {
 #   [x] Sample datasets              <- the parent: ticks every dataset under it
 #   [x] ├─ <each dataset not loaded yet>          For: the personas it is for
 #   [ ] Upload a file or folder: CSV/Parquet/JSON
-#   [ ] Connect an external source   <- `exakit connect`, after the file;
+#   [ ] Federation: Connect other data sources   <- `exakit connect`, after the file;
 #                                       shown disabled, with the reason,
 #                                       where the module cannot run
 #   [ ] <final_label>                <- mutually exclusive opt-out (Skip)
@@ -4090,7 +4090,7 @@ exakit_data_file_announce() {
     info "Loading a local file (EXAKIT_DATA_FILE)."
 }
 
-# exakit_data_external_run — the "Connect an external source" row, run last,
+# exakit_data_external_run — the "Federation: Connect other data sources" row, run last,
 # after the datasets and the file: `exakit connect` with no arguments
 # (exakit_vs_connect_wizard). Only a person who ticked the row at a terminal
 # gets the wizard; anything else is told the command. It never fails its
@@ -4253,14 +4253,14 @@ exakit_data_table_build() {
         # pyexasol, which runs it, is installed. Elsewhere the row is shown,
         # cannot be picked, and says why.
         if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
-            printf 'plain|Connect an external source|0|idle|||||| \n' >> "$_dtb_f"
+            printf 'plain|Federation: Connect other data sources|0|idle|||||| \n' >> "$_dtb_f"
             EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}external
 "
         else
             _dtb_why="unavailable"
             command -v exakit_vs_unavailable_reason >/dev/null 2>&1 && \
                 _dtb_why="$(exakit_vs_unavailable_reason)"
-            printf 'plain|Connect an external source - %s|0|disabled|||||| \n' "$_dtb_why" >> "$_dtb_f"
+            printf 'plain|Federation: Connect other data sources - %s|0|disabled|||||| \n' "$_dtb_why" >> "$_dtb_f"
             EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS
 "
         fi

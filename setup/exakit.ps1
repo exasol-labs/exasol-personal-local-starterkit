@@ -5062,12 +5062,29 @@ if ($Command -and $Command -ne "sql" -and -not $_helpSelf -and ($RestArgs -conta
     # (Show-ExakitVsGuide); --json keeps the help document, and
     # `exakit help connect` the command's whole page. Twin of the bash hook.
     $helpJson = ($RestArgs -contains '--json' -or $RestArgs -contains '-j')
-    if ($Command -eq "connect" -and -not $helpJson -and (Get-Command Show-ExakitVsGuide -ErrorAction SilentlyContinue)) {
-        $guideCode = Show-ExakitVsGuide -Connector (@($helpWords | Select-Object -Skip 1) -join ' ')
-        exit $guideCode
+    # At a console, `exakit connect --help` is the guide picker
+    # (Invoke-ExakitVsGuidePicker): tick connectors, read each guide, c
+    # connects one - $RestArgs becomes that connector and the command goes on
+    # below as `exakit connect <id>` does. A pipe, --json, CI or an agent gets
+    # the list, byte for byte as before. Twin of the bash hook.
+    $guideConnect = ""
+    $guidePicker = ($Command -eq "connect" -and -not $helpJson -and $helpWords.Count -eq 1 -and
+        (Get-Command Invoke-ExakitVsGuidePicker -ErrorAction SilentlyContinue) -and (Test-ExakitVsGuidePickerOk))
+    if ($guidePicker) {
+        $guideConnect = "" + (Invoke-ExakitVsGuidePicker)
+        if (-not $guideConnect) { exit 0 }
+        $RestArgs = @($guideConnect)
+        # No longer a help page: a connect writes, as it does when typed.
+        $script:ExakitReadOnlyHelp = $false
+        try { New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:BinDir | Out-Null } catch { }
+    } else {
+        if ($Command -eq "connect" -and -not $helpJson -and (Get-Command Show-ExakitVsGuide -ErrorAction SilentlyContinue)) {
+            $guideCode = Show-ExakitVsGuide -Connector (@($helpWords | Select-Object -Skip 1) -join ' ')
+            exit $guideCode
+        }
+        Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:$helpJson
+        exit 0
     }
-    Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:$helpJson
-    exit 0
 }
 
 try {

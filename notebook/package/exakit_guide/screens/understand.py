@@ -221,7 +221,7 @@ class ChooseData(Screen):
             self.connectors = actions.run("data.connectors")
             self.forms = actions.run("data.connector_forms")
             try:        # the connect menu's first line: this computer's public IP, to allow at a cloud source
-                self.tip = next((e.split(" ", 1)[1] for e in actions.run("data.source_tips") if "Tip:" in e), "")
+                self.tip = next((e.split(" ", 1)[1] for e in actions.run("data.source_tips") if "Whitelist IP:" in e), "")
             except Exception:
                 self.tip = ""
             approved = {a["table"].upper(): a for a in actions.run("kit.approved")}

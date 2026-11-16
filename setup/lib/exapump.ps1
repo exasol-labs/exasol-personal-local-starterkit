@@ -4042,12 +4042,12 @@ function New-ExakitDataTable {
         # kit's pyexasol is installed); elsewhere it is shown, cannot be
         # picked, and says why. Twin of the row in exakit_data_table_build.
         if ((Get-Command Test-ExakitVsAvailable -ErrorAction SilentlyContinue) -and (Test-ExakitVsAvailable)) {
-            [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source")
+            [void](Add-ExakitTableRow -Kind "plain" -Label "Federation: Connect other data sources")
             [void]$ids.Add("external")
         } else {
             $why = "unavailable"
             if (Get-Command Get-ExakitVsUnavailableReason -ErrorAction SilentlyContinue) { $why = Get-ExakitVsUnavailableReason }
-            [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source - $why")
+            [void](Add-ExakitTableRow -Kind "plain" -Label "Federation: Connect other data sources - $why")
             if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
             [void]$ids.Add("")
         }
@@ -4254,7 +4254,7 @@ function Test-ExakitConnectCancelled {
     return ($Code -eq 5 -or $Code -eq 130 -or $Code -eq -1073741510)
 }
 
-# Invoke-ExakitDataExternal - the "Connect an external source" row, run last,
+# Invoke-ExakitDataExternal - the "Federation: Connect other data sources" row, run last,
 # after the datasets and the file: `exakit connect` with no arguments
 # (Invoke-ExakitVsConnectWizard, a child on this console). Only a person who
 # ticked the row at a console gets the wizard; anything else is told the

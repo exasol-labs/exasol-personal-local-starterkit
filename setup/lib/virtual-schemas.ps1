@@ -37,11 +37,30 @@ function Get-ExakitVsDefs {
 # installed yet. Returns the exit code. Twin of exakit_vs_guide.
 function Show-ExakitVsGuide {
     param([string]$Connector = "", [switch]$Exact)
-    $defs = Get-ExakitVsDefs
-    if (-not $defs) {
-        if ($Exact) { return 10 }
+    $width = 80
+    try { if ([Console]::WindowWidth -gt 0) { $width = [Console]::WindowWidth } } catch { }
+    $raw = Get-ExakitVsGuideRaw -Connector $Connector -Width $width -Exact:$Exact
+    if ($raw.Code -eq 97) {
         Write-Host "This kit copy has no setup\virtual-schemas. Update it: exakit update" -ForegroundColor Red
         return 2
+    }
+    if ($raw.Code -eq 98) {
+        Write-Host "Python 3 is needed to show the connector guide." -ForegroundColor Red
+        return 2
+    }
+    foreach ($line in @($raw.Lines)) { Write-Host (Format-ExakitVsGuideLine -Line $line) }
+    return $raw.Code
+}
+
+# Get-ExakitVsGuideRaw -Connector -Width [-Exact] - guide.py's "<style>|<text>"
+# lines and its exit code: @{ Code; Lines }. Code 97 without the definitions,
+# 98 without a python (10 for both with -Exact). Twin of _exakit_vs_guide_raw.
+function Get-ExakitVsGuideRaw {
+    param([string]$Connector = "", [int]$Width = 80, [switch]$Exact)
+    $defs = Get-ExakitVsDefs
+    if (-not $defs) {
+        if ($Exact) { return @{ Code = 10; Lines = @() } }
+        return @{ Code = 97; Lines = @() }
     }
     $python = ""
     if (Get-Command Get-PyexasolVenvPython -ErrorAction SilentlyContinue) {
@@ -50,13 +69,10 @@ function Show-ExakitVsGuide {
     }
     if (-not $python -and (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue)) { $python = "" + (Get-ExakitPersonaPython) }
     if (-not $python) {
-        if ($Exact) { return 10 }
-        Write-Host "Python 3 is needed to show the connector guide." -ForegroundColor Red
-        return 2
+        if ($Exact) { return @{ Code = 10; Lines = @() } }
+        return @{ Code = 98; Lines = @() }
     }
-    $width = 80
-    try { if ([Console]::WindowWidth -gt 0) { $width = [Console]::WindowWidth } } catch { }
-    $argv = @("-I", (Join-ExakitCorePath $defs "engine" "guide.py"), "--defs", $defs, "--width", "$width", "--shell", "powershell")
+    $argv = @("-I", (Join-ExakitCorePath $defs "engine" "guide.py"), "--defs", $defs, "--width", "$Width", "--shell", "powershell")
     if ($Exact) { $argv += "--exact" }
     # An empty value is never passed: 5.1 drops it.
     if ($Connector) { $argv += $Connector }
@@ -73,21 +89,116 @@ function Show-ExakitVsGuide {
         if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
         if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
     }
-    # One "<style>|<text>" per line: T title, H heading, D dimmed, A a command.
-    foreach ($line in $lines) {
-        $line = "" + $line
-        $style = ""
-        $text = $line
-        if ($line.Length -ge 2 -and $line[1] -eq '|') { $style = $line.Substring(0, 1); $text = $line.Substring(2) }
-        switch ($style) {
-            "T" { Write-Host ("{0}{1}{2}" -f $script:UiBold, $text, $script:UiReset) }
-            "H" { Write-Host ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
-            "D" { Write-Host ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
-            "A" { Write-Host ("{0}{1}{2}" -f $script:UiAccent, $text, $script:UiReset) }
-            default { Write-Host $text }
-        }
+    return @{ Code = $code; Lines = $lines }
+}
+
+# Format-ExakitVsGuideLine -Line [-Width] - one guide line coloured: "<style>|<text>",
+# T title, H heading, D dimmed, A a command. With -Width the text is cut to it
+# first (the full-window reader's rows are one console row each). Twin of
+# _exakit_vs_guide_paint.
+function Format-ExakitVsGuideLine {
+    param([string]$Line, [int]$Width = 0)
+    $line = "" + $Line
+    $style = ""
+    $text = $line
+    if ($line.Length -ge 2 -and $line[1] -eq '|') { $style = $line.Substring(0, 1); $text = $line.Substring(2) }
+    if ($Width -gt 0 -and $text.Length -gt $Width) { $text = $text.Substring(0, $Width) }
+    switch ($style) {
+        "T" { return ("{0}{1}{2}" -f $script:UiBold, $text, $script:UiReset) }
+        "H" { return ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
+        "D" { return ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
+        "A" { return ("{0}{1}{2}" -f $script:UiAccent, $text, $script:UiReset) }
     }
-    return $code
+    return $text
+}
+
+# Get-ExakitVsGuideDoc -Connector - the guide's own file on this computer,
+# docs\virtual-schemas\<id>.md (its README when the id has none), or "".
+# Twin of _exakit_vs_guide_doc.
+function Get-ExakitVsGuideDoc {
+    param([string]$Connector)
+    $defs = Get-ExakitVsDefs
+    if (-not $defs) { return "" }
+    $docs = Join-Path (Join-Path (Split-Path -Parent (Split-Path -Parent $defs)) "docs") "virtual-schemas"
+    $one = Join-Path $docs ($Connector + ".md")
+    if ($Connector -and (Test-Path -LiteralPath $one -PathType Leaf)) { return $one }
+    $readme = Join-Path $docs "README.md"
+    if (Test-Path -LiteralPath $readme -PathType Leaf) { return $readme }
+    return ""
+}
+
+# Show-ExakitVsGuideScreen -Connector -Footer [-Keys] - one connector's guide
+# (guide.py, as `exakit connect <id> --help` prints it) in the full-window
+# reader (Show-ExakitPager): it disappears again, the screen under it as it
+# was. o opens the full guide's .md, or says where it is. Returns the key that
+# closed it, "" when it cannot be shown. Twin of _exakit_vs_guide_screen.
+function Show-ExakitVsGuideScreen {
+    param([string]$Connector, [string]$Footer, [string]$Keys = "")
+    $cols = 80; try { if ([Console]::WindowWidth -gt 0) { $cols = [Console]::WindowWidth } } catch { }
+    if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+    $raw = Get-ExakitVsGuideRaw -Connector $Connector -Width $cols
+    if ($raw.Code -ne 0) { return "" }
+    $lines = @()
+    foreach ($line in @($raw.Lines)) { $lines += (Format-ExakitVsGuideLine -Line $line -Width ($cols - 1)) }
+    return (Show-ExakitPager -Lines $lines -Footer $Footer -Keys $Keys -OpenPath (Get-ExakitVsGuideDoc -Connector $Connector))
+}
+
+# Show-ExakitVsGuideBack -Connector - the guide from inside exakit connect (? in
+# the menu or in a source's panel): Enter, q or Esc go back to where ? was
+# pressed. Twin of _exakit_vs_guide_back.
+function Show-ExakitVsGuideBack {
+    param([string]$Connector)
+    [void](Show-ExakitVsGuideScreen -Connector $Connector -Footer ("Enter/q back {0} o open full doc" -f $script:UiMidDot))
+}
+
+# Get-ExakitVsGuideName -Connector - its name in the catalog (PostgreSQL), the
+# id itself when the catalog does not say. Twin of _exakit_vs_guide_name.
+function Get-ExakitVsGuideName {
+    param([string]$Connector)
+    $defs = Get-ExakitVsDefs
+    if ($defs) {
+        try {
+            $doc = Get-Content -LiteralPath (Join-Path $defs "catalog.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+            foreach ($e in @($doc.connectors)) { if (("" + $e.id) -eq $Connector -and $e.name) { return ("" + $e.name) } }
+        } catch { }
+    }
+    return $Connector
+}
+
+# Test-ExakitVsGuidePickerOk - does `exakit connect --help` open the guide
+# picker here? A person at a console: input and output not redirected, colour
+# and glyphs on, not CI. Everything else (a pipe, --json, an agent) prints the
+# list as it always has. Twin of exakit_vs_guide_picker_ok.
+function Test-ExakitVsGuidePickerOk {
+    if (-not $script:UiFancy) { return $false }
+    if ($env:CI) { return $false }
+    if (-not (Test-ExakitMenuConsole)) { return $false }
+    try { if ([Console]::IsOutputRedirected) { return $false } } catch { return $false }
+    if (-not (Get-ExakitVsDefs)) { return $false }
+    return $true
+}
+
+# Invoke-ExakitVsGuidePicker - `exakit connect --help` at a console: the connect
+# menu itself (Invoke-ExakitVsPick -Guides: the same keys and rows), titled
+# "Connector guides"; each ticked connector's guide in turn in the full-window
+# reader. Enter the next guide, o its full .md, c connect that source now, q
+# (or Esc) done. Returns the connector c chose ("" for none), which the caller
+# connects as `exakit connect <id>` does. Twin of exakit_vs_guide_picker.
+function Invoke-ExakitVsGuidePicker {
+    $picked = @(Invoke-ExakitVsPick -Guides)
+    $count = $picked.Count
+    for ($i = 0; $i -lt $count; $i++) {
+        $id = "" + $picked[$i]
+        $next = "Enter next guide"
+        if ($i -eq $count - 1) { $next = "Enter done" }
+        $d = $script:UiMidDot
+        $foot = "{0} {1} o open full doc {1} c connect {2} now {1} q quit" -f $next, $d, (Get-ExakitVsGuideName -Connector $id)
+        $key = Show-ExakitVsGuideScreen -Connector $id -Footer $foot -Keys "c"
+        if ($key -eq "") { continue }
+        if ($key -eq "c") { return $id }
+        if ($key -ne "enter") { return "" }
+    }
+    return ""
 }
 
 # Test-ExakitVsAvailable - can a source be connected from here? Twin of
@@ -1052,7 +1163,7 @@ function Format-ExakitVsSqlLine {
 function Show-ExakitVsQueryList {
     param([object[]]$Items = @())
     $all = @($Items)
-    if ($all.Count -eq 1) { Info "Query it like any schema:" } else { Info "Query them like any schema:" }
+    Info "Query it:"
     foreach ($it in $all) {
         $q = ""
         $r = $it.Result
@@ -1060,8 +1171,6 @@ function Show-ExakitVsQueryList {
         if (-not $q) { $q = "SELECT * FROM VS_" + ("" + $it.Name).ToUpperInvariant() + ".<table> LIMIT 10" }
         Write-Host ("        " + (Format-ExakitVsSqlLine -Query $q))
     }
-    if ($all.Count -eq 1) { Info ("Type and naming notes for it: exakit source show " + $all[0].Name) }
-    else { Info "Type and naming notes for each source: exakit source show <name>" }
 }
 
 # Show-ExakitVsQueryHints - the one source's query line, for the line-by-line
@@ -1569,8 +1678,14 @@ function Test-ExakitVsUnsupported {
 # land in $script:ExakitVsLakehouseCatalog and $script:ExakitVsLakehouseFiles.
 # Twin of _exakit_vs_pick.
 function Invoke-ExakitVsPick {
+    # -Guides: `exakit connect --help`'s picker - the same rows and keys, titled
+    # "Connector guides", read from the catalog file (no engine, no public IP,
+    # no clock check); every connector can be ticked (a gated one has a guide
+    # too) and a Lakehouse catalog or store ticks Lakehouse's guide. ? on a row
+    # shows its connector's guide either way.
+    param([switch]$Guides)
     $script:ExakitVsLakehouseCatalog = ""; $script:ExakitVsLakehouseFiles = ""
-    $catalog = Get-ExakitVsCatalog
+    if ($Guides) { $catalog = Get-ExakitVsGuideCatalog } else { $catalog = Get-ExakitVsCatalog }
     if ($null -eq $catalog) { Write-Host ("  {0} The connector catalog could not be read. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red; return @() }
     $tree = Get-ExakitVsLakehouseTree
     $folds = @($tree.folds)
@@ -1580,7 +1695,9 @@ function Invoke-ExakitVsPick {
     # cat:<catalog>[:<files>], file:<catalog>:<files>, or "" for a row nobody
     # picks). Twin of _exakit_vs_pick.
     $entries = @(@($catalog.connectors) | Where-Object { $folds -notcontains ("" + $_.id) })
-    $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source"
+    $menuTitle = "Federation: Select data sources"
+    if ($Guides) { $menuTitle = "Connector guides" }
+    $t = New-ExakitTable -Title $menuTitle -Col1 "Source"
     # The Source column alone: nothing runs in this menu's rows, so it has no
     # Status column either.
     $t.StatMin = 0
@@ -1598,7 +1715,7 @@ function Invoke-ExakitVsPick {
         if ($gated) {
             # Its reason read on from its name: there is no Status column to say it in.
             $row = Add-ExakitTableRow -Kind $top -Label ($label + " - not available yet") -Table $t
-            Disable-ExakitTableRow -Row $row -Table $t
+            if (-not $Guides) { Disable-ExakitTableRow -Row $row -Table $t }
         } else {
             $row = Add-ExakitTableRow -Kind $top -Label $label -Table $t
         }
@@ -1626,7 +1743,7 @@ function Invoke-ExakitVsPick {
                 $groups += ("{0}:{1}:{2}:collapse" -f $ca, ($ca + 1), ($ca + 1))
                 continue
             }
-            $shown = @($files | Where-Object { ($allowed -contains ("" + $_.id)) -or (Test-ExakitVsUnsupported $_) })
+            $shown = @($files | Where-Object { $allowed -contains ("" + $_.id) })
             for ($j = 0; $j -lt $shown.Count; $j++) {
                 $f = $shown[$j]
                 $leaf = $mid + "-tee"
@@ -1639,12 +1756,36 @@ function Invoke-ExakitVsPick {
         }
         $groups += ("{0}:{1}:{2}:collapse+one" -f $row, ($row + 1), $keys.Count)
     }
-    $skip = Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $t
-    Show-ExakitVsClockCheck
+    $skipLabel = "Skip"
+    if ($Guides) {
+        $skipLabel = "Quit"
+        # A guide is read, not configured: a Lakehouse catalog or store is
+        # ticked freely there, nothing has to be picked under it.
+        $groups = @($groups | ForEach-Object { ("" + $_).Replace("+one", "").Replace("+first", "") })
+    }
+    $skip = Add-ExakitTableRow -Kind "plain" -Label $skipLabel -Table $t
+    if ($Guides) {
+        Write-Host ""
+        Info "Tick one or more connectors; Enter shows each one's guide."
+    } else {
+        Show-ExakitVsClockCheck
+    }
     Write-Host ""
-    Info "Tick one or more sources; the details for each are asked next."
-    Write-Host ""
-    $sel = @(Invoke-ExakitTableMenu -Table $t -ExclusiveIndex $skip -StartRow 1 -Groups $groups)
+    # ? on a row: its connector's guide (a Lakehouse catalog, store or note
+    # row: Lakehouse's; Skip: none). The rows' keys go through script scope,
+    # where the menu's scriptblock finds them.
+    $script:ExakitVsPickKeys = $keys
+    $script:UiTableHelp = {
+        param($row)
+        $all = @($script:ExakitVsPickKeys)
+        if ($row -lt 1 -or $row -gt $all.Count) { return }
+        $k = "" + $all[$row - 1]
+        if (-not $k -or $k.StartsWith("cat:") -or $k.StartsWith("file:")) { $k = "lakehouse" }
+        Show-ExakitVsGuideBack -Connector $k
+    }
+    try {
+        $sel = @(Invoke-ExakitTableMenu -Table $t -ExclusiveIndex $skip -StartRow 1 -Groups $groups)
+    } finally { $script:UiTableHelp = $null; $script:ExakitVsPickKeys = $null }
     if (-not $script:ExakitTableConfirmed) { return @() }
     if ($sel -contains $skip) { return @() }
     $picked = @()
@@ -1652,6 +1793,11 @@ function Invoke-ExakitVsPick {
         if ($r -lt 1 -or $r -gt $keys.Count) { continue }
         $k = "" + $keys[$r - 1]
         if (-not $k) { continue }
+        if ($Guides) {
+            if ($k.StartsWith("cat:") -or $k.StartsWith("file:")) { $k = "lakehouse" }
+            if ($picked -notcontains $k) { $picked += $k }
+            continue
+        }
         if ($k.StartsWith("cat:")) {
             $c = $k.Substring(4)
             $at = $c.IndexOf(":")
@@ -1663,6 +1809,15 @@ function Invoke-ExakitVsPick {
         } else { $picked += $k }
     }
     return $picked
+}
+
+# Get-ExakitVsGuideCatalog - the guide picker's catalog, as the engine's catalog
+# result has it: setup\virtual-schemas\catalog.json itself (no engine, no
+# public IP lookup); $null when it cannot be read. Twin of _exakit_vs_guide_catalog.
+function Get-ExakitVsGuideCatalog {
+    $defs = Get-ExakitVsDefs
+    if (-not $defs) { return $null }
+    try { return (Get-Content -LiteralPath (Join-Path $defs "catalog.json") -Raw -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
 }
 
 # Show-ExakitVsTuiPanel - one source's panel over what the form drew last
@@ -1741,10 +1896,26 @@ function Show-ExakitVsTuiPanel {
         [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $lead + $shown + "  " + $val + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
         $lines++
     }
-    # The legend, one dim line under the fields: what the star means.
+    # The legend, one dim line under the fields: what the star means, and that
+    # ? (then Enter) at a question shows this source's guide - when the panel
+    # is wide enough to say it.
+    $guideHint = "? + Enter: guide"
+    if ($in -lt 40) { $guideHint = "" }
+    $legendPlain = ""; $legendColour = ""
     if ($anyReq) {
-        $pad = [Math]::Max(0, $in - 15)
-        [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + "     " + $script:UiErr + "*" + $script:UiReset + $script:UiDim + " required" + $script:UiReset + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
+        $legendPlain = "     * required"
+        $legendColour = "     " + $script:UiErr + "*" + $script:UiReset + $script:UiDim + " required"
+        if ($guideHint) {
+            $legendPlain += " " + $script:UiMidDot + " " + $guideHint
+            $legendColour += " " + $script:UiMidDot + " " + $guideHint
+        }
+    } elseif ($guideHint) {
+        $legendPlain = "     " + $guideHint
+        $legendColour = "     " + $script:UiDim + $guideHint
+    }
+    if ($legendPlain) {
+        $pad = [Math]::Max(0, $in - $legendPlain.Length)
+        [void]$sb.Append("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $legendColour + $script:UiReset + (" " * $pad) + $script:UiAccent + $script:UiVB + $script:UiReset + "`r`n")
         $lines++
     }
     [void]$sb.Append("  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $in) + $script:UiBR + $script:UiReset + "`r`n")
@@ -2082,6 +2253,14 @@ function Read-ExakitVsTuiField {
         }
         $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
         if ($null -eq $a) { return $false }
+        # ? alone (then Enter): this source's guide, then the same question
+        # again, every answer kept. ? with anything else is text. Never in a
+        # hidden prompt (a credential, a connection string): ? can be part of
+        # a password or a URL there.
+        if ($a -eq "?") {
+            Show-ExakitVsGuideBack -Connector $Form.Connector
+            return (Read-ExakitVsTuiField -Form $Form -Index $Index -Why $Why)
+        }
         if ($a -eq "-" -and -not $f.Req) { $f.Val = ""; break }
         $v = $a
         if (-not $v) { $v = $def }
@@ -2253,6 +2432,8 @@ function Invoke-ExakitVsTuiReview {
         if ($why) { Write-ExakitVsTuiSay $why }
         $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
         if ($null -eq $a) { return "eof" }
+        # ? alone: the guide, then this summary again.
+        if ($a -eq "?") { Show-ExakitVsGuideBack -Connector $Form.Connector; continue }
         $n = $a -replace ' ', ''
         if ($n -eq "skip" -and $Form.Refused) { return "skip" }
         if (-not $n) {
@@ -2841,7 +3022,7 @@ function Invoke-ExakitVsTuiFlow {
         foreach ($warning in @($plan.warnings)) { if ($warning) { Warn2 ("{0}: {1}" -f $plan.name, $warning) } }
         foreach ($note in @($s.PlanInfo)) { if ($note) { Info ("{0}: {1}" -f $plan.name, $note) } }
     }
-    if ($Source -and $ip) { Info ("Tip: cloud sources see you as {0} - allow it if the source has an IP allowlist." -f $ip) }
+    if ($Source -and $ip) { Info ("Whitelist IP: {0}" -f $ip) }
     $plural = "s"; if ($sources.Count -eq 1) { $plural = "" }
     $t = New-ExakitVsTuiTable -Title ("Connect {0} source{1}" -f $sources.Count, $plural) -Sources $sources
     Show-ExakitTable -Table $t -Cursor 0
@@ -2860,8 +3041,6 @@ function Invoke-ExakitVsTuiFlow {
     # footer and the question - or under what the database was prepared with
     $script:EvtLive = $false
     Invoke-ExakitVsTuiRun -Table $t -Sources $sources -OnScreen $over
-    # The live table drew over the footer.
-    if ($script:EvtLive) { [void](Write-ExakitVsTuiFooter) }
     # A language container (a download and a restart), or the restart Docker's
     # DNS repair needs, that the step above did not make: said once, below the
     # table - picking the sources was the permission, so nothing is asked -
@@ -2899,7 +3078,8 @@ function Invoke-ExakitVsTuiFlow {
     $done = @($sources | Where-Object { $_.Outcome -eq "ok" })
     if ($done.Count -gt 0) {
         Show-ExakitVsQueryList -Items @($done | ForEach-Object { @{ Name = $_.Name; Result = $_.Result } })
-        Info "Manage with: exakit source show <name> (every action: exakit help source)"
+        Write-Host ""
+        Info "Manage it: exakit source"
     }
     # Nothing secret outlives the command in this session.
     foreach ($s in $sources) { $s.Secret = $null; $s.Storage = $null }

@@ -179,6 +179,119 @@ Check "a hidden row is not drawn" $false ($less.Contains("Iceberg REST catalog")
 Check "...and takes no line" ($plain.Split("`n").Count - 16) ($less.Split("`n").Count)
 $t.Remove("Hidden"); $t.Remove("Radio")
 
+Write-Host "== the connector guides: ? in the menu, the guide picker, the reader =="
+# The kit's own definitions, from this checkout (core-setup.ps1 is not loaded here).
+function Get-ExakitVsDefs { return (Join-Path (Join-Path $repo "setup") "virtual-schemas") }
+# The guide itself is Show-ExakitVsGuideBack's (the reader, below): here it records.
+$script:Guides = New-Object System.Collections.ArrayList
+function Show-ExakitVsGuideBack { param([string]$Connector) [void]$script:Guides.Add($Connector) }
+$script:Guides.Clear()
+Check "? on a row shows its connector's guide; the menu goes on" "PICKED=sqlserver CATALOG= FILES=" (Run-Pick "jj?? E")
+Check "...SQL Server's, once per ?" "sqlserver sqlserver" ($script:Guides -join ' ')
+$script:Guides.Clear()
+Check "? on a Lakehouse catalog row: Lakehouse's guide" "lakehouse" (& { [void](Run-Pick ($lake + "j? E")); $script:Guides -join ' ' })
+$script:Guides.Clear()
+Check "? on Skip shows nothing" "PICKED= CATALOG= FILES=|" ((Run-Pick "k?E") + "|" + ($script:Guides -join ' '))
+Check "...and the menu's ? is put back once it is done" $true ($null -eq $script:UiTableHelp)
+
+function Run-Guides([string]$Keys) {
+    Press $Keys
+    $picked = @(Invoke-ExakitVsPick -Guides 6> $null)
+    return ($picked -join ' ')
+}
+Check "the guide picker: the ticked connectors, in menu order" "postgresql mysql" (Run-Guides " j E")
+Check "...titled Connector guides" "Connector guides" $script:LastTable.Title
+$rows = @($script:LastTable.Rows.ToArray())
+Check "...its last row Quits" "Quit" $rows[-1].Label
+Check "...every connector can be ticked (a gated one has a guide too)" 0 @($rows | Where-Object { ($_.Kind -eq "tee" -or $_.Kind -eq "corner") -and $_.State -eq "disabled" }).Count
+Check "...nothing has to be picked under a Lakehouse catalog" "" (@($script:LastGroups | Where-Object { $_ -like "*one*" -or $_ -like "*first*" }) -join ' ')
+Check "...a Lakehouse catalog ticked is Lakehouse's guide, once" "lakehouse" (Run-Guides ($lake + "j E"))
+Check "...Quit is no guide" "" (Run-Guides "kE")
+
+$script:Screens = New-Object System.Collections.ArrayList
+$script:ScreenKeys = New-Object System.Collections.ArrayList
+function Show-ExakitVsGuideScreen { param([string]$Connector, [string]$Footer, [string]$Keys = "")
+    [void]$script:Screens.Add("$Connector|$Footer|$Keys")
+    $k = $script:ScreenKeys[0]; $script:ScreenKeys.RemoveAt(0); return $k }
+function Run-Picker([string]$Keys, [string[]]$ScreenKeys) {
+    Press $Keys
+    $script:Screens.Clear(); $script:ScreenKeys.Clear()
+    foreach ($k in $ScreenKeys) { [void]$script:ScreenKeys.Add($k) }
+    return ("" + (Invoke-ExakitVsGuidePicker 6> $null))
+}
+$d = $script:UiMidDot
+Check "Enter shows the next guide, c on it connects that source" "mysql" (Run-Picker " j E" @("enter", "c"))
+Check "...each guide in turn, its footer: next, open, connect, quit" `
+    ("postgresql|Enter next guide $d o open full doc $d c connect PostgreSQL now $d q quit|c" + "`n" + "mysql|Enter done $d o open full doc $d c connect MySQL now $d q quit|c") `
+    ($script:Screens -join "`n")
+Check "q ends the guides, nothing to connect" "|1" ((Run-Picker " j E" @("q")) + "|" + $script:Screens.Count)
+Check "Esc too" "|1" ((Run-Picker " j E" @("esc")) + "|" + $script:Screens.Count)
+Check "Enter after the last guide: done" "|2" ((Run-Picker " j E" @("enter", "enter")) + "|" + $script:Screens.Count)
+Remove-Item Function:\Show-ExakitVsGuideScreen
+Remove-Item Function:\Show-ExakitVsGuideBack
+
+$previousCi = $env:CI
+$env:CI = "true"
+Check "CI: connect --help prints the list, no picker" $false (Test-ExakitVsGuidePickerOk)
+if ($null -eq $previousCi) { Remove-Item Env:\CI } else { $env:CI = $previousCi }
+$fancy = $script:UiFancy; $script:UiFancy = $false
+Check "no colour or glyphs: no picker" $false (Test-ExakitVsGuidePickerOk)
+Check "...and the reader draws nothing" "" (Show-ExakitPager -Lines @("a") -Footer "f")
+$script:UiFancy = $fancy
+
+Check "VT input: ESC [ 5 ~ is PgUp, ESC [ 6 ~ PgDn" "PageUp PageDown" ((ConvertFrom-ExakitMenuSequence "[5~").Name + " " + (ConvertFrom-ExakitMenuSequence "[6~").Name)
+Check "...Home and End" "Home End Home End" ((@("[H", "[F", "[1~", "[4~") | ForEach-Object { (ConvertFrom-ExakitMenuSequence $_).Name }) -join ' ')
+
+# The reader itself, its output captured: the alternate screen in and out,
+# the window scrolled, o opening the guide's file.
+$script:Opened = New-Object System.Collections.ArrayList
+function Open-ExakitPath { param([string]$Path) [void]$script:Opened.Add($Path); return $script:OpenWorks }
+function Read-Pager([object[]]$Keys, [string]$Open = "") {
+    $script:Keys.Clear(); foreach ($k in $Keys) { $script:Keys.Enqueue($k) }
+    $sw = New-Object System.IO.StringWriter
+    $old = [Console]::Out
+    [Console]::SetOut($sw)
+    $script:PagerKey = "(threw)"
+    try { $script:PagerKey = Show-ExakitPager -Lines @(1..60 | ForEach-Object { "line $_" }) -Footer "Enter/q back" -Keys "c" -OpenPath $Open }
+    catch { }
+    finally { [Console]::SetOut($old) }
+    return ($sw.ToString() -replace "$([char]27)\[[0-9;]*[A-Za-z]", "")
+}
+$e = [char]27
+# A console that speaks virtual-terminal sequences, as Windows Terminal does.
+$script:UiVt = $true
+$arrows = ([string][char]0x2191) + "/" + ([string][char]0x2193)
+$script:OpenWorks = $true
+$out = Read-Pager @(@{ Name = 'PageDown' }, @{ Name = 'Down' }, @{ Name = 'Char'; Char = 'o' }, @{ Name = 'Enter' }) "C:\guides\pg.md"
+Check "the reader: Enter closes it" "enter" $script:PagerKey
+$raw = $null
+$sw2 = New-Object System.IO.StringWriter; $old2 = [Console]::Out; [Console]::SetOut($sw2)
+$script:Keys.Clear(); $script:Keys.Enqueue(@{ Name = 'Enter' })
+try { [void](Show-ExakitPager -Lines @("x") -Footer "f") } finally { [Console]::SetOut($old2) }
+$raw = $sw2.ToString()
+Check "...drawn in the alternate screen, which it leaves" "True True" ("{0} {1}" -f $raw.Contains("$e[?1049h"), $raw.Contains("$e[?1049l"))
+Check "...the footer, then where the window is" $true $out.Contains("Enter/q back $($script:UiMidDot) $arrows PgUp/PgDn scroll $($script:UiMidDot) 1-23 of 60")
+Check "...PgDn moved it a window on, Down one more" $true $out.Contains("25-47 of 60")
+Check "...o opened the guide's file" "C:\guides\pg.md" ($script:Opened -join ' ')
+Check "...and said so" $true $out.Contains("Opened C:\guides\pg.md")
+$script:OpenWorks = $false
+$out = Read-Pager @(@{ Name = 'Char'; Char = 'o' }, @{ Name = 'Char'; Char = 'q' }) "C:\guides\pg.md"
+Check "an opener that fails: the path is said instead, q closes" "q True" ("{0} {1}" -f $script:PagerKey, $out.Contains("The full guide: C:\guides\pg.md"))
+$out = Read-Pager @(@{ Name = 'Char'; Char = 'C' })
+Check "a caller's letter closes it, in either case" "c" $script:PagerKey
+$out = Read-Pager @(@{ Name = 'Escape' })
+Check "Esc closes it" "esc" $script:PagerKey
+$sw3 = New-Object System.IO.StringWriter; $old3 = [Console]::Out; [Console]::SetOut($sw3)
+$script:Keys.Clear()
+try { [void](Show-ExakitPager -Lines @("x") -Footer "f") } catch { } finally { [Console]::SetOut($old3) }
+Check "interrupted (Ctrl-C ends the pipeline): the finally block leaves the alternate screen" $true $sw3.ToString().EndsWith("$e[?1049l$e[?25h")
+Remove-Item Function:\Open-ExakitPath
+$script:UiVt = $false
+$sw4 = New-Object System.IO.StringWriter; $old4 = [Console]::Out; [Console]::SetOut($sw4)
+$script:Keys.Clear(); $script:Keys.Enqueue(@{ Name = 'Enter' })
+try { [void](Show-ExakitPager -Lines @("x") -Footer "f") } catch { } finally { [Console]::SetOut($old4) }
+Check "a console without virtual-terminal sequences: no alternate screen, the window cleared for the redraw" "False" ("" + $sw4.ToString().Contains("$e[?1049h"))
+
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"
 if ($script:FAIL -gt 0) { exit 1 }

@@ -391,7 +391,7 @@ def guide_one(defs, docs, entry, width, shell):
     say("N", "")
     ip = publicip.get()
     if ip:
-        for line in wrap("Network: " + ascii_text(re.sub(r"^Tip:\s*", "", publicip.advice(ip))), width, "", "  ", 3):
+        for line in wrap(ascii_text(publicip.advice(ip)), width, "", "  ", 3):
             say("N", line)
     else:
         readme = sections(load(os.path.join(docs, "README.md")) or "", 2)[1]
