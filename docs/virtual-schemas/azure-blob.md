@@ -5,22 +5,79 @@ tables. An EDML mapping file on your computer says which files become which
 table; leave it empty and the kit drafts one from the container. Public Azure
 cloud only.
 
-> **Easiest: let your AI agent do it.** The skill `exasol-vs-azure-blob` knows this connector.
->
-> **You still need, on your computer:** the Azure CLI (`az login`) or the Azure
-> portal, as someone who may create a SAS for the container.
->
-> **Prefer to do it by hand?** Follow the steps below.
+## The simplest way: ask your AI agent
+
+**Easiest: let your AI agent do it.** The kit installs the skill
+`exasol-vs-azure-blob` for your AI client; it knows this connector.
+
+Copy this prompt, fill in the `<...>` parts, and give it to your agent:
+
+```text
+Connect the files in the Azure Blob container <container> of the storage account
+<account> to my local Exasol with exakit. Use the exasol-vs-azure-blob skill.
+Create a read-only SAS for the container, draft the mapping from the files,
+and write the SAS to a file, never into the chat.
+```
+
+**You still need, on your computer:** the Azure CLI (`az login`) or the Azure
+portal, as someone who may create a SAS for the container.
+
+**Prefer to do it by hand?** Follow the steps below.
 
 ## What `exakit connect` asks for
 
-| Field | Required | Example |
+### Required
+
+| Field | Example | Where it comes from |
 |---|---|---|
-| Name (alias) for this connection | yes | `azdocs` |
-| Storage account name | yes | `mystorageacct` |
-| Container name | yes | `docs` |
-| EDML mapping (a .json file or a folder of them) | no: empty drafts it from the container | `./mapping` |
-| SAS token (read + list), connection string or account key | yes | (hidden, or a file) |
+| Name (alias) for this connection | `azdocs` | You choose it. `azdocs` gives the schema `VS_AZDOCS`. |
+| Storage account name | `mystorageacct` | Portal → Storage accounts ([step 1](#1-storage-account-and-container)). |
+| Container name | `docs` | The account → Data storage → Containers ([step 1](#1-storage-account-and-container)). |
+| SAS token (read + list), connection string or account key | (hidden, or a file) | A read-only SAS you make ([step 3](#3-a-read-only-sas-token-recommended)). |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| EDML mapping (a .json file or a folder of them) | the kit drafts one from the container ([step 2](#2-the-mapping)) | `./mapping` |
+
+## Connection string you can paste
+
+```text
+https://mystorageacct.blob.core.windows.net/docs
+abfss://docs@mystorageacct.dfs.core.windows.net
+DefaultEndpointsProtocol=https;AccountName=mystorageacct;EndpointSuffix=core.windows.net
+```
+
+| String | Fills |
+|---|---|
+| `https://<account>.blob.core.windows.net/<container>` | account and container |
+| `abfss://<container>@<account>.dfs.core.windows.net` | account and container |
+| A storage connection string (`AccountName=...;...`) | account |
+
+A credential in the string is the connector's, taken out of the string and not
+asked again: the URL's SAS query (`?sv=...&sig=...`), else the connection
+string's `SharedAccessSignature`, else its `AccountKey`.
+
+### Where to find the connection string
+
+You do not build it: copy the address the portal shows.
+
+- **Portal:** Storage accounts → `<account>` → Data storage → Containers → the
+  container's More button (**...**) → Container properties → URL. That gives
+  `https://<account>.blob.core.windows.net/<container>`. It fills account and
+  container.
+
+Paste the plain URL, without a SAS query (`?sv=...&sig=...`). Give the SAS
+token at the hidden prompt, or with `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| account | Portal → Storage accounts, or `az storage account list` ([step 1](#1-storage-account-and-container)). |
+| container | The account → Data storage → Containers, or `az storage container list` ([step 1](#1-storage-account-and-container)). |
+| path after the container | Not used: the mapping names the files ([step 2](#2-the-mapping)). |
 
 ## Where to find each value
 
@@ -114,22 +171,9 @@ mapping is drafted from the container; the connect prints its tables.
 statement in (`'SELECT "x" FROM VS_AZDOCS.T' | exakit sql`) or use
 `exakit sql --file query.sql`.
 
-## Connection string you can paste
-
-```text
-https://mystorageacct.blob.core.windows.net/docs
-abfss://docs@mystorageacct.dfs.core.windows.net
-```
-
-Both fill account and container. A storage connection string
-(`DefaultEndpointsProtocol=https;AccountName=mystorageacct;...`) fills the
-account. A credential in the string is the connector's, taken out of the
-string and not asked again: the URL's SAS query (`?sv=...&sig=...`), else the
-connection string's `SharedAccessSignature`, else its `AccountKey`.
-
 ## Common problems
 
-| Symptom | Fix |
+| Symptom or error text | Fix |
 |---|---|
 | `AuthenticationFailed` | An expired SAS, a wrong key, or a SAS made for another container: check the container name, else `exakit source reauth azdocs --password-file <new sas>`. |
 | `AuthorizationPermissionMismatch` | The SAS lacks read or list: make one with `rl` (step 3), then reauth. |

@@ -5,18 +5,31 @@ inside your Exasol database. Nothing runs on a warehouse, Athena or Databricks
 compute. One connector covers every catalog the engine knows: you pick where
 the table list is kept (the catalog), then how Exasol opens the files.
 
-> **Easiest: let your AI agent do it.** The skill `exasol-vs-lakehouse` knows this connector.
->
-> **You still need, on your computer:** the console or CLI of your catalog and
-> your storage (AWS CLI, Databricks CLI or workspace, Azure portal or `az`), to
-> look up the values and make a read-only login.
->
-> **Prefer to do it by hand?** Follow the steps below.
-
 The connector id is `lakehouse`. The old ids `iceberg-rest` and `unity` are
 gone and have no aliases. A source you saved with one of them is moved to
 `lakehouse` (with its catalog and files) the first time the kit reads it, so
 `exakit source list`, `show`, `check` and `remove` keep working.
+
+## The simplest way: ask your AI agent
+
+**Easiest: let your AI agent do it.** The kit installs the skill
+`exasol-vs-lakehouse` for your AI client; it knows this connector.
+
+Copy this prompt, fill in the `<...>` parts, and give it to your agent:
+
+```text
+Connect the lakehouse tables in <namespace or catalog.schema> to my local Exasol
+with exakit. Use the exasol-vs-lakehouse skill. Catalog: <iceberg-rest, unity,
+glue or none>, at <catalog URL, workspace URL or Glue region>. Files: <vended,
+s3 or azure>. Set up a read-only login for the catalog and the files, and
+write each secret to a file, never into the chat.
+```
+
+**You still need, on your computer:** the console or CLI of your catalog and
+your storage (AWS CLI, Databricks CLI or workspace, Azure portal or `az`), to
+look up the values and make a read-only login.
+
+**Prefer to do it by hand?** Follow the steps below.
 
 ## Databricks or Lakehouse?
 
@@ -85,25 +98,42 @@ remedy names the `files` values that work for that catalog.
 
 ## What `exakit connect` asks for
 
-`*` is required. A hidden field is typed without echo. Every combination starts
-with **Name (alias) for this connection** (`--name`): `sales_lake` gives the
-schema `VS_SALES_LAKE`.
+`*` marks a field the combination requires. A hidden field is typed without
+echo. The `--set` key is in brackets.
 
-### Catalog fields
+### Required
 
-| Catalog | Field | `--set` key | Example |
-|---|---|---|---|
-| `iceberg-rest` | Catalog URL * | `catalog_url` | `https://polaris.example.com/api/catalog` |
-| | Warehouse (catalog name) * | `warehouse` | `analytics` |
-| | Namespace * | `namespace` | `sales` |
-| `unity` | Workspace URL * | `workspace_url` | `https://dbc-1234abcd-5678.cloud.databricks.com` |
-| | Catalog.schema * | `namespace` | `main.sales` |
-| `glue` | AWS region * | `region` | `eu-central-1` |
-| | Glue database * | `database` | `sales_db` |
-| | Access key ID | `access_key_id` | `AKIA...` (optional when the secret file is the JSON `aws iam create-access-key` prints) |
-| | Secret access key (hidden) * | `secret` (`--password-file`) | |
-| | Glue catalog ID | `catalog_id` | `123456789012` (optional) |
-| `none` | Folder path * | `path` | `s3://sales-lake/orders/` or `abfss://lake@saleslake.dfs.core.windows.net/orders/` |
+| Field | Example | Where it comes from |
+|---|---|---|
+| Name (alias) for this connection (`--name`) | `sales_lake` | You choose it. `sales_lake` gives the schema `VS_SALES_LAKE`. |
+| `iceberg-rest`: Catalog URL * (`catalog_url`) | `https://polaris.example.com/api/catalog` | The catalog's console or docs ([Iceberg REST](#iceberg-rest-catalog)). |
+| `iceberg-rest`: Warehouse (catalog name) * (`warehouse`) | `analytics` | The catalog's console. |
+| `iceberg-rest`: Namespace * (`namespace`) | `sales` | The catalog's console. |
+| `unity`: Workspace URL * (`workspace_url`) | `https://dbc-1234abcd-5678.cloud.databricks.com` | Your browser's address bar ([Unity](#unity-catalog)). |
+| `unity`: Catalog.schema * (`namespace`) | `main.sales` | Catalog Explorer ([Unity](#unity-catalog)). |
+| `glue`: AWS region * (`region`) | `eu-central-1` | AWS Glue → Data Catalog → Databases ([Glue](#aws-glue)). |
+| `glue`: Glue database * (`database`) | `sales_db` | The same page ([Glue](#aws-glue)). |
+| `glue`: Secret access key (hidden) * (`secret`, `--password-file`) | | The read-only key ([Glue](#aws-glue)). |
+| `none`: Folder path * (`path`) | `s3://sales-lake/orders/` or `abfss://lake@saleslake.dfs.core.windows.net/orders/` | The folder of Parquet files. |
+| `login=token`: Catalog token (hidden) * (`secret`, `--password-file`); for Unity "Databricks token" | | The catalog's token page ([Unity](#unity-catalog): step 6). |
+| `login=oauth`: Client ID * (`client_id`) and Client secret (hidden) * (`secret`, `--password-file`) | `exakit-reader` | The catalog's OAuth client. |
+| `files=s3`: AWS region * (`region`) | `eu-central-1` | S3 → Buckets ([Files on S3](#files-on-s3)). |
+| `files=s3` with a catalog: Access key ID * (`access_key_id`) | `AKIA...` | Your IAM key ([Files on S3](#files-on-s3)). |
+| `files=s3`: Secret access key (hidden) * (`storage_secret`, `--storage-secret-file`; with `catalog=none`, `--password-file`) | | Your IAM key ([Files on S3](#files-on-s3)). |
+| `files=azure`: Azure storage account * (`account_name`) | `saleslake` | Azure portal → Storage accounts ([Files on Azure](#files-on-azure-adls-gen2)). |
+| `files=azure`: Account key or SAS (hidden) * (`storage_secret`, `--storage-secret-file`; with `catalog=none`, `--password-file`) | | The account's Access keys, or a SAS ([Files on Azure](#files-on-azure-adls-gen2)). |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| `glue`: Access key ID (`access_key_id`) | read from the secret file, when it is the JSON `aws iam create-access-key` prints | `AKIA...` |
+| `glue`: Glue catalog ID (`catalog_id`) | this account's catalog | `123456789012` |
+| `login=oauth`: Token endpoint (`token_endpoint`) | Unity: `/oidc/v1/token` | `https://polaris.example.com/api/catalog/v1/oauth/tokens` |
+| `login=oauth`: Scope (`scope`) | none | `PRINCIPAL_ROLE:ALL` |
+| `files=vended`: AWS region (`region`) | none: the catalog's own | `us-east-2` |
+| `files=s3`: Endpoint (`endpoint`) | Amazon S3 | an S3-compatible store's URL |
+| `catalog=none`, `files=s3`: Access key ID (`access_key_id`) | read from the secret file, when it is the AWS credential JSON | `AKIA...` |
 
 ### Catalog login (`iceberg-rest` and `unity` only)
 
@@ -116,17 +146,7 @@ Pick one. A token and an OAuth client together are refused. Glue signs its
 requests with the AWS key, and `none` has no catalog, so neither asks for a
 login.
 
-### Files fields
-
-| `files` | Field | `--set` key | Example |
-|---|---|---|---|
-| `vended` | AWS region (only if the files are on S3) | `region` | `us-east-2` |
-| `s3` | AWS region * | `region` | `eu-central-1` |
-| | Access key ID * (optional with `catalog=none` when the secret file is the AWS credential JSON) | `access_key_id` | `AKIA...` |
-| | Secret access key (hidden) * | `storage_secret` (`--storage-secret-file`; with `catalog=none`, `--password-file`) | |
-| | Endpoint (S3-compatible store) | `endpoint` | empty for Amazon S3 |
-| `azure` | Azure storage account * | `account_name` | `saleslake` |
-| | Account key or SAS (hidden) * | `storage_secret` (`--storage-secret-file`; with `catalog=none`, `--password-file`) | |
+### Notes on the files fields
 
 - **Region with vended files.** Leave it empty on Azure. On S3, give the
   bucket's region when the catalog does not send one: Unity's vended
@@ -237,6 +257,67 @@ account and the key or SAS.
 has no GCS backend and refuses `gs://`. The S3 interoperability row above is a
 possible workaround, untested. When the adapter adds a storage or a catalog,
 the kit adds one choice to the menu, not a new connector.
+
+## Connection string you can paste
+
+```text
+https://polaris.example.com/api/catalog
+https://dbc-1234abcd-5678.cloud.databricks.com/api/2.1/unity-catalog/iceberg-rest
+https://dbc-1234abcd-5678.cloud.databricks.com
+arn:aws:glue:eu-central-1:123456789012:database/sales_db
+https://glue.eu-central-1.amazonaws.com
+s3://my-lake-bucket/sales/orders/
+abfss://lake@mystorageacct.dfs.core.windows.net/sales/orders/
+```
+
+| String | Catalog | Fills |
+|---|---|---|
+| `https://<catalog-host>[:port][/path]` | Iceberg REST | `catalog=iceberg-rest` and `catalog_url` |
+| `https://<workspace-host>/api/2.1/unity-catalog/iceberg-rest` | Iceberg REST (the Databricks Iceberg endpoint) | `catalog=iceberg-rest` and `catalog_url` |
+| `https://<workspace-host>` (`.databricks.com`, `.azuredatabricks.net`) | Unity Catalog | `catalog=unity` and `workspace_url` |
+| `arn:aws:glue:<region>:<account-id>:database/<name>` | AWS Glue | `catalog=glue`, `region` and `database` |
+| `https://glue.<region>.amazonaws.com` | AWS Glue | `catalog=glue` and `region` |
+| `s3://<bucket>/<prefix>/` | No catalog, files on S3 | `catalog=none` and `path` |
+| `abfss://<container>@<account>.dfs.core.windows.net/<prefix>/` | No catalog, files on ADLS Gen2 | `catalog=none` and `path` |
+
+The string fills the catalog and its address. [Two secrets](#two-secrets) says
+how the secrets are given.
+
+### Where to find the connection string
+
+You do not build most of them: copy the address your catalog or storage
+shows.
+
+- **Iceberg REST catalog** (Polaris, Snowflake Open Catalog, Lakekeeper,
+  Nessie, Gravitino): the catalog's console or docs name its REST base URL.
+  Copy it with its path.
+- **Databricks Iceberg endpoint:** your workspace host plus
+  `/api/2.1/unity-catalog/iceberg-rest`.
+- **Unity Catalog:** your browser's address bar when the workspace is open,
+  `https://` and the host only.
+- **AWS Glue:** no console page shows the ARN whole. Write
+  `arn:aws:glue:<region>:<account-id>:database/<database>` from the region, the
+  12-digit account ID and the database name (AWS Glue → Data Catalog →
+  Databases).
+- **A Parquet folder on S3:** S3 → Buckets → `<bucket>` → select the folder →
+  Copy S3 URI.
+- **A Parquet folder on ADLS Gen2:** write
+  `abfss://<container>@<account>.dfs.core.windows.net/<folder>/` from the
+  storage account and container names.
+
+Leave any token, key or SAS out of the string. The kit asks for each secret at
+a hidden prompt, or reads it from a file. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| catalog URL (host and path) | The catalog's console or docs ([Iceberg REST](#iceberg-rest-catalog)). |
+| workspace host | Your browser's address bar ([Unity](#unity-catalog)). |
+| Glue region and database | AWS Glue → Data Catalog → Databases ([Glue](#aws-glue)). |
+| account ID (Glue ARN) | The account menu, top right of the AWS console, or `aws sts get-caller-identity`. |
+| bucket and prefix | S3 → Buckets → `<bucket>` ([Files on S3](#files-on-s3)). |
+| container and storage account | Azure portal → Storage accounts → `<account>` → Containers ([Files on Azure](#files-on-azure-adls-gen2)). |
 
 ## Where to find each value
 
@@ -432,7 +513,7 @@ the kit never stores secrets, so a reauth gives all of them again:
 
 ## Common problems
 
-| Symptom | Fix |
+| Symptom or error text | Fix |
 |---|---|
 | kind `input`: the combination is not valid | The remedy names the `files` values for that catalog. Glue takes S3 only; no catalog takes `s3` or `azure`. |
 | Both a token and an OAuth client given | Pick `login=token` or `login=oauth`, not both. |

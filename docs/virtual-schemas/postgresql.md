@@ -3,27 +3,93 @@
 Self-hosted PostgreSQL, Amazon RDS or Aurora PostgreSQL, Azure Database for
 PostgreSQL. One source is one schema of one database.
 
-> **Easiest: let your AI agent do it.** The skill `exasol-vs-postgresql` knows this connector.
->
-> **You still need, on your computer:** `psql` (or any SQL client) as an admin of
-> the database, plus the AWS CLI (`aws configure`) for RDS/Aurora or the Azure
-> CLI (`az login`) for Azure.
->
-> **Prefer to do it by hand?** Follow the steps below.
+## The simplest way: ask your AI agent
+
+**Easiest: let your AI agent do it.** The kit installs the skill
+`exasol-vs-postgresql` for your AI client; it knows this connector.
+
+Copy this prompt, fill in the `<...>` parts, and give it to your agent:
+
+```text
+Connect the PostgreSQL schema <schema> of the database <database> on <host> to
+my local Exasol with exakit. Use the exasol-vs-postgresql skill. Create a
+read-only user for it, open the network for my IP, and get the CA certificate
+for TLS verify. Write the password to a file, never into the chat.
+```
+
+**You still need, on your computer:** `psql` (or any SQL client) as an admin of
+the database, plus the AWS CLI (`aws configure`) for RDS/Aurora or the Azure
+CLI (`az login`) for Azure.
+
+**Prefer to do it by hand?** Follow the steps below.
 
 ## What `exakit connect` asks for
 
-| Field | Required | Example |
+### Required
+
+| Field | Example | Where it comes from |
 |---|---|---|
-| Name (alias) for this connection | yes | `sales` |
-| Host name or address | yes | `mydb.abc123.eu-central-1.rds.amazonaws.com` |
-| Port | no (5432) | `5432` |
-| Database | yes | `sales` |
-| Schema | no (`public`) | `public` |
-| Reader account | yes | `exakit_reader` |
-| Password | yes | (hidden) |
-| TLS | no (`verify`) | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify` | `~/certs/eu-central-1-bundle.pem` |
+| Name (alias) for this connection | `sales` | You choose it. `sales` gives the schema `VS_SALES`. |
+| Host name or address | `mydb.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint or Azure server name ([step 1](#1-host-and-port)). |
+| Database | `sales` | RDS: Configuration → DB name ([step 2](#2-database-and-schema)). |
+| Reader account | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Password | (hidden) | That user's password. |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| Port | `5432` | `5432` |
+| Schema | `public` | `public` |
+| TLS | `verify` | `verify`, `require` or `disable` |
+| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
+
+## Connection string you can paste
+
+```text
+postgres://exakit_reader@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales?currentSchema=public&sslmode=verify-full
+jdbc:postgresql://mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
+mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
+mydb.abc123.eu-central-1.rds.amazonaws.com
+```
+
+| String | Fills |
+|---|---|
+| `postgres://user@host:port/db?currentSchema=...&sslmode=...` (or `postgresql://`) | host, port, database, user, schema and TLS |
+| `jdbc:postgresql://host:port/db` | host, port and database (and `user`, `currentSchema`, `sslmode` when given) |
+| `host:port/db` | host, port and database |
+| `host` | host |
+
+`sslmode` sets TLS: `verify-full` and `verify-ca` give `verify`, `require` and
+`prefer` give `require`, `disable` gives `disable`. A password in the string
+(`user:password@` or `password=`) is the credential: taken out of the string
+and not asked again.
+
+### Where to find the connection string
+
+You do not build it: copy the address your provider shows.
+
+- **RDS:** AWS Console → RDS → Databases → `<db>` → Connectivity & security →
+  Endpoint and Port. RDS shows the parts, not a whole string. Paste
+  `<endpoint>:5432/<database>`.
+- **Aurora:** the same tab, the **Reader** endpoint.
+- **Azure:** Azure Database for PostgreSQL flexible servers → `<server>` →
+  Overview → Server name. Paste `<server>.postgres.database.azure.com:5432/<database>`.
+- **A string from your team or an app config** (`postgres://...`,
+  `jdbc:postgresql://...`) works as it is.
+
+Leave the password out of the string. The kit asks for it at a hidden prompt, or reads it from `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| host | RDS: Connectivity & security → Endpoint. Azure: Overview → Server name ([step 1](#1-host-and-port)). |
+| port | RDS: Connectivity & security → Port. Default `5432`. |
+| database | RDS: Configuration → DB name, or `\l` in `psql` ([step 2](#2-database-and-schema)). |
+| `currentSchema` | `\dn` in `psql` ([step 2](#2-database-and-schema)). Default `public`. |
+| user | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| `sslmode` | Your choice. Leave it out for `verify`. |
 
 ## Where to find each value
 
@@ -131,21 +197,9 @@ a string that contains `&`. For a quoted name in `exakit sql`, pipe the
 statement in (`'SELECT "x" FROM VS_SALES.T' | exakit sql`) or use
 `exakit sql --file query.sql`.
 
-## Connection string you can paste
-
-```text
-postgres://exakit_reader@mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales?currentSchema=public&sslmode=verify-full
-mydb.abc123.eu-central-1.rds.amazonaws.com:5432/sales
-```
-
-The first fills host, port, database, schema, user and TLS; the second fills
-host, port and database. `jdbc:postgresql://...` works too. A password in the
-string (`user:password@` or `password=`) is the credential: taken out of the
-string and not asked again.
-
 ## Common problems
 
-| Symptom | Fix |
+| Symptom or error text | Fix |
 |---|---|
 | "connect timed out", "The connection attempt failed" | Allow your IP in the security group or firewall; on RDS, Publicly accessible = Yes. |
 | "PKIX path building failed", "trustAnchors parameter must be non-empty" | Give the CA with `--set ca=<pem>` (step 5). Do not switch to `require` to hide it. |
