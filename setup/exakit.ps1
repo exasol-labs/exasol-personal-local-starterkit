@@ -952,6 +952,72 @@ function Unregister-ExakitAutostart {
 # Same rule as Invoke-CmdAutostart: on means EVERY service is registered,
 # because a partly-registered set will not bring the kit back. Twin of the
 # loop in cmd_status (setup/exakit).
+# Get-ExakitOrphanAutostartEntries - every Startup entry the kit owns (by its
+# name prefix) that step 0a of the uninstall left behind, as {Id, Path}. Non-kit
+# entries never match: the prefix ends in a dot and the suffix is .cmd.
+function Get-ExakitOrphanAutostartEntries {
+    param([switch]$DryRun)
+    $dir = Get-ExakitStartupDir
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { return @() }
+    $prefix = (Get-ExakitAutostartPrefix) + "."
+    $known = @(Get-ExakitServiceIds)
+    $found = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter "$prefix*.cmd" -ErrorAction SilentlyContinue)) {
+        $name = $f.Name
+        if (-not $name.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not $name.EndsWith(".cmd", [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $id = $name.Substring($prefix.Length, $name.Length - $prefix.Length - 4)
+        if (-not $id) { continue }
+        # Step 0a already listed a registered service's entry in a dry run;
+        # anything it left behind in a real run is a leftover all the same.
+        if ($DryRun -and ($known -contains $id) -and (Test-ExakitAutostartRegistered -Id $id)) { continue }
+        $found += [pscustomobject]@{ Id = $id; Path = $f.FullName }
+    }
+    return $found
+}
+
+# Get-ExakitOrphanAutostartPids <id> <entry> - processes still running from an
+# orphaned entry. Only clearly the kit's: the command line names the entry
+# itself, or names both the kit's bin dir and the add-on id.
+function Get-ExakitOrphanAutostartPids {
+    param([string]$Id, [string]$Entry)
+    $ours = @()
+    foreach ($p in @(Get-ExakitProcessList)) {
+        $cmd = "" + $p.CommandLine
+        if (-not $cmd) { continue }
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        $byEntry = $Entry -and ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        $byTarget = $script:BinDir -and
+            ($cmd.IndexOf($script:BinDir, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -and
+            ($cmd.IndexOf($Id, [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        if ($byEntry -or $byTarget) { $ours += [int]$p.ProcessId }
+    }
+    return @($ours | Sort-Object -Unique)
+}
+
+# Invoke-ExakitUninstallOrphanAutostart - remove (or, in a dry run, list) every
+# orphaned kit Startup entry, and stop a process still running from one.
+# Twin of _exakit_uninstall_orphan_autostart.
+function Invoke-ExakitUninstallOrphanAutostart {
+    param([switch]$DryRun)
+    foreach ($o in @(Get-ExakitOrphanAutostartEntries -DryRun:$DryRun)) {
+        $pids = @(Get-ExakitOrphanAutostartPids -Id $o.Id -Entry $o.Path)
+        if ($DryRun) {
+            Info "  will remove: the leftover automatic-start entry for $($o.Id) ($($o.Path))"
+            if ($pids.Count -gt 0) { Info "  will stop: the leftover $($o.Id) process (pids $($pids -join ' '))" }
+            continue
+        }
+        Remove-Item -LiteralPath $o.Path -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $o.Path) { Warn2 "Could not remove the leftover automatic-start entry $($o.Path)" }
+        else { Ok "$($o.Id): leftover automatic-start entry removed" }
+        foreach ($procId in $pids) {
+            if (-not (Stop-ExakitPidQuiet -Id $procId)) {
+                Warn2 "A leftover $($o.Id) process (pid $procId) is still running; it stops at the next logout."
+            }
+        }
+    }
+}
+
 function Test-ExakitAutostartAll {
     $ids = @(Get-ExakitServiceIds)
     if ($ids.Count -eq 0) { return $false }
@@ -1707,6 +1773,12 @@ function Invoke-ExakitUninstallRun {
             else { Unregister-ExakitAutostart -Id $svcId }
         }
     }
+    # 0a') Orphaned boot entries: every Startup entry carrying the kit's
+    #      prefix, whatever the registry says. An add-on whose files or
+    #      manifest record were already gone is no longer a service id, so
+    #      the loop above never saw its entry, and it ran at every login,
+    #      pointing at a target that no longer exists.
+    Invoke-ExakitUninstallOrphanAutostart -DryRun:$DryRun
 
     # 0b) Kit-managed marketplace add-ons that live OUTSIDE the kit home (the
     #    VS Code extension). Registry-driven: a new add-on ships its own

@@ -199,6 +199,13 @@ info_step(){ printf 'INFO %s\n' "\$*"; }; error(){ printf 'ERROR %s\n' "\$*"; }
 die(){ printf 'DIE %s\n' "\$*"; exit 1; }
 ui_spin_begin(){ :; }; ui_spin_end(){ :; }; ui_tilde(){ printf '%s' "\$1"; }
 _exakit_log_file(){ :; }
+# Boot-entry dirs in the sandbox, the prefix read from common.sh itself, and
+# the supervisors stubbed: nothing reaches the real launchd or systemd.
+EXAKIT_LAUNCHAGENT_DIR="$SBHOME/Library/LaunchAgents"
+EXAKIT_SYSTEMD_USER_DIR="$SBHOME/.config/systemd/user"
+$(grep '^EXAKIT_AUTOSTART_PREFIX=' "$ROOT/setup/lib/common.sh")
+launchctl(){ printf 'LAUNCHCTL %s\n' "\$*" >> "$TMP/supervisor"; }
+systemctl(){ printf 'SYSTEMCTL %s\n' "\$*" >> "$TMP/supervisor"; }
 manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || echo personal ;; *) echo "" ;; esac; }
 exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
@@ -212,7 +219,7 @@ for _fn in personal_launcher_cache_dir personal_other_deployments personal_pruna
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/runtime-personal.sh")"
 done
 eval "\$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
-for _fn in _exakit_uninstall_leftover_report exakit_uninstall_run; do
+for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_orphan_autostart exakit_uninstall_run; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
@@ -281,6 +288,40 @@ out="$(STUB_TD_RC=1 env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
 check    "h5: a failed teardown keeps the cache" "kept" "$(gone "$CACHE")"
 check    "h5: and the deployments folder" "kept" "$(gone "$SBHOME/.exasol/personal/deployments")"
 rm -rf "$SBHOME/.exasol" "$CACHE"
+
+# --- orphaned boot entries: swept by the kit prefix, whatever the registry says
+echo
+echo "exakit_uninstall_run sweeps orphaned kit boot entries:"
+LA="$SBHOME/Library/LaunchAgents"; SD="$SBHOME/.config/systemd/user"
+seed_entries() {
+    rm -rf "$LA" "$SD" "$TMP/supervisor"; mkdir -p "$LA" "$SD"
+    : > "$LA/com.exasol.exakit.dash-server.plist"
+    : > "$SD/com.exasol.exakit.exasol-scheduler.service"
+    : > "$LA/com.example.other.plist"
+    : > "$LA/com.exasol.exakitfoo.plist"
+    : > "$SD/other.service"
+}
+# (o1) dry run lists the orphans, removes nothing, never names a foreign entry.
+seed_entries
+out="$(STUB_DRY=1 bash "$TMP/run.sh" 2>&1)"
+contains "o1: dry run lists the orphaned LaunchAgent" "will remove: the leftover automatic-start entry for dash-server ($LA/com.exasol.exakit.dash-server.plist)" "$out"
+contains "o1: dry run lists the orphaned unit" "will remove: the leftover automatic-start entry for exasol-scheduler" "$out"
+lacks    "o1: a foreign LaunchAgent is not listed" "com.example.other" "$out"
+lacks    "o1: nor a near-miss prefix" "exakitfoo" "$out"
+check    "o1: dry run keeps the orphan" "kept" "$(gone "$LA/com.exasol.exakit.dash-server.plist")"
+lacks    "o1: dry run calls no supervisor" "LAUNCHCTL" "$(cat "$TMP/supervisor" 2>/dev/null)"
+# (o2) the real run unloads and removes the orphans, leaves foreign ones.
+seed_deploy
+out="$(bash "$TMP/run.sh" 2>&1)"
+check    "o2: the orphaned LaunchAgent is gone" "gone" "$(gone "$LA/com.exasol.exakit.dash-server.plist")"
+check    "o2: the orphaned unit is gone" "gone" "$(gone "$SD/com.exasol.exakit.exasol-scheduler.service")"
+contains "o2: launchd is told first" "LAUNCHCTL unload $LA/com.exasol.exakit.dash-server.plist" "$(cat "$TMP/supervisor" 2>/dev/null)"
+contains "o2: systemd disables and stops it" "SYSTEMCTL --user disable --now com.exasol.exakit.exasol-scheduler.service" "$(cat "$TMP/supervisor" 2>/dev/null)"
+contains "o2: the removal is recorded" "dash-server: leftover automatic-start entry removed" "$out"
+check    "o2: a foreign LaunchAgent stays" "kept" "$(gone "$LA/com.example.other.plist")"
+check    "o2: a near-miss prefix stays" "kept" "$(gone "$LA/com.exasol.exakitfoo.plist")"
+check    "o2: a foreign unit stays" "kept" "$(gone "$SD/other.service")"
+rm -rf "$LA" "$SD" "$SBHOME/.exasol"
 
 # --- cmd_uninstall --yes: the final word and the exit code ---------------
 echo

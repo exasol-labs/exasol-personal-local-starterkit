@@ -12345,6 +12345,56 @@ _exakit_autostart_unregister() {
     return 0
 }
 
+# _exakit_uninstall_orphan_autostart <dry> — remove (or, with dry=1, list)
+# every boot entry the kit owns by its name prefix that step 0a left behind.
+# Uninstall unregisters by id, so an add-on that had already lost
+# its files or manifest record kept its LaunchAgent / unit for good. Only
+# "$EXAKIT_AUTOSTART_PREFIX.<id>.plist|.service" matches: the prefix ends in a
+# dot, so nothing that merely starts with the same letters is touched. Twin of
+# Invoke-ExakitUninstallOrphanAutostart.
+_exakit_uninstall_orphan_autostart() {
+    _uoa_dry="${1:-0}"
+    _uoa_known=" $(exakit_service_ids 2>/dev/null | tr '\n' ' ') "
+    for _uoa_f in "$EXAKIT_LAUNCHAGENT_DIR/$EXAKIT_AUTOSTART_PREFIX".*.plist \
+                  "$EXAKIT_SYSTEMD_USER_DIR/$EXAKIT_AUTOSTART_PREFIX".*.service; do
+        [ -f "$_uoa_f" ] || continue
+        _uoa_name="${_uoa_f##*/}"
+        case "$_uoa_name" in
+            *.plist)   _uoa_label="${_uoa_name%.plist}" ;;
+            *.service) _uoa_label="${_uoa_name%.service}" ;;
+            *) continue ;;
+        esac
+        _uoa_id="${_uoa_label#"$EXAKIT_AUTOSTART_PREFIX".}"
+        [ -n "$_uoa_id" ] && [ "$_uoa_id" != "$_uoa_label" ] || continue
+        if [ "$_uoa_dry" = "1" ]; then
+            # Step 0a already listed a registered service's entry.
+            case "$_uoa_known" in
+                *" $_uoa_id "*) _exakit_autostart_registered "$_uoa_id" 2>/dev/null && continue ;;
+            esac
+            info "  will remove: the leftover automatic-start entry for $_uoa_id ($_uoa_f)"
+            continue
+        fi
+        case "$_uoa_name" in
+            *.plist)
+                launchctl unload "$_uoa_f" >/dev/null 2>&1
+                rm -f "$_uoa_f"
+                ;;
+            *.service)
+                if command -v systemctl >/dev/null 2>&1; then
+                    systemctl --user disable --now "$_uoa_name" >/dev/null 2>&1
+                fi
+                rm -f "$_uoa_f"
+                command -v systemctl >/dev/null 2>&1 && systemctl --user daemon-reload >/dev/null 2>&1
+                ;;
+        esac
+        if [ -e "$_uoa_f" ]; then
+            warn "Could not remove the leftover automatic-start entry $_uoa_f"
+        else
+            ok "$_uoa_id: leftover automatic-start entry removed"
+        fi
+    done
+    return 0
+}
 
 # _exakit_autostart_registered <id> — is a boot entry in place?
 _exakit_autostart_registered() {
@@ -12874,6 +12924,11 @@ exakit_uninstall_run() {
             fi
         done
     fi
+    # 0a') Orphaned boot entries: every LaunchAgent / systemd user unit
+    #      carrying the kit's prefix, whatever the registry says. An add-on
+    #      whose files or manifest record were already gone is no longer a
+    #      service id, so the loop above never saw its entry.
+    _exakit_uninstall_orphan_autostart "$_dry"
 
     # 0b) Kit-managed marketplace add-ons that live OUTSIDE the kit home (the
     #    VS Code extension). Anything under the kit home or the bin dir is

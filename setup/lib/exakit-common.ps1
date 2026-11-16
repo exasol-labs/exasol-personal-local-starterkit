@@ -6378,9 +6378,14 @@ function Get-ExakitActualTarget {
     return $Component
 }
 
+# The name prefix of every Startup entry the kit writes - the twin of
+# EXAKIT_AUTOSTART_PREFIX in common.sh. The uninstall sweep finds orphaned
+# entries by it, so it is defined once, here.
+function Get-ExakitAutostartPrefix { return "com.exasol.exakit" }
+
 function Get-ExakitAutostartEntryPath {
     param([Parameter(Mandatory)][string]$Id)
-    return (Join-Path (Get-ExakitStartupDir) "com.exasol.exakit.$Id.cmd")
+    return (Join-Path (Get-ExakitStartupDir) "$(Get-ExakitAutostartPrefix).$Id.cmd")
 }
 
 # Get-ExakitComponentAvailable - the version this kit would install NOW, under the
