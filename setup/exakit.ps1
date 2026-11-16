@@ -1715,6 +1715,64 @@ function Write-ExakitUninstallLeftoverReport {
     }
 }
 
+# Invoke-ExakitUninstallKitImages -DryRun - the container images the database
+# used. Twin of _exakit_uninstall_kit_images in common.sh.
+#
+# The launcher deploys the database into Docker or Podman, and the engine keeps
+# what it pulled: exasol/nano (~800 MB) and exasol/mcp-server (~400 MB) were
+# still on a Windows machine after a full uninstall, and nothing on screen said
+# so. Only those two repositories are ever touched (podman spells them
+# docker.io/exasol/...), every tag of them including <none>, and `rmi` runs
+# WITHOUT -f: an image a container still uses stays, with the one command that
+# removes it later. Every engine call is bounded, so a hung engine cannot stall
+# the uninstall.
+function Invoke-ExakitUninstallKitImages {
+    param([switch]$DryRun)
+    $kitRepos = @("exasol/nano", "exasol/mcp-server")
+    $anyEngine = $false
+    foreach ($engineName in @("docker", "podman")) {
+        $engine = Get-Command $engineName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $engine) { continue }
+        $anyEngine = $true
+        $list = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
+            -Arguments @("images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}")
+        if ($null -eq $list) {
+            Info "Could not ask $engineName for the kit's container images (is it running?); check later with: $engineName images exasol/nano; $engineName images exasol/mcp-server"
+            continue
+        }
+        $gone = @()
+        foreach ($line in (("" + $list) -split "`r?`n")) {
+            $parts = $line.Trim() -split '\|'
+            if ($parts.Count -lt 3) { continue }
+            $repo = $parts[0]
+            if ($repo.StartsWith("docker.io/")) { $repo = $repo.Substring(10) }
+            if ($kitRepos -notcontains $repo) { continue }
+            $tag = $parts[1]
+            $size = ""
+            if ($parts.Count -ge 4) { $size = $parts[3] }
+            $name = "${repo}:$tag"
+            # A dangling image has no tag to name it by; its id is the handle.
+            $ref = $name
+            if ((-not $tag) -or ($tag -eq "<none>")) { $ref = $parts[2] }
+            if ($DryRun) {
+                $sizeNote = ""
+                if ($size) { $sizeNote = " ($size)" }
+                Info "  will remove: $engineName image $name$sizeNote"
+                continue
+            }
+            $rmi = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 60 -Arguments @("rmi", $ref)
+            if ($null -ne $rmi) { $gone += $name }
+            else { Info "kept image ${name}: still used by a container; remove later with: $engineName rmi $ref" }
+        }
+        if ((-not $DryRun) -and $gone.Count -gt 0) {
+            OkStep "Container images removed ($engineName): $($gone -join ', ')"
+        }
+    }
+    if (-not $anyEngine) {
+        Info "Neither docker nor podman is on PATH, so the kit's container images (exasol/nano, exasol/mcp-server) were not checked."
+    }
+}
+
 function Invoke-ExakitUninstallRun {
     param([switch]$DryRun)
     # Set when the database survived the teardown; the caller must not print
@@ -1855,6 +1913,12 @@ function Invoke-ExakitUninstallRun {
         $script:PersonalTeardownLeftovers = @("the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)")
         $script:PersonalTeardownRemedy = "Remove-Item -Recurse -Force '" + ($script:PersonalDeployDir -replace "'", "''") + "'"
     }
+
+    # 1c) The container images the deployment ran from, once its containers
+    #     are gone (a full uninstall only; removing just the database keeps
+    #     them, so a re-install does not pull them again). Twin of step 1c in
+    #     exakit_uninstall_run.
+    if ($type -eq "personal") { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
 
     # 2) Managed MCP configuration in the AI clients. Best-effort.
     if (Get-Command Invoke-McpOperation -ErrorAction SilentlyContinue) {

@@ -78,6 +78,10 @@ function Remove-Personal { $script:markers.database = $true }
 # The launcher cache and state folders: nothing to remove here (their own
 # cases live in uninstall-leftovers-ps.ps1).
 function Get-PersonalLauncherLeftovers { [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() } }
+# The container-image step asks docker/podman through the bounded runner: a stub
+# that runs nothing, so no real engine is ever asked or touched (its own cases
+# live in tests/uninstall-leftovers-ps.ps1).
+function Invoke-ExakitBounded { param([string]$FilePath, [string[]]$Arguments = @(), [string]$ArgumentString = "", [int]$TimeoutSeconds = 8) return "" }
 function Invoke-McpOperation { param($Operation, $InputArgs) $script:markers.mcp = $Operation; return $true }
 # The real helper defers deletion to a detached process (so cmd.exe does not
 # choke on exakit.cmd being removed mid-run); here we delete synchronously so

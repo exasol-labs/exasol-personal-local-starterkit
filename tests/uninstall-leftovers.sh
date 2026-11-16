@@ -206,6 +206,12 @@ EXAKIT_SYSTEMD_USER_DIR="$SBHOME/.config/systemd/user"
 $(grep '^EXAKIT_AUTOSTART_PREFIX=' "$ROOT/setup/lib/common.sh")
 launchctl(){ printf 'LAUNCHCTL %s\n' "\$*" >> "$TMP/supervisor"; }
 systemctl(){ printf 'SYSTEMCTL %s\n' "\$*" >> "$TMP/supervisor"; }
+# The engines: only the stubs in STUB_ENG_DIR are on PATH (no real docker or
+# podman lives in /usr/bin or /bin), and the bounded runner just runs them.
+PATH="\${STUB_ENG_DIR:-$TMP/eng}:/usr/bin:/bin"; export PATH
+detect_os(){ printf '%s' "\${STUB_OS:-macos}"; }
+exakit_run_bounded(){ shift; "\$@"; }
+$(grep '^EXAKIT_KIT_IMAGE_REPOS=' "$ROOT/setup/lib/common.sh")
 manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || echo personal ;; *) echo "" ;; esac; }
 exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
@@ -219,7 +225,7 @@ for _fn in personal_launcher_cache_dir personal_other_deployments personal_pruna
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/runtime-personal.sh")"
 done
 eval "\$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
-for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_orphan_autostart exakit_uninstall_run; do
+for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_orphan_autostart _exakit_uninstall_kit_images exakit_uninstall_run; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
@@ -322,6 +328,74 @@ check    "o2: a foreign LaunchAgent stays" "kept" "$(gone "$LA/com.example.other
 check    "o2: a near-miss prefix stays" "kept" "$(gone "$LA/com.exasol.exakitfoo.plist")"
 check    "o2: a foreign unit stays" "kept" "$(gone "$SD/other.service")"
 rm -rf "$LA" "$SD" "$SBHOME/.exasol"
+
+# --- the container images the deployment ran from ------------------------
+echo
+echo "exakit_uninstall_run removes the kit's container images, and only those:"
+# Stub engines: `images` prints STUB_<ENGINE>_IMAGES (repo|tag|id|size rows),
+# `rmi` records its arguments and fails for a ref named in STUB_RMI_FAIL.
+mkdir -p "$TMP/eng" "$TMP/noeng"
+for _e in docker podman; do
+    _uc="$(printf '%s' "$_e" | tr a-z A-Z)"
+    cat > "$TMP/eng/$_e" <<STUB
+#!/bin/sh
+printf '$_e %s\n' "\$*" >> "$TMP/engcalls"
+case "\$1" in
+    images) printf '%s\n' "\${STUB_${_uc}_IMAGES:-}"; exit "\${STUB_${_uc}_RC:-0}" ;;
+    rmi) case " \${STUB_RMI_FAIL:-} " in *" \$2 "*) echo "conflict: image is being used by running container abc" >&2; exit 1 ;; esac ;;
+esac
+exit 0
+STUB
+    chmod +x "$TMP/eng/$_e"
+done
+DOCKER_IMGS="$(printf '%s\n' 'exasol/nano|2026.2.0-nano.8|aaa111|812MB' 'exasol/mcp-server|<none>|bbb222|426MB' 'exasol/nanoX|1|ccc333|1MB' 'library/postgres|16|ddd444|400MB' 'someone/exasol/nano|1|eee555|1MB')"
+PODMAN_IMGS='docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
+# (i1) dry run: the kit's images listed with engine and size, nothing removed.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
+contains "i1: dry run lists exasol/nano" "will remove: docker image exasol/nano:2026.2.0-nano.8 (812MB)" "$out"
+contains "i1: dry run lists the untagged mcp-server" "will remove: docker image exasol/mcp-server:<none> (426MB)" "$out"
+contains "i1: dry run lists podman's copy" "will remove: podman image exasol/nano:2026.2.0-nano.8 (812MB)" "$out"
+lacks    "i1: a foreign image is not listed" "postgres" "$out"
+lacks    "i1: nor a near-miss repository" "nanoX" "$out"
+lacks    "i1: nor one that only ends in exasol/nano" "someone/" "$out"
+lacks    "i1: dry run runs no rmi" "rmi" "$(cat "$TMP/engcalls" 2>/dev/null)"
+# (i2) real run: rmi without -f for each kit image, never for a foreign one.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
+calls="$(cat "$TMP/engcalls" 2>/dev/null)"
+contains "i2: exasol/nano removed by name" "docker rmi exasol/nano:2026.2.0-nano.8" "$calls"
+contains "i2: the untagged image removed by id" "docker rmi bbb222" "$calls"
+contains "i2: podman's copy removed" "podman rmi exasol/nano:2026.2.0-nano.8" "$calls"
+lacks    "i2: never with -f" "rmi -f" "$calls"
+lacks    "i2: never --force" "--force" "$calls"
+lacks    "i2: a foreign image is untouched" "ddd444" "$calls"
+lacks    "i2: by name either" "postgres" "$calls"
+lacks    "i2: a near-miss repository is untouched" "ccc333" "$calls"
+lacks    "i2: an image ending in exasol/nano is untouched" "eee555" "$calls"
+contains "i2: the removal is recorded" "Container images removed (docker): exasol/nano:2026.2.0-nano.8, exasol/mcp-server:<none>" "$out"
+contains "i2: and the run answers 0" "RC=0" "$out"
+# (i3) rmi refused (a container still uses it): kept, one hint, exit unchanged.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
+contains "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: still used by a container; remove later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
+contains "i3: the other image still goes" "Container images removed (docker): exasol/mcp-server:<none>" "$out"
+contains "i3: and the run still answers 0" "RC=0" "$out"
+# (i4) the engine does not answer: one hint, exit unchanged.
+seed_deploy
+out="$(STUB_OS=linux STUB_DOCKER_RC=1 bash "$TMP/run.sh" 2>&1)"
+contains "i4: an engine that does not answer gets a hint" "Could not ask docker for the kit's container images" "$out"
+contains "i4: and the run still answers 0" "RC=0" "$out"
+# (i5) no engine at all: one hint, exit unchanged.
+seed_deploy
+out="$(STUB_OS=linux STUB_ENG_DIR="$TMP/noeng" bash "$TMP/run.sh" 2>&1)"
+contains "i5: no engine gets a hint" "Neither docker nor podman is on PATH" "$out"
+contains "i5: and the run still answers 0" "RC=0" "$out"
+# (i6) macOS: the database lives in the launcher's VM; the host engine is left alone.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=macos STUB_DOCKER_IMAGES="$DOCKER_IMGS" bash "$TMP/run.sh" 2>&1)"
+check    "i6: macOS asks no engine" "" "$(cat "$TMP/engcalls" 2>/dev/null)"
+rm -rf "$SBHOME/.exasol"
 
 # --- cmd_uninstall --yes: the final word and the exit code ---------------
 echo
