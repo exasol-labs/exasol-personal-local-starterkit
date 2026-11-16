@@ -257,6 +257,59 @@ $left = @($doc.permissions.allow) + @($doc.permissions.deny)
 Check "only the user's rules are left" "Bash(git status:*)|Bash(exakit-other mcp-validate:*)|Bash(rm -rf:*)" ($left -join '|')
 Check "the rest of the file is kept" "keep-me" $doc.model
 
+# --- the exakit.cmd shim cleans itself up once its target is gone ----------
+# Uninstall deletes the shim from a detached process after it exits. When that
+# process is killed with the console's job, or the delete fails, the shim used
+# to survive the kit home and fail with powershell's "-File parameter does not
+# exist". The shim now checks its target and removes itself.
+Write-Host ""
+Write-Host "exakit.cmd self-cleaning shim"
+$cErr = $null; $cTok = $null
+$cAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$cTok, [ref]$cErr)
+foreach ($name in @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim", "Test-ExakitCmdShimCurrent")) {
+    $def = $cAst.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
+    if (-not $def) { throw "$name not found in exakit-common.ps1" }
+    Invoke-Expression $def.Extent.Text
+}
+$shimBin = Join-Path $sandbox "shimbin"
+$savedBin = $script:BinDir
+$script:BinDir = $shimBin
+$missing = Join-Path $sandbox "gone\kit\setup\exakit.ps1"
+$shim = Get-ExakitCmdShimContent -PsTarget $missing
+Check "shim: checks its target exists" "True" ($shim.Contains("if exist `"$missing`" goto run"))
+Check "shim: says it is a leftover" "True" ($shim.Contains("exakit was uninstalled - this leftover launcher (%~f0) removes itself now."))
+Check "shim: self-deletes after leaving the batch context" "True" ($shim.Contains("(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"))
+Check "shim: still runs the target" "True" ($shim.Contains("powershell -NoProfile -ExecutionPolicy Bypass -File `"$missing`" %*"))
+Check "shim: pure ASCII" "True" (-not ($shim -match '[^\x00-\x7F]'))
+New-Item -ItemType Directory -Force -Path $shimBin | Out-Null
+# The previous format: no target check. An install or update must rewrite it.
+[System.IO.File]::WriteAllText((Join-Path $shimBin "exakit.cmd"),
+    "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$missing`" %*`r`n",
+    [System.Text.Encoding]::ASCII)
+Check "shim: an old-format shim is not current" "False" (Test-ExakitCmdShimCurrent -PsTarget $missing)
+$shimPath = Set-ExakitCmdShim -PsTarget $missing
+Check "shim: the rewritten shim is current" "True" (Test-ExakitCmdShimCurrent -PsTarget $missing)
+$cmdExe = Get-Command cmd.exe -ErrorAction SilentlyContinue
+if ($cmdExe) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $out = & cmd.exe /d /c "`"$shimPath`" version" 2>&1 | Out-String -Width 4096
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    Check "shim (cmd.exe): prints the leftover message" "True" ($out -match 'exakit was uninstalled - this leftover launcher')
+    Check "shim (cmd.exe): no -File error" "False" ($out -match 'does not exist')
+    Check "shim (cmd.exe): exits non-zero" "True" ($code -ne 0)
+    Check "shim (cmd.exe): deleted itself" "False" (Test-Path -LiteralPath $shimPath)
+} else {
+    Write-Host "  skip shim (cmd.exe): not on Windows"
+}
+$script:BinDir = $savedBin
+$cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "uninstall: says the commands go as the window closes" "True" ($cliText.Contains('as this window closes: '))
+Check "uninstall: deferred cleaner starts outside the job (Win32_Process Create)" "True" ($cliText -match 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create')
+
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "PASS=$($script:PASS) FAIL=$($script:FAIL)"
