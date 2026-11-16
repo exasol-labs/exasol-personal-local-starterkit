@@ -89,6 +89,10 @@ function Remove-ExakitBinariesDeferred { param([string[]]$Paths) foreach ($f in 
 function Get-ExakitServiceIds { @("database") }
 function Test-ExakitAutostartRegistered { param([string]$Id) $true }
 function Unregister-ExakitAutostart { param([string]$Id) $script:markers.autostart = $Id }
+# The orphan sweep reads the Startup folder: a sandbox path with nothing in
+# it, never the real one (its own cases live in uninstall-leftovers-ps.ps1).
+function Get-ExakitStartupDir { return (Join-Path $sandbox "Startup") }
+function Get-ExakitAutostartPrefix { return "com.exasol.exakit" }
 # No add-ons in the sandbox: their removal has its own suite
 # (tests/uninstall-addons-only.sh) and dragging the registry in here would make
 # this test depend on which add-ons happen to be registered.

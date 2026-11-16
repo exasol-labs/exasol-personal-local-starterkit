@@ -54,6 +54,10 @@ foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/lib/runtime-personal.p
     "Remove-Personal", "Find-PersonalTeardownLeftovers", "Test-PersonalNamesCarryId", "Get-PersonalDeploymentId",
     "Get-PersonalLauncherCacheDir", "Get-PersonalOtherDeployments", "Get-PersonalPrunableStateDirs",
     "Get-PersonalLauncherLeftovers"))) { Invoke-Expression $t }
+# The Startup-entry naming lives in the shared layer: the real functions, so
+# the sweep is tested against the prefix the kit actually writes.
+foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/lib/exakit-common.ps1") @(
+    "Get-ExakitStartupDir", "Get-ExakitAutostartPrefix", "Get-ExakitAutostartEntryPath"))) { Invoke-Expression $t }
 foreach ($need in @("Remove-Personal", "Invoke-ExakitUninstallRun", "Invoke-CmdUninstall")) {
     if (-not (Get-Command $need -ErrorAction SilentlyContinue)) { throw "$need not found" }
 }
@@ -116,7 +120,12 @@ function Invoke-McpOperation { param($Operation, $InputArgs) return $true }
 function Start-ExakitSpinner { param([string]$Label) }
 function Stop-ExakitSpinner { }
 # Never the machine's processes: a real list would stop the open AI client's MCP server.
-function Get-ExakitProcessList { return @() }
+$script:fakeProcs = @()
+$script:stopped = @()
+function Get-ExakitProcessList { return @($script:fakeProcs) }
+function Stop-ExakitPidQuiet { param([int]$Id) $script:stopped += $Id; return $true }
+# The Startup folder is a sandbox directory, never the real one.
+$env:EXAKIT_STARTUP_DIR = Join-Path $fakeHome "Startup"
 function Remove-ExakitBinariesDeferred { param([string[]]$Paths) foreach ($f in $Paths) { Remove-Item -Force -ErrorAction SilentlyContinue $f } }
 # The launcher. STUB_INFO_OK / STUB_DESTROY_RC / STUB_DESTROY_REMOVES as in the
 # bash suite.
@@ -282,6 +291,43 @@ Invoke-ExakitUninstallRun
 Check "h5: a failed teardown keeps the cache" "True" (Test-Path $cache)
 Check "h5: and the deployments folder" "True" (Test-Path $deplRoot)
 Reset-Exa; if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
+
+Write-Host ""
+Write-Host "Invoke-ExakitUninstallRun sweeps orphaned kit Startup entries:"
+$startup = $env:EXAKIT_STARTUP_DIR
+$orphan = Join-Path $startup "com.exasol.exakit.dash-server.cmd"
+$foreign = Join-Path $startup "OneDrive.cmd"
+$nearMiss = Join-Path $startup "com.exasol.exakitfoo.cmd"
+function Seed-Startup {
+    if (Test-Path $startup) { Remove-Item -Recurse -Force $startup }
+    New-Item -ItemType Directory -Force -Path $startup | Out-Null
+    foreach ($f in @($orphan, $foreign, $nearMiss)) { Set-Content -Path $f -Value "@echo off" }
+    $target = Join-Path $script:BinDir "dash-server.cmd"
+    $script:fakeProcs = @(
+        [pscustomobject]@{ ProcessId = 4711; ParentProcessId = 1; CommandLine = "cmd.exe /c `"$target`" --port 8000" },
+        [pscustomobject]@{ ProcessId = 4712; ParentProcessId = 1; CommandLine = "cmd.exe /c C:\other\dash-server.cmd" },
+        [pscustomobject]@{ ProcessId = 4713; ParentProcessId = 1; CommandLine = "notepad.exe" })
+    $script:stopped = @()
+}
+# (o1) dry run lists the orphan and its process, removes and stops nothing.
+Seed-Kit; Seed-Deploy; Seed-Startup; $env:STUB_DESTROY_REMOVES = "1"
+Invoke-ExakitUninstallRun -DryRun
+Has   "o1: dry run lists the orphaned entry" "will remove: the leftover automatic-start entry for dash-server ($orphan)" $script:out
+Has   "o1: and the process still running from it" "will stop: the leftover dash-server process (pids 4711)" $script:out
+Lacks "o1: a foreign entry is not listed" "OneDrive" $script:out
+Lacks "o1: nor a near-miss prefix" "exakitfoo" $script:out
+Check "o1: dry run keeps the orphan" "True" (Test-Path $orphan)
+Check "o1: dry run stops nothing" "0" (@($script:stopped).Count)
+# (o2) the real run removes it and stops only the kit's process.
+Seed-Kit; Seed-Deploy; Seed-Startup
+Invoke-ExakitUninstallRun
+Check "o2: the orphaned entry is gone" "False" (Test-Path $orphan)
+Has   "o2: the removal is recorded" "dash-server: leftover automatic-start entry removed" $script:out
+Check "o2: only the kit's process is stopped" "4711" (@($script:stopped) -join " ")
+Check "o2: a foreign entry stays" "True" (Test-Path $foreign)
+Check "o2: a near-miss prefix stays" "True" (Test-Path $nearMiss)
+$script:fakeProcs = @(); $script:stopped = @()
+if (Test-Path $startup) { Remove-Item -Recurse -Force $startup }
 
 Write-Host ""
 Write-Host "Invoke-CmdUninstall -Yes only says complete when it is:"
