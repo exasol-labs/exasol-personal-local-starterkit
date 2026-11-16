@@ -14,6 +14,7 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $script:PASS = 0
 $script:FAIL = 0
+$script:SKIP = 0
 function Check($label, $expected, $actual) {
     if ("$expected" -eq "$actual") { $script:PASS++; Write-Host "  ok   $label = $actual" }
     else { $script:FAIL++; Write-Host "  FAIL $($label): expected $expected, got $actual" }
@@ -169,6 +170,44 @@ Check "an open port that never completes a handshake does not answer" $false (Te
 $listener.Stop()
 Check "a closed port does not answer" $false (Test-PersonalTlsAnswers)
 $script:PersonalProbeTimeout = $savedProbeTimeout
+
+# THE SUCCESS CASE, against a real TLS server. The bash twin once read every
+# good handshake as "not answering" (an external tool's exit code under
+# pipefail), and only negative cases were pinned, so nothing noticed: the
+# installer then waited out its budget and redeployed over a running database.
+# A throwaway self-signed certificate, as Exasol's own is. Skipped, not failed,
+# where openssl is not on PATH (Windows runners may lack it).
+$openssl = Get-Command openssl -ErrorAction SilentlyContinue
+if (-not $openssl) {
+    $script:SKIP++
+    Write-Host "  skip a completed TLS handshake answers (openssl not on PATH)"
+} else {
+    $tlsDir = Join-Path $work "tls"
+    New-Item -ItemType Directory -Force -Path $tlsDir | Out-Null
+    $key = Join-Path $tlsDir "key.pem"
+    $crt = Join-Path $tlsDir "cert.pem"
+    $free = New-Object System.Net.Sockets.TcpListener([System.Net.IPAddress]::Loopback, 0)
+    $free.Start()
+    $tlsPort = ([System.Net.IPEndPoint]$free.LocalEndpoint).Port
+    $free.Stop()
+    $server = $null
+    try {
+        $null = & $openssl.Source req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=localhost" -keyout $key -out $crt 2>&1
+        $emptyIn = Join-Path $tlsDir "stdin.txt"
+        Set-Content -Path $emptyIn -Value "" -Encoding Ascii
+        $server = Start-Process -FilePath $openssl.Source -PassThru -NoNewWindow `
+            -ArgumentList ('s_server -accept ' + $tlsPort + ' -www -cert "' + $crt + '" -key "' + $key + '"') `
+            -RedirectStandardInput $emptyIn `
+            -RedirectStandardOutput (Join-Path $tlsDir "out.log") -RedirectStandardError (Join-Path $tlsDir "err.log")
+        $deadline = [DateTime]::UtcNow.AddSeconds(10)
+        while (-not (Test-ExakitPortInUse -Port $tlsPort) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 200 }
+        Set-Content -Path (Join-Path $probeDir "deployment.json") -Value ('{"connection": {"host": "127.0.0.1", "dbPort": ' + $tlsPort + ', "username": "sys"}}')
+        $script:PersonalDeployDir = $probeDir
+        Check "a completed TLS handshake answers" $true (Test-PersonalTlsAnswers)
+    } finally {
+        if ($server -and -not $server.HasExited) { try { $server.Kill() } catch { } }
+    }
+}
 $script:PersonalDeployDir = Join-Path $work "absent"
 
 Write-Host "the launcher's word outranks the port, and ownership is proven before a database is adopted:"
@@ -219,5 +258,5 @@ Check "...and names WSL when something does" $true ($hint -like "*inside WSL*")
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
-Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"
+Write-Host "passed: $($script:PASS), failed: $($script:FAIL), skipped: $($script:SKIP)"
 if ($script:FAIL -gt 0) { exit 1 }
