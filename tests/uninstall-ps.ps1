@@ -78,6 +78,7 @@ function Remove-Personal { $script:markers.database = $true }
 # The launcher cache and state folders: nothing to remove here (their own
 # cases live in uninstall-leftovers-ps.ps1).
 function Get-PersonalLauncherLeftovers { [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() } }
+function Get-PersonalOtherDeployments { @() }
 # The container-image step asks docker/podman through the bounded runner: a stub
 # that runs nothing, so no real engine is ever asked or touched (its own cases
 # live in tests/uninstall-leftovers-ps.ps1).
