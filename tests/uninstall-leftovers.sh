@@ -203,17 +203,20 @@ manifest_get(){ case "\$1" in runtime.type) [ "\${STUB_NO_TYPE:-0}" = 1 ] || ech
 exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
 personal_teardown(){
-    if [ "\${STUB_TD_RC:-0}" = 0 ]; then EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi
+    if [ "\${STUB_TD_RC:-0}" = 0 ]; then rm -rf "$DEPLOY"; EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi
     EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $DEPLOY"
     EXAKIT_TEARDOWN_REMEDY="rm -rf '$DEPLOY'"
     return 1
 }
+for _fn in personal_launcher_cache_dir personal_other_deployments personal_prunable_state_dirs; do
+    eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/runtime-personal.sh")"
+done
 eval "\$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 for _fn in _exakit_uninstall_leftover_report exakit_uninstall_run; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
-exakit_uninstall_run 0
+exakit_uninstall_run "\${STUB_DRY:-0}"
 printf 'RC=%s\n' "\$?"
 HARNESS
 
@@ -234,6 +237,50 @@ contains "and the directory is named with its remedy" "rm -rf '$DEPLOY'" "$out"
 rm -rf "$DEPLOY"
 out="$(STUB_NO_TYPE=1 bash "$TMP/run.sh" 2>&1)"
 contains "no runtime recorded + nothing on disk: still 0" "RC=0" "$out"
+
+# --- the launcher's download cache and its empty state folders -----------
+echo
+echo "exakit_uninstall_run removes the launcher cache and the empty state folders:"
+CACHE="$SBHOME/Library/Caches/.exasol"
+[ "$(uname -s)" = Darwin ] || CACHE="$SBHOME/.cache/.exasol"
+seed_cache() { rm -rf "$CACHE"; mkdir -p "$CACHE/personal/runtime-artifacts/artifacts/exasol-nano-image"; head -c 2097152 /dev/zero > "$CACHE/personal/runtime-artifacts/artifacts/exasol-nano-image/img"; }
+gone() { [ -e "$1" ] && echo kept || echo gone; }
+# (h1) dry run: the cache (with its size) and every folder that goes are listed,
+# and nothing is removed.
+rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache
+out="$(STUB_DRY=1 env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+contains "h1: dry run lists the launcher cache" "will remove: Exasol launcher download cache $CACHE (" "$out"
+contains "h1: dry run lists the deployments folder" "will remove: empty launcher folder $SBHOME/.exasol/personal/deployments" "$out"
+contains "h1: dry run lists ~/.exasol" "will remove: empty launcher folder $SBHOME/.exasol" "$out"
+check    "h1: dry run keeps the cache" "kept" "$(gone "$CACHE")"
+check    "h1: dry run keeps the deployment" "kept" "$(gone "$DEPLOY")"
+# (h2) the real run removes the cache and the folders it listed.
+out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+contains "h2: the cache removal is recorded" "Launcher download cache removed: $CACHE" "$out"
+check    "h2: the cache is gone" "gone" "$(gone "$CACHE")"
+check    "h2: its parent cache folder stays" "kept" "$(gone "$(dirname "$CACHE")")"
+check    "h2: ~/.exasol is gone" "gone" "$(gone "$SBHOME/.exasol")"
+contains "h2: and the run answers 0" "RC=0" "$out"
+# (h3) another deployment beside the kit's: cache and folders stay.
+rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache
+mkdir -p "$SBHOME/.exasol/personal/deployments/other"
+out="$(STUB_DRY=1 env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+lacks    "h3: dry run does not list the shared cache" "launcher download cache" "$out"
+lacks    "h3: nor any launcher folder" "empty launcher folder" "$out"
+out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h3: the cache stays" "kept" "$(gone "$CACHE")"
+check    "h3: the sibling deployment stays" "kept" "$(gone "$SBHOME/.exasol/personal/deployments/other")"
+# (h4) a file beside personal/ keeps ~/.exasol but not the empty folders below.
+rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache; : > "$SBHOME/.exasol/notes"
+out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h4: ~/.exasol/personal is gone" "gone" "$(gone "$SBHOME/.exasol/personal")"
+check    "h4: ~/.exasol with a file in it stays" "kept" "$(gone "$SBHOME/.exasol/notes")"
+# (h5) a teardown that left the deployment: nothing beside it is touched.
+rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache
+out="$(STUB_TD_RC=1 env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h5: a failed teardown keeps the cache" "kept" "$(gone "$CACHE")"
+check    "h5: and the deployments folder" "kept" "$(gone "$SBHOME/.exasol/personal/deployments")"
+rm -rf "$SBHOME/.exasol" "$CACHE"
 
 # --- cmd_uninstall --yes: the final word and the exit code ---------------
 echo

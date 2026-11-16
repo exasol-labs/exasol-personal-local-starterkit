@@ -2057,6 +2057,78 @@ function Find-PersonalTeardownLeftovers {
     $script:PersonalTeardownRemedy = ($steps -join "; ")
 }
 
+# Get-PersonalLauncherCacheDir - the launcher's download cache (the Nano image,
+# the runner, the presets; around 500 MB). The launcher is a Go binary and
+# keeps it at os.UserCacheDir()\.exasol, which on Windows is
+# %LOCALAPPDATA%\.exasol. Empty when LOCALAPPDATA is not set (Go fails there
+# too, so there is no cache to name). Twin of personal_launcher_cache_dir.
+function Get-PersonalLauncherCacheDir {
+    if (-not $env:LOCALAPPDATA) { return "" }
+    return (Join-Path $env:LOCALAPPDATA ".exasol")
+}
+
+# Get-PersonalOtherDeployments - every entry in the launcher's deployments
+# directory other than the kit's own deployment. Anything there keeps the
+# shared cache and the state directories in place. Twin of
+# personal_other_deployments.
+function Get-PersonalOtherDeployments {
+    $parent = Split-Path -Parent $script:PersonalDeployDir
+    if (-not $parent -or -not (Test-Path -LiteralPath $parent -PathType Container)) { return @() }
+    $self = [System.IO.Path]::GetFullPath($script:PersonalDeployDir).TrimEnd('\', '/')
+    $others = @()
+    foreach ($e in @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)) {
+        if ($e.FullName.TrimEnd('\', '/') -ne $self) { $others += $e.FullName }
+    }
+    return $others
+}
+
+# Get-PersonalPrunableStateDirs - the launcher's state directories
+# (deployments, personal, .exasol, bottom-up) that are empty once the kit's
+# deployment is gone. The same answer before the destroy (what a dry run
+# lists) and after it (what is removed). Twin of personal_prunable_state_dirs.
+function Get-PersonalPrunableStateDirs {
+    $out = @()
+    $child = [System.IO.Path]::GetFullPath($script:PersonalDeployDir).TrimEnd('\', '/')
+    $dir = Split-Path -Parent $child
+    foreach ($name in @("deployments", "personal", ".exasol")) {
+        if (-not $dir -or (Split-Path -Leaf $dir) -ne $name) { break }
+        $item = Get-Item -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+        if (-not $item -or -not $item.PSIsContainer) { break }
+        if ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) { break }
+        $foreign = $false
+        foreach ($e in @(Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue)) {
+            if ($e.FullName.TrimEnd('\', '/') -ne $child) { $foreign = $true; break }
+        }
+        if ($foreign) { break }
+        $out += $dir
+        $child = $dir
+        $dir = Split-Path -Parent $dir
+    }
+    return $out
+}
+
+# Get-PersonalLauncherLeftovers - what a full uninstall removes beside the
+# deployment: the launcher's download cache (Cache, with its size in
+# CacheSize) and the state directories that are empty once the deployment is
+# gone (Dirs, bottom-up). Nothing at all while another deployment shares them.
+function Get-PersonalLauncherLeftovers {
+    $plan = [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() }
+    if (@(Get-PersonalOtherDeployments).Count -gt 0) { return $plan }
+    $cache = Get-PersonalLauncherCacheDir
+    if ($cache) {
+        $item = Get-Item -LiteralPath $cache -Force -ErrorAction SilentlyContinue
+        if ($item -and $item.PSIsContainer -and -not ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            $plan.Cache = $cache
+            $bytes = 0
+            foreach ($f in @(Get-ChildItem -LiteralPath $cache -Recurse -Force -File -ErrorAction SilentlyContinue)) { $bytes += $f.Length }
+            if ($bytes -ge 1GB) { $plan.CacheSize = "{0:N1} GB" -f ($bytes / 1GB) }
+            else { $plan.CacheSize = "{0:N0} MB" -f ($bytes / 1MB) }
+        }
+    }
+    $plan.Dirs = @(Get-PersonalPrunableStateDirs)
+    return $plan
+}
+
 # Update-Personal - bring the kit-managed launcher to the advertised version and
 # leave the record telling the truth about the deployment's state afterwards.
 # The update prompt upstream of this call explains the one-time guest rebuild;

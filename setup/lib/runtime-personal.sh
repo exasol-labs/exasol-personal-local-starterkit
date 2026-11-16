@@ -3097,6 +3097,56 @@ personal_teardown_leftovers() {
     [ -z "$EXAKIT_TEARDOWN_LEFTOVERS" ]
 }
 
+# personal_launcher_cache_dir — the launcher's download cache (the Nano image,
+# the runner, the presets; around 500 MB). The launcher is a Go binary and
+# keeps it at os.UserCacheDir()/.exasol: ~/Library/Caches/.exasol on macOS,
+# $XDG_CACHE_HOME/.exasol (only when absolute, as Go requires) or
+# ~/.cache/.exasol elsewhere. Twin of Get-PersonalLauncherCacheDir.
+personal_launcher_cache_dir() {
+    [ -n "${HOME:-}" ] || return 1
+    case "$(uname -s 2>/dev/null)" in
+        Darwin) printf '%s\n' "$HOME/Library/Caches/.exasol" ;;
+        *)  case "${XDG_CACHE_HOME:-}" in
+                /*) printf '%s\n' "$XDG_CACHE_HOME/.exasol" ;;
+                *)  printf '%s\n' "$HOME/.cache/.exasol" ;;
+            esac ;;
+    esac
+}
+
+# personal_other_deployments — every entry in the launcher's deployments
+# directory other than the kit's own deployment, one per line. Anything there
+# (another deployment, or a file nobody can vouch for) keeps the shared cache
+# and the state directories in place.
+personal_other_deployments() {
+    _pod_parent="$(dirname "$EXAKIT_PERSONAL_DEPLOY_DIR")"
+    [ -d "$_pod_parent" ] || return 0
+    for _pod_e in "$_pod_parent"/* "$_pod_parent"/.[!.]* "$_pod_parent"/..?*; do
+        [ -e "$_pod_e" ] || [ -L "$_pod_e" ] || continue
+        [ "$_pod_e" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && continue
+        printf '%s\n' "$_pod_e"
+    done
+}
+
+# personal_prunable_state_dirs — the launcher's state directories
+# (deployments, personal, .exasol, bottom-up) that are empty once the kit's
+# deployment is gone, one per line. The same answer before the destroy (what a
+# dry run lists) and after it (what is removed). Removal is rmdir only.
+personal_prunable_state_dirs() {
+    _pp_child="$EXAKIT_PERSONAL_DEPLOY_DIR"
+    _pp_d="$(dirname "$_pp_child")"
+    for _pp_name in deployments personal .exasol; do
+        [ "$(basename "$_pp_d")" = "$_pp_name" ] || return 0
+        [ -d "$_pp_d" ] && [ ! -L "$_pp_d" ] || return 0
+        for _pp_e in "$_pp_d"/* "$_pp_d"/.[!.]* "$_pp_d"/..?*; do
+            [ -e "$_pp_e" ] || [ -L "$_pp_e" ] || continue
+            [ "$_pp_e" = "$_pp_child" ] || return 0
+        done
+        printf '%s\n' "$_pp_d"
+        _pp_child="$_pp_d"
+        _pp_d="$(dirname "$_pp_d")"
+    done
+}
+
 personal_upgrade_plan() {
     _current="$1"
     _latest="$2"
