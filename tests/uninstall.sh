@@ -314,15 +314,15 @@ check "and says so" "1" "$(printf '%s\n' "$_p" | grep -c '^OK Stopped .*4999991'
 # --- the closing hints: restart the clients, and uv's cache ----------------
 echo
 echo "uninstall ends with the restart advice and the uv cache hint:"
-_hints() { # _hints <PATH>
-    SANDBOX="$SANDBOX" ROOT="$ROOT" P="$1" bash <<'HINTS'
+_hints() { # _hints <PATH> [dry]
+    SANDBOX="$SANDBOX" ROOT="$ROOT" P="$1" D="${2:-0}" bash <<'HINTS'
 set -u
 HOME="$SANDBOX/hint-home"; EXAKIT_BIN_DIR="$HOME/.local/bin"
 mkdir -p "$EXAKIT_BIN_DIR"; printf '#!/bin/sh\n' > "$EXAKIT_BIN_DIR/uv"; chmod +x "$EXAKIT_BIN_DIR/uv"
 info(){ printf 'INFO %s\n' "$*"; }
 eval "$(awk '/^_exakit_uninstall_closing_hints\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 PATH="$P"
-_exakit_uninstall_closing_hints
+_exakit_uninstall_closing_hints "$D"
 HINTS
 }
 _h="$(_hints "/usr/bin:/bin" 2>&1)"
@@ -331,8 +331,11 @@ check "uv not on PATH: the kit's uv is named" "1" "$(printf '%s\n' "$_h" | grep 
 mkdir -p "$SANDBOX/uvbin"; printf '#!/bin/sh\n' > "$SANDBOX/uvbin/uv"; chmod +x "$SANDBOX/uvbin/uv"
 _h="$(_hints "$SANDBOX/uvbin:/usr/bin:/bin" 2>&1)"
 check "uv on PATH: the bare command" "1" "$(printf '%s\n' "$_h" | grep -cF 'with: uv cache clean exasol-mcp-server')"
+# A dry run says nothing: --yes runs the plan first, so hints there printed twice.
+_h="$(_hints "$SANDBOX/uvbin:/usr/bin:/bin" 1 2>&1)"
+check "dry run: no hints" "0" "$(printf '%s\n' "$_h" | grep -c 'Restart any AI client\|cache clean exasol-mcp-server')"
 # Wired into the engine, after the spinner, on both sides.
-check "the engine prints the hints" "1" "$(grep -c '_exakit_uninstall_closing_hints$' "$ROOT/setup/lib/common.sh")"
+check "the engine prints the hints (dry-aware)" "1" "$(grep -c '_exakit_uninstall_closing_hints "\$_dry"$' "$ROOT/setup/lib/common.sh")"
 check "the engine stops the processes" "1" "$(grep -c '_exakit_uninstall_mcp_processes "\$_dry"$' "$ROOT/setup/lib/common.sh")"
 
 echo

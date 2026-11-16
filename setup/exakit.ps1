@@ -2052,7 +2052,7 @@ function Invoke-ExakitUninstallRun {
         Stop-ExakitSpinner
         $script:ExakitQuietDetail = $unPrevQuiet
     }
-    Write-ExakitUninstallClosingHints
+    Write-ExakitUninstallClosingHints -DryRun:$DryRun
     # Said last, and said plainly, because it is the one thing the reader cannot
     # find out afterwards: the logfile that held the per-path detail lived inside
     # the kit home this run has just deleted, so the lines above are the only
@@ -2137,8 +2137,11 @@ function Invoke-ExakitUninstallMcpProcesses {
 # Write-ExakitUninstallClosingHints - what uninstall leaves on purpose: open AI
 # clients still hold the removed MCP entry, and uv keeps the MCP server package
 # in its own cache, which is uv's to clean. Twin of
-# _exakit_uninstall_closing_hints.
+# _exakit_uninstall_closing_hints. Silent on a dry run: they are advice for
+# after a real removal, the same on both sides.
 function Write-ExakitUninstallClosingHints {
+    param([switch]$DryRun)
+    if ($DryRun) { return }
     $uv = "uv"
     if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
         $kitUv = Join-Path $script:BinDir "uv.exe"
