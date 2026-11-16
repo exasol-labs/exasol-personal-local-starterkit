@@ -158,7 +158,10 @@ function Invoke-ExakitBounded {
         if ((" " + $env:STUB_RMI_FAIL + " ").Contains(" " + $Arguments[1] + " ")) { return $null }
         return "Untagged"
     }
-    if ($eng -eq "docker") { return $env:STUB_DOCKER_PS }
+    if ($eng -eq "docker") {
+        if ($env:STUB_DOCKER_PS_FAIL -eq "1") { return $null }
+        return $env:STUB_DOCKER_PS
+    }
     return ""
 }
 $script:engCalls = @()
@@ -231,6 +234,23 @@ Has   "g: the remedy removes it" "docker rm -f exa-test1-db-1" ("" + $script:Per
 Lacks "g: an unrelated container is not named" "somebody-else" (Left)
 Lacks "g: nor one that merely starts with the id" "exa-test10" (Left)
 $env:STUB_DOCKER_PS = ""
+
+# (g2) the engine hangs or refuses: a warning with the check command, never a
+# leftover - the run still succeeds, and the uninstall says it under the
+# "Database removed" line.
+Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"; $env:STUB_DOCKER_PS_FAIL = "1"
+Remove-Personal
+Check "g2: an engine that does not answer is not a leftover" "" (Left)
+Has   "g2: but it is a warning with the check command" "could not check docker for the deployment's container (no answer within 15s, or it refused); check with: docker ps -a --filter name=exa-test1" (@($script:PersonalTeardownWarnings) -join "; ")
+Seed-Kit; Seed-Deploy
+Invoke-ExakitUninstallRun
+Has   "g2: the uninstall still says Database removed" "Database removed" $script:out
+Has   "g2: and warns under it" "WARN could not check docker for the deployment's container" $script:out
+Check "g2: the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+$env:STUB_DOCKER_PS_FAIL = ""
+Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
+Remove-Personal
+Check "g2: an engine that answers gives no warning" "0" (@($script:PersonalTeardownWarnings).Count)
 
 Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
 Remove-Personal

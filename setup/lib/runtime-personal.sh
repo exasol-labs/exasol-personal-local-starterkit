@@ -3168,10 +3168,29 @@ personal_teardown_leftovers() {
             _ptl_kill="${_ptl_kill:+$_ptl_kill }$_ptl_pid"
         done
     fi
+    # An engine that hangs or refuses (the user is not in the docker group)
+    # answered nothing here, so "Database removed" showed over a container that
+    # was still there. Its failure is now a warning with the command to check
+    # by hand - a warning, not a leftover: it alone never fails the run.
+    EXAKIT_TEARDOWN_WARNINGS=""
     if [ -n "$_ptl_id" ] && personal_engine_platform; then
         for _ptl_eng in docker podman; do
             command -v "$_ptl_eng" >/dev/null 2>&1 || continue
-            for _ptl_name in $(exakit_run_bounded "${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}" "$_ptl_eng" ps -a --format '{{.Names}}' 2>/dev/null | \
+            _ptl_errf="$(mktemp "${TMPDIR:-/tmp}/exakit-ptl.XXXXXX" 2>/dev/null || true)"
+            _ptl_list="$(exakit_run_bounded "${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}" "$_ptl_eng" ps -a --format '{{.Names}}' 2>"${_ptl_errf:-/dev/null}")"
+            _ptl_rc=$?
+            if [ "$_ptl_rc" != 0 ]; then
+                if [ "$_ptl_rc" = 124 ] || [ "$_ptl_rc" = 137 ]; then
+                    _ptl_why="no answer within ${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}s"
+                else
+                    _ptl_why="$(sed -n '/./{p;q;}' "${_ptl_errf:-/dev/null}" 2>/dev/null | cut -c1-160)"
+                    [ -n "$_ptl_why" ] || _ptl_why="exit $_ptl_rc"
+                fi
+                EXAKIT_TEARDOWN_WARNINGS="${EXAKIT_TEARDOWN_WARNINGS:+$EXAKIT_TEARDOWN_WARNINGS
+}could not check $_ptl_eng for the deployment's container ($_ptl_why); check with: $_ptl_eng ps -a --filter name=$_ptl_id"
+            fi
+            [ -n "$_ptl_errf" ] && rm -f "$_ptl_errf"
+            for _ptl_name in $(printf '%s\n' "$_ptl_list" | \
                     awk -v id="$_ptl_id" '
                         { n = $0; sub(/\r$/, "", n); li = length(id); ln = length(n); f = 0 }
                         n == id { f = 1 }
