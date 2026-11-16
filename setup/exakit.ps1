@@ -4129,11 +4129,6 @@ function Invoke-CmdSql {
     exit 0
 }
 
-# Stop-ExakitBadOption <message> - refuse an unknown option as BAD INPUT: exit 2,
-# the code AGENTS.md documents and the bash twin returns. These arms used Fail,
-# which exits 1 and records a failure note, so an agent reading the exit code
-# saw a broken kit where there was only a typo. Same output as
-# Assert-ExakitKnownOptions.
 # Test-ExakitMcpDoctorFailedRecordAnswers - true when the launcher records the
 # deployment as deployment_failed, yet its database answers the probe AND the
 # port is provably held by this deployment's own runner. mcp-doctor then checks
@@ -4153,6 +4148,11 @@ function Test-ExakitMcpDoctorFailedRecordAnswers([string]$RuntimeType) {
     return [bool](Test-PersonalDbAnswers)
 }
 
+# Stop-ExakitBadOption <message> - refuse an unknown option as BAD INPUT: exit 2,
+# the code AGENTS.md documents and the bash twin returns. These arms used Fail,
+# which exits 1 and records a failure note, so an agent reading the exit code
+# saw a broken kit where there was only a typo. Same output as
+# Assert-ExakitKnownOptions.
 function Stop-ExakitBadOption([string]$Msg) {
     # Delegates rather than duplicating. This function and Deny-ExakitInput
     # were written independently for the same defect - a bad option answered
