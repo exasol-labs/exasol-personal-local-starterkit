@@ -5591,12 +5591,21 @@ _exakit_addon_table_build() {
     # other one is listed unticked; no persona, or "all": every add-on ticked.
     _atb_pre="$(printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
     [ "$_atb_pre" = all ] && _atb_pre=""
-    printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
+    # EXAKIT_ADDON_TABLE_NO_GROUP: no "Select All" row and no tree - the install's
+    # table, where two rows install on their own and the rest are single picks.
+    _atb_flat=0
+    [ "${EXAKIT_ADDON_TABLE_NO_GROUP:-0}" = 1 ] && _atb_flat=1
     # Via a newline-separated STRING, one line per row, so a row that is not an
     # add-on is an EMPTY line rather than a gap a space-separated list would
     # close up — the row number is the index, and it has to stay one.
-    EXAKIT_ADDON_TABLE_IDS="
+    if [ "$_atb_flat" = 1 ]; then
+        _atb_row=0
+        EXAKIT_ADDON_TABLE_IDS=""
+    else
+        printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
+        EXAKIT_ADDON_TABLE_IDS="
 "
+    fi
     # How many unpickable rows follow, counted BEFORE the loop: the corner
     # connector belongs to the last row of the tree, and when a disabled row
     # comes after the installable ones the corner is not the last installable.
@@ -5611,7 +5620,9 @@ EXAKIT_ATB_COUNT
     _atb_i=0
     for _atb_id in "$@"; do
         _atb_i=$(( _atb_i + 1 ))
-        if [ "$_atb_i" -eq "$_atb_n" ] && [ "$_atb_dn" -eq 0 ]; then
+        if [ "$_atb_flat" = 1 ]; then
+            _atb_kind=plain
+        elif [ "$_atb_i" -eq "$_atb_n" ] && [ "$_atb_dn" -eq 0 ]; then
             _atb_kind=corner
         else
             _atb_kind=tee
@@ -5687,7 +5698,8 @@ EXAKIT_ATB_KIDS
     while IFS='|' read -r _atb_did _atb_dwhy _atb_dver; do
         [ -n "$_atb_did" ] || continue
         _atb_d=$(( _atb_d + 1 ))
-        if [ "$_atb_d" -eq "$_atb_dn" ]; then _atb_dkind=corner; else _atb_dkind=tee; fi
+        if [ "$_atb_flat" = 1 ]; then _atb_dkind=plain
+        elif [ "$_atb_d" -eq "$_atb_dn" ]; then _atb_dkind=corner; else _atb_dkind=tee; fi
         # The state word goes to BOTH the status cell (field 10) and the
         # Description column (field 12): the selection screen has Description
         # and no Status, the install screen has Status and no Description, and
@@ -5702,7 +5714,7 @@ EXAKIT_ATB_DISABLED
     printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
     EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
-    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 ))
+    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 - _atb_flat ))
     EXAKIT_TABLE_EXCLUSIVE="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # "all": the parent is a master toggle, checked only while EVERY child is.
     # Under the default "any" it stayed checked with one child ticked, so the
@@ -5710,12 +5722,13 @@ EXAKIT_ATB_DISABLED
     # user glances at to confirm what is about to be installed. Its range takes
     # in the add-ons' own child rows, so Select All means every row.
     EXAKIT_TABLE_GROUP="${_atb_inner}1:2:$(( _atb_n + _atb_kids + 1 )):all"
+    [ "$_atb_flat" = 1 ] && EXAKIT_TABLE_GROUP="$_atb_inner"
     # The group AND every add-on pre-selected, so Enter alone installs what is
     # on offer and Skip is the explicit opt-out. Mirrors exakit_data_load_select.
     # A child row its add-on starts unticked (a choice recorded earlier) leaves
     # Select All unticked too, which is what "all" means.
     EXAKIT_TABLE_DEFAULTS="$_atb_kdefaults"
-    [ "$_atb_allticked" = 1 ] && EXAKIT_TABLE_DEFAULTS="1${EXAKIT_TABLE_DEFAULTS:+,$EXAKIT_TABLE_DEFAULTS}"
+    [ "$_atb_allticked" = 1 ] && [ "$_atb_flat" = 0 ] && EXAKIT_TABLE_DEFAULTS="1${EXAKIT_TABLE_DEFAULTS:+,$EXAKIT_TABLE_DEFAULTS}"
     # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
     [ -n "$EXAKIT_TABLE_DEFAULTS" ] || EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # Every row here can be checked, and saying so is not optional:
@@ -6219,7 +6232,9 @@ EXAKIT_MM_COVERED
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # The help command supplies details beyond the table.
     [ "${UI_TABLE_AUTO:-0}" = 1 ] || [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] || info "Details on any add-on: exakit help <id>"
+    [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ] && EXAKIT_ADDON_TABLE_NO_GROUP=1
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
+    EXAKIT_ADDON_TABLE_NO_GROUP=0
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
     UI_TABLE_COL1="Add-on"
@@ -6250,6 +6265,8 @@ EXAKIT_MM_COVERED
             EXAKIT_ADDON_TABLE_KEEP=1 _exakit_marketplace_apply_python "$EXAKIT_MARKETPLACE_AUTO_FIRST" || true
             _mm_auto_notes="${EXAKIT_ADDON_TABLE_NOTES:-}"
             EXAKIT_ADDON_TABLE_NOTES=""
+            # Their activity line goes with them: the question has no blank line in it.
+            rm -f "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
             _mm_auto_done=1
             UI_TABLE_MENU_ONSCREEN="${UI_TABLE_LINES:-0}"
             EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
@@ -6598,6 +6615,8 @@ _exakit_marketplace_apply_python() {
     _mpa_root="$(_exakit_marketplace_root)"
     _mpa_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-apply.XXXXXX")" || return 1
     mkfifo "$_mpa_dir/events" || { rm -rf "$_mpa_dir"; return 1; }
+    # The activity line comes back for an install (it went after the install's own two).
+    [ -z "${EXAKIT_ADDON_TABLE_STATE:-}" ] || [ -e "$EXAKIT_ADDON_TABLE_STATE.activity" ] || : > "$EXAKIT_ADDON_TABLE_STATE.activity"
     EXAKIT_ADDON_TABLE_LIVE=0
     if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
         ui_table_begin "$EXAKIT_ADDON_TABLE_STATE" && EXAKIT_ADDON_TABLE_LIVE=1

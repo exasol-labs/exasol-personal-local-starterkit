@@ -3026,6 +3026,9 @@ exakit_bundled_datasets() {
         _bdr_order="$(_exakit_dataset_conf_get order "$_bdr_conf")"
         _bdr_schema="$(_exakit_dataset_conf_get schema "$_bdr_conf")"
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
+        # Not part of this release (hidden=yes): its folder stays, but it is not
+        # offered, listed or loaded - asked for by name, it is an unknown id.
+        case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
         # A dataset that will be downloaded says how big the download is, in
         # every list that offers it ("... - 3.9 MB download").
         _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"
@@ -3463,9 +3466,23 @@ exakit_dataset_loaded() {
 
 # exakit_pending_datasets — "id|label" lines for bundled datasets that are NOT
 # loaded yet. Drives the dynamic data menus: loaded datasets are not offered.
+# exakit_hidden_datasets — the ids whose dataset.conf hides them (hidden=yes):
+# kept in the kit and loaded when named, never offered. One per line.
+exakit_hidden_datasets() {
+    _hd_root="$(exakit_repo_root 2>/dev/null)" || return 0
+    for _hd_conf in "$_hd_root"/data/datasets/*/dataset.conf; do
+        [ -f "$_hd_conf" ] || continue
+        case "$(_exakit_dataset_conf_get hidden "$_hd_conf")" in
+            yes|true|1) _exakit_dataset_conf_get id "$_hd_conf" ;;
+        esac
+    done
+}
+
 exakit_pending_datasets() {
+    _pd_hidden=" $(exakit_hidden_datasets | tr '\n' ' ') "
     exakit_bundled_datasets | while IFS='|' read -r _bd_id _bd_label _bd_flag _bd_markers _bd_schema; do
         [ -n "$_bd_id" ] || continue
+        case "$_pd_hidden" in *" $_bd_id "*) continue ;; esac     # kept, not offered
         exakit_dataset_loaded "$_bd_flag" "$_bd_markers" "$_bd_schema" "$_bd_id" \
             || printf '%s|%s\n' "$_bd_id" "$_bd_label"
     done
@@ -3998,6 +4015,8 @@ exakit_data_samples_select() {
     # the names their width here.
     UI_TABLE_COL2=" "
     [ "${EXAKIT_TABLE_HAS_DESC:-0}" = 1 ] && UI_TABLE_COL2="Description"
+    # The install's compact table has no descriptions: no blank column either, so the names keep their width.
+    [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] && UI_TABLE_COL2=""
     [ "${UI_TABLE_MENU_ONSCREEN:-0}" != 0 ] || printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
     UI_TABLE_COL2=""

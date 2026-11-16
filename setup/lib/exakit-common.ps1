@@ -6942,8 +6942,14 @@ function Show-ExakitMarketplaceMenu {
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     $script:ExakitAddonTable.Activity = ""
-    [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
-    [void]$addonIds.Add("")
+    # The install's table (EXAKIT_MARKETPLACE_AUTO_FIRST): no "Select All" row and
+    # no tree - two rows install on their own and the rest are single picks.
+    # Twin of EXAKIT_ADDON_TABLE_NO_GROUP in _exakit_addon_table_build.
+    $flat = [bool]($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1")
+    if (-not $flat) {
+        [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
+        [void]$addonIds.Add("")
+    }
     $addonCount = $selectable.Count
     $coveredCount = $covered.Count
     # The defaults and the inner group specs the child rows add as they are
@@ -6962,7 +6968,8 @@ function Show-ExakitMarketplaceMenu {
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
         # after the installable ones, the last installable one is a tee.
-        if ($i -eq ($addonCount - 1) -and $coveredCount -eq 0) { $kind = "corner" } else { $kind = "tee" }
+        if ($flat) { $kind = "plain" }
+        elseif ($i -eq ($addonCount - 1) -and $coveredCount -eq 0) { $kind = "corner" } else { $kind = "tee" }
         # One line, whatever the About says: the column truncates, and a folded
         # cell would make the row two lines tall - which is the frame-height
         # invariant the redraw depends on.
@@ -6986,7 +6993,8 @@ function Show-ExakitMarketplaceMenu {
         $innerGroups += ("{0}:{1}:{2}:claim" -f $parentRow, ($parentRow + 1), ($parentRow + $kids.Count))
     }
     for ($i = 0; $i -lt $coveredCount; $i++) {
-        if ($i -eq ($coveredCount - 1)) { $kind = "corner" } else { $kind = "tee" }
+        if ($flat) { $kind = "plain" }
+        elseif ($i -eq ($coveredCount - 1)) { $kind = "corner" } else { $kind = "tee" }
         # The state word goes to Description (the selection screen) AND to the
         # disabled note (the Status cell on the install screen), so the row says
         # the same thing on either.
@@ -6998,6 +7006,7 @@ function Show-ExakitMarketplaceMenu {
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
     $rowSkip = $addonCount + $kidCount + $coveredCount + 2
+    if ($flat) { $rowSkip = $rowSkip - 1 }
     $script:ExakitAddonTableIds = $addonIds.ToArray()
     # Default: the group AND every available add-on pre-selected - the same
     # posture as the data-load menu, where Enter alone acts on what is on offer
@@ -7010,7 +7019,8 @@ function Show-ExakitMarketplaceMenu {
     # in the add-ons' own child rows, so Select All means every row - and a
     # child row its add-on starts unticked (a choice recorded earlier) leaves
     # Select All unticked too, which is what "all" means.
-    if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
+    # Without the group row, row 1 is an add-on: the group's own default goes.
+    if (-not $allTicked -or $flat) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
     # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
     if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
     # THE INSTALL'S ADD-ONS TABLE (EXAKIT_MARKETPLACE_AUTO_FIRST): every add-on on
@@ -7035,15 +7045,21 @@ function Show-ExakitMarketplaceMenu {
             }
             $autoNotes = @($script:ExakitAddonTableNotes)
             $script:ExakitAddonTableNotes = @()
+            # Their activity line goes with them: the question has no blank line in it.
+            [void]$script:ExakitAddonTable.Remove("Activity")
             $autoDone = $true
             $onScreen = [int]$script:ExakitAddonTable.Lines + 1
             $defaults = @($rowSkip)
         }
     }
+    $groupParent = 1
+    $groupFirst = 2
+    $groupLast = $addonCount + $kidCount + 1
+    if ($flat) { $groupParent = 0; $groupFirst = 0; $groupLast = 0 }
     try {
         $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
-            -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
-            -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all" -OnScreen $onScreen)
+            -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent $groupParent `
+            -GroupFirst $groupFirst -GroupLast $groupLast -GroupMode "all" -OnScreen $onScreen)
     } finally {
         $script:UiTableNoBox = @()
     }

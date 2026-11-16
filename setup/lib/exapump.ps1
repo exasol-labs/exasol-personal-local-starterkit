@@ -2960,6 +2960,9 @@ function Get-ExakitBundledDatasets {
                 if ($line -match '^([a-z_]+)=(.*)$') { $kv[$Matches[1]] = $Matches[2] }
             }
             if (-not $kv.id -or -not $kv.label) { continue }
+            # Not part of this release (hidden=yes): its folder stays, but it is not
+            # offered, listed or loaded. Twin of the same skip in exakit_bundled_datasets.
+            if (("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
             # A dataset that will be downloaded says how big the download is, in
             # every list that offers it ("... - 3.9 MB download").
             $label = $kv.label
@@ -2970,7 +2973,8 @@ function Get-ExakitBundledDatasets {
             $schema = if ($kv.schema) { $kv.schema } else { $kv.id.ToUpper() }
             $order = 50
             if ($kv.order -match '^[0-9]+$') { $order = [int]$kv.order }
-            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order
+            $hidden = ("" + $kv.hidden) -match '^(yes|true|1)$'
+            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order; Hidden = $hidden
                             Description = ("" + $kv.description) }
         }
     }
@@ -3556,7 +3560,8 @@ function Get-ExakitVerifiedDatasets {
 
 # Datasets that are NOT loaded yet - drives the dynamic data menus.
 function Get-ExakitPendingDatasets {
-    return @(Get-ExakitBundledDatasets | Where-Object { -not (Test-ExakitDatasetLoaded $_) })
+    # A dataset its conf hides (hidden=yes) is kept and loads when named, never offered. Twin of exakit_pending_datasets.
+    return @(Get-ExakitBundledDatasets | Where-Object { -not $_.Hidden -and -not (Test-ExakitDatasetLoaded $_) })
 }
 
 function Invoke-ExakitDatasetLoad {
@@ -4125,6 +4130,8 @@ function Select-ExakitDataLoad {
     # untitled, so the names get their width (twin of exakit_data_samples_select).
     if ($script:UiTable) {
         if ($script:ExakitTableHasDesc) { $script:UiTable.Col2 = "Description" } else { $script:UiTable.Col2 = " " }
+        # The install's compact table has no descriptions: no blank column either, so the names keep their width.
+        if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1") { $script:UiTable.Col2 = "" }
     }
     $onScreen = 0
     $startRow = 0

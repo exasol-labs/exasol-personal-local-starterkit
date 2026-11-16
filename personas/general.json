@@ -2,11 +2,14 @@
   "schema_version": 1,
   "id": "general",
   "title": "General",
-  "summary": "Sample data (retail, energy, weather) and your AI clients.",
+  "summary": "Sample data (retail sales, bank transactions) and your AI clients.",
   "picker": true,
   "visible": true,
   "default": true,
   "order": 90,
-  "datasets": ["tpch", "energy", "weather"],
+  "datasets": [
+    "retail_sales",
+    "bank_transaction"
+  ],
   "mcp_clients": "all"
 }

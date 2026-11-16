@@ -171,12 +171,15 @@ def one(root: Path, persona_id: str) -> dict:
     return picked(root, persona_id)[0]
 
 
-def bundled_datasets(root: Path, defaults_only: bool = False) -> list:
-    """The dataset ids the kit ships (data/datasets/<id>/dataset.conf), in their menu order; with defaults_only, the
-    ones a kit without a persona loads (default=yes)."""
+def bundled_datasets(root: Path, defaults_only: bool = False, include_hidden: bool = False) -> list:
+    """The dataset ids the kit offers (data/datasets/<id>/dataset.conf), in their menu order; with defaults_only, the
+    ones a kit without a persona loads (default=yes). A dataset its conf hides (hidden=yes: kept in the repository, not
+    part of this release) is left out unless include_hidden."""
     found = []
     for conf in (root / "data" / "datasets").glob("*/dataset.conf"):
         keys = {k.strip(): v.strip() for k, v in (line.split("=", 1) for line in conf.read_text(encoding="utf-8").splitlines() if "=" in line)}
+        if not include_hidden and keys.get("hidden", "").lower() in ("yes", "true", "1"):
+            continue
         if defaults_only and keys.get("default", "").lower() not in ("yes", "true", "1"):
             continue
         order = keys.get("order", "")
