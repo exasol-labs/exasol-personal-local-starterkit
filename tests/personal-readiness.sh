@@ -20,9 +20,20 @@
 #     install a password that could never work.
 #   - personal_recover_slow_first_boot treats the launcher's reconcile as the
 #     ownership proof: when its deploy fails, the recovery fails, instead of
-#     "continuing with the database it can reach".
+#     "continuing with the database it can reach". When the launcher already
+#     records its database as ready there is nothing to reconcile, and no
+#     deploy is run over the running VM.
 #   - personal_start on a deployment the launcher records as failed retries the
 #     launcher's deploy, because in that state its start exits 0 doing nothing.
+#   - personal_tls_answers is decided by openssl's OUTPUT, never its exit
+#     status, under the `set -o pipefail` every entry point runs with. macOS
+#     ships LibreSSL as /usr/bin/openssl, and its s_client exits 1 after a
+#     completed handshake when stdin hits EOF; piped into `grep -q` under
+#     pipefail that made the probe fail against a database that was up, so a
+#     slow first boot was never recovered and status called the database's own
+#     port "held by another process". The harness runs with pipefail for that
+#     reason, and the probe is also run through the real exakit_run_bounded
+#     and the real /usr/bin/openssl.
 #
 # Uses spare ports (186xx) and a stub launcher; never touches a real deployment.
 
@@ -110,6 +121,8 @@ sleep 1
 # Source the real module with the loggers and the common-layer helpers stubbed,
 # then run one probe. Everything after HARNESS-time is the module's own code.
 cat > "$TMP/harness.sh" <<HARNESS
+# Every entry point (setup/exakit, setup-macos.sh, setup-linux.sh) runs with it.
+set -o pipefail
 info(){ printf 'INFO %s\n' "\$*"; }; ok(){ printf 'OK %s\n' "\$*"; }; warn(){ printf 'WARN %s\n' "\$*"; }
 die(){ printf 'DIE %s\n' "\$*"; exit 1; }
 ui_spin_begin(){ :; }; ui_spin_end(){ :; }
@@ -133,6 +146,10 @@ personal_reap_orphan_daemon(){ return 1; }
 personal_port_holder_hint(){ :; }
 personal_db_port_pids(){ :; }
 personal_launcher_state(){ printf '%s' "\${STUB_STATE:-}"; }
+# The real bound, for the probes that must prove a hung client is cut off.
+if [ "\${STUB_REAL_BOUNDED:-0}" = 1 ]; then
+    eval "\$(sed -n '/^exakit_run_bounded()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+fi
 # The crossing's accessors exist only on a machine with a legacy record, and
 # the hint guards on that with command -v, so they are defined only when the
 # scenario asks for them.
@@ -226,6 +243,16 @@ _out="$(probe STUB_TLS=0 EXAKIT_PERSONAL_READY_TIMEOUT=1 -- 'personal_recover_sl
 check "database never answers within the budget -> failure" 1 "$(rc_of "$_out")"
 case "$(cat "$TMP/calls")" in *deploy*) check "  ...and deploy was not attempted" "no deploy" "deploy";; *) check "  ...and deploy was not attempted" "no deploy" "no deploy";; esac
 
+# A launcher that already records its database as up is not deployed over:
+# a deploy over a running VM is answered with "VM is already running" and a
+# record that then refuses every command, stop included.
+_out="$(probe STUB_TLS=1 STUB_STATE=database_ready -- 'personal_recover_slow_first_boot')"
+check "database answers, launcher already says database_ready -> success" 0 "$(rc_of "$_out")"
+case "$(cat "$TMP/calls")" in *deploy*) check "  ...and no deploy over the running database" "no deploy" "deploy";; *) check "  ...and no deploy over the running database" "no deploy" "no deploy";; esac
+_out="$(probe STUB_TLS=1 STUB_STATE=deployment_failed -- 'personal_recover_slow_first_boot')"
+check "database answers, launcher still says deployment_failed -> reconciled" 0 "$(rc_of "$_out")"
+contains "  ...by the launcher's deploy" "RUN exasol-stub deploy" "$(cat "$TMP/calls")"
+
 echo "personal_wait_ready: reachable means a handshake completed"
 _out="$(probe STUB_TLS=1 -- 'personal_wait_ready')"
 check "handshake completes -> reachable" 0 "$(rc_of "$_out")"
@@ -245,6 +272,63 @@ contains "  ...naming the repair" "exakit repair-runtime" "$_out"
 _out="$(probe STUB_STATE=stopped -- 'personal_start')"
 check "stopped -> the ordinary start" 0 "$(rc_of "$_out")"
 contains "  ...start was run" "RUN exasol-stub start" "$(cat "$TMP/calls")"
+
+echo "personal_tls_answers: openssl's output decides, not its exit status (pipefail)"
+# Stub clients, one per directory so each can be put first on PATH.
+_pem='-----BEGIN CERTIFICATE-----\nMIIBstub\n-----END CERTIFICATE-----\n'
+_stub() { # _stub <name> <body>
+    mkdir -p "$TMP/ssl-$1"
+    printf '#!/bin/sh\n%s\n' "$2" > "$TMP/ssl-$1/openssl"
+    chmod +x "$TMP/ssl-$1/openssl"
+}
+_stub cert-exit1  "printf '%b' '$_pem'; exit 1"
+_stub empty-exit1 "exit 1"
+_stub cert-exit0  "printf '%b' '$_pem'; exit 0"
+_stub hang        "exec sleep 30"
+# A client that keeps writing after the certificate: `grep -q` stops reading at
+# the match and the writer dies of SIGPIPE (141), which pipefail reported as
+# a failed probe.
+_stub cert-more   "printf '%b' '$_pem'; exec head -c 1000000 /dev/zero"
+# The system directories only: probe() word-splits its assignments, so a PATH
+# with a space in it (macOS app bundles) cannot pass through, and a Homebrew
+# openssl ahead of the stub would answer instead of it.
+SYS_PATH="/usr/bin:/bin:/usr/sbin:/sbin"
+_tls_stub() { # _tls_stub <stub> -> rc of personal_tls_answers with that openssl first on PATH
+    rc_of "$(probe PATH="$TMP/ssl-$1:$SYS_PATH" STUB_REAL_BOUNDED=1 EXAKIT_PERSONAL_PROBE_TIMEOUT=3 STUB_PORT="$CLOSED_PORT" -- 'personal_tls_answers')"
+}
+check "certificate printed, client exits 1 (LibreSSL) -> answers" 0 "$(_tls_stub cert-exit1)"
+check "nothing printed, client exits 1 -> does not"               1 "$(_tls_stub empty-exit1)"
+check "certificate printed, client exits 0 -> answers"            0 "$(_tls_stub cert-exit0)"
+check "certificate, then more output (SIGPIPE under grep -q) -> answers" 0 "$(_tls_stub cert-more)"
+_t0="$(date +%s)"
+check "client hangs, prints nothing -> does not"                  1 "$(_tls_stub hang)"
+_t1="$(date +%s)"
+check "  ...and the bound cut it off (under 15s)" yes "$([ $((_t1 - _t0)) -lt 15 ] && echo yes || echo "no ($((_t1 - _t0))s)")"
+
+# The real thing: macOS's own /usr/bin/openssl against a real s_server. -www
+# answers and closes the way a database does, and it is the shape that makes
+# LibreSSL's s_client exit 1 after a good handshake.
+if [ -x /usr/bin/openssl ]; then
+    mkdir -p "$TMP/ssl-system"
+    ln -sf /usr/bin/openssl "$TMP/ssl-system/openssl"
+    _sys_ver="$(/usr/bin/openssl version 2>/dev/null)"
+    SSERVER_PORT="$(pick_port $((CLOSED_PORT + 1)))"
+    /usr/bin/openssl s_server -accept "$SSERVER_PORT" -cert "$TMP/cert.pem" -key "$TMP/key.pem" -www \
+        </dev/null >/dev/null 2>&1 &
+    CHILDREN="$CHILDREN $!"
+    _w=0
+    until (exec 3<>"/dev/tcp/127.0.0.1/$SSERVER_PORT") 2>/dev/null; do
+        _w=$((_w + 1)); [ "$_w" -ge 20 ] && break; sleep 0.25
+    done
+    _sys_raw="$(/usr/bin/openssl s_client -connect "127.0.0.1:$SSERVER_PORT" </dev/null >/dev/null 2>&1; echo $?)"
+    echo "  (system client: $_sys_ver; its own s_client exit against s_server -www: $_sys_raw)"
+    check "system openssl, s_server answers -> answers" 0 \
+        "$(rc_of "$(probe PATH="$TMP/ssl-system:$SYS_PATH" STUB_REAL_BOUNDED=1 EXAKIT_PERSONAL_PROBE_TIMEOUT=5 STUB_PORT="$SSERVER_PORT" -- 'personal_tls_answers')")"
+    check "system openssl, closed port -> does not" 1 \
+        "$(rc_of "$(probe PATH="$TMP/ssl-system:$SYS_PATH" STUB_REAL_BOUNDED=1 EXAKIT_PERSONAL_PROBE_TIMEOUT=5 STUB_PORT="$CLOSED_PORT" -- 'personal_tls_answers')")"
+else
+    echo "  (no /usr/bin/openssl: system-client checks skipped)"
+fi
 
 echo ""
 echo "personal-readiness.sh: $PASS passed, $FAIL failed"
