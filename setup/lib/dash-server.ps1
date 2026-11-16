@@ -413,13 +413,33 @@ function Write-DashServerLauncher {
 # server ran waits for that server to exit, and the Startup entry at the next
 # login runs the old launcher, so an update that never restarts a healthy
 # server never lands it. Restart our own server now: once its launcher copy
-# has exited, Start-DashServer applies the staged file. A port that is not
-# proven ours (Test-DashServerPortIsOurs) is left alone, and the staged message
-# stands.
+# has exited, Start-DashServer applies the staged file. Only the processes that
+# hold our port AND run from our venv are stopped - never the pid recorded in
+# the pid file, which can be stale and reused by another process after a
+# reboot. When none is proven ours the port is left alone, and the staged
+# message stands.
+function Get-DashServerOurPortPids {
+    $ours = @()
+    foreach ($procId in (Get-DashServerPortPids)) {
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction Stop).CommandLine
+            if ($cmd -and $cmd.Contains($script:DashServerVenv)) { $ours += [int]$procId }
+        } catch { }
+    }
+    return $ours
+}
+
+function Stop-DashServerPid {
+    param([int]$Id)
+    try { & taskkill.exe /PID $Id /T /F 2>$null | Out-Null } catch { }
+}
+
 function Restart-DashServerForStagedLauncher {
-    if (-not (Test-DashServerPortIsOurs)) { return }
+    $ours = @(Get-DashServerOurPortPids)
+    if ($ours.Count -eq 0) { return }
     Info "Restarting dash-server so it runs the new launcher"
-    [void](Stop-DashServer)
+    foreach ($id in $ours) { Stop-DashServerPid -Id $id }
+    if ($script:DashServerPidFile) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $script:DashServerPidFile }
     for ($i = 0; $i -lt 10 -and @(Get-ExakitLauncherRunningPids -Path (Get-DashServerLauncherPath)).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
     [void](Start-DashServer)
 }
