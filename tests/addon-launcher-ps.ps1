@@ -153,6 +153,41 @@ foreach ($c in $cases) {
     }
 }
 
+# --- Windows only: a real cmd.exe runs the launcher while it is rewritten ---
+# The real running-copy scan, the real detached helper, sandbox paths only.
+# While the copy runs the file must not change; once it exits the helper swaps
+# the new content in.
+Write-Host ""
+Write-Host "live rewrite under cmd.exe (Windows only)"
+if (Get-Command cmd.exe -ErrorAction SilentlyContinue) {
+    foreach ($d in (Import-Functions -File (Join-Path $repo "setup/lib/exakit-common.ps1") -Names @("Get-ExakitLauncherRunningPids", "Start-ExakitDetachedPowerShell"))) { Invoke-Expression $d }
+    $liveDir = Join-Path $sandbox "live"
+    New-Item -ItemType Directory -Force -Path $liveDir | Out-Null
+    $live = Join-Path $liveDir "live-addon.cmd"
+    $liveOld = "@echo off`r`nrem old launcher`r`nping -n 7 127.0.0.1 >nul`r`necho old-done`r`n"
+    $liveNew = "@echo off`r`nrem new launcher, different length and bytes`r`necho new-content`r`n"
+    [System.IO.File]::WriteAllText($live, $liveOld, [System.Text.Encoding]::ASCII)
+    $proc = Start-Process -FilePath "cmd.exe" -ArgumentList @("/d", "/c", "`"$live`"") -PassThru -WindowStyle Hidden
+    $seen = $false
+    for ($i = 0; $i -lt 20 -and -not $seen; $i++) {
+        if (@(Get-ExakitLauncherRunningPids -Path $live).Count -gt 0) { $seen = $true } else { Start-Sleep -Milliseconds 250 }
+    }
+    Check "live: the running copy is found by its path" "True" $seen
+    Write-ExakitAddonLauncher -Path $live -Content $liveNew
+    $changed = $false
+    while (-not $proc.HasExited) {
+        if ([System.IO.File]::ReadAllText($live) -ne $liveOld) { $changed = $true }
+        Start-Sleep -Milliseconds 200
+    }
+    Check "live: nothing was rewritten while it ran" "False" $changed
+    Check "live: the running copy finished its own (old) script" "0" $proc.ExitCode
+    for ($i = 0; $i -lt 60 -and (Test-Path -LiteralPath "$live.new"); $i++) { Start-Sleep -Milliseconds 500 }
+    Check "live: after it exited the new content is in place" "True" ([System.IO.File]::ReadAllText($live) -eq $liveNew)
+    Check "live: .new is gone" "False" (Test-Path -LiteralPath "$live.new")
+} else {
+    Write-Host "  skip live rewrite: not on Windows"
+}
+
 # --- static: every add-on launcher writer goes through the deferred writer --
 Write-Host ""
 Write-Host "static"
