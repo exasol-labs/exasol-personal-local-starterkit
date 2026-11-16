@@ -5947,8 +5947,14 @@ _exakit_marketplace_install_one() {
 # ⇄ twin: Set-ExakitAddonProgress in exakit-common.ps1.
 exakit_addon_activity() {
     [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] || return 0
-    # One writer (the install), one reader (the table animator).
-    printf '%s|%s\n' "$EXAKIT_ADDON_TABLE_ROW" "$1" | tr '\r\n' '  ' > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    # One "row|text" record per add-on (several install side by side): this row's
+    # replaces its own, the others stay. Written whole, then moved in, so the
+    # table animator never reads half a file.
+    {
+        [ -f "$EXAKIT_ADDON_TABLE_STATE.activity" ] && \
+            grep -v "^$EXAKIT_ADDON_TABLE_ROW|" "$EXAKIT_ADDON_TABLE_STATE.activity" 2>/dev/null
+        printf '%s|%s\n' "$EXAKIT_ADDON_TABLE_ROW" "$(printf '%s' "$1" | tr '\r\n' '  ')"
+    } > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     mv -f "$EXAKIT_ADDON_TABLE_STATE.activity.new" "$EXAKIT_ADDON_TABLE_STATE.activity"
 }
 

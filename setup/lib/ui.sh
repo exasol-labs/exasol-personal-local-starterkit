@@ -1534,16 +1534,14 @@ ui_table_frame() {
     # The line each row starts on, for a click (see ui_table_menu).
     _UI_TABLE_AT=()
     _utr_now="$(date +%s 2>/dev/null || echo 0)"
-    # One reserved activity line follows the active add-on, directly above
-    # its bar. Moving it between rows keeps the total frame height constant.
-    _utr_activity_row=0; _utr_activity=""
-    if [ -f "$1.activity" ]; then
-        _utr_activity_row=2
-        _utr_activity_record="$(head -n 1 "$1.activity" 2>/dev/null)"
-        case "$_utr_activity_record" in
-            *'|'*) _utr_activity_row="${_utr_activity_record%%|*}"; _utr_activity="${_utr_activity_record#*|}" ;;
-        esac
-        case "$_utr_activity_row" in ''|*[!0-9]*) _utr_activity_row=2 ;; esac
+    # An activity line above each add-on that is saying what it does, directly
+    # above its bar: the side channel holds one "row|text" record per add-on
+    # (several install side by side). No record, no line - nothing is reserved.
+    _utr_acts=""
+    if [ -s "$1.activity" ]; then
+        _utr_acts="
+$(cat "$1.activity" 2>/dev/null)
+"
     fi
     _utr_i=0
     while IFS='|' read -r _utr_kind _utr_label _utr_tick _utr_state _utr_pct \
@@ -1679,7 +1677,18 @@ ui_table_frame() {
             _utr_used=$(( _utr_used + UI_TABLE_COL3_W + _UI_TABLE_SEP_W ))
         fi
         _utr_rpad=$(( _utr_inner - _utr_used )); [ "$_utr_rpad" -ge 0 ] || _utr_rpad=0
-        if [ "$_utr_i" = "$_utr_activity_row" ]; then
+        _utr_activity=""
+        _utr_has_activity=0
+        case "$_utr_acts" in
+            *"
+$_utr_i|"*)
+                _utr_activity="${_utr_acts#*
+$_utr_i|}"
+                _utr_activity="${_utr_activity%%
+*}"
+                _utr_has_activity=1 ;;
+        esac
+        if [ "$_utr_has_activity" = 1 ]; then
             _utr_activity_left=$(( 5 + UI_TABLE_NAME_W + _utr_statsep_w ))
             [ "$UI_TABLE_COL2_W" -gt 0 ] && _utr_activity_left=$(( _utr_activity_left + _UI_TABLE_SEP_W + UI_TABLE_COL2_W ))
             [ "$UI_TABLE_COL3_W" -gt 0 ] && _utr_activity_left=$(( _utr_activity_left + _UI_TABLE_SEP_W + UI_TABLE_COL3_W ))
