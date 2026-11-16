@@ -12817,16 +12817,18 @@ _exakit_uninstall_closing_hints() {
 # _exakit_uninstall_kit_images <dry> - the container images the database used.
 #
 # On Linux, WSL and Windows the launcher deploys the database into Docker or
-# Podman, and the engine keeps what it pulled: exasol/nano (~800 MB) and
-# exasol/mcp-server (~400 MB) were still on a machine after a full uninstall,
-# and nothing on screen said so. Only those two repositories are ever
-# touched (podman spells them docker.io/exasol/...), every tag of them
-# including <none>, and `rmi` runs WITHOUT -f: an image a container still
+# Podman, and the engine keeps what it pulled: exasol/nano (~800 MB) was
+# still on a machine after a full uninstall, and nothing on screen said so.
+# Only that repository is ever touched (podman spells it docker.io/exasol/...;
+# rmi gets the exact reference the engine listed), every tag of it including
+# <none>, and `rmi` runs WITHOUT -f: an image a container still
 # uses stays, with the one command that removes it later. macOS deploys into
 # the launcher's own VM, so the host engine holds nothing of the kit's there.
 # Every engine call is bounded, so a hung engine cannot stall the uninstall.
 # Twin of Invoke-ExakitUninstallKitImages.
-EXAKIT_KIT_IMAGE_REPOS="exasol/nano exasol/mcp-server"
+# Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx), so an
+# image of it on this machine is the user's own.
+EXAKIT_KIT_IMAGE_REPOS="exasol/nano"
 _exakit_uninstall_kit_images() {
     _kim_dry="${1:-0}"
     _kim_os="$(detect_os 2>/dev/null || uname -s 2>/dev/null)"
@@ -12837,23 +12839,30 @@ _exakit_uninstall_kit_images() {
         command -v "$_kim_eng" >/dev/null 2>&1 || continue
         _kim_any=1
         if ! _kim_list="$(exakit_run_bounded 30 "$_kim_eng" images --format '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}' 2>/dev/null)"; then
-            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/nano; $_kim_eng images exasol/mcp-server"
+            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/nano"
             continue
         fi
         _kim_rows="$(printf '%s\n' "$_kim_list" | while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size; do
             _kr_bare="${_kr_repo#docker.io/}"
             for _kr_want in $EXAKIT_KIT_IMAGE_REPOS; do
-                [ "$_kr_bare" = "$_kr_want" ] && printf '%s|%s|%s|%s\n' "$_kr_bare" "$_kr_tag" "$_kr_id" "$_kr_size"
+                [ "$_kr_bare" = "$_kr_want" ] && printf '%s|%s|%s|%s|%s\n' "$_kr_bare" "$_kr_tag" "$_kr_id" "$_kr_size" "$_kr_repo"
             done
         done)"
         [ -n "$_kim_rows" ] || continue
         # A here-document, not a pipe: the loop sets _kim_gone, and a pipe
         # would run it in a subshell that drops the value.
-        while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size; do
+        _kim_seen=" "
+        while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size _kr_listed; do
             [ -n "$_kr_repo" ] || continue
+            # podman lists one image twice when it carries a tag AND a <none>
+            # row; one rmi handles it, and the second row is not "kept".
+            case "$_kim_seen" in *" $_kr_id "*) continue ;; esac
+            [ -n "$_kr_id" ] && _kim_seen="$_kim_seen$_kr_id "
             _kr_name="$_kr_repo:$_kr_tag"
             # A dangling image has no tag to name it by; its id is the handle.
-            case "$_kr_tag" in ''|'<none>') _kr_ref="$_kr_id" ;; *) _kr_ref="$_kr_name" ;; esac
+            # Otherwise the exact reference the engine listed (docker.io/...
+            # under podman), so rmi names the very image it was shown.
+            case "$_kr_tag" in ''|'<none>') _kr_ref="$_kr_id" ;; *) _kr_ref="${_kr_listed:-$_kr_repo}:$_kr_tag" ;; esac
             if [ "$_kim_dry" = "1" ]; then
                 info "  will remove: $_kim_eng image $_kr_name${_kr_size:+ ($_kr_size)}"
                 continue
@@ -12870,7 +12879,7 @@ KIMROWS
         _kim_gone=""
     done
     if [ "$_kim_any" = 0 ]; then
-        info "Neither docker nor podman is on PATH, so the kit's container images (exasol/nano, exasol/mcp-server) were not checked."
+        info "Neither docker nor podman is on PATH, so the kit's container image (exasol/nano) was not checked."
     fi
     return 0
 }
@@ -13095,8 +13104,13 @@ exakit_uninstall_run() {
 
     # 1c) The container images the deployment ran from, once its containers
     #     are gone (a full uninstall only; removing just the database keeps
-    #     them, so a re-install does not pull them again).
-    if [ "$_type" = personal ] && [ "$_un_had_deploy" = 1 ] && command -v _exakit_uninstall_kit_images >/dev/null 2>&1; then
+    #     them, so a re-install does not pull them again). Same guards as 1b:
+    #     never while the database is still there or another deployment
+    #     still runs from the same image.
+    if [ "$_type" = personal ] && [ "$_un_had_deploy" = 1 ] && \
+       [ "$EXAKIT_UNINSTALL_DB_LEFT" != 1 ] && \
+       command -v _exakit_uninstall_kit_images >/dev/null 2>&1 && \
+       [ -z "$(personal_other_deployments 2>/dev/null)" ]; then
         _exakit_uninstall_kit_images "$_dry"
     fi
 

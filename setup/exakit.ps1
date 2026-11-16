@@ -1719,16 +1719,17 @@ function Write-ExakitUninstallLeftoverReport {
 # used. Twin of _exakit_uninstall_kit_images in common.sh.
 #
 # The launcher deploys the database into Docker or Podman, and the engine keeps
-# what it pulled: exasol/nano (~800 MB) and exasol/mcp-server (~400 MB) were
-# still on a Windows machine after a full uninstall, and nothing on screen said
-# so. Only those two repositories are ever touched (podman spells them
-# docker.io/exasol/...), every tag of them including <none>, and `rmi` runs
+# what it pulled: exasol/nano (~800 MB) was still on a Windows machine after a
+# full uninstall, and nothing on screen said so. Only that repository is ever
+# touched (podman spells it docker.io/exasol/...; rmi gets the exact reference
+# the engine listed), every tag of it including <none>, and `rmi` runs
 # WITHOUT -f: an image a container still uses stays, with the one command that
 # removes it later. Every engine call is bounded, so a hung engine cannot stall
 # the uninstall.
 function Invoke-ExakitUninstallKitImages {
     param([switch]$DryRun)
-    $kitRepos = @("exasol/nano", "exasol/mcp-server")
+    # Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx).
+    $kitRepos = @("exasol/nano")
     $anyEngine = $false
     foreach ($engineName in @("docker", "podman")) {
         $engine = Get-Command $engineName -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -1737,22 +1738,30 @@ function Invoke-ExakitUninstallKitImages {
         $list = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
             -Arguments @("images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}")
         if ($null -eq $list) {
-            Info "Could not ask $engineName for the kit's container images (is it running?); check later with: $engineName images exasol/nano; $engineName images exasol/mcp-server"
+            Info "Could not ask $engineName for the kit's container images (is it running?); check later with: $engineName images exasol/nano"
             continue
         }
         $gone = @()
+        $seenIds = @{}
         foreach ($line in (("" + $list) -split "`r?`n")) {
             $parts = $line.Trim() -split '\|'
             if ($parts.Count -lt 3) { continue }
-            $repo = $parts[0]
+            $listed = $parts[0]
+            $repo = $listed
             if ($repo.StartsWith("docker.io/")) { $repo = $repo.Substring(10) }
             if ($kitRepos -notcontains $repo) { continue }
+            # podman lists one image twice when it carries a tag AND a <none>
+            # row; one rmi handles it, and the second row is not "kept".
+            if ($parts[2] -and $seenIds.ContainsKey($parts[2])) { continue }
+            if ($parts[2]) { $seenIds[$parts[2]] = $true }
             $tag = $parts[1]
             $size = ""
             if ($parts.Count -ge 4) { $size = $parts[3] }
             $name = "${repo}:$tag"
             # A dangling image has no tag to name it by; its id is the handle.
-            $ref = $name
+            # Otherwise the exact reference the engine listed (docker.io/...
+            # under podman).
+            $ref = "${listed}:$tag"
             if ((-not $tag) -or ($tag -eq "<none>")) { $ref = $parts[2] }
             if ($DryRun) {
                 $sizeNote = ""
@@ -1769,7 +1778,7 @@ function Invoke-ExakitUninstallKitImages {
         }
     }
     if (-not $anyEngine) {
-        Info "Neither docker nor podman is on PATH, so the kit's container images (exasol/nano, exasol/mcp-server) were not checked."
+        Info "Neither docker nor podman is on PATH, so the kit's container image (exasol/nano) was not checked."
     }
 }
 
@@ -1919,9 +1928,14 @@ function Invoke-ExakitUninstallRun {
 
     # 1c) The container images the deployment ran from, once its containers
     #     are gone (a full uninstall only; removing just the database keeps
-    #     them, so a re-install does not pull them again). Twin of step 1c in
-    #     exakit_uninstall_run.
-    if ($type -eq "personal" -and $unHadDeploy) { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
+    #     them, so a re-install does not pull them again). Same guards as 1b:
+    #     never while the database is still there or another deployment still
+    #     runs from the same image. Twin of step 1c in exakit_uninstall_run.
+    if ($type -eq "personal" -and $unHadDeploy -and -not $script:ExakitUninstallDbLeft) {
+        $otherDeploys = @()
+        if (Get-Command Get-PersonalOtherDeployments -ErrorAction SilentlyContinue) { $otherDeploys = @(Get-PersonalOtherDeployments) }
+        if ($otherDeploys.Count -eq 0) { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
+    }
 
     # 2) Managed MCP configuration in the AI clients. Best-effort.
     if (Get-Command Invoke-McpOperation -ErrorAction SilentlyContinue) {
