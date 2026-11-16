@@ -3529,6 +3529,13 @@ function Get-ExakitAddonLauncherGuard {
 # Get-ExakitLauncherRunningPids <path> - processes (other than this one) whose
 # command line names the launcher's path: a cmd.exe running it right now. An
 # empty list where processes cannot be listed.
+#
+# Known blind spot: a launcher typed by name at an interactive cmd.exe prompt
+# runs inside that cmd.exe, whose command line is just "cmd.exe" - Windows
+# exposes no record of which batch file an interactive shell is executing, and
+# the launcher's child names the add-on's target, not the launcher. Such a run
+# is not detected, and an add-on update writes that launcher in place. The
+# Startup entry, exakit start and a cmd /c run all name the path and are found.
 function Get-ExakitLauncherRunningPids {
     param([Parameter(Mandatory)][string]$Path)
     $found = @()

@@ -103,7 +103,7 @@ function Get-ExakitAutostartPrefix { return "com.exasol.exakit" }
 # this test depend on which add-ons happen to be registered.
 function Get-ExakitMarketplaceInstalledAddons { @() }
 function Get-ExakitMarketplaceAddon { param([string]$Id) $null }
-function Get-ExakitMarketplaceAddons { @() }
+function Get-ExakitMarketplaceAddons { @([pscustomobject]@{ Id = "dash-server" }) }
 # These four live in setup/lib/, not setup/exakit.ps1, so extracting the CLI's
 # functions does not bring them along.
 #
@@ -146,7 +146,8 @@ function Seed {
         "$($script:ExakitHome)\credentials")) {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
     }
-    foreach ($f in @("exakit.cmd", "exapump.exe", "exasol.exe", "some-other-tool.exe")) {
+    foreach ($f in @("exakit.cmd", "exapump.exe", "exasol.exe", "some-other-tool.exe",
+                     "exakit.cmd.new", "dash-server.cmd", "dash-server.cmd.new", "some-other-tool.cmd.new")) {
         New-Item -ItemType File -Force -Path (Join-Path $script:BinDir $f) | Out-Null
     }
     New-Item -ItemType File -Force -Path (Join-Path $script:ExakitHome "manifest.json") | Out-Null
@@ -161,7 +162,15 @@ Write-Host "Invoke-ExakitUninstallRun:"
 
 # --- dry run: nothing removed, no teardown -------------------------------
 Seed
+$script:dryInfo = @()
+function Info($m) { $script:dryInfo += "$m" }
 Invoke-ExakitUninstallRun -DryRun
+function Info($m) {}
+$dryText = $script:dryInfo -join "`n"
+Check "dry: lists a staged exakit.cmd.new" "True" ($dryText.Contains("will remove: CLI binary " + (Join-Path $script:BinDir "exakit.cmd.new")))
+Check "dry: lists a staged add-on .cmd.new" "True" ($dryText.Contains("will remove: CLI binary " + (Join-Path $script:BinDir "dash-server.cmd.new")))
+Check "dry: does not list a bystander .cmd.new" "False" ($dryText.Contains("some-other-tool.cmd.new"))
+Check "dry: staged .new kept" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
 Check "dry: kit home kept"   "yes" (Ex $script:ExakitHome)
 Check "dry: exapump kept"    "yes" (Ex (Join-Path $fakeHome ".exapump"))
 Check "dry: exapump under the profile home kept" "yes" (Ex (Join-Path $fakeProfile ".exapump"))
@@ -188,6 +197,10 @@ Check "real: exakit.cmd gone"   "no"  (Ex (Join-Path $script:BinDir "exakit.cmd"
 Check "real: skill A gone"      "no"  (Ex "$fakeHome\.claude\skills\local-agent-ready-starter")
 Check "real: skill B gone"      "no"  (Ex "$fakeHome\.claude\skills\trusted-ai-workflow")
 Check "real: bystander kept"    "yes" (Ex (Join-Path $script:BinDir "some-other-tool.exe"))
+Check "real: exakit.cmd.new gone" "no" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
+Check "real: add-on launcher gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd"))
+Check "real: add-on .cmd.new gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
+Check "real: bystander .cmd.new kept" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
 
 # --- idempotent second run on empty tree ---------------------------------
 $ok = $true; try { Invoke-ExakitUninstallRun } catch { $ok = $false }

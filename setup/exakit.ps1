@@ -2051,6 +2051,12 @@ function Invoke-ExakitUninstallRun {
     if (Get-Command Get-ExakitMarketplaceAddons -ErrorAction SilentlyContinue) {
         foreach ($addon in Get-ExakitMarketplaceAddons) { $binNames += "$($addon.Id).cmd" }
     }
+    # A staged <launcher>.cmd.new (the deferred shim writer's) whose swap has
+    # not run yet goes too: it is the kit's file, and left behind it is a
+    # stray launcher nobody removes.
+    foreach ($bin in @($binNames)) {
+        if ($bin.EndsWith(".cmd", [System.StringComparison]::OrdinalIgnoreCase)) { $binNames += "$bin.new" }
+    }
     foreach ($bin in $binNames) {
         $p = Join-Path $script:BinDir $bin
         if (Test-Path $p) {
