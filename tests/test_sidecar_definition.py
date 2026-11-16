@@ -111,6 +111,39 @@ class SidecarDefinitionEditorTests(unittest.TestCase):
         self.assertEqual(self.run_editor("drop", str(self.file), "mcp").stdout.strip(), "changed")
         self.assertEqual(list(self.doc()["sidecars"]), ["mine"])
 
+    def test_put_reads_a_definition_written_with_a_utf8_bom(self) -> None:
+        # Windows PowerShell 5.1's `Set-Content -Encoding UTF8` starts the file with EF BB BF; json.loads on a plain
+        # utf-8 read raised "Unexpected UTF-8 BOM" and the MCP sidecar was never saved.
+        definition = self.dir / "def.json"
+        body = json.dumps({"enabled": True, "container": {
+            "image": "x:1", "env": [{"name": "EXA_PASSWORD", "valueFile": str(self.secret)}]}})
+        definition.write_bytes(b"\xef\xbb\xbf" + body.encode("utf-8"))
+        self.secret.write_bytes(b"\xef\xbb\xbfreadonly-secret\r\n")
+        put = self.run_editor("put", str(self.file), "mcp", str(definition))
+        self.assertEqual((put.returncode, put.stdout.strip()), (0, "changed"), put.stderr)
+        self.assertEqual(self.doc()["sidecars"]["mcp"]["container"]["env"],
+                         [{"name": "EXA_PASSWORD", "value": "readonly-secret"}])
+
+    def test_a_failure_is_one_line_that_quotes_nothing_it_read(self) -> None:
+        # sidecars.yaml holds the password as a literal value, and PyYAML's message quotes the lines around the error:
+        # the kit logs this stderr, so it must name the kind and the place only.
+        self.file.write_text("version: 1\nsidecars:\n  mcp:\n    env: [{value: readonly-secret}\n  : : :\n",
+                             encoding="utf-8")
+        definition = self.dir / "def.json"
+        definition.write_text(json.dumps({"enabled": True}), encoding="utf-8")
+        result = self.run_editor("put", str(self.file), "mcp", str(definition))
+        self.assertEqual(result.returncode, 1)
+        self.assertNotIn("readonly-secret", result.stdout + result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(len(result.stderr.strip().splitlines()), 1, result.stderr)
+        self.assertIn("put failed:", result.stderr)
+
+        broken = self.dir / "broken.json"
+        broken.write_text("{not json", encoding="utf-8")
+        result = self.run_editor("put", str(self.file), "mcp", str(broken))
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("JSONDecodeError", result.stderr)
+
     def test_an_unknown_sidecar_is_refused_with_exit_2(self) -> None:
         result = self.run_editor("literal-env", str(self.file), "nope", "X=1")
         self.assertEqual(result.returncode, 2)

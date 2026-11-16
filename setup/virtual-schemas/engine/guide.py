@@ -64,12 +64,34 @@ def sections(text, level):
     return head, [(h, "\n".join(b)) for h, b in out]
 
 
-def find(parts, words):
-    """The body of the first section whose plain heading starts with words."""
+def find(parts, words, exact=False):
+    """The body of the first section whose plain heading starts with words
+    (with exact, is words: "Connect" is not "Connection string ...")."""
     for heading, body in parts:
-        if plain(heading).lower().startswith(words.lower()):
+        text = plain(heading).lower()
+        if text == words.lower() if exact else text.startswith(words.lower()):
             return body
     return None
+
+
+def asked(body):
+    """What it asks for, as (label, required): from the "### Required" and
+    "### Optional" tables when the section has them (an optional field's
+    default that starts "for ..." is kept as its note), else from the one
+    table's second column."""
+    subs = sections(body or "", 3)[1]
+    if not any(re.match(r"(required|optional)\b", plain(h).lower()) for h, _ in subs):
+        return [(plain(r[0]), plain(r[1]).lower()) for r in table(body) if len(r) >= 2]
+    out = []
+    for heading, sub in subs:
+        kind = plain(heading).lower()
+        for r in table(sub):
+            if kind.startswith("required"):
+                out.append((plain(r[0]), "yes"))
+            elif kind.startswith("optional"):
+                note = re.match(r"for [^,;:(]+", plain(r[1]).lower()) if len(r) >= 2 else None
+                out.append((plain(r[0]), note.group(0).strip() if note else "no"))
+    return out
 
 
 def paragraphs(lines):
@@ -327,13 +349,14 @@ def guide_one(defs, docs, entry, width, shell):
     say("T", "%s - exakit connect %s" % (title, cid))
     # The top box: "> **Easiest ...**" and "> **You still need ...**".
     box = paragraphs([l[1:].strip() if l.startswith(">") else "" for l in head if l.startswith(">") or not l.strip()])
+    box += paragraphs(prose(find(parts, "The simplest way")))
     for lead in ("Easiest", "You still need"):
         for para in box:
             if para.startswith("**" + lead):
                 for line in wrap(plain(para), width, "", "  ", 3):
                     say("N", line)
     # What it asks for: which fields are required, matched to the steps by their words.
-    fields = [(plain(r[0]), plain(r[1]).lower()) for r in table(find(parts, "What exakit connect asks for")) if len(r) >= 2]
+    fields = asked(find(parts, "What exakit connect asks for"))
     where = find(parts, "Where to find each value")
     rows = []
     network = None
@@ -382,7 +405,7 @@ def guide_one(defs, docs, entry, width, shell):
         say("N", "Paste at the prompt, e.g.:")
         say("A", "  " + ascii_text(blocks[0][0]))
         if shell == "powershell":
-            for para in paragraphs(prose(find(parts, "Connect"))):
+            for para in paragraphs(prose(find(parts, "Connect", exact=True))):
                 if para.startswith("**Windows:**"):
                     first = re.split(r"(?<=\.)\s", plain(para))[0]
                     for line in wrap(first, width, "", "  ", 2):

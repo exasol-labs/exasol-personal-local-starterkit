@@ -640,5 +640,9 @@ mcp_sidecar_apply() {
             _exakit_log_file "INFO  MCP: the Claude Desktop bridge was not fetched ahead (it downloads on its first start)"
     fi
     _exakit_log_file "OK    MCP: the launcher's MCP server answers at $_msa_url as $_msa_user"
+    # Serving now: the install step's "the MCP server did not finish" record
+    # (and its failure note) is history, whichever command healed it.
+    # ⇄ twin: the same clear in Set-McpSidecar.
+    command -v exakit_clear_soft_failure >/dev/null 2>&1 && exakit_clear_soft_failure mcp
     return 0
 }

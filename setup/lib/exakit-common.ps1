@@ -2812,12 +2812,28 @@ function Register-ExakitSoftFailure {
 }
 
 # Clear-ExakitSoftFailure <component> - the step ran to completion later (a
-# re-run, `exakit data-load`, `exakit mcp-setup`), so its record goes.
+# re-run, `exakit data-load`, `exakit mcp-setup`), so its record goes - and
+# the failure note Register-ExakitSoftFailure wrote for it ("<label> did not
+# finish ..."), or `exakit status` kept saying "Last failure: mcp did not
+# finish" after an `exakit mcp-setup` that worked. A note about anything else
+# stays. Twin of exakit_clear_soft_failure.
 function Clear-ExakitSoftFailure {
     param([Parameter(Mandatory)][string]$Component)
     try {
         $key = "install.soft_failures." + ($Component -replace '[^A-Za-z0-9_]', '_')
-        if ($null -ne (Get-ExakitManifestValue $key)) { Remove-ExakitManifestValue $key }
+        $record = Get-ExakitManifestValue $key
+        if ($null -ne $record) {
+            $label = ""
+            try { $label = "" + $record.label } catch { $label = "" }
+            if (-not $label) { $label = $Component }
+            Remove-ExakitManifestValue $key
+            if (Test-Path -LiteralPath $script:FailureNotePath) {
+                $first = "$(@(Get-Content -LiteralPath $script:FailureNotePath -ErrorAction Stop)[0])"
+                if ($first.StartsWith("$label did not finish")) {
+                    Remove-Item -LiteralPath $script:FailureNotePath -Force -ErrorAction SilentlyContinue
+                }
+            }
+        }
     } catch { }
     if ($script:ExakitSoftFailed.Contains($Component)) { $script:ExakitSoftFailed.Remove($Component) }
 }

@@ -2127,7 +2127,10 @@ function Write-ExakitLoadReceipt {
         $epoch = [int][double]::Parse((Get-Date -UFormat %s))
         $line = "{0}`t{1}`t{2}`t{3}`t{4}`t{5}" -f $Target.ToUpper(), $bytes,
             (Get-ExakitSha256 -Path $File), $rowText, $epoch, (Split-Path $File -Leaf)
-        Add-Content -LiteralPath $path -Value $line -Encoding UTF8
+        # BOM-less: the notebook's kit_facts reads this file as UTF-8, and
+        # `Add-Content -Encoding UTF8` on PowerShell 5.1 starts a new file with
+        # a BOM that lands on the first table's name.
+        [System.IO.File]::AppendAllText($path, $line + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
     } catch {
         # Bookkeeping must never fail a load that worked.
     }
@@ -2209,7 +2212,10 @@ function Remove-ExakitLoadReceipt {
         if (-not (Test-Path $path)) { return }
         $prefix = $Target.ToUpper() + "`t"
         $keep = @(Get-Content -LiteralPath $path | Where-Object { -not $_.StartsWith($prefix) })
-        Set-Content -LiteralPath $path -Value $keep -Encoding UTF8
+        # BOM-less, as Write-ExakitLoadReceipt writes it.
+        $text = ""
+        if ($keep.Count -gt 0) { $text = ($keep -join [Environment]::NewLine) + [Environment]::NewLine }
+        [System.IO.File]::WriteAllText($path, $text, (New-Object System.Text.UTF8Encoding($false)))
     } catch {
     }
 }

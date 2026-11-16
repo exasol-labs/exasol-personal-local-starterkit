@@ -4,25 +4,85 @@ One Unity Catalog schema, queried through a Databricks SQL warehouse with a
 personal access token (PAT). The warehouse runs the queries. To read the
 table files directly instead, with no warehouse, see [Lakehouse (Iceberg / Delta)](lakehouse.md).
 
-> **Easiest: let your AI agent do it.** The skill `exasol-vs-databricks` knows this connector.
->
-> **You still need, on your computer:** the Databricks workspace in a browser,
-> or the Databricks CLI (`databricks auth login --host https://<workspace-host>`).
->
-> **Prefer to do it by hand?** Follow the steps below.
+## The simplest way: ask your AI agent
+
+**Easiest: let your AI agent do it.** The kit installs the skill
+`exasol-vs-databricks` for your AI client; it knows this connector.
+
+Copy this prompt, fill in the `<...>` parts, and give it to your agent:
+
+```text
+Connect the Databricks schema <catalog>.<schema> to my local Exasol with exakit
+through the SQL warehouse <warehouse>. Use the exasol-vs-databricks skill.
+Workspace: <workspace-host>. Grant a read-only user what it needs, and write
+its personal access token to a file, never into the chat.
+```
+
+**You still need, on your computer:** the Databricks workspace in a browser,
+or the Databricks CLI (`databricks auth login --host https://<workspace-host>`),
+as someone who may grant on the catalog and the warehouse.
+
+**Prefer to do it by hand?** Follow the steps below.
 
 ## What `exakit connect` asks for
 
-| Field | Required | Example |
+### Required
+
+| Field | Example | Where it comes from |
 |---|---|---|
-| Name (alias) for this connection | yes | `lake` |
-| Workspace host name | yes | `dbc-1234abcd-5678.cloud.databricks.com` |
-| SQL warehouse HTTP path | yes | `/sql/1.0/warehouses/abc123def456ghi7` |
-| Catalog (Unity Catalog) | yes | `main` |
-| Schema | yes | `sales` |
-| Personal access token | yes | (hidden) |
+| Name (alias) for this connection | `lake` | You choose it. `lake` gives the schema `VS_LAKE`. |
+| Workspace host name | `dbc-1234abcd-5678.cloud.databricks.com` | SQL Warehouses → `<warehouse>` → Connection details → Server hostname ([step 1](#1-host-and-http-path)). |
+| SQL warehouse HTTP path | `/sql/1.0/warehouses/abc123def456ghi7` | The same tab → HTTP path ([step 1](#1-host-and-http-path)). |
+| Catalog (Unity Catalog) | `main` | Catalog Explorer ([step 2](#2-catalog-and-schema)). |
+| Schema | `sales` | Catalog Explorer ([step 2](#2-catalog-and-schema)). |
+| Personal access token | (hidden) | The token of the read-only user ([step 4](#4-the-personal-access-token)). |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| (none) | Every field is required. | |
 
 The account name is fixed (`token`): there is no user field.
+
+## Connection string you can paste
+
+```text
+jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc123def456ghi7;ConnCatalog=main;ConnSchema=sales
+jdbc:spark://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc123def456ghi7
+dbc-1234abcd-5678.cloud.databricks.com
+```
+
+| String | Fills |
+|---|---|
+| `jdbc:databricks://<host>:443/default;httpPath=...;ConnCatalog=...;ConnSchema=...` | host, HTTP path, catalog and schema |
+| `jdbc:spark://<host>:443/default;httpPath=...` (the older driver's URL) | host and HTTP path |
+| `<host>` | host |
+
+Without `ConnCatalog` and `ConnSchema` you type those two. `transportMode`,
+`ssl`, `AuthMech` and `UID` are dropped. A `PWD=` (or `password=`, `token=`) in
+the string is the personal access token: taken out of the string and not asked
+again.
+
+### Where to find the connection string
+
+You do not build it: copy the address the workspace shows.
+
+- **Workspace:** SQL Warehouses → `<warehouse>` → Connection details → copy the
+  **JDBC URL**. It fills host and HTTP path. Add
+  `;ConnCatalog=<catalog>;ConnSchema=<schema>` to fill those two as well, or
+  type them.
+- If the copied URL has a `PWD=` part, delete it.
+
+Leave the token out of the string. The kit asks for it at a hidden prompt, or reads it from `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| host | Connection details → Server hostname ([step 1](#1-host-and-http-path)). |
+| `httpPath` | Connection details → HTTP path ([step 1](#1-host-and-http-path)). |
+| `ConnCatalog`, `ConnSchema` | Catalog Explorer, or `databricks schemas list <catalog>` ([step 2](#2-catalog-and-schema)). |
 
 ## Where to find each value
 
@@ -109,21 +169,9 @@ aggregates and `LIMIT` on one table go to Databricks.
 name in `exakit sql`, pipe the statement in (`'SELECT "x" FROM VS_LAKE.T' | exakit sql`)
 or use `exakit sql --file query.sql`.
 
-## Connection string you can paste
-
-```text
-jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc123def456ghi7;ConnCatalog=main;ConnSchema=sales
-dbc-1234abcd-5678.cloud.databricks.com
-```
-
-The first fills host, HTTP path, catalog and schema (without `ConnCatalog` and
-`ConnSchema` you type those two). The second fills the host only. A `PWD=` (or
-`password=`, `token=`) in the string is the personal access token: taken out
-of the string and not asked again.
-
 ## Common problems
 
-| Symptom | Fix |
+| Symptom or error text | Fix |
 |---|---|
 | "HTTP 403: Invalid access token" | The token is wrong, expired or revoked: make a new one (step 4), then `exakit source reauth lake`. |
 | "SCHEMA_DOES_NOT_EXIST", "CATALOG_DOES_NOT_EXIST" | A wrong name, or the token's user lacks the grants in step 3. |

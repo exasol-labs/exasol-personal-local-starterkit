@@ -106,7 +106,9 @@ def loaded_files() -> list[dict[str, Any]]:
     if not path or not path.is_file():
         return []
     latest: dict[str, dict[str, Any]] = {}
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    # utf-8-sig: a receipts file first written by Windows PowerShell 5.1 starts with a BOM, which would otherwise
+    # glue itself onto the first table's name.
+    for line in path.read_text(encoding="utf-8-sig", errors="replace").splitlines():
         parts = line.split("\t")
         if len(parts) < 6 or "." not in parts[0]:
             continue

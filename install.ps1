@@ -108,8 +108,11 @@ trap {
         $failHome = if ($env:EXAKIT_HOME) { $env:EXAKIT_HOME } else { Join-Path $failBase ".exasol-starter-kit" }
         New-Item -ItemType Directory -Force -Path $failHome -ErrorAction SilentlyContinue | Out-Null
         $stamp = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
-        Set-Content -Path (Join-Path $failHome ".last-failure") `
-            -Value @($_.Exception.Message, $stamp) -Encoding UTF8 -ErrorAction SilentlyContinue
+        # BOM-less UTF-8 with LF, as Write-ExakitFailureNote writes it: on 5.1
+        # `-Encoding UTF8` put a BOM in front of line 1, the reason every reader
+        # takes verbatim (bash under WSL included).
+        [System.IO.File]::WriteAllText((Join-Path $failHome ".last-failure"),
+            ($_.Exception.Message + "`n" + $stamp + "`n"), (New-Object System.Text.UTF8Encoding($false)))
     } catch { }
     $global:LASTEXITCODE = 1
     if ($ExakitRanAsFile) { exit 1 }
