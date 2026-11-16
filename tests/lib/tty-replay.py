@@ -205,8 +205,13 @@ if os.environ.get('TTY_REPLAY_RAW'):
     with open(os.environ['TTY_REPLAY_RAW'], 'w', encoding='utf-8') as f:
         f.write(re.sub(r'\x1b\[[0-9;?]*[A-Za-z]|\x1b[=>]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)?|[\x01\x02]', '', raw))
 
-# Minimal terminal: rows, cursor, ESC[nA (up), ESC[nJ (clear to end), ESC[K, \r
+# Minimal terminal: rows, cursor, ESC[nA (up), ESC[nJ (clear to end), ESC[K, \r,
+# ESC[H (home), ESC[2J (clear all) and the alternate screen (ESC[?1049h / l):
+# what is drawn there is gone when it is left, the screen before it back as it
+# was - the guide reader (ui_pager) is asserted on exactly that.
 scr, cur, col = [], 0, 0
+saved = None
+alt_seen = 0
 worst_per_line, worst_total = 0, 0
 def put(ch):
     global cur, col
@@ -236,12 +241,22 @@ while i < len(raw):
             n = int(m.group(1) or 1); k = m.group(2)
             if k == 'A': cur = max(0, cur - n); col = 0
             elif k == 'B': cur += n
+            elif k == 'H': cur = 0; col = 0
+            elif k == 'J' and m.group(1) == '2':
+                scr = []
             elif k == 'J':
                 while len(scr) <= cur: scr.append('')
                 scr[cur] = scr[cur][:col]; del scr[cur+1:]
             elif k == 'K':
                 while len(scr) <= cur: scr.append('')
                 scr[cur] = scr[cur][:col]
+            i += m.end(); continue
+        m = re.match(r'\x1b\[\?1049([hl])', raw[i:])
+        if m:
+            if m.group(1) == 'h' and saved is None:
+                saved = (scr, cur, col); scr, cur, col = [], 0, 0; alt_seen += 1
+            elif m.group(1) == 'l' and saved is not None:
+                scr, cur, col = saved; saved = None
             i += m.end(); continue
         # DEC private modes - the cursor (?25) and the menus' mouse reporting (?1000,
         # ?1006) - change no cell, as on a real terminal.
@@ -300,6 +315,7 @@ print("=== tables on screen: %d top borders, %d bottom borders (wanted 1 and %d)
 # already done. So count it in the RAW stream, where nothing can overwrite it.
 noise = len(re.findall(r'Terminated:? *\d*|Killed:? *\d*', raw))
 print("=== shell job announcements: %d ===" % noise)
+print("=== alternate screen: entered %d times, %s ===" % (alt_seen, "still in it" if saved is not None else "left"))
 # A spinner frame anywhere in the raw stream while a table is meant to own the
 # line is a SECOND animator. It cannot be seen on the screen -- the table's next
 # frame paints over it -- but it is writing to the same terminal, without a
@@ -313,4 +329,5 @@ if wait_failed:
     # What the scenario wrote last, for the next person to read the failure.
     print("=== since the last key, the end: %r ===" % SHOWN.sub('', since.decode('utf-8', 'replace'))[-400:])
 sys.exit(0 if (tops == 1 and bots == want_bots and noise == 0
-               and worst_per_line <= 1 and worst_total <= 1 and not wait_failed) else 1)
+               and worst_per_line <= 1 and worst_total <= 1 and not wait_failed
+               and saved is None) else 1)

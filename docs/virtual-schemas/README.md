@@ -39,6 +39,27 @@ Each guide below tells you where to find every value `exakit connect` asks for.
 - **Name (alias).** Lower case letters, digits and `_`, a letter first, at most
   40 characters. `sales` gives the schema `VS_SALES`.
 
+## Read a guide in the terminal
+
+You only need to remember `exakit connect`; every guide is reachable from it.
+
+- `exakit connect --help` opens a picker of the connectors: the same menu as
+  `exakit connect`, titled "Connector guides". Tick one or more with Space and
+  press Enter; each guide is shown in turn, full screen. Up/Down, PgUp/PgDn and
+  Space scroll a long one. Enter shows the next guide, `o` opens the guide's
+  `.md` file on your computer (or prints its path), `c` connects that source
+  now (the same as `exakit connect <connector>`), `q` quits.
+- In the `exakit connect` menu, `?` shows the highlighted connector's guide.
+- In a source's panel, type `?` alone and press Enter at any question (or at
+  the summary) to see that source's guide. Your answers are kept and the same
+  question comes back. A hidden prompt (the password, the connection string)
+  never treats `?` as the guide key: it can be part of a password or a URL.
+
+The guide disappears when you leave it: the screen you were on comes back as
+it was. Piped, with `--json` or in CI, `exakit connect --help` prints the list
+of connectors as before, and `exakit connect <connector> --help` always prints
+that connector's guide.
+
 ## After you connect
 
 ```bash

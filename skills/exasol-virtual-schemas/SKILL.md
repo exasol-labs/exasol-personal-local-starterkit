@@ -77,6 +77,12 @@ exakit source check <name> --json                                   # later: a f
   as `VS_SALES`, the credential in the CONNECTION `EXAKIT_SRC_SALES`.
 - `exakit connect` alone, at a terminal, opens a menu and a panel per source. An agent
   never lands in it; suggest it to a user who connects several sources by hand.
+  The guides are inside it: `?` in the menu shows the highlighted connector's guide,
+  and `?` alone then Enter at a panel question shows that source's (answers kept; a
+  hidden prompt never takes `?` as the key). At a terminal, `exakit connect --help`
+  opens a "Connector guides" picker (Enter next guide, `o` opens the .md, `c` connects
+  that source now, `q` quits). An agent's `exakit connect --help` (piped, `--json`, CI)
+  prints the connector list unchanged; `exakit connect <id> --help` prints one guide.
   The form marks each required field with a red `*` (a plain `*` without colour), and its
   first question takes a pasted connection string, read hidden (nothing shows while it is
   pasted; the hint lists the forms the connector reads, one per line). It is then shown

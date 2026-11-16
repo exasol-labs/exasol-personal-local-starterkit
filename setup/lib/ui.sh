@@ -2057,6 +2057,9 @@ ui_animation_stop() {
 # Left unset it is row 2, past a "Select All" row; a table with no such row
 # (exakit connect's) starts on row 1. A row nobody can pick still moves it on.
 # ⇄ twin: Invoke-ExakitTableMenu -StartRow.
+# UI_TABLE_HELP (optional): a function the ? key calls with the cursor's row,
+# to show that row's guide (exakit connect: the connector's). The hint then
+# says "? guide". Unset, ? does nothing. ⇄ twin: Invoke-ExakitTableMenu -Help.
 # UI_TABLE_AUTO=1: nobody is asked. The table is drawn once with its defaults
 # ticked, they are the answer, and it counts as confirmed - the caller was told
 # to do exactly this (`exakit persona add`). No key is read; ui_table_begin then
@@ -2158,7 +2161,9 @@ ui_table_menu() {
         ui_table_frame "$_utm_f" "$_utm_cur"
         _utm_open=""
         [ "$_UI_TREE_ON" = 1 ] && _ui_checkbox_tree_collapse_on && _utm_open=" · → to open"
-        _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle$_utm_open · Enter to confirm${UI_RESET:-}"
+        # A menu with a guide per row (UI_TABLE_HELP) says ? opens it.
+        _utm_help=""; [ -n "${UI_TABLE_HELP:-}" ] && _utm_help=" · ? guide"
+        _utm_hint="      ${UI_DIM:-}↑/↓ to move · Space to toggle$_utm_open · Enter to confirm$_utm_help${UI_RESET:-}"
         # Enter refused for an open "one" group with nothing picked: said under
         # the hint until the next key.
         _utm_extra=0
@@ -2234,6 +2239,11 @@ ui_table_menu() {
                 ;;
             k|K) _utm_move -1 ;;
             j|J) _utm_move 1 ;;
+            "?")
+                # The highlighted row's guide (UI_TABLE_HELP <row>), drawn in
+                # the alternate screen: this table comes back as it was, the
+                # cursor and the ticks where they were.
+                [ -n "${UI_TABLE_HELP:-}" ] && "$UI_TABLE_HELP" "$_utm_cur" ;;
         esac
         if [ "$_UI_TREE_ON" = 1 ]; then
             _ui_checkbox_tree_refresh "$_utm_sel"
@@ -2375,6 +2385,163 @@ ui_pick_menu() {
     printf '\033[1A\033[0J'
     if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
     if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
+    return 0
+}
+
+# --- full-window reader -----------------------------------------------------
+# ui_open_path <path> — a local file opened in this computer's own viewer:
+# macOS open, Linux xdg-open (in the background: it can stay with the viewer).
+# Returns 1 when the file is not there, there is no opener, or it failed; the
+# caller then says the path. Never an error. ⇄ twin: Open-ExakitPath.
+ui_open_path() {
+    [ -n "${1:-}" ] && [ -e "$1" ] || return 1
+    if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        command -v open >/dev/null 2>&1 || return 1
+        open "$1" >/dev/null 2>&1 < /dev/null && return 0
+        return 1
+    fi
+    command -v xdg-open >/dev/null 2>&1 || return 1
+    ( xdg-open "$1" >/dev/null 2>&1 < /dev/null & ) 2>/dev/null
+    return 0
+}
+
+# _ui_pager_leave — the reader's screen gone: the alternate screen left (the
+# screen before it comes back as it was), or, without one, the window cleared
+# for the caller to redraw; the cursor shown again.
+_ui_pager_leave() {
+    [ "${_UI_PAGER_ON:-0}" = 1 ] || return 0
+    if [ "${_UI_PAGER_ALT:-0}" = 1 ]; then printf '\033[?1049l'; else printf '\033[2J\033[H'; fi
+    printf '\033[?25h'
+    _UI_PAGER_ON=0
+}
+
+# _ui_pager_interrupted <INT|TERM> — Ctrl-C while the reader is up: its screen
+# left first, then _ui_interrupted (mouse off, echo back, the trap that stood
+# before runs, or exit 130). Never leaves anyone in the alternate screen.
+_ui_pager_interrupted() {
+    _ui_pager_leave
+    _ui_interrupted "$1" _UI_PAGER_PREV
+}
+
+# ui_pager <lines-file> <footer> [keys] — a full-window reader, for a guide:
+# the lines (one screen row each, colour included - the caller cuts them to
+# the width) in the terminal's alternate screen, so the screen under it comes
+# back exactly as it was. Longer than the window, ↑/↓ (j/k), PgUp/PgDn (b),
+# Space, Home and End scroll it; the footer, always on the last row, says the
+# keys and where in the text the window is. Enter, q and Esc return; so does
+# each letter in [keys] (lower case). With UI_PAGER_OPEN set to a file, o opens
+# it in place (ui_open_path) and the line above the footer says it was opened -
+# or where it is. UI_PAGER_KEY is the key that returned: enter, q, esc, eof, or
+# the letter. EXAKIT_NO_ALTSCREEN=1 (or a terminal without one: TERM linux,
+# vt100...) clears the window instead, and clears it again on the way out for
+# the caller to redraw. Returns 1, with nothing drawn, without a fancy terminal.
+# Ctrl-C gives the terminal back first (_ui_pager_interrupted).
+# ⇄ twin: Show-ExakitPager in ui.ps1.
+ui_pager() {
+    _upg_f="$1"; _upg_foot="$2"; _upg_keys="${3:-}"
+    UI_PAGER_KEY=eof
+    _upg_tty="$(_exakit_prompt_tty)"
+    [ -n "$_upg_tty" ] && [ "${UI_FANCY:-0}" = 1 ] || return 1
+    _upg_rows=()
+    while IFS= read -r _upg_l || [ -n "$_upg_l" ]; do _upg_rows[${#_upg_rows[@]}]="$_upg_l"; done < "$_upg_f"
+    _upg_n=${#_upg_rows[@]}
+    _UI_PAGER_ALT=1
+    [ "${EXAKIT_NO_ALTSCREEN:-0}" = 1 ] && _UI_PAGER_ALT=0
+    case "${TERM:-}" in linux|dumb|vt52|vt100|vt102|vt220|cons25) _UI_PAGER_ALT=0 ;; esac
+    _UI_PAGER_PREV_INT="$(trap -p INT)"; _UI_PAGER_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_pager_interrupted INT' INT
+    trap '_ui_pager_interrupted TERM' TERM
+    _UI_PAGER_ON=1
+    if [ "$_UI_PAGER_ALT" = 1 ]; then printf '\033[?1049h\033[2J\033[H\033[?25l'
+    else printf '\033[2J\033[H\033[?25l'; fi
+    _upg_top=0; _upg_note=""
+    while :; do
+        _upg_cols="$(_ui_term_cols)"
+        if [ -t 0 ]; then set -- $(stty size 2>/dev/null || true)
+        else set -- $( { stty size < /dev/tty; } 2>/dev/null || true); fi
+        _upg_tall="${1:-${LINES:-24}}"; case "$_upg_tall" in ''|*[!0-9]*|0) _upg_tall=24 ;; esac
+        [ "$_upg_tall" -ge 4 ] || _upg_tall=4
+        # Every row the footer needs is kept: the note above it (a path is
+        # said whole, over as many rows as it takes), the keys, and - when the
+        # text is longer than the window - where the window is, on the keys'
+        # row when it fits there, else on a row of its own.
+        _upg_w=$(( _upg_cols - 3 )); [ "$_upg_w" -ge 10 ] || _upg_w=10
+        _upg_nrows=0
+        [ -n "$_upg_note" ] && _upg_nrows=$(( (${#_upg_note} + _upg_w - 1) / _upg_w ))
+        _upg_view=$(( _upg_tall - 1 - _upg_nrows ))
+        _upg_hint="$_upg_foot"; _upg_hint2=""
+        if [ "$_upg_n" -gt "$_upg_view" ]; then
+            _upg_where="↑/↓ PgUp/PgDn scroll · $_upg_n-$_upg_n of $_upg_n"
+            if [ $(( ${#_upg_foot} + 3 + ${#_upg_where} )) -gt "$_upg_w" ]; then
+                _upg_view=$(( _upg_view - 1 )); _upg_hint2=1
+            fi
+        fi
+        [ "$_upg_view" -ge 1 ] || _upg_view=1
+        _upg_last=$(( _upg_n - _upg_view )); [ "$_upg_last" -ge 0 ] || _upg_last=0
+        [ "$_upg_top" -le "$_upg_last" ] || _upg_top="$_upg_last"
+        [ "$_upg_top" -ge 0 ] || _upg_top=0
+        if [ "$_upg_n" -gt "$_upg_view" ]; then
+            _upg_end=$(( _upg_top + _upg_view )); [ "$_upg_end" -le "$_upg_n" ] || _upg_end="$_upg_n"
+            _upg_where="↑/↓ PgUp/PgDn scroll · $(( _upg_top + 1 ))-$_upg_end of $_upg_n"
+            if [ -n "$_upg_hint2" ]; then _upg_hint2="$_upg_where"; else _upg_hint="$_upg_hint · $_upg_where"; fi
+        fi
+        _upg_frame=$'\033[H'
+        _upg_i=0
+        while [ "$_upg_i" -lt "$_upg_view" ]; do
+            _upg_frame="$_upg_frame${_upg_rows[$(( _upg_top + _upg_i ))]:-}${UI_RESET:-}"$'\033[K\n'
+            _upg_i=$(( _upg_i + 1 ))
+        done
+        _upg_i=0
+        while [ "$_upg_i" -lt "$_upg_nrows" ]; do
+            _upg_frame="$_upg_frame  ${_upg_note:$(( _upg_i * _upg_w )):$_upg_w}"$'\033[K\n'
+            _upg_i=$(( _upg_i + 1 ))
+        done
+        _upg_frame="$_upg_frame  ${UI_DIM:-}$(_ui_fit_row "$_upg_hint" 3 "$_upg_cols")${UI_RESET:-}"$'\033[K'
+        [ -n "$_upg_hint2" ] && _upg_frame="$_upg_frame"$'\n'"  ${UI_DIM:-}$(_ui_fit_row "$_upg_hint2" 3 "$_upg_cols")${UI_RESET:-}"$'\033[K'
+        printf '%s' "$_upg_frame"
+        _ui_menu_key "$_upg_tty" || { UI_PAGER_KEY=eof; break; }
+        _upg_was="$_upg_note"; _upg_note=""
+        case "$UI_KEY" in
+            "") UI_PAGER_KEY=enter; break ;;
+            q|Q) UI_PAGER_KEY=q; break ;;
+            " ") _upg_top=$(( _upg_top + _upg_view )) ;;
+            j|J) _upg_top=$(( _upg_top + 1 )) ;;
+            k|K) _upg_top=$(( _upg_top - 1 )) ;;
+            b|B) _upg_top=$(( _upg_top - _upg_view )) ;;
+            g) _upg_top=0 ;;
+            G) _upg_top="$_upg_last" ;;
+            o|O)
+                if [ -n "${UI_PAGER_OPEN:-}" ]; then
+                    # Said as the guides say a path: ~ for the home folder.
+                    _upg_shown="$UI_PAGER_OPEN"
+                    case "$_upg_shown" in "$HOME"/*) _upg_shown="~${_upg_shown#"$HOME"}" ;; esac
+                    if ui_open_path "$UI_PAGER_OPEN"; then _upg_note="Opened $_upg_shown"
+                    else _upg_note="The full guide: $_upg_shown"; fi
+                else
+                    _upg_note="$_upg_was"
+                fi ;;
+            "$(printf '\033')")
+                case "$UI_KEY_SEQ" in
+                    '') UI_PAGER_KEY=esc; break ;;
+                    '[A'|'OA') _upg_top=$(( _upg_top - 1 )) ;;
+                    '[B'|'OB') _upg_top=$(( _upg_top + 1 )) ;;
+                    '[5') _upg_top=$(( _upg_top - _upg_view )) ;;
+                    '[6') _upg_top=$(( _upg_top + _upg_view )) ;;
+                    '[H'|'[1'|'OH') _upg_top=0 ;;
+                    '[F'|'[4'|'OF') _upg_top="$_upg_last" ;;
+                    *) _upg_note="$_upg_was" ;;
+                esac ;;
+            *)
+                _upg_lk="$(printf '%s' "$UI_KEY" | tr '[:upper:]' '[:lower:]')"
+                case "$_upg_lk" in
+                    [a-z]) case "$_upg_keys" in *"$_upg_lk"*) UI_PAGER_KEY="$_upg_lk"; break ;; esac ;;
+                esac
+                _upg_note="$_upg_was" ;;
+        esac
+    done
+    _ui_pager_leave
+    if [ -n "$_UI_PAGER_PREV_INT" ]; then eval "$_UI_PAGER_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_PAGER_PREV_TERM" ]; then eval "$_UI_PAGER_PREV_TERM"; else trap - TERM; fi
     return 0
 }
 

@@ -4060,6 +4060,26 @@ if command -v python3 >/dev/null 2>&1; then
     check "the typed credential reached the CONNECTION - an arrow and Delete pressed in it dropped" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPASTE"]["secret"]')"
     lacks "...and the credential typed is in none of what was drawn" "$TUI_SECRET" "$TUI_RAW"
 
+    # ? alone at a question: the source's guide in the alternate screen (it
+    # disappears again), then the same question, every answer kept. ? in the
+    # hidden password is part of it. ? at the summary: the guide, then the
+    # summary again.
+    Q_BACK="$(when 'Enter/q back')"
+    TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
+        "$Q_PASTE\r${Q_NAME}tuiguide\r${Q_HOST}?\r$Q_BACK\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}?\r${Q_BACK}q${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw?$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}?\r$Q_BACK\x1b${Q_SUM}\r${Q_GO}y\r"
+    check "? in the panel: one panel and one table left, the guide screen gone" "0" "$TUI_RC"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "...the legend says ? shows the guide" "│     * required · ? + Enter: guide " "$TUI_RAW"
+    has "...the guide is this source's" "PostgreSQL - exakit connect postgresql" "$TUI_RAW"
+    has "...its footer says how back" "Enter/q back · o open full doc" "$TUI_RAW"
+    check "...shown three times (host, database, summary), always left again" "=== alternate screen: entered 3 times, left ===" \
+        "$(printf '%s\n' "$TUI_OUT" | grep '^=== alternate screen')"
+    lacks "...no guide text left on the screen" "PostgreSQL - exakit connect postgresql" "$TUI_SCREEN"
+    has "...the answers given before it kept" "$(prow 'Name (alias) for this connection *' 'tuiguide')" "$TUI_SCREEN"
+    has "...it connects with the answers typed after it" '"host": "pg.example.com"' "$(cat "$HOME_K/sources/tuiguide/"*.json 2>/dev/null)"
+    check "...? in the hidden password is part of the password" "pw?$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIGUIDE"]["secret"]')"
+    lacks "...which is in none of what was drawn" "$TUI_SECRET" "$TUI_RAW"
+
     # A pasted string WITH a password: read hidden, shown back masked, and the
     # password is the credential - the hidden prompt never asks, the panel
     # says "(from the string, hidden)", and the CONNECTION gets it. The source

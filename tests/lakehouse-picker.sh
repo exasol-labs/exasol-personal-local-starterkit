@@ -253,5 +253,85 @@ check "...also while the catalog still lists iceberg-rest and unity: the one Lak
     "11" "$(printf '%s\n' "$SCREEN" | grep -cE '^  │ \[ \] [├└]─ ')"
 lacks "...no Unity row of its own" "Unity Catalog (lakehouse engine)" "$SCREEN"
 
+printf '\n== the connector guides: exakit connect --help and the ? key ==\n'
+# tests/lib/guide-picker-scenario.sh: the guide picker, the connect menu's ?,
+# and setup/exakit itself, under a real pty. The guide is drawn in the
+# alternate screen (the replay models it), so the final screen is the one the
+# guide was opened over.
+guides() { # guides <mode> <title> <keys> - the replay's report in G_OUT, the final screen in G_SCREEN
+    G_OUT="$(GUIDE_MODE="$1" TTY_REPLAY_CTTY="${G_CTTY:-}" TTY_REPLAY_RAW="${TMPDIR:-/tmp}/guides.raw" TTY_REPLAY_COLS="${G_COLS:-100}" \
+        python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/guide-picker-scenario.sh" "$ROOT" "$2" "$3" 2>&1)"
+    G_RC=$?
+    G_SCREEN="$(printf '%s\n' "$G_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
+    G_RAW="$(cat "${TMPDIR:-/tmp}/guides.raw" 2>/dev/null)"
+    G_ALT="$(printf '%s\n' "$G_OUT" | grep '^=== alternate screen')"
+}
+gw() { printf '\\x02%s\\x03' "$1"; }                # a wait: nothing typed until this text shows
+G_MENU="$(gw 'Enter to confirm')"
+guides picker "Connector guides" " j $G_MENU\\r$(gw 'Enter next guide')\\r$(gw 'Enter done')q"
+check "the picker: two guides shown in turn, q after the last" "GUIDES RC=0 CONNECT=" "$(printf '%s\n' "$G_OUT" | grep '^GUIDES')"
+check "...one table left on screen, never stacked" "0" "$G_RC"
+has "...titled Connector guides" "╭─ Connector guides" "$G_SCREEN"
+has "...the connect menu's own rows" "├─ PostgreSQL" "$G_SCREEN"
+has "...the Lakehouse row too" "├─ Lakehouse (Iceberg / Delta)" "$G_SCREEN"
+has "...its last row Quits" "[ ] Quit" "$G_SCREEN"
+has "...its own line above it" "Tick one or more connectors; Enter shows each one's guide." "$G_SCREEN"
+has "...the hint says ? shows a guide" "Space to toggle · → to open · Enter to confirm · ? guide" "$G_RAW"
+has "...the first guide is PostgreSQL's" "PostgreSQL - exakit connect postgresql" "$G_RAW"
+has "...its footer: next, open, connect, quit" "Enter next guide · o open full doc · c connect PostgreSQL now · q quit" "$G_RAW"
+has "...the last guide's Enter says done" "Enter done · o open full doc · c connect MySQL now · q quit" "$G_RAW"
+has "...a guide longer than the window scrolls, the footer says where" "↑/↓ PgUp/PgDn scroll · 1-22 of" "$G_RAW"
+has "...on a row of its own when the keys fill theirs" "· q quit
+  ↑/↓ PgUp/PgDn scroll" "$(printf '%s' "$G_RAW" | tr -d '\r')"
+check "...each guide in the alternate screen, which is always left" "=== alternate screen: entered 2 times, left ===" "$G_ALT"
+lacks "...so no guide text stays on the screen" "exakit connect postgresql" "$G_SCREEN"
+guides picker "Connector guides" " $G_MENU\\r$(gw 'Enter done')\\x1b[6~$(gw 'of')\\x1b[B$(gw 'of')\\x1b[5~$(gw 'of')jkbG c"
+check "PgDn, Down, PgUp, j, k, b, G and Space scroll; c connects that source" "GUIDES RC=0 CONNECT=postgresql" "$(printf '%s\n' "$G_OUT" | grep '^GUIDES')"
+has "...the window moved" "PgUp/PgDn scroll · 2-23 of" "$G_RAW"
+G_N="$(EXAKIT_NO_IP_LOOKUP=1 python3 "$ROOT/setup/virtual-schemas/engine/guide.py" --defs "$ROOT/setup/virtual-schemas" --width 100 postgresql | wc -l | tr -d ' ')"
+has "...and G is the last line (22 of the window's 24 rows, the footer the last two)" "PgUp/PgDn scroll · $(( G_N - 21 ))-$G_N of $G_N" "$G_RAW"
+# 140 columns: the path, said whole, fits on the note's one row.
+G_COLS=140 guides picker "Connector guides" " $G_MENU\\r$(gw 'Enter done')o$(gw 'Opened')\\r"
+has "o opens the guide's own .md on this computer" "OPEN $ROOT/docs/virtual-schemas/postgresql.md" "$G_OUT"
+has "...and says so above the footer" "Opened $ROOT/docs/virtual-schemas/postgresql.md" "$G_RAW"
+check "...the guide stays until Enter" "GUIDES RC=0 CONNECT=" "$(printf '%s\n' "$G_OUT" | grep '^GUIDES')"
+G_OUT="$(GUIDE_OPEN_FAILS=1 GUIDE_MODE=picker TTY_REPLAY_RAW="${TMPDIR:-/tmp}/guides.raw" TTY_REPLAY_COLS=140 \
+    python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/guide-picker-scenario.sh" "$ROOT" "Connector guides" \
+    " $G_MENU\\r$(gw 'Enter done')o$(gw 'The full guide:')\\r" 2>&1)"
+has "an opener that fails: the path is said, nothing is an error" "The full guide: $ROOT/docs/virtual-schemas/postgresql.md" "$(cat "${TMPDIR:-/tmp}/guides.raw")"
+check "...and the picker ends as usual" "GUIDES RC=0 CONNECT=" "$(printf '%s\n' "$G_OUT" | grep '^GUIDES')"
+guides picker "Connector guides" "jjjjjjjjj j $G_MENU\\r$(gw 'Enter done')\\r"
+has "a Lakehouse catalog ticked: Lakehouse's guide, nothing more to pick under it" "c connect Lakehouse (Iceberg / Delta) now" "$G_RAW"
+lacks "...no Pick one of the options refusal" "Pick one of the options" "$G_RAW"
+# Ctrl-C reaches the scenario as SIGINT only from its controlling terminal.
+G_CTTY=1 guides picker "Connector guides" " $G_MENU\\r$(gw 'Enter done')\\x03"
+check "Ctrl-C in a guide: the alternate screen is left before the command ends" "=== alternate screen: entered 1 times, left ===" "$G_ALT"
+lacks "...the command ends there (130), nothing after it" "GUIDES RC=" "$G_OUT"
+guides picker "Connector guides" "k$G_MENU\\r"
+check "Quit: no guide, nothing to connect" "GUIDES RC=0 CONNECT=|" "$(printf '%s\n' "$G_OUT" | grep '^GUIDES')|$(printf '%s\n' "$G_ALT" | grep -o 'entered [1-9]')"
+
+guides menu "Connect external sources" "jj $G_MENU?$(gw 'Enter/q back')\\r$G_MENU\\r"
+check "? in the connect menu: the highlighted row's guide, then the menu as it was" "PICKED=sqlserver RC=0" "$(printf '%s\n' "$G_OUT" | grep '^PICKED')"
+check "...one menu left on screen" "0" "$G_RC"
+has "...the guide is SQL Server's" "SQL Server - exakit connect sqlserver" "$G_RAW"
+has "...its footer says how back" "Enter/q back · o open full doc" "$G_RAW"
+has "...the menu hint says ? guide" "Enter to confirm · ? guide" "$G_RAW"
+check "...drawn in the alternate screen, and left" "=== alternate screen: entered 1 times, left ===" "$G_ALT"
+has "...the tick made before ? is kept" "[✓] ├─ SQL Server" "$G_SCREEN"
+guides menu "Connect external sources" "jjjjjjjjj j?$(gw 'Enter/q back')q$G_MENU\\x1b[C?$(gw 'Enter/q back')\\x1b$G_MENU\\r"
+has "? on a Lakehouse catalog row: Lakehouse's guide" "Lakehouse (Iceberg / Delta) - exakit connect lakehouse" "$G_RAW"
+check "...q and Esc go back too; the menu carries on" "PICKED=lakehouse RC=0" "$(printf '%s\n' "$G_OUT" | grep '^PICKED')"
+guides menu "Connect external sources" "k?$G_MENU\\r"
+check "? on Skip shows nothing" "PICKED= RC=5|" "$(printf '%s\n' "$G_OUT" | grep '^PICKED')|$(printf '%s\n' "$G_ALT" | grep -o 'entered [1-9]')"
+
+guides exakit "Connector guides" " $G_MENU\\r$(gw 'Enter done')c"
+has "setup/exakit connect --help at a terminal opens the picker" "╭─ Connector guides" "$G_SCREEN"
+has "...c runs exakit connect <id>: here, with nothing installed, its own answer" "No installation found" "$G_OUT"
+check "...and its exit code" "EXAKIT RC=4" "$(printf '%s\n' "$G_OUT" | grep '^EXAKIT')"
+G_PIPE="$(HOME="${TMPDIR:-/tmp}" EXAKIT_HOME="${TMPDIR:-/tmp}/kit" COLUMNS=80 bash "$ROOT/setup/exakit" connect --help </dev/null 2>&1)"
+lacks "...not on a pipe: the list as before" "Connector guides" "$G_PIPE"
+has "...the list itself" "One connector's guide: exakit connect <connector> --help" "$G_PIPE"
+lacks "...no alternate screen" "$(printf '\033[?1049h')" "$G_PIPE"
+
 printf '\n%d checks, %d failed\n' "$checks" "$fails"
 [ "$fails" -eq 0 ]

@@ -558,6 +558,9 @@ function Get-ExakitManifestValue { param([string]$Path)
 . (Join-Path $repo "setup/lib/core-setup.ps1")
 . (Join-Path $repo "setup/lib/virtual-schemas.ps1")
 function Get-ExakitVsDefs { return $defs }
+# ? alone at a question shows the guide (the reader, tested in
+# lakehouse-picker-ps.ps1): here it is recorded.
+function Show-ExakitVsGuideBack { param([string]$Connector) Add-Content -LiteralPath $record -Value "GUIDE $Connector" }
 $script:UiFancy = $false
 Set-ExakitPalette
 $script:EvtCols = 100
@@ -683,6 +686,17 @@ Check "...which is asked again, its answer the default" $true ($script:formAsked
 Check "...instead of asking to change every answer" 0 @($script:formAsked | Where-Object { $_ -like "CONFIRM*" }).Count
 Check "...and the corrected host is the one planned" $true $script:formOut.Contains("FORM postgresql --name psjump --set host=pg.example.com ")
 Check "...the summary after it offers to leave the source out" $true ($script:formAsked -contains "ASK Number to change, Enter to continue, skip to leave this source out")
+
+# ? alone at a question: the guide, then the same question again, every answer
+# kept; ? in the hidden password is part of it; ? at the summary: the guide,
+# then the summary again.
+Invoke-FormChild @("", "?", "psguide", "pg.example.com", "", "sales", "", "reader", "?", "", "", "?", "")
+Check "? at a question shows this source's guide (and at the summary)" "GUIDE postgresql|GUIDE postgresql" ((@($script:formAsked | Where-Object { $_ -like "GUIDE *" })) -join '|')
+Check "...then asks the same question again" 2 @($script:formAsked | Where-Object { $_ -like "ASK Name (alias) for this connection *" }).Count
+Check "...the summary too" 2 @($script:formAsked | Where-Object { $_ -like "ASK Number to change*" }).Count
+Check "...and the answers are what was typed around it" "FORM postgresql --name psguide --set host=pg.example.com --set port=5432 --set database=sales --set schema=public --set user=reader --set tls=verify" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
+Check "...? in the hidden password was the password, no guide" 2 @($script:formAsked | Where-Object { $_ -like "GUIDE *" }).Count
+Check "the legend says ? shows the guide" $true $script:formOut.Contains("|     * required - ? + Enter: guide ")
 
 # A refusal naming two inputs opens the summary with its reason; "-" takes an
 # optional answer back to its default; skip leaves the source out.
