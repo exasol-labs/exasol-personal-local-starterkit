@@ -185,13 +185,16 @@ The files live in `~/.exasol-starter-kit/credentials/`.
 
 `exakit uninstall` is the one destructive command here. A full uninstall removes
 the database **and its data**, the managed AI-client configs, the skills the kit
-placed and the binaries. It also removes the launcher download cache, empty
+placed and the binaries. Kit 0.2.5 and later also remove the launcher download cache, empty
 `~/.exasol` folders, the kit's autostart entries (orphaned ones too), the
 `exasol/nano` image when no container uses it (on Linux/WSL/Windows with
 Docker or Podman; macOS runs the database in the launcher's VM), and the kit's
-own MCP server processes on macOS/Linux. Exit 0 can come with a warning line
-when the container engine could not be asked: nothing is known to remain, and
-the line names the command to check by hand.
+own MCP server processes on macOS/Linux. Exit codes (kit 0.2.5 and later): `0`
+done, a dry run, or nothing to do; `1` something remains (the output names it
+and the command that removes it); `2` bad option; `5` not confirmed. Exit 0 can
+come with a line naming something the kit could not check or remove (an engine
+that did not answer, or an exasol/nano image it kept): the database is gone, and
+the line names the command to finish by hand.
 
 ```bash
 exakit uninstall --dry-run        # the full plan; changes nothing
