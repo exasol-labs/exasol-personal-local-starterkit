@@ -300,7 +300,7 @@ try {
     }
 
     # --- step 5: AI bridge (server, clients, skills) ----------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 5/7  AI bridge (MCP server, clients and skills)")) {
+    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 5/7  Setting up AI bridge (MCP server, clients and skills)")) {
         if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
                 # One line for this step's server work: the spinner narrates
                 # starting the launcher's MCP server and its healing, so the

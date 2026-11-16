@@ -1496,25 +1496,30 @@ check "an unknown id among them still refuses" "yes" "$( (
     ); [ $? -ne 0 ] && echo yes || echo no )"
 
 echo
-echo "a persona whose add-ons are all gets the whole marketplace:"
-offer() { # offer <preselect> — the filter exakit_marketplace_offer hands the menu
+echo "the install's closing add-ons: Dash Server and JSON Tables, installed when missing, no question:"
+offer() { # offer <installed ids> — what exakit_marketplace_offer hands the menu
     (
         _exakit_marketplace_load_modules() { :; }
-        exakit_marketplace_has_pending() { return 0; }
         _exakit_marketplace_warm_about() { :; }
-        _exakit_prompt_tty() { printf '/dev/tty'; }
-        ui_rule() { :; }
+        _exakit_marketplace_catalog_about() { :; }
+        _exakit_addon_offerable() { return 0; }
+        _exakit_addon_system_present() { return 1; }
+        exakit_marketplace_addon_installed() { case " $INSTALLED_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
         heading() { printf 'HEADING %s\n' "$1"; }
-        exakit_marketplace_menu() { printf 'MENU ONLY=[%s] TICKED=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}"; }
-        unset EXAKIT_MARKETPLACE_ADDONS EXAKIT_SOFT_FAILED
-        EXAKIT_MARKETPLACE_PRESELECT="$1" exakit_marketplace_offer
+        ui_checkbox_menu() { printf 'ASKED\n'; }
+        exakit_marketplace_menu() { printf 'MENU ONLY=[%s] TICKED=[%s] AUTO=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${UI_TABLE_AUTO:-}"; }
+        unset EXAKIT_MARKETPLACE_ADDONS EXAKIT_SOFT_FAILED EXAKIT_MARKETPLACE_PRESELECT
+        INSTALLED_IDS="$1" exakit_marketplace_offer
     )
 }
-check "all: every add-on, no filter"      "HEADING Add-ons for your personas|MENU ONLY=[] TICKED=[all]" "$(offer all | tr '\n' '|' | sed 's/|$//')"
-check "a list: every add-on listed, those ticked" "MENU ONLY=[] TICKED=[notebook,udf-devkit]" "$(offer notebook,udf-devkit | grep MENU)"
+check "both missing: both installed, ticked, no question" \
+    "HEADING Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
+check "one there: only the other"  "MENU ONLY=[json-tables] TICKED=[json-tables] AUTO=[1]" "$(offer dash-server | grep MENU)"
+check "both there: nothing at all" "" "$(offer "dash-server json-tables")"
 _ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
-has "the Windows twin lists every add-on too" 'Remove-Item env:EXAKIT_MARKETPLACE_ONLY' "$_ps_offer"
-lacks "...and never narrows to the persona's" '$env:EXAKIT_MARKETPLACE_ONLY = ' "$_ps_offer"
+has "the Windows twin narrows to the missing ones" '$env:EXAKIT_MARKETPLACE_ONLY = ($ids -join' "$_ps_offer"
+has "...and draws them ticked, unasked"           '$env:UI_TABLE_AUTO = "1"'                  "$_ps_offer"
+lacks "...with no question"                       'Read-ExakitCheckboxMenu'                     "$_ps_offer"
 
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

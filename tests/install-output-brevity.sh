@@ -234,23 +234,22 @@ has "...and its twin"                  'Add-ExakitTableRow -Kind "plain" -Label 
 # is the answer, and every loadable file in it is taken without a question.
 lacks "and the bulk-format menu is gone" '_bsl_labels' "$EXAPUMP_SH"
 
-printf '\n== the closing offer is two words and a question ==\n'
+printf '\n== the closing add-ons are installed, not offered ==\n'
 
-# A HEADING, not an action: the dim bullet marked the offer as one more thing
-# being done TO the machine, and sat level with the question it introduces.
-has "the pitch"            'heading "Supercharge Exasol with add-ons from marketplace"'          "$COMMON"
-has "...on Windows too"    'Write-ExakitHeading "Supercharge Exasol with add-ons from marketplace"' "$COMMON_PS1"
-# Two spaces, the same column as begin_step's own arrow: at four it sat in the
-# action gutter, level with the question it introduces.
+# No question and no pitch: the add-ons every kit gets (Dash Server, JSON Tables)
+# are installed when missing, their rows drawn at once and filled in live.
+lacks "no gate question"          'Explore marketplace ?'                               "$COMMON$COMMON_PS1"
+lacks "no pitch"                  'Supercharge Exasol with add-ons from marketplace'   "$COMMON$COMMON_PS1"
+lacks "no 'maybe later'"          'Maybe later'                                        "$COMMON$COMMON_PS1"
+lacks "no spinner before the table" 'Getting the add-ons ready'                        "$COMMON$COMMON_PS1"
+has "the add-ons every kit gets"  'EXAKIT_AUTO_ADDONS="dash-server json-tables"'        "$COMMON"
+has "...on Windows too"           '$script:ExakitAutoAddons = @("dash-server", "json-tables")' "$COMMON_PS1"
+has "drawn ticked and confirmed"  'UI_TABLE_AUTO=1 exakit_marketplace_menu'              "$COMMON"
+has "...on Windows too"           '$env:UI_TABLE_AUTO = "1"'                           "$COMMON_PS1"
+has "under a heading"             'heading "Add-ons"'                                   "$COMMON"
+has "...on Windows too"           'Write-ExakitHeading "Add-ons"'                       "$COMMON_PS1"
+# Two spaces, the same column as begin_step's own arrow.
 has "the heading is at the STEP indent" "printf '  %s%s%s %s" "$COMMON"
-lacks "no three-line pitch" "editor integration, extra data formats"          "$COMMON$COMMON_PS1"
-# The bare "Explore ?" never said what it was asking about.
-has "the question"         'ui_checkbox_menu "Explore marketplace ?" "1"'      "$COMMON"
-has "...on Windows too"    '-Title "Explore marketplace ?"'                    "$COMMON_PS1"
-lacks "no 'Browse it now?'" "Browse it now?"                                  "$COMMON$COMMON_PS1"
-lacks "no 'open the marketplace' row" "Yes, open the marketplace"             "$COMMON$COMMON_PS1"
-lacks "no 'maybe later' row"          "No, maybe later"                       "$COMMON$COMMON_PS1"
-has "just Yes and No"      '-Options @("Yes", "No")'                          "$COMMON_PS1"
 
 printf '\n== the quiet gate silences the screen, never the log ==\n'
 
@@ -278,14 +277,6 @@ check "the rule has air above it" "" "$(printf '%s\n' "$RULE" | sed -n 1p)"
 check "one divider line"          "1" "$(printf '%s\n' "$RULE" | grep -c "$UI_HR")"
 has "and air below it in the source" "'\\n  %s%s%s\\n\\n'" "$(cat "$ROOT/setup/lib/ui.sh")"
 has "and it draws a divider" "$UI_HR$UI_HR$UI_HR" "$RULE"
-has "the offer is behind the seam" 'ui_rule
-    # A heading, not an action: what follows the rule is a separate offer, and
-    # the dim bullet marked it as one more thing being done TO the machine.
-    heading "Supercharge Exasol with add-ons from marketplace"' "$COMMON"
-has "...on Windows too" 'Write-ExakitRule
-    # A heading, not an action: what follows the rule is a separate offer, and
-    # the dim bullet marked it as one more thing being done TO the machine.
-    Write-ExakitHeading "Supercharge Exasol with add-ons from marketplace"' "$COMMON_PS1"
 has "ui.sh has the rule"  "ui_rule()"                  "$(cat "$ROOT/setup/lib/ui.sh")"
 has "ui.ps1 has its twin" "function Write-ExakitRule"  "$(cat "$ROOT/setup/lib/ui.ps1")"
 

@@ -266,10 +266,27 @@ class MCPAccessSubsystem:
             )
             snapshot_reference = snapshot_record["snapshot_id"]
 
-        for adapter, rendered, artifact, _ in rendered_items:
-            del adapter
-            self._apply_render(rendered)
-            artifact.permissions = self._security.apply_managed_permissions(rendered.path)
+        # Each client's file is written by a worker of its own, at the same time; two clients that share a file are
+        # written one after the other by the same worker. The manifest is then updated in order, on this thread.
+        by_path: dict[str, list[tuple[RenderResult, ArtifactReference]]] = {}
+        for _adapter, rendered, artifact, _ in rendered_items:
+            by_path.setdefault(str(rendered.path), []).append((rendered, artifact))
+
+        def write(items: list[tuple[RenderResult, ArtifactReference]]) -> None:
+            for rendered, artifact in items:
+                self._apply_render(rendered)
+                artifact.permissions = self._security.apply_managed_permissions(rendered.path)
+
+        if len(by_path) > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=min(8, len(by_path)), thread_name_prefix="exakit-mcp-write") as pool:
+                for done in [pool.submit(write, items) for items in by_path.values()]:
+                    done.result()           # a write that failed raises here, as it did one at a time
+        else:
+            for items in by_path.values():
+                write(items)
+        for _adapter, _rendered, artifact, _ in rendered_items:
             stored_artifact = manifest_repository.upsert_artifact(artifact)
             artifacts[artifacts.index(artifact)] = stored_artifact
 

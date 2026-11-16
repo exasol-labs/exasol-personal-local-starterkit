@@ -302,7 +302,11 @@ function Invoke-ExakitPersonaData {
     [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
         -Label "some of the data" `
         -Warning "Some of the data did not finish loading." `
-        -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
+        -Body {
+            $env:EXAKIT_INSTALL_AUTO_DATA = "1"
+            try { Request-ExakitDataLoadOffer -KitRoot $KitRoot }
+            finally { Remove-Item Env:EXAKIT_INSTALL_AUTO_DATA -ErrorAction SilentlyContinue }
+        })
 }
 
 # Write-ExakitPersonaMarketplaceNote - after the closing offer showed only the

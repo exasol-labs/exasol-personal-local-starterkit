@@ -243,7 +243,9 @@ _mkt="$( (
     exakit_marketplace_menu() { :; }
     printf 'soft=[%s] ' "${EXAKIT_SOFT_FAILED:-}"
     grep -q 'Sample data did not finish loading' "$WORK/persona.out" && printf 'warned ' || printf 'quiet '
-    exakit_marketplace_offer 2>/dev/null | grep -c 'HEADING Supercharge Exasol with add-ons from marketplace'
+    _exakit_addon_offerable() { return 0; }; _exakit_addon_system_present() { return 1; }
+    exakit_marketplace_addon_installed() { return 1; }; _exakit_marketplace_catalog_about() { :; }
+    exakit_marketplace_offer 2>/dev/null | grep -c 'HEADING Add-ons'
 ) )"
 check "only the file fails: no soft failure, no warning, the marketplace is offered" "soft=[] quiet 1" "$_mkt"
 # No answer variables and no terminal: the table's defaults stand, and the

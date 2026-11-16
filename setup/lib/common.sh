@@ -6218,7 +6218,7 @@ EXAKIT_MM_COVERED
     EXAKIT_ADDON_TABLE_LABELS="$_mm_labels"
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # The help command supplies details beyond the table.
-    info "Details on any add-on: exakit help <id>"
+    [ "${UI_TABLE_AUTO:-0}" = 1 ] || info "Details on any add-on: exakit help <id>"
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
@@ -6458,93 +6458,57 @@ exakit_print_ready_line() {
     return 0
 }
 
+# THE ADD-ONS EVERY KIT GETS. Installed at the end of the install when they are
+# missing - no question first: their rows are drawn at once, ticked, and turn
+# into the live progress table while both install side by side (apply.py runs
+# parallel-safe add-ons in one turn). Twin: $script:ExakitAutoAddons.
+EXAKIT_AUTO_ADDONS="dash-server json-tables"
+
+# _exakit_marketplace_catalog_about <ids csv> — id|description from the catalog's
+# own copy of each repository's About: no lookup stands between the install and
+# the table. The real About is refreshed in the background meanwhile.
+_exakit_marketplace_catalog_about() {
+    run_python_any - "$(_exakit_marketplace_root)/marketplace/catalog.json" "$1" <<'PY' 2>/dev/null
+import json, sys
+wanted = sys.argv[2].split(",")
+for row in json.load(open(sys.argv[1], encoding="utf-8")).get("addons", []):
+    if row.get("id") in wanted:
+        about = (row.get("kit_about") or (row.get("github") or {}).get("about") or "").replace("|", "/").replace("\n", " ")
+        print(f"{row['id']}|{about}")
+PY
+}
+
 exakit_marketplace_offer() {
-    # Several checks per add-on and a description fetched for each take
-    # seconds: a turning spinner says the install is still going, not stuck.
-    ui_spin_begin "Getting the add-ons ready"
     # The installers run this in a subshell, where the loader keeps no memo:
     # this one is the subshell's own, and goes when it does.
     if [ -z "$_EXAKIT_HOOK_MEMO" ] && [ "${BASH_SUBSHELL:-0}" != 0 ] && _exakit_hook_memo_begin; then
         trap 'exakit_sweep_tmp' EXIT
     fi
     _exakit_marketplace_load_modules
-    exakit_marketplace_has_pending || { ui_spin_end; return 0; }
-    # Fill the About cache now, while the gate question below is still being
-    # read: this is the one screen where the cache is reliably cold (a machine
-    # minutes old), and the table it feeds does not exist yet.
-    _exakit_marketplace_warm_about
-    ui_spin_end
 
-    # A scripted answer wins over any prompt (same contract as the menu).
+    # A scripted answer wins (same contract as the menu): EXAKIT_MARKETPLACE_ADDONS=none installs nothing.
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
         exakit_marketplace_menu
         return $?
     fi
+    # Only a database that never installed holds them back.
+    exakit_soft_failed runtime && return 0
 
-    # THE PERSONAS' ADD-ONS, picked on screen: offered straight away, ticked,
-    # and only those - the rest of the marketplace is one command away and the
-    # closing note says so. Enter installs them; Skip backs out.
-    # A persona whose add-ons are "all" is the whole marketplace, every row
-    # ticked: "all" is not an id, and as a filter it matched nothing, which
-    # ended the offer with "Everything available is already covered."
-    # Independent of the data: a dataset that failed to download is repaired with
-    # `exakit data-load` and is no reason to withhold the persona's notebooks and
-    # dashboards. Only a database that never installed holds them back.
-    if [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] && ! exakit_soft_failed runtime && [ -n "$(_exakit_prompt_tty)" ]; then
-        # No rule above it: the personas' add-ons carry on from their data, as
-        # one setup, rather than reading as a separate offer.
-        heading "Add-ons for your personas"
-        # Every add-on is listed; the personas' own are the ones ticked
-        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
-        # Each row says what the add-on does for the persona, in the persona's
-        # own words, not the add-on repository's About (NEW-10).
-        _mo_reasons=""
-        if [ -n "${EXAKIT_PERSONA:-}" ] && command -v _exakit_persona_service >/dev/null 2>&1; then
-            _mo_reasons="$(_exakit_persona_service addon-reasons "$EXAKIT_PERSONA" 2>/dev/null || true)"
-        fi
-        EXAKIT_MARKETPLACE_REASONS="$_mo_reasons" EXAKIT_MARKETPLACE_ONLY="" exakit_marketplace_menu || true
-        return 0
-    fi
-
-    # "Done and working" must be true before it is said: a run that recorded
-    # soft failures points at the marketplace without the celebration.
-    if [ -n "${EXAKIT_SOFT_FAILED:-}" ] || [ -z "$(_exakit_prompt_tty)" ]; then
-        info "Optional add-ons (dashboards & more): exakit marketplace"
-        return 0
-    fi
-
-    # One gate question first — the same cursor menu every other kit choice
-    # uses, no typing: Yes is pre-ticked, No is the exclusive opt-out. Only a
-    # Yes opens the marketplace selection itself (where the available add-ons
-    # come pre-selected, so Enter installs them and Skip still backs out).
-    #
-    # "Your starter kit is ready to use." used to be printed here. It is now
-    # exakit_print_ready_line, called by the setup scripts before this offer:
-    # behind these gates it reached only an interactive, fully-successful run
-    # that still had an add-on left to install, which is a minority of runs.
-    # The install is over; what follows is a different question. A rule with air
-    # around it is the seam, so the offer does not read as one more install step.
-    ui_rule
-    # A heading, not an action: what follows the rule is a separate offer, and
-    # the dim bullet marked it as one more thing being done TO the machine.
-    heading "Supercharge Exasol with add-ons from marketplace"
-    EXAKIT_CHECKBOX_EXCLUSIVE=2
-    ui_checkbox_menu "Explore marketplace ?" "1" \
-        "Yes" \
-        "No"
-    case ",$EXAKIT_CHECKBOX_SELECTION," in
-        *",1,"*)
-            exakit_marketplace_menu || true
-            # "Browse again: exakit marketplace · how to use one: exakit
-            # help <add-on>" stood here. The table above has just said what was
-            # installed and what each one gives you; the reader has not asked
-            # to browse again, and the closing support line already names
-            # `exakit help`.
-            ;;
-        *)
-            info "Maybe later — browse any time with: exakit marketplace"
-            ;;
-    esac
+    _mo_ids=""
+    for _mo_id in $EXAKIT_AUTO_ADDONS $(printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}" | tr ',' ' '); do
+        case ",$_mo_ids," in *",$_mo_id,"*) continue ;; esac
+        _exakit_addon_offerable "$_mo_id" || continue
+        exakit_marketplace_addon_installed "$_mo_id" && continue
+        _exakit_addon_system_present "$_mo_id" && continue
+        _mo_ids="${_mo_ids:+$_mo_ids,}$_mo_id"
+    done
+    [ -n "$_mo_ids" ] || return 0
+    _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"
+    # The checks the table does not need, behind it: the About cache for `exakit marketplace` later.
+    ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
+    heading "Add-ons"
+    EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="$_mo_ids" EXAKIT_MARKETPLACE_PRESELECT="$_mo_ids" \
+        UI_TABLE_AUTO=1 exakit_marketplace_menu || true
     return 0
 }
 
@@ -11860,6 +11824,7 @@ exakit_mcp_setup() {
 
     EXAKIT_MCP_TABLE_STATE=""
     _mcp_rows=""                    # the table rows the progress phase fills in
+    _mcp_auto=0                     # EXAKIT_MCP_AUTO picked the clients: no table, a spinner
 
     # EXAKIT_MCP_CLIENTS lets an agent-driven or scripted install pick clients
     # without a prompt (e.g. "claude", "claude,cursor", "all", or "1,2").
@@ -11896,6 +11861,21 @@ exakit_mcp_setup() {
                 ;;
         esac
         info "Configuring MCP clients from EXAKIT_MCP_CLIENTS: $_clients_csv"
+    elif [ "${EXAKIT_MCP_AUTO:-0}" = 1 ]; then
+        # THE INSTALL CONNECTS WHAT IS THERE. Every AI client found on this
+        # machine and not connected yet, without a table; nothing found, nothing said.
+        _clients_csv=""
+        if _client_status="$(exakit_mcp_discover_status)"; then
+            while read -r _st_id _st_state; do
+                [ "$_st_state" = pending ] && [ -n "$_st_id" ] && _clients_csv="${_clients_csv:+$_clients_csv,}$_st_id"
+            done <<EXAKIT_MCP_AUTO_EOF
+$_client_status
+EXAKIT_MCP_AUTO_EOF
+        else
+            _clients_csv="$(exakit_mcp_detected_clients 2>/dev/null || true)"
+        fi
+        [ -n "$_clients_csv" ] || return 0
+        _mcp_auto=1
     else
         # Show the FULL list of supported clients so the user sees everything
         # the kit can connect: pending clients (installed, not connected yet)
@@ -12131,6 +12111,26 @@ EOF
     # the table there is nothing to add — and a line printed here would land
     # between the menu's frame and the animator's first frame, which is the one
     # place on this screen where nothing may be printed.
+    if [ "${_mcp_auto:-0}" = 1 ]; then
+        # The read-only user is prepared first: it says its one line, then the
+        # spinner turns while every client's file is written (side by side).
+        _mcp_auto=0
+        exakit_configure_mcp_readonly_access || { rm -f "$_result_file"; return 1; }
+        EXAKIT_MCP_READONLY_READY=1
+        ui_spin_begin "Connecting AI clients"
+        if exakit_run_mcp_setup_cli "$_clients_csv" "$_result_file"; then
+            :
+        else
+            _setup_status=$?
+        fi
+        ui_spin_end
+        _mcp_auto_ok="$(_exakit_mcp_result_states "$_result_file" 2>/dev/null | grep -c ' configured$' || true)"
+        rm -f "$_result_file"
+        [ "$_setup_status" -eq 0 ] || return "$_setup_status"
+        ok "AI clients connected: ${_mcp_auto_ok:-0}"
+        exakit_clear_soft_failure mcp_clients
+        return 0
+    fi
     [ "$_mcp_table_shown" = 1 ] || info "Applying MCP setup"
     if exakit_run_mcp_setup_cli "$_clients_csv" "$_result_file"; then
         :
@@ -12345,7 +12345,9 @@ exakit_maybe_offer_mcp_setup() {
     # non-interactive runs keep that default.
     # No lead-in: the ticks directly above already said the runtime and the
     # server are ready, and this restated them in a sentence.
-    if ! exakit_mcp_setup; then
+    # EXAKIT_MCP_AUTO: the install connects every AI client found here without a
+    # table; `exakit mcp-setup` run by hand still asks.
+    if ! EXAKIT_MCP_AUTO=1 exakit_mcp_setup; then
         warn "Your local database is installed, but AI client setup did not finish cleanly."
         warn "Retry any time with: exakit mcp-setup"
         exakit_note_failure "the AI client configuration did not finish (see the log)"
@@ -12440,6 +12442,27 @@ _exakit_offer_notes() {
 # before the file was looked at, so EXAKIT_PERSONA plus EXAKIT_DATA_FILE loaded
 # the persona's datasets and dropped the file without a word. Then the external
 # source, which unattended is only ever the command to run.
+# _exakit_auto_sample_data <kit_root> — the install's sample load: the preselected
+# datasets not loaded yet, named once ("Sample datasets (tpch, energy, weather)"),
+# each loaded with its own progress bar and no line of its own.
+_exakit_auto_sample_data() {
+    case "${EXAKIT_DATASETS_PRESELECT:-}" in ''|none) return 0 ;; esac
+    _asd_pending=" $(exakit_pending_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
+    _asd_ids=""
+    for _asd_id in $(printf '%s' "$EXAKIT_DATASETS_PRESELECT" | tr ',' ' '); do
+        case "$_asd_pending" in *" $_asd_id "*) _asd_ids="${_asd_ids:+$_asd_ids }$_asd_id" ;; esac
+    done
+    [ -n "$_asd_ids" ] || return 0
+    info "Sample datasets ($(printf '%s' "$_asd_ids" | sed 's/ /, /g'))"
+    for _asd_id in $_asd_ids; do
+        if ! ( EXAKIT_DATA_AUTO=1 exakit_load_dataset "$_kit_root" "$_asd_id" ); then
+            _exakit_offer_fail "loading dataset '$_asd_id' did not finish (see the log)"
+        fi
+    done
+    [ "$_data_failed" -eq 0 ] || warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
+    return 0
+}
+
 _exakit_offer_answered_rest() {
     if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
         info "Loading a local file (EXAKIT_DATA_FILE)."
@@ -12544,6 +12567,16 @@ exakit_maybe_offer_data_load() {
             warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
             _exakit_offer_fail "the bundled sample data did not finish loading (see the log)"
         fi
+        _exakit_offer_answered_rest 0
+        return "$_data_failed"
+    fi
+
+    # THE INSTALL LOADS THE SAMPLES, IT DOES NOT ASK. Nobody named datasets, so
+    # the default persona's ones (EXAKIT_DATASETS_PRESELECT) that are not loaded
+    # yet load as they are: one line naming them, then each one's progress bar.
+    # `exakit data-load` run by hand keeps the table below.
+    if [ "${EXAKIT_INSTALL_AUTO_DATA:-0}" = 1 ]; then
+        _exakit_auto_sample_data "$_kit_root"
         _exakit_offer_answered_rest 0
         return "$_data_failed"
     fi
@@ -13350,7 +13383,7 @@ kit_shared_steps() {
     if [ "$_kss_nodb" = 1 ]; then
         :
     elif command -v mcp_sidecar_apply >/dev/null 2>&1; then
-        if begin_step mcp "Step ${_step_no}/${_total}  AI bridge (MCP server, clients and skills)"; then
+        if begin_step mcp "Step ${_step_no}/${_total}  Setting up AI bridge (MCP server, clients and skills)"; then
             if exakit_soft_step mcp "exakit update" "the MCP server" _exakit_install_mcp; then
                 mark_step mcp
             fi

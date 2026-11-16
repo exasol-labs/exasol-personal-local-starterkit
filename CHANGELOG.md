@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### A shorter install (rc-1-federation)
+
+- **No persona question.** The install sets up the General persona without asking or naming it. Data Scientist and ML Engineer are disabled (`"visible": false`): not offered, not listed and refused by name; an install that recorded one keeps working.
+- **The notebook add-on is hidden.** Disabled in `marketplace/catalog.json` like udf-devkit: not shown and not installable from the marketplace.
+- **The sample datasets load without a menu.** One line names them ("Sample datasets (tpch, energy, weather)"), then each one's progress bar. `exakit data-load` keeps its menu.
+- **Loading a folder no longer prints "ignored: N of other kinds"** for files that were never data.
+- **No "Explore marketplace?" question.** Dash Server and JSON Tables are installed at the end of the install when missing: their rows are drawn at once from the catalog's own descriptions, install side by side, and the About cache refreshes in the background.
+- **The AI bridge step connects every AI client found here without a table.** "Setting up AI bridge (MCP server, clients and skills)", the server and read-only lines, then a spinner while each client's file is written by a worker of its own, and one result line. `exakit mcp-setup` keeps its table.
+
 ### A data scientist skill, skills for every AI client, and clearer data failures
 
 - **Faster from Use this data to the dashboard preview.**

@@ -2567,8 +2567,7 @@ function Show-ExakitBulkPlan {
     # near-identical sentences stacked under a three-file plan was more lines
     # about what is NOT being loaded than about what is.
     $ignored = ""
-    $other = @($Plan | Where-Object { $_.StartsWith("skip|unsupported|") }).Count
-    if ($other -gt 0) { $ignored = "$other of other kinds" }
+    # Files of other kinds (images, notes beside the exports) are left alone without a word: they were never data.
     $empty = @($Plan | Where-Object { $_.StartsWith("skip|empty|") }).Count
     if ($empty -gt 0) {
         if ($ignored) { $ignored = "$ignored, $empty empty" } else { $ignored = "$empty empty" }
@@ -3668,7 +3667,8 @@ function Invoke-ExakitDatasetDirLoad {
     }
     # The table already names the dataset in its own row, so announcing it again
     # would be the same fact twice - and the line would scroll the table.
-    if ($script:ExakitTableLive) {
+    # The install's own sample load (EXAKIT_DATA_AUTO) named them all on one line.
+    if ($script:ExakitTableLive -or $env:EXAKIT_DATA_AUTO -eq "1") {
         Write-ExakitLog "INFO" "Loading the '$Id' dataset into schema $schema"
     } else {
         Info "Loading the '$Id' dataset into schema $schema"
@@ -4465,6 +4465,43 @@ function Request-ExakitDataLoadOffer {
             }
         }
         if ($externalNamed) { Write-ExakitDataExternalHint }
+    } elseif ($env:EXAKIT_INSTALL_AUTO_DATA -eq "1") {
+        # THE INSTALL LOADS THE SAMPLES, IT DOES NOT ASK: the default persona's
+        # datasets (EXAKIT_DATASETS_PRESELECT) not loaded yet, named on one line,
+        # each with its own progress bar. Twin of _exakit_auto_sample_data.
+        $preselect = "$env:EXAKIT_DATASETS_PRESELECT"
+        if ($preselect -and $preselect -ne "none") {
+            $pending = @(Get-ExakitPendingDatasets | ForEach-Object { $_.Id })
+            $ids = @($preselect -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -and ($pending -ccontains $_) })
+            if ($ids.Count -gt 0) {
+                Info "Sample datasets ($($ids -join ', '))"
+                $env:EXAKIT_DATA_AUTO = "1"
+                try {
+                    foreach ($id in $ids) {
+                        try {
+                            Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $id
+                        } catch {
+                            $reason = Get-ExakitFailureReason
+                            if (-not $reason) { $reason = "$_" }
+                            Write-ExakitLog "WARN" "Dataset '$id' did not load: $reason"
+                            $failedIds += $id
+                        }
+                    }
+                } finally {
+                    Remove-Item Env:EXAKIT_DATA_AUTO -ErrorAction SilentlyContinue
+                }
+            }
+        }
+        if ($env:EXAKIT_DATA_FILE) {
+            Info "Loading a local file (EXAKIT_DATA_FILE)."
+            try {
+                Invoke-ExakitOfferLocalFile
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_"; $unsaid = $true }
+                $reasons += $reason
+            }
+        }
     } else {
         # No lead-in sentence: the checkbox below names every dataset on offer and
         # the skip, which is the whole of what this line was explaining.

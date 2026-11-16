@@ -6938,7 +6938,7 @@ function Show-ExakitMarketplaceMenu {
     # About line, which is a table cell and not a reference. The reference is
     # the help document, and nothing on this screen named it. Twin of the same
     # line in exakit_marketplace_menu.
-    Info "Details on any add-on: exakit help <id>"
+    if ($env:UI_TABLE_AUTO -ne "1") { Info "Details on any add-on: exakit help <id>" }
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     $script:ExakitAddonTable.Activity = ""
@@ -7558,89 +7558,58 @@ function Write-ExakitReadyLine {
     }
 }
 
-function Request-ExakitMarketplaceOffer {
-    # Several checks per add-on and a description fetched for each take
-    # seconds: a turning spinner says the install is still going, not stuck.
-    # Twin of exakit_marketplace_offer.
-    Start-ExakitSpinner "Getting the add-ons ready"
-    try {
-        if (-not (Test-ExakitMarketplaceHasPending)) { return }
-        # Fill the About cache now, while the gate question below is still being
-        # read: this is the one screen where the cache is reliably cold (a machine
-        # minutes old), and the table it feeds does not exist yet.
-        Update-ExakitMarketplaceAboutCache
-    } finally { Stop-ExakitSpinner }
+# THE ADD-ONS EVERY KIT GETS. Installed at the end of the install when they are
+# missing - no question first: their rows are drawn at once, ticked, and turn
+# into the live progress table while both install side by side (apply.py runs
+# parallel-safe add-ons in one turn). Twin of EXAKIT_AUTO_ADDONS in common.sh.
+$script:ExakitAutoAddons = @("dash-server", "json-tables")
 
-    # A scripted answer wins over any prompt (same contract as the menu).
+# Get-ExakitMarketplaceCatalogAbout - "id|description" lines from the catalog's own
+# copy of each repository's About: no lookup stands between the install and the
+# table. Twin of _exakit_marketplace_catalog_about.
+function Get-ExakitMarketplaceCatalogAbout {
+    param([string[]]$Ids)
+    $catalog = Join-Path (Get-ExakitMarketplaceRoot) "marketplace\catalog.json"
+    try { $doc = Get-Content -LiteralPath $catalog -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return @() }
+    $lines = @()
+    foreach ($row in @($doc.addons)) {
+        if ($Ids -notcontains $row.id) { continue }
+        $about = ""
+        if ($row.kit_about) { $about = "" + $row.kit_about } elseif ($row.github -and $row.github.about) { $about = "" + $row.github.about }
+        $lines += "$($row.id)|$(($about -replace '\|', '/') -replace '\r?\n', ' ')"
+    }
+    return $lines
+}
+
+function Request-ExakitMarketplaceOffer {
+    # A scripted answer wins (same contract as the menu): EXAKIT_MARKETPLACE_ADDONS=none installs nothing.
     if ($env:EXAKIT_MARKETPLACE_ADDONS) {
         Show-ExakitMarketplaceMenu
         return
     }
-
-    # "Done and working" must be true before it is said: a run that recorded
-    # soft failures points at the marketplace without the celebration.
-    $softFailed = $false
-    $softState = Get-Variable -Scope Script -Name ExakitSoftFailed -ErrorAction SilentlyContinue
-    if ($softState -and $softState.Value -and $softState.Value.Count -gt 0) { $softFailed = $true }
-    $interactive = ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
-    # Personas picked on screen: their add-ons, ticked, and nothing else - the
-    # rest of the marketplace is named once by Write-ExakitPersonaMarketplaceNote.
-    # A persona whose add-ons are "all" is the whole marketplace, every row
-    # ticked: "all" is not an id, and as a filter it matched nothing, which ended
-    # the offer with "Everything available is already covered." Twin of
-    # exakit_marketplace_offer.
-    # Independent of the data: a dataset that failed to download is repaired with
-    # `exakit data-load` and is no reason to withhold the persona's notebooks and
-    # dashboards. Only a database that never installed holds them back.
-    $runtimeFailed = ($softState -and $softState.Value -and $softState.Value.Contains("runtime"))
-    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $runtimeFailed -and $interactive) {
-        # No rule above it: the personas' add-ons carry on from their data, as
-        # one setup, rather than reading as a separate offer.
-        Write-ExakitHeading "Add-ons for your personas"
-        # Every add-on is listed; the personas' own are the ones ticked
-        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
+    # Only a database that never installed holds them back. Twin of exakit_marketplace_offer.
+    if (Test-ExakitSoftFailed "runtime") { return }
+    $ids = @()
+    $wanted = @($script:ExakitAutoAddons) + @(("" + $env:EXAKIT_MARKETPLACE_PRESELECT) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($id in $wanted) {
+        if ($ids -contains $id) { continue }
+        if (-not (Test-ExakitAddonOfferable $id)) { continue }
+        if (Test-ExakitMarketplaceAddonInstalled $id) { continue }
+        if (Test-ExakitAddonSystemPresent $id) { continue }
+        $ids += $id
+    }
+    if ($ids.Count -eq 0) { return }
+    Write-ExakitHeading "Add-ons"
+    $env:EXAKIT_MARKETPLACE_REASONS = (@(Get-ExakitMarketplaceCatalogAbout -Ids $ids) -join "`n")
+    $env:EXAKIT_MARKETPLACE_ONLY = ($ids -join ',')
+    $previousPreselect = $env:EXAKIT_MARKETPLACE_PRESELECT
+    $env:EXAKIT_MARKETPLACE_PRESELECT = ($ids -join ',')
+    $env:UI_TABLE_AUTO = "1"
+    try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
         Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-        # Each row says what the add-on does for the persona, in the persona's own
-        # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
-        if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {
-            $env:EXAKIT_MARKETPLACE_REASONS = (@(Invoke-ExakitPersonaService "addon-reasons" $env:EXAKIT_PERSONA) -join "`n")
-        }
-        try { Show-ExakitMarketplaceMenu } finally {
-            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-            Remove-Item env:EXAKIT_MARKETPLACE_REASONS -ErrorAction SilentlyContinue
-        }
-        return
-    }
-    if ($softFailed -or -not $interactive) {
-        Info "Optional add-ons (dashboards & more): exakit marketplace"
-        return
-    }
-
-    # One gate question first - the same cursor menu every other kit choice
-    # uses, no typing: Yes is pre-ticked, No is the exclusive opt-out. Only a
-    # Yes opens the marketplace selection itself (where the available add-ons
-    # come pre-selected, so Enter installs them and Skip still backs out).
-    # "Your starter kit is ready to use." used to be printed here. It is now
-    # Write-ExakitReadyLine, called by the setup script before this offer:
-    # behind these gates it reached only an interactive, fully-successful run
-    # that still had an add-on left to install, which is a minority of runs.
-    # The install is over; what follows is a different question. A rule with air
-    # around it is the seam, so the offer does not read as one more install step.
-    Write-ExakitRule
-    # A heading, not an action: what follows the rule is a separate offer, and
-    # the dim bullet marked it as one more thing being done TO the machine.
-    Write-ExakitHeading "Supercharge Exasol with add-ons from marketplace"
-    $gate = Read-ExakitCheckboxMenu -Title "Explore marketplace ?" `
-        -Options @("Yes", "No") `
-        -Defaults @(1) -ExclusiveIndex 2
-    if ($gate -contains 1) {
-        try { Show-ExakitMarketplaceMenu } catch { Warn2 "The marketplace did not finish cleanly: $_" }
-        # "Browse again: exakit marketplace | how to use one: exakit help
-        # <add-on>" stood here. The table above has just said what was installed
-        # and what each one gives you; the reader has not asked to browse again,
-        # and the closing support line already names `exakit help`.
-    } else {
-        Info "Maybe later - browse any time with: exakit marketplace"
+        Remove-Item env:EXAKIT_MARKETPLACE_REASONS -ErrorAction SilentlyContinue
+        Remove-Item env:UI_TABLE_AUTO -ErrorAction SilentlyContinue
+        if ($previousPreselect) { $env:EXAKIT_MARKETPLACE_PRESELECT = $previousPreselect } else { Remove-Item env:EXAKIT_MARKETPLACE_PRESELECT -ErrorAction SilentlyContinue }
     }
 }
 

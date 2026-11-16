@@ -4,7 +4,7 @@
   "title": "Data Scientist",
   "summary": "Explore data in notebooks, ask it questions, share dashboards.",
   "picker": true,
-  "visible": true,
+  "visible": false,
   "order": 10,
   "datasets": ["amazon_sales", "fraud_transactions"],
   "mcp_clients": "all",

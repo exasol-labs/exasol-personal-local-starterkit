@@ -2909,11 +2909,10 @@ exakit_bulk_print_plan() {
     # The two counts on ONE line when both happen, and each with its own
     # plural. Two near-identical sentences stacked under a three-file plan was
     # more lines about what is NOT being loaded than about what is.
-    _bpp_other="$(printf '%s\n' "$1" | grep -c '^skip|unsupported|' || true)"
     _bpp_empty="$(printf '%s\n' "$1" | grep -c '^skip|empty|' || true)"
     _bpp_hdr="$(printf '%s\n' "$1" | grep -c '^skip|header-only|' || true)"
     _bpp_ig=""
-    [ "$_bpp_other" -gt 0 ] && _bpp_ig="$_bpp_other of other kinds"
+    # Files of other kinds (images, notes beside the exports) are left alone without a word: they were never data.
     [ "$_bpp_empty" -gt 0 ] && _bpp_ig="${_bpp_ig:+$_bpp_ig, }$_bpp_empty empty"
     [ "$_bpp_hdr" -gt 0 ] && _bpp_ig="${_bpp_ig:+$_bpp_ig, }$_bpp_hdr with a header and no rows"
     # Not folded into "ignored": these hold data, and one rename loads them.
@@ -3581,7 +3580,8 @@ exakit_load_dataset_dir() {
 
     # The table already names the dataset in its own row, so announcing it again
     # would be the same fact twice — and the line would scroll the table.
-    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ]; then
+    # The install's own sample load (EXAKIT_DATA_AUTO) named them all on one line.
+    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ] || [ "${EXAKIT_DATA_AUTO:-0}" = 1 ]; then
         _exakit_log_file "INFO  Loading the '$_ld_id' dataset into schema $_ld_schema"
     else
         info "Loading the '$_ld_id' dataset into schema $_ld_schema"
