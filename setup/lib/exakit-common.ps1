@@ -3294,7 +3294,22 @@ function Get-ExakitCmdShimContent {
             $target = "%USERPROFILE%" + $target.Substring($profileDir.Length)
         }
     }
-    return "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*`r`n"
+    # Self-cleaning: a shim whose target is gone is a leftover of an uninstall
+    # whose deferred delete never ran (the detached cleaner was killed with the
+    # console's job, or the delete failed). Rather than fail with powershell's
+    # "-File parameter does not exist", it says so and deletes itself.
+    # `(goto) 2>nul` ends the batch context first, so cmd.exe never re-reads the
+    # deleted file; the rest of that line was already parsed and still runs.
+    # `cmd /c exit 1` sets the exit code without `exit`, which would close an
+    # interactive cmd.exe once the batch context is gone. A label and goto, not a
+    # parenthesised if-block, because the message itself contains parentheses.
+    $nl = "`r`n"
+    return "@echo off" + $nl +
+        "if exist `"$target`" goto run" + $nl +
+        ">&2 echo exakit was uninstalled - this leftover launcher (%~f0) removes itself now." + $nl +
+        "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1" + $nl +
+        ":run" + $nl +
+        "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*" + $nl
 }
 
 # Get-ExakitOemEncoding - the console code page cmd.exe reads a batch file in.

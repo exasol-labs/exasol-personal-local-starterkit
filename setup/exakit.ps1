@@ -1886,7 +1886,10 @@ function Invoke-ExakitUninstallRun {
     if (-not $DryRun -and $binPaths.Count -gt 0) {
         Remove-ExakitBinariesDeferred -Paths $binPaths
         $binNamesGone = @($binPaths | ForEach-Object { Split-Path -Leaf $_ })
-        RecordRemoved "Commands removed from $($script:BinDir): $($binNamesGone -join ', ')"
+        # "as this window closes", not "removed": the delete runs after this
+        # process exits, so at this point it has been arranged, not done. A shim
+        # it misses still cleans itself up on its next run.
+        RecordRemoved "Commands removed from $($script:BinDir) as this window closes: $($binNamesGone -join ', ')"
     }
     } finally {
         Stop-ExakitSpinner
@@ -2008,14 +2011,37 @@ function Remove-ExakitBinariesDeferred {
     $deferred = @"
 foreach (`$id in @($pidList)) { try { Wait-Process -Id `$id -Timeout 60 -ErrorAction SilentlyContinue } catch {} }
 Start-Sleep -Milliseconds 250
-foreach (`$f in @($quoted)) { try { Remove-Item -Force -ErrorAction SilentlyContinue `$f } catch {} }
+foreach (`$f in @($quoted)) {
+    for (`$n = 0; `$n -lt 10; `$n++) {
+        try { Remove-Item -LiteralPath `$f -Force -ErrorAction Stop } catch {}
+        if (-not (Test-Path -LiteralPath `$f)) { break }
+        Start-Sleep -Milliseconds 500
+    }
+}
 "@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($deferred))
+    # Win32_Process.Create first: WMI creates the process, so it is outside this
+    # process's job object and survives an agent or console that kills the whole
+    # tree when it closes - Start-Process children die with that tree, which is
+    # how exakit.cmd was left behind. Start-Process stays as the fallback.
+    $started = $false
     try {
-        Start-Process -FilePath "powershell.exe" `
-            -ArgumentList @("-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded) `
-            -WindowStyle Hidden | Out-Null
-    } catch {
+        $cimArgs = @{ CommandLine = "powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand $encoded" }
+        try {
+            $cimArgs.ProcessStartupInformation = New-CimInstance -ClassName Win32_ProcessStartup -Namespace root/cimv2 -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+        } catch { }
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments $cimArgs -ErrorAction Stop
+        if ($r -and $r.ReturnValue -eq 0) { $started = $true }
+    } catch { }
+    if (-not $started) {
+        try {
+            Start-Process -FilePath "powershell.exe" `
+                -ArgumentList @("-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded) `
+                -WindowStyle Hidden | Out-Null
+            $started = $true
+        } catch { }
+    }
+    if (-not $started) {
         # If we cannot spawn the detached cleaner, fall back to deleting inline.
         # The batch-file message may reappear, but the binaries are still gone.
         foreach ($f in $Paths) { Remove-Item -Force -ErrorAction SilentlyContinue $f }
