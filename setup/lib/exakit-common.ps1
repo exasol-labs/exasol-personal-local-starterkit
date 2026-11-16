@@ -3494,8 +3494,8 @@ function Write-ExakitCmdShimDeferred {
         return $false
     }
     $pidList = (@($WaitPids) + @(0)) -join ','
-    $qShim = $ShimPath -replace "'", "''"
-    $qNew = $newPath -replace "'", "''"
+    $qShim = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($ShimPath)
+    $qNew = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($newPath)
     $timeoutArg = ""
     if ($WaitTimeoutSeconds -gt 0) { $timeoutArg = " -Timeout $WaitTimeoutSeconds" }
     $recheckBlock = ""
@@ -4236,12 +4236,12 @@ function Complete-ExakitSelfUpdateDeferred {
     $pidList = $waitPids -join ','
     # Single-quote the paths and double any quote they contain, exactly as
     # Remove-ExakitBinariesDeferred does.
-    $q1 = $KitDir -replace "'", "''"
-    $q2 = $Backup -replace "'", "''"
-    $q3 = $StagedRoot -replace "'", "''"
-    $q4 = $script:KitUpdateNotePath -replace "'", "''"
-    $q5 = $Version -replace "'", "''"
-    $q6 = $Source -replace "'", "''"
+    $q1 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($KitDir)
+    $q2 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Backup)
+    $q3 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($StagedRoot)
+    $q4 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($script:KitUpdateNotePath)
+    $q5 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Version)
+    $q6 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Source)
     # Only the directory swap is deferred; the shim was already written by the
     # caller, and its target path is the same before and after.
     #

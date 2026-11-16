@@ -1953,7 +1953,7 @@ function Invoke-ExakitUninstallRun {
         # arm in exakit_uninstall_run.
         $script:ExakitUninstallDbLeft = $true
         $script:PersonalTeardownLeftovers = @("the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)")
-        $script:PersonalTeardownRemedy = "Remove-Item -Recurse -Force '" + ($script:PersonalDeployDir -replace "'", "''") + "'"
+        $script:PersonalTeardownRemedy = "Remove-Item -Recurse -Force '" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($script:PersonalDeployDir) + "'"
     }
 
     # 1c) The container images the deployment ran from, once its containers
@@ -2150,7 +2150,7 @@ function Remove-ExakitBinariesDeferred {
     } catch { }
     $waitPids = @($waitPids | Sort-Object -Unique)
     $pidList = $waitPids -join ','
-    $quoted  = ($Paths | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
+    $quoted  = ($Paths | ForEach-Object { "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($_) + "'" }) -join ','
     $deferred = @"
 foreach (`$id in @($pidList)) { try { Wait-Process -Id `$id -Timeout 60 -ErrorAction SilentlyContinue } catch {} }
 Start-Sleep -Milliseconds 250

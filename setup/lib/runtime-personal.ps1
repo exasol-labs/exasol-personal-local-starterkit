@@ -2067,7 +2067,7 @@ function Find-PersonalTeardownLeftovers {
     }
     if (Test-Path -LiteralPath $script:PersonalDeployDir) {
         $left += "the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)"
-        $steps += "Remove-Item -Recurse -Force '" + ($script:PersonalDeployDir -replace "'", "''") + "'"
+        $steps += "Remove-Item -Recurse -Force '" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($script:PersonalDeployDir) + "'"
     }
     $script:PersonalTeardownLeftovers = $left
     $script:PersonalTeardownRemedy = ($steps -join "; ")
