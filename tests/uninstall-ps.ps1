@@ -410,6 +410,28 @@ if ($cmdExe) {
     Write-Host "  skip deferred delete (cmd.exe): not on Windows"
 }
 
+# --- exakit uninstall <addon-id>: its staged <id>.cmd.new goes too -------
+Write-Host ""
+Write-Host "exakit uninstall <addon-id> removes its staged launcher:"
+Seed
+function Get-ExakitMarketplaceAddon { param([string]$Id) if ($Id -eq "dash-server") { [pscustomobject]@{ Id = "dash-server"; UninstallFn = "Uninstall-FakeDash" } } }
+function Uninstall-FakeDash { param([switch]$DryRun) if (-not $DryRun) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $script:BinDir "dash-server.cmd") } }
+function Test-ExakitMarketplaceAddonInstalled { param([string]$Id) $true }
+function Remove-ExakitAddonSkills { param([string]$Id) }
+function Initialize-ExakitLogging { }
+$script:dryInfo = @()
+function Info($m) { $script:dryInfo += "$m" }
+$script:ManifestPath = Join-Path $script:ExakitHome "manifest.json"
+Invoke-CmdUninstall -Addon "dash-server" -DryRun
+function Info($m) {}
+Check "addon dry: lists its staged .cmd.new" "True" (($script:dryInfo -join "`n").Contains("will remove: staged launcher " + (Join-Path $script:BinDir "dash-server.cmd.new")))
+Check "addon dry: the staged .cmd.new is kept" "yes" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
+Invoke-ExakitUninstallComponent -Key "dash-server"
+Check "addon: its staged .cmd.new is gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
+Check "addon: exakit.cmd.new is not its to remove" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
+Check "addon: a bystander .cmd.new stays" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
+Check "addon: exakit.cmd stays" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd"))
+
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "PASS=$($script:PASS) FAIL=$($script:FAIL)"
