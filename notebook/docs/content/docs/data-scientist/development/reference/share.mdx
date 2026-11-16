@@ -80,5 +80,6 @@ A dashboard prepared from an approved dataset and one query. `preview()` puts it
 | `healthy` | `bool` |
 | `requests(profile_name: str='starter-kit') -> list[tuple[str, dict[str, Any]]]` | The exact MCP calls an agent makes to create the preview (no credentials). |
 | `description() -> str` | The catalog's line under the title: the approved data it answers from. |
-| `preview(tool: Tool, profile_name: str='starter-kit', windows: bool \| None=None) -> str` | Create and health-check a preview; on Windows use build + healthcheck. |
+| `files_digest(profile_name: str='starter-kit') -> str` | What the preview is built from: the app's name, its profile and every file, as one hash. |
+| `preview( tool: Tool, profile_name: str='starter-kit', windows: bool \| None=None, *, building: bool=False) -> str` | Create and health-check a preview; on Windows use build + healthcheck. |
 | `confirm(tool: Tool, figures_checked: bool=False) -> str` | Promote the exact healthy preview after a human checks its figures. |

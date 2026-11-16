@@ -8,6 +8,8 @@ The answers you approve in Ask can make one dashboard: a tab per page, a tile pe
 
 In `02_ask_your_data`, after an answer runs, **Pin to dashboard** puts it on a page. Name the dashboard and the page. **Title on the dashboard** starts as your question; change it when you rewrote the SQL to answer something else. A new page name makes a new page. The same SQL pinned to a page again replaces its tile there.
 
+Each pin also starts building the dashboard's preview in the background (`nb.prepare_preview`), so `03_share` shows it at once. **Preview** uses that build only when Dash Server confirms it is still the preview shown and holds exactly the files it would deploy; otherwise it builds the preview as before. Nothing is published until you confirm the figures.
+
 A tile is shown the way the answer looks:
 
 | Answer                               | Tile  |

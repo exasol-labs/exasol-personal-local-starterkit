@@ -2058,8 +2058,11 @@ class PinTitleTest(unittest.TestCase):
         with mock.patch.object(module.actions, "run", side_effect=lambda action_id, **kw: sent.append((action_id, kw)) or {"kind": "bar"}):
             card.on_pin({"tile_title": "  Quantity   by supplier ", "board": "Sales", "page": "Sources"})
             card.on_pin({"board": "sales"})
-        self.assertEqual(("ask.pin", {"board": "sales", "page": "Sources", "title": "Quantity by supplier"}), sent[0])
-        self.assertIsNone(sent[1][1]["title"], "left empty: the question asked")
+        pins = [kw for action_id, kw in sent if action_id == "ask.pin"]
+        self.assertEqual({"board": "sales", "page": "Sources", "title": "Quantity by supplier"}, pins[0])
+        self.assertIsNone(pins[1]["title"], "left empty: the question asked")
+        self.assertEqual([("ask.prepare_preview", {"board": "sales"})] * 2, [x for x in sent if x[0] == "ask.prepare_preview"],
+                         "each pin starts the dashboard's preview in the background")
         card.tile_title = "Quantity by supplier"
         with mock.patch.object(module, "_model_ready", return_value=False), \
                 mock.patch.object(module.actions, "run", side_effect=RuntimeError("stop after the reset")):

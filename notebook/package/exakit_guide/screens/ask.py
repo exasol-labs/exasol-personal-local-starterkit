@@ -292,7 +292,12 @@ class Ask(Screen):
         title = " ".join(str(v.get("tile_title") or "").split()) or None
         self.tile_title = title
         tile = actions.run("ask.pin", board=self.board, page=self.page, title=title)
-        self.flash = {"kind": "ok", "v": f"Pinned to {self.board} / {self.page} as a {tile['kind']}. 03_share publishes it."}
+        try:
+            building = actions.run("ask.prepare_preview", board=self.board) == "building"
+        except Exception:                       # noqa: BLE001 - 03_share builds the preview when asked
+            building = False
+        self.flash = {"kind": "ok", "v": f"Pinned to {self.board} / {self.page} as a {tile['kind']}. "
+                      + ("Its preview is being built now, so 03_share shows it at once." if building else "03_share publishes it.")}
 
     def on_verify(self, _v: dict) -> None:
         """Keep the question in the semantic model as a verified question (proposal.verify)."""

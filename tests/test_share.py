@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -72,6 +73,59 @@ class ShareTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.workflow_id = workflow("share-test")
+
+    def test_a_preview_built_from_the_same_files_is_used_again(self):
+        module = sys.modules["exakit_nb.share"]   # the package's name "share" is the function
+
+        class Shown(Tools):
+            revision = 3
+
+            def __call__(self, name, args):
+                if name == "app_get_status":
+                    self.calls.append((name, args))
+                    return {"app": {"preview_mounted": True, "preview_revision_number": self.revision,
+                                    "preview_path": f"/preview/example/{self.revision}"}}
+                return super().__call__(name, args)
+
+        sql = "SELECT CATEGORY, COUNT(*) AS N FROM T GROUP BY 1"
+        tool = Shown()
+        deploys = lambda: [n for n, _ in tool.calls].count("app_deploy_draft")
+        health = lambda: [n for n, _ in tool.calls].count("app_run_healthcheck")
+        self.assertEqual("/preview/example/3", share(Dataset(), sql, "Example", "example").preview(tool))
+        self.assertEqual((1, 1), (deploys(), health()))
+        again = share(Dataset(), sql, "Example", "example")
+        self.assertEqual("/preview/example/3", again.preview(tool))
+        self.assertEqual((1, 1, True, 3), (deploys(), health(), again.healthy, again.revision_number),
+                         "the same files, still the preview shown, checked a moment ago: used as it is")
+        later = time.time() + module.HEALTH_FRESH_SECONDS + 5
+        with patch.object(module.time, "time", return_value=later):
+            share(Dataset(), sql, "Example", "example").preview(tool)
+        self.assertEqual((1, 2), (deploys(), health()), "checked again after ten minutes, not built again")
+        tool.revision = 4
+        share(Dataset(), sql, "Example", "example").preview(tool)
+        self.assertEqual(2, deploys(), "another revision is shown now: built again")
+        tool.revision = 3
+        share(Dataset(), sql + " ORDER BY 2", "Example", "example").preview(tool)
+        self.assertEqual(3, deploys(), "other files: built again")
+        tool.changed_path = "app.py"
+        with self.assertRaises(RuntimeError):
+            share(Dataset(), sql + " ORDER BY 2", "Example", "example").preview(tool)
+        self.assertEqual(4, deploys(), "the shown revision no longer holds these files: built again (and refused)")
+        self.assertEqual({}, module._read_record("example"), "a failed build leaves nothing to use again")
+
+    def test_a_preview_being_built_elsewhere_is_waited_for_unless_its_notebook_closed(self):
+        module = sys.modules["exakit_nb.share"]   # the package's name "share" is the function
+
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        module._write_record("example", {"building_since": time.time(), "pid": 2 ** 22 + 7})
+        started = time.time()
+        draft._wait_for_building()
+        self.assertLess(time.time() - started, 0.5, "its process is gone: not waited for")
+        module._write_record("example", {"building_since": time.time(), "pid": os.getpid() + 1})
+        with patch.object(module, "_alive", return_value=True), patch.object(module, "BUILDING_WAIT_SECONDS", 1.5):
+            started = time.time()
+            draft._wait_for_building()
+            self.assertGreaterEqual(time.time() - started, 1.0, "being built elsewhere: waited for")
 
     def test_preview_then_confirm(self):
         draft = share(Dataset(), "SELECT CATEGORY, COUNT(*) AS N FROM T GROUP BY 1", "Example", "example")

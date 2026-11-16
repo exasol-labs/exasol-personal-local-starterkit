@@ -50,7 +50,7 @@ A dashboard being put together: its pages, in order, each with its tiles.
 | `filters(page: dict[str, Any]) -> list[str]` | What a page can be filtered by: the ones set for it (set_filters), else the columns that are not numbers and that every tile of the page returns, or that FILTER_SHARED_BY of its tiles do - FILTERS of them at most. |
 | `set_filters(page: str, columns: list[str] \| None) -> Board` | The filters of a page, chosen by you (columns its tiles return); None goes back to the kit's choice. |
 | `spec() -> dict[str, Any]` | What the Dash app reads (BOARD.json): the title, and each page with its filters and its tiles' SQL files. |
-| `share(name: str \| None=None, app: str \| None=None)` | The Dash app for this board (a BoardDraft): nothing is sent until its preview(). |
+| `share(name: str \| None=None, app: str \| None=None, *, show: bool=True)` | The Dash app for this board (a BoardDraft): nothing is sent until its preview(). |
 
 
 ## nb.board [#board]
@@ -126,6 +126,21 @@ or table; by default what the answer looks like). The same SQL pinned again to a
 Returns the tile.
 
 **Used in:** `data-scientist/02_ask_your_data`, `data-scientist/03_share`
+
+
+## nb.prepare_preview [#prepare_preview]
+
+```python
+nb.prepare_preview(name: str) -> str
+```
+
+Build the preview of a board's dashboard in the background, right after a pin, so 03_share shows it at once:
+Dash Server deploys and health-checks a dashboard in ~20 s. Nothing is published: it is the same preview that
+Preview makes (nb.board(name).share().preview(...)), and Preview uses it once Dash Server confirms it is still
+the one shown, built from exactly the files it would deploy. Another pin while it builds builds once more after.
+Returns at once: "building" (PREPARED_PREVIEWS[name] has the outcome), or why it was not started.
+
+**Used in:** `data-scientist/02_ask_your_data`
 
 
 ## nb.starter_board [#starter_board]

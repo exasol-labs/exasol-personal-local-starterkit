@@ -61,19 +61,20 @@ class nb.ShareDraft
 A dashboard prepared from an approved dataset and one query. `preview()` puts it on Dash Server as a preview;
 `confirm(..., figures_checked=True)` publishes it, and only after a person checked the preview's figures.
 
-| Member                                                                                    | What it is                                                                 |
-| ----------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `dataset`                                                                                 | `Any`                                                                      |
-| `sql`                                                                                     | `str`                                                                      |
-| `title`                                                                                   | `str`                                                                      |
-| `name`                                                                                    | `str`                                                                      |
-| `query_digest`                                                                            | `str`                                                                      |
-| `workflow_id`                                                                             | `str`                                                                      |
-| `files`                                                                                   | `list[dict[str, str]]`                                                     |
-| `revision_number`                                                                         | \`int                                                                      | None\` |
-| `preview_url`                                                                             | \`str                                                                      | None\` |
-| `healthy`                                                                                 | `bool`                                                                     |
-| `requests(profile_name: str='starter-kit') -> list[tuple[str, dict[str, Any]]]`           | The exact MCP calls an agent makes to create the preview (no credentials). |
-| `description() -> str`                                                                    | The catalog's line under the title: the approved data it answers from.     |
-| `preview(tool: Tool, profile_name: str='starter-kit', windows: bool \| None=None) -> str` | Create and health-check a preview; on Windows use build + healthcheck.     |
-| `confirm(tool: Tool, figures_checked: bool=False) -> str`                                 | Promote the exact healthy preview after a human checks its figures.        |
+| Member                                                                                                              | What it is                                                                               |
+| ------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `dataset`                                                                                                           | `Any`                                                                                    |
+| `sql`                                                                                                               | `str`                                                                                    |
+| `title`                                                                                                             | `str`                                                                                    |
+| `name`                                                                                                              | `str`                                                                                    |
+| `query_digest`                                                                                                      | `str`                                                                                    |
+| `workflow_id`                                                                                                       | `str`                                                                                    |
+| `files`                                                                                                             | `list[dict[str, str]]`                                                                   |
+| `revision_number`                                                                                                   | \`int                                                                                    | None\` |
+| `preview_url`                                                                                                       | \`str                                                                                    | None\` |
+| `healthy`                                                                                                           | `bool`                                                                                   |
+| `requests(profile_name: str='starter-kit') -> list[tuple[str, dict[str, Any]]]`                                     | The exact MCP calls an agent makes to create the preview (no credentials).               |
+| `description() -> str`                                                                                              | The catalog's line under the title: the approved data it answers from.                   |
+| `files_digest(profile_name: str='starter-kit') -> str`                                                              | What the preview is built from: the app's name, its profile and every file, as one hash. |
+| `preview( tool: Tool, profile_name: str='starter-kit', windows: bool \| None=None, *, building: bool=False) -> str` | Create and health-check a preview; on Windows use build + healthcheck.                   |
+| `confirm(tool: Tool, figures_checked: bool=False) -> str`                                                           | Promote the exact healthy preview after a human checks its figures.                      |

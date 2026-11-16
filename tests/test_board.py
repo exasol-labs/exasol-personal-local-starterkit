@@ -554,5 +554,66 @@ class BoardAppTest(unittest.TestCase):
         self.assertIn("label='Trend'", layout)
 
 
+class PreparePreviewTest(unittest.TestCase):
+    """A pin builds the board's preview in the background: one build at a time, the latest pins built after it,
+    and nothing started when Dash Server is not running."""
+
+    def setUp(self):
+        import exakit_nb  # noqa: F401
+
+        self.module = sys.modules["exakit_nb.board"]
+        self.release = threading.Event()
+        self.built: list[str] = []
+        test = self
+
+        class Draft:
+            def __init__(self, name):
+                self.name = name
+
+            def preview(self, tools, building=False):
+                assert building and tools == "tools"
+                test.built.append(self.name)
+                test.release.wait(5)
+                return f"/preview/{self.name}/1"
+
+        class Board:
+            def __init__(self, name):
+                self.name = name
+
+            def share(self, show=True):
+                assert not show, "the tiles' SQL is not printed from the background"
+                return Draft(self.name)
+
+        for patch in (mock.patch.object(self.module, "board", side_effect=Board),
+                      mock.patch("exakit_nb.dash_mcp.dash_tools", return_value="tools"),
+                      mock.patch.dict(self.module.PREPARED_PREVIEWS, clear=True),
+                      mock.patch.dict(self.module._PREPARE_NEXT, clear=True)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def wait_until(self, check):
+        deadline = time.time() + 5
+        while time.time() < deadline and not check():
+            time.sleep(0.02)
+        return check()
+
+    def test_one_build_at_a_time_and_the_latest_pins_after_it(self):
+        self.assertEqual("building", self.module.prepare_preview("sales"))
+        self.assertTrue(self.wait_until(lambda: self.built == ["sales"]))
+        self.assertEqual("building", self.module.prepare_preview("sales"))     # pinned again while it builds
+        self.assertEqual("building", self.module.prepare_preview("sales"))
+        self.release.set()
+        self.assertTrue(self.wait_until(lambda: self.module.PREPARED_PREVIEWS.get("sales") == "/preview/sales/1"
+                                        and len(self.built) == 2 and not self.module._PREPARE_NEXT))
+        time.sleep(0.1)
+        self.assertEqual(["sales", "sales"], self.built, "once more for the pins made while it built, not twice")
+
+    def test_nothing_starts_when_dash_server_is_not_running(self):
+        with mock.patch("exakit_nb.dash_mcp.dash_tools", side_effect=RuntimeError("Dash Server is stopped. Run exakit start")):
+            said = self.module.prepare_preview("sales")
+        self.assertEqual("Dash Server is stopped. Run exakit start", said)
+        self.assertEqual([], self.built)
+
+
 if __name__ == "__main__":
     unittest.main()

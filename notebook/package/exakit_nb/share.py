@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Callable
 
@@ -19,6 +21,57 @@ from .workflow import DASHBOARD_REVISION, current_workflow, home, log_event
 
 Tool = Callable[[str, dict[str, Any]], dict[str, Any]]
 _NAME = re.compile(r"^[a-z][a-z0-9-]*$")
+PREVIEW_KEPT_SECONDS = 1800     # a preview built from the very same files is used again for half an hour
+HEALTH_FRESH_SECONDS = 600      # ... and health-checked again when its last check is older than ten minutes
+BUILDING_WAIT_SECONDS = 180     # a preview being built (in another notebook) is waited for this long at most
+
+
+def _record_path(name: str):
+    return home() / "boards" / f"{name}.preview.json"
+
+
+def _read_record(name: str) -> dict[str, Any]:
+    try:
+        found = json.loads(_record_path(name).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def _alive(pid: Any) -> bool:
+    """Whether the process that started a build still runs (a closed notebook's build is not waited for)."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid == os.getpid():
+        return True
+    if sys.platform == "win32":
+        import ctypes
+
+        handle = ctypes.windll.kernel32.OpenProcess(0x1000, False, pid)      # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return True
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _write_record(name: str, record: dict[str, Any]) -> None:
+    path = _record_path(name)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        part = path.with_name(path.name + f".{os.getpid()}.part")
+        part.write_text(json.dumps(record, indent=1) + "\n", encoding="utf-8")
+        os.replace(part, path)
+    except OSError:                     # not kept: the next preview is built again
+        pass
 
 
 def _unwrap(result: dict[str, Any]) -> dict[str, Any]:
@@ -80,8 +133,61 @@ class ShareDraft:
         "Live Exasol dashboard backed by profile <name>", which says nothing about the dashboard."""
         return f"From the approved {self.dataset.id} data, descriptor v{self.dataset.version}."
 
-    def preview(self, tool: Tool, profile_name: str = "starter-kit", windows: bool | None = None) -> str:
-        """Create and health-check a preview; on Windows use build + healthcheck."""
+    def files_digest(self, profile_name: str = "starter-kit") -> str:
+        """What the preview is built from: the app's name, its profile and every file, as one hash."""
+        files = sorted((row["path"], row["content"]) for row in self.files)
+        return hashlib.sha256(json.dumps([self.name, profile_name, files]).encode("utf-8")).hexdigest()
+
+    def _wait_for_building(self) -> None:
+        """A preview of this app being built elsewhere (prepare_preview, in another notebook's kernel) is waited for,
+        so the two never write the app's files at the same time."""
+        deadline = time.time() + BUILDING_WAIT_SECONDS
+        while time.time() < deadline:
+            record = _read_record(self.name)
+            started = float(record.get("building_since") or 0)
+            if not started or time.time() - started > BUILDING_WAIT_SECONDS or not _alive(record.get("pid")):
+                return
+            time.sleep(1)
+
+    def _reuse(self, tool: Tool, digest: str) -> str | None:
+        """The preview already built from exactly these files, when Dash Server still shows it: its revision is the
+        preview mounted, and that revision holds these files unchanged (app_get_status, app_diff_draft_vs_artifact);
+        health-checked again when its last check is older than HEALTH_FRESH_SECONDS. None: build it."""
+        record = _read_record(self.name)
+        revision = record.get("revision")
+        if (record.get("digest") != digest or not isinstance(revision, int) or record.get("building_since")
+                or time.time() - float(record.get("built_at") or 0) > PREVIEW_KEPT_SECONDS):
+            return None
+        try:
+            app = _unwrap(tool("app_get_status", {"name": self.name})).get("app") or {}
+            if not app.get("preview_mounted") or app.get("preview_revision_number") != revision:
+                return None
+            compared = _unwrap(tool("app_diff_draft_vs_artifact", {"name": self.name, "revision_number": revision}))
+            states = {row.get("path"): row.get("status") for row in compared.get("files", [])}
+            if any(states.get(row["path"]) != "unchanged" for row in self.files):
+                return None
+            checked = float(record.get("checked_at") or 0)
+            if time.time() - checked > HEALTH_FRESH_SECONDS:
+                health = _unwrap(tool("app_run_healthcheck", {"name": self.name, "target": "preview"}))
+                if health.get("health", {}).get("status") != "healthy":
+                    return None
+                checked = time.time()
+        except RuntimeError:                # Dash Server refused one of the reads: build it
+            return None
+        self.revision_number, self.healthy = revision, True
+        self.preview_url = app.get("preview_path") or record.get("preview_path") or f"/preview/{self.name}/{revision}"
+        _write_record(self.name, dict(record, checked_at=checked))
+        log_event(DASHBOARD_REVISION, app=self.name, revision=revision, **self._logged(), preview_path=self.preview_url,
+                  state="preview", reused=True)
+        return self.preview_url
+
+    def preview(self, tool: Tool, profile_name: str = "starter-kit", windows: bool | None = None, *,
+                building: bool = False) -> str:
+        """Create and health-check a preview; on Windows use build + healthcheck. The preview built a moment ago from
+        exactly these files (by prepare_preview after a pin, or the last Preview) is used again once Dash Server
+        confirms it is still the one shown. ``building``: this is that background build (prepare_preview)."""
+        if not building:
+            self._wait_for_building()
         self.healthy = False
         self.revision_number = None
         self.preview_url = None
@@ -104,8 +210,21 @@ class ShareDraft:
         if (not profile.get("is_valid") or bound.get("user", "").upper() != readonly["user"].upper()
                 or bound.get("dsn") not in kit_dsns):
             raise RuntimeError("Dash Server profile must validate as the kit's read-only user and database. Run exakit mcp-setup and restart dash-server.")
+        digest = self.files_digest(profile_name)
+        if not building:
+            reused = self._reuse(tool, digest)
+            if reused is not None:
+                return reused
         if windows is None:
             windows = sys.platform == "win32"
+        _write_record(self.name, {"digest": digest, "building_since": time.time(), "pid": os.getpid()})
+        try:
+            return self._build(tool, profile_name, windows, digest)
+        except BaseException:
+            _write_record(self.name, {})            # nothing to use again: the next preview builds it
+            raise
+
+    def _build(self, tool: Tool, profile_name: str, windows: bool, digest: str) -> str:
         requests = self.requests(profile_name)
         created = tool(*requests[0])
         if created.get("isError") or created.get("is_error"):
@@ -148,6 +267,9 @@ class ShareDraft:
         self.healthy = True
         app = deployed.get("app", {})
         self.preview_url = app.get("preview_path") or f"/preview/{self.name}/{self.revision_number}"
+        now = time.time()
+        _write_record(self.name, {"digest": digest, "revision": revision_number, "preview_path": self.preview_url,
+                                  "built_at": now, "checked_at": now})
         log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number, **self._logged(),
                   preview_path=self.preview_url, state="preview")
         return self.preview_url
@@ -225,7 +347,7 @@ class BoardDraft(ShareDraft):
                 "tiles": [{"id": t["id"], "sql_digest": t["sql_digest"], "dataset": t.get("dataset")} for t in self.board.tiles]}
 
 
-def board_draft(board: Any, name: str, app: str | None = None) -> BoardDraft:
+def board_draft(board: Any, name: str, app: str | None = None, *, show: bool = True) -> BoardDraft:
     """The Dash app of a board: app.py (the tabbed dashboard), BOARD.json (its pages, tiles and filters), one SQL file
     per tile (the approved SQL, unchanged) and REVISION.json (the lineage). Every tile's SQL is shown here first."""
     workflow_id = current_workflow()
@@ -256,6 +378,7 @@ def board_draft(board: Any, name: str, app: str | None = None) -> BoardDraft:
         if hashlib.sha256(statement.encode("utf-8")).hexdigest() != tile["sql_digest"]:
             raise RuntimeError(f"Tile {tile['id']} ({tile['title']}) no longer matches the SQL that was approved; pin it again.")
         files.append({"path": f"queries/{tile['id']}.sql", "content": statement + "\n"})
-        print(f"[{tile['id']}] {tile['title']}\n{statement}\n")
+        if show:
+            print(f"[{tile['id']}] {tile['title']}\n{statement}\n")
     return BoardDraft(dataset=None, sql="", title=spec["title"], name=name, query_digest=digest, workflow_id=workflow_id,
                       files=files, board=board)

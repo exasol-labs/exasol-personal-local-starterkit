@@ -197,6 +197,8 @@ ACTIONS: dict[str, Action] = {
     "ask.run": Action("02_ask_your_data", "proposal.approve()\nanswer = proposal.run()", "answer"),
     "ask.insights": Action("02_ask_your_data", "insights = nb.insights(answer, rules=INSIGHT_RULES)", "insights", False),
     "ask.pin": Action("02_ask_your_data", "pinned = nb.pin(proposal, answer, board={board}, page={page}, title={title})", "pinned"),
+    # the dashboard's preview built in the background after a pin: 03_share shows it at once
+    "ask.prepare_preview": Action("02_ask_your_data", "preparing = nb.prepare_preview({board})", "preparing", False),
     "ask.verify": Action("02_ask_your_data", "verified = proposal.verify(connection)", "verified"),
     # -- step 4: share and hand off ---------------------------------------------------------------------------------
     "share.open": Action("03_share", 'nb.continue_workflow("share")\n'

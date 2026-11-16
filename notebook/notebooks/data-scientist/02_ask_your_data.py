@@ -159,6 +159,7 @@ if answer is not None:
     print("\n".join(insights))
     if PIN_TO:
         pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1], title=TILE_TITLE)
+        preparing = nb.prepare_preview(PIN_TO[0])   # its preview is built in the background: 03_share shows it at once
     if KEEP_AS_VERIFIED:
         verified = proposal.verify(connection)
 

@@ -298,12 +298,62 @@ class Board:
 
     __repr__ = __str__
 
-    def share(self, name: str | None = None, app: str | None = None):
+    def share(self, name: str | None = None, app: str | None = None, *, show: bool = True):
         """The Dash app for this board (a BoardDraft): nothing is sent until its preview(). ``app`` is your own
-        version of the dashboard's source (nb.board_app(), changed)."""
+        version of the dashboard's source (nb.board_app(), changed). ``show``: print each tile's SQL."""
         from .share import board_draft
 
-        return board_draft(self, name or self.name, app=app)
+        return board_draft(self, name or self.name, app=app, show=show)
+
+
+_PREPARING_LOCK = None          # one background preview at a time in this kernel (threading.Lock, made on first use)
+_PREPARE_NEXT: dict[str, bool] = {}
+PREPARED_PREVIEWS: dict[str, str] = {}      # board -> "building" | the preview path | why it could not be built
+
+
+def prepare_preview(name: str) -> str:
+    """Build the preview of a board's dashboard in the background, right after a pin, so 03_share shows it at once:
+    Dash Server deploys and health-checks a dashboard in ~20 s. Nothing is published: it is the same preview that
+    Preview makes (nb.board(name).share().preview(...)), and Preview uses it once Dash Server confirms it is still
+    the one shown, built from exactly the files it would deploy. Another pin while it builds builds once more after.
+    Returns at once: "building" (PREPARED_PREVIEWS[name] has the outcome), or why it was not started."""
+    import threading
+
+    global _PREPARING_LOCK
+    name = _check_name(name)
+    try:
+        from .dash_mcp import dash_tools
+
+        tools = dash_tools(ready=False)              # never installs or starts anything in the background
+    except Exception as exc:                          # noqa: BLE001 - not running: 03_share builds it when asked
+        PREPARED_PREVIEWS[name] = (str(exc).splitlines() or [type(exc).__name__])[0][:200]
+        return PREPARED_PREVIEWS[name]
+    if _PREPARING_LOCK is None:
+        _PREPARING_LOCK = threading.Lock()
+    if not _PREPARING_LOCK.acquire(blocking=False):
+        _PREPARE_NEXT[name] = True                    # the build running now is followed by one of the latest pins
+        PREPARED_PREVIEWS[name] = "building"
+        return "building"
+    PREPARED_PREVIEWS[name] = "building"
+
+    def build() -> None:
+        try:
+            todo = [name]
+            while todo:
+                one = todo.pop(0)
+                _PREPARE_NEXT.pop(one, None)
+                try:
+                    PREPARED_PREVIEWS[one] = board(one).share(show=False).preview(tools, building=True)
+                except Exception as exc:              # noqa: BLE001 - said in PREPARED_PREVIEWS; Preview builds it
+                    PREPARED_PREVIEWS[one] = (str(exc).splitlines() or [type(exc).__name__])[0][:200]
+                todo += [n for n in list(_PREPARE_NEXT) if n not in todo]
+        finally:
+            _PREPARING_LOCK.release()
+        if _PREPARE_NEXT:                             # pinned again just as this one finished
+            prepare_preview(next(iter(_PREPARE_NEXT)))
+
+    threading.Thread(target=build, name="exakit-preview", daemon=True).start()
+    return "building"
 
 
 def boards() -> list[dict[str, Any]]:
