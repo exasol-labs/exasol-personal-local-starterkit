@@ -184,10 +184,10 @@ seed_deploy
 out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_DOCKER_FAIL="permission denied while trying to connect to the Docker daemon socket")"
 contains "g2: an engine that refuses is not a leftover" "RC=0" "$out"
 contains "g2: nothing is counted left over" "LEFT=;" "$out"
-contains "g2: but it is a warning with the check command" "WARNINGS=could not check docker for the deployment's container (permission denied while trying to connect to the Docker daemon socket); check with: docker ps -a --filter name=exa-test1" "$out"
+contains "g2: but it is a warning with the check command" "WARNINGS=Could not ask docker whether the database's container is gone (docker said: permission denied while trying to connect to the Docker daemon socket). Check by hand once docker answers: docker ps -a --filter name=exa-test1 (if docker needs sudo here: sudo docker ps -a --filter name=exa-test1)" "$out"
 out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
 contains "g2: an engine that answers gives no warning" "WARNINGS=" "$out"
-lacks    "g2: none at all" "could not check" "$out"
+lacks    "g2: none at all" "Could not ask" "$out"
 
 # (f) nothing was ever deployed: success, nothing destroyed.
 rm -rf "$DEPLOY"
@@ -475,7 +475,7 @@ contains "i2: and the run answers 0" "RC=0" "$out"
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB' 'docker.io/exasol/nano|<none>|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2b: one rmi for one image id" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
-lacks    "i2b: the duplicate row is not reported kept" "kept image" "$out"
+lacks    "i2b: the duplicate row is not reported kept" "Kept image" "$out"
 # (i2b') the same, with the <none> row listed FIRST: tagged rows still go
 # first, so the tag is removed by name and the <none> twin is skipped.
 rm -f "$TMP/engcalls"; seed_deploy
@@ -483,7 +483,7 @@ out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|
 check    "i2b': <none> listed first: one rmi" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
 contains "i2b': and it is the tag, by name" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2b': no rmi by id" "podman rmi fff666" "$(cat "$TMP/engcalls" 2>/dev/null)"
-lacks    "i2b': nothing reported kept" "kept image" "$out"
+lacks    "i2b': nothing reported kept" "Kept image" "$out"
 # (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$(printf '%s\n' 'exasol/nano|2026.2.0|abc123|812MB' 'exasol/nano|latest|abc123|812MB')" bash "$TMP/run.sh" 2>&1)"
@@ -494,7 +494,7 @@ contains "i2c: the second tag by its name" "docker rmi exasol/nano:latest" "$(ca
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|<none>|aaa999|812MB' 'localhost/myorg/foo|1|aaa999|812MB' 'docker.io/exasol/nano|<none>|bbb888|800MB')" bash "$TMP/run.sh" 2>&1)"
 lacks    "i2d: no rmi by id for an image a user's tag shares" "podman rmi aaa999" "$(cat "$TMP/engcalls" 2>/dev/null)"
-contains "i2d: it is reported kept" "kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag" "$out"
+contains "i2d: it is reported kept" "Kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag." "$out"
 contains "i2d: a <none> row with no other name still goes" "podman rmi bbb888" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2d: the user's tag is never named" "myorg" "$(grep rmi "$TMP/engcalls" 2>/dev/null)"
 # (i2e) a container (any state) still uses an image: kept, no rmi, and no
@@ -503,18 +503,18 @@ rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_IN_USE="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
 contains "i2e: a container's image is asked about with ps -a" "docker ps -a -q --filter ancestor=exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2e: no rmi for an image a container uses" "docker rmi exasol/nano:2026.2.0-nano.8" "$(cat "$TMP/engcalls" 2>/dev/null)"
-contains "i2e: it is reported kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" "$out"
-lacks    "i2e: with no remove-later advice" "remove later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
+contains "i2e: it is reported kept" "Kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)." "$out"
+lacks    "i2e: with no remove-later advice" "Remove it later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
 contains "i2e: the unused image still goes" "docker rmi ggg777" "$(cat "$TMP/engcalls" 2>/dev/null)"
 # (i2f) the same in a dry run: not listed as "will remove".
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_IN_USE="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
 lacks    "i2f: dry run does not promise to remove an image in use" "will remove: docker image exasol/nano:2026.2.0-nano.8" "$out"
-contains "i2f: dry run says it is kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" "$out"
+contains "i2f: dry run says it is kept" "Kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)." "$out"
 # (i3) rmi refused (a container still uses it): kept, one hint, exit unchanged.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
-contains "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: the engine refused (a container may still use it); remove later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
+contains "i3: a refused rmi is kept with its remedy" "Kept image exasol/nano:2026.2.0-nano.8: docker did not remove it (a container may still use it, or docker did not answer). Remove it later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
 contains "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" "$out"
 contains "i3: and the run still answers 0" "RC=0" "$out"
 # (i4) the engine does not answer: one hint, exit unchanged.
@@ -542,7 +542,7 @@ fi
 if engines_sealed "$TMP/noeng" "i5 (no engine)"; then
 seed_deploy
 out="$(STUB_OS=linux STUB_ENG_DIR="$TMP/noeng" bash "$TMP/run.sh" 2>&1)"
-contains "i5: no engine gets a hint" "Neither docker nor podman is on PATH" "$out"
+contains "i5: no engine gets a hint" "Neither Docker nor Podman was found" "$out"
 contains "i5: and the run still answers 0" "RC=0" "$out"
 fi
 # (i6) macOS: the database lives in the launcher's VM; the host engine is left alone.

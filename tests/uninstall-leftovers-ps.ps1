@@ -253,23 +253,23 @@ $env:STUB_DOCKER_PS = ""
 Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"; $env:STUB_DOCKER_PS_FAIL = "1"
 Remove-Personal
 Check "g2: an engine that does not answer is not a leftover" "" (Left)
-Has   "g2: but it is a warning with the check command" "could not check docker for the deployment's container (no answer within 15s, or it refused); check with: docker ps -a --filter name=exa-test1" (@($script:PersonalTeardownWarnings) -join "; ")
+Has   "g2: but it is a warning with the check command" "Could not ask docker whether the database's container is gone (docker did not answer within 15s, or refused). Check by hand once docker answers: docker ps -a --filter name=exa-test1" (@($script:PersonalTeardownWarnings) -join "; ")
 Seed-Kit; Seed-Deploy
 Invoke-ExakitUninstallRun
 Has   "g2: the uninstall still says Database removed" "Database removed" $script:out
-Has   "g2: and warns under it" "WARN could not check docker for the deployment's container" $script:out
+Has   "g2: and warns under it" "WARN Could not ask docker whether the database's container is gone" $script:out
 Check "g2: the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 # The database-only removal says it too.
 Seed-Kit; Seed-Deploy; $script:out = @()
 Invoke-ExakitUninstallComponent -Key "database"
-Has   "g2: database only: warns as well" "WARN could not check docker for the deployment's container" $script:out
+Has   "g2: database only: warns as well" "WARN Could not ask docker whether the database's container is gone" $script:out
 # The reason is told apart where the bounded runner says which it was.
 Seed-Deploy; $env:STUB_DOCKER_PS_OUTCOME = "timeout"
 Remove-Personal
-Has   "g2: a hang is named as one" "could not check docker for the deployment's container (no answer within 15s); check with:" (@($script:PersonalTeardownWarnings) -join "; ")
+Has   "g2: a hang is named as one" "Could not ask docker whether the database's container is gone (docker did not answer within 15s). Check by hand" (@($script:PersonalTeardownWarnings) -join "; ")
 Seed-Deploy; $env:STUB_DOCKER_PS_OUTCOME = "exit 125"
 Remove-Personal
-Has   "g2: a refusal is named as one, with its exit code" "could not check docker for the deployment's container (it refused: exit 125); check with:" (@($script:PersonalTeardownWarnings) -join "; ")
+Has   "g2: a refusal is named as one, with its exit code" "Could not ask docker whether the database's container is gone (docker refused: exit 125). Check by hand" (@($script:PersonalTeardownWarnings) -join "; ")
 $env:STUB_DOCKER_PS_OUTCOME = ""
 $env:STUB_DOCKER_PS_FAIL = ""
 Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
@@ -484,7 +484,7 @@ $env:STUB_PODMAN_IMAGES = @('docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
 Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun
 Check "i2b: one rmi for one image id" "1" (@($script:engCalls | Where-Object { $_ -like "podman rmi*" }).Count)
-Lacks "i2b: the duplicate row is not reported kept" "kept image" $script:out
+Lacks "i2b: the duplicate row is not reported kept" "Kept image" $script:out
 # (i2b') the same, with the <none> row listed FIRST: tagged rows still go
 # first, so the tag is removed by name and the <none> twin is skipped.
 $env:STUB_PODMAN_IMAGES = @('docker.io/exasol/nano|<none>|fff666|812MB', 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB') -join "`n"
@@ -493,7 +493,7 @@ Invoke-ExakitUninstallRun
 Check "i2b': <none> listed first: one rmi" "1" (@($script:engCalls | Where-Object { $_ -like "podman rmi*" }).Count)
 Has   "i2b': and it is the tag, by name" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" $script:engCalls
 Lacks "i2b': no rmi by id" "podman rmi fff666" $script:engCalls
-Lacks "i2b': nothing reported kept" "kept image" $script:out
+Lacks "i2b': nothing reported kept" "Kept image" $script:out
 # (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
 $env:STUB_PODMAN_IMAGES = ""
 $env:STUB_DOCKER_IMAGES = @('exasol/nano|2026.2.0|abc123|812MB', 'exasol/nano|latest|abc123|812MB') -join "`n"
@@ -508,7 +508,7 @@ $env:STUB_PODMAN_IMAGES = @('docker.io/exasol/nano|<none>|aaa999|812MB', 'localh
 Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun
 Lacks "i2d: no rmi by id for an image a user's tag shares" "podman rmi aaa999" $script:engCalls
-Has   "i2d: it is reported kept" "kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag" $script:out
+Has   "i2d: it is reported kept" "Kept image exasol/nano:<none> (id aaa999): it also carries another repository's tag." $script:out
 Has   "i2d: a <none> row with no other name still goes" "podman rmi bbb888" $script:engCalls
 Lacks "i2d: the user's tag is never named" "myorg" $script:engCalls
 $env:STUB_PODMAN_IMAGES = $savedPodman; $env:STUB_DOCKER_IMAGES = $savedDocker
@@ -536,19 +536,19 @@ Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_IN_USE = "exasol/nano:2
 Invoke-ExakitUninstallRun
 Has   "i2e: a container's image is asked about with ps -a" "docker ps -a -q --filter ancestor=exasol/nano:2026.2.0-nano.8" $script:engCalls
 Lacks "i2e: no rmi for an image a container uses" "docker rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
-Has   "i2e: it is reported kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" $script:out
-Lacks "i2e: with no remove-later advice" "remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
+Has   "i2e: it is reported kept" "Kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)." $script:out
+Lacks "i2e: with no remove-later advice" "Remove it later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
 Has   "i2e: the unused image still goes" "docker rmi ggg777" $script:engCalls
 # (i2f) the same in a dry run: not listed as "will remove".
 Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun -DryRun
 Lacks "i2f: dry run does not promise to remove an image in use" "will remove: docker image exasol/nano:2026.2.0-nano.8" $script:out
-Has   "i2f: dry run says it is kept" "kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)" $script:out
+Has   "i2f: dry run says it is kept" "Kept image exasol/nano:2026.2.0-nano.8: a container still uses it (another deployment?)." $script:out
 $env:STUB_IN_USE = ""; $env:STUB_PODMAN_IMAGES = $savedPodman
 # (i3) rmi refused (a container still uses it): kept, one hint, not flagged.
 Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
 Invoke-ExakitUninstallRun
-Has   "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: the engine refused (a container may still use it); remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
+Has   "i3: a refused rmi is kept with its remedy" "Kept image exasol/nano:2026.2.0-nano.8: docker did not remove it (a container may still use it, or docker did not answer). Remove it later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
 Has   "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" $script:out
 Check "i3: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 $env:STUB_RMI_FAIL = ""
@@ -564,7 +564,7 @@ New-Item -ItemType Directory -Force -Path $noEngineDir | Out-Null
 $env:PATH = $noEngineDir
 Seed-Kit; Seed-Deploy
 Invoke-ExakitUninstallRun
-Has   "i5: no engine gets a hint" "Neither docker nor podman is on PATH" $script:out
+Has   "i5: no engine gets a hint" "Neither Docker nor Podman was found" $script:out
 Check "i5: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 $env:PATH = $engineDir
 $env:STUB_DOCKER_IMAGES = ""; $env:STUB_PODMAN_IMAGES = ""

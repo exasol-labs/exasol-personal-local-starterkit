@@ -12931,14 +12931,14 @@ _exakit_uninstall_kit_images() {
                 BEGIN { n = split(repos, r, " ") }
                 $3 == id { b = $1; sub(/^docker\.io\//, "", b); k = 0; for (i = 1; i <= n; i++) if (b == r[i]) k = 1; if (!k) f = 1 }
                 END { exit f ? 0 : 1 }'; then
-                info "kept image $_kr_name (id $_kr_id): it also carries another repository's tag"
+                info "Kept image $_kr_name (id $_kr_id): it also carries another repository's tag."
                 continue
             fi
             # A container (any state) still made from it: another deployment's,
             # possibly one this kit cannot see (Windows on a shared Docker
             # Desktop). Kept, with no "remove later" advice to take it away.
             if [ -n "$(exakit_run_bounded 30 "$_kim_eng" ps -a -q --filter "ancestor=$_kr_ref" 2>/dev/null)" ]; then
-                info "kept image $_kr_name: a container still uses it (another deployment?)"
+                info "Kept image $_kr_name: a container still uses it (another deployment?)."
                 continue
             fi
             if [ "$_kim_dry" = "1" ]; then
@@ -12948,7 +12948,7 @@ _exakit_uninstall_kit_images() {
             if exakit_run_bounded 60 "$_kim_eng" rmi "$_kr_ref" >/dev/null 2>&1; then
                 _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_name"
             else
-                info "kept image $_kr_name: the engine refused (a container may still use it); remove later with: $_kim_eng rmi $_kr_ref"
+                info "Kept image $_kr_name: $_kim_eng did not remove it (a container may still use it, or $_kim_eng did not answer). Remove it later with: $_kim_eng rmi $_kr_ref"
             fi
         done <<KIMROWS
 $_kim_rows
@@ -12957,7 +12957,7 @@ KIMROWS
         _kim_gone=""
     done
     if [ "$_kim_any" = 0 ]; then
-        info "Neither docker nor podman is on PATH, so the kit's container image (exasol/nano) was not checked."
+        info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
     fi
     return 0
 }

@@ -2072,9 +2072,9 @@ _mcp_doctor_failed_record_but_answers() {
 _mcp_doctor_db_reachable() {
     exakit_runtime_is_running && return 0
     _mcp_doctor_failed_record_but_answers || return 1
-    warn "The launcher records this deployment as failed although its database answers - repair the record with: exakit start"
+    warn "Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept)."
     EXAKIT_MCP_RESULT_REMEDY="exakit start"
-    EXAKIT_MCP_RESULT_REMEDY_HINT="the launcher still records this deployment as failed although its database answers; exakit start repairs the record"
+    EXAKIT_MCP_RESULT_REMEDY_HINT="the launcher still records this deployment as failed although its database answers; exakit start restarts the database (data kept) and clears the record"
     export EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     return 0
 }

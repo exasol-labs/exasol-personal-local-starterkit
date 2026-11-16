@@ -967,7 +967,7 @@ personal_foreign_db_hint() {
     if command -v _personal_port_held_by_own_runner >/dev/null 2>&1 && \
        _personal_port_held_by_own_runner; then
         _pfh_pids="$(printf '%s' "$_ppo_pids" | tr '\n' ' ' | sed 's/ *$//')"
-        printf ' It is this kit'"'"'s own Exasol runner (pid %s), not another database: stop it (kill %s; its VM stops, the data stays) and re-run.' \
+        printf ' It is this kit'"'"'s own Exasol database process (pid %s), not another database. Stop it with: kill %s (your data stays), then run: exakit start' \
             "$_pfh_pids" "$_pfh_pids"
         return 0
     fi
@@ -1301,7 +1301,7 @@ _personal_is_own_runner_pid() {
 personal_stop_runner_of_failed_deployment() {
     _personal_port_held_by_own_runner || return 1
     _psr_pids="$_ppo_pids"
-    info "The launcher records this deployment as failed while its VM still runs - stopping that VM so the deploy can start it cleanly"
+    info "Exasol marked this database as failed, but it is still running. Restarting it cleanly (your data is kept)..."
     command -v _exakit_log_file >/dev/null 2>&1 &&
         _exakit_log_file "INFO  stopping runner pid(s)$(printf ' %s' $_psr_pids) on port $(personal_db_port) (launcher state deployment_failed)"
     for _psr_pid in $_psr_pids; do
@@ -3243,13 +3243,13 @@ personal_teardown_leftovers() {
             _ptl_rc=$?
             if [ "$_ptl_rc" != 0 ]; then
                 if [ "$_ptl_rc" = 124 ] || [ "$_ptl_rc" = 137 ]; then
-                    _ptl_why="no answer within ${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}s"
+                    _ptl_why="$_ptl_eng did not answer within ${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}s"
                 else
                     _ptl_why="$(sed -n '/./{p;q;}' "${_ptl_errf:-/dev/null}" 2>/dev/null | cut -c1-160)"
-                    [ -n "$_ptl_why" ] || _ptl_why="exit $_ptl_rc"
+                    if [ -n "$_ptl_why" ]; then _ptl_why="$_ptl_eng said: $_ptl_why"; else _ptl_why="$_ptl_eng refused: exit $_ptl_rc"; fi
                 fi
                 EXAKIT_TEARDOWN_WARNINGS="${EXAKIT_TEARDOWN_WARNINGS:+$EXAKIT_TEARDOWN_WARNINGS
-}could not check $_ptl_eng for the deployment's container ($_ptl_why); check with: $_ptl_eng ps -a --filter name=$_ptl_id"
+}Could not ask $_ptl_eng whether the database's container is gone ($_ptl_why). Check by hand once $_ptl_eng answers: $_ptl_eng ps -a --filter name=$_ptl_id (if $_ptl_eng needs sudo here: sudo $_ptl_eng ps -a --filter name=$_ptl_id)"
             fi
             [ -n "$_ptl_errf" ] && rm -f "$_ptl_errf"
             for _ptl_name in $(printf '%s\n' "$_ptl_list" | \
@@ -3260,7 +3260,7 @@ personal_teardown_leftovers() {
                         ln > li && (substr(n, ln - li) == "-" id || substr(n, ln - li) == "_" id) { f = 1 }
                         f { print n }'); do
                 _ptl_add "the $_ptl_eng container $_ptl_name"
-                _ptl_rm="${_ptl_rm:+$_ptl_rm && }$_ptl_eng rm -f $_ptl_name"
+                _ptl_rm="${_ptl_rm:+$_ptl_rm; }$_ptl_eng rm -f $_ptl_name"
             done
         done
     fi
@@ -3271,9 +3271,11 @@ personal_teardown_leftovers() {
         _ptl_dir="rm -rf '$(printf '%s' "$EXAKIT_PERSONAL_DEPLOY_DIR" | sed "s/'/'\\\\''/g")'"
     fi
     EXAKIT_TEARDOWN_REMEDY=""
-    [ -n "$_ptl_kill" ] && EXAKIT_TEARDOWN_REMEDY="kill $_ptl_kill"
-    [ -n "$_ptl_rm" ]   && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY && }$_ptl_rm"
-    [ -n "$_ptl_dir" ]  && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY && }$_ptl_dir"
+    # Joined with "; ", as the PowerShell twin: a runner that exited before the
+    # paste must not stop the rm -rf after it.
+    [ -n "$_ptl_kill" ] && EXAKIT_TEARDOWN_REMEDY="kill $_ptl_kill 2>/dev/null"
+    [ -n "$_ptl_rm" ]   && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY; }$_ptl_rm"
+    [ -n "$_ptl_dir" ]  && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY; }$_ptl_dir"
     [ -z "$EXAKIT_TEARDOWN_LEFTOVERS" ]
 }
 
