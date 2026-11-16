@@ -358,8 +358,11 @@ function Test-PersonalDbAnswers { $script:stubAnswers }
 # The shipped Windows twin proves nothing (the port is the engine relay's).
 $rpText = Get-Content -Raw (Join-Path $repo "setup/lib/runtime-personal.ps1")
 Check "doctor: the Windows runner proof always says no" "True" ($rpText -match 'function Test-PersonalPortHeldByOwnRunner \{\s*return \$false')
+$script:probed = 0
+function Test-PersonalDbAnswers { $script:probed++; $script:stubAnswers }
 function Test-PersonalPortHeldByOwnRunner { $false }
 Check "doctor: no runner proof on this side -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+Check "doctor: no runner proof -> the database is never probed" "0" $script:probed
 function Test-PersonalPortHeldByOwnRunner { $script:stubOwn }
 Check "doctor: failed record, answers, own runner -> reachable" "True" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
 $script:stubOwn = $false
