@@ -1224,9 +1224,36 @@ personal_reap_orphan_daemon() {
 # Returns 0 when a runner was stopped and the port is free, 1 otherwise
 # (nothing of ours there, not certain, or the port is still held).
 EXAKIT_PERSONAL_RUNNER_STOP_WAIT="${EXAKIT_PERSONAL_RUNNER_STOP_WAIT:-20}"
+# _personal_runner_of_this_deployment PID - 0 when PID is proven to work for
+# THIS deployment: its working directory is $EXAKIT_PERSONAL_DEPLOY_DIR (or
+# below it), or it holds a file open under that directory. A runner from the
+# same launcher cache can serve another deployment (another directory, another
+# port mapping), and stopping it would stop someone else's VM. lsof is the
+# only witness; where it cannot answer, nothing is proven and 1 is returned.
+_personal_runner_of_this_deployment() {
+    _prd_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-}"
+    [ -n "$_prd_dir" ] && [ -d "$_prd_dir" ] || return 1
+    _prd_dir="${_prd_dir%/}"
+    _prd_phys="$(cd "$_prd_dir" 2>/dev/null && pwd -P)"
+    [ -n "$_prd_phys" ] || _prd_phys="$_prd_dir"
+    _prd_paths="$(lsof -a -p "$1" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
+$(lsof -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p')"
+    _prd_hit=1
+    while IFS= read -r _prd_path; do
+        [ -n "$_prd_path" ] || continue
+        case "$_prd_path" in
+            "$_prd_dir"|"$_prd_dir"/*|"$_prd_phys"|"$_prd_phys"/*) _prd_hit=0; break ;;
+        esac
+    done <<EOF
+$_prd_paths
+EOF
+    return "$_prd_hit"
+}
+
 # _personal_port_held_by_own_runner - 0 when the deployment port has at least
 # one listener and EVERY listener is the launcher's runner executed from the
-# launcher's own cache. Sets _ppo_pids to those listeners.
+# launcher's own cache AND proven to belong to this deployment
+# (_personal_runner_of_this_deployment). Sets _ppo_pids to those listeners.
 _personal_port_held_by_own_runner() {
     _ppo_pids=""
     command -v lsof >/dev/null 2>&1 || return 1
@@ -1240,6 +1267,7 @@ _personal_port_held_by_own_runner() {
             *"$_ppo_cache"/*exasol-local-runner*) ;;
             *) return 1 ;;
         esac
+        _personal_runner_of_this_deployment "$_ppo_pid" || return 1
     done
     _ppo_pids="$_ppo_found"
 }
