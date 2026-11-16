@@ -346,7 +346,7 @@ if (Test-Path $startup) { Remove-Item -Recurse -Force $startup }
 
 Write-Host ""
 Write-Host "Invoke-ExakitUninstallRun removes the kit's container images, and only those:"
-$dockerImgs = @('exasol/nano|2026.2.0-nano.8|aaa111|812MB', 'exasol/mcp-server|<none>|bbb222|426MB',
+$dockerImgs = @('exasol/nano|2026.2.0-nano.8|aaa111|812MB', 'exasol/nano|<none>|ggg777|800MB', 'exasol/mcp-server|<none>|bbb222|426MB',
     'exasol/nanoX|1|ccc333|1MB', 'library/postgres|16|ddd444|400MB', 'someone/exasol/nano|1|eee555|1MB') -join "`n"
 $env:STUB_DOCKER_IMAGES = $dockerImgs
 $env:STUB_PODMAN_IMAGES = 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
@@ -354,7 +354,8 @@ $env:STUB_PODMAN_IMAGES = 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
 Seed-Kit; Seed-Deploy; $env:STUB_DESTROY_REMOVES = "1"; $script:engCalls = @()
 Invoke-ExakitUninstallRun -DryRun
 Has   "i1: dry run lists exasol/nano" "will remove: docker image exasol/nano:2026.2.0-nano.8 (812MB)" $script:out
-Has   "i1: dry run lists the untagged mcp-server" "will remove: docker image exasol/mcp-server:<none> (426MB)" $script:out
+Has   "i1: dry run lists the untagged nano" "will remove: docker image exasol/nano:<none> (800MB)" $script:out
+Lacks "i1: exasol/mcp-server is not the kit's (MCP runs through uvx)" "exasol/mcp-server" $script:out
 Has   "i1: dry run lists podman's copy" "will remove: podman image exasol/nano:2026.2.0-nano.8 (812MB)" $script:out
 Lacks "i1: a foreign image is not listed" "postgres" $script:out
 Lacks "i1: nor a near-miss repository" "nanoX" $script:out
@@ -364,21 +365,49 @@ Lacks "i1: dry run runs no rmi" "rmi" $script:engCalls
 Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun
 Has   "i2: exasol/nano removed by name" "docker rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
-Has   "i2: the untagged image removed by id" "docker rmi bbb222" $script:engCalls
-Has   "i2: podman's copy removed" "podman rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
+Has   "i2: the untagged image removed by id" "docker rmi ggg777" $script:engCalls
+Has   "i2: podman's copy removed by the exact listed reference" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" $script:engCalls
+Lacks "i2: exasol/mcp-server is untouched" "bbb222" $script:engCalls
 Lacks "i2: never with -f" "rmi -f" $script:engCalls
 Lacks "i2: never --force" "--force" $script:engCalls
 Lacks "i2: a foreign image is untouched" "ddd444" $script:engCalls
 Lacks "i2: by name either" "postgres" $script:engCalls
 Lacks "i2: a near-miss repository is untouched" "ccc333" $script:engCalls
 Lacks "i2: an image ending in exasol/nano is untouched" "eee555" $script:engCalls
-Has   "i2: the removal is recorded" "Container images removed (docker): exasol/nano:2026.2.0-nano.8, exasol/mcp-server:<none>" $script:out
+Has   "i2: the removal is recorded" "Container images removed (docker): exasol/nano:2026.2.0-nano.8, exasol/nano:<none>" $script:out
 Check "i2: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+# (i2b) podman lists one image as a tag row AND a <none> row: one rmi, no "kept".
+$savedPodman = $env:STUB_PODMAN_IMAGES; $savedDocker = $env:STUB_DOCKER_IMAGES
+$env:STUB_DOCKER_IMAGES = ""
+$env:STUB_PODMAN_IMAGES = @('docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB', 'docker.io/exasol/nano|<none>|fff666|812MB') -join "`n"
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun
+Check "i2b: one rmi for one image id" "1" (@($script:engCalls | Where-Object { $_ -like "podman rmi*" }).Count)
+Lacks "i2b: the duplicate row is not reported kept" "kept image" $script:out
+$env:STUB_PODMAN_IMAGES = $savedPodman; $env:STUB_DOCKER_IMAGES = $savedDocker
+# (i7) another deployment still runs from the image: no engine is asked.
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+$otherDeploy = Join-Path (Split-Path -Parent $script:PersonalDeployDir) "other"
+New-Item -ItemType Directory -Force -Path $otherDeploy | Out-Null
+Invoke-ExakitUninstallRun
+Check "i7: another deployment keeps exasol/nano (no engine call)" "0" (@($script:engCalls).Count)
+Remove-Item -Recurse -Force $otherDeploy
+# (i8) the database was left behind: no engine is asked either.
+Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_DESTROY_REMOVES = "0"
+Invoke-ExakitUninstallRun
+Check "i8: a database left behind keeps its image (no engine call)" "0" (@($script:engCalls).Count)
+$env:STUB_DESTROY_REMOVES = "1"
+if (Test-Path $script:PersonalDeployDir) { Remove-Item -Recurse -Force $script:PersonalDeployDir }
+# (i9) no deployment on this machine at all (a sandboxed home): the engine is
+# never asked. Without the had-a-deployment guard this case reaches the engine.
+Seed-Kit; $script:engCalls = @(); $script:out = @()
+Invoke-ExakitUninstallRun
+Check "i9: no deployment dir, no engine call" "0" (@($script:engCalls).Count)
 # (i3) rmi refused (a container still uses it): kept, one hint, not flagged.
 Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
 Invoke-ExakitUninstallRun
 Has   "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: still used by a container; remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
-Has   "i3: the other image still goes" "Container images removed (docker): exasol/mcp-server:<none>" $script:out
+Has   "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" $script:out
 Check "i3: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 $env:STUB_RMI_FAIL = ""
 # (i4) the engine does not answer: one hint.
