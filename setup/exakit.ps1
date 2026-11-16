@@ -977,18 +977,28 @@ function Get-ExakitOrphanAutostartEntries {
 }
 
 # Get-ExakitOrphanAutostartPids <id> <entry> - processes still running from an
-# orphaned entry. Only a command line that names the orphaned Startup entry's
-# full path counts. The kit's bin dir plus the add-on id is no proof: the user's
-# own `dash-server` started by hand names both, and it is not the leftover.
+# orphaned entry. The entry runs `start "" /min <bindir>\<id>.cmd ...` and
+# exits at once, so what is left running names the launcher, not the entry.
+# Two proofs count, nothing looser: a command line that names the entry's full
+# path, or one that names the launcher's exact full path <BinDir>\<id>.cmd as a
+# path token (at the start or after a quote or space, and followed by a quote,
+# a space or the end). The bin dir and the id on their own are no proof: a
+# C:\other\<id>.cmd, or <id>.cmd.bak, is not the kit's launcher.
 function Get-ExakitOrphanAutostartPids {
     param([string]$Id, [string]$Entry)
     $ours = @()
     if (-not $Entry) { return @() }
+    $launcherRe = $null
+    if ($Id -and $script:BinDir) {
+        $launcher = Join-Path $script:BinDir "$Id.cmd"
+        $launcherRe = '(^|["\s])' + [regex]::Escape($launcher) + '(["\s]|$)'
+    }
     foreach ($p in @(Get-ExakitProcessList)) {
         $cmd = "" + $p.CommandLine
         if (-not $cmd) { continue }
         if ([int]$p.ProcessId -eq $PID) { continue }
-        if ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $ours += [int]$p.ProcessId }
+        if ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $ours += [int]$p.ProcessId; continue }
+        if ($launcherRe -and [regex]::IsMatch($cmd, $launcherRe, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $ours += [int]$p.ProcessId }
     }
     return @($ours | Sort-Object -Unique)
 }
