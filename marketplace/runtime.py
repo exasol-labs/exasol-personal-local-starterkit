@@ -104,6 +104,29 @@ def managed_python_version(environment: Mapping[str, str] | None = None) -> str:
 
 
 _activity_local = threading.local()
+_activity_lock = threading.Lock()      # several workers write the table's side channel at the same time
+
+
+def _activity_records(path: Path, row: str, text: str | None) -> None:
+    """Replace ``row``'s "row|text" record in the side channel (``text`` None: remove it), keeping every other row's:
+    one record per add-on, several installing side by side. Written whole, then moved in, so the table animator never
+    reads half a file."""
+    with _activity_lock:
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            lines = []
+        lines = [line for line in lines if line and not line.startswith(f"{row}|")]
+        if text is not None:
+            lines.append(f"{row}|{text}")
+        fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as out:
+                out.write("".join(f"{line}\n" for line in lines))
+            os.replace(name, path)
+        finally:
+            if os.path.exists(name):
+                os.unlink(name)
 
 
 @contextlib.contextmanager
@@ -504,26 +527,25 @@ class KitContext:
             return
         self.show_activity(label)
 
-    def show_activity(self, label: str) -> None:
-        """Show one activity line the way the platform asked: the progress table's side channel, else stdout."""
+    def show_activity(self, label: str, row: str | None = None) -> None:
+        """Show one activity line the way the platform asked: the progress table's side channel, else stdout.
+        ``row``: the table row it belongs to (an add-on installing beside others); else the current one."""
         activity_file = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_FILE")
-        row = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_ROW", "")
+        if row is None:
+            row = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_ROW", "")
         if activity_file and row.isdecimal() and int(row) > 0:
             # The platform table already owns stdout. Its animator reads this
-            # side channel and draws the current operation above the bar.
-            # Replacing one complete record avoids a half-line on a redraw.
-            path = Path(activity_file)
+            # side channel and draws each add-on's current operation above its bar.
             safe = label.replace("\r", " ").replace("\n", " ").replace("|", " ")
-            fd, name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8") as out:
-                    out.write(f"{row}|{safe}\n")
-                os.replace(name, path)
-            finally:
-                if os.path.exists(name):
-                    os.unlink(name)
+            _activity_records(Path(activity_file), row, safe)
             return
         print(f"  • {label}", flush=True)
+
+    def clear_activity(self, row: str) -> None:
+        """The add-on on ``row`` is done: its activity line goes."""
+        activity_file = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_FILE")
+        if activity_file and row.isdecimal() and int(row) > 0 and Path(activity_file).exists():
+            _activity_records(Path(activity_file), row, None)
 
 
 def _redacted(output, secrets: list[str]) -> Iterator[str]:

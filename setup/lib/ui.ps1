@@ -1224,10 +1224,19 @@ function Get-ExakitTableFrame {
     $inner += $statSepW + $statW
     $lines = New-Object 'System.Collections.Generic.List[string]'
 
-    $activityRow = 0
-    if ($Table.ContainsKey("Activity")) {
+    # An activity line above each add-on that is saying what it does: one per row
+    # (several install side by side). No text, no line - nothing is reserved.
+    # Twin of the one-record-per-row side channel in ui_table_frame.
+    # No activity lines in the table: each row's bar and status say enough (the log
+    # keeps what each install did). $env:UI_TABLE_ACTIVITY = "1" draws them. Twin of ui_table_frame.
+    $activities = @{}
+    if ($env:UI_TABLE_ACTIVITY -ne "1") {
+    } elseif ($Table.ContainsKey("Activities") -and $Table.Activities) {
+        foreach ($k in @($Table.Activities.Keys)) { if ($Table.Activities[$k]) { $activities[[int]$k] = "" + $Table.Activities[$k] } }
+    } elseif ($Table.ContainsKey("Activity") -and $Table.Activity) {
         $activityRow = 2
         if ($Table.ContainsKey("ActivityRow") -and [int]$Table.ActivityRow -gt 0) { $activityRow = [int]$Table.ActivityRow }
+        $activities[$activityRow] = "" + $Table.Activity
     }
 
     $title = " " + $Table.Title + " "
@@ -1399,12 +1408,12 @@ function Get-ExakitTableFrame {
         }
         $tail = $inner - $used
         if ($tail -lt 0) { $tail = 0 }
-        if ($i -eq $activityRow) {
+        if ($activities.ContainsKey($i)) {
             $activityLeft = 5 + $nameW + $statSepW
             if ($col2W -gt 0) { $activityLeft += $sepW + $col2W }
             if ($col3W -gt 0) { $activityLeft += $sepW + $col3W }
             $activityWidth = $inner - $activityLeft
-            $activity = ("" + $Table.Activity) -replace "[\r\n]", " "
+            $activity = ("" + $activities[$i]) -replace "[\r\n]", " "
             if ($activity.Length -gt $activityWidth) { $activity = $activity.Substring(0, $activityWidth) }
             [void]$lines.Add("  " + $script:UiAccent + $script:UiVB + $script:UiReset + (" " * $activityLeft) +
                 $script:UiDim + $activity + $script:UiReset + (" " * ($activityWidth - $activity.Length)) +

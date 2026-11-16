@@ -62,6 +62,16 @@ def apply(ctx: KitContext, ids: str, emit: Callable[[Event], None]) -> bool:
         validate_selection = getattr(module, "validate_selection", None)
         if callable(validate_selection):
             validate_selection(ctx)
+    outer = emit
+
+    def settled(event: Event) -> None:
+        outer(event)
+        if event.phase in ("done", "failed") and ":" not in event.addon:
+            row = _table_row(event.addon)
+            if row:
+                ctx.clear_activity(row)     # its activity line goes with it
+
+    emit = settled
     with _activity_rows():
         results: list[bool] = []
         for group in _groups(selected, modules):
@@ -105,14 +115,25 @@ class _Turn:
     until the add-on is the one being shown, then replayed in the order they happened and passed straight through
     from there on; so the progress output and the log read exactly as a one-after-the-other install's would."""
 
-    def __init__(self, ctx: KitContext, show: Callable[[str], None]):
+    def __init__(self, ctx: KitContext, show: Callable[[str], None], row: str = "", addon_id: str = ""):
         self._ctx = ctx
         self._show = show
+        self._row = row
+        self._addon_id = addon_id
         self._lock = threading.Lock()
         self._held: list[tuple[str, str]] = []
         self._live = False
 
     def activity(self, label: str) -> None:
+        # In the platform's table every add-on has its own activity line: shown at once, on its own row.
+        if self._row:
+            self._ctx.show_activity(label, row=self._row)
+            return
+        # A table that reads the stream (Windows): the record names its add-on, so its own row shows it.
+        if self._addon_id and os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_EVENTS") == "1":
+            safe = label.replace("\r", " ").replace("\n", " ").replace("|", " ")
+            print(f"@@EXAKIT|{self._addon_id}|activity|{safe}|0", flush=True)
+            return
         with self._lock:
             if self._live:
                 self._show(label)
@@ -159,7 +180,9 @@ def _apply_side_by_side(ctx: KitContext, group: list[str], modules: dict[str, ob
         return [_apply_one(ctx, addon_id, modules[addon_id], emit) for addon_id in group]
     sink = current_activity_sink()
     show = sink if sink is not None else ctx.show_activity
-    turns = {addon_id: _Turn(ctx, show) for addon_id in pending}
+    table = sink is None and bool(os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_FILE"))
+    turns = {addon_id: _Turn(ctx, show, _table_row(addon_id) if table else "", addon_id if sink is None else "")
+             for addon_id in pending}
     results: list[bool] = []
     with ThreadPoolExecutor(max_workers=min(WORKERS, len(pending)), thread_name_prefix="exakit-addon") as pool:
         futures: dict[str, Future] = {addon_id: pool.submit(_install_held, ctx, addon_id, turns[addon_id])
@@ -199,9 +222,14 @@ def _activity_rows() -> Iterator[None]:
             os.environ["EXAKIT_MARKETPLACE_ACTIVITY_ROW"] = previous
 
 
-def _point_activity_at(addon_id: str) -> None:
+def _table_row(addon_id: str) -> str:
+    """The platform table's row for this add-on ("" when there is no table, or it has no row)."""
     table_ids = os.environ.get("EXAKIT_ADDON_TABLE_IDS", "").splitlines()
-    os.environ["EXAKIT_MARKETPLACE_ACTIVITY_ROW"] = str(table_ids.index(addon_id) + 1) if addon_id in table_ids else ""
+    return str(table_ids.index(addon_id) + 1) if addon_id in table_ids else ""
+
+
+def _point_activity_at(addon_id: str) -> None:
+    os.environ["EXAKIT_MARKETPLACE_ACTIVITY_ROW"] = _table_row(addon_id)
 
 
 def _installed(ctx: KitContext, addon_id: str, module: object) -> str | None:

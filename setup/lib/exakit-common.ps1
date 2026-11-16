@@ -7396,6 +7396,8 @@ function Set-ExakitAddonActivity {
     if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
         $script:ExakitAddonTable.ActivityRow = $script:ExakitAddonTableRow
         $script:ExakitAddonTable.Activity = $Message
+        if (-not $script:ExakitAddonTable.ContainsKey("Activities")) { $script:ExakitAddonTable.Activities = @{} }
+        $script:ExakitAddonTable.Activities[$script:ExakitAddonTableRow] = $Message
     }
 }
 
@@ -7440,8 +7442,10 @@ function Invoke-ExakitMarketplaceApplyPython {
     # answer; explicit answers reach Python unmodified for batch validation.
     if (-not $env:EXAKIT_NOTEBOOK_FRONTENDS) { Invoke-ExakitMarketplaceQuestions -Ids $Ids }
     $script:ExakitAddonTableLive = $false
+    $tableShown = $false
     if ($null -ne $script:ExakitAddonTable) {
         $script:ExakitAddonTableLive = [bool](Start-ExakitTable -Table $script:ExakitAddonTable)
+        $tableShown = $script:ExakitAddonTableLive
     }
     $notes = [System.Collections.Generic.List[object]]::new()
     $root = Get-ExakitMarketplaceRoot
@@ -7462,6 +7466,9 @@ function Invoke-ExakitMarketplaceApplyPython {
         if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
         $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
         Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_FILE -ErrorAction SilentlyContinue
+        # Add-ons installing side by side say what they do as @@EXAKIT|<id>|activity records, so each row of the
+        # table shows its own line. Twin of the side channel's one record per row in common.sh.
+        $env:EXAKIT_MARKETPLACE_ACTIVITY_EVENTS = "1"
         # No console input for the installs (their questions were asked before the table): a child that turned the
         # console's echo back on would let every key pressed meanwhile push the frame down. Twin of </dev/null.
         $null | & $uv run --python $script:ManagedPythonVersion --no-project python $runner ($Ids -join ',') --stream 2>&1 |
@@ -7476,6 +7483,18 @@ function Invoke-ExakitMarketplaceApplyPython {
                     $script:ExakitAddonTableRow = 0
                     if ($script:ExakitAddonTableLive) {
                         $script:ExakitAddonTableRow = [int](Get-ExakitAddonTableRow -Id $id)
+                    }
+                    if ($phase -eq 'activity') {
+                        if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
+                            if (-not $script:ExakitAddonTable.ContainsKey("Activities")) { $script:ExakitAddonTable.Activities = @{} }
+                            $script:ExakitAddonTable.Activities[$script:ExakitAddonTableRow] = $detail
+                        } elseif (-not $script:ExakitAddonTableLive) { Info "$($id): $detail" }
+                        return
+                    }
+                    if ($phase -in @('done', 'failed') -and $script:ExakitAddonTableRow -gt 0 -and
+                        $null -ne $script:ExakitAddonTable -and $script:ExakitAddonTable.ContainsKey("Activities")) {
+                        $script:ExakitAddonTable.Activities.Remove($script:ExakitAddonTableRow)   # its line goes with it
+                        if ($script:ExakitAddonTable.ActivityRow -eq $script:ExakitAddonTableRow) { $script:ExakitAddonTable.Activity = "" }
                     }
                     if ($id.Contains(':')) {
                         # One of the add-on's tools (notebook:jupyterlab), settled: its own row says how.
@@ -7556,6 +7575,7 @@ function Invoke-ExakitMarketplaceApplyPython {
         $ErrorActionPreference = $oldError
         if ($null -eq $oldCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
         else { $env:UV_CACHE_DIR = $oldCache }
+        Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_EVENTS -ErrorAction SilentlyContinue
         if ($null -eq $oldActivity) { Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_FILE -ErrorAction SilentlyContinue }
         else { $env:EXAKIT_MARKETPLACE_ACTIVITY_FILE = $oldActivity }
         if ($null -eq $oldVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
@@ -7575,7 +7595,9 @@ function Invoke-ExakitMarketplaceApplyPython {
         return
     }
     foreach ($note in $notes) {
-        if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text }
+        # The table's rows already say each one's result: with the table on screen the line goes to the log; a
+        # warning still shows. Twin of the same rule in _exakit_marketplace_apply_python.
+        if ($note.Kind -eq 'ok') { if ($tableShown) { Write-ExakitLog "OK" $note.Text } else { Ok $note.Text } } else { Warn2 $note.Text }
     }
     if ($code -ne 0) {
         if (-not $script:ExakitApplyFailureEvent -and $script:ExakitApplyLastError) {
