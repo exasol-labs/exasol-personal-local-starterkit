@@ -3473,6 +3473,18 @@ function Set-ExakitCmdShim {
     return $shimPath
 }
 
+# Invoke-ExakitFileReplace -New <path> -Target <path> - one atomic File.Replace
+# of Target by New, with no backup. NullString, not a plain null: PowerShell
+# passes null to a string parameter as an empty string, which Replace rejects
+# as a backup path. Its own function so the deferred helper (which embeds this
+# definition) and Complete-ExakitAddonLauncherUpdate share it, and the tests
+# can make it fail the way ReplaceFile documents for 1176/1177: Target gone,
+# New still under its own name.
+function Invoke-ExakitFileReplace {
+    param([Parameter(Mandatory)][string]$New, [Parameter(Mandatory)][string]$Target)
+    [System.IO.File]::Replace($New, $Target, [System.Management.Automation.Language.NullString]::Value)
+}
+
 # Write-ExakitCmdShimDeferred - stage exakit.cmd.new and hand the rename to a
 # detached helper that waits for -WaitPids first. $true when the helper started.
 #
@@ -3523,6 +3535,7 @@ for (`$r = 0; `$r -lt 1000; `$r++) {
 }
 "@
     }
+    $replaceBody = "" + ${function:Invoke-ExakitFileReplace}
     # Pids are waited on by number. A waited pid that exits and is reused by an
     # unrelated process keeps the helper waiting on that one (until logout, for
     # a long-lived process), and the alive check below then skips the swap.
@@ -3538,15 +3551,22 @@ $recheckBlock
 foreach (`$id in @($pidList)) { if (`$id -and (Get-Process -Id `$id -ErrorAction SilentlyContinue)) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; exit } }
 # One atomic File.Replace: it needs the target to exist, so a target removed
 # meanwhile (an uninstall ran) is never brought back, and there is no moment
-# with no file at the target. NullString, not a plain null: PowerShell passes
-# null to a string parameter as an empty string, which Replace rejects as a
-# backup path. Target
-# gone: .new is dropped. Any other failure
-# (a scanner holding .new): the old file and .new both stay.
+# with no file at the target. Target gone before the Replace: .new is dropped.
+# A Replace that fails and leaves the target gone with .new still there
+# (ReplaceFile's 1176/1177): the target existed a moment ago, so .new is moved
+# onto it, and never dropped. Any other failure (a scanner holding .new): the
+# old file and .new both stay.
+function Invoke-ExakitFileReplace {
+$replaceBody
+}
+`$half = `$false
 for (`$n = 0; `$n -lt 20; `$n++) {
     if (-not (Test-Path -LiteralPath '$qNew')) { break }
-    if (-not (Test-Path -LiteralPath '$qShim')) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; break }
-    try { [System.IO.File]::Replace('$qNew', '$qShim', [System.Management.Automation.Language.NullString]::Value); break } catch {}
+    if (-not `$half) {
+        if (-not (Test-Path -LiteralPath '$qShim')) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; break }
+        try { Invoke-ExakitFileReplace -New '$qNew' -Target '$qShim'; break } catch { `$half = -not (Test-Path -LiteralPath '$qShim') }
+    }
+    if (`$half) { try { Move-Item -LiteralPath '$qNew' -Destination '$qShim' -ErrorAction Stop; break } catch {} }
     Start-Sleep -Milliseconds 500
 }
 "@
@@ -3676,14 +3696,20 @@ function Write-ExakitAddonLauncher {
 # copy ran (its helper ended at a logoff, or the copy was stopped for this very
 # restart) is applied now, but only when no copy runs (the writer's own check)
 # and <path> itself still exists. The same atomic File.Replace as the helper;
-# on failure both files stay and the current launcher starts.
+# on failure both files stay and the current launcher starts. A failure that
+# leaves <path> gone with .new still there (ReplaceFile's 1176/1177) moves .new
+# onto <path>: it existed a moment ago.
 function Complete-ExakitAddonLauncherUpdate {
     param([Parameter(Mandatory)][string]$Path)
     $newPath = "$Path.new"
     if (-not (Test-Path -LiteralPath $newPath)) { return }
     if (-not (Test-Path -LiteralPath $Path)) { return }
     if (@(Get-ExakitLauncherRunningPids -Path $Path).Count -gt 0) { return }
-    try { [System.IO.File]::Replace($newPath, $Path, [System.Management.Automation.Language.NullString]::Value) } catch { }
+    try { Invoke-ExakitFileReplace -New $newPath -Target $Path } catch {
+        if (-not (Test-Path -LiteralPath $Path) -and (Test-Path -LiteralPath $newPath)) {
+            Move-Item -LiteralPath $newPath -Destination $Path -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 # Test-ExakitCmdShimCurrent - is the installed shim the one this kit would write?
