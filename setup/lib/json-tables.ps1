@@ -674,7 +674,8 @@ function Get-JsonTablesSummary {
 
 function Uninstall-JsonTables {
     param([switch]$DryRun)
-    foreach ($path in @($script:JsonTablesVenv, $script:JsonTablesHome, (Get-JsonTablesBin))) {
+    # The launcher's staged refresh is named for the launcher, not the add-on id.
+    foreach ($path in @($script:JsonTablesVenv, $script:JsonTablesHome, (Get-JsonTablesBin), "$(Get-JsonTablesBin).new")) {
         if (-not (Test-Path $path)) { continue }
         if ($DryRun) {
             Info "  will remove: $path"
