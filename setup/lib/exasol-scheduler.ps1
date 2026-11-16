@@ -242,12 +242,21 @@ function Invoke-ExasolSchedulerSql {
         # SQL over stdin, never argv: CREATE/ALTER USER carries a password,
         # and an argv is visible to every local process for the life of the
         # call.
+        # No BOM ahead of the SQL, also under console code page 65001 (see
+        # Invoke-ExapumpAdminSql in mcp.ps1 for why both encodings are set).
+        $previousOutputEncoding = $OutputEncoding
+        $previousConsoleInput = $null
+        try { $previousConsoleInput = [Console]::InputEncoding } catch { }
+        $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+        try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
         $result = ($Sql | & $bin sql -p $script:ExapumpProfile 2>&1)
         return @{ Success = ($LASTEXITCODE -eq 0); Output = ($result | Out-String -Width 4096) }
     } catch {
         return @{ Success = $false; Output = "$_" }
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
+        if ($null -ne $previousOutputEncoding) { $OutputEncoding = $previousOutputEncoding }
+        if ($null -ne $previousConsoleInput) { try { [Console]::InputEncoding = $previousConsoleInput } catch { } }
     }
 }
 

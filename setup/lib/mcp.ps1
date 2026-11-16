@@ -533,13 +533,24 @@ function Invoke-ExapumpAdminSql {
         # nothing goes through the 5.1 command-line rules any more, so quoted
         # identifiers arrive intact by construction rather than by escaping.
         $previousOutputEncoding = $OutputEncoding
+        # NOT ENOUGH ON ITS OWN UNDER CODE PAGE 65001. With the console at
+        # UTF-8 (chcp 65001 - what Claude Code's Windows shell and other agent
+        # harnesses set), Windows PowerShell 5.1 still writes a BOM ahead of
+        # piped native stdin, and Exasol rejects '<U+FEFF>SELECT ...' as "not
+        # allowed within unquoted identifier" - mcp-doctor then reported bad
+        # admin credentials. The console's input encoding is set BOM-less for
+        # the call too; setting it throws without a console, hence the catch.
+        $previousConsoleInput = $null
+        try { $previousConsoleInput = [Console]::InputEncoding } catch { }
         try {
             # No BOM: exapump parses the first bytes as SQL.
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+            try { [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
             $out = @($Sql | & $bin sql -p $Profile 2>&1) -join "`n"
             $code = $LASTEXITCODE
         } finally {
             $OutputEncoding = $previousOutputEncoding
+            if ($null -ne $previousConsoleInput) { try { [Console]::InputEncoding = $previousConsoleInput } catch { } }
         }
         return @{ Output = $out; ExitCode = $code; Success = (Test-ExapumpSucceeded -ExitCode $code -Output $out) }
     } catch {
