@@ -294,7 +294,10 @@ Check "U+2019 in the path: the helper script parses" "0" (@($qErr).Count)
 $prevOut = $null
 $f = Join-Path $sandbox ("helper-" + [guid]::NewGuid() + ".ps1")
 [System.IO.File]::WriteAllText($f, $script:helperScript, (New-Object System.Text.UTF8Encoding $true))
-$prevOut = & $selfExe -NoProfile -File $f 2>&1 | Out-String
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+$prevOut = & $selfExe -NoProfile -File $f 2>&1 | Out-String -Width 4096
+$ErrorActionPreference = $prevEap
 Remove-Item -Force -LiteralPath $f -ErrorAction SilentlyContinue
 Check "U+2019 in the path: nothing in it runs as code" "False" ($prevOut -match 'INJECTED')
 Check "U+2019 in the path: the path round-trips and the new shim lands" "True" ((Test-Path -LiteralPath $qShimPath) -and ([System.IO.File]::ReadAllText($qShimPath) -eq $newShim))
