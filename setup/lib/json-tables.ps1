@@ -587,11 +587,12 @@ function Write-JsonTablesLauncher {
     # rather than losing the file.
     # Never in place under a running copy, either: Write-ExakitAddonLauncher
     # (exakit-common.ps1) defers the swap while a cmd.exe runs this launcher.
-    Write-ExakitAddonLauncher -Path $launcher -Content ($lines -join "`r`n")
+    $launcherHow = Write-ExakitAddonLauncher -Path $launcher -Content ($lines -join "`r`n")
     } catch {
         return (Write-JsonTablesNotInstalled "could not write the launcher at $launcher")
     }
-    Ok "JSON Tables launcher written: $launcher"
+    if ($launcherHow -eq "staged") { Info "JSON Tables launcher update staged; it applies once the running json-tables exits" }
+    else { Ok "JSON Tables launcher written: $launcher" }
     if (Get-Command Confirm-ExakitOnPath -ErrorAction SilentlyContinue) {
         Confirm-ExakitOnPath $script:BinDir
     }

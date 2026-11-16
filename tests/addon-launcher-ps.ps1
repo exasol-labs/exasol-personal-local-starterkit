@@ -38,7 +38,7 @@ function Import-Functions {
 
 $commonNames = @("Get-ExakitOemEncoding", "Write-ExakitCmdShimFile", "Write-ExakitCmdShimDeferred",
                  "Start-ExakitDetachedPowerShell", "Get-ExakitAddonLauncherGuard",
-                 "Get-ExakitLauncherRunningPids", "Write-ExakitAddonLauncher")
+                 "Get-ExakitLauncherRunningPids", "Write-ExakitAddonLauncher", "Complete-ExakitAddonLauncherUpdate")
 $defs = @(Import-Functions -File (Join-Path $repo "setup/lib/exakit-common.ps1") -Names $commonNames)
 $defs += @(Import-Functions -File (Join-Path $repo "setup/lib/dash-server.ps1") -Names @("Get-DashServerLauncherPath", "Write-DashServerLauncher"))
 $defs += @(Import-Functions -File (Join-Path $repo "setup/lib/dbt-exasol.ps1") -Names @("Get-DbtExasolLauncherPath", "Write-DbtExasolLauncher"))
@@ -47,7 +47,9 @@ foreach ($d in $defs) { Invoke-Expression $d }
 
 # Stubs for what the writers read; nothing here reaches the machine.
 function Write-ExakitLog { param($Level, $Message) }
-function Ok($m) { }
+$script:said = @()
+function Ok($m) { $script:said += "OK $m" }
+function Info($m) { $script:said += "INFO $m" }
 function Warn2($m) { }
 function Write-DashServerNotInstalled($m) { Write-Host "  (not installed: $m)"; return $false }
 function Write-DbtExasolNotInstalled($m) { Write-Host "  (not installed: $m)"; return $false }
@@ -119,6 +121,31 @@ foreach ($c in $cases) {
     & ([scriptblock]::Create($script:helperScript))
     Check "$($c.Id): helper: the new launcher is in place" "True" ([System.IO.File]::ReadAllText($c.Path) -eq $text)
     Check "$($c.Id): helper: .new is gone" "False" (Test-Path -LiteralPath "$($c.Path).new")
+
+    # Staged while running: the writer says so, not "launcher written".
+    [System.IO.File]::WriteAllText($c.Path, $old, [System.Text.Encoding]::ASCII)
+    $script:said = @()
+    [void](& $c.Write)
+    Check "$($c.Id): running: says the update is staged" "True" ((@($script:said) -join "`n") -match 'launcher update staged; it applies ')
+    Check "$($c.Id): running: does not say launcher written" "False" ((@($script:said) -join "`n") -match 'launcher written')
+    # The helper never ran (a logoff ended it): nothing is replaced while a
+    # copy still runs, and the next start (no copy running) applies the .new.
+    Complete-ExakitAddonLauncherUpdate -Path $c.Path
+    Check "$($c.Id): stale .new: not applied while a copy runs" "True" ([System.IO.File]::ReadAllText($c.Path) -eq $old)
+    Check "$($c.Id): stale .new: kept while a copy runs" "True" (Test-Path -LiteralPath "$($c.Path).new")
+    $script:running = @()
+    Complete-ExakitAddonLauncherUpdate -Path $c.Path
+    Check "$($c.Id): stale .new: applied at the next start" "True" ([System.IO.File]::ReadAllText($c.Path) -eq $text)
+    Check "$($c.Id): stale .new: gone once applied" "False" (Test-Path -LiteralPath "$($c.Path).new")
+    # A removed launcher is never brought back by a stale .new.
+    Set-Content -Path "$($c.Path).new" -Value "stale"
+    $keep = [System.IO.File]::ReadAllText($c.Path)
+    Remove-Item -Force -LiteralPath $c.Path
+    Complete-ExakitAddonLauncherUpdate -Path $c.Path
+    Check "$($c.Id): stale .new: a removed launcher is not recreated" "False" (Test-Path -LiteralPath $c.Path)
+    Remove-Item -Force -LiteralPath "$($c.Path).new" -ErrorAction SilentlyContinue
+    [System.IO.File]::WriteAllText($c.Path, $keep, [System.Text.Encoding]::ASCII)
+    $script:running = @(2147483001)
 
     # No helper could start: the working old launcher is kept, no .new left.
     [System.IO.File]::WriteAllText($c.Path, $old, [System.Text.Encoding]::ASCII)
@@ -196,6 +223,16 @@ foreach ($f in @("dash-server.ps1", "dbt-exasol.ps1", "json-tables.ps1")) {
     Check "$($f): writes its launcher through Write-ExakitAddonLauncher" "1" ([regex]::Matches($src, 'Write-ExakitAddonLauncher -Path')).Count
     Check "$($f): no direct WriteAllText of the launcher" "0" ([regex]::Matches($src, 'WriteAllText\(\(Get-\w+LauncherPath\)|WriteAllText\(\$launcher')).Count
     Check "$($f): carries the self-cleaning guard" "1" ([regex]::Matches($src, 'Get-ExakitAddonLauncherGuard -Id')).Count
+}
+
+# dash-server applies a staged launcher right before each start, so an update
+# that stopped and restarts it runs the new launcher (the update's own restart,
+# and the next `exakit start`).
+foreach ($fn in @("Start-DashServer", "Test-DashServer")) {
+    $body = "" + (Import-Functions -File (Join-Path $repo "setup/lib/dash-server.ps1") -Names @($fn))
+    $applyAt = $body.IndexOf("Complete-ExakitAddonLauncherUpdate -Path (Get-DashServerLauncherPath)")
+    $startAt = $body.IndexOf("Start-Process -FilePath (Get-DashServerLauncherPath)")
+    Check "$($fn): applies a staged launcher before it starts one" "True" (($applyAt -ge 0) -and ($startAt -gt $applyAt))
 }
 
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
