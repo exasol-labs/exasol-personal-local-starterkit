@@ -215,7 +215,7 @@ set -u
 HOME="$SBHOME"; export HOME
 EXAKIT_HOME="$SBHOME/.exasol-starter-kit"; EXAKIT_BIN_DIR="$SBHOME/.local/bin"
 EXAKIT_EXAPUMP_CONFIG_DIR="$SBHOME/.exapump"
-EXAKIT_PERSONAL_DEPLOY_DIR="$DEPLOY"
+EXAKIT_PERSONAL_DEPLOY_DIR="\${STUB_DEPLOY_DIR:-$DEPLOY}"
 export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_EXAPUMP_CONFIG_DIR
 info(){ printf 'INFO %s\n' "\$*"; }; warn(){ printf 'WARN %s\n' "\$*"; }
 ok(){ printf 'OK %s\n' "\$*"; }; ok_step(){ printf 'OK %s\n' "\$*"; }
@@ -241,7 +241,7 @@ exakit_repo_root(){ return 1; }
 exakit_marketplace_addons(){ :; }
 personal_teardown(){
     EXAKIT_TEARDOWN_WARNINGS="\${STUB_TW:-}"
-    if [ "\${STUB_TD_RC:-0}" = 0 ]; then rm -rf "$DEPLOY"; EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi
+    if [ "\${STUB_TD_RC:-0}" = 0 ]; then rm -rf "\$EXAKIT_PERSONAL_DEPLOY_DIR"; EXAKIT_TEARDOWN_LEFTOVERS=""; EXAKIT_TEARDOWN_REMEDY=""; return 0; fi
     EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $DEPLOY"
     EXAKIT_TEARDOWN_REMEDY="rm -rf '$DEPLOY'"
     return 1
@@ -311,6 +311,19 @@ lacks    "h3: nor any launcher folder" "empty launcher folder" "$out"
 out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
 check    "h3: the cache stays" "kept" "$(gone "$CACHE")"
 check    "h3: the sibling deployment stays" "kept" "$(gone "$SBHOME/.exasol/personal/deployments/other")"
+# (h3b) the kit's deployment lives elsewhere (EXAKIT_PERSONAL_DEPLOY_DIR set)
+# and another one sits in the launcher's default folder: the cache stays.
+rm -rf "$SBHOME/.exasol"; seed_cache
+CUSTOM="$SBHOME/custom/deployments/kit"; mkdir -p "$CUSTOM"
+mkdir -p "$SBHOME/.exasol/personal/deployments/other"
+out="$(STUB_DEPLOY_DIR="$CUSTOM" env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h3b: a deployment in the default folder keeps the shared cache" "kept" "$(gone "$CACHE")"
+check    "h3b: and that deployment stays" "kept" "$(gone "$SBHOME/.exasol/personal/deployments/other")"
+# (h3c) the same with the default folder empty: the cache goes.
+rm -rf "$SBHOME/.exasol"; seed_cache; mkdir -p "$CUSTOM"
+out="$(STUB_DEPLOY_DIR="$CUSTOM" env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"
+check    "h3c: no other deployment anywhere: the cache goes" "gone" "$(gone "$CACHE")"
+rm -rf "$SBHOME/custom"
 # (h4) a file beside personal/ keeps ~/.exasol but not the empty folders below.
 rm -rf "$SBHOME/.exasol"; seed_deploy; seed_cache; : > "$SBHOME/.exasol/notes"
 out="$(env -u XDG_CACHE_HOME bash "$TMP/run.sh" 2>&1)"

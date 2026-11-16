@@ -314,6 +314,22 @@ Seed-Kit; $script:out = @()
 Invoke-ExakitUninstallRun
 Check "h3: the cache stays" "True" (Test-Path $cache)
 Check "h3: the sibling deployment stays" "True" (Test-Path (Join-Path $deplRoot "other"))
+# (h3b) the kit's deployment lives elsewhere and another one sits in the
+# launcher's default folder: the shared cache stays.
+$savedDeploy = $script:PersonalDeployDir
+Reset-Exa; Seed-Kit; Seed-Cache
+$script:PersonalDeployDir = Join-Path $fakeHome "custom\deployments\kit"
+Seed-Deploy
+New-Item -ItemType Directory -Force -Path (Join-Path $deplRoot "other") | Out-Null
+Invoke-ExakitUninstallRun
+Check "h3b: a deployment in the default folder keeps the shared cache" "True" (Test-Path $cache)
+Check "h3b: and that deployment stays" "True" (Test-Path (Join-Path $deplRoot "other"))
+# (h3c) the same with the default folder empty: the cache goes.
+Reset-Exa; Seed-Kit; Seed-Cache; Seed-Deploy
+Invoke-ExakitUninstallRun
+Check "h3c: no other deployment anywhere: the cache goes" "False" (Test-Path $cache)
+$script:PersonalDeployDir = $savedDeploy
+Remove-Item -Recurse -Force (Join-Path $fakeHome "custom") -ErrorAction SilentlyContinue
 # (h4) a file in ~/.exasol keeps it; the empty folders below still go.
 Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache
 New-Item -ItemType File -Force -Path (Join-Path $exaRoot "notes") | Out-Null
