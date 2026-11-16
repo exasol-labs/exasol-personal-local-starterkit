@@ -11716,6 +11716,23 @@ _exakit_remove_installed_skills() {
 
 
 
+# _exakit_uninstall_leftover_report — say what of the database survived a
+# teardown, and the one command that removes it. Reads what personal_teardown
+# left in EXAKIT_TEARDOWN_LEFTOVERS / EXAKIT_TEARDOWN_REMEDY. Printed LAST, after
+# the spinner has ended, so it is the final thing on the screen and not lost
+# among the record lines. Twin of Write-ExakitUninstallLeftoverReport.
+_exakit_uninstall_leftover_report() {
+    error "The database was NOT removed. Still on this machine:"
+    printf '%s\n' "${EXAKIT_TEARDOWN_LEFTOVERS:-the local Exasol Personal deployment}" | while IFS= read -r _ulr_line; do
+        [ -n "$_ulr_line" ] && info "  $_ulr_line"
+    done
+    if [ -n "${EXAKIT_TEARDOWN_REMEDY:-}" ]; then
+        info "Remove it with (this deletes the database and all its data):"
+        info "  $EXAKIT_TEARDOWN_REMEDY"
+    fi
+    return 0
+}
+
 # _exakit_uninstall_component <key> <dry> — one selectable piece of the kit,
 # removed on its own. Each removal also clears its manifest record and step
 # flag, so `exakit status`, `exakit version` and an installer re-run all read the
@@ -11733,7 +11750,13 @@ _exakit_uninstall_component() {
             fi
             info "Removing the local Exasol $_uc_type deployment and all data"
             case "$_uc_type" in
-                personal) personal_teardown --data || warn "Database removal reported errors" ;;
+                personal)
+                    if ! personal_teardown --data; then
+                        # Not best-effort: the deployment is still there, so
+                        # the step stays marked and the caller is told.
+                        _exakit_uninstall_leftover_report
+                        return 1
+                    fi ;;
                 *)        warn "Unknown runtime type '$_uc_type'; skipping database removal" ;;
             esac
             exakit_unmark_step runtime
@@ -11777,7 +11800,7 @@ _exakit_uninstall_component() {
             exakit_unmark_step pyexasol
             ;;
         everything)
-            exakit_uninstall_run "$_uc_dry"
+            exakit_uninstall_run "$_uc_dry" || return 1
             ;;
         *)
             # A marketplace add-on: its module owns the removal.
@@ -12623,10 +12646,17 @@ EXAKIT_UM_PANEL_EOF
     [ "$_um_answer" = "UNINSTALL" ] || { info "Uninstall cancelled — nothing was removed."; return 0; }
 
     printf '\n'
+    _um_rc=0
     for _um_key in $_um_picked; do
-        _exakit_uninstall_component "$_um_key" 0
+        _exakit_uninstall_component "$_um_key" 0 || _um_rc=1
     done
     printf '\n'
+    # The database survived (the report above names it and the command that
+    # removes it): "Done" would be the one false line of the run.
+    if [ "$_um_rc" -ne 0 ]; then
+        error "Uninstall did not finish: the database is still on this machine (see above)."
+        return 1
+    fi
     # A full uninstall has just deleted the exakit binary, so pointing at
     # `exakit info` sends the reader to a command that no longer exists -
     # the last word of the run being one that cannot be followed. Anything
@@ -12654,6 +12684,7 @@ EXAKIT_UM_PANEL_EOF
 
 exakit_uninstall_run() {
     _dry="${1:-0}"
+    EXAKIT_UNINSTALL_DB_LEFT=0
     # A real run narrates itself on ONE line. Every path it touches was printed
     # as its own bullet -- three per add-on, then the deployment, the MCP
     # configs, the kit home and one per CLI binary -- around twenty lines of
@@ -12793,7 +12824,11 @@ exakit_uninstall_run() {
         _step "local Exasol $_type deployment and ALL its data"
         if [ "$_dry" != "1" ]; then
             case "$_type" in
-                personal) personal_teardown --data || warn "Database removal reported errors (continuing uninstall)" ;;
+                # Still best-effort for the REST of the run (one piece failing
+                # must not strand the others), but no longer for the answer:
+                # the record line below is skipped, the leftovers are reported
+                # at the end, and the run returns 1.
+                personal) personal_teardown --data || EXAKIT_UNINSTALL_DB_LEFT=1 ;;
                 *)        warn "Unknown runtime type '$_type'; skipping database removal" ;;
             esac
         fi
@@ -12803,7 +12838,9 @@ exakit_uninstall_run() {
         # refused to remove is found again by name, and nothing else on screen
         # ever says what it was called.
         case "$_type" in
-            personal) _done "Database removed: the local Exasol Personal deployment and all its data" ;;
+            personal)
+                [ "$EXAKIT_UNINSTALL_DB_LEFT" = 1 ] || \
+                    _done "Database removed: the local Exasol Personal deployment and all its data" ;;
             *)        : ;;
         esac
     else
@@ -12820,6 +12857,14 @@ exakit_uninstall_run() {
         info "If a local deployment exists it is still on disk, with all its data, at:"
         info "  ${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
         info "Remove it by hand, or re-install and then uninstall again to have the kit do it."
+        # And when it IS there, the run must not end on "complete": the same
+        # leftover report and status as a teardown that left it behind.
+        _un_dd="${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
+        if [ "$_dry" != "1" ] && [ -e "$_un_dd" ]; then
+            EXAKIT_UNINSTALL_DB_LEFT=1
+            EXAKIT_TEARDOWN_LEFTOVERS="the deployment directory $_un_dd (the database and ALL its data)"
+            EXAKIT_TEARDOWN_REMEDY="rm -rf '$_un_dd'"
+        fi
     fi
 
     # 2) Managed MCP configuration in every AI client the kit configures.
@@ -12895,8 +12940,14 @@ exakit_uninstall_run() {
     if [ "$_dry" != "1" ]; then
         info_step "The lines above are the whole record of this uninstall — the install log lived in the kit home and went with it."
     fi
-    # Explicit, because every step here is best-effort: each failure warns and
-    # carries on, so the function has always succeeded, and leaving the status to
-    # whatever the last line happened to be made that an accident of ordering.
+    # Every step here is best-effort - each failure warns and carries on - with
+    # ONE exception: the database. A run that left it on the machine says so,
+    # last, with the command that removes it, and answers 1 so no caller can
+    # print "complete" over it.
+    if [ "$_dry" != "1" ] && [ "${EXAKIT_UNINSTALL_DB_LEFT:-0}" = 1 ]; then
+        printf '\n'
+        _exakit_uninstall_leftover_report
+        return 1
+    fi
     return 0
 }

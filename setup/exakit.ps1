@@ -1633,8 +1633,27 @@ function Test-ExakitSafeUninstallTarget([string]$Path) {
     return ($null -eq $anyEntry)
 }
 
+# Write-ExakitUninstallLeftoverReport - say what of the database survived a
+# teardown, and the one command that removes it (Remove-Personal leaves both in
+# $script:PersonalTeardownLeftovers / $script:PersonalTeardownRemedy). Twin of
+# _exakit_uninstall_leftover_report in common.sh.
+function Write-ExakitUninstallLeftoverReport {
+    Write-Host "      [x] The database was NOT removed. Still on this machine:" -ForegroundColor Red
+    Write-ExakitLog "ERROR" "The database was NOT removed."
+    $left = @($script:PersonalTeardownLeftovers)
+    if ($left.Count -eq 0) { $left = @("the local Exasol Personal deployment") }
+    foreach ($line in $left) { Info "  $line" }
+    if ($script:PersonalTeardownRemedy) {
+        Info "Remove it with (this deletes the database and all its data):"
+        Info "  $($script:PersonalTeardownRemedy)"
+    }
+}
+
 function Invoke-ExakitUninstallRun {
     param([switch]$DryRun)
+    # Set when the database survived the teardown; the caller must not print
+    # success over it. Twin of EXAKIT_UNINSTALL_DB_LEFT.
+    $script:ExakitUninstallDbLeft = $false
 
     # THE GUARD RUNS BEFORE ANYTHING IS REMOVED, so "Nothing was removed" is
     # true when it fires. Twin of the check at the top of exakit_uninstall_run.
@@ -1716,11 +1735,28 @@ function Invoke-ExakitUninstallRun {
         } else {
             Info "Removing the local Exasol $type deployment and all data"
             switch ($type) {
-                "personal" { try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" } }
+                "personal" {
+                    # Still best-effort for the REST of the run, but no longer
+                    # for the answer: what survived is reported at the end and
+                    # the caller does not print success.
+                    $script:PersonalTeardownLeftovers = @()
+                    $script:PersonalTeardownRemedy = ""
+                    try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" }
+                    if (@($script:PersonalTeardownLeftovers).Count -gt 0) { $script:ExakitUninstallDbLeft = $true }
+                }
                 default { Warn2 "Unknown runtime type '$type'; skipping database removal" }
             }
-            RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
+            if (-not $script:ExakitUninstallDbLeft) {
+                RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
+            }
         }
+    } elseif (-not $DryRun -and $script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir)) {
+        # No runtime recorded, but the deployment is on disk: nothing below
+        # removes it, so the run must not end on "complete". Twin of the same
+        # arm in exakit_uninstall_run.
+        $script:ExakitUninstallDbLeft = $true
+        $script:PersonalTeardownLeftovers = @("the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)")
+        $script:PersonalTeardownRemedy = "Remove-Item -Recurse -Force '" + ($script:PersonalDeployDir -replace "'", "''") + "'"
     }
 
     # 2) Managed MCP configuration in the AI clients. Best-effort.
@@ -1835,6 +1871,12 @@ function Invoke-ExakitUninstallRun {
     if (-not $DryRun) {
         InfoStep "The lines above are the whole record of this uninstall - the install log lived in the kit home and went with it."
     }
+    # The one step that is not best-effort for the answer: a database left on
+    # the machine is said last, with the command that removes it.
+    if (-not $DryRun -and $script:ExakitUninstallDbLeft) {
+        Write-Host ""
+        Write-ExakitUninstallLeftoverReport
+    }
 }
 
 # Delete the CLI binaries from a short-lived detached PowerShell that first
@@ -1936,11 +1978,19 @@ function Invoke-CmdUninstall {
         Warn2 "exakit uninstall -Yes removes the FULL kit (all local database data included)."
         Invoke-ExakitUninstallRun
         Write-Host ""
+        if ($script:ExakitUninstallDbLeft) {
+            # "Uninstall complete" here was the bug: exit 0 over a database
+            # still on disk. Twin of the same arm in cmd_uninstall.
+            Write-Host "      [x] Uninstall did not finish: the database is still on this machine (see above)." -ForegroundColor Red
+            exit 1
+        }
         Ok "Uninstall complete - the Exasol Personal Local Starter Kit has been removed."
         return
     }
 
+    $script:ExakitUninstallDbLeft = $false
     Show-ExakitUninstallMenu
+    if ($script:ExakitUninstallDbLeft) { exit 1 }
 }
 
 # The interactive `exakit uninstall`: pick exactly what goes, see exactly what
@@ -2062,6 +2112,12 @@ function Show-ExakitUninstallMenu {
     Write-Host ""
     foreach ($key in $picked) { Invoke-ExakitUninstallComponent -Key $key }
     Write-Host ""
+    # The database survived (the report above names it and the command that
+    # removes it): "Done" would be the one false line of the run.
+    if ($script:ExakitUninstallDbLeft) {
+        Write-Host "      [x] Uninstall did not finish: the database is still on this machine (see above)." -ForegroundColor Red
+        return
+    }
     # A full uninstall has just deleted the exakit command, so pointing at
     # `exakit info` ends the run with an instruction that cannot be followed.
     # Anything short of EVERYTHING leaves the CLI in place.
@@ -2086,8 +2142,17 @@ function Invoke-ExakitUninstallComponent {
             # can still change the answer. Twin of the same move in
             # _exakit_uninstall_component.
             Info "Removing the local Exasol Personal deployment and all data"
+            $script:PersonalTeardownLeftovers = @()
+            $script:PersonalTeardownRemedy = ""
             try { Remove-Personal } catch { Warn2 "Database removal reported errors" }
-            Remove-ExakitStepDone "runtime"
+            if (@($script:PersonalTeardownLeftovers).Count -gt 0) {
+                # Not best-effort: the deployment is still there, so the step
+                # stays marked and the caller is told.
+                $script:ExakitUninstallDbLeft = $true
+                Write-ExakitUninstallLeftoverReport
+            } else {
+                Remove-ExakitStepDone "runtime"
+            }
         }
         "mcp_configs" {
             Info "Removing the managed MCP configuration from the AI clients"
