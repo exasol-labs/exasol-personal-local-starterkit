@@ -250,11 +250,16 @@ for _fn in personal_launcher_cache_dir personal_other_deployments personal_pruna
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/runtime-personal.sh")"
 done
 eval "\$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
-for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_orphan_autostart _exakit_uninstall_kit_images exakit_uninstall_run; do
+for _fn in _exakit_uninstall_leftover_report _exakit_uninstall_teardown_warnings _exakit_uninstall_component _exakit_uninstall_orphan_autostart _exakit_uninstall_kit_images exakit_uninstall_run; do
     eval "\$(awk -v n="\$_fn" '\$0 ~ ("^" n "\\\\(\\\\)") {f=1} f{print} f&&/^}\$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 done
 mkdir -p "\$EXAKIT_HOME" && : > "\$EXAKIT_HOME/manifest.json"
-exakit_uninstall_run "\${STUB_DRY:-0}"
+exakit_unmark_step(){ :; }
+if [ -n "\${STUB_COMPONENT:-}" ]; then
+    _exakit_uninstall_component "\$STUB_COMPONENT" "\${STUB_DRY:-0}"
+else
+    exakit_uninstall_run "\${STUB_DRY:-0}"
+fi
 printf 'RC=%s\n' "\$?"
 HARNESS
 
@@ -269,6 +274,17 @@ contains "and answers 0" "RC=0" "$out"
 out="$(STUB_TD_RC=0 STUB_TW="could not check docker for the deployment's container (exit 1); check with: docker ps -a --filter name=exa-test1" bash "$TMP/run.sh" 2>&1)"
 contains "a container check that could not run is warned under the record line" "WARN could not check docker for the deployment's container (exit 1)" "$out"
 contains "and alone still answers 0" "RC=0" "$out"
+# The database-only removal (exakit uninstall, pick "database") says the same.
+seed_deploy
+out="$(STUB_COMPONENT=database STUB_TD_RC=0 STUB_TW="could not check docker for the deployment's container (exit 1); check with: docker ps -a --filter name=exa-test1" bash "$TMP/run.sh" 2>&1)"
+contains "database only: the unrun container check is warned" "WARN could not check docker for the deployment's container (exit 1)" "$out"
+contains "database only: and alone still answers 0" "RC=0" "$out"
+seed_deploy
+out="$(STUB_COMPONENT=database STUB_TD_RC=1 STUB_TW="could not check podman for the deployment's container (exit 1); check with: podman ps -a --filter name=exa-test1" bash "$TMP/run.sh" 2>&1)"
+contains "database only, deployment left: the warning is said too" "WARN could not check podman" "$out"
+contains "database only, deployment left: answers 1" "RC=1" "$out"
+out="$(STUB_COMPONENT=database STUB_TD_RC=0 bash "$TMP/run.sh" 2>&1)"
+lacks    "database only, no warnings: no WARN line" "WARN could not check" "$out"
 # No runtime in the manifest (an interrupted install) and the deployment on
 # disk: nothing removes it, so the run must not answer 0 either.
 seed_deploy

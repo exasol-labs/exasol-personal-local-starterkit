@@ -2412,6 +2412,7 @@ function Invoke-ExakitUninstallComponent {
             Info "Removing the local Exasol Personal deployment and all data"
             $script:PersonalTeardownLeftovers = @()
             $script:PersonalTeardownRemedy = ""
+            $script:PersonalTeardownWarnings = @()
             try { Remove-Personal } catch { Warn2 "Database removal reported errors" }
             if (@($script:PersonalTeardownLeftovers).Count -gt 0) {
                 # Not best-effort: the deployment is still there, so the step
@@ -2421,6 +2422,9 @@ function Invoke-ExakitUninstallComponent {
             } else {
                 Remove-ExakitStepDone "runtime"
             }
+            # A container check that could not run is said here too, as the
+            # full run does (Invoke-ExakitUninstallRun step 1).
+            foreach ($tw in @($script:PersonalTeardownWarnings)) { if ($tw) { Warn2 $tw } }
         }
         "mcp_configs" {
             Info "Removing the managed MCP configuration from the AI clients"

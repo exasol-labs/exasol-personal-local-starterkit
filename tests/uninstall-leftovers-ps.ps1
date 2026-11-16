@@ -249,6 +249,10 @@ Invoke-ExakitUninstallRun
 Has   "g2: the uninstall still says Database removed" "Database removed" $script:out
 Has   "g2: and warns under it" "WARN could not check docker for the deployment's container" $script:out
 Check "g2: the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+# The database-only removal says it too.
+Seed-Kit; Seed-Deploy; $script:out = @()
+Invoke-ExakitUninstallComponent -Key "database"
+Has   "g2: database only: warns as well" "WARN could not check docker for the deployment's container" $script:out
 $env:STUB_DOCKER_PS_FAIL = ""
 Seed-Deploy; $env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"
 Remove-Personal
