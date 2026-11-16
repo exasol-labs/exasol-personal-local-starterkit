@@ -3443,11 +3443,20 @@ function Set-ExakitCmdShim {
 
 # Write-ExakitCmdShimDeferred - stage exakit.cmd.new and hand the rename to a
 # detached helper that waits for -WaitPids first. $true when the helper started.
+#
+# -WaitTimeoutSeconds 0 waits for -WaitPids without a limit. -Recheck makes the
+# helper, once those are gone, look again for any process whose command line
+# names -ShimPath and wait for it too before the move: an add-on launcher may be
+# started again (exakit start) in the moment between its old copy exiting and
+# the swap. -Label names the file in the log.
 function Write-ExakitCmdShimDeferred {
     param(
         [Parameter(Mandatory)][string]$ShimPath,
         [Parameter(Mandatory)][string]$Content,
-        [int[]]$WaitPids = @()
+        [int[]]$WaitPids = @(),
+        [int]$WaitTimeoutSeconds = 120,
+        [switch]$Recheck,
+        [string]$Label = "exakit.cmd"
     )
     $newPath = "$ShimPath.new"
     try {
@@ -3459,9 +3468,24 @@ function Write-ExakitCmdShimDeferred {
     $pidList = (@($WaitPids) + @(0)) -join ','
     $qShim = $ShimPath -replace "'", "''"
     $qNew = $newPath -replace "'", "''"
+    $timeoutArg = ""
+    if ($WaitTimeoutSeconds -gt 0) { $timeoutArg = " -Timeout $WaitTimeoutSeconds" }
+    $recheckBlock = ""
+    if ($Recheck) {
+        $recheckBlock = @"
+for (`$r = 0; `$r -lt 1000; `$r++) {
+    `$busy = @()
+    try { `$busy = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { `$_.ProcessId -ne `$PID -and ("" + `$_.CommandLine).IndexOf('$qShim', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { [int]`$_.ProcessId }) } catch {}
+    if (`$busy.Count -eq 0) { break }
+    foreach (`$id in `$busy) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} }
+    Start-Sleep -Milliseconds 500
+}
+"@
+    }
     $deferred = @"
-foreach (`$id in @($pidList)) { if (`$id) { try { Wait-Process -Id `$id -Timeout 120 -ErrorAction SilentlyContinue } catch {} } }
+foreach (`$id in @($pidList)) { if (`$id) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} } }
 Start-Sleep -Milliseconds 1500
+$recheckBlock
 for (`$n = 0; `$n -lt 20; `$n++) {
     if (-not (Test-Path -LiteralPath '$qNew')) { break }
     try { Move-Item -LiteralPath '$qNew' -Destination '$qShim' -Force -ErrorAction Stop; break } catch {}
@@ -3469,12 +3493,85 @@ for (`$n = 0; `$n -lt 20; `$n++) {
 }
 "@
     if (Start-ExakitDetachedPowerShell -Script $deferred) {
-        Write-ExakitLog "INFO" "exakit.cmd refresh staged; it is swapped in once this command exits"
+        Write-ExakitLog "INFO" "$Label refresh staged; it is swapped in once the running copy exits"
         return $true
     }
     Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
-    Write-ExakitLog "WARN" "Could not start the exakit.cmd refresh helper; the current exakit.cmd is kept"
+    Write-ExakitLog "WARN" "Could not start the $Label refresh helper; the current $Label is kept"
     return $false
+}
+
+# Get-ExakitAddonLauncherGuard <id> <target> - the self-cleaning head of a
+# marketplace add-on's .cmd launcher, the same pattern as exakit.cmd: a
+# launcher whose target is gone is a leftover of an uninstall that did not
+# finish, so it says so and deletes itself instead of failing on a missing
+# executable. `(goto) 2>nul` leaves the batch context first, so cmd.exe never
+# re-reads the deleted file; `cmd /c exit 1` sets the exit code without
+# closing an interactive cmd.exe. A label and goto, not a parenthesised
+# if-block, because the message contains parentheses. The label is
+# kit-prefixed so it cannot collide with one in the launcher body.
+function Get-ExakitAddonLauncherGuard {
+    param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Target)
+    return @(
+        "if exist `"$Target`" goto exakit_target_ok"
+        ">&2 echo $Id was uninstalled - this leftover launcher (`"%~f0`") removes itself now."
+        "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"
+        ":exakit_target_ok"
+    )
+}
+
+# Get-ExakitLauncherRunningPids <path> - processes (other than this one) whose
+# command line names the launcher's path: a cmd.exe running it right now. An
+# empty list where processes cannot be listed.
+function Get-ExakitLauncherRunningPids {
+    param([Parameter(Mandatory)][string]$Path)
+    $found = @()
+    try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return @() }
+    foreach ($p in $procs) {
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        $cl = "" + $p.CommandLine
+        if ($cl -and $cl.IndexOf($Path, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $found += [int]$p.ProcessId }
+    }
+    return @($found | Sort-Object -Unique)
+}
+
+# Write-ExakitAddonLauncher <path> <content> - write an add-on .cmd launcher,
+# never in place while a cmd.exe runs it. cmd.exe resumes a batch file at the
+# byte offset it had reached, so rewriting a running launcher (dash-server runs
+# for as long as the server does) makes it resume inside the new content -
+# possibly inside the self-cleaning line. Same bytes already on disk: nothing
+# to do. Running: staged as <path>.new and swapped in by a detached helper
+# once every copy has exited (Write-ExakitCmdShimDeferred). Otherwise in place,
+# dropping a leftover .new. Throws only when the in-place write fails; a
+# helper that cannot start keeps the current, working launcher.
+function Write-ExakitAddonLauncher {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Content)
+    $newPath = "$Path.new"
+    if (Test-Path -LiteralPath $Path) {
+        $oem = Get-ExakitOemEncoding
+        if ($oem) { $want = $oem.GetBytes($Content) }
+        else { $want = [System.Text.Encoding]::Default.GetBytes($Content) }
+        $same = $false
+        try {
+            $have = [System.IO.File]::ReadAllBytes($Path)
+            if ($have.Length -eq $want.Length) {
+                $same = $true
+                for ($i = 0; $i -lt $want.Length; $i++) { if ($have[$i] -ne $want[$i]) { $same = $false; break } }
+            }
+        } catch { $same = $false }
+        if ($same) {
+            Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+            return
+        }
+        $running = @(Get-ExakitLauncherRunningPids -Path $Path)
+        if ($running.Count -gt 0) {
+            [void](Write-ExakitCmdShimDeferred -ShimPath $Path -Content $Content -WaitPids $running `
+                -WaitTimeoutSeconds 0 -Recheck -Label (Split-Path -Leaf $Path))
+            return
+        }
+    }
+    Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+    Write-ExakitCmdShimFile -Path $Path -Content $Content
 }
 
 # Test-ExakitCmdShimCurrent - is the installed shim the one this kit would write?

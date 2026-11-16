@@ -252,8 +252,7 @@ function Write-DashServerLauncher {
     $exe = Join-Path $script:DashServerVenv "Scripts\dash-server.exe"
 
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
-    $lines = @(
-        "@echo off"
+    $lines = @("@echo off") + @(Get-ExakitAddonLauncherGuard -Id "dash-server" -Target $exe) + @(
         # setlocal, AND THAT IS NOT BOILERPLATE. A .cmd invoked from an
         # interactive cmd.exe runs in THAT process, so every `set` here escapes
         # into the user's console and is inherited by everything they run
@@ -395,9 +394,9 @@ function Write-DashServerLauncher {
     # written". Same approach as Set-ExakitCmdShim, including its fallback: a
     # machine whose OEM code page cannot be resolved keeps the old behaviour
     # rather than losing the file.
-    $oemEnc = Get-ExakitOemEncoding
-    if ($oemEnc) { [System.IO.File]::WriteAllText((Get-DashServerLauncherPath), ($lines -join "`r`n"), $oemEnc) }
-    else { Set-Content -Path (Get-DashServerLauncherPath) -Value ($lines -join "`r`n") -Encoding Ascii }
+    # Never in place under a running copy, either: Write-ExakitAddonLauncher
+    # (exakit-common.ps1) defers the swap while a cmd.exe runs this launcher.
+    Write-ExakitAddonLauncher -Path (Get-DashServerLauncherPath) -Content ($lines -join "`r`n")
     } catch {
         return (Write-DashServerNotInstalled "could not write the launcher at $(Get-DashServerLauncherPath)")
     }

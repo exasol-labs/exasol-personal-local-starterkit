@@ -70,6 +70,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/shim-update-ps.ps1
+      - name: add-on launchers clean themselves up and are never rewritten under themselves, under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-launcher-ps.ps1
       - name: uninstall never claims success over a leftover database, under 5.1
         if: matrix.shard == 2
         shell: powershell
