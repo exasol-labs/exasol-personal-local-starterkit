@@ -18,13 +18,13 @@
 **macOS / Linux / WSL**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0/install.sh | EXAKIT_REF=feat/rc-build-0.3.0 sh
+curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/install.sh | EXAKIT_REF=feat/rc-build-0.3.0-federation sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-$env:EXAKIT_REF = "feat/rc-build-0.3.0"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0/install.ps1 | iex
+$env:EXAKIT_REF = "feat/rc-build-0.3.0-federation"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/install.ps1 | iex
 ```
 
 To have an AI agent do the install, paste this into Claude Code, Codex or any other coding agent:
@@ -32,7 +32,7 @@ To have an AI agent do the install, paste this into Claude Code, Codex or any ot
 <div align="left">
 
 ```text
-Install the Exasol starter kit from https://github.com/exasol-labs/exasol-personal-local-starterkit/tree/feat/rc-build-0.3.0
+Install the Exasol starter kit from https://github.com/exasol-labs/exasol-personal-local-starterkit/tree/feat/rc-build-0.3.0-federation
 ```
 
 </div>
