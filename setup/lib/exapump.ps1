@@ -4126,14 +4126,53 @@ function Select-ExakitDataLoad {
     if ($script:UiTable) {
         if ($script:ExakitTableHasDesc) { $script:UiTable.Col2 = "Description" } else { $script:UiTable.Col2 = " " }
     }
-    Write-Host ""
+    $onScreen = 0
+    $startRow = 0
+    if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1" -and @($script:ExakitTableSampleIds).Count -gt 0) {
+        # THE INSTALL'S SAMPLE ROW, before the question: no column heading, no
+        # checkbox on it, and its datasets loading at once with the bar to the
+        # right of the row. Then the same table asks about the rows under it,
+        # Skip ticked so Enter goes on. Twin of _exakit_data_compact_samples.
+        if ($script:UiTable) { $script:UiTable.Col1 = " " }
+        $script:UiTableNoBox = @(1)
+        Write-Host ""
+        Start-ExakitDataTableRun
+        $okCount = 0
+        $all = @($script:ExakitTableSampleIds)
+        foreach ($sampleId in $all) {
+            try {
+                Invoke-ExakitDatasetLoad -KitRoot (Get-ExakitRepoRoot) -Id $sampleId
+                $okCount++
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_" }
+                Write-ExakitLog "WARN" "Dataset '$sampleId' did not load: $reason"
+                $script:ExakitCompactFailedIds = @($script:ExakitCompactFailedIds) + @($sampleId)
+            }
+        }
+        if ($okCount -eq $all.Count) {
+            Set-ExakitTableRow -Row 1 -State "done" -Final "$($all.Count) of $($all.Count) loaded"
+        } else {
+            Set-ExakitTableRow -Row 1 -State "failed" -Final "$okCount of $($all.Count) loaded"
+        }
+        Stop-ExakitDataTableRun
+        # Loaded: the row is no longer a choice, and nothing more loads from it.
+        $script:ExakitTableIds[0] = ""
+        $script:ExakitTableSampleIds = @()
+        $script:ExakitTableDefaults = @($script:ExakitTableRowSkip)
+        if ($script:UiTable) { $onScreen = [int]$script:UiTable.Lines + 1 }
+        $startRow = 2
+    } else {
+        Write-Host ""
+    }
     try {
         $selection = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults `
             -ExclusiveIndex $script:ExakitTableRowSkip `
             -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
-            -GroupLast $script:ExakitTableGroupLast -GroupMode "all")
+            -GroupLast $script:ExakitTableGroupLast -GroupMode "all" -OnScreen $onScreen -StartRow $startRow)
     } finally {
-        if ($script:UiTable) { $script:UiTable.Col2 = "" }
+        if ($script:UiTable) { $script:UiTable.Col2 = ""; $script:UiTable.Col1 = "Dataset" }
+        $script:UiTableNoBox = @()
     }
     if ($selection -contains $script:ExakitTableRowSkip) { return @("none") }
     # With nothing pending the local-file row is pre-ticked so Enter does
@@ -4494,13 +4533,19 @@ function Request-ExakitDataLoadOffer {
         # datasets that are not loaded yet are offered, pre-selected, plus the
         # local-file option, the external source and an explicit skip.
         # Non-interactive installs keep the pre-selected defaults.
+        $script:ExakitCompactFailedIds = @()
         $chosen = Select-ExakitDataLoad -FinalLabel "Skip"
+        $failedIds += @($script:ExakitCompactFailedIds)
         if ($chosen -contains "none") {
-            Info "Skipping data loading. Run it any time with: exakit data-load"
-            return
+            # The install's compact table loaded its samples before it asked: Skip is only "nothing more".
+            if ($env:EXAKIT_DATA_TABLE_COMPACT -ne "1") {
+                Info "Skipping data loading. Run it any time with: exakit data-load"
+                return
+            }
+            $chosen = @()
         }
         $chosen = @(Get-ExakitDataLoadOrder -Chosen $chosen)
-        Start-ExakitDataTableRun
+        if ($chosen.Count -gt 0) { Start-ExakitDataTableRun }
         try {
             foreach ($id in $chosen) {
                 if ($id -eq "external") {

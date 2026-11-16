@@ -1329,14 +1329,18 @@ function Get-ExakitTableFrame {
             $box = "[ ]"
             $boxLen = 3
         }
-        if ($row.State -eq "disabled") { $box = "   "; $boxLen = 3 }
+        # $script:UiTableNoBox names rows that are never a choice (the install's
+        # sample row, the add-ons it installs on its own): no checkbox in any state.
+        # Twin of UI_TABLE_NOBOX in ui.sh.
+        $noBox = (@($script:UiTableNoBox) -contains $i)
+        if ($row.State -eq "disabled" -or $noBox) { $box = "   "; $boxLen = 3 }
         if ($i -eq $Cursor) {
             if ($script:UiFancy) { $ptr = $script:UiAccent + "❯" + $script:UiReset } else { $ptr = ">" }
         } else {
             $ptr = " "
         }
         # A row nobody can pick never takes the cursor either.
-        if ($row.State -eq "disabled") { $ptr = " " }
+        if ($row.State -eq "disabled" -or $noBox) { $ptr = " " }
         # A radio row (a "one" group): no checkbox; "(*)" or "( )" after its
         # tree connector, in the row's own colour.
         if ($radio -contains $i) {
@@ -1982,6 +1986,8 @@ function Test-ExakitTreeRadioRepick {
 # and it counts as confirmed - the caller was told to do exactly this (`exakit
 # persona add`). No key is read; Start-ExakitTable then turns the same frame
 # into the progress display. Twin of UI_TABLE_AUTO in ui_table_menu.
+$script:UiTableNoBox = @()      # rows drawn without a checkbox and never picked (UI_TABLE_NOBOX)
+
 function Invoke-ExakitTableMenu {
     param(
         [hashtable]$Table = $null,
@@ -2010,7 +2016,7 @@ function Invoke-ExakitTableMenu {
     # pickable children, so there is no second rule to keep in step.
     $pickable = New-Object 'System.Collections.Generic.List[int]'
     for ($i = 1; $i -le $n; $i++) {
-        if ($Table.Rows[$i - 1].State -ne "disabled") { [void]$pickable.Add($i) }
+        if ($Table.Rows[$i - 1].State -ne "disabled" -and -not (@($script:UiTableNoBox) -contains $i)) { [void]$pickable.Add($i) }
     }
     # Move the cursor, stepping over the rows nobody can pick. Returns the new row
     # rather than assigning it: a scriptblock runs in a child scope, so an

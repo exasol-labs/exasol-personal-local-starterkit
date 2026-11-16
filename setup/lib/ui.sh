@@ -1581,7 +1581,10 @@ ui_table_frame() {
         # one row whose status was already known. The 5-space indent is the
         # width of the pointer and checkbox it replaces, so the tree connectors
         # still line up.
-        if [ "$_utr_state" = "disabled" ]; then
+        # UI_TABLE_NOBOX (" 1 ") names rows that are never a choice - the install's
+        # sample row, which loads whatever is picked below it: no checkbox in any
+        # state, while it loads and after.
+        if [ "$_utr_state" = "disabled" ] || case "${UI_TABLE_NOBOX:- }" in *" $_utr_i "*) true ;; *) false ;; esac; then
             # Three spaces, the width of "[ ]": with two the tree connector
             # sat a column left of every pickable row above it.
             _utr_ptr=" "; _utr_box="   "; _utr_boxlen=3
@@ -2073,7 +2076,7 @@ ui_table_menu() {
     while IFS='|' read -r _u1 _u2 _u3 _u4 _urest; do
         [ -n "$_u1" ] || continue
         _utm_n=$(( _utm_n + 1 ))
-        if [ "$_u4" = "disabled" ]; then
+        if [ "$_u4" = "disabled" ] || case "${UI_TABLE_NOBOX:- }" in *" $_utm_n "*) true ;; *) false ;; esac; then
             _utm_dis="$_utm_dis $_utm_n"
         else
             _UI_CHECKBOX_SELECTABLE="${_UI_CHECKBOX_SELECTABLE:+$_UI_CHECKBOX_SELECTABLE }$_utm_n"

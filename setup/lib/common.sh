@@ -6218,7 +6218,7 @@ EXAKIT_MM_COVERED
     EXAKIT_ADDON_TABLE_LABELS="$_mm_labels"
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # The help command supplies details beyond the table.
-    [ "${UI_TABLE_AUTO:-0}" = 1 ] || info "Details on any add-on: exakit help <id>"
+    [ "${UI_TABLE_AUTO:-0}" = 1 ] || [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] || info "Details on any add-on: exakit help <id>"
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
@@ -6228,7 +6228,48 @@ EXAKIT_MM_COVERED
     UI_TABLE_COL3="Description"
     # Once an install runs, the Version gives way before the names (ui_table_widths).
     UI_TABLE_COL2_YIELDS=1
+    # THE INSTALL'S ADD-ONS TABLE (EXAKIT_MARKETPLACE_AUTO_FIRST): every add-on on
+    # offer is listed; the ones named install at once, in this table - no checkbox
+    # on their rows, the bar to the right - and then the same table asks about
+    # the rest, Skip ticked so Enter goes on. No Description column: the table
+    # stays inside the terminal while it changes from progress to question.
+    _mm_auto_notes=""
+    _mm_auto_done=0
+    if [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
+        _mm_auto_rows=" "
+        for _mm_aid in $(printf '%s' "$EXAKIT_MARKETPLACE_AUTO_FIRST" | tr ',' ' '); do
+            _mm_arow="$(_exakit_addon_table_row "$_mm_aid")"
+            case "$_mm_arow" in ''|0|*[!0-9]*) continue ;; esac
+            _mm_auto_rows="$_mm_auto_rows$_mm_arow "
+        done
+        if [ "$_mm_auto_rows" != " " ]; then
+            UI_TABLE_COL3=""
+            UI_TABLE_NOBOX="$_mm_auto_rows"
+            UI_TABLE_LINES=0
+            printf '\n'
+            EXAKIT_ADDON_TABLE_KEEP=1 _exakit_marketplace_apply_python "$EXAKIT_MARKETPLACE_AUTO_FIRST" || true
+            _mm_auto_notes="${EXAKIT_ADDON_TABLE_NOTES:-}"
+            EXAKIT_ADDON_TABLE_NOTES=""
+            _mm_auto_done=1
+            UI_TABLE_MENU_ONSCREEN="${UI_TABLE_LINES:-0}"
+            EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
+        fi
+    fi
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
+    UI_TABLE_NOBOX=""
+    if [ "$_mm_auto_done" = 1 ]; then
+        # What the two installs had to say, now that the table no longer moves.
+        while IFS='|' read -r _mm_nkind _mm_nmsg; do
+            [ -n "$_mm_nkind" ] || continue
+            if [ "$_mm_nkind" = ok ]; then ok "$_mm_nmsg"; else warn "$_mm_nmsg"; fi
+        done <<EXAKIT_MM_AUTO_NOTES
+$_mm_auto_notes
+EXAKIT_MM_AUTO_NOTES
+        # Skip, or nothing more ticked: the two are in, and that is the whole answer.
+        case ",$EXAKIT_TABLE_SELECTION," in
+            *",$EXAKIT_ADDON_TABLE_ROW_SKIP,"*|,none,|,,) _exakit_addon_table_cleanup; return 0 ;;
+        esac
+    fi
     # The Description helps the choice and goes once it is made: the install
     # shows each add-on's Version and its Status. _exakit_addon_table_cleanup
     # drops the Version heading with the table.
@@ -6506,17 +6547,19 @@ exakit_marketplace_offer() {
     ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
     # Nothing to install and nobody to ask: nothing on screen.
     [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || return 0
-    heading "Add-ons"
-    if [ -n "$_mo_ids" ]; then
+    heading "Supercharging Exasol with Add-ons"
+    if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
+        # ONE table: every add-on on offer, the missing ones of the two installing
+        # in it at once, then the rest waits for a pick (Enter alone is Skip).
+        # Every row's description from the catalog's own copy: no lookup before the table.
+        _mo_about="$(_exakit_marketplace_catalog_about "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')")"
+        EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none \
+            EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" exakit_marketplace_menu || true
+    elif [ -n "$_mo_ids" ]; then
+        # Nobody to ask: the two, drawn ticked and installed, and nothing else.
         _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"
         EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="$_mo_ids" EXAKIT_MARKETPLACE_PRESELECT="$_mo_ids" \
             UI_TABLE_AUTO=1 exakit_marketplace_menu || true
-    fi
-    # Then the rest of the marketplace, on a terminal: every add-on listed (the two
-    # above as installed), nothing ticked, and it waits for a pick - Enter alone is Skip.
-    if [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; then
-        EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none EXAKIT_MARKETPLACE_NO_TEXTUAL=1 \
-            exakit_marketplace_menu || true
     fi
     return 0
 }
@@ -6659,6 +6702,16 @@ warn|$_mpa_id did not finish: $_mpa_detail"
     if _exakit_addon_table_live; then
         ui_table_end "$EXAKIT_ADDON_TABLE_STATE"
         EXAKIT_ADDON_TABLE_LIVE=0
+    fi
+    # EXAKIT_ADDON_TABLE_KEEP: the same table asks next (the install's add-ons),
+    # so nothing is printed under it and it stays; the notes wait for the caller.
+    if [ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ]; then
+        EXAKIT_ADDON_TABLE_NOTES="$_mpa_notes"
+        if [ "$_mpa_rc" -ne 0 ] && [ -s "$_mpa_dir/stderr" ]; then
+            _exakit_log_file "WARN  $(tail -n 1 "$_mpa_dir/stderr")"
+        fi
+        rm -rf "$_mpa_dir"
+        return "$_mpa_rc"
     fi
     while IFS='|' read -r _mpa_kind _mpa_message; do
         [ -n "$_mpa_kind" ] || continue
@@ -12581,8 +12634,9 @@ exakit_maybe_offer_data_load() {
     # loading flow never aborts the surrounding install.
     exakit_data_load_select "Skip"
     if [ "$EXAKIT_DATA_LOAD_SELECTION" = "none" ]; then
-        info "Skipping data loading. Run it any time with: exakit data-load"
-        return 0
+        # The install's compact table loaded its samples before it asked: Skip is only "nothing more".
+        [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] || info "Skipping data loading. Run it any time with: exakit data-load"
+        return "$_data_failed"
     fi
     # The SAME table the selection was just made in becomes the progress display.
     # This is the path an install actually takes, and it was the one left out:

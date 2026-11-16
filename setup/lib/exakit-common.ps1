@@ -6938,7 +6938,7 @@ function Show-ExakitMarketplaceMenu {
     # About line, which is a table cell and not a reference. The reference is
     # the help document, and nothing on this screen named it. Twin of the same
     # line in exakit_marketplace_menu.
-    if ($env:UI_TABLE_AUTO -ne "1") { Info "Details on any add-on: exakit help <id>" }
+    if ($env:UI_TABLE_AUTO -ne "1" -and -not $env:EXAKIT_MARKETPLACE_AUTO_FIRST) { Info "Details on any add-on: exakit help <id>" }
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     $script:ExakitAddonTable.Activity = ""
@@ -7013,9 +7013,46 @@ function Show-ExakitMarketplaceMenu {
     if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
     # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
     if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
-    $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
-        -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
-        -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
+    # THE INSTALL'S ADD-ONS TABLE (EXAKIT_MARKETPLACE_AUTO_FIRST): every add-on on
+    # offer is listed; the ones named install at once, in this table - no checkbox
+    # on their rows, the bar to the right - and then the same table asks about
+    # the rest, Skip ticked so Enter goes on. Twin of the same stage in
+    # exakit_marketplace_menu.
+    $onScreen = 0
+    $autoNotes = @()
+    $autoDone = $false
+    if ($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1") {
+        $autoIds = @(("" + $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $autoRows = @()
+        for ($r = 0; $r -lt $addonIds.Count; $r++) { if ($autoIds -contains $addonIds[$r]) { $autoRows += ($r + 1) } }
+        if ($autoRows.Count -gt 0) {
+            $script:ExakitAddonTable.Col3 = ""
+            $script:UiTableNoBox = $autoRows
+            Write-Host ""
+            $script:ExakitAddonTableKeep = $true
+            try { Invoke-ExakitMarketplaceApplyPython -Ids $autoIds } catch { Write-ExakitLog "WARN" "$_" } finally {
+                $script:ExakitAddonTableKeep = $false
+            }
+            $autoNotes = @($script:ExakitAddonTableNotes)
+            $script:ExakitAddonTableNotes = @()
+            $autoDone = $true
+            $onScreen = [int]$script:ExakitAddonTable.Lines + 1
+            $defaults = @($rowSkip)
+        }
+    }
+    try {
+        $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
+            -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
+            -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all" -OnScreen $onScreen)
+    } finally {
+        $script:UiTableNoBox = @()
+    }
+    if ($autoDone) {
+        # What the two installs had to say, now that the table no longer moves.
+        foreach ($note in $autoNotes) { if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text } }
+        # Skip, or nothing more ticked: the two are in, and that is the whole answer.
+        if ($selection.Count -eq 0 -or $selection -contains $rowSkip) { Reset-ExakitAddonTable; return }
+    }
     # ONLY A PRESSED ENTER INSTALLS - the defaults standing without a console
     # would install every add-on on a machine where nobody chose anything.
     # Twin of the same gate in _exakit_marketplace_menu (common.sh).
@@ -7500,7 +7537,15 @@ function Invoke-ExakitMarketplaceApplyPython {
             Stop-ExakitTable -Table $script:ExakitAddonTable
             $script:ExakitAddonTableLive = $false
         }
-        Reset-ExakitAddonTable
+        if (-not $script:ExakitAddonTableKeep) { Reset-ExakitAddonTable }
+    }
+    # $script:ExakitAddonTableKeep: the same table asks next (the install's
+    # add-ons), so nothing is printed under it; the notes wait for the caller.
+    # Twin of EXAKIT_ADDON_TABLE_KEEP in _exakit_marketplace_apply_python.
+    if ($script:ExakitAddonTableKeep) {
+        $script:ExakitAddonTableNotes = @($notes)
+        if ($code -ne 0 -and $script:ExakitApplyLastError) { Write-ExakitLog "WARN" $script:ExakitApplyLastError }
+        return
     }
     foreach ($note in $notes) {
         if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text }
@@ -7600,19 +7645,26 @@ function Request-ExakitMarketplaceOffer {
     }
     # Nothing to install and nobody to ask: nothing on screen.
     if ($ids.Count -eq 0 -and -not ((Test-ExakitInteractive) -and (Test-ExakitMarketplaceHasPending))) { return }
-    Write-ExakitHeading "Add-ons"
-    if ($ids.Count -gt 0) { Install-ExakitAutoAddons -Ids $ids }
-    # Then the rest of the marketplace, on a console: every add-on listed (the two
-    # above as installed), nothing ticked, and it waits for a pick - Enter alone is
-    # Skip. Twin of the same stage in exakit_marketplace_offer.
-    if ((Test-ExakitInteractive) -and (Test-ExakitMarketplaceHasPending)) {
+    Write-ExakitHeading "Supercharging Exasol with Add-ons"
+    if (Test-ExakitInteractive) {
+        # ONE table: every add-on on offer, the missing ones of the two installing
+        # in it at once, then the rest waits for a pick (Enter alone is Skip).
+        # Every row's description from the catalog's own copy: no lookup first.
+        # Twin of the same branch in exakit_marketplace_offer.
+        $allIds = @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id })
+        $env:EXAKIT_MARKETPLACE_REASONS = (@(Get-ExakitMarketplaceCatalogAbout -Ids $allIds) -join "`n")
         $env:EXAKIT_MARKETPLACE_PRESELECT = "none"
         $env:EXAKIT_MARKETPLACE_NO_TEXTUAL = "1"
+        $env:EXAKIT_MARKETPLACE_AUTO_FIRST = ($ids -join ',')
         Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-        try { Show-ExakitMarketplaceMenu } catch { Warn2 "The marketplace did not finish cleanly: $_" } finally {
-            Remove-Item env:EXAKIT_MARKETPLACE_PRESELECT -ErrorAction SilentlyContinue
-            Remove-Item env:EXAKIT_MARKETPLACE_NO_TEXTUAL -ErrorAction SilentlyContinue
+        try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
+            foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST")) {
+                Remove-Item "env:$name" -ErrorAction SilentlyContinue
+            }
         }
+    } elseif ($ids.Count -gt 0) {
+        # Nobody to ask: the two, drawn ticked and installed, and nothing else.
+        Install-ExakitAutoAddons -Ids $ids
     }
 }
 

@@ -3910,6 +3910,62 @@ _exakit_data_persona_pending() {
     done | tr '\n' ',' | sed 's/,$//'
 }
 
+# _exakit_data_compact_samples — the install's sample row, before the question:
+# no column heading, no checkbox on it, and its datasets loading at once with
+# the bar to the right of the row. When they are in, the row is no longer a
+# choice and the same table asks about the rows under it (upload, external
+# source, Skip - Skip ticked, so Enter goes on). Reads and books like the load
+# loop in exakit_maybe_offer_data_load (_exakit_offer_fail, deferred errors).
+_exakit_data_compact_samples() {
+    UI_TABLE_COL1=" "
+    UI_TABLE_NOBOX=" 1 "
+    printf '\n'
+    EXAKIT_TABLE_LIVE=0
+    ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
+    EXAKIT_DEFER_ERRORS=""
+    if [ "$EXAKIT_TABLE_LIVE" = 1 ]; then
+        EXAKIT_DEFER_ERRORS="$EXAKIT_TABLE_STATE.fatal"
+        : > "$EXAKIT_DEFER_ERRORS"
+    fi
+    _dcs_root="$(exakit_repo_root 2>/dev/null || true)"
+    _dcs_n=0
+    _dcs_ok=0
+    for _dcs_id in $(printf '%s' "$EXAKIT_TABLE_SAMPLE_IDS" | tr ',' ' '); do
+        _dcs_n=$(( _dcs_n + 1 ))
+        if ( ui_table_detach; exakit_load_dataset "$_dcs_root" "$_dcs_id" ); then
+            _dcs_ok=$(( _dcs_ok + 1 ))
+        else
+            command -v _exakit_offer_fail >/dev/null 2>&1 && \
+                _exakit_offer_fail "loading dataset '$_dcs_id' did not finish (see the log)"
+        fi
+    done
+    if [ "$_dcs_ok" -eq "$_dcs_n" ]; then
+        ui_table_set "$EXAKIT_TABLE_STATE" 1 done "" "" "" "" "$_dcs_n of $_dcs_n loaded"
+    else
+        ui_table_set "$EXAKIT_TABLE_STATE" 1 failed "" "" "" "" "$_dcs_ok of $_dcs_n loaded"
+    fi
+    [ "$EXAKIT_TABLE_LIVE" = 1 ] && ui_table_end "$EXAKIT_TABLE_STATE"
+    EXAKIT_TABLE_LIVE=0
+    if [ -n "$EXAKIT_DEFER_ERRORS" ] && [ -s "$EXAKIT_DEFER_ERRORS" ]; then
+        while IFS='|' read -r _dcs_kind _dcs_text; do
+            [ -n "$_dcs_text" ] && error "$_dcs_text"
+        done < "$EXAKIT_DEFER_ERRORS"
+        rm -f "$EXAKIT_DEFER_ERRORS"
+    else
+        # Nothing printed under the frame: the question reuses it where it stands.
+        UI_TABLE_MENU_ONSCREEN="${UI_TABLE_LINES:-0}"
+    fi
+    EXAKIT_DEFER_ERRORS=""
+    # Loaded: the row is no longer a choice, and nothing more loads from it.
+    EXAKIT_TABLE_IDS="
+$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed '1d')"
+    EXAKIT_TABLE_SAMPLE_IDS=""
+    EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_SKIP"
+    UI_TABLE_MENU_START=2
+    [ "$_dcs_ok" -eq "$_dcs_n" ] || warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
+    return 0
+}
+
 # exakit_data_samples_select <final-label> — the table of the data question
 # (exakit_data_load_select), which then shows the load's progress. Each says, in a
 # "For" column, the personas it is for; the personas picked for this machine
@@ -3931,6 +3987,9 @@ exakit_data_samples_select() {
     exakit_track_tmp "$EXAKIT_TABLE_STATE"
     exakit_data_table_build "$EXAKIT_TABLE_STATE"
     UI_TABLE_TITLE="Data to load"
+    if [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] && [ -n "${EXAKIT_TABLE_SAMPLE_IDS:-}" ]; then
+        _exakit_data_compact_samples
+    fi
     # What each dataset is (description= in its dataset.conf) gets a column of
     # its own while the reader picks; the progress display that follows has no
     # room for it, and needs none. With no description the second column is
@@ -3939,9 +3998,11 @@ exakit_data_samples_select() {
     # the names their width here.
     UI_TABLE_COL2=" "
     [ "${EXAKIT_TABLE_HAS_DESC:-0}" = 1 ] && UI_TABLE_COL2="Description"
-    printf '\n'
+    [ "${UI_TABLE_MENU_ONSCREEN:-0}" != 0 ] || printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
     UI_TABLE_COL2=""
+    UI_TABLE_COL1=""
+    UI_TABLE_NOBOX=""
 
     # Skip answers none; the caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in

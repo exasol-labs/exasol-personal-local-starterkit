@@ -1523,7 +1523,8 @@ offer() { # offer <installed ids> — what exakit_marketplace_offer hands the me
         exakit_marketplace_addon_installed() { case " $INSTALLED_IDS " in *" $1 "*) return 0 ;; esac; return 1; }
         heading() { printf 'HEADING %s\n' "$1"; }
         ui_checkbox_menu() { printf 'ASKED\n'; }
-        exakit_marketplace_menu() { printf 'MENU ONLY=[%s] TICKED=[%s] AUTO=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${UI_TABLE_AUTO:-}"; }
+        exakit_marketplace_menu() { printf 'MENU ONLY=[%s] TICKED=[%s] AUTO=[%s]%s\n' "${EXAKIT_MARKETPLACE_ONLY:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${UI_TABLE_AUTO:-}" "${EXAKIT_MARKETPLACE_AUTO_FIRST:+ FIRST=[$EXAKIT_MARKETPLACE_AUTO_FIRST]}"; }
+        UI_FANCY=1
         _exakit_prompt_tty() { [ -n "${OFFER_TTY:-}" ] && printf '/dev/tty'; }
         exakit_marketplace_has_pending() { [ -n "${OFFER_PENDING:-}" ]; }
         unset EXAKIT_MARKETPLACE_ADDONS EXAKIT_SOFT_FAILED EXAKIT_MARKETPLACE_PRESELECT
@@ -1531,13 +1532,13 @@ offer() { # offer <installed ids> — what exakit_marketplace_offer hands the me
     )
 }
 check "both missing: both installed, ticked, no question" \
-    "HEADING Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
+    "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
 check "one there: only the other"  "MENU ONLY=[json-tables] TICKED=[json-tables] AUTO=[1]" "$(offer dash-server | grep MENU)"
 check "both there: nothing at all" "" "$(offer "dash-server json-tables")"
-check "on a terminal, the rest of the marketplace waits for a pick, nothing ticked" \
-    "HEADING Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]|MENU ONLY=[] TICKED=[none] AUTO=[]" \
+check "on a terminal, ONE table: every add-on, the two installing first, the rest waiting with nothing ticked" \
+    "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[] FIRST=[dash-server,json-tables]" \
     "$(OFFER_TTY=1 OFFER_PENDING=1 offer "" | tr '\n' '|' | sed 's/|$//')"
-check "...also when the two are there already" "HEADING Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
+check "...also when the two are there already" "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
     "$(OFFER_TTY=1 OFFER_PENDING=1 offer "dash-server json-tables" | tr '\n' '|' | sed 's/|$//')"
 _ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
 _ps_auto="$(sed -n '/^function Install-ExakitAutoAddons/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"

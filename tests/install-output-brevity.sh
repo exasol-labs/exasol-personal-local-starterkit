@@ -246,8 +246,8 @@ has "the add-ons every kit gets"  'EXAKIT_AUTO_ADDONS="dash-server json-tables"'
 has "...on Windows too"           '$script:ExakitAutoAddons = @("dash-server", "json-tables")' "$COMMON_PS1"
 has "drawn ticked and confirmed"  'UI_TABLE_AUTO=1 exakit_marketplace_menu'              "$COMMON"
 has "...on Windows too"           '$env:UI_TABLE_AUTO = "1"'                           "$COMMON_PS1"
-has "under a heading"             'heading "Add-ons"'                                   "$COMMON"
-has "...on Windows too"           'Write-ExakitHeading "Add-ons"'                       "$COMMON_PS1"
+has "under a heading"             'heading "Supercharging Exasol with Add-ons"'         "$COMMON"
+has "...on Windows too"           'Write-ExakitHeading "Supercharging Exasol with Add-ons"' "$COMMON_PS1"
 # Two spaces, the same column as begin_step's own arrow.
 has "the heading is at the STEP indent" "printf '  %s%s%s %s" "$COMMON"
 
