@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.2.5
+
+**A hotfix release: the macOS install, a complete uninstall, and Windows MCP.**
+
+- **macOS install.** The readiness probe no longer fails on the stock
+  (LibreSSL) openssl, and a first boot that the launcher recorded as failed
+  while its database runs is recovered: the kit's own runner is proven to
+  belong to this deployment before it is restarted, and the data is kept.
+- **Uninstall removes everything the kit added** - the launcher download
+  cache, empty `~/.exasol` folders, autostart entries (orphaned ones too), the
+  kit's `exasol/nano` image when no container uses it (Docker/Podman hosts),
+  the legacy permission rules - and says plainly when something stays.
+  Exit codes: `0` done, `1` something remains, `2` bad option, `5` declined.
+- **Windows.** `mcp-doctor` and `mcp-setup` work from AI agent shells (the
+  BOM fix). Launchers left behind by an uninstall remove themselves, and the
+  `exakit.cmd` refresh never swaps the file under a running copy.
+
 ## 0.2.4
 
 **Exasol Personal 2.4.0, with Docker as an engine for new deployments.**
