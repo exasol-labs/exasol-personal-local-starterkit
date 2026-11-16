@@ -419,7 +419,9 @@ function Seed-Startup {
 Seed-Kit; Seed-Deploy; Seed-Startup; $env:STUB_DESTROY_REMOVES = "1"
 Invoke-ExakitUninstallRun -DryRun
 Has   "o1: dry run lists the orphaned entry" "will remove: the leftover automatic-start entry for dash-server ($orphan)" $script:out
-Has   "o1: and the process still running from it" "will stop: the leftover dash-server process (pids 4711 4714 4715 4722)" $script:out
+Has   "o1: and the launcher still running from it" "will stop: the leftover dash-server launcher (pids 4711 4714 4715 4722)" $script:out
+Has   "o1: and says the server it started may keep running" "note: a dash-server server already started from it may keep running until logout or a reboot" $script:out
+Lacks "o1: never claims to stop the server" "will stop: the leftover dash-server process" $script:out
 Lacks "o1: a foreign entry is not listed" "OneDrive" $script:out
 Lacks "o1: nor a near-miss prefix" "exakitfoo" $script:out
 Check "o1: dry run keeps the orphan" "True" (Test-Path $orphan)
@@ -430,6 +432,7 @@ Invoke-ExakitUninstallRun
 Check "o2: the orphaned entry is gone" "False" (Test-Path $orphan)
 Has   "o2: the removal is recorded" "dash-server: leftover automatic-start entry removed" $script:out
 Check "o2: only the kit's processes are stopped" "4711 4714 4715 4722" (@($script:stopped) -join " ")
+Has   "o2: says the server it started may keep running" "a dash-server server already started from it may keep running until logout or a reboot" $script:out
 Check "o2: a foreign entry stays" "True" (Test-Path $foreign)
 Check "o2: a near-miss prefix stays" "True" (Test-Path $nearMiss)
 $script:fakeProcs = @(); $script:stopped = @()

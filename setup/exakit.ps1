@@ -1007,15 +1007,21 @@ function Get-ExakitOrphanAutostartPids {
 }
 
 # Invoke-ExakitUninstallOrphanAutostart - remove (or, in a dry run, list) every
-# orphaned kit Startup entry, and stop a process still running from one.
-# Twin of _exakit_uninstall_orphan_autostart.
+# orphaned kit Startup entry, and stop a launcher cmd.exe still running from
+# one. Only that cmd.exe is stopped, never what it started: Windows has no
+# process-group stop, so the add-on server below it (or a launcher that is not
+# a .cmd, such as exasol-scheduler's PowerShell one) may keep running until
+# logout or a reboot, and both runs say so. Twin of
+# _exakit_uninstall_orphan_autostart.
 function Invoke-ExakitUninstallOrphanAutostart {
     param([switch]$DryRun)
     foreach ($o in @(Get-ExakitOrphanAutostartEntries -DryRun:$DryRun)) {
         $pids = @(Get-ExakitOrphanAutostartPids -Id $o.Id -Entry $o.Path)
+        $note = "a $($o.Id) server already started from it may keep running until logout or a reboot"
         if ($DryRun) {
             Info "  will remove: the leftover automatic-start entry for $($o.Id) ($($o.Path))"
-            if ($pids.Count -gt 0) { Info "  will stop: the leftover $($o.Id) process (pids $($pids -join ' '))" }
+            if ($pids.Count -gt 0) { Info "  will stop: the leftover $($o.Id) launcher (pids $($pids -join ' '))" }
+            Info "  note: $note"
             continue
         }
         Remove-Item -LiteralPath $o.Path -Force -ErrorAction SilentlyContinue
@@ -1026,6 +1032,7 @@ function Invoke-ExakitUninstallOrphanAutostart {
                 Warn2 "A leftover $($o.Id) process (pid $procId) is still running; it stops at the next logout."
             }
         }
+        Info "  $note"
     }
 }
 
