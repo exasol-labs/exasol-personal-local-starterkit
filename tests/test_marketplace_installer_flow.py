@@ -21,7 +21,7 @@ class InstallerFlowTest(unittest.TestCase):
     def test_the_install_never_asks_and_sets_up_general_quietly(self):
         actions = plan(ROOT, {}, interactive=True)
         self.assertEqual([('set', 'EXAKIT_PERSONA', 'general'),
-                          ('set', 'EXAKIT_DATASETS_PRESELECT', 'tpch,energy,weather'),
+                          ('set', 'EXAKIT_DATASETS_PRESELECT', 'retail_sales,bank_transaction'),
                           ('record', 'general', ''), ('set', 'EXAKIT_PERSONA_ACTIVE', '1'),
                           ('data', '', '')], actions)
         self.assertNotIn('question', [action[0] for action in actions])
@@ -37,7 +37,7 @@ class InstallerFlowTest(unittest.TestCase):
         self.assertNotIn('install', [action[0] for action in actions])
 
     def test_selected_without_a_persona_keeps_default_data_without_record(self):
-        self.assertEqual([('set', 'EXAKIT_DATASETS_PRESELECT', 'tpch,energy,weather'),
+        self.assertEqual([('set', 'EXAKIT_DATASETS_PRESELECT', 'retail_sales,bank_transaction'),
                           ('data', '', '')], plan(ROOT, {}, phase='selected'))
 
     def test_explicit_answers_do_not_change_preselection(self):

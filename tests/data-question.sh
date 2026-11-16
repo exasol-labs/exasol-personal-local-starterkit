@@ -37,6 +37,11 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 WORK="$(mktemp -d)"
+# This release offers retail_sales and bank_transaction only (the others are hidden=yes); what the data question
+# does with several bundled datasets is still the kit's, so it runs on a kit copy with them on (tests/release_kit.py).
+ROOT="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/tests"); from pathlib import Path
+from release_kit import kit_with_hidden_parts_on
+print(kit_with_hidden_parts_on(Path(sys.argv[2]), personas=(), addons=()))' "$ROOT" "$WORK/release-kit")"
 trap 'rm -rf "$WORK"' EXIT
 
 check() { # check <label> <expected> <actual>

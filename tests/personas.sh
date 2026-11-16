@@ -72,7 +72,7 @@ check "ml-engineer: kept, hidden (visible: false)" "False" \
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env 2>&1; printf '|%s' "${EXAKIT_DATASETS:-unset}") )"
 contains "ml-engineer: asking for it by name is refused, nothing answered" "Persona 'ml-engineer' is disabled" "$out"
-check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
+check "no persona: the kit's own samples (default=yes)" "retail_sales,bank_transaction" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: the Amazon and fraud datasets" "amazon_sales,fraud_transactions" "$(exakit_persona_value data-scientist datasets)"
 check "data-scientist: Dash Server, the notebook, JSON Tables, Semantic Views" "dash-server,notebook,json-tables,semantic-views" "$(exakit_persona_value data-scientist addons)"
 check "ml-engineer: the Amazon sales and fraud datasets" "amazon_sales,fraud_transactions" "$(exakit_persona_value ml-engineer datasets)"
@@ -95,7 +95,7 @@ check "the title names each" "Data Scientist + General" "$(_exakit_persona_servi
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,general; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook,json-tables,semantic-views" "$out"
+check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,retail_sales,bank_transaction|all|dash-server,notebook,json-tables,semantic-views" "$out"
 check "each dataset is named with the personas it is for (a hidden one is not named)" "amazon_sales|Data Scientist" \
     "$(exakit_persona_dataset_hints | grep '^amazon_sales|')"
 
@@ -248,11 +248,11 @@ out="$( (manifest_set persona.id ""
         ui_checkbox_menu() { shift; printf '%s|%s|%s' "$1" "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" "$(eval echo \"\${$#}\")" > "$WORK/q"; EXAKIT_CHECKBOX_SELECTION="2"; }
         exakit_persona_question >/dev/null 2>&1; printf '%s~%s' "$(cat "$WORK/q")" "${EXAKIT_PERSONA:-}") )"
 check "the question ends with General, ticked to begin with, combinable (no exclusive row)" \
-    "2||General - Sample data (retail, energy, weather) and your AI clients.~general" "$out"
+    "2||General - Sample data (retail sales, bank transactions) and your AI clients.~general" "$out"
 out="$( (unset EXAKIT_PERSONA EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT
         exakit_persona_data() { :; }; exakit_persona_flow "$ROOT" </dev/null >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${EXAKIT_PERSONA:-}") )"
-check "no persona named: General, quietly - its datasets, no add-ons" "tpch,energy,weather||general" "$out"
+check "no persona named: General, quietly - its datasets, no add-ons" "retail_sales,bank_transaction||general" "$out"
 out="$( (unset EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT; exakit_persona_data() { :; }
         export EXAKIT_PERSONA=bare; exakit_persona_flow "$WORK/kit3" selected >/dev/null 2>&1; printf '%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}") )"
 check "a persona with no datasets ticks none (and offers no add-ons)" "none|" "$out"

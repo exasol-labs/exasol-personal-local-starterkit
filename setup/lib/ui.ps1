@@ -299,7 +299,9 @@ function Start-ExakitSpinner([string]$Label) {
             $i = 0
             while ($flag.Run) {
                 $el = [int]((Get-Date) - $flag.T0).TotalSeconds
-                [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K")
+                # No label: the spinner alone (the heading above says what is coming). Twin of ui_spin_begin "".
+                if ($flag.Label) { [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                else { [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m${e}[K") }
                 $i = ($i + 1) % 10
                 Start-Sleep -Milliseconds 90
             }

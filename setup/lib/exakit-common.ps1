@@ -611,7 +611,7 @@ function InfoStep([string]$Msg) {
 # step. Twin of heading in common.sh.
 function Write-ExakitHeading([string]$Msg) {
     if ($script:UiFancy) {
-        Write-Host ("  {0}{1}{2} {3}" -f $script:UiOk, $script:UiArrow, $script:UiReset, $Msg)
+        Write-Host ("  {0}{1}{2} {3}{4}{5}" -f $script:UiOk, $script:UiArrow, $script:UiReset, $script:UiBold, $Msg, $script:UiReset)
     } else {
         Write-Host ("  {0} {1}" -f $script:UiArrow, $Msg)
     }
@@ -6933,6 +6933,12 @@ function Show-ExakitMarketplaceMenu {
     # managed outside the kit, not in this kit copy) as dim, unpickable rows
     # saying why, the way the MCP client list shows "Cursor - not installed".
     # Twin of _exakit_addon_table_build in common.sh.
+    # The install's table: the add-ons that install on their own on top, then the
+    # rest in the registry's order. Twin of the reorder in exakit_marketplace_menu.
+    if ($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1") {
+        $firstIds = @(("" + $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $selectable = @(@($selectable | Where-Object { $firstIds -contains $_.Id }) + @($selectable | Where-Object { $firstIds -notcontains $_.Id }))
+    }
     $addonIds = New-Object 'System.Collections.Generic.List[string]'
     # Above the table, not under it: the Description column is a repository's
     # About line, which is a table cell and not a reference. The reference is
@@ -7038,6 +7044,7 @@ function Show-ExakitMarketplaceMenu {
         if ($autoRows.Count -gt 0) {
             $script:ExakitAddonTable.Col3 = ""
             $script:UiTableNoBox = $autoRows
+            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
             Write-Host ""
             $script:ExakitAddonTableKeep = $true
             try { Invoke-ExakitMarketplaceApplyPython -Ids $autoIds } catch { Write-ExakitLog "WARN" "$_" } finally {
@@ -7064,8 +7071,9 @@ function Show-ExakitMarketplaceMenu {
         $script:UiTableNoBox = @()
     }
     if ($autoDone) {
-        # What the two installs had to say, now that the table no longer moves.
-        foreach ($note in $autoNotes) { if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text } }
+        # What the two installs had to say: the table's rows already say it, so the
+        # log keeps the lines (a warning still shows). Twin of the shell's.
+        foreach ($note in $autoNotes) { if ($note.Kind -eq 'ok') { Write-ExakitLog "OK" $note.Text } else { Warn2 $note.Text } }
         # Skip, or nothing more ticked: the two are in, and that is the whole answer.
         if ($selection.Count -eq 0 -or $selection -contains $rowSkip) { Reset-ExakitAddonTable; return }
     }
@@ -7673,7 +7681,11 @@ function Request-ExakitMarketplaceOffer {
         $env:EXAKIT_MARKETPLACE_NO_TEXTUAL = "1"
         $env:EXAKIT_MARKETPLACE_AUTO_FIRST = ($ids -join ',')
         Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+        # A spinner until the table is up: the rows are read first. Twin of the shell's.
+        Start-ExakitSpinner ""
+        $script:ExakitMarketplaceSpinning = $true
         try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
+            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
             foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST")) {
                 Remove-Item "env:$name" -ErrorAction SilentlyContinue
             }

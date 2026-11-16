@@ -352,9 +352,14 @@ ui_spin_begin() {
             _f="${UI_SPIN_FRAMES[$_i]}"
             _now="$(date +%s 2>/dev/null || echo 0)"
             _el=$((_now - _UI_STEP_T0))
-            printf '\r  %s%s%s %s %s(%ss)%s\033[K' \
-                "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
-                "$UI_DIM" "$_el" "$UI_RESET"
+            if [ -z "$_UI_STEP_LABEL" ]; then
+                # No label: the spinner alone (the heading above says what is coming).
+                printf '\r  %s%s%s\033[K' "$UI_ACCENT" "$_f" "$UI_RESET"
+            else
+                printf '\r  %s%s%s %s %s(%ss)%s\033[K' \
+                    "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
+                    "$UI_DIM" "$_el" "$UI_RESET"
+            fi
             _i=$(((_i + 1) % 10))
             sleep 0.08
         done

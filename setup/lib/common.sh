@@ -517,7 +517,7 @@ info_step() {
 # nothing that uses it runs inside a one-line step.
 # ⇄ twin: Write-ExakitHeading in exakit-common.ps1.
 heading() {
-    printf '  %s%s%s %s\n' "${UI_OK:-}" "${UI_ARROW:->}" "${UI_RESET:-}" "$*"
+    printf '  %s%s%s %s%s%s\n' "${UI_OK:-}" "${UI_ARROW:->}" "${UI_RESET:-}" "${UI_BOLD:-}" "$*" "${UI_RESET:-}"
     _exakit_log_file "INFO  $*"
 }
 # A LIVE ADD-ON TABLE OWNS THE SCREEN: it redraws its own frame, so anything
@@ -6188,7 +6188,8 @@ EXAKIT_MM_EOF
     # in the selection itself as columns, so the reader picks from the thing
     # that describes them.
     #
-    printf '\n'
+    # The install's spinner owns this line until the table is drawn (below).
+    [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] || printf '\n'
 
     if [ "$_mm_selectable" -eq 0 ]; then
         info "Everything available is already covered."
@@ -6232,7 +6233,19 @@ EXAKIT_MM_COVERED
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # The help command supplies details beyond the table.
     [ "${UI_TABLE_AUTO:-0}" = 1 ] || [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] || info "Details on any add-on: exakit help <id>"
-    [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ] && EXAKIT_ADDON_TABLE_NO_GROUP=1
+    if [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
+        EXAKIT_ADDON_TABLE_NO_GROUP=1
+        # The ones that install on their own on top, then the rest in the registry's order.
+        _mm_first=()
+        _mm_rest=()
+        for _mm_one in "${_mm_pick_ids[@]}"; do
+            case ",$EXAKIT_MARKETPLACE_AUTO_FIRST," in
+                *",$_mm_one,"*) _mm_first+=("$_mm_one") ;;
+                *) _mm_rest+=("$_mm_one") ;;
+            esac
+        done
+        _mm_pick_ids=("${_mm_first[@]}" "${_mm_rest[@]}")
+    fi
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     EXAKIT_ADDON_TABLE_NO_GROUP=0
     UI_TABLE_TITLE="Marketplace add-ons"
@@ -6261,7 +6274,9 @@ EXAKIT_MM_COVERED
             UI_TABLE_COL3=""
             UI_TABLE_NOBOX="$_mm_auto_rows"
             UI_TABLE_LINES=0
-            printf '\n'
+            # The spinner's line becomes the blank line above the table.
+            [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && ui_spin_end
+            printf '\n\n'
             EXAKIT_ADDON_TABLE_KEEP=1 _exakit_marketplace_apply_python "$EXAKIT_MARKETPLACE_AUTO_FIRST" || true
             _mm_auto_notes="${EXAKIT_ADDON_TABLE_NOTES:-}"
             EXAKIT_ADDON_TABLE_NOTES=""
@@ -6273,12 +6288,15 @@ EXAKIT_MM_COVERED
         fi
     fi
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
+    # The Description helps the choice and goes once it is made (see below).
+    UI_TABLE_COL3=""
     UI_TABLE_NOBOX=""
     if [ "$_mm_auto_done" = 1 ]; then
-        # What the two installs had to say, now that the table no longer moves.
+        # What the two installs had to say: the table's rows already say it, so the
+        # log keeps the lines (a warning still shows).
         while IFS='|' read -r _mm_nkind _mm_nmsg; do
             [ -n "$_mm_nkind" ] || continue
-            if [ "$_mm_nkind" = ok ]; then ok "$_mm_nmsg"; else warn "$_mm_nmsg"; fi
+            if [ "$_mm_nkind" = ok ]; then _exakit_log_file "OK    $_mm_nmsg"; else warn "$_mm_nmsg"; fi
         done <<EXAKIT_MM_AUTO_NOTES
 $_mm_auto_notes
 EXAKIT_MM_AUTO_NOTES
@@ -6570,8 +6588,12 @@ exakit_marketplace_offer() {
         # in it at once, then the rest waits for a pick (Enter alone is Skip).
         # Every row's description from the catalog's own copy: no lookup before the table.
         _mo_about="$(_exakit_marketplace_catalog_about "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')")"
+        # A spinner until the table is up: the rows are read first (a second or two).
+        ui_spin_begin ""
         EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none \
-            EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" exakit_marketplace_menu || true
+            EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" EXAKIT_MARKETPLACE_SPINNING=1 \
+            exakit_marketplace_menu || true
+        ui_spin_end
     elif [ -n "$_mo_ids" ]; then
         # Nobody to ask: the two, drawn ticked and installed, and nothing else.
         _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"

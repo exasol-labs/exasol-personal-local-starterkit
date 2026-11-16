@@ -461,11 +461,12 @@ rm -f "$EXAKIT_BIN_DIR/dash-server"
 
 echo "the closing offer (post-install):"
 # Non-interactive (no TTY): never a question - the closing add-ons are installed, not offered.
-_offer_notty="$( (exakit_marketplace_menu() { printf 'MENU %s\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }; exakit_marketplace_offer) 2>&1 )"
+_offer_notty="$( (_EXAKIT_HOOK_MEMO=""; exakit_marketplace_menu() { printf 'MENU %s\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }; exakit_marketplace_offer) 2>&1 )"
 lacks "no TTY -> no yes/no question" "Explore marketplace" "$_offer_notty"
 lacks "no TTY -> no 'marketplace now'" "marketplace now" "$_offer_notty"
 # A scripted answer installs without asking.
 check "EXAKIT_MARKETPLACE_ADDONS pre-answers the offer" "rc=0 called=dash-server" "$( (
+    _EXAKIT_HOOK_MEMO=""      # the offer's add-on answers stay in this subshell, not the run's memo
     . "$ROOT/tests/lib/mock-addon-events.sh"
     dash_server_install() { printf dash-server > "$WORK/called"; }
     dash_server_validate() { return 0; }
@@ -476,12 +477,14 @@ check "EXAKIT_MARKETPLACE_ADDONS pre-answers the offer" "rc=0 called=dash-server
 ) )"
 # Everything already present: the offer disappears entirely — no hint, no ask.
 check "nothing pending -> the offer is silent" "" "$( (
+    _EXAKIT_HOOK_MEMO=""
     PATH="$WORK/system-bin:$PATH"
     cover_every_addon
     exakit_marketplace_offer 2>&1
 ) )"
 # Soft failures: the hint, never the "done and working" celebration.
 _offer_soft="$( (
+    _EXAKIT_HOOK_MEMO=""
     EXAKIT_SOFT_FAILED="pyexasol"
     exakit_marketplace_menu() { printf 'MENU %s\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }
     exakit_marketplace_offer 2>&1
@@ -489,6 +492,7 @@ _offer_soft="$( (
 lacks "soft failures -> no victory lap" "done and working" "$_offer_soft"
 # Only a database that never installed holds the closing add-ons back.
 check "a failed database -> no add-ons at all" "" "$( (
+    _EXAKIT_HOOK_MEMO=""
     exakit_soft_failed() { [ "$1" = runtime ]; }
     exakit_marketplace_menu() { printf 'MENU\n'; }
     exakit_marketplace_offer 2>&1

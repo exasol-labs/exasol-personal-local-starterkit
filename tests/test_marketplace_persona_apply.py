@@ -162,10 +162,10 @@ class PersonaApplyTest(unittest.TestCase):
     def test_external_is_the_menu_row_and_persona_add_skips_it(self) -> None:
         # EXAKIT_DATASETS may carry `external` (the data menu's external-source
         # row) from the shell or exakit.env: not a dataset, and not an error.
-        self.assertEqual(["tpch"], persona_apply._requested_datasets(ROOT, "tpch,external"))
+        self.assertEqual(["retail_sales"], persona_apply._requested_datasets(ROOT, "retail_sales,external"))
         self.assertEqual([], persona_apply._requested_datasets(ROOT, "external"))
         with self.assertRaises(persona_apply.persona_service.BadInput):
-            persona_apply._requested_datasets(ROOT, "tpch,nope")
+            persona_apply._requested_datasets(ROOT, "retail_sales,nope")
         calls = []
         with patch.dict(os.environ, {"EXAKIT_DATASETS": "amazon_sales,external", "EXAKIT_MCP_CLIENTS": "skip",
                                      "EXAKIT_MARKETPLACE_ADDONS": "none", "EXAKIT_SKIP_MCP": ""}), \

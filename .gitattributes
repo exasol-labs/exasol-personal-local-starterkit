@@ -38,3 +38,9 @@ static/*.mp4 export-ignore
 # them from here when their digests match the manifest.
 data/datasets/amazon_sales/data export-ignore
 data/datasets/fraud_transactions/data export-ignore
+
+# Not part of this release (hidden=yes in their dataset.conf: not offered, listed
+# or loaded): their data stays in the repo but not in the archive users install.
+data/datasets/tpch/data export-ignore
+data/datasets/energy/data export-ignore
+data/datasets/weather/data export-ignore
