@@ -12812,6 +12812,18 @@ _exakit_kit_mcp_server_pids() {
 }
 _exakit_stop_pid() { kill -TERM "$1" 2>/dev/null; }
 
+# _exakit_uninstall_recorded_db_port <deploy-dir> - the dbPort recorded in
+# <deploy-dir>/deployment.json, or nothing: no file, or no number there. No
+# default port - an unproven port must match no MCP server at all.
+_exakit_uninstall_recorded_db_port() {
+    _urp_file="${1:-}/deployment.json"
+    [ -n "${1:-}" ] && [ -f "$_urp_file" ] || return 0
+    _urp="$(tr -d '\012\015' < "$_urp_file" 2>/dev/null | \
+        sed -n 's/.*"dbPort"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    case "$_urp" in ''|*[!0-9]*) return 0 ;; esac
+    printf '%s' "$_urp"
+}
+
 # _exakit_uninstall_mcp_processes <dry> <port> - stop the kit's own MCP
 # servers (TERM), or in a dry run name them. <port> is the deployment's
 # database port, captured before the deployment was removed.
@@ -13073,9 +13085,12 @@ exakit_uninstall_run() {
     [ -n "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && _un_had_deploy=1
     # The deployment's port, read while its deployment.json still exists:
     # step 2b proves an MCP server is the kit's by EXA_DSN on this port.
+    # ONLY from that file (never personal_db_port's 8563 fallback): no
+    # deployment.json, or no number in it, leaves it empty and step 2b stops
+    # nothing.
     _un_mcp_port=""
-    [ "$_un_had_deploy" = 1 ] && command -v personal_db_port >/dev/null 2>&1 && \
-        _un_mcp_port="$(personal_db_port 2>/dev/null || true)"
+    [ "$_un_had_deploy" = 1 ] && \
+        _un_mcp_port="$(_exakit_uninstall_recorded_db_port "$EXAKIT_PERSONAL_DEPLOY_DIR")"
     if [ -n "$_type" ]; then
         # Named BEFORE the removal, not only in the record line after it: on
         # `--yes` there is no gate to read, so this line is the last chance to
