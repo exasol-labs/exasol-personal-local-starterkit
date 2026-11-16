@@ -12843,6 +12843,28 @@ exakit_uninstall_run() {
                     _done "Database removed: the local Exasol Personal deployment and all its data" ;;
             *)        : ;;
         esac
+        # 1b) What the launcher leaves beside the deployment: its download
+        #     cache (~500 MB) and the state directories the deployment lived in.
+        #     Only once the deployment is gone, and never while another
+        #     deployment shares them. The dry run lists the same paths.
+        if [ "$_type" = personal ] && [ "$EXAKIT_UNINSTALL_DB_LEFT" != 1 ] && \
+           command -v personal_launcher_cache_dir >/dev/null 2>&1 && \
+           [ -z "$(personal_other_deployments)" ]; then
+            _un_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+            if [ -n "$_un_cache" ] && [ -d "$_un_cache" ] && [ ! -L "$_un_cache" ]; then
+                _un_csize="$(du -sh "$_un_cache" 2>/dev/null | awk '{print $1}')"
+                _step "Exasol launcher download cache $_un_cache${_un_csize:+ ($_un_csize)}"
+                _rm "$_un_cache"
+                _done "Launcher download cache removed: $_un_cache${_un_csize:+ ($_un_csize)}"
+            fi
+            _un_prune="$(personal_prunable_state_dirs)"
+            if [ -n "$_un_prune" ]; then
+                printf '%s\n' "$_un_prune" | while IFS= read -r _un_pd; do
+                    _step "empty launcher folder $_un_pd"
+                    [ "$_dry" = "1" ] || rmdir "$_un_pd" 2>/dev/null || break
+                done
+            fi
+        fi
     else
         # No runtime.type: the manifest is missing or truncated (an interrupted
         # install, a half-written record, a kit home staged by a dry run). The

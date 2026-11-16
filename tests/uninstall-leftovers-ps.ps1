@@ -51,7 +51,9 @@ function Get-FunctionTexts([string]$Path, [string[]]$Only = @()) {
 # functions under test. Stubs below are defined AFTER and win by name.
 foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/exakit.ps1"))) { Invoke-Expression $t }
 foreach ($t in (Get-FunctionTexts (Join-Path $repo "setup/lib/runtime-personal.ps1") @(
-    "Remove-Personal", "Find-PersonalTeardownLeftovers", "Test-PersonalNamesCarryId", "Get-PersonalDeploymentId"))) { Invoke-Expression $t }
+    "Remove-Personal", "Find-PersonalTeardownLeftovers", "Test-PersonalNamesCarryId", "Get-PersonalDeploymentId",
+    "Get-PersonalLauncherCacheDir", "Get-PersonalOtherDeployments", "Get-PersonalPrunableStateDirs",
+    "Get-PersonalLauncherLeftovers"))) { Invoke-Expression $t }
 foreach ($need in @("Remove-Personal", "Invoke-ExakitUninstallRun", "Invoke-CmdUninstall")) {
     if (-not (Get-Command $need -ErrorAction SilentlyContinue)) { throw "$need not found" }
 }
@@ -66,6 +68,9 @@ $script:ExakitHome = Join-Path $fakeHome ".exasol-starter-kit"
 $script:BinDir     = Join-Path $fakeHome ".local\bin"
 $script:ManifestPath = Join-Path $script:ExakitHome "manifest.json"
 $script:PersonalDeployDir = Join-Path $fakeHome ".exasol\personal\deployments\default"
+# The launcher cache lives under LOCALAPPDATA: point it into the sandbox for
+# every case (the clean uninstall runs now remove it), never at the real one.
+$env:LOCALAPPDATA = Join-Path $fakeHome "AppData\Local"
 # Engines: empty files on a PATH that holds nothing else, so Get-Command finds
 # these and never a real docker/podman. They are never executed (the bounded
 # runner below is a stub).
@@ -226,6 +231,55 @@ Seed-Kit; $script:out = @()
 Invoke-ExakitUninstallRun
 Check "no runtime recorded + nothing on disk: not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 $env:STUB_NO_TYPE = ""
+
+Write-Host ""
+Write-Host "Invoke-ExakitUninstallRun removes the launcher cache and the empty state folders:"
+$cache = Join-Path $env:LOCALAPPDATA ".exasol"
+$exaRoot = Join-Path $fakeHome ".exasol"
+$deplRoot = Split-Path -Parent $script:PersonalDeployDir
+function Seed-Cache {
+    if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
+    $img = Join-Path $cache "personal\runtime-artifacts\artifacts\exasol-nano-image"
+    New-Item -ItemType Directory -Force -Path $img | Out-Null
+    [System.IO.File]::WriteAllBytes((Join-Path $img "img"), (New-Object byte[] 2097152))
+}
+function Reset-Exa { if (Test-Path $exaRoot) { Remove-Item -Recurse -Force $exaRoot } }
+# (h1) dry run lists the cache with its size and every folder that goes.
+Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache
+Invoke-ExakitUninstallRun -DryRun
+Has   "h1: dry run lists the launcher cache" "will remove: Exasol launcher download cache $cache (2 MB)" $script:out
+Has   "h1: dry run lists the deployments folder" "will remove: empty launcher folder $deplRoot" $script:out
+Has   "h1: dry run lists ~/.exasol" "will remove: empty launcher folder $exaRoot" $script:out
+Check "h1: dry run keeps the cache" "True" (Test-Path $cache)
+# (h2) the real run removes them.
+$env:STUB_DESTROY_RC = "0"; $env:STUB_DESTROY_REMOVES = "1"; $script:out = @()
+Invoke-ExakitUninstallRun
+Has   "h2: the cache removal is recorded" "Launcher download cache removed: $cache" $script:out
+Check "h2: the cache is gone" "False" (Test-Path $cache)
+Check "h2: LOCALAPPDATA itself stays" "True" (Test-Path $env:LOCALAPPDATA)
+Check "h2: ~/.exasol is gone" "False" (Test-Path $exaRoot)
+# (h3) another deployment beside the kit's: cache and folders stay.
+Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache
+New-Item -ItemType Directory -Force -Path (Join-Path $deplRoot "other") | Out-Null
+Invoke-ExakitUninstallRun -DryRun
+Lacks "h3: dry run does not list the shared cache" "launcher download cache" $script:out
+Lacks "h3: nor any launcher folder" "empty launcher folder" $script:out
+Seed-Kit; $script:out = @()
+Invoke-ExakitUninstallRun
+Check "h3: the cache stays" "True" (Test-Path $cache)
+Check "h3: the sibling deployment stays" "True" (Test-Path (Join-Path $deplRoot "other"))
+# (h4) a file in ~/.exasol keeps it; the empty folders below still go.
+Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache
+New-Item -ItemType File -Force -Path (Join-Path $exaRoot "notes") | Out-Null
+Invoke-ExakitUninstallRun
+Check "h4: ~/.exasol/personal is gone" "False" (Test-Path (Join-Path $exaRoot "personal"))
+Check "h4: ~/.exasol with a file in it stays" "True" (Test-Path (Join-Path $exaRoot "notes"))
+# (h5) a teardown that left the deployment: nothing beside it is touched.
+Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache; $env:STUB_DESTROY_REMOVES = "0"
+Invoke-ExakitUninstallRun
+Check "h5: a failed teardown keeps the cache" "True" (Test-Path $cache)
+Check "h5: and the deployments folder" "True" (Test-Path $deplRoot)
+Reset-Exa; if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
 
 Write-Host ""
 Write-Host "Invoke-CmdUninstall -Yes only says complete when it is:"

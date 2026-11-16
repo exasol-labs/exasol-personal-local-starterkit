@@ -1750,6 +1750,31 @@ function Invoke-ExakitUninstallRun {
                 RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
             }
         }
+        # 1b) What the launcher leaves beside the deployment: its download cache
+        #     and the state folders the deployment lived in. Only once the
+        #     deployment is gone, never while another deployment shares them;
+        #     the dry run lists the same paths. Twin of step 1b in
+        #     exakit_uninstall_run.
+        if ($type -eq "personal" -and -not $script:ExakitUninstallDbLeft -and
+            (Get-Command Get-PersonalLauncherLeftovers -ErrorAction SilentlyContinue)) {
+            $launcherLeft = Get-PersonalLauncherLeftovers
+            if ($launcherLeft.Cache) {
+                $cacheLabel = "$($launcherLeft.Cache) ($($launcherLeft.CacheSize))"
+                if ($DryRun) { Info "  will remove: Exasol launcher download cache $cacheLabel" }
+                else {
+                    Info "Removing the Exasol launcher download cache $cacheLabel"
+                    try {
+                        Remove-Item -LiteralPath $launcherLeft.Cache -Recurse -Force -ErrorAction Stop
+                        RecordRemoved "Launcher download cache removed: $cacheLabel"
+                    } catch { Warn2 "Could not remove the launcher download cache $($launcherLeft.Cache) (continuing uninstall)" }
+                }
+            }
+            foreach ($stateDir in @($launcherLeft.Dirs)) {
+                if ($DryRun) { Info "  will remove: empty launcher folder $stateDir"; continue }
+                # Non-recursive: a folder that is not empty stays.
+                try { [System.IO.Directory]::Delete($stateDir, $false) } catch { break }
+            }
+        }
     } elseif (-not $DryRun -and $script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir)) {
         # No runtime recorded, but the deployment is on disk: nothing below
         # removes it, so the run must not end on "complete". Twin of the same

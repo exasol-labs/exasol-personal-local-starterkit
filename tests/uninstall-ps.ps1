@@ -75,6 +75,9 @@ function Get-RuntimeType { "personal" }
 function Get-ExakitRepoRoot { return $null }   # force fallback skill list
 function Get-ExakitProfileHome { return $fakeProfile }
 function Remove-Personal { $script:markers.database = $true }
+# The launcher cache and state folders: nothing to remove here (their own
+# cases live in uninstall-leftovers-ps.ps1).
+function Get-PersonalLauncherLeftovers { [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() } }
 function Invoke-McpOperation { param($Operation, $InputArgs) $script:markers.mcp = $Operation; return $true }
 # The real helper defers deletion to a detached process (so cmd.exe does not
 # choke on exakit.cmd being removed mid-run); here we delete synchronously so
