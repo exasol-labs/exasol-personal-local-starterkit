@@ -1728,7 +1728,7 @@ function Write-ExakitUninstallLeftoverReport {
     if ($left.Count -eq 0) { $left = @("the local Exasol Personal deployment") }
     foreach ($line in $left) { Info "  $line" }
     if ($script:PersonalTeardownRemedy) {
-        Info "Remove it with (this deletes the database and all its data):"
+        Info "Remove it with this PowerShell command (it deletes the database and all its data):"
         Info "  $($script:PersonalTeardownRemedy)"
     }
 }
@@ -1799,7 +1799,7 @@ function Invoke-ExakitUninstallKitImages {
                     if ($qr.StartsWith("docker.io/")) { $qr = $qr.Substring(10) }
                     $q.Count -ge 3 -and $q[2] -eq $parts[2] -and ($kitRepos -notcontains $qr) })
                 if ($foreign.Count -gt 0) {
-                    Info "kept image $name (id $($parts[2])): it also carries another repository's tag"
+                    Info "Kept image $name (id $($parts[2])): it also carries another repository's tag."
                     continue
                 }
             }
@@ -1809,7 +1809,7 @@ function Invoke-ExakitUninstallKitImages {
             $users = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
                 -Arguments @("ps", "-a", "-q", "--filter", "ancestor=$ref")
             if ($null -ne $users -and ("" + $users).Trim()) {
-                Info "kept image ${name}: a container still uses it (another deployment?)"
+                Info "Kept image ${name}: a container still uses it (another deployment?)."
                 continue
             }
             if ($DryRun) {
@@ -1820,14 +1820,14 @@ function Invoke-ExakitUninstallKitImages {
             }
             $rmi = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 60 -Arguments @("rmi", $ref)
             if ($null -ne $rmi) { $gone += $name }
-            else { Info "kept image ${name}: the engine refused (a container may still use it); remove later with: $engineName rmi $ref" }
+            else { Info "Kept image ${name}: $engineName did not remove it (a container may still use it, or $engineName did not answer). Remove it later with: $engineName rmi $ref" }
         }
         if ((-not $DryRun) -and $gone.Count -gt 0) {
             OkStep "Container images removed ($engineName): $($gone -join ', ')"
         }
     }
     if (-not $anyEngine) {
-        Info "Neither docker nor podman is on PATH, so the kit's container image (exasol/nano) was not checked."
+        Info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
     }
 }
 
@@ -2103,7 +2103,7 @@ function Invoke-ExakitUninstallRun {
         # "as this window closes", not "removed": the delete runs after this
         # process exits, so at this point it has been arranged, not done. A shim
         # it misses still cleans itself up on its next run.
-        RecordRemoved "Commands removed from $($script:BinDir) as this window closes: $($binNamesGone -join ', ')"
+        RecordRemoved "Commands in $($script:BinDir) are removed when you close this window: $($binNamesGone -join ', ')"
     }
     } finally {
         Stop-ExakitSpinner
@@ -2154,7 +2154,7 @@ function Write-ExakitUninstallClosingHints {
         if (Test-Path -LiteralPath $kitUv) { $uv = "& '" + $kitUv + "'" }
     }
     Info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
-    Info "uv keeps the MCP server package in its cache; free that space with: $uv cache clean exasol-mcp-server"
+    Info "uv keeps the MCP server package in its cache. To free that space, run in PowerShell: $uv cache clean exasol-mcp-server"
 }
 
 # Delete the CLI binaries from a short-lived detached PowerShell that first
@@ -4501,7 +4501,7 @@ try {
             $doctorType = Get-RuntimeType
             $doctorUp = ($doctorType -eq "personal" -and (Get-PersonalStatus) -eq "running")
             if (-not $doctorUp -and (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType $doctorType)) {
-                $doctorStale = "The launcher records this deployment as failed although its database answers - repair the record with: exakit start"
+                $doctorStale = "Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept)."
                 # --json keeps stdout one object: the warning goes to stderr
                 # there, as the shell twin's warn() does everywhere.
                 if ($doctorJson) { [Console]::Error.WriteLine("      ! $doctorStale"); Write-ExakitLog "WARN" $doctorStale }

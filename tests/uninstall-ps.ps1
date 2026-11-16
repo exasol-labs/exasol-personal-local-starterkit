@@ -318,7 +318,7 @@ if ($env:USERPROFILE -and $want.StartsWith($env:USERPROFILE + [string][char]92, 
     $want = "%USERPROFILE%" + $want.Substring($env:USERPROFILE.Length)
 }
 Check "shim: checks its target exists" "True" ($shim.Contains("if exist `"$want`" goto run"))
-Check "shim: says it is a leftover" "True" ($shim.Contains("exakit was uninstalled - this leftover launcher (`"%~f0`") removes itself now."))
+Check "shim: says it is a leftover" "True" ($shim.Contains("exakit is no longer installed here (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To install exakit again, run the installer from the starter kit README."))
 Check "shim: self-deletes after leaving the batch context" "True" ($shim.Contains("(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"))
 Check "shim: still runs the target" "True" ($shim.Contains("powershell -NoProfile -ExecutionPolicy Bypass -File `"$want`" %*"))
 Check "shim: pure ASCII" "True" (-not ($shim -match '[^\x00-\x7F]'))
@@ -337,7 +337,7 @@ if ($cmdExe) {
     $out = & cmd.exe /d /c "`"$shimPath`" version" 2>&1 | Out-String -Width 4096
     $code = $LASTEXITCODE
     $ErrorActionPreference = $prevEap
-    Check "shim (cmd.exe): prints the leftover message" "True" ($out -match 'exakit was uninstalled - this leftover launcher')
+    Check "shim (cmd.exe): prints the leftover message" "True" ($out -match 'exakit is no longer installed here \(its files are gone\), so this leftover launcher')
     Check "shim (cmd.exe): no -File error" "False" ($out -match 'does not exist')
     Check "shim (cmd.exe): exits non-zero" "True" ($code -ne 0)
     Check "shim (cmd.exe): deleted itself" "False" (Test-Path -LiteralPath $shimPath)
@@ -377,9 +377,9 @@ Check "doctor: ...not a personal runtime -> not reachable" "False" (Test-ExakitM
 Remove-Item Function:\Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue
 $cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
 Check "doctor: the mcp-doctor arm asks it" "True" ($cliText.Contains('if (-not $doctorUp -and (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType $doctorType)) {'))
-Check "doctor: and says the one warning" "True" ($cliText.Contains('The launcher records this deployment as failed although its database answers - repair the record with: exakit start'))
+Check "doctor: and says the one warning" "True" ($cliText.Contains('Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept).'))
 $cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
-Check "uninstall: says the commands go as the window closes" "True" ($cliText.Contains('as this window closes: '))
+Check "uninstall: says the commands go as the window closes" "True" ($cliText.Contains('are removed when you close this window: '))
 Check "uninstall: deferred cleaner starts outside the job (Win32_Process Create)" "True" ($cliText -match 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create')
 
 # --- the deferred delete, run for real (Windows only) ----------------------

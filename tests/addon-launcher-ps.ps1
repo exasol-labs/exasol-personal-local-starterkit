@@ -95,7 +95,7 @@ foreach ($c in $cases) {
     $lines = $text -split "`r`n"
     Check "$($c.Id): starts with @echo off" "@echo off" $lines[0]
     Check "$($c.Id): checks its target first" "if exist `"$($c.Target)`" goto exakit_target_ok" $lines[1]
-    Check "$($c.Id): says it is a leftover" ">&2 echo $($c.Id) was uninstalled - this leftover launcher (`"%~f0`") removes itself now." $lines[2]
+    Check "$($c.Id): says it is a leftover" ">&2 echo $($c.Id) is no longer installed (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To add it again: exakit marketplace" $lines[2]
     Check "$($c.Id): self-deletes after leaving the batch context" "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1" $lines[3]
     Check "$($c.Id): then the label" ":exakit_target_ok" $lines[4]
     Check "$($c.Id): the label is defined once" "1" (@($lines | Where-Object { $_ -eq ":exakit_target_ok" }).Count)
@@ -172,7 +172,7 @@ foreach ($c in $cases) {
         $out = & cmd.exe /d /c "`"$($c.Path)`" --version" 2>&1 | Out-String -Width 4096
         $code = $LASTEXITCODE
         $ErrorActionPreference = $prevEap
-        Check "$($c.Id) (cmd.exe): prints the leftover message" "True" ($out -match "$([regex]::Escape($c.Id)) was uninstalled - this leftover launcher")
+        Check "$($c.Id) (cmd.exe): prints the leftover message" "True" ($out -match "$([regex]::Escape($c.Id)) is no longer installed \(its files are gone\), so this leftover launcher")
         Check "$($c.Id) (cmd.exe): exits non-zero" "True" ($code -ne 0)
         Check "$($c.Id) (cmd.exe): deleted itself" "False" (Test-Path -LiteralPath $c.Path)
     } else {

@@ -3314,7 +3314,7 @@ function Get-ExakitCmdShimContent {
     $nl = "`r`n"
     return "@echo off" + $nl +
         "if exist `"$target`" goto run" + $nl +
-        ">&2 echo exakit was uninstalled - this leftover launcher (`"%~f0`") removes itself now." + $nl +
+        ">&2 echo exakit is no longer installed here (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To install exakit again, run the installer from the starter kit README." + $nl +
         "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1" + $nl +
         ":run" + $nl +
         "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*" + $nl
@@ -3572,7 +3572,7 @@ function Get-ExakitAddonLauncherGuard {
     param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Target)
     return @(
         "if exist `"$Target`" goto exakit_target_ok"
-        ">&2 echo $Id was uninstalled - this leftover launcher (`"%~f0`") removes itself now."
+        ">&2 echo $Id is no longer installed (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To add it again: exakit marketplace"
         "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"
         ":exakit_target_ok"
     )

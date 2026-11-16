@@ -2047,12 +2047,12 @@ function Find-PersonalTeardownLeftovers {
             if ($null -eq $names) {
                 # Why, where Invoke-ExakitBounded says: a hang and a refusal
                 # are different things to check. Twin of _ptl_why.
-                $why = "no answer within 15s, or it refused"
+                $why = "$engineName did not answer within 15s, or refused"
                 $outcome = "" + $script:ExakitBoundedOutcome
-                if ($outcome -eq "timeout") { $why = "no answer within 15s" }
-                elseif ($outcome -like "exit *") { $why = "it refused: $outcome" }
-                elseif ($outcome -eq "error") { $why = "it could not be run" }
-                $warnings += "could not check $engineName for the deployment's container ($why); check with: $engineName ps -a --filter name=$Id"
+                if ($outcome -eq "timeout") { $why = "$engineName did not answer within 15s" }
+                elseif ($outcome -like "exit *") { $why = "$engineName refused: $outcome" }
+                elseif ($outcome -eq "error") { $why = "$engineName could not be run" }
+                $warnings += "Could not ask $engineName whether the database's container is gone ($why). Check by hand once $engineName answers: $engineName ps -a --filter name=$Id"
                 continue
             }
             foreach ($line in @(("" + ($names -join "`n")) -split "`r?`n")) {

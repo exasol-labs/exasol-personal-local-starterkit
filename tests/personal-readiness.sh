@@ -374,11 +374,11 @@ if command -v lsof >/dev/null 2>&1; then
     RUN_PORT="$(pick_port $((CLOSED_PORT + 20)))"
     _rpid="$(start_listener "$RDIR/launcher" "$RUN_PORT" "$RDEPLOY")"
     _hint_own="$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_PORT="$RUN_PORT" -- 'personal_foreign_db_hint')"
-    contains "the kit's own runner on the port is named as ours" "own Exasol runner (pid $_rpid)" "$_hint_own"
+    contains "the kit's own runner on the port is named as ours" "own Exasol database process (pid $_rpid)" "$_hint_own"
     case "$_hint_own" in *"did not deploy"*) check "  ...not as a foreign database" "not foreign" "foreign" ;; *) check "  ...not as a foreign database" "not foreign" "not foreign" ;; esac
     _out="$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_rpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=10 -- 'personal_start')"
     check "own runner + deployment_failed -> exit 0" 0 "$(rc_of "$_out")"
-    contains "  ...says why it stops the VM" "while its VM still runs" "$_out"
+    contains "  ...says why it stops the VM" "but it is still running. Restarting it cleanly" "$_out"
     contains "  ...the runner was signalled" "KILL -TERM $_rpid" "$(cat "$TMP/calls")"
     check "  ...the runner is gone" no "$(alive "$_rpid")"
     check "  ...deploy ran exactly once" 1 "$(grep -c 'RUN exasol-stub deploy' "$TMP/calls")"
