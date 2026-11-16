@@ -3622,6 +3622,10 @@ function Get-ExakitLauncherRunningPids {
     try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return @() }
     foreach ($p in $procs) {
         if ([int]$p.ProcessId -eq $PID) { continue }
+        # Only cmd.exe interprets a batch file, so only cmd.exe is a running
+        # copy. An editor or viewer with the launcher open names the path too,
+        # and must not hold a launcher update back.
+        if (("" + $p.Name).ToLowerInvariant() -ne "cmd.exe") { continue }
         $cl = "" + $p.CommandLine
         if ($cl -and $cl.IndexOf($Path, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $found += [int]$p.ProcessId }
     }
