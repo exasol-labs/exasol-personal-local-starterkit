@@ -3454,9 +3454,13 @@ function Set-ExakitCmdShim {
     $waitPids = @()
     if (Test-Path -LiteralPath $shimPath) {
         # Own launcher chain, plus any other process running exakit.cmd by its
-        # path right now (a second window's `exakit start`, a Startup entry).
+        # path right now (a second window's `exakit start`, a Startup entry),
+        # plus a PowerShell running the kit's exakit.ps1: an `exakit` typed at
+        # an interactive cmd.exe prompt shows only there, and that cmd.exe
+        # reads exakit.cmd again when it exits. Waited for, never stopped.
         $waitPids = @(@(Get-ExakitShimLauncherPids -ShimPath $shimPath) +
-                      @(Get-ExakitLauncherRunningPids -Path $shimPath) | Sort-Object -Unique)
+                      @(Get-ExakitLauncherRunningPids -Path $shimPath) +
+                      @(Get-ExakitKitScriptRunningPids -Path $PsTarget) | Sort-Object -Unique)
     }
     if ($waitPids.Count -eq 0) {
         # Not under the shim: in place, and a leftover .new from an earlier
@@ -3465,7 +3469,7 @@ function Set-ExakitCmdShim {
         Write-ExakitCmdShimFile -Path $shimPath -Content $content
         return $shimPath
     }
-    Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $content -WaitPids $waitPids -Recheck | Out-Null
+    Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $content -WaitPids $waitPids -Recheck -RecheckScript $PsTarget | Out-Null
     return $shimPath
 }
 
@@ -3476,7 +3480,9 @@ function Set-ExakitCmdShim {
 # helper, once those are gone, look again for any process whose command line
 # names -ShimPath and wait for it too before the move: an add-on launcher may be
 # started again (exakit start) in the moment between its old copy exiting and
-# the swap. -Label names the file in the log.
+# the swap. -RecheckScript also counts a powershell.exe / pwsh.exe whose
+# command line names that script as a path token (Get-ExakitKitScriptRunningPids).
+# -Label names the file in the log.
 function Write-ExakitCmdShimDeferred {
     param(
         [Parameter(Mandatory)][string]$ShimPath,
@@ -3484,6 +3490,7 @@ function Write-ExakitCmdShimDeferred {
         [int[]]$WaitPids = @(),
         [int]$WaitTimeoutSeconds = 0,
         [switch]$Recheck,
+        [string]$RecheckScript = "",
         [string]$Label = "exakit.cmd"
     )
     $newPath = "$ShimPath.new"
@@ -3500,10 +3507,16 @@ function Write-ExakitCmdShimDeferred {
     if ($WaitTimeoutSeconds -gt 0) { $timeoutArg = " -Timeout $WaitTimeoutSeconds" }
     $recheckBlock = ""
     if ($Recheck) {
+        $qScriptRe = ""
+        if ($RecheckScript) {
+            $qScriptRe = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent(
+                '(^|["\s])' + [regex]::Escape($RecheckScript) + '(["\s]|$)')
+        }
         $recheckBlock = @"
+`$scriptRe = '$qScriptRe'
 for (`$r = 0; `$r -lt 1000; `$r++) {
     `$busy = @()
-    try { `$busy = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { `$_.ProcessId -ne `$PID -and ("" + `$_.CommandLine).IndexOf('$qShim', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { [int]`$_.ProcessId }) } catch {}
+    try { `$busy = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { `$_.ProcessId -ne `$PID -and (("" + `$_.CommandLine).IndexOf('$qShim', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or (`$scriptRe -and @('powershell.exe', 'pwsh.exe') -contains ("" + `$_.Name).ToLowerInvariant() -and [regex]::IsMatch("" + `$_.CommandLine, `$scriptRe, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))) } | ForEach-Object { [int]`$_.ProcessId }) } catch {}
     if (`$busy.Count -eq 0) { break }
     foreach (`$id in `$busy) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} }
     Start-Sleep -Milliseconds 500
@@ -3572,6 +3585,26 @@ function Get-ExakitLauncherRunningPids {
         if ([int]$p.ProcessId -eq $PID) { continue }
         $cl = "" + $p.CommandLine
         if ($cl -and $cl.IndexOf($Path, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $found += [int]$p.ProcessId }
+    }
+    return @($found | Sort-Object -Unique)
+}
+
+# Get-ExakitKitScriptRunningPids <path> - powershell.exe / pwsh.exe processes
+# (other than this one) whose command line names the kit's exakit.ps1 <path> as
+# a path token (at the start or after a quote or space, and followed by a
+# quote, a space or the end), so <path>.bak or X<path> is no match. Used only
+# to WAIT before a shim swap, never to stop anything. An empty list where
+# processes cannot be listed.
+function Get-ExakitKitScriptRunningPids {
+    param([string]$Path)
+    if (-not $Path) { return @() }
+    $re = '(^|["\s])' + [regex]::Escape($Path) + '(["\s]|$)'
+    $found = @()
+    try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return @() }
+    foreach ($p in $procs) {
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        if (@("powershell.exe", "pwsh.exe") -notcontains ("" + $p.Name).ToLowerInvariant()) { continue }
+        if ([regex]::IsMatch("" + $p.CommandLine, $re, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $found += [int]$p.ProcessId }
     }
     return @($found | Sort-Object -Unique)
 }

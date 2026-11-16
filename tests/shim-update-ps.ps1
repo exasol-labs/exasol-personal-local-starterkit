@@ -26,7 +26,8 @@ $cErr = $null; $cTok = $null
 $cAst = [System.Management.Automation.Language.Parser]::ParseFile($commonPath, [ref]$cTok, [ref]$cErr)
 $names = @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim",
            "Test-ExakitCmdShimCurrent", "Write-ExakitCmdShimFile", "Get-ExakitShimLauncherPids",
-           "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell", "Get-ExakitLauncherRunningPids")
+           "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell", "Get-ExakitLauncherRunningPids",
+           "Get-ExakitKitScriptRunningPids")
 $defs = @{}
 foreach ($name in $names) {
     $def = $cAst.FindAll({ param($n)
@@ -162,6 +163,34 @@ Check "another process runs exakit.cmd: not rewritten in place" "True" ([System.
 Check "another process runs exakit.cmd: the helper waits for it" "True" ("$script:helperScript".Contains("2147483001"))
 Check "the shim helper rechecks for a fresh exakit.cmd run" "True" ("$script:helperScript".Contains("Get-CimInstance Win32_Process"))
 Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+
+# An `exakit` typed at an interactive cmd.exe prompt: that cmd.exe's command
+# line is just "cmd.exe"; only its PowerShell child names the kit's exakit.ps1.
+# That PowerShell is waited for (never stopped); a near miss or an editor is not.
+. Import-ShimFunctions
+function Get-ExakitShimLauncherPids { param([string]$ShimPath) return @() }
+function Get-ExakitLauncherRunningPids { param([string]$Path) return @() }
+function Start-ExakitDetachedPowerShell { param([string]$Script) $script:helperScript = $Script; return $true }
+function Get-CimInstance {
+    param([string]$ClassName, [string]$Filter, $ErrorAction)
+    @([pscustomobject]@{ ProcessId = 2147483101; Name = "cmd.exe"; CommandLine = "C:\Windows\system32\cmd.exe" },
+      [pscustomobject]@{ ProcessId = 2147483102; Name = "powershell.exe"; CommandLine = "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" start" },
+      [pscustomobject]@{ ProcessId = 2147483103; Name = "PWSH.EXE"; CommandLine = "pwsh -File $target status" },
+      [pscustomobject]@{ ProcessId = 2147483104; Name = "powershell.exe"; CommandLine = "powershell -File `"$target.bak`"" },
+      [pscustomobject]@{ ProcessId = 2147483105; Name = "notepad.exe"; CommandLine = "notepad.exe `"$target`"" },
+      [pscustomobject]@{ ProcessId = $PID; Name = "pwsh.exe"; CommandLine = "pwsh -File `"$target`" update" })
+}
+Check "a PowerShell running the kit's exakit.ps1 is found (never this one)" "2147483102,2147483103" ((@(Get-ExakitKitScriptRunningPids -Path $target)) -join ",")
+$script:helperScript = $null
+Write-OldShim
+[void](Set-ExakitCmdShim -PsTarget $target)
+Check "interactive-cmd run: exakit.cmd not rewritten in place" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $oldShim)
+Check "interactive-cmd run: the helper waits for its PowerShell" "True" ("$script:helperScript".Contains("2147483102"))
+Check "interactive-cmd run: the helper does not wait for an editor" "False" ("$script:helperScript".Contains("2147483105"))
+Check "the helper's recheck also looks for the kit's exakit.ps1" "True" ("$script:helperScript".Contains([regex]::Escape($target)))
+Check "the helper never stops what it finds" "False" ("$script:helperScript" -match 'Stop-Process|taskkill')
+Remove-Item Function:\Get-CimInstance
+Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
 . Import-ShimFunctions
 function Start-ExakitDetachedPowerShell { param([string]$Script) $script:helperScript = $Script; return $script:helperOk }
 
@@ -202,6 +231,36 @@ Remove-Item -Force -LiteralPath $shimPath
 Invoke-HelperChild
 Check "target removed before the move: exakit.cmd not recreated" "False" (Test-Path -LiteralPath $shimPath)
 Check "target removed before the move: exakit.cmd.new removed" "False" (Test-Path -LiteralPath $newPath)
+
+# The helper's recheck: a PowerShell running the kit's exakit.ps1 that starts
+# after the staged swap (an `exakit` typed at an interactive cmd.exe prompt) is
+# waited for before the move. The child gets a process table naming a real,
+# short-lived sleeper as that PowerShell.
+$sleep2Args = @{ FilePath = $selfExe; ArgumentList = @("-NoProfile", "-Command", "Start-Sleep -Seconds 6"); PassThru = $true }
+if ($env:OS -eq "Windows_NT") { $sleep2Args.WindowStyle = "Hidden" }
+$sleeper2 = Start-Process @sleep2Args
+Write-OldShim
+Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+$script:helperScript = $null
+[void](Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $newShim -WaitPids @(2147483000) -Recheck -RecheckScript $target)
+$tQ2 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($target)
+$stubTable = @"
+function Get-CimInstance { param([string]`$ClassName, [string]`$Filter, `$ErrorAction)
+    if (Get-Process -Id $($sleeper2.Id) -ErrorAction SilentlyContinue) {
+        [pscustomobject]@{ ProcessId = $($sleeper2.Id); Name = 'powershell.exe'; CommandLine = 'powershell -NoProfile -File "' + '$tQ2' + '" start' }
+    }
+}
+"@
+$f2 = Join-Path $sandbox ("helper-" + [guid]::NewGuid() + ".ps1")
+[System.IO.File]::WriteAllText($f2, $stubTable + "`r`n" + $script:helperScript, (New-Object System.Text.UTF8Encoding $true))
+$helper2 = Start-Process -FilePath $selfExe -ArgumentList @("-NoProfile", "-File", $f2) -PassThru
+Start-Sleep -Seconds 3
+Check "recheck: while that PowerShell runs, exakit.cmd is untouched" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $oldShim)
+Check "recheck: and the sleeper was still running (the case was real)" "False" ($sleeper2.HasExited)
+[void]$helper2.WaitForExit(30000)
+Check "recheck: once it exits, the new shim lands" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $newShim)
+Remove-Item -Force -LiteralPath $f2 -ErrorAction SilentlyContinue
+try { Stop-Process -Id $sleeper2.Id -Force -ErrorAction SilentlyContinue } catch { }
 
 # A path with a typographic apostrophe (U+2019, which PowerShell also reads as
 # a single quote) must not end the quoted path in the helper: escaping only the
