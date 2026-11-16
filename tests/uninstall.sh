@@ -285,11 +285,20 @@ case "$*" in
             "4999991 /Users/u/.local/bin/uvx exasol-mcp-server@1.2.0" \
             "4999992 /opt/other/uvx exasol-mcp-server@1.2.0" \
             "4999993 grep exasol-mcp-server" \
-            "4999996 /tmp/uvx exasol-mcp-server EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563" ;;
+            "4999996 /tmp/uvx exasol-mcp-server EXA_USER=mcp_readonly EXA_DSN=127.0.0.1:8563" \
+            "4999997 /tmp/uvx exasol-mcp-server@1.2.0" \
+            "4999998 /tmp/uvx exasol-mcp-server@1.2.0" \
+            "4999999 /tmp/uvx exasol-mcp-server@1.2.0" ;;
     # The plain command line (`ps -o command=`): what `ps -E` prints first.
     "-ww -o command= -p 4999991") printf '%s\n' "/Users/u/.local/bin/uvx exasol-mcp-server@1.2.0" ;;
     "-ww -o command= -p 4999992") printf '%s\n' "/opt/other/uvx exasol-mcp-server@1.2.0" ;;
     "-ww -o command= -p 4999993") printf '%s\n' "grep exasol-mcp-server" ;;
+    # The kit's MCP user, but another port (a second deployment) or a remote DSN.
+    "-ww -o command= -p 4999997"|"-ww -o command= -p 4999998"|"-ww -o command= -p 4999999") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0" ;;
+    *"-p 4999997") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:9563 EXA_USER=mcp_readonly" ;;
+    *"-p 4999998") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=db.example.com:8563 EXA_USER=mcp_readonly" ;;
+    # The right DSN, but another database user.
+    *"-p 4999999") printf '%s\n' "/tmp/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:8563 EXA_USER=sys" ;;
     *"-p 4999991") printf '%s\n' "/Users/u/.local/bin/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=127.0.0.1:8563 EXA_USER=mcp_readonly EXA_PASSWORD=x" ;;
     *"-p 4999992") printf '%s\n' "/opt/other/uvx exasol-mcp-server@1.2.0 PATH=/bin EXA_DSN=db.example.com:8563 EXA_USER=analyst" ;;
     *"-p 4999993") printf '%s\n' "grep exasol-mcp-server PATH=/bin" ;;
@@ -317,6 +326,9 @@ check "dry run stops nothing" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 _p="$(_procs 0 2>&1)"
 check "real run stops the kit's process" "1" "$(printf '%s\n' "$_p" | grep -cx 'KILL 4999991')"
 check "the kit's user and DSN in the arguments only: not matched" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999996')"
+check "the kit's user on another port: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999997')"
+check "the kit's user with a remote DSN: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999998')"
+check "the right DSN with another user: left alone" "0" "$(printf '%s\n' "$_p" | grep -c '^KILL 4999999')"
 check "and only that one" "1" "$(printf '%s\n' "$_p" | grep -c '^KILL')"
 check "and says so" "1" "$(printf '%s\n' "$_p" | grep -c '^OK Stopped .*4999991')"
 # The Linux branch: /proc/<pid>/environ, NUL-separated, read from a fake proc
