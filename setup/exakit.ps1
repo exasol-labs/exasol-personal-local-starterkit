@@ -4117,7 +4117,6 @@ function Invoke-CmdSql {
 # _mcp_doctor_failed_record_but_answers in setup/exakit.
 function Test-ExakitMcpDoctorFailedRecordAnswers([string]$RuntimeType) {
     if ($RuntimeType -ne "personal") { return $false }
-    if (-not (Get-Command Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue)) { return $false }
     if ((Get-PersonalLauncherState) -ne "deployment_failed") { return $false }
     if (-not (Test-PersonalDbAnswers)) { return $false }
     return [bool](Test-PersonalPortHeldByOwnRunner)
