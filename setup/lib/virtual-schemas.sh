@@ -1254,14 +1254,23 @@ _exakit_vs_lakehouse_handoff() {
     return 0
 }
 
-# _exakit_vs_pick <work-dir> — the connector menu, under the line that names
+# _exakit_vs_pick <work-dir> [guides] — the connector menu, under the line that names
 # this computer's public IP (_exakit_vs_catalog). Sets EXAKIT_VS_PICKED to the
 # chosen connector ids, space separated, and for Lakehouse
 # EXAKIT_VS_LAKEHOUSE_CATALOG and _FILES; returns 5 when nothing was chosen.
+# ? on a row shows its connector's guide (_exakit_vs_pick_help).
+# With "guides" it is `exakit connect --help`'s picker: the same rows and keys,
+# titled "Connector guides", read from the catalog file (no engine, no public
+# IP, no clock check); every connector can be ticked - a gated one has a guide
+# too - and a Lakehouse catalog or store ticks Lakehouse's guide.
 _exakit_vs_pick() {
-    _evp_dir="$1"
+    _evp_dir="$1"; _evp_mode="${2:-}"
     EXAKIT_VS_LAKEHOUSE_CATALOG=""; EXAKIT_VS_LAKEHOUSE_FILES=""
-    _exakit_vs_catalog "$_evp_dir/catalog"
+    if [ "$_evp_mode" = guides ]; then
+        _exakit_vs_guide_catalog
+    else
+        _exakit_vs_catalog "$_evp_dir/catalog"
+    fi
     # tree|label|gate|key, in the catalog's order: each source by its name and
     # nothing more - the adapter version and tier are `exakit source catalog`'s.
     # Lakehouse's subtree follows its row (key cat:<catalog>, file:<catalog>:<files>,
@@ -1325,7 +1334,7 @@ PY
             ''|note|off) ;;
             *) _evp_label="$_evp_label - not available yet" ;;
         esac
-        if [ -n "$_evp_gate" ]; then
+        if [ -n "$_evp_gate" ] && { [ "$_evp_mode" != guides ] || [ -z "$_evp_id" ]; }; then
             printf '%s|%s|0|disabled||||||||\n' "$_evp_tree" "$_evp_label" >> "$_evp_state"
         else
             printf '%s|%s|0|idle||||||||\n' "$_evp_tree" "$_evp_label" >> "$_evp_state"
@@ -1334,23 +1343,35 @@ PY
 $_evp_id"
     done < "$_evp_dir/rows"
     _evp_n="$_evp_i"
-    printf 'plain|Skip|0|idle||||||||\n' >> "$_evp_state"
+    _evp_skipl=Skip; [ "$_evp_mode" = guides ] && _evp_skipl=Quit
+    printf 'plain|%s|0|idle||||||||\n' "$_evp_skipl" >> "$_evp_state"
     _evp_skip=$(( _evp_n + 1 ))
+    # A guide is read, not configured: a Lakehouse catalog or store is ticked
+    # freely there, nothing has to be picked under it.
+    [ "$_evp_mode" = guides ] && _evp_group="$(printf '%s' "$_evp_group" | sed 's/+one//g; s/+first//g')"
     EXAKIT_TABLE_DEFAULTS=""            # nothing ticked: a connect is always a choice
     EXAKIT_TABLE_GROUP="$_evp_group"
     EXAKIT_TABLE_EXCLUSIVE="$_evp_skip"
     UI_TABLE_TITLE="Connect external sources"
+    [ "$_evp_mode" = guides ] && UI_TABLE_TITLE="Connector guides"
     UI_TABLE_COL1="Source"; UI_TABLE_COL2=""; UI_TABLE_COL3=""
     UI_TABLE_MENU_START=1               # no "Select All" row to step past
-    _exakit_vs_clock_check
-    printf '\n'
-    info "Tick one or more sources; the details for each are asked next."
+    if [ "$_evp_mode" = guides ]; then
+        printf '\n'
+        info "Tick one or more connectors; Enter shows each one's guide."
+    else
+        _exakit_vs_clock_check
+        printf '\n'
+        info "Tick one or more sources; the details for each are asked next."
+    fi
     printf '\n'
     # The Source column alone: nothing runs in this menu's rows, so it has no
     # Status column either (UI_TABLE_STAT_MIN=0).
     _evp_statmin="${UI_TABLE_STAT_MIN-}"
     UI_TABLE_STAT_MIN=0
+    UI_TABLE_HELP=_exakit_vs_pick_help
     ui_table_menu "$_evp_state"
+    UI_TABLE_HELP=""
     if [ -n "$_evp_statmin" ]; then UI_TABLE_STAT_MIN="$_evp_statmin"; else unset UI_TABLE_STAT_MIN; fi
     EXAKIT_TABLE_EXCLUSIVE=""
     EXAKIT_TABLE_GROUP=""
@@ -1360,6 +1381,10 @@ $_evp_id"
         case "$_evp_row" in ''|*[!0-9]*) continue ;; esac
         [ "$_evp_row" = "$_evp_skip" ] && { EXAKIT_VS_PICKED=""; return 5; }
         _evp_id="$(printf '%s\n' "$_evp_ids" | sed -n "$(( _evp_row + 1 ))p")"
+        if [ "$_evp_mode" = guides ]; then
+            case "$_evp_id" in cat:*|file:*) _evp_id=lakehouse ;; esac
+            case " $EXAKIT_VS_PICKED " in *" $_evp_id "*) continue ;; esac
+        fi
         case "$_evp_id" in
             '') ;;
             cat:*)
@@ -1445,10 +1470,21 @@ _exakit_vs_tui_frame() {
         _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
         _evf_i=$(( _evf_i + 1 ))
     done
-    # The legend, one dim line under the fields: what the star means.
+    # The legend, one dim line under the fields: what the star means, and
+    # that ? (then Enter) at a question shows this source's guide - when the
+    # panel is wide enough to say it.
+    _evf_g="? + Enter: guide"
+    [ "$_EVT_IN" -ge 40 ] || _evf_g=""
     if [ -n "$_evf_anyreq" ]; then
-        _evf_pad=$(( _EVT_IN - 15 )); [ "$_evf_pad" -ge 0 ] || _evf_pad=0
-        _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_VB$UI_RESET     $UI_ERR*$UI_RESET$UI_DIM required$UI_RESET${_EVT_SP:0:$_evf_pad}$UI_ACCENT$UI_VB$UI_RESET"$'\n'
+        _evf_lp="     * required"
+        _evf_lc="     $UI_ERR*$UI_RESET$UI_DIM required"
+        [ -n "$_evf_g" ] && { _evf_lp="$_evf_lp · $_evf_g"; _evf_lc="$_evf_lc · $_evf_g"; }
+    else
+        _evf_lp="${_evf_g:+     $_evf_g}"; _evf_lc="${_evf_g:+     $UI_DIM$_evf_g}"
+    fi
+    if [ -n "$_evf_lp" ]; then
+        _evf_pad=$(( _EVT_IN - ${#_evf_lp} )); [ "$_evf_pad" -ge 0 ] || _evf_pad=0
+        _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_VB$UI_RESET$_evf_lc$UI_RESET${_EVT_SP:0:$_evf_pad}$UI_ACCENT$UI_VB$UI_RESET"$'\n'
         _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
     fi
     _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_BL${_EVT_HR:0:$_EVT_IN}$UI_BR$UI_RESET"$'\n'
@@ -1613,12 +1649,13 @@ EOF
 # its notes and its default. Enter takes the default; an optional one with none is
 # left empty, a required one is refused in one line and asked again. The engine
 # checks a typed answer (cli.py field, the value on its stdin, never in argv); a
-# credential is hidden, and asked again keeps the one given on Enter. Returns 1
-# at end of input. Twin of Read-ExakitVsTuiField.
+# credential is hidden, and asked again keeps the one given on Enter. ? alone
+# (then Enter) shows the source's guide and asks again (_exakit_vs_guide_back);
+# never at a hidden prompt. Returns 1 at end of input. Twin of Read-ExakitVsTuiField.
 _exakit_vs_tui_field() {
-    _etf_i="$1"
+    _etf_i="$1"; _etf_why="${2:-}"
     _exakit_vs_tui_draw "$_evo_title" "$_etf_i"
-    [ -n "${2:-}" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$2"
+    [ -n "$_etf_why" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etf_why"
     _exakit_vs_tui_hint "${_EVT_HINT[$_etf_i]:-}"
     _etf_k="${_EVT_KIND[$_etf_i]}"; _etf_lab="${_EVT_LABF[$_etf_i]}"; _etf_req="${_EVT_REQ[$_etf_i]}"
     _etf_old="${_EVT_VAL[$_etf_i]}"
@@ -1664,6 +1701,15 @@ _exakit_vs_tui_field() {
             break
         fi
         _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 0 || return 1
+        # ? alone (then Enter): this source's guide, then the same question
+        # again, every answer kept. ? with anything else is text. Never in a
+        # hidden prompt (a credential, a connection string): ? can be part of
+        # a password or a URL there.
+        if [ "$_EVT_ANSWER" = "?" ]; then
+            _exakit_vs_guide_back "$_evo_id"
+            _exakit_vs_tui_field "$_etf_i" "$_etf_why"
+            return $?
+        fi
         if [ "$_EVT_ANSWER" = "-" ] && [ -z "$_etf_req" ]; then _EVT_VAL[$_etf_i]=""; break; fi
         _etf_v="${_EVT_ANSWER:-$_etf_def}"
         case "$_etf_v" in "~/"*) _etf_v="$HOME/${_etf_v#\~/}" ;; esac
@@ -1846,6 +1892,8 @@ _exakit_vs_tui_review() {
         _exakit_vs_tui_draw "$_evo_title" -1 numbered
         [ -n "$_etv_why" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etv_why"
         _exakit_vs_tui_ask "$_etv_q" "$_etv_deco" 0 || return 1
+        # ? alone: the guide, then this summary again.
+        if [ "$_EVT_ANSWER" = "?" ]; then _exakit_vs_guide_back "$_evo_id"; continue; fi
         _etv_n="$(printf '%s' "$_EVT_ANSWER" | tr -d ' ')"
         [ "$_etv_n" = skip ] && [ -n "${_evo_refused:-}" ] && return 2
         if [ -z "$_etv_n" ]; then
@@ -2746,30 +2794,166 @@ EOF
 # any python3 runs it when the kit's own is not installed yet.
 # Twin of Show-ExakitVsGuide.
 exakit_vs_guide() {
-    _evg_exact=""; [ "${1:-}" = --exact ] && _evg_exact=1
-    _evg_defs="$(exakit_vs_defs 2>/dev/null)" || {
-        [ -n "$_evg_exact" ] && return 10
-        error "This kit copy has no setup/virtual-schemas. Update it: exakit update"; return 2; }
-    _evg_py="$(_exakit_vs_kit_python 2>/dev/null)" || _evg_py="$(command -v python3 2>/dev/null)" || {
-        [ -n "$_evg_exact" ] && return 10
-        error "python3 is needed to show the connector guide."; return 2; }
     _evg_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || die "Could not create a temporary file."
-    _exakit_vs_python "$_evg_py" "$_evg_defs/engine/guide.py" --defs "$_evg_defs" \
-        --width "$(_ui_term_cols 2>/dev/null || echo 80)" --shell bash "$@" \
-        > "$_evg_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    _exakit_vs_guide_raw "$_evg_out" "$(_ui_term_cols 2>/dev/null || echo 80)" "$@"
     _evg_rc=$?
-    # One "<style>|<text>" per line: T title, H heading, D dimmed, A a command.
+    case "$_evg_rc" in
+        97) rm -f "$_evg_out"
+            error "This kit copy has no setup/virtual-schemas. Update it: exakit update"; return 2 ;;
+        98) rm -f "$_evg_out"
+            error "python3 is needed to show the connector guide."; return 2 ;;
+    esac
+    _exakit_vs_guide_paint "$_evg_out"
+    rm -f "$_evg_out"
+    return "$_evg_rc"
+}
+
+# _exakit_vs_guide_raw <out-file> <width> [--exact] [connector] — guide.py's
+# "<style>|<text>" lines into the file; its exit code, 97 without the
+# definitions and 98 without a python (10 for both with --exact).
+_exakit_vs_guide_raw() {
+    _evr_out="$1"; _evr_w="$2"; shift 2
+    _evr_exact=""; [ "${1:-}" = --exact ] && _evr_exact=1
+    _evr_defs="$(exakit_vs_defs 2>/dev/null)" || {
+        [ -n "$_evr_exact" ] && return 10
+        return 97; }
+    _evr_py="$(_exakit_vs_kit_python 2>/dev/null)" || _evr_py="$(command -v python3 2>/dev/null)" || {
+        [ -n "$_evr_exact" ] && return 10
+        return 98; }
+    _exakit_vs_python "$_evr_py" "$_evr_defs/engine/guide.py" --defs "$_evr_defs" \
+        --width "$_evr_w" --shell bash "$@" \
+        > "$_evr_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+}
+
+# _exakit_vs_guide_paint <raw-file> [width] — the guide's lines coloured: one
+# "<style>|<text>" per line, T title, H heading, D dimmed, A a command. With a
+# width, each line is cut to it first (the full-window reader's rows are one
+# screen row each).
+_exakit_vs_guide_paint() {
     while IFS= read -r _evg_line || [ -n "$_evg_line" ]; do
         _evg_text="${_evg_line#?|}"
+        [ -n "${2:-}" ] && [ "${#_evg_text}" -gt "$2" ] && _evg_text="${_evg_text:0:$2}"
         case "$_evg_line" in
             T\|*)      printf '%s%s%s\n' "${UI_BOLD:-}" "$_evg_text" "${UI_RESET:-}" ;;
             H\|*|D\|*) printf '%s%s%s\n' "${UI_DIM:-}" "$_evg_text" "${UI_RESET:-}" ;;
             A\|*)      printf '%s%s%s\n' "${UI_ACCENT:-}" "$_evg_text" "${UI_RESET:-}" ;;
             *)         printf '%s\n' "$_evg_text" ;;
         esac
-    done < "$_evg_out"
-    rm -f "$_evg_out"
-    return "$_evg_rc"
+    done < "$1"
+}
+
+# _exakit_vs_guide_doc <connector-id> — the guide's own file on this computer,
+# docs/virtual-schemas/<id>.md (its README when the id has none).
+_exakit_vs_guide_doc() {
+    _evd_defs="$(exakit_vs_defs 2>/dev/null)" || return 1
+    _evd_docs="$(dirname "$(dirname "$_evd_defs")")/docs/virtual-schemas"
+    if [ -f "$_evd_docs/$1.md" ]; then printf '%s\n' "$_evd_docs/$1.md"
+    elif [ -f "$_evd_docs/README.md" ]; then printf '%s\n' "$_evd_docs/README.md"
+    else return 1; fi
+}
+
+# _exakit_vs_guide_screen <connector-id> <footer> [keys] — one connector's
+# guide (guide.py, as `exakit connect <id> --help` prints it) in the
+# full-window reader (ui_pager): it disappears again, the screen under it as it
+# was. o opens the full guide's .md (ui_open_path), or says where it is. The
+# key that closed it is in UI_PAGER_KEY. Returns 1 when it cannot be shown.
+# ⇄ twin: Show-ExakitVsGuideScreen.
+_exakit_vs_guide_screen() {
+    _egs_cols="$(_ui_term_cols 2>/dev/null || echo 80)"
+    _egs_raw="$(mktemp "${TMPDIR:-/tmp}/exakit-guide.XXXXXX")" || return 1
+    _exakit_vs_guide_raw "$_egs_raw" "$_egs_cols" "$1" < /dev/null
+    case "$?" in 0) ;; *) rm -f "$_egs_raw"; return 1 ;; esac
+    _exakit_vs_guide_paint "$_egs_raw" $(( _egs_cols - 1 )) > "$_egs_raw.lines"
+    UI_PAGER_OPEN="$(_exakit_vs_guide_doc "$1" 2>/dev/null)"
+    ui_pager "$_egs_raw.lines" "$2" "${3:-}"; _egs_rc=$?
+    UI_PAGER_OPEN=""
+    rm -f "$_egs_raw" "$_egs_raw.lines"
+    return "$_egs_rc"
+}
+
+# _exakit_vs_guide_back <connector-id> — the guide from inside exakit connect
+# (? in the menu or in a source's panel): Enter, q or Esc go back to where ?
+# was pressed.
+_exakit_vs_guide_back() {
+    _exakit_vs_guide_screen "$1" "Enter/q back · o open full doc"
+}
+
+# _exakit_vs_pick_help <row> — ? in the connector menu: the guide of the
+# connector on that row (a Lakehouse catalog or store row: Lakehouse's). The
+# menu's own rows are _evp_ids.
+_exakit_vs_pick_help() {
+    _eph_id="$(printf '%s\n' "$_evp_ids" | sed -n "$(( $1 + 1 ))p")"
+    case "$_eph_id" in
+        '') [ "$1" -le "${_evp_n:-0}" ] && _eph_id=lakehouse ;;
+        cat:*|file:*) _eph_id=lakehouse ;;
+    esac
+    [ -n "$_eph_id" ] || return 0
+    _exakit_vs_guide_back "$_eph_id"
+    return 0
+}
+
+# exakit_vs_guide_picker_ok — does `exakit connect --help` open the guide
+# picker here? A person at a terminal: stdin and stdout a terminal, colour and
+# glyphs on, not CI. Everything else (a pipe, --json, an agent) prints the list
+# as it always has.
+exakit_vs_guide_picker_ok() {
+    [ "${UI_FANCY:-0}" = 1 ] || return 1
+    [ -t 0 ] && [ -t 1 ] || return 1
+    [ -z "${CI:-}" ] || return 1
+    exakit_vs_defs >/dev/null 2>&1 || return 1
+    return 0
+}
+
+# exakit_vs_guide_picker — `exakit connect --help` at a terminal: the connect
+# menu itself (_exakit_vs_pick guides: the same keys and rows), titled
+# "Connector guides"; each ticked connector's guide in turn in the full-window
+# reader. Enter the next guide, o its full .md, c connect that source now, q
+# (or Esc) done. After c, EXAKIT_VS_GUIDE_CONNECT is the connector the caller
+# then connects, as `exakit connect <id>` does. ⇄ twin: Invoke-ExakitVsGuidePicker.
+exakit_vs_guide_picker() {
+    EXAKIT_VS_GUIDE_CONNECT=""
+    _egp_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-guides.XXXXXX")" || { error "Could not create a temporary folder."; return 1; }
+    _exakit_vs_pick "$_egp_dir" guides
+    _egp_rc=$?
+    rm -rf "$_egp_dir"
+    [ "$_egp_rc" -eq 5 ] && return 0
+    [ "$_egp_rc" -eq 0 ] || return "$_egp_rc"
+    # shellcheck disable=SC2086 — connector ids, one word each
+    set -- $EXAKIT_VS_PICKED
+    _egp_at=0
+    for _egp_id in "$@"; do
+        _egp_at=$(( _egp_at + 1 ))
+        _egp_name="$(_exakit_vs_guide_name "$_egp_id")"
+        _egp_next="Enter next guide"; [ "$_egp_at" -eq "$#" ] && _egp_next="Enter done"
+        _exakit_vs_guide_screen "$_egp_id" \
+            "$_egp_next · o open full doc · c connect $_egp_name now · q quit" c || continue
+        case "$UI_PAGER_KEY" in
+            c) EXAKIT_VS_GUIDE_CONNECT="$_egp_id"; return 0 ;;
+            enter) ;;
+            *) return 0 ;;
+        esac
+    done
+    return 0
+}
+
+# _exakit_vs_guide_catalog — the guide picker's catalog, into EXAKIT_VS_RESULT
+# as the engine's catalog result has it: setup/virtual-schemas/catalog.json
+# itself (no engine, no public IP lookup).
+_exakit_vs_guide_catalog() {
+    EXAKIT_VS_RESULT="$(cat "$(exakit_vs_defs 2>/dev/null)/catalog.json" 2>/dev/null)"
+}
+
+# _exakit_vs_guide_name <connector-id> — its name in the catalog (PostgreSQL),
+# the id itself when the catalog does not say.
+_exakit_vs_guide_name() {
+    _egn="$(run_python_any - "$(exakit_vs_defs 2>/dev/null)/catalog.json" "$1" <<'PY' 2>/dev/null
+import json, sys
+for e in json.load(open(sys.argv[1], encoding="utf-8"))["connectors"]:
+    if e["id"] == sys.argv[2]:
+        print(e.get("name") or e["id"])
+PY
+)"
+    printf '%s\n' "${_egn:-$1}"
 }
 
 cmd_connect() {

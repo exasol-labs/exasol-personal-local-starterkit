@@ -375,6 +375,8 @@ function Restore-ExakitCursor { Disable-ExakitMenuMouse; if ($script:UiFancy) { 
 # so the screen scrolls as it always does, and clicks are re-armed after two
 # quiet seconds or with the next key - as in ui.sh.
 $script:UiMouse = $null
+# The ? key of Invoke-ExakitTableMenu: a scriptblock its caller sets (UI_TABLE_HELP).
+$script:UiTableHelp = $null
 function Enable-ExakitMenuMouse {
     if (-not $script:UiFancy -or $env:EXAKIT_NO_MOUSE -eq '1' -or $null -ne $script:UiMouse) { return }
     if ($PSVersionTable.PSVersion.Major -gt 5 -and -not $IsWindows) { return }
@@ -440,6 +442,12 @@ function Read-ExakitMenuKey {
             # (Get-ExakitTreeArrow); every other menu has no arm for them.
             'LeftArrow'  { return @{ Name = 'Left' } }
             'RightArrow' { return @{ Name = 'Right' } }
+            # Scrolling keys, for the guide reader (Show-ExakitPager); the
+            # menus have no arm for them.
+            'PageUp'    { return @{ Name = 'PageUp' } }
+            'PageDown'  { return @{ Name = 'PageDown' } }
+            'Home'      { return @{ Name = 'Home' } }
+            'End'       { return @{ Name = 'End' } }
         }
         $code = [int]$key.KeyChar
         if ($code -eq 13 -or $code -eq 10) { return @{ Name = 'Enter' } }
@@ -476,6 +484,10 @@ function ConvertFrom-ExakitMenuSequence {
     if ($Sequence -ceq '[B' -or $Sequence -ceq 'OB') { return @{ Name = 'Down' } }
     if ($Sequence -ceq '[C' -or $Sequence -ceq 'OC') { return @{ Name = 'Right' } }
     if ($Sequence -ceq '[D' -or $Sequence -ceq 'OD') { return @{ Name = 'Left' } }
+    if ($Sequence -ceq '[5~') { return @{ Name = 'PageUp' } }
+    if ($Sequence -ceq '[6~') { return @{ Name = 'PageDown' } }
+    if ($Sequence -ceq '[H' -or $Sequence -ceq 'OH' -or $Sequence -ceq '[1~') { return @{ Name = 'Home' } }
+    if ($Sequence -ceq '[F' -or $Sequence -ceq 'OF' -or $Sequence -ceq '[4~') { return @{ Name = 'End' } }
     if ($Sequence -cmatch '^\[<(\d+);(\d+);(\d+)([Mm])$') {
         $button = [int]$Matches[1]
         if ($Matches[4] -ceq 'M' -and $button -eq 0) { return @{ Name = 'Click'; Y = [int]$Matches[3] } }
@@ -1996,6 +2008,11 @@ function Invoke-ExakitTableMenu {
         [int]$StartRow = 0,
         [switch]$Auto
     )
+    # ? on a row: $script:UiTableHelp (a scriptblock, set by the caller) is
+    # called with the cursor's row, to show that row's guide (exakit connect:
+    # the connector's); the hint then says "? guide". Unset, ? does nothing.
+    # Twin of UI_TABLE_HELP.
+    $Help = $script:UiTableHelp
     if ($null -eq $Table) { $Table = $script:UiTable }
     if ($null -eq $Table) { return @() }
     $n = $Table.Rows.Count
@@ -2162,7 +2179,9 @@ function Invoke-ExakitTableMenu {
         $frame = Get-ExakitTableFrame -Table $Table -Cursor $cur
         $openHint = ""
         if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " · → to open" }
-        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $script:UiReset
+        $helpHint = ""
+        if ($null -ne $Help) { $helpHint = " · ? guide" }
+        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $helpHint + $script:UiReset
         $extra = 0
         if ($note) {
             $hint += "`r`n    " + $script:UiWarn + "!" + $script:UiReset + " " + $note
@@ -2232,6 +2251,9 @@ function Invoke-ExakitTableMenu {
                 switch -Regex ($key.Char) {
                     '^[kK]$' { $cur = [int](& $step $cur (-1)) }
                     '^[jJ]$' { $cur = [int](& $step $cur 1) }
+                    # The highlighted row's guide, in the alternate screen:
+                    # this table comes back as it was, cursor and ticks kept.
+                    '^\?$'   { if ($null -ne $Help) { [void](& $Help $cur) } }
                 }
             }
         }
@@ -2341,6 +2363,153 @@ function Read-ExakitPickMenu {
     # The hint goes: the choice is made. The rows stay, as a record of it.
     [Console]::Write("`r$($e)[1A$($e)[0J")
     return $pick
+}
+
+# --- full-window reader -----------------------------------------------------
+# Open-ExakitPath <path> - a local file opened in this computer's own viewer:
+# Invoke-Item on Windows, open on macOS, xdg-open on Linux. $false when the file
+# is not there, there is no opener, or it failed; the caller then says the
+# path. Never an error. Twin of ui_open_path in ui.sh.
+function Open-ExakitPath {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
+        if ($onWindows) { Invoke-Item -LiteralPath $Path -ErrorAction Stop; return $true }
+        if ($IsMacOS) {
+            if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+            & open $Path 2>$null | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        }
+        if (-not (Get-Command xdg-open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+        Start-Process -FilePath "xdg-open" -ArgumentList @($Path) -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+# Show-ExakitPager -Lines -Footer [-Keys] [-OpenPath] - a full-window reader, for
+# a guide: the lines (one console row each, colour included - the caller cuts
+# them to the width) in the console's alternate screen, so the screen under it
+# comes back exactly as it was. Longer than the window, Up/Down (j/k),
+# PgUp/PgDn (b), Space, Home and End scroll it; the footer, always on the last
+# row, says the keys and where in the text the window is. Enter, q and Esc
+# return; so does each letter in -Keys. With -OpenPath, o opens that file in
+# place (Open-ExakitPath) and the line above the footer says it was opened - or
+# where it is. Returns the key that closed it: enter, q, esc, or the letter;
+# "" with nothing drawn without a fancy console. A console without virtual
+# terminal sequences (old conhost), or EXAKIT_NO_ALTSCREEN=1, clears the window
+# instead, and clears it again on the way out for the caller to redraw. Ctrl-C
+# leaves it through the finally block. Twin of ui_pager in ui.sh.
+function Show-ExakitPager {
+    param([string[]]$Lines = @(), [string]$Footer = "", [string]$Keys = "", [string]$OpenPath = "")
+    if (-not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return "" }
+    $e = $script:UiEsc
+    $rows = @($Lines)
+    $n = $rows.Count
+    $alt = [bool]$script:UiVt -and $env:EXAKIT_NO_ALTSCREEN -ne "1"
+    $result = "eof"
+    $top = 0; $note = ""
+    $updown = "Up/Down"
+    if ($script:UiFancy) { $updown = ([string][char]0x2191) + "/" + ([string][char]0x2193) }
+    try {
+        if ($alt) { [Console]::Write("$e[?1049h$e[2J$e[H$e[?25l") }
+        else { try { [Console]::Clear() } catch { [Console]::Write("$e[2J$e[H") }; [Console]::Write("$e[?25l") }
+        while ($true) {
+            $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+            if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+            if ($cols -lt 20) { $cols = 80 }
+            $tall = 24; try { $tall = [Console]::WindowHeight } catch { }
+            if ($tall -lt 4) { $tall = 24 }
+            # Every row the footer needs is kept: the note above it (a path is
+            # said whole, over as many rows as it takes), the keys, and - when
+            # the text is longer than the window - where the window is, on the
+            # keys' row when it fits there, else on a row of its own.
+            $w = [Math]::Max(10, $cols - 3)
+            $noteRows = 0
+            if ($note) { $noteRows = [int][Math]::Ceiling($note.Length / $w) }
+            $view = $tall - 1 - $noteRows
+            $hint = $Footer; $hint2 = ""; $own = $false
+            if ($n -gt $view) {
+                $where = "{0} PgUp/PgDn scroll {1} {2}-{2} of {2}" -f $updown, $script:UiMidDot, $n
+                if (($Footer.Length + 3 + $where.Length) -gt $w) { $view--; $own = $true }
+            }
+            if ($view -lt 1) { $view = 1 }
+            $last = [Math]::Max(0, $n - $view)
+            if ($top -gt $last) { $top = $last }
+            if ($top -lt 0) { $top = 0 }
+            if ($n -gt $view) {
+                $end = [Math]::Min($n, $top + $view)
+                $where = "{0} PgUp/PgDn scroll {1} {2}-{3} of {4}" -f $updown, $script:UiMidDot, ($top + 1), $end, $n
+                if ($own) { $hint2 = $where } else { $hint = $hint + " " + $script:UiMidDot + " " + $where }
+            }
+            $fit = {
+                param([string]$Text)
+                if (($Text.Length + 3) -gt $cols) {
+                    $keep = [Math]::Max(1, $cols - 4)
+                    return ($Text.Substring(0, $keep) + $script:UiEllipsis)
+                }
+                return $Text
+            }
+            $sb = New-Object System.Text.StringBuilder
+            [void]$sb.Append("$e[H")
+            for ($i = 0; $i -lt $view; $i++) {
+                $row = ""
+                if (($top + $i) -lt $n) { $row = "" + $rows[$top + $i] }
+                [void]$sb.Append($row + $script:UiReset + "$e[K`r`n")
+            }
+            for ($i = 0; $i -lt $noteRows; $i++) {
+                $at = $i * $w
+                [void]$sb.Append("  " + $note.Substring($at, [Math]::Min($w, $note.Length - $at)) + "$e[K`r`n")
+            }
+            [void]$sb.Append("  " + $script:UiDim + (& $fit $hint) + $script:UiReset + "$e[K")
+            if ($hint2) { [void]$sb.Append("`r`n  " + $script:UiDim + (& $fit $hint2) + $script:UiReset + "$e[K") }
+            [Console]::Write($sb.ToString())
+            $key = Read-ExakitMenuKey
+            $was = $note; $note = ""
+            $stop = $false
+            switch ($key.Name) {
+                "Enter"    { $result = "enter"; $stop = $true }
+                "Escape"   { $result = "esc"; $stop = $true }
+                "Space"    { $top += $view }
+                "Down"     { $top++ }
+                "Up"       { $top-- }
+                "PageDown" { $top += $view }
+                "PageUp"   { $top -= $view }
+                "Home"     { $top = 0 }
+                "End"      { $top = $last }
+                "Char" {
+                    $c = "" + $key.Char
+                    if ($c -ceq "G") { $top = $last }
+                    elseif ($c -ceq "g") { $top = 0 }
+                    else {
+                        $lc = $c.ToLowerInvariant()
+                        if ($lc -eq "q") { $result = "q"; $stop = $true }
+                        elseif ($lc -eq "j") { $top++ }
+                        elseif ($lc -eq "k") { $top-- }
+                        elseif ($lc -eq "b") { $top -= $view }
+                        elseif ($lc -eq "o") {
+                            if ($OpenPath) {
+                                # Said as the guides say a path: ~ for the home folder.
+                                $shown = $OpenPath
+                                if ($HOME -and $shown.StartsWith($HOME + [IO.Path]::DirectorySeparatorChar)) { $shown = "~" + $shown.Substring($HOME.Length) }
+                                if (Open-ExakitPath -Path $OpenPath) { $note = "Opened " + $shown }
+                                else { $note = "The full guide: " + $shown }
+                            } else { $note = $was }
+                        }
+                        elseif ($lc -match '^[a-z]$' -and $Keys.Contains($lc)) { $result = $lc; $stop = $true }
+                        else { $note = $was }
+                    }
+                }
+                default { $note = $was }
+            }
+            if ($stop) { break }
+        }
+    } finally {
+        if ($alt) { [Console]::Write("$e[?1049l") }
+        else { try { [Console]::Clear() } catch { [Console]::Write("$e[2J$e[H") } }
+        [Console]::Write("$e[?25h")
+    }
+    return $result
 }
 
 # Render the install banner + plan (used by install.ps1 after download).

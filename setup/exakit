@@ -3170,6 +3170,20 @@ if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$_help_skip" -eq 0 ]; then
                 # `exakit connect [<connector>] --help`: the connector guide
                 # (exakit_vs_guide); --json keeps the help document, and
                 # `exakit help connect` the command's whole page.
+                # At a terminal, `exakit connect --help` is the guide picker
+                # (exakit_vs_guide_picker): tick connectors, read each guide,
+                # c connects one as `exakit connect <id>` does. A pipe, --json,
+                # CI or an agent gets the list below, byte for byte as before.
+                if [ "$_help_topic" = connect ] && [ -z "$_help_json" ] && \
+                   command -v exakit_vs_guide_picker >/dev/null 2>&1 && exakit_vs_guide_picker_ok; then
+                    exakit_vs_guide_picker
+                    _help_rc=$?
+                    if [ -n "${EXAKIT_VS_GUIDE_CONNECT:-}" ]; then
+                        cmd_connect "$EXAKIT_VS_GUIDE_CONNECT"
+                        exit $?
+                    fi
+                    exit "$_help_rc"
+                fi
                 case "$_help_topic" in
                     connect|"connect "*)
                         if [ -z "$_help_json" ] && command -v exakit_vs_guide >/dev/null 2>&1; then
