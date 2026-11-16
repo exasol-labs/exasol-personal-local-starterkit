@@ -1335,6 +1335,15 @@ _start_database_run() {
                 if personal_reap_orphan_daemon; then
                     exakit_ensure_runtime_running deploy
                 else
+                    # ...AND "not by Exasol" STAYS TRUE ONLY FOR A FOREIGN HOLDER.
+                    # A runner the reaper spared (too young to judge, or live
+                    # by the launcher's word) is Exasol's, and says so here.
+                    case "${PERSONAL_PORT_HOLDER:-}" in
+                        runner_young)
+                            die "Port $EXAKIT_PERSONAL_PORT is held by an Exasol Personal runner that started a moment ago (pid ${PERSONAL_PORT_HOLDER_PID}): the database is still starting, or an interrupted run left it. Wait about ${PERSONAL_PORT_HOLDER_WAIT}s, then: exakit start" ;;
+                        runner_live)
+                            die "Port $EXAKIT_PERSONAL_PORT is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that does not answer as this kit's database. Check it with: exakit status. If it is a leftover, free the port with: kill ${PERSONAL_PORT_HOLDER_PID}   then: exakit start" ;;
+                    esac
                     die "Port $EXAKIT_PERSONAL_PORT is held by another process$(personal_port_holder_hint), not by Exasol, so the database cannot start. Stop that process, then: exakit start"
                 fi
             else

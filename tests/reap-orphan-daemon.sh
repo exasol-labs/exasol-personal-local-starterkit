@@ -155,6 +155,67 @@ RC5="$(run_reaper_aged "$P5" 1)"; sleep 1
 check "a daemon past the start budget is still reaped" "no" "$(alive "$PID5")"
 check "...and the port is reported free" "0" "$(printf '%s' "$RC5" | tail -1)"
 
+echo
+echo "a runner the reaper spares is named as what it is:"
+# REPORTED FROM A REAL INSTALL: "Port 8563 is held by a non-Exasol process
+# (pid ...: .../.exasol/personal/runtime-artifacts/artifac...)" followed by
+# "Stop that application". The process WAS Exasol's own runner - spared for its
+# age or for the launcher's word - and the reader was sent looking for a
+# program to close. The reaper now says which of the three it is, and leaves
+# that for the deploy path in PERSONAL_PORT_HOLDER.
+cat > "$TMP/say.sh" <<HARNESS
+info(){ :; }; ok(){ :; }; warn(){ printf 'WARN %s\n' "\$*"; }
+port_in_use(){ return 0; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+source "$ROOT/setup/lib/runtime-personal.sh"
+[ -z "\${FAKE_STATE:-}" ] || personal_launcher_state(){ printf '%s' "\$FAKE_STATE"; }
+EXAKIT_PERSONAL_PORT="\$1"
+personal_reap_orphan_daemon; echo "RC \$? HOLDER \${PERSONAL_PORT_HOLDER:-} PID \${PERSONAL_PORT_HOLDER_PID:-} WAIT \${PERSONAL_PORT_HOLDER_WAIT:-}"
+HARNESS
+has() { case "$1" in *"$2"*) echo yes ;; *) echo no ;; esac; }
+
+P6="$(pick_port $((P5 + 1)))"
+PID6="$(start_daemon "$P6")"
+SAID="$(EXAKIT_PERSONAL_REAP_MIN_AGE=180 bash "$TMP/say.sh" "$P6")"
+check "a young runner is called an Exasol runner"        yes "$(has "$SAID" "held by an Exasol Personal runner that started")"
+check "...never a non-Exasol process"                    no  "$(has "$SAID" "non-Exasol")"
+check "...and the caller is told it is young"            yes "$(has "$SAID" "RC 1 HOLDER runner_young PID $PID6 WAIT 17")"
+check "...and it is left running"                        yes "$(alive "$PID6")"
+SAID="$(EXAKIT_PERSONAL_REAP_MIN_AGE=0 FAKE_STATE=running bash "$TMP/say.sh" "$P6")"
+check "a runner the launcher calls live says so"         yes "$(has "$SAID" "whose deployment the launcher reports as running")"
+check "...and the caller is told it is live"             yes "$(has "$SAID" "RC 1 HOLDER runner_live PID $PID6")"
+check "...and it is left running"                        yes "$(alive "$PID6")"
+kill -9 "$PID6" 2>/dev/null || true
+
+P7="$(pick_port $((P6 + 1)))"
+PID7="$(start_foreign "$P7")"
+SAID="$(EXAKIT_PERSONAL_REAP_MIN_AGE=180 bash "$TMP/say.sh" "$P7")"
+check "another program is still a non-Exasol process"    yes "$(has "$SAID" "held by a non-Exasol process (pid $PID7")"
+check "...and the caller is told it is foreign"          yes "$(has "$SAID" "RC 1 HOLDER foreign PID $PID7")"
+
+# The deploy path waits out a young runner's start budget instead of stopping.
+cat > "$TMP/wait.sh" <<HARNESS
+info(){ printf 'INFO %s\n' "\$*"; }; ok(){ :; }; warn(){ :; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+source "$ROOT/setup/lib/runtime-personal.sh"
+EXAKIT_PERSONAL_PORT="\$1"
+sleep(){ SLEPT=\$((SLEPT + \$1)); [ "\$SLEPT" -lt "\${FREE_AFTER:-9999}" ] || personal_db_port_pids(){ :; }; }
+SLEPT=0
+personal_wait_out_young_runner "\$2"; echo "SLEPT \$SLEPT"
+HARNESS
+SAID="$(bash "$TMP/wait.sh" "$P7" 0)"
+check "nothing left of the budget: no wait"              yes "$(has "$SAID" "SLEPT 0")"
+SAID="$(bash "$TMP/wait.sh" "$P7" 20)"
+check "the rest of the budget is waited, with a margin"  yes "$(has "$SAID" "SLEPT 25")"
+check "...and said once"                                 yes "$(has "$SAID" "INFO Waiting up to 25s")"
+SAID="$(FREE_AFTER=10 bash "$TMP/wait.sh" "$P7" 120)"
+check "a port that frees ends the wait early"            yes "$(has "$SAID" "SLEPT 10")"
+kill -9 "$PID7" 2>/dev/null || true
+_dp_body="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | sed -e 's/[[:space:]]*#.*$//')"
+check "the deploy path waits for a young runner, then judges again" yes \
+    "$(has "$_dp_body" 'personal_wait_out_young_runner "${PERSONAL_PORT_HOLDER_WAIT:-0}"')"
+check "...and names the command that frees the port"     yes "$(has "$_dp_body" 'free the port with: kill ${PERSONAL_PORT_HOLDER_PID}')"
+
 # The predicate itself, on the two questions it now asks beyond the name.
 _rod_src="$(sed -n '/^personal_is_orphan_daemon()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 case "$_rod_src" in
@@ -194,8 +255,13 @@ echo "exakit start reaps before it refuses:"
 # <service>` arrived (bare start and `start database` share it, so the two
 # cannot drift). That is the function the conflict branch is in now; the
 # fallback to cmd_start keeps this guard meaningful if it ever moves back.
-_cs_fn='_start_database'
-grep -q "^_start_database()" "$ROOT/setup/exakit" || _cs_fn='cmd_start'
+# ...AND SINCE THEN _start_database BECAME A WRAPPER (it marks the start as asked
+# for and calls _start_database_run, which holds the branch). The check read the
+# eight-line wrapper and failed on a branch that was there all along: the
+# innermost of the three that exists is the one to read.
+_cs_fn='_start_database_run'
+grep -q "^_start_database_run()" "$ROOT/setup/exakit" || _cs_fn='_start_database'
+grep -q "^${_cs_fn}()" "$ROOT/setup/exakit" || _cs_fn='cmd_start'
 _cs_body="$(awk -v fn="$_cs_fn" 'index($0, fn "()") == 1 {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit" \
     | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d')"
 _cs_reap="$(printf '%s\n' "$_cs_body" | grep -n 'personal_reap_orphan_daemon' | head -1 | cut -d: -f1)"

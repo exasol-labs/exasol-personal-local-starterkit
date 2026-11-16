@@ -1215,6 +1215,15 @@ personal_reap_orphan_daemon() {
     _listeners="$(personal_db_port_pids)"
     [ -n "$_listeners" ] || return 0   # nothing listening → port is free
 
+    # WHO HOLDS IT, for the caller's next step (set only when nothing is reaped):
+    #   foreign       not an Exasol runner at all
+    #   runner_young  an Exasol runner younger than the start budget (starting,
+    #                 or the leftover of an install interrupted a moment ago);
+    #                 PERSONAL_PORT_HOLDER_WAIT is what is left of that budget
+    #   runner_live   an Exasol runner whose deployment the launcher calls live
+    PERSONAL_PORT_HOLDER=""
+    PERSONAL_PORT_HOLDER_PID=""
+    PERSONAL_PORT_HOLDER_WAIT=0
     _reaped=""
     for _pid in $_listeners; do
         if personal_is_orphan_daemon "$_pid"; then
@@ -1222,7 +1231,25 @@ personal_reap_orphan_daemon() {
             pkill -P "$_pid" 2>/dev/null || true
             kill "$_pid" 2>/dev/null || true
             _reaped="$_reaped $_pid"
+        elif _personal_is_runner_process "$_pid"; then
+            # IT IS EXASOL'S OWN RUNNER, AND IT USED TO BE CALLED "a non-Exasol
+            # process". The reaper spared it for a reason (its age, or the
+            # launcher's word), and the message named neither: the reader was
+            # told to go and stop an application that is the database itself.
+            PERSONAL_PORT_HOLDER_PID="$_pid"
+            _rod_age="$(_personal_proc_age_seconds "$_pid" 2>/dev/null || true)"
+            if [ "${EXAKIT_PERSONAL_REAP_MIN_AGE:-0}" -gt 0 ] && [ -n "$_rod_age" ] && \
+               [ "$_rod_age" -lt "$EXAKIT_PERSONAL_REAP_MIN_AGE" ]; then
+                PERSONAL_PORT_HOLDER="runner_young"
+                PERSONAL_PORT_HOLDER_WAIT=$((EXAKIT_PERSONAL_REAP_MIN_AGE - _rod_age))
+                warn "Port $_rod_port is held by an Exasol Personal runner that started ${_rod_age}s ago (pid $_pid): it is still starting, or left by an install interrupted a moment ago; leaving it untouched."
+            else
+                PERSONAL_PORT_HOLDER="runner_live"
+                _rod_state="$(personal_launcher_state 2>/dev/null || true)"
+                warn "Port $_rod_port is held by an Exasol Personal runner (pid $_pid) whose deployment the launcher reports as ${_rod_state:-live}; leaving it untouched."
+            fi
         else
+            [ -n "$PERSONAL_PORT_HOLDER" ] || { PERSONAL_PORT_HOLDER="foreign"; PERSONAL_PORT_HOLDER_PID="$_pid"; }
             warn "Port $_rod_port is held by a non-Exasol process (pid $_pid: $(_personal_proc_command "$_pid" | cut -c1-80)); leaving it untouched."
         fi
     done
@@ -1254,6 +1281,21 @@ personal_reap_orphan_daemon() {
         return 1
     fi
     ok "Freed port $_rod_port (removed a leftover Exasol runner daemon)"
+    return 0
+}
+
+# personal_wait_out_young_runner <seconds> - wait for the port while a runner
+# too young to judge holds it: until the port is free, or the rest of the
+# runner's start budget (plus a margin) has passed. Says so once; never fails.
+# Bounded by EXAKIT_PERSONAL_REAP_MIN_AGE, so at most about three minutes.
+personal_wait_out_young_runner() {
+    _wyr_left=$(( ${1:-0} + 5 ))
+    [ "$_wyr_left" -gt 5 ] || return 0
+    info "Waiting up to ${_wyr_left}s for it to finish starting or to stop, then checking the port again."
+    while [ "$_wyr_left" -gt 0 ] && [ -n "$(personal_db_port_pids)" ]; do
+        sleep 5
+        _wyr_left=$((_wyr_left - 5))
+    done
     return 0
 }
 
@@ -2500,10 +2542,38 @@ personal_deploy_local() {
     # a stale container), which the reaper leaves untouched, is a hard stop.
     # EXAKIT_DB_PORT does not apply to the personal path, so name the real port.
     if port_in_use "$(personal_db_port)"; then
-        if ! personal_reap_orphan_daemon; then
-            warn "Port $(personal_db_port) is in use by a process that is not a reachable Exasol Personal deployment.$(personal_foreign_db_hint)"
-            info "Stop that application, then re-run the installer (EXAKIT_DB_PORT does not choose the port of a personal deployment): $(exakit_install_command)"
-            exakit_note_failure "Port $(personal_db_port) is held by something that is not an Exasol Personal deployment"
+        _pdl_port_free=0
+        personal_reap_orphan_daemon && _pdl_port_free=1
+        # A RUNNER TOO YOUNG TO JUDGE IS WAITED FOR, NOT GIVEN UP ON. The usual
+        # one is this installer's own runner from a run interrupted a moment
+        # ago: nobody can stop it for the user (its deployment record is gone),
+        # and in three minutes it is either a database that answers or an
+        # orphan the reaper takes. So the rest of its start budget is waited
+        # out here, once, and the port is judged again.
+        if [ "$_pdl_port_free" = 0 ] && [ "${PERSONAL_PORT_HOLDER:-}" = "runner_young" ]; then
+            personal_wait_out_young_runner "${PERSONAL_PORT_HOLDER_WAIT:-0}"
+            if ! port_in_use "$(personal_db_port)" || personal_reap_orphan_daemon; then
+                _pdl_port_free=1
+            fi
+        fi
+        if [ "$_pdl_port_free" = 0 ]; then
+            case "${PERSONAL_PORT_HOLDER:-}" in
+                runner_young|runner_live)
+                    # NAME WHAT IT IS AND THE ONE COMMAND THAT FREES THE PORT. "Stop
+                    # that application" sent the reader looking for a program;
+                    # it is an Exasol runner, and with no deployment here to
+                    # stop it through, its process id is the handle there is.
+                    warn "Port $(personal_db_port) is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that is not a reachable deployment of this kit.$(personal_foreign_db_hint)"
+                    info "If it is a database you use, stop it with its own 'exasol stop' (or 'exakit stop' where it was installed). If it is a leftover, free the port with: kill ${PERSONAL_PORT_HOLDER_PID}"
+                    info "Then re-run the installer (EXAKIT_DB_PORT does not choose the port of a personal deployment): $(exakit_install_command)"
+                    exakit_note_failure "Port $(personal_db_port) is held by an Exasol Personal runner (pid ${PERSONAL_PORT_HOLDER_PID}) that is not a reachable deployment of this kit: stop it, or kill ${PERSONAL_PORT_HOLDER_PID}, then re-run the installer"
+                    ;;
+                *)
+                    warn "Port $(personal_db_port) is in use by a process that is not a reachable Exasol Personal deployment.$(personal_foreign_db_hint)"
+                    info "Stop that application, then re-run the installer (EXAKIT_DB_PORT does not choose the port of a personal deployment): $(exakit_install_command)"
+                    exakit_note_failure "Port $(personal_db_port) is held by something that is not an Exasol Personal deployment"
+                    ;;
+            esac
             return 1
         fi
     fi
