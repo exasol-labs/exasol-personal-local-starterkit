@@ -3454,7 +3454,7 @@ function Write-ExakitCmdShimDeferred {
         [Parameter(Mandatory)][string]$ShimPath,
         [Parameter(Mandatory)][string]$Content,
         [int[]]$WaitPids = @(),
-        [int]$WaitTimeoutSeconds = 120,
+        [int]$WaitTimeoutSeconds = 0,
         [switch]$Recheck,
         [string]$Label = "exakit.cmd"
     )
@@ -3486,6 +3486,12 @@ for (`$r = 0; `$r -lt 1000; `$r++) {
 foreach (`$id in @($pidList)) { if (`$id) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} } }
 Start-Sleep -Milliseconds 1500
 $recheckBlock
+# NEVER swap under a running copy: cmd.exe resumes a batch file at its old byte
+# offset, and the new content there can be the self-delete line. If a waited
+# process is still alive (a bounded wait ran out), keep the old file.
+foreach (`$id in @($pidList)) { if (`$id -and (Get-Process -Id `$id -ErrorAction SilentlyContinue)) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; exit } }
+# The target gone (an uninstall ran meanwhile): do not bring it back.
+if (-not (Test-Path -LiteralPath '$qShim')) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; exit }
 for (`$n = 0; `$n -lt 20; `$n++) {
     if (-not (Test-Path -LiteralPath '$qNew')) { break }
     try { Move-Item -LiteralPath '$qNew' -Destination '$qShim' -Force -ErrorAction Stop; break } catch {}
