@@ -113,6 +113,44 @@ Set-Content -Path $newPath -Value "stale"
 Check "install: written in place" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $newShim)
 Check "install: a leftover exakit.cmd.new is removed" "False" (Test-Path -LiteralPath $newPath)
 
+# --- the helper never moves under a live waited process or onto a removed target
+Write-Host ""
+Write-Host "deferred helper guards"
+$sig = [System.Management.Automation.Language.Parser]::ParseInput($defs["Write-ExakitCmdShimDeferred"], [ref]$null, [ref]$null)
+$toParam = $sig.FindAll({ param($n) $n -is [System.Management.Automation.Language.ParameterAst] -and $n.Name.VariablePath.UserPath -eq "WaitTimeoutSeconds" }, $true) | Select-Object -First 1
+Check "the deferred writer's wait limit defaults to 0 (no limit)" "0" ("" + $toParam.DefaultValue.Extent.Text)
+Check "Set-ExakitCmdShim passes no positive wait limit" "False" ($setBody -match '-WaitTimeoutSeconds\s+[1-9]')
+$selfExe = (Get-Process -Id $PID).Path
+function Invoke-HelperChild {
+    # The helper ends with `exit`; run it in its own PowerShell so that exit
+    # does not end this test.
+    $f = Join-Path $sandbox ("helper-" + [guid]::NewGuid() + ".ps1")
+    Set-Content -Path $f -Value $script:helperScript
+    & $selfExe -NoProfile -File $f | Out-Null
+    Remove-Item -Force -LiteralPath $f -ErrorAction SilentlyContinue
+}
+$sleepArgs = @{ FilePath = $selfExe; ArgumentList = @("-NoProfile", "-Command", "Start-Sleep -Seconds 60"); PassThru = $true }
+if ($env:OS -eq "Windows_NT") { $sleepArgs.WindowStyle = "Hidden" }
+$sleeper = Start-Process @sleepArgs
+Write-OldShim
+Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+$script:helperScript = $null
+[void](Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $newShim -WaitPids @($sleeper.Id) -WaitTimeoutSeconds 1)
+Check "bounded wait: helper script carries the limit" "True" ("$script:helperScript".Contains("-Timeout 1"))
+Invoke-HelperChild
+Check "waited pid still alive after the limit: exakit.cmd untouched" "True" ([System.IO.File]::ReadAllText($shimPath) -eq $oldShim)
+Check "waited pid still alive after the limit: exakit.cmd.new removed" "False" (Test-Path -LiteralPath $newPath)
+Check "the sleeper was still running (the case was real)" "False" ($sleeper.HasExited)
+try { Stop-Process -Id $sleeper.Id -Force -ErrorAction SilentlyContinue } catch { }
+
+Write-OldShim
+$script:helperScript = $null
+[void](Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $newShim -WaitPids @(2147483000))
+Remove-Item -Force -LiteralPath $shimPath
+Invoke-HelperChild
+Check "target removed before the move: exakit.cmd not recreated" "False" (Test-Path -LiteralPath $shimPath)
+Check "target removed before the move: exakit.cmd.new removed" "False" (Test-Path -LiteralPath $newPath)
+
 # --- behavioral (Windows only): a real update from an old-format shim -------
 Write-Host ""
 Write-Host "cmd.exe (Windows only)"
