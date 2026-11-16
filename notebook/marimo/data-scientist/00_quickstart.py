@@ -411,14 +411,15 @@ def _(connection, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    Several tables? Their column roles are drawn up in the background, every source at once, so `01_explore` shows them without reading each table again.
+    Several tables? The card reads every live source once, all at the same time, before it opens the tables (`nb.prove_sources`); their column roles are then drawn up in the background, every source at once, so `01_explore` shows them without reading each table again.
     """)
     return
 
 
 @app.cell
-def _(nb, remembered):
+def _(connection, nb, remembered):
     if len(remembered) > 1:
+        proven = nb.prove_sources(connection, remembered)
         drafting = nb.prepare_drafts(remembered)
     return
 

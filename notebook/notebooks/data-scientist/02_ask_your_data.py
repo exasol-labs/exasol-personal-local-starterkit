@@ -148,16 +148,17 @@ nb.formatted(answer, dataset, currency) if answer is not None else None
 # `nb.insights` writes the answer out in sentences by fixed rules (the largest and smallest, shares, the change over time, values far from the rest): no model and no new query. Pin the answer to a page of a dashboard (`nb.pin`): `03_share` publishes the pages as one dashboard with tabs and filters. When it was answered from the semantic model, `proposal.verify(connection)` keeps it in the model as a verified question: asked again, here or in an AI client, it is answered with this reviewed request.
 
 # %% [markdown]
-# `PIN_TO`: a dashboard and a page, such as `("sales-overview", "Revenue")`. `KEEP_AS_VERIFIED = True` keeps the question as a trusted question.
+# `PIN_TO`: a dashboard and a page, such as `("sales-overview", "Revenue")`. `TILE_TITLE`: the tile's title on the dashboard (None: the question; set it when you rewrote the SQL to answer something else). `KEEP_AS_VERIFIED = True` keeps the question as a trusted question.
 
 # %%
 PIN_TO = None
+TILE_TITLE = None
 KEEP_AS_VERIFIED = False
 if answer is not None:
     insights = nb.insights(answer, rules=INSIGHT_RULES)
     print("\n".join(insights))
     if PIN_TO:
-        pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1])
+        pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1], title=TILE_TITLE)
     if KEEP_AS_VERIFIED:
         verified = proposal.verify(connection)
 

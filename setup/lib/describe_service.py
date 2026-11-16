@@ -1136,7 +1136,7 @@ def glossary(conn, model: str, object_name: str, mode: str = "STRUCTURED_REQUEST
 def validate_model(conn, model: str) -> dict[str, Any]:
     """What Semantic Views finds wrong with a model, in its own words: every issue of a fresh validation run
     (VALIDATE_MODEL: severity, object, rule code, message), each published metric whose result type differs from
-    what it declares (CHECK_METRIC_TYPES; no data read), and the keys and key mappings it suggests
+    what it declares (CHECK_METRIC_TYPES; no data read; kept a day for the same metrics and facts), and the keys and key mappings it suggests
     (SUGGEST_GRAIN_METADATA). Validation may probe the data, bounded by a 60-second timeout."""
     from descriptor import semantic_model as sm
 
@@ -1151,14 +1151,20 @@ def validate_model(conn, model: str) -> dict[str, Any]:
         {"severity": str(r.get("SEVERITY") or "").upper(), "object_type": str(r.get("OBJECT_TYPE") or ""),
          "object": str(r.get("OBJECT_NAME") or ""), "rule": str(r.get("RULE_CODE") or ""),
          "message": " ".join(str(r.get("MESSAGE") or "").split())} for r in issues], "types": [], "suggestions": []}
-    try:
-        found["types"] = [{"object": str(r.get("OBJECT_NAME") or ""), "metric": str(r.get("METRIC_NAME") or ""),
-                           "declared": str(r.get("DECLARED_TYPE") or ""), "compiled": str(r.get("COMPILED_TYPE") or ""),
-                           "error": str(r.get("PROBE_ERROR") or "")}
-                          for r in map(upper, _rows(conn, sm._script("CHECK_METRIC_TYPES", name)))
-                          if r.get("COMPATIBLE") is False or r.get("PROBE_ERROR")]
-    except Exception:                       # noqa: BLE001 - an older product: validation alone
-        pass
+    fingerprint = _metric_fingerprint(conn, name)
+    kept = _checked_types(name, fingerprint)
+    if kept is not None:                    # the same metrics over the same facts, checked lately: the same answer
+        found["types"] = kept
+    else:
+        try:
+            found["types"] = [{"object": str(r.get("OBJECT_NAME") or ""), "metric": str(r.get("METRIC_NAME") or ""),
+                               "declared": str(r.get("DECLARED_TYPE") or ""), "compiled": str(r.get("COMPILED_TYPE") or ""),
+                               "error": str(r.get("PROBE_ERROR") or "")}
+                              for r in map(upper, _rows(conn, sm._script("CHECK_METRIC_TYPES", name)))
+                              if r.get("COMPATIBLE") is False or r.get("PROBE_ERROR")]
+            _keep_checked_types(name, fingerprint, found["types"])
+        except Exception:                   # noqa: BLE001 - an older product: validation alone
+            pass
     try:
         found["suggestions"] = [{"type": str(r.get("SUGGESTION_TYPE") or ""), "object": str(r.get("OBJECT_NAME") or ""),
                                  "reason": str(r.get("REASON_CODE") or ""), "proposed": r.get("PROPOSED_METADATA_JSON")}
@@ -1167,6 +1173,55 @@ def validate_model(conn, model: str) -> dict[str, Any]:
         pass
     found["errors"] = sum(1 for i in found["issues"] if i["severity"] in ("ERROR", "PRECONDITION"))
     return found
+
+
+TYPES_CHECKED_SECONDS = 86400      # a metric type check is kept a day for the same metrics and facts
+
+
+def _metric_fingerprint(conn, model: str) -> str | None:
+    """One hash of every metric and fact of ``model`` as Semantic Views fingerprints them (DEFINITION_HASHES_FOR_AGENT):
+    a metric's result type follows from its definition and the facts it reads. None when they cannot be read."""
+    hashes = definition_hashes(conn, model)
+    picked = sorted(f"{k}={v}" for k, v in hashes.items() if k.startswith(("METRIC:", "FACT:")))
+    return hashlib.sha256("\n".join(picked).encode("utf-8")).hexdigest() if picked else None
+
+
+def _types_file() -> Path:
+    return store.kit_home() / "semantic" / "checked-types.json"
+
+
+def _checked_types(model: str, fingerprint: str | None) -> list[dict[str, Any]] | None:
+    """What CHECK_METRIC_TYPES found for these very metrics in the last day, or None: it compiles and probes every
+    metric (12 s for a model over a Snowflake source), and saving again with the same metrics finds the same."""
+    import time
+
+    if not fingerprint:
+        return None
+    try:
+        kept = json.loads(_types_file().read_text(encoding="utf-8")).get(model.lower()) or {}
+    except (OSError, ValueError):
+        return None
+    if kept.get("fingerprint") != fingerprint or time.time() - float(kept.get("at") or 0) > TYPES_CHECKED_SECONDS:
+        return None
+    return list(kept.get("types") or [])
+
+
+def _keep_checked_types(model: str, fingerprint: str | None, types: list[dict[str, Any]]) -> None:
+    import time
+
+    if not fingerprint:
+        return
+    path = _types_file()
+    try:
+        every = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
+    except (OSError, ValueError):
+        every = {}
+    every[model.lower()] = {"fingerprint": fingerprint, "at": time.time(), "types": types}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(every, indent=1) + "\n", encoding="utf-8")
+    except OSError:                         # noqa: PERF203 - not kept: checked again next time
+        pass
 
 
 def valid_combinations(conn, model: str, object_name: str, metrics: list[str] | None = None) -> list[dict[str, Any]]:

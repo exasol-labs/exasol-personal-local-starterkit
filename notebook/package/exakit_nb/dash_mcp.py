@@ -26,8 +26,43 @@ def _local_url(url: str) -> str:
     return url.rstrip("/")
 
 
-def dash_server_url() -> str:
-    """Take the dashboard URL from exakit status, never from a guessed port."""
+LOOPBACK = "127.0.0.1"   # dash-server listens on this computer only: the port comes from the manifest
+_KNOWN_URL: str | None = None      # the URL exakit status gave, kept for this kernel (looked up again when unreachable)
+
+
+def dash_server_url(fresh: bool = False) -> str:
+    """Take the dashboard URL from exakit status, never from a guessed port. Kept once read (exakit status takes
+    ~6 s): a call that cannot reach it looks it up again (``fresh``)."""
+    global _KNOWN_URL
+    if _KNOWN_URL and not fresh:
+        return _KNOWN_URL
+    _KNOWN_URL = (None if fresh else _manifest_url()) or _status_url()
+    return _KNOWN_URL
+
+
+def _manifest_url() -> str | None:
+    """The address from the port the kit recorded for dash-server in its manifest, when something answers there
+    within a second; None otherwise (exakit status then says whether it is stopped)."""
+    import socket
+
+    home = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit")
+    try:
+        manifest = json.loads((home / "manifest.json").read_text(encoding="utf-8"))
+        components = manifest.get("components") or {}
+        port = int((components.get("dash_server") or components.get("dash-server") or {}).get("port"))
+    except (OSError, ValueError, TypeError, AttributeError):
+        return None
+    if not 0 < port < 65536:
+        return None
+    try:
+        with socket.create_connection((LOOPBACK, port), timeout=1):
+            pass
+    except OSError:
+        return None
+    return _local_url(f"http://{LOOPBACK}:{port}")
+
+
+def _status_url() -> str:
     launcher = Path.home() / ".local" / "bin" / ("exakit.cmd" if sys.platform == "win32" else "exakit")
     command = str(launcher) if launcher.is_file() else "exakit"
     try:
@@ -48,9 +83,19 @@ class DashTools:
     """Synchronous adapter for notebook cells, which already run an event loop."""
 
     def __init__(self, url: str | None = None):
+        self.given = url is not None
         self.url = _local_url(url) if url is not None else dash_server_url()
 
     def __call__(self, name: str, arguments: dict) -> dict:
+        try:
+            return self._call(name, arguments)
+        except Exception as error:
+            if self.given or not _unreachable(error):
+                raise
+            self.url = dash_server_url(fresh=True)   # moved or stopped since: exakit status says which
+            return self._call(name, arguments)
+
+    def _call(self, name: str, arguments: dict) -> dict:
         async def call() -> dict:
             from mcp import ClientSession
             from mcp.client.streamable_http import streamable_http_client
@@ -64,6 +109,22 @@ class DashTools:
         # Jupyter and Marimo have a live asyncio loop on the calling thread.
         with ThreadPoolExecutor(max_workers=1) as pool:
             return pool.submit(lambda: asyncio.run(call())).result()
+
+
+def _unreachable(error: BaseException) -> bool:
+    """The server was not there (refused, reset, timed out), possibly inside an exception group from the MCP client."""
+    import httpx
+
+    todo, looked = [error], set()
+    while todo:
+        one = todo.pop()
+        if id(one) in looked:
+            continue
+        looked.add(id(one))
+        if isinstance(one, (ConnectionError, TimeoutError, httpx.ConnectError, httpx.ConnectTimeout)):
+            return True
+        todo += list(getattr(one, "exceptions", []) or []) + [c for c in (one.__cause__, one.__context__) if c]
+    return False
 
 
 def dash_tools(ready: bool = True) -> DashTools:

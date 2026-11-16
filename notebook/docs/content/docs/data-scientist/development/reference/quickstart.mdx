@@ -85,6 +85,20 @@ one table (a grant, a type) shows when its column roles are drawn up.
 **Used in:** `data-scientist/01_explore`
 
 
+## nb.prove_sources [#prove_sources]
+
+```python
+nb.prove_sources(conn, tables: list[str]) -> dict[str, str]
+```
+
+Read one row of one table of every live source in `tables` ("VS\_\<NAME\>.\<TABLE\>"), every source at the same
+time on a connection of its own, so the load_source calls that follow on `conn` do not read them again one
+after another (each read of a live source is a round trip: ~9 s for Snowflake, ~5 s for MySQL in our run).
+\{source: "ok" | why it could not be read\}; a source that failed is read again by load_source, which says why.
+
+**Used in:** `data-scientist/00_quickstart`
+
+
 ## nb.show_roles [#show_roles]
 
 ```python

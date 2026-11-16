@@ -160,10 +160,11 @@ remembered = nb.remember_chosen(chosen_data)
 print("01_explore opens: " + ", ".join(remembered))
 
 # %% [markdown]
-# Several tables? Their column roles are drawn up in the background, every source at once, so `01_explore` shows them without reading each table again.
+# Several tables? The card reads every live source once, all at the same time, before it opens the tables (`nb.prove_sources`); their column roles are then drawn up in the background, every source at once, so `01_explore` shows them without reading each table again.
 
 # %%
 if len(remembered) > 1:
+    proven = nb.prove_sources(connection, remembered)
     drafting = nb.prepare_drafts(remembered)
 
 # %% [markdown]

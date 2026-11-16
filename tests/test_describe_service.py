@@ -431,6 +431,31 @@ class SemanticSurfaces(unittest.TestCase):
         self.assertEqual("total_amount: revenue incl. tax", svc.glossary(conn, "sales", "orders"))
         self.assertEqual("", svc.glossary(self.Conn({}), "sales", "orders"))
 
+    def test_the_metric_type_check_is_not_run_again_for_the_same_metrics(self):
+        hashes = [{"FIELD_KIND": "METRIC", "FIELD_NAME": "x", "DEFINITION_HASH": "a"},
+                  {"FIELD_KIND": "FACT", "FIELD_NAME": "qty", "DEFINITION_HASH": "b"},
+                  {"FIELD_KIND": "DIMENSION", "FIELD_NAME": "state", "DEFINITION_HASH": "c"}]
+        answers = {"DEFINITION_HASHES_FOR_AGENT": lambda _sql: hashes, "VALIDATE_MODEL": [],
+                   "CHECK_METRIC_TYPES": [{"OBJECT_NAME": "ORDERS", "METRIC_NAME": "x", "COMPATIBLE": False}]}
+        checks = lambda conn: sum("CHECK_METRIC_TYPES" in sql for sql in conn.sent)
+        first, again = self.Conn(answers), self.Conn(answers)
+        self.assertEqual(["x"], [t["metric"] for t in svc.validate_model(first, "sales")["types"]])
+        self.assertEqual(["x"], [t["metric"] for t in svc.validate_model(again, "sales")["types"]], "the same finding")
+        self.assertEqual((1, 0), (checks(first), checks(again)), "same metrics and facts: not checked twice")
+        hashes[2]["DEFINITION_HASH"] = "changed"
+        unrelated = self.Conn(answers)
+        svc.validate_model(unrelated, "sales")
+        self.assertEqual(0, checks(unrelated), "a dimension changed: the metric types did not")
+        hashes[1]["DEFINITION_HASH"] = "changed"
+        changed = self.Conn(answers)
+        svc.validate_model(changed, "sales")
+        self.assertEqual(1, checks(changed), "a fact changed: checked again")
+        with mock.patch.object(svc.time if hasattr(svc, "time") else __import__("time"), "time",
+                               return_value=__import__("time").time() + svc.TYPES_CHECKED_SECONDS + 1):
+            later = self.Conn(answers)
+            svc.validate_model(later, "sales")
+        self.assertEqual(1, checks(later), "a day later: checked again")
+
     def test_a_new_computer_reads_the_data_map_back_from_the_model_and_restores_a_version(self):
         from descriptor import publish
         record = {"version": 3, "inputs": {"all": True, "tables": ["SHOP.ORDERS"], "grains": {"SHOP.ORDERS": "one order"},

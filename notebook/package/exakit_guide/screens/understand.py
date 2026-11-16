@@ -392,6 +392,12 @@ class ChooseData(Screen):
             SESSION.opened.wait(900)                 # the tables chosen before are opened first, then added to
         if several and (not self.ADDING or not isinstance(SESSION.get("chosen_tables"), dict)):
             actions.run("data.several")              # adding with nothing opened yet: start the set here
+        live = [values["source"] for action_id, _v, values, _l in wanted if action_id == "data.source" and values.get("source")]
+        if len({str(t).split(".", 1)[0].upper() for t in live}) > 1:     # each source once, all at the same time
+            try:
+                actions.run("data.prove", tables=live)
+            except Exception:                   # noqa: BLE001 - each table is then read on its own, and says why
+                pass
         chosen: list[dict] = list(SESSION.chosen) if self.ADDING else []
         before = len(chosen)
         for action_id, variable, values, label in wanted:

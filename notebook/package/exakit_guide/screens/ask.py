@@ -137,6 +137,7 @@ class Ask(Screen):
         self.history: list[dict] = []
         self.view = "table"                  # the answer as: table, chart, insights or json
         self.board, self.page = "my-dashboard", "Overview"
+        self.tile_title: str | None = None       # the pinned tile's title; None: the question asked
         self.error = None
         try:
             self.ds = _dataset()
@@ -155,6 +156,7 @@ class Ask(Screen):
     # -- drafting --------------------------------------------------------------------------
     def _draft(self, question: str, use_model: bool | None = None) -> None:
         self.question, self.answer, self.my_notes = question.strip(), None, []
+        self.tile_title = None                     # a new question: its own title
         if not self.question:
             raise ValueError("Type a question first.")
         use_model = _model_ready() if use_model is None else use_model
@@ -261,6 +263,8 @@ class Ask(Screen):
                            "question: anyone who asks it again, here or in an AI tool, gets this checked answer "
                            "instead of a new guess."},
                    {"t": "fields", "items": [{"id": "ask_keep", "type": "group", "fields": [
+                       {"id": "tile_title", "type": "text", "label": "Title on the dashboard",
+                        "value": self.tile_title or (p.question if p is not None else ""), "placeholder": "Revenue by region"},
                        {"id": "board", "type": "text", "label": "Dashboard", "value": self.board, "placeholder": "sales-overview"},
                        {"id": "page", "type": "text", "label": "Page", "value": self.page, "placeholder": "Overview"}]}]},
                    {"t": "actions", "items": [{"id": "pin", "label": "Pin to dashboard", "busy": "Pinning…"}]
@@ -285,7 +289,9 @@ class Ask(Screen):
         """Pin the approved answer to a page of a dashboard (nb.pin): its SQL exactly as approved."""
         self.board = str(v.get("board") or self.board).strip().lower() or "my-dashboard"
         self.page = " ".join(str(v.get("page") or self.page).split()) or "Overview"
-        tile = actions.run("ask.pin", board=self.board, page=self.page)
+        title = " ".join(str(v.get("tile_title") or "").split()) or None
+        self.tile_title = title
+        tile = actions.run("ask.pin", board=self.board, page=self.page, title=title)
         self.flash = {"kind": "ok", "v": f"Pinned to {self.board} / {self.page} as a {tile['kind']}. 03_share publishes it."}
 
     def on_verify(self, _v: dict) -> None:
@@ -297,11 +303,13 @@ class Ask(Screen):
         self._draft(str(v.get("question") or ""))
 
     def on_edit(self, v: dict) -> None:
+        """Your own SQL in place of the drafted one; ``title`` (when given) is what it now answers, shown on the tile."""
         if self.proposal is None:
             raise ValueError("Draft a question first: your own SQL then replaces the drafted one.")
         actions.run("ask.edit", sql=str(v.get("sql") or ""))     # the kit checks it is one read-only statement
         self.answer, self.my_notes = None, ["Your own SQL. Check it, then approve."]
         self.drafted_by = "you"
+        self.tile_title = " ".join(str(v.get("title") or "").split()) or self.tile_title
 
     def on_run(self, _v: dict) -> None:
         if self.proposal is None:

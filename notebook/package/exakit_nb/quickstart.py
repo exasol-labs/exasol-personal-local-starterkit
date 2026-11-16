@@ -120,6 +120,43 @@ _PROVEN: dict[tuple[object, str], float] = {}  # (connection, source) -> when a 
 PROVEN_SECONDS = 300
 
 
+def prove_sources(conn, tables: list[str]) -> dict[str, str]:
+    """Read one row of one table of every live source in ``tables`` ("VS_<NAME>.<TABLE>"), every source at the same
+    time on a connection of its own, so the load_source calls that follow on ``conn`` do not read them again one
+    after another (each read of a live source is a round trip: ~9 s for Snowflake, ~5 s for MySQL in our run).
+    {source: "ok" | why it could not be read}; a source that failed is read again by load_source, which says why."""
+    import threading
+
+    from . import connect
+
+    first: dict[str, str] = {}
+    for table in tables:
+        schema, _, name = str(table).strip().partition(".")
+        if name and schema.upper() not in first and time.time() - _PROVEN.get((conn, schema.upper()), 0.0) > PROVEN_SECONDS:
+            first[schema.upper()] = ".".join('"' + p.replace('"', '""') + '"' for p in (schema.upper(), name))
+    said: dict[str, str] = {}
+
+    def prove(schema: str, quoted: str) -> None:
+        other = None
+        try:
+            other = connect()
+            _sql(other, f"SELECT * FROM {quoted} LIMIT 1")
+            _PROVEN[(conn, schema)] = time.time()
+            said[schema] = "ok"
+        except Exception as err:              # noqa: BLE001 - load_source reads it again and names the fix
+            said[schema] = (str(err).strip().splitlines() or [type(err).__name__])[0][:300]
+        finally:
+            if other is not None:
+                other.close()
+
+    threads = [threading.Thread(target=prove, args=pair, daemon=True) for pair in first.items()]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(120)
+    return said
+
+
 def load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | None:
     """A table in a connected external source (a virtual schema). ``descriptor`` is ``VS_<NAME>.<TABLE>`` (any case,
     the VS_ prefix optional), ``VS_<NAME>`` alone (its one table, or a list of them), or a descriptor file whose

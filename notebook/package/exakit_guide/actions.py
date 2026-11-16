@@ -90,6 +90,8 @@ ACTIONS: dict[str, Action] = {
     "data.choose": Action("00_quickstart", "chosen_data = {data}", "chosen_data", False),
     # several tables chosen at once: each is kept by its table name, and one of them is the one being worked on
     "data.several": Action("00_quickstart", "chosen_tables = {{}}", "chosen_tables", False),
+    # several live tables: every source read once, all at the same time, before the tables are opened one by one
+    "data.prove": Action("00_quickstart", "proven = nb.prove_sources(connection, {tables})", "proven", False),
     "data.keep": Action("00_quickstart", "chosen_tables[{table}] = {data}", "chosen_tables", False),
     "data.remember": Action("00_quickstart", "remembered = nb.remember_chosen({tables})", "remembered", False),
     # several tables: each one's column roles drawn up in the background, at the same time, while the first opens
@@ -194,7 +196,7 @@ ACTIONS: dict[str, Action] = {
     "ask.currency": Action("02_ask_your_data", "currency = nb.currency_of(connection, dataset)", "currency", False),
     "ask.run": Action("02_ask_your_data", "proposal.approve()\nanswer = proposal.run()", "answer"),
     "ask.insights": Action("02_ask_your_data", "insights = nb.insights(answer, rules=INSIGHT_RULES)", "insights", False),
-    "ask.pin": Action("02_ask_your_data", "pinned = nb.pin(proposal, answer, board={board}, page={page})", "pinned"),
+    "ask.pin": Action("02_ask_your_data", "pinned = nb.pin(proposal, answer, board={board}, page={page}, title={title})", "pinned"),
     "ask.verify": Action("02_ask_your_data", "verified = proposal.verify(connection)", "verified"),
     # -- step 4: share and hand off ---------------------------------------------------------------------------------
     "share.open": Action("03_share", 'nb.continue_workflow("share")\n'

@@ -130,6 +130,7 @@
   "prepare_training": "/data-scientist/development/reference/ml-train#prepare_training",
   "Proposal": "/data-scientist/development/reference/ask#Proposal",
   "propose_change": "/data-scientist/development/reference/semantic#propose_change",
+  "prove_sources": "/data-scientist/development/reference/quickstart#prove_sources",
   "provider_models": "/data-scientist/development/reference/providers#provider_models",
   "query_history": "/data-scientist/development/reference/semantic#query_history",
   "query_logging": "/data-scientist/development/reference/semantic#query_logging",

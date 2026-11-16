@@ -898,6 +898,40 @@ class QuickstartTest(unittest.TestCase):
             self.assertIn('SELECT * FROM "VS_SALES"."ORDERS" LIMIT 1', sql.call_args_list[-1][0][1])
             self.assertIn("is a live source", out.getvalue())
 
+    def test_every_source_is_proven_at_once_on_its_own_connection(self):
+        import threading
+
+        opened, started, both = [], [], threading.Barrier(2, timeout=5)
+
+        class Other:
+            def close(self):
+                pass
+
+        def connect():
+            opened.append(Other())
+            return opened[-1]
+
+        def answer(conn, statement):
+            if "LIMIT 1" in statement:
+                started.append((conn, statement))
+                if "BROKEN" in statement:
+                    raise RuntimeError("permission denied\nmore")
+                both.wait()                      # the two good sources are read at the same time, or this times out
+                return _Frame(X=[1])
+            return _Frame(SCHEMA_NAME=["VS_SALES", "VS_CRM", "VS_BROKEN"]) if "VIRTUAL" in statement else _Frame(TABLE_NAME=["ORDERS", "LEADS", "T"])
+        conn = object()
+        with mock.patch.object(quickstart, "_sql", side_effect=answer), mock.patch("exakit_nb.connect", side_effect=connect):
+            said = exakit_nb.prove_sources(conn, ["VS_SALES.ORDERS", "VS_SALES.CUSTOMERS", "VS_CRM.LEADS", "VS_BROKEN.T"])
+            self.assertEqual({"VS_SALES": "ok", "VS_CRM": "ok", "VS_BROKEN": "permission denied"}, said)
+            self.assertEqual(3, len(started), "one read a source")
+            self.assertNotIn(conn, [c for c, _ in started], "never on the notebook's own connection")
+            with redirect_stdout(io.StringIO()):
+                exakit_nb.load_source(conn, "VS_SALES.ORDERS")
+                exakit_nb.load_source(conn, "VS_CRM.LEADS")
+            self.assertEqual(3, len(started), "proven: not read again")
+            with self.assertRaises(exakit_nb.SourceProblem):
+                exakit_nb.load_source(conn, "VS_BROKEN.T")        # not proven: read, and the reason named
+
     def test_a_source_just_read_is_not_read_again_for_its_next_table(self):
         answers = [("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["VS_SALES"])),
                    ("EXA_ALL_TABLES", _Frame(TABLE_NAME=["CUSTOMERS", "ORDERS"])),

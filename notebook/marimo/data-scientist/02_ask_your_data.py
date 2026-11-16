@@ -248,7 +248,7 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    `PIN_TO`: a dashboard and a page, such as `("sales-overview", "Revenue")`. `KEEP_AS_VERIFIED = True` keeps the question as a trusted question.
+    `PIN_TO`: a dashboard and a page, such as `("sales-overview", "Revenue")`. `TILE_TITLE`: the tile's title on the dashboard (None: the question; set it when you rewrote the SQL to answer something else). `KEEP_AS_VERIFIED = True` keeps the question as a trusted question.
     """)
     return
 
@@ -256,12 +256,13 @@ def _(mo):
 @app.cell
 def _(INSIGHT_RULES, answer, connection, nb, proposal):
     PIN_TO = None
+    TILE_TITLE = None
     KEEP_AS_VERIFIED = False
     if answer is not None:
         insights = nb.insights(answer, rules=INSIGHT_RULES)
         print("\n".join(insights))
         if PIN_TO:
-            pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1])
+            pinned = nb.pin(proposal, answer, board=PIN_TO[0], page=PIN_TO[1], title=TILE_TITLE)
         if KEEP_AS_VERIFIED:
             verified = proposal.verify(connection)
     return

@@ -2046,5 +2046,27 @@ class PrepareDraftsTest(unittest.TestCase):
         self.assertTrue(self.module._PREPARING["VS_TEST.ORDERS"].wait(5))     # finished before the next test
 
 
+class PinTitleTest(unittest.TestCase):
+    """A pinned answer keeps the title you give it: rewritten SQL answers something else than the question drafted."""
+
+    def test_the_title_given_is_the_tiles_and_a_new_question_resets_it(self):
+        from exakit_guide.screens import ask as module
+
+        card = object.__new__(module.Ask)
+        card.board, card.page, card.tile_title, card.flash = "my-dashboard", "Overview", None, None
+        sent = []
+        with mock.patch.object(module.actions, "run", side_effect=lambda action_id, **kw: sent.append((action_id, kw)) or {"kind": "bar"}):
+            card.on_pin({"tile_title": "  Quantity   by supplier ", "board": "Sales", "page": "Sources"})
+            card.on_pin({"board": "sales"})
+        self.assertEqual(("ask.pin", {"board": "sales", "page": "Sources", "title": "Quantity by supplier"}), sent[0])
+        self.assertIsNone(sent[1][1]["title"], "left empty: the question asked")
+        card.tile_title = "Quantity by supplier"
+        with mock.patch.object(module, "_model_ready", return_value=False), \
+                mock.patch.object(module.actions, "run", side_effect=RuntimeError("stop after the reset")):
+            with self.assertRaises(RuntimeError):
+                card._draft("count by STATUS")
+        self.assertIsNone(card.tile_title)
+
+
 if __name__ == "__main__":
     unittest.main()

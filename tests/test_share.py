@@ -188,14 +188,57 @@ class ShareTests(unittest.TestCase):
     def test_dash_endpoint_comes_from_status_and_stays_local(self):
         class Result:
             stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"running"}}'
-        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()):
-            self.assertEqual(dash_server_url(), "http://127.0.0.1:5101")
+        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()), patch("exakit_nb.dash_mcp._KNOWN_URL", None):
+            self.assertEqual(dash_server_url(fresh=True), "http://127.0.0.1:5101")
             Result.stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"stopped"}}'
             with self.assertRaisesRegex(RuntimeError, "stopped"):
-                dash_server_url()
+                dash_server_url(fresh=True)
             Result.stdout = '{"urls":{"dash-server":"https://remote.example"},"services":{"dash-server":"running"}}'
             with self.assertRaisesRegex(RuntimeError, "unexpected"):
-                dash_server_url()
+                dash_server_url(fresh=True)
+
+    def test_the_dash_endpoint_comes_from_the_manifest_when_it_answers(self):
+        import socket
+        from exakit_nb import dash_mcp
+
+        with tempfile.TemporaryDirectory() as home, socket.socket() as listening:
+            listening.bind(("127.0.0.1", 0))
+            listening.listen(1)
+            port = listening.getsockname()[1]
+            Path(home, "manifest.json").write_text(json.dumps({"components": {"dash_server": {"port": port}}}), encoding="utf-8")
+            with patch.dict(os.environ, {"EXAKIT_HOME": home}), patch("exakit_nb.dash_mcp._KNOWN_URL", None), \
+                    patch("exakit_nb.dash_mcp.subprocess.run") as status:
+                self.assertEqual(f"http://127.0.0.1:{port}", dash_mcp.dash_server_url())
+                self.assertEqual(0, status.call_count, "no exakit status when the recorded port answers")
+            listening.close()
+            with patch.dict(os.environ, {"EXAKIT_HOME": home}):
+                self.assertIsNone(dash_mcp._manifest_url(), "nothing answers: exakit status says why")
+
+    def test_the_dash_endpoint_is_read_once_and_again_when_unreachable(self):
+        import httpx
+        from exakit_nb import dash_mcp
+
+        class Result:
+            stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"running"}}'
+        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()) as status, patch("exakit_nb.dash_mcp._KNOWN_URL", None), \
+                patch("exakit_nb.dash_mcp._manifest_url", return_value=None):
+            tools = dash_mcp.DashTools()
+            dash_mcp.DashTools()
+            self.assertEqual(1, status.call_count, "exakit status read once")
+            Result.stdout = Result.stdout.replace("5101", "5102")
+            calls = []
+
+            def call(name, arguments):
+                calls.append(tools.url)
+                if len(calls) == 1:
+                    raise ExceptionGroup("mcp", [httpx.ConnectError("refused")])
+                return {"ok": True}
+            with patch.object(tools, "_call", side_effect=call):
+                self.assertEqual({"ok": True}, tools("app_list", {}))
+            self.assertEqual(["http://127.0.0.1:5101", "http://127.0.0.1:5102"], calls, "moved: looked up again, then called")
+            with patch.object(tools, "_call", side_effect=ValueError("a tool error")), self.assertRaises(ValueError):
+                tools("app_list", {})
+            self.assertEqual(2, status.call_count, "a tool's own error is not a reason to look it up again")
 
 
 

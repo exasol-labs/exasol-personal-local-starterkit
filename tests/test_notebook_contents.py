@@ -416,6 +416,10 @@ class NotebookShapeTest(unittest.TestCase):
                 # The clear-text check (audit SEC-08) names the loopback host to ALLOW plain http there;
                 # it is a rule about hosts, not a connection value. Exactly that one line is exempt.
                 text = text.replace('if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):', "")
+            if path == ROOT / "notebook/package/exakit_nb/dash_mcp.py":
+                # Dash Server's address is built from the port the kit recorded, on this computer only: a rule about
+                # where it listens, not a connection value. Exactly that one line is exempt.
+                text = text.replace('LOOPBACK = "127.0.0.1"   # dash-server listens on this computer only: the port comes from the manifest', "")
             if path == ROOT / "notebook/package/exakit_nb/sources.py":
                 # connect_source names the loopback hosts to REPLACE them (a Mac's database reaches this computer
                 # at 192.168.64.1) and the query parameter to TAKE a password out of a pasted URL: rules, not values.
