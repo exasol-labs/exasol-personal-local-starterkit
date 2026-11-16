@@ -3556,7 +3556,7 @@ foreach (`$id in @($pidList)) { if (`$id -and (Get-Process -Id `$id -ErrorAction
 # (ReplaceFile's 1176/1177): the target existed a moment ago, so .new is moved
 # onto it, and never dropped. Any other failure (a scanner holding .new): the
 # old file and .new both stay.
-function Invoke-ExakitFileReplace {
+    function Invoke-ExakitFileReplace {
 $replaceBody
 }
 `$half = `$false
