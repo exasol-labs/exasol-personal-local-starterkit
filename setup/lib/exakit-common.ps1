@@ -3523,6 +3523,11 @@ for (`$r = 0; `$r -lt 1000; `$r++) {
 }
 "@
     }
+    # Pids are waited on by number. A waited pid that exits and is reused by an
+    # unrelated process keeps the helper waiting on that one (until logout, for
+    # a long-lived process), and the alive check below then skips the swap.
+    # Both are the safe direction: the old file stays and the next update
+    # tries again; a reused pid can never make a live copy look gone.
     $deferred = @"
 foreach (`$id in @($pidList)) { if (`$id) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} } }
 Start-Sleep -Milliseconds 1500
@@ -3583,6 +3588,14 @@ function Get-ExakitAddonLauncherGuard {
 # the launcher's child names the add-on's target, not the launcher. Such a run
 # is not detected, and an add-on update writes that launcher in place. The
 # Startup entry, exakit start and a cmd /c run all name the path and are found.
+#
+# The deferred swap waits for what this finds with no time limit, so the blind
+# spot matters there too: the swap lands whenever the waited copy exits, and a
+# run typed by name at another interactive prompt at that moment is not seen.
+# For exakit.cmd that run's PowerShell child names the kit's exakit.ps1 and is
+# waited for (Get-ExakitKitScriptRunningPids); an add-on launcher typed by
+# name has no such witness. Accepted: it needs a second, concurrent run typed
+# at a prompt in the instant of the swap.
 function Get-ExakitLauncherRunningPids {
     param([Parameter(Mandatory)][string]$Path)
     $found = @()
