@@ -160,7 +160,9 @@ function Invoke-ExakitBounded {
     }
     if ($eng -eq "docker") {
         if ($env:STUB_DOCKER_PS_FAIL -eq "1") { return $null }
-        return $env:STUB_DOCKER_PS
+        # "" + : Windows PowerShell 5.1 deletes a variable set to "", so an
+        # unset stub reads as an engine that answered with no containers.
+        return ("" + $env:STUB_DOCKER_PS)
     }
     return ""
 }
