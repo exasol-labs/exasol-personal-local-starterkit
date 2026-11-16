@@ -4142,8 +4142,11 @@ function Invoke-CmdSql {
 function Test-ExakitMcpDoctorFailedRecordAnswers([string]$RuntimeType) {
     if ($RuntimeType -ne "personal") { return $false }
     if ((Get-PersonalLauncherState) -ne "deployment_failed") { return $false }
-    if (-not (Test-PersonalDbAnswers)) { return $false }
-    return [bool](Test-PersonalPortHeldByOwnRunner)
+    # The runner proof first: on this side it is a constant no, and the
+    # database probe it saves is a network round trip. The bash twin probes
+    # first; the answer is the same either way.
+    if (-not (Test-PersonalPortHeldByOwnRunner)) { return $false }
+    return [bool](Test-PersonalDbAnswers)
 }
 
 function Stop-ExakitBadOption([string]$Msg) {
