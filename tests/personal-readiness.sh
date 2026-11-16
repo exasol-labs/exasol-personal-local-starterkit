@@ -25,6 +25,10 @@
 #     deploy is run over the running VM.
 #   - personal_start on a deployment the launcher records as failed retries the
 #     launcher's deploy, because in that state its start exits 0 doing nothing.
+#     When the kit's own runner (executed from the launcher's cache, listening
+#     on the port) still runs the VM, the launcher refuses that deploy with "VM
+#     is already running": the runner is stopped first, then deploy runs once.
+#     A listener that is not certainly ours is never signalled.
 #   - personal_tls_answers is decided by openssl's OUTPUT, never its exit
 #     status, under the `set -o pipefail` every entry point runs with. macOS
 #     ships LibreSSL as /usr/bin/openssl, and its s_client exits 1 after a
@@ -130,7 +134,15 @@ manifest_set(){ :; }
 manifest_get(){ printf '%s' "\${STUB_PROFILE:-}"; }
 exakit_run_bounded(){ shift; "\$@"; }
 port_in_use(){ (exec 3<>"/dev/tcp/127.0.0.1/\$1") 2>/dev/null && { exec 3>&- 3<&-; return 0; }; return 1; }
-run_logged(){ printf 'RUN %s\n' "\$*" >> "$TMP/calls"; case " \$* " in *" \${STUB_FAIL_VERB:-never} "*) return 1;; esac; return 0; }
+run_logged(){
+    printf 'RUN %s\n' "\$*" >> "$TMP/calls"
+    # The launcher over a VM its runner still runs: deploy refuses.
+    case " \$* " in *" deploy "*)
+        if [ -n "\${STUB_VM_PID:-}" ] && command kill -0 "\$STUB_VM_PID" 2>/dev/null; then
+            printf 'Error: VM is already running\n'; return 1
+        fi;;
+    esac
+    case " \$* " in *" \${STUB_FAIL_VERB:-never} "*) return 1;; esac; return 0; }
 detect_wsl_version(){ [ "\${STUB_WSL:-0}" = 1 ]; }
 EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
 source "$ROOT/setup/lib/runtime-personal.sh"
@@ -144,7 +156,13 @@ personal_repair_command(){ printf 'exakit repair-runtime'; }
 personal_deployment_wedged(){ return 1; }
 personal_reap_orphan_daemon(){ return 1; }
 personal_port_holder_hint(){ :; }
-personal_db_port_pids(){ :; }
+# The real lsof-backed listener lookup only for the runner scenarios, which
+# start a real process on a spare port; every other probe sees no listener.
+if [ "\${STUB_REAL_PIDS:-0}" = 1 ]; then
+    kill(){ printf 'KILL %s\n' "\$*" >> "$TMP/calls"; command kill "\$@"; }
+else
+    personal_db_port_pids(){ :; }
+fi
 personal_launcher_state(){ printf '%s' "\${STUB_STATE:-}"; }
 # The real bound, for the probes that must prove a hung client is cut off.
 if [ "\${STUB_REAL_BOUNDED:-0}" = 1 ]; then
@@ -272,6 +290,62 @@ contains "  ...naming the repair" "exakit repair-runtime" "$_out"
 _out="$(probe STUB_STATE=stopped -- 'personal_start')"
 check "stopped -> the ordinary start" 0 "$(rc_of "$_out")"
 contains "  ...start was run" "RUN exasol-stub start" "$(cat "$TMP/calls")"
+
+echo "personal_start: deployment_failed while the kit's own runner still runs the VM"
+# What an older kit left behind on a user's Mac: the launcher records
+# deployment_failed, its runner (executed from the launcher's cache) still
+# runs the VM and listens on the port, and the launcher answers every command
+# with "VM is already running". The runner is stopped, then deploy runs once.
+RHOME="$TMP/home"
+case "$(uname -s)" in
+    Darwin) RCACHE="$RHOME/Library/Caches/.exasol" ;;
+    *)      RCACHE="$RHOME/.cache/.exasol" ;;
+esac
+RDIR="$RCACHE/personal/runtime-artifacts/exasol-local-runner/darwin/arm64/abc123/unpack"
+mkdir -p "$RDIR" "$TMP/elsewhere"
+cp "$TMP/tls_server.py" "$RDIR/launcher"
+cp "$TMP/tls_server.py" "$TMP/elsewhere/exasol-local-runner-copy"
+start_listener() { # start_listener <script> <port> -> pid, once the port is held
+    python3 "$1" "$2" "$TMP/cert.pem" "$TMP/key.pem" >/dev/null 2>&1 &
+    _lp=$!; CHILDREN="$CHILDREN $_lp"
+    _w=0; until (exec 3<>"/dev/tcp/127.0.0.1/$2") 2>/dev/null; do _w=$((_w + 1)); [ "$_w" -ge 40 ] && break; sleep 0.25; done
+    echo "$_lp"
+}
+alive() { kill -0 "$1" 2>/dev/null && echo yes || echo no; }
+if command -v lsof >/dev/null 2>&1; then
+    RUN_PORT="$(pick_port $((CLOSED_PORT + 20)))"
+    _rpid="$(start_listener "$RDIR/launcher" "$RUN_PORT")"
+    _hint_own="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_PORT="$RUN_PORT" -- 'personal_foreign_db_hint')"
+    contains "the kit's own runner on the port is named as ours" "own Exasol runner (pid $_rpid)" "$_hint_own"
+    case "$_hint_own" in *"did not deploy"*) check "  ...not as a foreign database" "not foreign" "foreign" ;; *) check "  ...not as a foreign database" "not foreign" "not foreign" ;; esac
+    _out="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_rpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=10 -- 'personal_start')"
+    check "own runner + deployment_failed -> exit 0" 0 "$(rc_of "$_out")"
+    contains "  ...says why it stops the VM" "while its VM still runs" "$_out"
+    contains "  ...the runner was signalled" "KILL -TERM $_rpid" "$(cat "$TMP/calls")"
+    check "  ...the runner is gone" no "$(alive "$_rpid")"
+    check "  ...deploy ran exactly once" 1 "$(grep -c 'RUN exasol-stub deploy' "$TMP/calls")"
+    _kl="$(sed -n '/KILL -TERM/=' "$TMP/calls" | head -1)"; _dl="$(sed -n '/RUN exasol-stub deploy/=' "$TMP/calls" | head -1)"
+    check "  ...stop before deploy" yes "$([ -n "$_kl" ] && [ -n "$_dl" ] && [ "$_kl" -lt "$_dl" ] && echo yes || echo "no ($(tr '\n' ';' < "$TMP/calls"))")"
+
+    # NEGATIVE: the same name outside the launcher's cache is not certainly
+    # ours - untouched, and the old behaviour (deploy, which fails) stands.
+    RUN_PORT2="$(pick_port $((RUN_PORT + 1)))"
+    _fpid="$(start_listener "$TMP/elsewhere/exasol-local-runner-copy" "$RUN_PORT2")"
+    _out="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_fpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT2" -- 'personal_start')"
+    check "runner name outside the cache -> old behaviour (dies)" 1 "$(rc_of "$_out")"
+    check "  ...it was not killed" yes "$(alive "$_fpid")"
+    case "$(cat "$TMP/calls")" in *KILL*) check "  ...no signal sent" none sent ;; *) check "  ...no signal sent" none none ;; esac
+    contains "  ...deploy still tried" "RUN exasol-stub deploy" "$(cat "$TMP/calls")"
+    # NEGATIVE: a plain foreign listener is never touched.
+    RUN_PORT3="$(pick_port $((RUN_PORT2 + 1)))"
+    _xpid="$(start_listener "$TMP/tls_server.py" "$RUN_PORT3")"
+    _out="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_xpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT3" -- 'personal_start')"
+    check "foreign listener -> old behaviour (dies)" 1 "$(rc_of "$_out")"
+    check "  ...it was not killed" yes "$(alive "$_xpid")"
+    contains "  ...and it is still called foreign" "did not deploy" "$_out"
+else
+    echo "  (no lsof: runner checks skipped)"
+fi
 
 echo "personal_tls_answers: openssl's output decides, not its exit status (pipefail)"
 # Stub clients, one per directory so each can be put first on PATH.

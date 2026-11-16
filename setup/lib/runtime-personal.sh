@@ -960,6 +960,17 @@ personal_foreign_db_hint() {
             "$(legacy_container)" "$(legacy_engine_name)" "$(legacy_container)"
         return 0
     fi
+    # THE KIT'S OWN RUNNER IS NOT A FOREIGN DATABASE. A deployment the
+    # launcher records as failed while its runner still runs the VM answers
+    # here too, and telling that user to stop "a database this kit did not
+    # deploy" sent them hunting for one that does not exist.
+    if command -v _personal_port_held_by_own_runner >/dev/null 2>&1 && \
+       _personal_port_held_by_own_runner; then
+        _pfh_pids="$(printf '%s' "$_ppo_pids" | tr '\n' ' ' | sed 's/ *$//')"
+        printf ' It is this kit'"'"'s own Exasol runner (pid %s), not another database: stop it (kill %s; its VM stops, the data stays) and re-run.' \
+            "$_pfh_pids" "$_pfh_pids"
+        return 0
+    fi
     printf ' It answers like an Exasol database this kit did not deploy: stop that database first, then re-run.'
     detect_wsl_version >/dev/null 2>&1 && \
         printf ' WSL and Windows share this port, so one deployed on the Windows side holds it here too (stop it there with: exakit stop).'
@@ -1185,6 +1196,86 @@ personal_reap_orphan_daemon() {
     fi
     ok "Freed port $_rod_port (removed a leftover Exasol runner daemon)"
     return 0
+}
+
+# personal_stop_runner_of_failed_deployment - a deployment the launcher
+# records as "deployment_failed" WHILE ITS OWN RUNNER STILL RUNS THE VM. An
+# older kit could leave exactly that: the launcher gave up on a first boot,
+# the runner kept the VM up and the database answers TLS, and from then on
+# the launcher refuses every command - deploy, start, stop and destroy alike -
+# with "VM is already running". The kit's deploy retry then failed, and the
+# foreign-database hint told the user to stop a database that was the kit's
+# own. The cure, proven by hand on a user's Mac: stop that runner (its VM
+# exits with it), and the launcher's deploy then brings the deployment up.
+#
+# ONLY OUR RUNNER, ONLY WHEN CERTAIN. Every listener on this deployment's
+# port must be the launcher's runner (_personal_is_runner_process) AND be
+# executed from the launcher's own cache (personal_launcher_cache_dir). One
+# listener that fails either test - a foreign process, a runner of unknown
+# origin - and nothing is touched; the caller keeps its old behaviour. No
+# lsof, no listener: nothing to do.
+#
+# DATA. Stopping the runner is stopping the VM: the deployment directory and
+# its data disk are files the runner has open, not files it deletes, and the
+# kit already stops this same process in personal_reap_orphan_daemon. SIGTERM
+# first, which lets the VM exit on its own terms; SIGKILL only for a runner
+# that has not exited and released the port within the budget.
+#
+# Returns 0 when a runner was stopped and the port is free, 1 otherwise
+# (nothing of ours there, not certain, or the port is still held).
+EXAKIT_PERSONAL_RUNNER_STOP_WAIT="${EXAKIT_PERSONAL_RUNNER_STOP_WAIT:-20}"
+# _personal_port_held_by_own_runner - 0 when the deployment port has at least
+# one listener and EVERY listener is the launcher's runner executed from the
+# launcher's own cache. Sets _ppo_pids to those listeners.
+_personal_port_held_by_own_runner() {
+    _ppo_pids=""
+    command -v lsof >/dev/null 2>&1 || return 1
+    _ppo_cache="$(personal_launcher_cache_dir 2>/dev/null || true)"
+    [ -n "$_ppo_cache" ] || return 1
+    _ppo_found="$(personal_db_port_pids)"
+    [ -n "$_ppo_found" ] || return 1
+    for _ppo_pid in $_ppo_found; do
+        _personal_is_runner_process "$_ppo_pid" || return 1
+        case "$(ps -p "$_ppo_pid" -o command= 2>/dev/null || true)" in
+            *"$_ppo_cache"/*exasol-local-runner*) ;;
+            *) return 1 ;;
+        esac
+    done
+    _ppo_pids="$_ppo_found"
+}
+
+personal_stop_runner_of_failed_deployment() {
+    _personal_port_held_by_own_runner || return 1
+    _psr_pids="$_ppo_pids"
+    info "The launcher records this deployment as failed while its VM still runs - stopping that VM so the deploy can start it cleanly"
+    command -v _exakit_log_file >/dev/null 2>&1 &&
+        _exakit_log_file "INFO  stopping runner pid(s)$(printf ' %s' $_psr_pids) on port $(personal_db_port) (launcher state deployment_failed)"
+    for _psr_pid in $_psr_pids; do
+        kill -TERM "$_psr_pid" 2>/dev/null || true
+    done
+    _psr_waited=0
+    while [ "$_psr_waited" -lt "$EXAKIT_PERSONAL_RUNNER_STOP_WAIT" ]; do
+        _psr_alive=""
+        for _psr_pid in $_psr_pids; do
+            kill -0 "$_psr_pid" 2>/dev/null && _psr_alive=1
+        done
+        [ -z "$_psr_alive" ] && [ -z "$(personal_db_port_pids)" ] && break
+        sleep 1
+        _psr_waited=$((_psr_waited + 1))
+    done
+    for _psr_pid in $_psr_pids; do
+        if kill -0 "$_psr_pid" 2>/dev/null; then
+            warn "The runner (pid $_psr_pid) did not exit within ${EXAKIT_PERSONAL_RUNNER_STOP_WAIT}s - forcing it."
+            pkill -9 -P "$_psr_pid" 2>/dev/null || true
+            kill -9 "$_psr_pid" 2>/dev/null || true
+        fi
+    done
+    _psr_waited=0
+    while [ "$_psr_waited" -lt 3 ] && [ -n "$(personal_db_port_pids)" ]; do
+        sleep 1
+        _psr_waited=$((_psr_waited + 1))
+    done
+    [ -z "$(personal_db_port_pids)" ]
 }
 
 # --- deployment progress ----------------------------------------------------
@@ -2154,6 +2245,9 @@ personal_deploy_local() {
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy."
             EXAKIT_ACTIVE_LABEL="Retrying the deployment"
+            # Its own runner still holding the VM makes that deploy fail with
+            # "VM is already running"; stop it first when it is certainly ours.
+            personal_stop_runner_of_failed_deployment || true
             if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy) || \
                personal_recover_slow_first_boot; then
                 ok "Reusing the existing Exasol deployment (deployed again)"
@@ -2941,6 +3035,9 @@ personal_start() {
         # launcher's own retry for that state is its deploy.
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy instead of a start it would ignore."
+            # A VM its runner still runs answers that deploy with "VM is
+            # already running"; stop our own runner first (only when certain).
+            personal_stop_runner_of_failed_deployment || true
             if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy); then
                 ok "Database started"
                 return 0
