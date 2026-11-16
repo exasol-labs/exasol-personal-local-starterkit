@@ -746,5 +746,46 @@ _out="$(wsl401 "Error: some other deploy failure" heal)"
 contains "any other deploy failure: the old message"   "did not come up" "$_out"
 lacks    "  never blamed on the WSL kernel"            "cannot create the deployment network" "$_out"
 
+echo "mcp-doctor: deployment_failed while the database answers and the runner is ours:"
+# The real cmd_mcp_doctor and its two helpers from setup/exakit, against stubs:
+# the launcher's record, the probe, the runner proof and the MCP subsystem.
+# personal_deployment_running is left alone - it still says "not running".
+doctor() { # doctor <state> <answers 0|1> <own 0|1> [--json] -> output, then rc=N
+    _dst="$1" _dans="$2" _down="$3"; shift 3
+    (
+        for _fn in _mcp_doctor_failed_record_but_answers _mcp_doctor_db_reachable cmd_mcp_doctor; do
+            eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit")"
+        done
+        EXAKIT_MANIFEST="$TMP/doctor-manifest.json"; : > "$EXAKIT_MANIFEST"
+        _runtime_type() { printf 'personal'; }
+        exakit_installation_runtime_type() { printf 'personal'; }
+        exakit_init_logging() { :; }
+        exakit_runtime_remedy() { printf 'exakit start\n'; }
+        personal_deployment_running() { return 1; }
+        personal_launcher_state() { printf '%s' "$_dst"; }
+        personal_db_answers() { [ "$_dans" = 1 ]; }
+        _personal_port_held_by_own_runner() { [ "$_down" = 1 ]; }
+        exakit_mcp_operation() { printf 'MCP %s\n' "$*"; return 0; }
+        warn() { printf 'WARN %s\n' "$*"; }; info() { :; }
+        cmd_mcp_doctor "$@"
+    ) 2>&1
+    printf '\nrc=%s' "$?"
+}
+_out="$(doctor deployment_failed 1 1)"
+contains "failed record, database answers, own runner: the checks run" "MCP doctor" "$_out"
+check "  ...with exactly one warning" 1 "$(printf '%s\n' "$_out" | grep -c '^WARN ')"
+contains "  ...naming the repair" "WARN The launcher records this deployment as failed although its database answers - repair the record with: exakit start" "$_out"
+check "  ...exit 0" "rc=0" "$(printf '%s' "$_out" | tail -1)"
+_out="$(doctor deployment_failed 1 0)"
+lacks "not the own runner: no checks" "MCP doctor" "$_out"
+check "  ...exit 3 (not running)" "rc=3" "$(printf '%s' "$_out" | tail -1)"
+_out="$(doctor deployment_failed 0 1)"
+lacks "database silent: no checks" "MCP doctor" "$_out"
+check "  ...exit 3" "rc=3" "$(printf '%s' "$_out" | tail -1)"
+_out="$(doctor stopped 1 1)"
+lacks "launcher says stopped: no checks" "MCP doctor" "$_out"
+lacks "  ...and no stale-record warning" "records this deployment as failed" "$_out"
+check "personal_deployment_running still never consults the runner" 0 "$(sed -n '/^personal_deployment_running()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '_personal_port_held_by_own_runner')"
+
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

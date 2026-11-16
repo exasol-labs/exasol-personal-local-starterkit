@@ -326,6 +326,33 @@ if ($cmdExe) {
     Write-Host "  skip shim (cmd.exe): not on Windows"
 }
 $script:BinDir = $savedBin
+
+# --- mcp-doctor: a failed record over a database that answers ------------
+# The launcher says deployment_failed, the probe answers and the port is
+# provably this deployment's own runner: mcp-doctor checks against it (with one
+# warning). Any one missing - or no runner proof on this side at all - and it
+# does not. Twin of the shell check in tests/personal-agent-contract.sh.
+Write-Host ""
+Write-Host "mcp-doctor: deployment_failed while the database answers:"
+$script:stubState = "deployment_failed"; $script:stubAnswers = $true; $script:stubOwn = $true
+function Get-PersonalLauncherState { $script:stubState }
+function Test-PersonalDbAnswers { $script:stubAnswers }
+Remove-Item Function:\Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue
+Check "doctor: no runner proof on this side -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+function Test-PersonalPortHeldByOwnRunner { $script:stubOwn }
+Check "doctor: failed record, answers, own runner -> reachable" "True" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubOwn = $false
+Check "doctor: ...not the own runner -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubOwn = $true; $script:stubAnswers = $false
+Check "doctor: ...database silent -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubAnswers = $true; $script:stubState = "stopped"
+Check "doctor: ...launcher says stopped -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubState = "deployment_failed"
+Check "doctor: ...not a personal runtime -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "")
+Remove-Item Function:\Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue
+$cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "doctor: the mcp-doctor arm asks it" "True" ($cliText.Contains('if (-not $doctorUp -and (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType $doctorType)) {'))
+Check "doctor: and says the one warning" "True" ($cliText.Contains('The launcher records this deployment as failed although its database answers - repair the record with: exakit start'))
 $cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
 Check "uninstall: says the commands go as the window closes" "True" ($cliText.Contains('as this window closes: '))
 Check "uninstall: deferred cleaner starts outside the job (Win32_Process Create)" "True" ($cliText -match 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create')
