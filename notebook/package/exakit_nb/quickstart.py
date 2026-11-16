@@ -115,11 +115,19 @@ CONNECT_HINT = ('Connect one here: nb.connect_source("postgresql", "sales", url=
                 "(the password is asked in a hidden box), or in a terminal: exakit connect")
 
 
+_PROVEN: dict[tuple[object, str], float] = {}  # (connection, source) -> when a read from it last worked (the connection
+#                                                itself: an id() can come back for a new one)
+PROVEN_SECONDS = 300
+
+
 def load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | None:
     """A table in a connected external source (a virtual schema). ``descriptor`` is ``VS_<NAME>.<TABLE>`` (any case,
     the VS_ prefix optional), ``VS_<NAME>`` alone (its one table, or a list of them), or a descriptor file whose
     fact_table is in a source. None skips it and lists the sources there are. A name that cannot be used stops the
-    cell with one line naming what is there and how to connect one; the table is read once (one row) to prove it."""
+    cell with one line naming what is there and how to connect one; the table is read once (one row) to prove it -
+    once per source in five minutes, on the same connection: each read of a live source is a round trip (a Snowflake
+    source took ~9 s, even for one row), so the next tables of a source just proven are not read here; a problem of
+    one table (a grant, a type) shows when its column roles are drawn up."""
     from .sources import SourceProblem, clean_path, clean_text
 
     names = [str(name) for name in connected_sources(conn)["SCHEMA_NAME"]]
@@ -164,12 +172,15 @@ def load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | 
         raise SourceProblem(f"{schema} has no table {parts[1]}. Its tables: {_listed(tables)}.")
     table = f"{schema}.{match[0]}"
     quoted = ".".join('"' + p.replace('"', '""') + '"' for p in (schema, match[0]))
-    try:
-        _sql(conn, f"SELECT * FROM {quoted} LIMIT 1")
-    except Exception as err:                                   # the source is down, a grant is missing, a type fails
-        reason = str(err).strip().splitlines()[0][:300] if str(err).strip() else type(err).__name__
-        raise SourceProblem(f"{table} could not be read: {reason}\nCheck the source: exakit source check "
-                            f"{_source_alias(schema)}") from None
+    proven = (conn, schema)
+    if time.time() - _PROVEN.get(proven, 0.0) > PROVEN_SECONDS:
+        try:
+            _sql(conn, f"SELECT * FROM {quoted} LIMIT 1")
+        except Exception as err:                               # the source is down, a grant is missing, a type fails
+            reason = str(err).strip().splitlines()[0][:300] if str(err).strip() else type(err).__name__
+            raise SourceProblem(f"{table} could not be read: {reason}\nCheck the source: exakit source check "
+                                f"{_source_alias(schema)}") from None
+        _PROVEN[proven] = time.time()
     print(f"{table} is a live source: queries read it through the virtual schema. The next cells propose its roles.")
     ident = re.sub(r"[^a-z0-9]+", "_", table.lower()).strip("_") or "source"
     return LoadedTable(ident, table, Path("."))

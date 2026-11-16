@@ -405,6 +405,21 @@ def _(connection, nb):
         _chosen_data = nb.dataset(connection, OPEN_APPROVED)
     remembered = nb.remember_chosen(_chosen_data)
     print('01_explore opens: ' + ', '.join(remembered))
+    return (remembered,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    Several tables? Their column roles are drawn up in the background, every source at once, so `01_explore` shows them without reading each table again.
+    """)
+    return
+
+
+@app.cell
+def _(nb, remembered):
+    if len(remembered) > 1:
+        drafting = nb.prepare_drafts(remembered)
     return
 
 

@@ -297,6 +297,8 @@ class Ask(Screen):
         self._draft(str(v.get("question") or ""))
 
     def on_edit(self, v: dict) -> None:
+        if self.proposal is None:
+            raise ValueError("Draft a question first: your own SQL then replaces the drafted one.")
         actions.run("ask.edit", sql=str(v.get("sql") or ""))     # the kit checks it is one read-only statement
         self.answer, self.my_notes = None, ["Your own SQL. Check it, then approve."]
         self.drafted_by = "you"

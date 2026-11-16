@@ -92,6 +92,8 @@ ACTIONS: dict[str, Action] = {
     "data.several": Action("00_quickstart", "chosen_tables = {{}}", "chosen_tables", False),
     "data.keep": Action("00_quickstart", "chosen_tables[{table}] = {data}", "chosen_tables", False),
     "data.remember": Action("00_quickstart", "remembered = nb.remember_chosen({tables})", "remembered", False),
+    # several tables: each one's column roles drawn up in the background, at the same time, while the first opens
+    "data.prepare": Action("00_quickstart", "drafting = nb.prepare_drafts({tables})", "drafting", False),
     "data.switch": Action("00_quickstart", "chosen_data = chosen_tables[{table}]", "chosen_data", False),
     "data.map": Action("00_quickstart", "data_map = nb.data_map(connection)", "data_map", False),
     "data.connectors": Action("00_quickstart", "connectors = nb.connectors()", "connectors", False),

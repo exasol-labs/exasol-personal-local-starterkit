@@ -42,7 +42,7 @@ SLOT_OF = {"entity": "entity", "category": "category", "date": "time", "label": 
 COLUMN_ROLES = ("key", "time", "measure", "category", "flag", "text", "identifier", "other")
 SLOTS = ("key", "time", "text", "target", "category", "entity")
 
-__all__ = ["Draft", "describe", "describe_service"]
+__all__ = ["Draft", "describe", "describe_service", "prepare_drafts"]
 
 
 def describe_service():
@@ -80,11 +80,70 @@ def _resolve(name: str) -> tuple[str, str | None]:
     raise ValueError(f"'{name}' is neither SCHEMA.TABLE nor a dataset id the kit knows.")
 
 
+_PREPARING: dict[str, Any] = {}          # SCHEMA.TABLE upper-cased -> an Event set when its draft is done (prepare_drafts)
+PREPARED: dict[str, str] = {}             # SCHEMA.TABLE -> "reading" | "ready" | the reason it failed
+
+
+def prepare_drafts(tables: list[str], *, workers: int = 4, wait: bool = False) -> dict[str, str]:
+    """Draw up the column roles of ``tables`` in the background, from the moment they are chosen. Every source is read
+    at the same time, each on a connection of its own; the tables of one source are read one after another, first
+    chosen first, because a source answers one statement at a time (Snowflake took ~9 s a statement, whatever its
+    size: at once they only queued). Returns at once (``wait``: when all are done). nb.describe then uses each fresh
+    draft instead of reading the table again, and waits for a table still being read rather than reading it twice.
+    {table: reading | ready | why it failed}."""
+    import threading
+
+    service = describe_service()
+    if service is None:
+        return {}
+    by_source: dict[str, list[str]] = {}
+    for table in dict.fromkeys(str(t) for t in tables):
+        busy = _PREPARING.get(table.upper())
+        if busy is not None and not busy.is_set():
+            continue                                  # already being read
+        _PREPARING[table.upper()] = threading.Event()
+        PREPARED[table] = "reading"
+        by_source.setdefault(table.split(".", 1)[0].upper(), []).append(table)
+
+    def source(names: list[str]) -> None:
+        from . import connect
+
+        conn = None
+        try:
+            for table in names:
+                try:
+                    conn = conn or connect()
+                    service.describe(conn, table)
+                    PREPARED[table] = "ready"
+                except Exception as exc:         # noqa: BLE001 - said per table; the card drafts it again when opened
+                    PREPARED[table] = (str(exc).splitlines() or [type(exc).__name__])[0][:200]
+                finally:
+                    _PREPARING[table.upper()].set()
+        finally:
+            if conn is not None:
+                conn.close()
+
+    groups = list(by_source.values())
+    lanes = [groups[i::max(1, min(int(workers), len(groups) or 1))] for i in range(max(1, min(int(workers), len(groups) or 1)))]
+    threads = [threading.Thread(target=lambda lane=lane: [source(g) for g in lane], name="exakit-draft", daemon=True)
+               for lane in lanes if lane]
+    for thread in threads:
+        thread.start()
+    if wait:
+        for thread in threads:
+            thread.join()
+    return dict(PREPARED)
+
+
 def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str | None = None, force: bool = False,
              rules: dict | None = None) -> "Draft":
     """Describe ``SCHEMA.TABLE`` (or a dataset id's table): the approved descriptor when the table still matches it,
-    else a fresh draft. Uses the connection given, else opens the kit's. Only SELECTs run."""
+    else a fresh draft (one prepare_drafts made is used as it is; one it is still making is waited for). Uses the
+    connection given, else opens the kit's. Only SELECTs run."""
     table, slug = _resolve(str(table_or_dataset))
+    drafting = _PREPARING.get(str(table).upper())
+    if drafting is not None and not force and not rules:
+        drafting.wait(900)                   # being read in the background: the same read is not started twice
     service = describe_service()
     if service is not None:
         own = conn is None

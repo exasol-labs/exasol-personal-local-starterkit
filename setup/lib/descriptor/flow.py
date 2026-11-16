@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime as dt
 import getpass
+import json
 import os
 import re
 from typing import Any, Callable
@@ -161,6 +162,9 @@ def describe(run: Callable[[str], list[dict[str, Any]]], table: str, *, dataset:
     approved = load(approved_text) if approved_text else None
     if approved and not force and live_digest(run, table) == approved["source"]["schema_digest"]:
         return {"status": "approved", "doc": approved, "profile": None, "changed": [], "previous": approved["version"]}
+    reused = None if force else _fresh_draft(run, table, home)
+    if reused is not None:                 # drawn up a moment ago (prepare_drafts, or the last look): not read again
+        return dict(reused, previous=approved["version"] if approved else None)
     found = profiling.profile(None, table, run=run)
     version = max(store.versions(table, home) or [0]) + 1
     doc = drafting.draft(found, dataset or (approved or {}).get("dataset") or dataset_id(table), version)
@@ -172,6 +176,34 @@ def describe(run: Callable[[str], list[dict[str, Any]]], table: str, *, dataset:
     store.write_draft(table, drafting.to_yaml(doc), home)
     return {"status": "draft", "doc": doc, "profile": found, "changed": changed,
             "previous": approved["version"] if approved else None}
+
+
+DRAFT_FRESH_SECONDS = 3600     # a draft this recent, of a table whose columns did not change since, is used as it is
+
+
+def _fresh_draft(run: Callable[[str], list[dict[str, Any]]], table: str, home=None) -> dict[str, Any] | None:
+    """The store's draft of ``table`` with the profile it was made from, when it was made in the last
+    DRAFT_FRESH_SECONDS and the table's columns are still the same (one catalog read, no rows): drafting a table read
+    live costs a round trip to its source, so a draft made in the background is not made twice. None otherwise."""
+    import time
+
+    text = store.draft(table, home)
+    if not text:
+        return None
+    try:
+        path = store.folder(table, home) / store.DRAFT
+        if time.time() - path.stat().st_mtime > DRAFT_FRESH_SECONDS:
+            return None
+        doc = load(text)
+        beside = store.folder(table, home) / store.PROFILE      # the draft's profile, until approval makes it v<n>
+        found = json.loads(beside.read_text(encoding="utf-8")) if beside.is_file() else None
+        if not found or found.pop("version", None) != doc.get("version"):
+            return None
+        if found.get("source", {}).get("schema_digest") != live_digest(run, table):
+            return None
+    except Exception:                       # noqa: BLE001 - anything unclear: drafted again
+        return None
+    return {"status": "draft", "doc": doc, "profile": found, "changed": []}
 
 
 def problems(doc: dict[str, Any], live_columns: list[str] | None = None) -> list[str]:

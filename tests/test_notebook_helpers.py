@@ -898,6 +898,20 @@ class QuickstartTest(unittest.TestCase):
             self.assertIn('SELECT * FROM "VS_SALES"."ORDERS" LIMIT 1', sql.call_args_list[-1][0][1])
             self.assertIn("is a live source", out.getvalue())
 
+    def test_a_source_just_read_is_not_read_again_for_its_next_table(self):
+        answers = [("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["VS_SALES"])),
+                   ("EXA_ALL_TABLES", _Frame(TABLE_NAME=["CUSTOMERS", "ORDERS"])),
+                   ("LIMIT 1", _Frame(X=[1]))]
+        conn = object()
+        with self.run_sql(answers) as sql, redirect_stdout(io.StringIO()):
+            exakit_nb.load_source(conn, "VS_SALES.ORDERS")
+            exakit_nb.load_source(conn, "VS_SALES.CUSTOMERS")
+            probes = [c for c in sql.call_args_list if "LIMIT 1" in c[0][1]]
+            self.assertEqual(1, len(probes), "one round trip proves the source")
+            with mock.patch.object(quickstart.time, "time", return_value=quickstart.time.time() + quickstart.PROVEN_SECONDS + 1):
+                exakit_nb.load_source(conn, "VS_SALES.CUSTOMERS")
+            self.assertEqual(2, len([c for c in sql.call_args_list if "LIMIT 1" in c[0][1]]), "proven again later")
+
     def test_a_wrong_source_or_table_lists_what_is_there(self):
         answers = [("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["VS_SALES"])),
                    ("EXA_ALL_TABLES", _Frame(TABLE_NAME=["CUSTOMERS", "ORDERS"]))]

@@ -28,14 +28,17 @@ You do not need a terminal for this stage. Every step runs from a cell or a card
 
 The three options of the **Choose your data** card are tick boxes, and so is every list under them: datasets, your tables, connections, and the tables of each connection. Tick what you want from any mix of them and press **Use this data**.
 
-| What the card does               | The cell it runs                                                                                   |
-| -------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Loads each ticked table          | The same cell as for one table: `nb.load_sample`, `nb.use_table`, `nb.dataset` or `nb.load_source` |
-| Keeps each one by its table name | `chosen_tables[<table>] = ...`                                                                     |
-| Works on the first               | `chosen_data = chosen_tables[<table>]`                                                             |
-| Notes them for `01_explore`      | `nb.remember_chosen([...])`                                                                        |
+| What the card does                                                          | The cell it runs                                                                                   |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Loads each ticked table                                                     | The same cell as for one table: `nb.load_sample`, `nb.use_table`, `nb.dataset` or `nb.load_source` |
+| Keeps each one by its table name                                            | `chosen_tables[<table>] = ...`                                                                     |
+| Works on the first                                                          | `chosen_data = chosen_tables[<table>]`                                                             |
+| Notes them for `01_explore`                                                 | `nb.remember_chosen([...])`                                                                        |
+| Draws up every table's column roles in the background, every source at once | `nb.prepare_drafts([...])`                                                                         |
 
 A table that could not be loaded is named under the card with the kit's reason. The others are used.
+
+You do not wait for one table after another. The first table's column roles show while the others are still read: every source at the same time, each on its own connection, and the tables of one source in the order you chose them, since a source answers one statement at a time. A table read in the last hour whose columns have not changed is not read again, so `01_explore` opens straight away after the quickstart.
 
 What follows from the choice:
 

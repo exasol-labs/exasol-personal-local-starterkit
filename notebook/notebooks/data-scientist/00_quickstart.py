@@ -160,6 +160,13 @@ remembered = nb.remember_chosen(chosen_data)
 print("01_explore opens: " + ", ".join(remembered))
 
 # %% [markdown]
+# Several tables? Their column roles are drawn up in the background, every source at once, so `01_explore` shows them without reading each table again.
+
+# %%
+if len(remembered) > 1:
+    drafting = nb.prepare_drafts(remembered)
+
+# %% [markdown]
 # ## Next
 #
 # Open `01_explore` to understand your data - the column map and the semantic views - then prepare, explore, model and validate (steps 2 to 6). Then open `02_ask_your_data` (step 7) and `03_share` (steps 8 and 9). Each one continues this workflow.

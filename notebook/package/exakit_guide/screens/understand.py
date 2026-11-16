@@ -388,8 +388,10 @@ class ChooseData(Screen):
                 return
             raise ValueError("Tick at least one dataset, table or source.")
         several = len(wanted) > 1 or self.ADDING     # adding: every table is kept by name beside the ones there
-        if several and not self.ADDING:
-            actions.run("data.several")
+        if self.ADDING and SESSION.understanding:
+            SESSION.opened.wait(900)                 # the tables chosen before are opened first, then added to
+        if several and (not self.ADDING or not isinstance(SESSION.get("chosen_tables"), dict)):
+            actions.run("data.several")              # adding with nothing opened yet: start the set here
         chosen: list[dict] = list(SESSION.chosen) if self.ADDING else []
         before = len(chosen)
         for action_id, variable, values, label in wanted:
@@ -424,6 +426,8 @@ class ChooseData(Screen):
         if SESSION.source is None:
             raise ValueError("Nothing was loaded. The kit's note is under 'What the kit said'.")
         SESSION.chosen, SESSION.chosen_n = chosen, SESSION.chosen_n + 1
+        if len(chosen) > 1:                           # the others are read while the first one's roles are shown
+            actions.run("data.prepare", tables=[e["table"] for e in chosen])
         use_chosen(chosen[0])
         actions.run("data.remember", tables=[e["table"] for e in chosen])    # what 01_explore opens
         self.done = True
@@ -2314,6 +2318,10 @@ class Understand(Screen):
                     SESSION.chosen_n += 1
                     use_chosen(SESSION.chosen[0])
                     print(f"Reading {tables[0]}: each column's type, how many values and how they spread")
+                    with SESSION.showing_queries():
+                        SESSION.changed("source", None)
+                elif SESSION.review is None and SESSION.source is not None:
+                    # tables were chosen before this card was there (Choose your data above): draw up the first one
                     with SESSION.showing_queries():
                         SESSION.changed("source", None)
         except Exception as exc:

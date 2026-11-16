@@ -128,6 +128,28 @@ class FlowTest(unittest.TestCase):
     def describe(self, **kw):
         return flow.describe(self.db.run, "support.tickets", home=self.home, **kw)
 
+    def test_a_fresh_draft_is_used_again_without_reading_the_table(self):
+        first = self.describe()
+        again = self.describe()
+        self.assertEqual(1, self.profiles, "drawn up a moment ago (in the background): not read twice")
+        self.assertEqual(first["doc"], again["doc"])
+        self.describe(force=True)
+        self.assertEqual(2, self.profiles, "force reads it again")
+
+    def test_a_stale_or_changed_draft_is_drawn_up_again(self):
+        import os
+
+        self.describe()
+        draft = store.folder("SUPPORT.TICKETS", self.home) / store.DRAFT
+        old = draft.stat().st_mtime - flow.DRAFT_FRESH_SECONDS - 60
+        os.utime(draft, (old, old))
+        self.describe()
+        self.assertEqual(2, self.profiles, "older than an hour: read again")
+        self.db.columns.append(("NOTE", "VARCHAR(100) UTF8"))
+        self.db.data = [row + ["n"] for row in self.db.data]
+        self.describe()
+        self.assertEqual(3, self.profiles, "the columns changed: read again")
+
     def approve(self, doc, **kw):
         kw.setdefault("now", lambda: dt.datetime(2026, 11, 3, 10, 14, tzinfo=dt.timezone.utc))
         with mock.patch.object(store, "kit_home", return_value=self.home):

@@ -1243,7 +1243,7 @@ class SeveralTablesTest(unittest.TestCase):
         ran = self.use({"kind": ["sample", "file", "source"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"],
                         "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY", "STATE_LOGISTICS"]})
         self.assertEqual(["data.several", "data.sample", "data.keep", "data.table", "data.keep", "data.source", "data.keep",
-                          "data.source", "data.switch"], ran)
+                          "data.source", "data.switch", "data.prepare"], ran)
         self.assertEqual(["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"],
                          [e["table"] for e in self.session.chosen])
         self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table)
@@ -1257,7 +1257,8 @@ class SeveralTablesTest(unittest.TestCase):
         self.session.chosen = [{"label": "Amazon", "table": "AMAZON.ORDER_LINES", "variable": None, "rows": None, "broken": None}]
         self.card.ADDING = True
         ran = self.use({"kind": ["source"], "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY"]})
-        self.assertEqual(["data.source", "data.keep", "data.switch"], ran, "the tables there stay: no data.several")
+        self.assertEqual(["data.source", "data.keep", "data.switch", "data.prepare"], ran,
+                         "the tables there stay (no data.several); all of them are drafted in the background")
         self.assertEqual(["VS_LOGISTICS.COURIER_DAILY", "AMAZON.ORDER_LINES"], [e["table"] for e in self.session.chosen])
         self.assertEqual({"AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"}, set(self.session._ns["chosen_tables"]))
         with self.assertRaisesRegex(ValueError, "Nothing new"):
@@ -1400,7 +1401,7 @@ class SeveralTablesTest(unittest.TestCase):
                 mock.patch.object(self.card, "_load_options"):
             ran = self.use({**values, "table": "COURIER_DAILY"})
         connect.assert_called_once()
-        self.assertEqual(["data.several", "data.table", "data.keep", "data.source", "data.keep", "data.switch"], ran)
+        self.assertEqual(["data.several", "data.table", "data.keep", "data.source", "data.keep", "data.switch", "data.prepare"], ran)
         self.assertEqual(["MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"], [e["table"] for e in self.session.chosen])
         self.ran.clear()
         self.card.connector = "postgresql"
@@ -1959,6 +1960,90 @@ class ToggleTest(unittest.TestCase):
         self.assertIn('exakit_guide = ["static/*.js", "static/*.css"]', toml)
         self.assertIn('"anywidget==0.11.0"', toml)
         self.assertIn('"exakit_guide.screens"', toml)
+
+
+class PrepareDraftsTest(unittest.TestCase):
+    """Use this data: every chosen table's column roles drawn up in the background, sources at once, one source's
+    tables in order, and a table being read waited for instead of read twice."""
+
+    def setUp(self):
+        import threading
+
+        import exakit_nb  # noqa: F401 - loads the module below (the package's name "describe" is the function)
+
+        module = sys.modules["exakit_nb.describe"]
+        self.module = module
+        self.lock = threading.Lock()
+        self.release = threading.Event()
+        self.order: list[str] = []
+        self.busy: dict[str, int] = {}
+        self.most: dict[str, int] = {}
+        self.connections = 0
+        test = self
+
+        class Service:
+            @staticmethod
+            def describe(conn, table):
+                schema = table.split(".")[0]
+                with test.lock:
+                    test.order.append(table)
+                    test.busy[schema] = test.busy.get(schema, 0) + 1
+                    test.most[schema] = max(test.most.get(schema, 0), test.busy[schema])
+                test.release.wait(5)
+                with test.lock:
+                    test.busy[schema] -= 1
+                if table.endswith("BROKEN"):
+                    raise RuntimeError("the source refused\nmore detail")
+                return {"status": "draft"}
+
+        class Conn:
+            def close(self):
+                pass
+
+        def connect():
+            with self.lock:
+                self.connections += 1
+            return Conn()
+
+        patches = [mock.patch.object(module, "describe_service", return_value=Service()),
+                   mock.patch("exakit_nb.connect", side_effect=connect),
+                   mock.patch.dict(module._PREPARING, clear=True), mock.patch.dict(module.PREPARED, clear=True)]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_sources_are_read_at_once_and_one_sources_tables_in_order(self):
+        tables = ["VS_TEST.ORDERS", "VS_TEST.CUSTOMERS", "VS_CATALOG.category_costs", "AMAZON.ORDER_LINES", "VS_TEST.BROKEN"]
+        said = self.module.prepare_drafts(tables)
+        self.assertEqual({t: "reading" for t in tables}, said, "returns at once")
+        self.module.prepare_drafts(["VS_TEST.ORDERS"])          # a table being read is not queued again (read once, below)
+        time.sleep(0.2)
+        self.release.set()
+        for table in tables:
+            self.assertTrue(self.module._PREPARING[table.upper()].wait(5))
+        self.assertEqual({"VS_TEST": 1, "VS_CATALOG": 1, "AMAZON": 1}, self.most, "one statement at a time per source")
+        self.assertEqual(["VS_TEST.ORDERS", "VS_TEST.CUSTOMERS", "VS_TEST.BROKEN"],
+                         [t for t in self.order if t.startswith("VS_TEST.")], "first chosen, first read")
+        self.assertEqual(3, self.connections, "one connection a source")
+        self.assertEqual(5, len(self.order), "each table read once")
+        self.assertEqual("the source refused", self.module.PREPARED["VS_TEST.BROKEN"])
+        self.assertEqual("ready", self.module.PREPARED["VS_TEST.ORDERS"])
+
+    def test_describe_waits_for_a_table_being_read(self):
+        import threading
+
+        self.module.prepare_drafts(["VS_TEST.ORDERS"])
+        waited = threading.Event()
+        with mock.patch.object(self.module, "_resolve", side_effect=lambda t: (t, None)), \
+                mock.patch.object(self.module._PREPARING["VS_TEST.ORDERS"], "wait",
+                                  side_effect=lambda timeout=None: waited.set() or True):
+            try:
+                self.module.describe("VS_TEST.ORDERS", conn=object())
+            except Exception:  # noqa: BLE001 - only the wait is checked here, not the rest of describe
+                pass
+        self.assertTrue(waited.is_set(), "nb.describe waits for the background read of the same table")
+        self.release.set()
+        self.assertTrue(self.module._PREPARING["VS_TEST.ORDERS"].wait(5))     # finished before the next test
 
 
 if __name__ == "__main__":
