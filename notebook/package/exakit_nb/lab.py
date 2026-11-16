@@ -48,6 +48,13 @@ CLUSTERERS: dict[str, tuple] = {}
 DETECTORS: dict[str, tuple] = {}
 
 
+def _text(series) -> bool:
+    """A column of text: object in pandas 2, its own string dtype in pandas 3."""
+    from pandas.api import types
+
+    return types.is_object_dtype(series) or types.is_string_dtype(series)
+
+
 def _catalog() -> None:
     if CLASSIFIERS:
         return
@@ -193,7 +200,7 @@ def load(conn, ds, leaks: list[str]) -> Data:
     for c in numeric:
         frame[c] = pd.to_numeric(frame[c], errors="coerce").astype(float)
     for c in categorical:
-        if frame[c].dtype == object and frame[c].dropna().map(lambda v: hasattr(v, "as_integer_ratio") and not isinstance(v, bool)).all():
+        if _text(frame[c]) and frame[c].dropna().map(lambda v: hasattr(v, "as_integer_ratio") and not isinstance(v, bool)).all():
             frame[c] = pd.to_numeric(frame[c], errors="coerce")
     if date:
         frame[date] = pd.to_datetime(frame[date], errors="coerce")
@@ -255,7 +262,7 @@ def prepare(d: Data, task: str, target_number: str | None = None, extra: dict[st
     X = f[numeric + categorical].copy()
     for name, series in (extra or {}).items():
         X[name] = series.reindex(X.index)
-        (categorical if X[name].dtype == object else numeric).append(name)
+        (categorical if _text(X[name]) else numeric).append(name)
     for c in categorical:
         X[c] = X[c].astype(str).where(X[c].notna(), None)
     return Run(task, target, X, y, numeric, categorical, metric, label, rate, notes, dropped)
@@ -526,7 +533,7 @@ def ideas(d: Data, run: Run) -> list[Idea]:
             out.append(Idea(f"missing_{m}", f"Whether {m} is missing", f"{f[m].isna().mean():.1%} of rows have no {m}. Sometimes a blank is a signal.",
                             f'CASE WHEN "{m}" IS NULL THEN 1 ELSE 0 END', lambda fr, m=m: fr[m].isna().astype(float)))
     for c in cats:
-        if f[c].dtype == object:
+        if _text(f[c]):
             avg_len = f[c].dropna().astype(str).str.len().mean()
             if avg_len and avg_len > 20:
                 words = "|".join(NEGATIVE_WORDS)

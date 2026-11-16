@@ -282,7 +282,8 @@ def _prepare(frame, descriptor=None) -> list[tuple[str, str]]:
         # the column type, without asking the user to map roles before the role picker appears.
         for name in frame.columns:
             column = frame[name]
-            if not types.is_object_dtype(column) or column.dropna().empty:
+            # text: object in pandas 2, its own string dtype in pandas 3
+            if not (types.is_object_dtype(column) or types.is_string_dtype(column)) or column.dropna().empty:
                 continue
             sample = column.dropna().astype(str).head(int(LOAD_RULES["DATE_SAMPLE"]))
             if not sample.str.contains(r"[-/:]", regex=True).mean() >= float(LOAD_RULES["DATE_SHARE"]):
