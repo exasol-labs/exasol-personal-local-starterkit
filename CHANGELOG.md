@@ -10,7 +10,7 @@
   (LibreSSL) openssl, and a first boot that the launcher recorded as failed
   while its database runs is recovered: the kit's own runner is proven to
   belong to this deployment before it is restarted, and the data is kept.
-- **Uninstall removes everything the kit added** - the launcher download
+- **Uninstall removes more of what the kit added** - the launcher download
   cache, empty `~/.exasol` folders, autostart entries (orphaned ones too), the
   kit's `exasol/nano` image when no container uses it (Docker/Podman hosts),
   the legacy permission rules - and says plainly when something stays.

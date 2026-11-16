@@ -21,8 +21,8 @@
     "already had the kit working and wants to know what is different."
   ],
   "0.2.5": [
-    "macOS: install works with stock OpenSSL and recovers a stuck one.",
-    "Uninstall removes all the kit added: cache, folders, autostart,",
+    "macOS: install works with stock LibreSSL and recovers a failed boot.",
+    "Uninstall also removes the kit's cache, empty folders, autostart,",
     "the kit's Docker/Podman image and old permission rules.",
     "Uninstall now says plainly when something stays, and why.",
     "Windows: mcp-doctor and mcp-setup work from AI agent shells.",
