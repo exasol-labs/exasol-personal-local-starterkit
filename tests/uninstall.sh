@@ -9,6 +9,22 @@
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# A harness that forgot to load or stub a function prints "command not found"
+# and carries on, so the suite passed while not running the code it names.
+# Run the suite once more as a child, keep its output, and fail on any such line.
+if [ -z "${EXAKIT_UNINSTALL_SH_INNER:-}" ]; then
+    _log="$(mktemp)"
+    EXAKIT_UNINSTALL_SH_INNER=1 bash "$0" "$@" 2>&1 | tee "$_log"
+    _rc="${PIPESTATUS[0]}"
+    if grep -q 'command not found' "$_log"; then
+        printf '  FAIL the suite printed "command not found" (a harness is missing a function):\n'
+        grep 'command not found' "$_log" | sed 's/^/    /'
+        rm -f "$_log"
+        exit 1
+    fi
+    rm -f "$_log"
+    exit "$_rc"
+fi
 PASS=0
 FAIL=0
 SANDBOX="$(mktemp -d)"
@@ -43,6 +59,17 @@ export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_EXAPUMP_CONFIG_DIR
 
 # --- stub the externals the engine calls ---------------------------------
 info(){ :; }; warn(){ :; }; ok(){ :; }; die(){ echo "die: $*" >&2; exit 1; }
+ok_step(){ :; }; info_step(){ :; }; ui_spin_end(){ :; }; _exakit_log_file(){ :; }
+ui_tilde(){ printf '%s' "$1"; }
+# The boot-entry sweep runs for real against sandbox folders; the service
+# managers it would call are stubbed, never the machine's.
+EXAKIT_LAUNCHAGENT_DIR="$HOME/Library/LaunchAgents"
+EXAKIT_SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
+EXAKIT_AUTOSTART_PREFIX="com.exasol.exakit"
+launchctl(){ printf '%s\n' "$*" >> "$SANDBOX/marker_launchctl"; }
+systemctl(){ printf '%s\n' "$*" >> "$SANDBOX/marker_systemctl"; }
+exakit_service_ids(){ :; }
+_exakit_autostart_registered(){ return 1; }
 manifest_get(){
     case "$1" in
         runtime.type) echo personal ;;
@@ -64,6 +91,9 @@ exakit_marketplace_addons(){ printf '%s\n' "dash-server|x"; }
 # selectable uninstall menu).
 eval "$(awk '/^_exakit_remove_installed_skills\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
 eval "$(awk '/^exakit_uninstall_run\(\)/{f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+for _fn in _exakit_uninstall_orphan_autostart _exakit_uninstall_teardown_warnings; do
+    eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/lib/common.sh")"
+done
 
 exakit_uninstall_run "$DRY"
 HARNESS
@@ -89,6 +119,10 @@ seed() { # (re)create the fake install artifacts
     : > "$SANDBOX/home/.exasol-starter-kit/manifest.json"
     # A bystander app must survive: exapump/kit removal must not touch it.
     : > "$SANDBOX/home/.local/bin/some-other-tool"
+    # A boot entry the kit owns that step 0a left behind, and one that is not.
+    mkdir -p "$SANDBOX/home/Library/LaunchAgents"
+    : > "$SANDBOX/home/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist"
+    : > "$SANDBOX/home/Library/LaunchAgents/com.example.other.plist"
     rm -f "$SANDBOX"/marker_*
 }
 
@@ -102,6 +136,7 @@ check "dry: kit home kept"        yes "$(exists "$H/.exasol-starter-kit")"
 check "dry: exasol bin kept"      yes "$(exists "$H/.local/bin/exasol")"
 check "dry: skill kept"           yes "$(exists "$H/.claude/skills/local-agent-ready-starter")"
 check "dry: no db teardown"       no  "$(exists "$SANDBOX/marker_personal")"
+check "dry: orphaned boot entry kept" yes "$(exists "$H/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist")"
 
 # --- real run: everything removed, teardown + mcp removal invoked ----------
 seed
@@ -125,6 +160,8 @@ check "real: skill B gone"        no  "$(exists "$H/.claude/skills/exasol-runtim
 # removes only what its own install recorded — never the whole folder.
 check "real: foreign skill kept"  yes "$(exists "$H/.claude/skills/somebody-elses-skill")"
 check "real: bystander kept"      yes "$(exists "$H/.local/bin/some-other-tool")"
+check "real: orphaned boot entry removed" no "$(exists "$H/Library/LaunchAgents/com.exasol.exakit.gone-addon.plist")"
+check "real: another app's boot entry kept" yes "$(exists "$H/Library/LaunchAgents/com.example.other.plist")"
 
 # --- idempotent: a second real run on the now-empty tree must not error ----
 run_engine 0; check "idempotent second run" 0 "$?"
