@@ -510,6 +510,18 @@ function Show-ExakitHelpCommand {
                 Write-Host ""
                 Write-ExakitHelpWrapped -Text ("! " + $entry.warning) -Indent "    "
             }
+            # Twin of the exit_codes block in help.sh's render_command_detail:
+            # numeric order, one "code  meaning" line each.
+            if ($entry.PSObject.Properties["exit_codes"] -and $entry.exit_codes) {
+                Write-Host ""
+                Write-Host "    Exit codes" -ForegroundColor DarkGray
+                $codes = @($entry.exit_codes.PSObject.Properties | Sort-Object { [int]$_.Name })
+                foreach ($c in $codes) {
+                    Write-Host "      " -NoNewline
+                    Write-Host $c.Name -ForegroundColor Green -NoNewline
+                    Write-Host "  $($c.Value)"
+                }
+            }
             if ($entry.examples) {
                 Write-Host ""
                 Write-Host "    Examples" -ForegroundColor DarkGray

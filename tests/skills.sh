@@ -496,6 +496,15 @@ rows = [c for c in d["commands"] if c["invocation"] == "exakit skills-install"]
 print(bool(rows) and rows[0].get("hidden") is True)' 2>/dev/null)"
 has "but exakit skills-install --help still renders its page" "The installer already does this" "$(bash "$ROOT/setup/exakit" skills-install --help 2>/dev/null)"
 has "the PowerShell renderer filters hidden entries the same way" 'Get-ExakitHelpVisibleCommands' "$(cat "$ROOT/setup/lib/help.ps1")"
+# Both renderers show a command's exit_codes block (bash: help.sh).
+has "exakit uninstall --help (bash) lists its exit codes" "Exit codes" "$(bash "$ROOT/setup/exakit" help uninstall 2>/dev/null)"
+if command -v pwsh >/dev/null 2>&1; then
+    _ps_help="$(ROOT="$ROOT" pwsh -NoProfile -Command '. (Join-Path $env:ROOT "setup/lib/help.ps1"); $script:LibDir = Join-Path $env:ROOT "setup/lib"; [void](Show-ExakitHelpCommand -Name "uninstall")' 2>&1)"
+    has "Show-ExakitHelpCommand (PowerShell) lists the exit codes too" "Exit codes" "$_ps_help"
+    has "  ...code 1 with its meaning" "1  something remains" "$_ps_help"
+else
+    has "Show-ExakitHelpCommand renders exit_codes" 'Write-Host "    Exit codes"' "$(cat "$ROOT/setup/lib/help.ps1")"
+fi
 has "exakit skills names the repair only when a skill is missing" 'exakit skills-install' "$(sed -n '/^exakit_skills_list()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "skills --json carries the verdict" '"installed_version"' "$(sed -n '/^_exakit_skills_json_compact()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "info --json carries the skills block" 'doc["skills"] = {' "$(sed -n '/^cmd_info_json()/,/^}/p' "$ROOT/setup/exakit")"
