@@ -330,6 +330,28 @@ Invoke-ExakitUninstallRun
 Check "h3c: no other deployment anywhere: the cache goes" "False" (Test-Path $cache)
 $script:PersonalDeployDir = $savedDeploy
 Remove-Item -Recurse -Force (Join-Path $fakeHome "custom") -ErrorAction SilentlyContinue
+# (h3d) the launcher cache is a symlink (a reparse point): kept, never followed.
+# Creating one needs Developer Mode or admin on Windows; without it the case is
+# a counted skip.
+Reset-Exa; Seed-Kit; Seed-Deploy
+if (Test-Path $cache) { Remove-Item -Recurse -Force $cache }
+$cacheTarget = Join-Path $sandbox "cache-target"
+New-Item -ItemType Directory -Force -Path (Join-Path $cacheTarget "personal") | Out-Null
+New-Item -ItemType File -Force -Path (Join-Path $cacheTarget "personal\keep") | Out-Null
+$linked = $false
+try { New-Item -ItemType SymbolicLink -Path $cache -Target $cacheTarget -ErrorAction Stop | Out-Null; $linked = $true } catch { }
+if ($linked) {
+    Invoke-ExakitUninstallRun
+    $li = Get-Item -LiteralPath $cache -Force -ErrorAction SilentlyContinue
+    Check "h3d: a symlinked cache is kept" "True" ([bool]($li -and ($li.Attributes -band [System.IO.FileAttributes]::ReparsePoint)))
+    Check "h3d: and what it points at is untouched" "True" (Test-Path (Join-Path $cacheTarget "personal\keep"))
+    Lacks "h3d: and not reported removed" "Launcher download cache removed" $script:out
+    try { [System.IO.Directory]::Delete($cache, $false) } catch { Remove-Item -Force $cache -ErrorAction SilentlyContinue }
+} else {
+    $script:SKIP = 1 + [int]$script:SKIP
+    Write-Host "  skip h3d: this account cannot create a symbolic link"
+}
+Remove-Item -Recurse -Force $cacheTarget -ErrorAction SilentlyContinue
 # (h4) a file in ~/.exasol keeps it; the empty folders below still go.
 Reset-Exa; Seed-Kit; Seed-Deploy; Seed-Cache
 New-Item -ItemType File -Force -Path (Join-Path $exaRoot "notes") | Out-Null
@@ -490,5 +512,5 @@ Lacks "and never runs the destroy" "DESTROY-CALLED" $o
 
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""
-Write-Host "PASS=$($script:PASS) FAIL=$($script:FAIL)"
+Write-Host "PASS=$($script:PASS) FAIL=$($script:FAIL) SKIP=$([int]$script:SKIP)"
 if ($script:FAIL -ne 0) { exit 1 }
