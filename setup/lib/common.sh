@@ -12760,8 +12760,9 @@ EXAKIT_UM_PANEL_EOF
 # environment carries what the kit wrote into every client config: EXA_USER is
 # the kit's read-only MCP user and EXA_DSN is a loopback address. The
 # environment is read from /proc/<pid>/environ (Linux) or `ps -E` (macOS);
-# where neither answers, nothing qualifies and nothing is stopped. Twin of
-# Get-ExakitKitMcpServerPids.
+# where neither answers, nothing qualifies and nothing is stopped. No
+# PowerShell twin: Windows cannot read another process's environment, so the
+# Windows uninstall only asks the user to restart open AI clients.
 _exakit_kit_mcp_server_pids() {
     _kmp_user="${EXAKIT_MCP_USER:-mcp_readonly}"
     ps -axww -o pid=,command= 2>/dev/null | while read -r _kmp_pid _kmp_cmd; do
