@@ -297,7 +297,7 @@ if ($env:USERPROFILE -and $want.StartsWith($env:USERPROFILE + [string][char]92, 
     $want = "%USERPROFILE%" + $want.Substring($env:USERPROFILE.Length)
 }
 Check "shim: checks its target exists" "True" ($shim.Contains("if exist `"$want`" goto run"))
-Check "shim: says it is a leftover" "True" ($shim.Contains("exakit was uninstalled - this leftover launcher (%~f0) removes itself now."))
+Check "shim: says it is a leftover" "True" ($shim.Contains("exakit was uninstalled - this leftover launcher (`"%~f0`") removes itself now."))
 Check "shim: self-deletes after leaving the batch context" "True" ($shim.Contains("(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"))
 Check "shim: still runs the target" "True" ($shim.Contains("powershell -NoProfile -ExecutionPolicy Bypass -File `"$want`" %*"))
 Check "shim: pure ASCII" "True" (-not ($shim -match '[^\x00-\x7F]'))

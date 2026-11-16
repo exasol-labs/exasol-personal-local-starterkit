@@ -3306,7 +3306,7 @@ function Get-ExakitCmdShimContent {
     $nl = "`r`n"
     return "@echo off" + $nl +
         "if exist `"$target`" goto run" + $nl +
-        ">&2 echo exakit was uninstalled - this leftover launcher (%~f0) removes itself now." + $nl +
+        ">&2 echo exakit was uninstalled - this leftover launcher (`"%~f0`") removes itself now." + $nl +
         "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1" + $nl +
         ":run" + $nl +
         "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*" + $nl
