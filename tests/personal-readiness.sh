@@ -144,7 +144,7 @@ run_logged(){
     esac
     case " \$* " in *" \${STUB_FAIL_VERB:-never} "*) return 1;; esac; return 0; }
 detect_wsl_version(){ [ "\${STUB_WSL:-0}" = 1 ]; }
-EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+EXAKIT_PERSONAL_DEPLOY_DIR="\${STUB_DEPLOY_DIR:-$TMP/no-deployment}"
 source "$ROOT/setup/lib/runtime-personal.sh"
 personal_cli(){ printf 'exasol-stub'; }
 personal_auto_approve_flag(){ printf -- '--auto-approve'; }
@@ -302,11 +302,15 @@ case "$(uname -s)" in
     *)      RCACHE="$RHOME/.cache/.exasol" ;;
 esac
 RDIR="$RCACHE/personal/runtime-artifacts/exasol-local-runner/darwin/arm64/abc123/unpack"
-mkdir -p "$RDIR" "$TMP/elsewhere"
+# The runner works in its deployment's directory: that is how the kit proves
+# a runner is THIS deployment's, not another deployment's from the same cache.
+RDEPLOY="$TMP/deployments/default"
+ODEPLOY="$TMP/deployments/other"
+mkdir -p "$RDIR" "$TMP/elsewhere" "$RDEPLOY" "$ODEPLOY"
 cp "$TMP/tls_server.py" "$RDIR/launcher"
 cp "$TMP/tls_server.py" "$TMP/elsewhere/exasol-local-runner-copy"
-start_listener() { # start_listener <script> <port> -> pid, once the port is held
-    python3 "$1" "$2" "$TMP/cert.pem" "$TMP/key.pem" >/dev/null 2>&1 &
+start_listener() { # start_listener <script> <port> [cwd] -> pid, once the port is held
+    (cd "${3:-$TMP}" && exec python3 "$1" "$2" "$TMP/cert.pem" "$TMP/key.pem") >/dev/null 2>&1 &
     _lp=$!; CHILDREN="$CHILDREN $_lp"
     _w=0; until (exec 3<>"/dev/tcp/127.0.0.1/$2") 2>/dev/null; do _w=$((_w + 1)); [ "$_w" -ge 40 ] && break; sleep 0.25; done
     echo "$_lp"
@@ -314,11 +318,11 @@ start_listener() { # start_listener <script> <port> -> pid, once the port is hel
 alive() { kill -0 "$1" 2>/dev/null && echo yes || echo no; }
 if command -v lsof >/dev/null 2>&1; then
     RUN_PORT="$(pick_port $((CLOSED_PORT + 20)))"
-    _rpid="$(start_listener "$RDIR/launcher" "$RUN_PORT")"
-    _hint_own="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_PORT="$RUN_PORT" -- 'personal_foreign_db_hint')"
+    _rpid="$(start_listener "$RDIR/launcher" "$RUN_PORT" "$RDEPLOY")"
+    _hint_own="$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_PORT="$RUN_PORT" -- 'personal_foreign_db_hint')"
     contains "the kit's own runner on the port is named as ours" "own Exasol runner (pid $_rpid)" "$_hint_own"
     case "$_hint_own" in *"did not deploy"*) check "  ...not as a foreign database" "not foreign" "foreign" ;; *) check "  ...not as a foreign database" "not foreign" "not foreign" ;; esac
-    _out="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_rpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=10 -- 'personal_start')"
+    _out="$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_rpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=10 -- 'personal_start')"
     check "own runner + deployment_failed -> exit 0" 0 "$(rc_of "$_out")"
     contains "  ...says why it stops the VM" "while its VM still runs" "$_out"
     contains "  ...the runner was signalled" "KILL -TERM $_rpid" "$(cat "$TMP/calls")"
@@ -327,11 +331,23 @@ if command -v lsof >/dev/null 2>&1; then
     _kl="$(sed -n '/KILL -TERM/=' "$TMP/calls" | head -1)"; _dl="$(sed -n '/RUN exasol-stub deploy/=' "$TMP/calls" | head -1)"
     check "  ...stop before deploy" yes "$([ -n "$_kl" ] && [ -n "$_dl" ] && [ "$_kl" -lt "$_dl" ] && echo yes || echo "no ($(tr '\n' ';' < "$TMP/calls"))")"
 
+    # NEGATIVE: the launcher's own runner, from the launcher's own cache, but
+    # working for ANOTHER deployment (its cwd is that deployment's directory).
+    # Not provably this deployment's runner - never signalled.
+    RUN_PORT4="$(pick_port $((RUN_PORT + 1)))"
+    _opid="$(start_listener "$RDIR/launcher" "$RUN_PORT4" "$ODEPLOY")"
+    _out="$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_opid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT4" -- 'personal_start')"
+    check "own-cache runner of another deployment -> old behaviour (dies)" 1 "$(rc_of "$_out")"
+    check "  ...it was not killed" yes "$(alive "$_opid")"
+    case "$(cat "$TMP/calls")" in *KILL*) check "  ...no signal sent" none sent ;; *) check "  ...no signal sent" none none ;; esac
+    check "  ...not named as this kit's runner" 1 "$(rc_of "$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_PORT="$RUN_PORT4" -- '_personal_port_held_by_own_runner')")"
+    kill -9 "$_opid" 2>/dev/null || true
+
     # NEGATIVE: the same name outside the launcher's cache is not certainly
     # ours - untouched, and the old behaviour (deploy, which fails) stands.
-    RUN_PORT2="$(pick_port $((RUN_PORT + 1)))"
-    _fpid="$(start_listener "$TMP/elsewhere/exasol-local-runner-copy" "$RUN_PORT2")"
-    _out="$(probe STUB_REAL_PIDS=1 HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_fpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT2" -- 'personal_start')"
+    RUN_PORT2="$(pick_port $((RUN_PORT4 + 1)))"
+    _fpid="$(start_listener "$TMP/elsewhere/exasol-local-runner-copy" "$RUN_PORT2" "$RDEPLOY")"
+    _out="$(probe STUB_REAL_PIDS=1 STUB_DEPLOY_DIR="$RDEPLOY" HOME="$RHOME" XDG_CACHE_HOME= STUB_VM_PID="$_fpid" STUB_STATE=deployment_failed STUB_PORT="$RUN_PORT2" -- 'personal_start')"
     check "runner name outside the cache -> old behaviour (dies)" 1 "$(rc_of "$_out")"
     check "  ...it was not killed" yes "$(alive "$_fpid")"
     case "$(cat "$TMP/calls")" in *KILL*) check "  ...no signal sent" none sent ;; *) check "  ...no signal sent" none none ;; esac
