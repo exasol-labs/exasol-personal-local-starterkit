@@ -275,7 +275,7 @@ Write-Host "exakit.cmd self-cleaning shim"
 $cErr = $null; $cTok = $null
 $cAst = [System.Management.Automation.Language.Parser]::ParseFile(
     (Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$cTok, [ref]$cErr)
-foreach ($name in @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim", "Test-ExakitCmdShimCurrent")) {
+foreach ($name in @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim", "Test-ExakitCmdShimCurrent", "Write-ExakitCmdShimFile", "Get-ExakitShimLauncherPids", "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell")) {
     $def = $cAst.FindAll({ param($n)
         $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
     if (-not $def) { throw "$name not found in exakit-common.ps1" }
