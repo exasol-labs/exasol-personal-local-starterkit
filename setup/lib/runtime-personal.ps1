@@ -2081,12 +2081,24 @@ function Get-PersonalLauncherCacheDir {
 # shared cache and the state directories in place. Twin of
 # personal_other_deployments.
 function Get-PersonalOtherDeployments {
-    $parent = Split-Path -Parent $script:PersonalDeployDir
-    if (-not $parent -or -not (Test-Path -LiteralPath $parent -PathType Container)) { return @() }
+    # Both places a deployment can live: beside the configured deploy dir, and
+    # the launcher's default ~\.exasol\personal\deployments when the kit's
+    # deployment is elsewhere. The launcher cache is shared by all of them.
     $self = [System.IO.Path]::GetFullPath($script:PersonalDeployDir).TrimEnd('\', '/')
+    $dirs = @()
+    $parent = Split-Path -Parent $script:PersonalDeployDir
+    if ($parent) { $dirs += [System.IO.Path]::GetFullPath($parent).TrimEnd('\', '/') }
+    $homeDir = $HOME
+    if ($homeDir) {
+        $default = [System.IO.Path]::GetFullPath((Join-Path $homeDir ".exasol\personal\deployments")).TrimEnd('\', '/')
+        if ($dirs -notcontains $default) { $dirs += $default }
+    }
     $others = @()
-    foreach ($e in @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue)) {
-        if ($e.FullName.TrimEnd('\', '/') -ne $self) { $others += $e.FullName }
+    foreach ($d in $dirs) {
+        if (-not (Test-Path -LiteralPath $d -PathType Container)) { continue }
+        foreach ($e in @(Get-ChildItem -LiteralPath $d -Force -ErrorAction SilentlyContinue)) {
+            if ($e.FullName.TrimEnd('\', '/') -ne $self) { $others += $e.FullName }
+        }
     }
     return $others
 }

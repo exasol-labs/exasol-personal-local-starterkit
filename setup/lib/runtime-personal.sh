@@ -3233,14 +3233,26 @@ personal_launcher_cache_dir() {
 # directory other than the kit's own deployment, one per line. Anything there
 # (another deployment, or a file nobody can vouch for) keeps the shared cache
 # and the state directories in place.
+#
+# Both places a deployment can live are scanned: beside the configured deploy
+# dir, and the launcher's default ~/.exasol/personal/deployments when the kit's
+# deployment is elsewhere (EXAKIT_PERSONAL_DEPLOY_DIR set). The launcher cache
+# is shared by every deployment, wherever it lives.
 personal_other_deployments() {
     _pod_parent="$(dirname "$EXAKIT_PERSONAL_DEPLOY_DIR")"
-    [ -d "$_pod_parent" ] || return 0
-    for _pod_e in "$_pod_parent"/* "$_pod_parent"/.[!.]* "$_pod_parent"/..?*; do
-        [ -e "$_pod_e" ] || [ -L "$_pod_e" ] || continue
-        [ "$_pod_e" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && continue
-        printf '%s\n' "$_pod_e"
+    _pod_default="${HOME:-}/.exasol/personal/deployments"
+    for _pod_dir in "$_pod_parent" "$_pod_default"; do
+        [ -n "${HOME:-}" ] || [ "$_pod_dir" = "$_pod_parent" ] || continue
+        [ -d "$_pod_dir" ] || continue
+        for _pod_e in "$_pod_dir"/* "$_pod_dir"/.[!.]* "$_pod_dir"/..?*; do
+            [ -e "$_pod_e" ] || [ -L "$_pod_e" ] || continue
+            [ "$_pod_e" = "$EXAKIT_PERSONAL_DEPLOY_DIR" ] && continue
+            printf '%s\n' "$_pod_e"
+        done
+        # One scan when the two are the same directory.
+        [ "$_pod_parent" = "$_pod_default" ] && break
     done
+    return 0
 }
 
 # personal_prunable_state_dirs — the launcher's state directories
