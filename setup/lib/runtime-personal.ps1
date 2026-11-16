@@ -2241,3 +2241,13 @@ function Update-Personal {
         Info "Its next 'exakit stop' followed by 'exakit start' moves the containers onto the launcher's own deployment network, once."
     }
 }
+
+# Test-PersonalPortHeldByOwnRunner - twin of _personal_port_held_by_own_runner
+# in runtime-personal.sh. On Windows the database port belongs to the
+# engine's relay, not to a kit runner process, so ownership of the listener
+# cannot be proven from here: the answer is always "not proven". mcp-doctor's
+# stale-record check (Test-ExakitMcpDoctorFailedRecordAnswers) therefore keeps
+# its plain behaviour on Windows, and `exakit start` remains the repair.
+function Test-PersonalPortHeldByOwnRunner {
+    return $false
+}

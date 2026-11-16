@@ -337,7 +337,10 @@ Write-Host "mcp-doctor: deployment_failed while the database answers:"
 $script:stubState = "deployment_failed"; $script:stubAnswers = $true; $script:stubOwn = $true
 function Get-PersonalLauncherState { $script:stubState }
 function Test-PersonalDbAnswers { $script:stubAnswers }
-Remove-Item Function:\Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue
+# The shipped Windows twin proves nothing (the port is the engine relay's).
+$rpText = Get-Content -Raw (Join-Path $repo "setup/lib/runtime-personal.ps1")
+Check "doctor: the Windows runner proof always says no" "True" ($rpText -match 'function Test-PersonalPortHeldByOwnRunner \{\s*return \$false')
+function Test-PersonalPortHeldByOwnRunner { $false }
 Check "doctor: no runner proof on this side -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
 function Test-PersonalPortHeldByOwnRunner { $script:stubOwn }
 Check "doctor: failed record, answers, own runner -> reachable" "True" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
