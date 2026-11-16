@@ -212,7 +212,10 @@ function Get-ExakitComponentAvailable($id) { return "9.9.9" }
 function Get-DashServerInstalledVersion { return "9.9.9" }
 $script:portOurs = $true; $script:stopped = 0; $script:started = 0; $script:stoppedIds = @()
 function Get-DashServerOurPortPids { if ($script:portOurs) { return @(2147483001) } return @() }
-function Stop-DashServerPid { param([int]$Id) $script:stopped++; $script:stoppedIds += $Id; $script:running = @() }
+function Stop-DashServerPid { param([int]$Id) $script:stopped++; $script:stoppedIds += $Id; $script:running = @($script:running | Where-Object { $_ -ne $Id }) }
+$script:idle = @()
+function Get-DashServerIdleLauncherPids { return @($script:idle | Where-Object { $script:running -contains $_ }) }
+function Warn2 { param($m) $script:said += $m }
 # The pid-file path must never be used here: a stale recorded pid can belong
 # to another process after a reboot.
 function Stop-DashServer { throw "Restart-DashServerForStagedLauncher must not call Stop-DashServer" }
@@ -231,6 +234,28 @@ Check "ours: only the pid proven on our port is stopped" "2147483001" (@($script
 Check "ours: and started again" "1" $script:started
 Check "ours: the new launcher is in place" "True" ([System.IO.File]::ReadAllText($dsPath) -eq $dsNew)
 Check "ours: no .new is left" "False" (Test-Path -LiteralPath "$dsPath.new")
+# Started by the Startup entry: `start "" /min` runs the launcher as cmd.exe /K,
+# which stays at a prompt (pid ...002) after its server (...001) is stopped. That
+# idle shell is closed, then the staged launcher applies.
+[System.IO.File]::WriteAllText($dsPath, $dsOld, [System.Text.Encoding]::ASCII)
+$script:stopped = 0; $script:started = 0; $script:stoppedIds = @(); $script:idle = @(2147483002)
+$script:running = @(2147483002); $script:helperScript = $null; $script:said = @()
+Update-DashServer
+Check "startup /K shell: the server and the idle launcher shell are stopped" "2147483001,2147483002" (@($script:stoppedIds) -join ",")
+Check "startup /K shell: the new launcher is in place" "True" ([System.IO.File]::ReadAllText($dsPath) -eq $dsNew)
+Check "startup /K shell: no .new is left" "False" (Test-Path -LiteralPath "$dsPath.new")
+Check "startup /K shell: no still-staged warning" "False" ((@($script:said) -join "`n") -match 'still runs its old launcher')
+# A launcher shell that is still busy (not idle) is never stopped; the update
+# stays staged and says so.
+[System.IO.File]::WriteAllText($dsPath, $dsOld, [System.Text.Encoding]::ASCII)
+$script:stopped = 0; $script:started = 0; $script:stoppedIds = @(); $script:idle = @()
+$script:running = @(2147483003); $script:helperScript = $null; $script:said = @()
+Update-DashServer
+Check "busy launcher shell: only the server is stopped" "2147483001" (@($script:stoppedIds) -join ",")
+Check "busy launcher shell: the launcher is not rewritten under it" "True" ([System.IO.File]::ReadAllText($dsPath) -eq $dsOld)
+Check "busy launcher shell: the update says it is still staged" "True" ((@($script:said) -join "`n") -match 'still runs its old launcher')
+Remove-Item -Force -LiteralPath "$dsPath.new" -ErrorAction SilentlyContinue
+$script:idle = @()
 [System.IO.File]::WriteAllText($dsPath, $dsOld, [System.Text.Encoding]::ASCII)
 $script:portOurs = $false; $script:stopped = 0; $script:started = 0
 $script:running = @(2147483001); $script:helperScript = $null; $script:said = @()

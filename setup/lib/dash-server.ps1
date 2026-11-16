@@ -434,14 +434,41 @@ function Stop-DashServerPid {
     try { & taskkill.exe /PID $Id /T /F 2>$null | Out-Null } catch { }
 }
 
+# Get-DashServerIdleLauncherPids - launcher shells left open at a prompt. The
+# Startup entry runs `start "" /min <launcher>`, and start runs a .cmd as
+# cmd.exe /K: once the batch ends (its server stopped) that cmd.exe stays at a
+# prompt until logoff, still naming the launcher, so a staged launcher would
+# wait for it forever. Proof, all three: the process is cmd.exe, its command
+# line names our exact launcher path as a path token, and it has no child
+# process but conhost.exe (its batch is over, so it reads the file no more).
+function Get-DashServerIdleLauncherPids {
+    $launcher = Get-DashServerLauncherPath
+    $re = '(^|["\s])' + [regex]::Escape($launcher) + '(["\s]|$)'
+    $idle = @()
+    try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return $idle }
+    foreach ($p in $procs) {
+        if (("" + $p.Name).ToLowerInvariant() -ne "cmd.exe") { continue }
+        if (-not [regex]::IsMatch("" + $p.CommandLine, $re, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { continue }
+        $kids = @($procs | Where-Object { ([int]$_.ParentProcessId -eq [int]$p.ProcessId) -and (("" + $_.Name).ToLowerInvariant() -ne "conhost.exe") })
+        if ($kids.Count -eq 0) { $idle += [int]$p.ProcessId }
+    }
+    return $idle
+}
+
 function Restart-DashServerForStagedLauncher {
     $ours = @(Get-DashServerOurPortPids)
     if ($ours.Count -eq 0) { return }
     Info "Restarting dash-server so it runs the new launcher"
     foreach ($id in $ours) { Stop-DashServerPid -Id $id }
     if ($script:DashServerPidFile) { Remove-Item -Force -ErrorAction SilentlyContinue -LiteralPath $script:DashServerPidFile }
-    for ($i = 0; $i -lt 10 -and @(Get-ExakitLauncherRunningPids -Path (Get-DashServerLauncherPath)).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
+    for ($i = 0; $i -lt 10 -and @(Get-ExakitLauncherRunningPids -Path (Get-DashServerLauncherPath)).Count -gt 0; $i++) {
+        foreach ($id in @(Get-DashServerIdleLauncherPids)) { Stop-DashServerPid -Id $id }
+        Start-Sleep -Milliseconds 500
+    }
     [void](Start-DashServer)
+    if (Test-Path -LiteralPath ((Get-DashServerLauncherPath) + ".new")) {
+        Warn2 "dash-server still runs its old launcher: a copy of it is open, so the update stays staged and applies once that copy exits"
+    }
 }
 
 # Test-DashServer - prove the package imports, then start the server briefly
