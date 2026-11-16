@@ -3364,6 +3364,9 @@ function Write-ExakitCmdShimFile {
 # A cmd.exe whose own command line does not name the shim is an interactive
 # shell that ran it in-process: it never exits, so it is not waited for (the
 # batch it was running finishes within moments of its child returning).
+# A chain with no cmd.exe at all (exakit.ps1 started directly by a scheduled
+# task, an agent or CI) has nothing reading exakit.cmd, so it is not under the
+# shim: waiting on its ancestors would wait on explorer.exe until logout.
 #
 # Fail safe: when the chain cannot be read (the WMI query fails), the answer is
 # "under the shim" with this process to wait for - deferring the swap costs one
@@ -3372,12 +3375,14 @@ function Get-ExakitShimLauncherPids {
     param([string]$ShimPath)
     $chain = @()
     $launched = $false
+    $foundCmd = $false
     $cur = $PID
     for ($depth = 0; $depth -lt 12 -and $cur; $depth++) {
         try {
             $p = Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction Stop
         } catch {
             $launched = $true
+            $foundCmd = $true
             $chain += [int]$PID
             break
         }
@@ -3389,13 +3394,14 @@ function Get-ExakitShimLauncherPids {
         if ($namesShim) { $launched = $true }
         $isCmd = ("$($p.Name)" -ieq "cmd.exe")
         if ($isCmd) {
+            $foundCmd = $true
             if ($cl.IndexOf("exakit.cmd", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $chain += [int]$cur }
             break
         }
         $chain += [int]$cur
         $cur = [int]$p.ParentProcessId
     }
-    if (-not $launched) { return @() }
+    if (-not $launched -or -not $foundCmd) { return @() }
     return @($chain | Sort-Object -Unique)
 }
 
