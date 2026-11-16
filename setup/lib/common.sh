@@ -11752,6 +11752,18 @@ _exakit_uninstall_leftover_report() {
     return 0
 }
 
+# _exakit_uninstall_teardown_warnings — one warn line per check the teardown
+# could not run (EXAKIT_TEARDOWN_WARNINGS, set by personal_teardown_leftovers).
+# Shared by the full uninstall and the database-only removal, so neither folds
+# an unanswered engine into a plain "removed".
+_exakit_uninstall_teardown_warnings() {
+    [ -n "${EXAKIT_TEARDOWN_WARNINGS:-}" ] || return 0
+    printf '%s\n' "$EXAKIT_TEARDOWN_WARNINGS" | while IFS= read -r _un_tw; do
+        [ -n "$_un_tw" ] && warn "$_un_tw"
+    done
+    return 0
+}
+
 # _exakit_uninstall_component <key> <dry> — one selectable piece of the kit,
 # removed on its own. Each removal also clears its manifest record and step
 # flag, so `exakit status`, `exakit version` and an installer re-run all read the
@@ -11774,8 +11786,10 @@ _exakit_uninstall_component() {
                         # Not best-effort: the deployment is still there, so
                         # the step stays marked and the caller is told.
                         _exakit_uninstall_leftover_report
+                        _exakit_uninstall_teardown_warnings
                         return 1
-                    fi ;;
+                    fi
+                    _exakit_uninstall_teardown_warnings ;;
                 *)        warn "Unknown runtime type '$_uc_type'; skipping database removal" ;;
             esac
             exakit_unmark_step runtime
@@ -13088,11 +13102,7 @@ exakit_uninstall_run() {
                     _done "Database removed: the local Exasol Personal deployment and all its data"
                 # A container check that could not run is said right under
                 # that line, never folded into it.
-                if [ "$_dry" != "1" ] && [ -n "${EXAKIT_TEARDOWN_WARNINGS:-}" ]; then
-                    printf '%s\n' "$EXAKIT_TEARDOWN_WARNINGS" | while IFS= read -r _un_tw; do
-                        [ -n "$_un_tw" ] && warn "$_un_tw"
-                    done
-                fi ;;
+                [ "$_dry" = "1" ] || _exakit_uninstall_teardown_warnings ;;
             *)        : ;;
         esac
         # 1b) What the launcher leaves beside the deployment: its download
