@@ -43,7 +43,7 @@ $commonNames = @("Get-ExakitOemEncoding", "Write-ExakitCmdShimFile", "Write-Exak
 $defs = @(Import-Functions -File (Join-Path $repo "setup/lib/exakit-common.ps1") -Names $commonNames)
 $defs += @(Import-Functions -File (Join-Path $repo "setup/lib/dash-server.ps1") -Names @("Get-DashServerLauncherPath", "Write-DashServerLauncher"))
 $defs += @(Import-Functions -File (Join-Path $repo "setup/lib/dbt-exasol.ps1") -Names @("Get-DbtExasolLauncherPath", "Write-DbtExasolLauncher"))
-$defs += @(Import-Functions -File (Join-Path $repo "setup/lib/json-tables.ps1") -Names @("Get-JsonTablesBin", "Write-JsonTablesLauncher"))
+$defs += @(Import-Functions -File (Join-Path $repo "setup/lib/json-tables.ps1") -Names @("Get-JsonTablesBin", "Write-JsonTablesLauncher", "Uninstall-JsonTables"))
 foreach ($d in $defs) { Invoke-Expression $d }
 
 # Stubs for what the writers read; nothing here reaches the machine.
@@ -253,6 +253,23 @@ foreach ($fn in @("Start-DashServer", "Test-DashServer")) {
     $startAt = $body.IndexOf("Start-Process -FilePath (Get-DashServerLauncherPath)")
     Check "$($fn): applies a staged launcher before it starts one" "True" (($applyAt -ge 0) -and ($startAt -gt $applyAt))
 }
+
+# exakit uninstall json-tables: the staged refresh of its launcher is
+# exasol-json-tables.cmd.new (named for the launcher, not the add-on id), and
+# its dry run lists it and its real run removes it.
+Write-Host ""
+Write-Host "json-tables uninstall"
+$script:JsonTablesHome = Join-Path $sandbox "jt"
+function Remove-ExakitManifestValue($k) { }
+function OkStep($m) { }
+$jtBin = Get-JsonTablesBin
+if (-not $jtBin.StartsWith($sandbox)) { throw "json-tables launcher is outside the sandbox: $jtBin" }
+Set-Content -Path "$jtBin.new" -Value "staged"
+$script:said = @()
+[void](Uninstall-JsonTables -DryRun)
+Check "json-tables dry run lists exasol-json-tables.cmd.new" "True" ((@($script:said) -join "`n").Contains("will remove: $jtBin.new"))
+[void](Uninstall-JsonTables)
+Check "json-tables uninstall removes exasol-json-tables.cmd.new" "False" (Test-Path -LiteralPath "$jtBin.new")
 
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""
