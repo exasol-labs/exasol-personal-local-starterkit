@@ -396,11 +396,12 @@ function Write-DashServerLauncher {
     # rather than losing the file.
     # Never in place under a running copy, either: Write-ExakitAddonLauncher
     # (exakit-common.ps1) defers the swap while a cmd.exe runs this launcher.
-    Write-ExakitAddonLauncher -Path (Get-DashServerLauncherPath) -Content ($lines -join "`r`n")
+    $launcherHow = Write-ExakitAddonLauncher -Path (Get-DashServerLauncherPath) -Content ($lines -join "`r`n")
     } catch {
         return (Write-DashServerNotInstalled "could not write the launcher at $(Get-DashServerLauncherPath)")
     }
-    Ok "dash-server launcher written: $(Get-DashServerLauncherPath)"
+    if ($launcherHow -eq "staged") { Info "dash-server launcher update staged; it applies when dash-server next starts" }
+    else { Ok "dash-server launcher written: $(Get-DashServerLauncherPath)" }
     return $true
 }
 
@@ -482,6 +483,8 @@ function Test-DashServer {
     # that handle, and so the reason below is this attempt's.
     $probeLog = Join-Path $script:LogDir "dash-server-validate.log"
     New-Item -ItemType Directory -Force -Path $script:LogDir | Out-Null
+    # A launcher update staged while a copy ran is applied now that none does.
+    Complete-ExakitAddonLauncherUpdate -Path (Get-DashServerLauncherPath)
     try {
         $proc = Start-Process -FilePath (Get-DashServerLauncherPath) `
             -ArgumentList @("--host", "127.0.0.1", "--port", $script:DashServerPort) `
@@ -843,6 +846,8 @@ function Start-DashServer {
     }
     New-Item -ItemType Directory -Force -Path $script:DashServerHome, $script:LogDir | Out-Null
     Info "Starting dash-server on port $($script:DashServerPort)"
+    # A launcher update staged while a copy ran is applied now that none does.
+    Complete-ExakitAddonLauncherUpdate -Path (Get-DashServerLauncherPath)
     try {
         $proc = Start-Process -FilePath (Get-DashServerLauncherPath) `
             -ArgumentList @("--host", "127.0.0.1", "--port", $script:DashServerPort) `

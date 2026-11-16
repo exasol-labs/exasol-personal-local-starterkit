@@ -271,11 +271,12 @@ function Write-DbtExasolLauncher {
     # rather than losing the file.
     # Never in place under a running copy, either: Write-ExakitAddonLauncher
     # (exakit-common.ps1) defers the swap while a cmd.exe runs this launcher.
-    Write-ExakitAddonLauncher -Path (Get-DbtExasolLauncherPath) -Content ($lines -join "`r`n")
+    $launcherHow = Write-ExakitAddonLauncher -Path (Get-DbtExasolLauncherPath) -Content ($lines -join "`r`n")
     } catch {
         return (Write-DbtExasolNotInstalled "could not write the launcher at $(Get-DbtExasolLauncherPath)")
     }
-    Ok "dbt-exasol launcher written: $(Get-DbtExasolLauncherPath)"
+    if ($launcherHow -eq "staged") { Info "dbt-exasol launcher update staged; it applies once the running dbt-exasol exits" }
+    else { Ok "dbt-exasol launcher written: $(Get-DbtExasolLauncherPath)" }
     return $true
 }
 

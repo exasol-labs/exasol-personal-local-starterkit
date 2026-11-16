@@ -3623,7 +3623,10 @@ function Get-ExakitKitScriptRunningPids {
 # to do. Running: staged as <path>.new and swapped in by a detached helper
 # once every copy has exited (Write-ExakitCmdShimDeferred). Otherwise in place,
 # dropping a leftover .new. Throws only when the in-place write fails; a
-# helper that cannot start keeps the current, working launcher.
+# helper that cannot start keeps the current, working launcher. Answers
+# "staged" when the new launcher waits in <path>.new for the running copy to
+# exit (a logoff can end the helper first: Complete-ExakitAddonLauncherUpdate
+# applies it at the next start), "written" otherwise.
 function Write-ExakitAddonLauncher {
     param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Content)
     $newPath = "$Path.new"
@@ -3641,17 +3644,33 @@ function Write-ExakitAddonLauncher {
         } catch { $same = $false }
         if ($same) {
             Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
-            return
+            return "written"
         }
         $running = @(Get-ExakitLauncherRunningPids -Path $Path)
         if ($running.Count -gt 0) {
-            [void](Write-ExakitCmdShimDeferred -ShimPath $Path -Content $Content -WaitPids $running `
-                -WaitTimeoutSeconds 0 -Recheck -Label (Split-Path -Leaf $Path))
-            return
+            if (Write-ExakitCmdShimDeferred -ShimPath $Path -Content $Content -WaitPids $running `
+                -WaitTimeoutSeconds 0 -Recheck -Label (Split-Path -Leaf $Path)) { return "staged" }
+            return "written"
         }
     }
     Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
     Write-ExakitCmdShimFile -Path $Path -Content $Content
+    return "written"
+}
+
+# Complete-ExakitAddonLauncherUpdate <path> - just before the kit starts an
+# add-on launcher: a <path>.new that Write-ExakitAddonLauncher staged while a
+# copy ran (its helper ended at a logoff, or the copy was stopped for this very
+# restart) is applied now, but only when no copy runs (the writer's own check)
+# and <path> itself still exists. The same atomic File.Replace as the helper;
+# on failure both files stay and the current launcher starts.
+function Complete-ExakitAddonLauncherUpdate {
+    param([Parameter(Mandatory)][string]$Path)
+    $newPath = "$Path.new"
+    if (-not (Test-Path -LiteralPath $newPath)) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    if (@(Get-ExakitLauncherRunningPids -Path $Path).Count -gt 0) { return }
+    try { [System.IO.File]::Replace($newPath, $Path, [System.Management.Automation.Language.NullString]::Value) } catch { }
 }
 
 # Test-ExakitCmdShimCurrent - is the installed shim the one this kit would write?
