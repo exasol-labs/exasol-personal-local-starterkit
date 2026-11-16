@@ -28,6 +28,12 @@ Each guide below tells you where to find every value `exakit connect` asks for.
 - **The credential never goes on the command line.** Type it at the hidden
   prompt, or put it alone in an owner-only file (`chmod 600`) and pass
   `--password-file <file>`.
+- **A connection string is optional.** The first question of
+  `exakit connect` asks for one. You do not build it: it is the address your
+  provider shows on its connect or connection-details page. Each guide's
+  "Where to find the connection string" says where. Leave the password out of
+  it; the kit asks for that at a hidden prompt. Press Enter alone to type the
+  fields one by one instead.
 - **A source on this computer** is not `localhost` (inside the database that is
   the database itself). On macOS use `192.168.64.1`.
 - **Name (alias).** Lower case letters, digits and `_`, a letter first, at most

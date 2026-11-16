@@ -3,26 +3,90 @@
 Self-hosted MySQL or MariaDB, Amazon RDS or Aurora MySQL, Azure Database for
 MySQL. One source is one database (MySQL has no schemas below it).
 
-> **Easiest: let your AI agent do it.** The skill `exasol-vs-mysql` knows this connector.
->
-> **You still need, on your computer:** the `mysql` client (or any SQL client)
-> as an admin, plus the AWS CLI (`aws configure`) for RDS/Aurora or the Azure
-> CLI (`az login`) for Azure.
->
-> **Prefer to do it by hand?** Follow the steps below.
+## The simplest way: ask your AI agent
+
+**Easiest: let your AI agent do it.** The kit installs the skill
+`exasol-vs-mysql` for your AI client; it knows this connector.
+
+Copy this prompt, fill in the `<...>` parts, and give it to your agent:
+
+```text
+Connect the MySQL database <database> on <host> to my local Exasol with exakit.
+Use the exasol-vs-mysql skill. Create a read-only user for it, open the network
+for my IP, and get the CA certificate for TLS verify. Write the password to a
+file, never into the chat.
+```
+
+**You still need, on your computer:** the `mysql` client (or any SQL client)
+as an admin, plus the AWS CLI (`aws configure`) for RDS/Aurora or the Azure
+CLI (`az login`) for Azure.
+
+**Prefer to do it by hand?** Follow the steps below.
 
 ## What `exakit connect` asks for
 
-| Field | Required | Example |
+### Required
+
+| Field | Example | Where it comes from |
 |---|---|---|
-| Name (alias) for this connection | yes | `shop` |
-| Host name or address | yes | `shop.abc123.eu-central-1.rds.amazonaws.com` |
-| Port | no (3306) | `3306` |
-| Database | yes | `shop` |
-| Reader account | yes | `exakit_reader` |
-| Password | yes | (hidden) |
-| TLS | no (`verify`) | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify` | `~/certs/eu-central-1-bundle.pem` |
+| Name (alias) for this connection | `shop` | You choose it. `shop` gives the schema `VS_SHOP`. |
+| Host name or address | `shop.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint or Azure server name ([step 1](#1-host-and-port)). |
+| Database | `shop` | `SHOW DATABASES` ([step 2](#2-database)). |
+| Reader account | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Password | (hidden) | That user's password. |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| Port | `3306` | `3306` |
+| TLS | `verify` | `verify`, `require` or `disable` |
+| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
+
+## Connection string you can paste
+
+```text
+mysql://exakit_reader@shop.abc123.eu-central-1.rds.amazonaws.com:3306/shop?sslMode=VERIFY_IDENTITY
+jdbc:mysql://shop.abc123.eu-central-1.rds.amazonaws.com:3306/shop
+shop.abc123.eu-central-1.rds.amazonaws.com:3306/shop
+shop.abc123.eu-central-1.rds.amazonaws.com
+```
+
+| String | Fills |
+|---|---|
+| `mysql://user@host:port/db?sslMode=...` | host, port, database, user and TLS |
+| `jdbc:mysql://host:port/db` | host, port and database (and `user`, `sslMode`, `useSSL` when given) |
+| `host:port/db` | host, port and database |
+| `host` | host |
+
+`sslMode` sets TLS: `VERIFY_IDENTITY` and `VERIFY_CA` give `verify`,
+`REQUIRED` and `PREFERRED` give `require`, `DISABLED` gives `disable`
+(`useSSL=false` too). A password in the string (`user:password@` or
+`password=`) is the credential: taken out of the string and not asked again.
+
+### Where to find the connection string
+
+You do not build it: copy the address your provider shows.
+
+- **RDS / Aurora:** AWS Console → RDS → Databases → `<db>` → Connectivity &
+  security → Endpoint and Port (Aurora: the **Reader** endpoint). RDS shows
+  the parts, not a whole string. Paste `<endpoint>:3306/<database>`.
+- **Azure:** Azure Database for MySQL flexible servers → `<server>` → Overview →
+  Server name. Paste `<server>.mysql.database.azure.com:3306/<database>`.
+- **A string from your team or an app config** (`mysql://...`,
+  `jdbc:mysql://...`) works as it is.
+
+Leave the password out of the string. The kit asks for it at a hidden prompt, or reads it from `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| host | RDS: Connectivity & security → Endpoint. Azure: Overview → Server name ([step 1](#1-host-and-port)). |
+| port | RDS: Connectivity & security → Port. Default `3306`. |
+| database | `SHOW DATABASES` ([step 2](#2-database)). |
+| user | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| `sslMode` | Your choice. Leave it out for `verify`. |
 
 ## Where to find each value
 
@@ -121,21 +185,9 @@ a string that contains `&`. Quoted names do not survive PowerShell 5.1
 arguments: pipe the statement in (`'SELECT "first_name" FROM VS_SHOP."actor"' | exakit sql`)
 or use `exakit sql --file query.sql`.
 
-## Connection string you can paste
-
-```text
-mysql://exakit_reader@shop.abc123.eu-central-1.rds.amazonaws.com:3306/shop?sslMode=VERIFY_IDENTITY
-jdbc:mysql://shop.abc123.eu-central-1.rds.amazonaws.com:3306/shop
-```
-
-The first fills host, port, database, user and TLS; the second fills host,
-port and database. A bare `host:port/database` works too. A password in the
-string (`user:password@` or `password=`) is the credential: taken out of the
-string and not asked again.
-
 ## Common problems
 
-| Symptom | Fix |
+| Symptom or error text | Fix |
 |---|---|
 | "Communications link failure" and the source did not answer | Allow your IP in the security group or firewall; on RDS, Publicly accessible = Yes. |
 | "PKIX path building failed", "Path does not chain with any of the trust anchors" | Give the CA with `--set ca=<pem>` (step 5). |

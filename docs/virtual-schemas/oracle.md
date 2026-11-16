@@ -4,30 +4,94 @@ Oracle Database on your own server, Amazon RDS for Oracle or Oracle Cloud,
 through the Java thin driver (no Oracle Client install). One source is one
 schema (owner).
 
-> **Easiest: let your AI agent do it.** The skill `exasol-vs-oracle` knows this connector.
->
-> **You still need, on your computer:** SQLcl (`sql`) or SQL*Plus as an admin,
-> plus the AWS CLI (`aws configure`) for RDS, or the Oracle Cloud Console for
-> Autonomous Database.
->
-> **Prefer to do it by hand?** Follow the steps below.
+## The simplest way: ask your AI agent
+
+**Easiest: let your AI agent do it.** The kit installs the skill
+`exasol-vs-oracle` for your AI client; it knows this connector.
+
+Copy this prompt, fill in the `<...>` parts, and give it to your agent:
+
+```text
+Connect the Oracle schema <SCHEMA> of the service <SERVICE> on <host> to my
+local Exasol with exakit. Use the exasol-vs-oracle skill. Create a read-only
+user for it, open the network for my IP, and get the CA certificate for TCPS.
+Write the password to a file, never into the chat.
+```
+
+**You still need, on your computer:** SQLcl (`sql`) or SQL*Plus as an admin,
+plus the AWS CLI (`aws configure`) for RDS, or the Oracle Cloud Console for
+Autonomous Database.
+
+**Prefer to do it by hand?** Follow the steps below.
 
 ## What `exakit connect` asks for
 
-| Field | Required | Example |
+### Required
+
+| Field | Example | Where it comes from |
 |---|---|---|
-| Name (alias) for this connection | yes | `hr` |
-| Host name or address | yes | `hr.abc123.eu-central-1.rds.amazonaws.com` |
-| Port | no (1521) | `2484` for TCPS |
-| Service name | yes | `ORCL` |
-| Schema (owner) | yes | `HR` |
-| Reader account | yes | `EXAKIT_READER` |
-| Password | yes | (hidden) |
-| TLS | no (`verify`) | `verify` or `disable` |
-| CA certificate file (PEM) | for `verify` | `~/certs/eu-central-1-bundle.pem` |
+| Name (alias) for this connection | `hr` | You choose it. `hr` gives the schema `VS_HR`. |
+| Host name or address | `hr.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint, or the host in your TNS entry ([step 1](#1-host-port-and-service)). |
+| Service name | `ORCL` | RDS: Configuration → DB name ([step 1](#1-host-port-and-service)). |
+| Schema (owner) | `HR` | The owner of the tables ([step 2](#2-schema)). |
+| Reader account | `EXAKIT_READER` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Password | (hidden) | That user's password. |
+
+### Optional
+
+| Field | Default if left out | Example |
+|---|---|---|
+| Port | `1521` | `2484` for TCPS |
+| TLS | `verify` | `verify` or `disable` |
+| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
 
 `verify` is TCPS with the certificate's host name checked. Oracle has no
 `require` level here; `disable` is plain TCP and sends the password in clear.
+
+## Connection string you can paste
+
+```text
+jdbc:oracle:thin:@tcps://hr.abc123.eu-central-1.rds.amazonaws.com:2484/ORCL
+jdbc:oracle:thin:@//hr.abc123.eu-central-1.rds.amazonaws.com:1521/ORCL
+hr.abc123.eu-central-1.rds.amazonaws.com:1521/ORCL
+```
+
+| String | Fills |
+|---|---|
+| `jdbc:oracle:thin:@tcps://host:port/service` | host, port and service; TLS `verify` |
+| `jdbc:oracle:thin:@//host:port/service` | host, port and service |
+| `host:port/service` | host, port and service |
+
+The last two are plain TCP: TLS stays at `verify`, so change the port to the
+TCPS one or set TLS to `disable`. A `user/password@` after `thin:` gives the
+user and the password: taken out of the string and not asked again. A SID
+(`host:port:SID`) and a TNS descriptor `(DESCRIPTION=...)` are not read: type
+the fields.
+
+### Where to find the connection string
+
+You do not build it: copy the address your provider shows.
+
+- **RDS:** AWS Console → RDS → Databases → `<db>` → Connectivity & security →
+  Endpoint, and the DB name on the Configuration tab (the service name,
+  default `ORCL`). RDS shows the parts, not a whole string. Paste
+  `jdbc:oracle:thin:@tcps://<endpoint>:2484/<service>` for TCPS.
+- **Oracle Cloud Autonomous Database:** Database connection → TLS connection
+  strings. Those are TNS descriptors, which the kit does not read. Take the
+  `host`, `port` and `service_name` from one and paste
+  `jdbc:oracle:thin:@tcps://<host>:<port>/<service_name>`, or type the fields.
+- Use the **service name**, not the SID.
+
+Leave the password out of the string. The kit asks for it at a hidden prompt, or reads it from `--password-file`. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
+
+### Where to find each part of the string
+
+| Part of the string | Where to find it |
+|---|---|
+| host | RDS: Connectivity & security → Endpoint ([step 1](#1-host-port-and-service)). |
+| port | The TCPS port of the SSL option (RDS: `2484`), or `1521` for TCP ([step 1](#1-host-port-and-service)). |
+| service | RDS: Configuration → DB name. Self-hosted: `v$parameter` `service_names` ([step 1](#1-host-port-and-service)). |
+| `tcps://` | Use it with the TCPS port. |
 
 ## Where to find each value
 
@@ -128,23 +192,9 @@ Add `--dry-run` to see the plan first.
 For a quoted name in `exakit sql`, pipe the statement in
 (`'SELECT "x" FROM VS_HR.T' | exakit sql`) or use `exakit sql --file query.sql`.
 
-## Connection string you can paste
-
-```text
-jdbc:oracle:thin:@tcps://hr.abc123.eu-central-1.rds.amazonaws.com:2484/ORCL
-hr.abc123.eu-central-1.rds.amazonaws.com:1521/ORCL
-```
-
-Both fill host, port and service; the first also sets TLS to `verify`. A
-`user/password@` after `thin:` gives the user and the password: taken out of
-the string and not asked again. The
-second is plain TCP: TLS stays at `verify`, so change the port to the TCPS one
-or set TLS to `disable`. A SID (`host:port:SID`) and a TNS descriptor
-`(DESCRIPTION=...)` are not read: type the fields.
-
 ## Common problems
 
-| Symptom | Fix |
+| Symptom or error text | Fix |
 |---|---|
 | "ORA-12170", "ORA-12541" | No listener there, or a firewall drops it: host, port, security group. |
 | "IO Error: The Network Adapter", "Got minus one from a read call" | Wrong port for TCPS: `verify` needs the TCPS port (often 2484). |
