@@ -171,6 +171,14 @@ class BoardTest(unittest.TestCase):
         with mock.patch.object(across, "_links", return_value=[]):
             self.assertEqual([], across.linked_groups(orders), "no saved link: nothing changes")
 
+    def test_a_tile_says_whether_its_sql_orders_the_rows(self):
+        frame = pd.DataFrame({"STATE": ["a"], "N": [1]})
+        self.board.pin(proposal("By state?", "SELECT STATE, COUNT(*) AS N FROM T GROUP BY 1"), frame, board="sorted")
+        self.board.pin(proposal("Top states?", "SELECT STATE, COUNT(*) AS N FROM T GROUP BY 1 order  by 2 DESC"), frame, board="sorted")
+        tiles = self.board.board("sorted").spec()["pages"][0]["tiles"]
+        self.assertEqual([False, True], [t["ordered"] for t in tiles],
+                         "the dashboard sorts a bar chart largest first only when its SQL leaves the order open")
+
     def test_the_dashboard_rules_filters_and_your_own_app_are_used(self):
         self.board.pin(proposal("By state?", "SELECT STATE, COUNT(*) AS N FROM T GROUP BY 1"),
                        pd.DataFrame({"STATE": ["a"], "CAT": ["x"], "N": [1]}), board="ruled", page="Revenue")

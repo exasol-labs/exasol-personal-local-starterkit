@@ -283,6 +283,7 @@ class Board:
         for n, p in enumerate(self.pages, 1):
             pages.append({"id": f"page-{n}", "title": p["title"], "filters": self.filters(p),
                           "tiles": [{"id": t["id"], "title": t["title"], "kind": t["kind"], "query": f"queries/{t['id']}.sql",
+                                     "ordered": bool(re.search(r"\bORDER\s+BY\b", str(t.get("sql") or ""), re.I)),
                                      "sql_digest": t["sql_digest"], "dataset": t.get("dataset"),
                                      "descriptor_version": t.get("descriptor_version")} for t in p["tiles"]]})
         return {"title": self.title or self.name.replace("-", " ").title(), "pages": pages,

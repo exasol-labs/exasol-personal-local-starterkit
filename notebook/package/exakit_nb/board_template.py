@@ -116,9 +116,11 @@ def figure(tile, rows):
     if not rows or not measures:
         return None
     x = labels[0] if labels else keys[0]
+    if tile["kind"] != "line" and not tile.get("ordered"):       # no ORDER BY in its SQL: the largest bar first
+        rows = sorted(rows, key=lambda r: (number(r.get(measures[0])) is None, -(number(r.get(measures[0])) or 0)))
     for n, measure in enumerate(measures[:3]):
         values = [number(r.get(measure)) for r in rows]
-        names = [str(r.get(x)) for r in rows]
+        names = ["(no value)" if r.get(x) is None else str(r.get(x)) for r in rows]
         if tile["kind"] == "line":
             fig.add_trace(go.Scatter(x=names, y=values, mode="lines+markers", name=measure.replace("_", " "),
                                      line={"color": COLORS[n % len(COLORS)], "width": 2}))
@@ -150,8 +152,10 @@ def tile_view(tile, result, chosen):
         value = next(iter(rows[0].values()))
         shown = f"{number(value):,.0f}" if number(value) is not None and abs(number(value)) >= 100 else str(value)
         body.append(html.Div(shown, className="share-stat-value board-kpi"))
-    elif tile["kind"] in ("bar", "line") and figure(tile, rows) is not None:
-        body.append(dcc.Graph(figure=figure(tile, rows), config={"displayModeBar": False, "responsive": True}))
+    elif tile["kind"] in ("bar", "line") and (fig := figure(tile, rows)) is not None:
+        # responsive charts take their container's height: without one the chart collapses to a sliver
+        body.append(dcc.Graph(figure=fig, style={"height": f"{fig.layout.height or 320}px"},
+                              config={"displayModeBar": False, "responsive": True}))
     if rows and tile["kind"] != "kpi":
         table = dash_table.DataTable(data=rows[:TABLE_ROWS], columns=[{"name": k.replace("_", " "), "id": k} for k in rows[0]],
                                      page_size=10, sort_action="native", export_format="csv", style_table={"overflowX": "auto"},
