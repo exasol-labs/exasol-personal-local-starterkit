@@ -330,6 +330,35 @@ $cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
 Check "uninstall: says the commands go as the window closes" "True" ($cliText.Contains('as this window closes: '))
 Check "uninstall: deferred cleaner starts outside the job (Win32_Process Create)" "True" ($cliText -match 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create')
 
+# --- the deferred delete, run for real (Windows only) ----------------------
+# The checks above read the source. This one runs Remove-ExakitBinariesDeferred
+# in a child powershell under a cmd.exe - the exakit.cmd shape - and waits for
+# the detached cleaner to remove the sandbox files once both have exited.
+if ($cmdExe) {
+    Write-Host ""
+    Write-Host "deferred delete (cmd.exe)"
+    $ddDir = Join-Path $sandbox "deferred"
+    New-Item -ItemType Directory -Force -Path $ddDir | Out-Null
+    $ddA = Join-Path $ddDir "a.exe"; $ddB = Join-Path $ddDir "exakit.cmd"
+    foreach ($f in @($ddA, $ddB)) { Set-Content -Path $f -Value "x" }
+    $cliAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $repo "setup/exakit.ps1"), [ref]$null, [ref]$null)
+    $ddDef = $cliAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq "Remove-ExakitBinariesDeferred" }, $true) | Select-Object -First 1
+    $ddChild = Join-Path $ddDir "child.ps1"
+    $qA = $ddA -replace "'", "''"; $qB = $ddB -replace "'", "''"
+    Set-Content -Path $ddChild -Value ($ddDef.Extent.Text + "`r`nRemove-ExakitBinariesDeferred -Paths @('$qA', '$qB')`r`nexit 0`r`n")
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & cmd.exe /d /c "powershell -NoProfile -ExecutionPolicy Bypass -File `"$ddChild`"" 2>&1 | Out-Null
+    $ErrorActionPreference = $prevEap
+    for ($i = 0; $i -lt 40 -and ((Test-Path -LiteralPath $ddA) -or (Test-Path -LiteralPath $ddB)); $i++) { Start-Sleep -Milliseconds 500 }
+    Check "deferred delete (cmd.exe): the binary is gone" "False" (Test-Path -LiteralPath $ddA)
+    Check "deferred delete (cmd.exe): the shim is gone" "False" (Test-Path -LiteralPath $ddB)
+} else {
+    Write-Host "  skip deferred delete (cmd.exe): not on Windows"
+}
+
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "PASS=$($script:PASS) FAIL=$($script:FAIL)"
