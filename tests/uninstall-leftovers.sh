@@ -186,6 +186,18 @@ lacks    "f: and destroy is not called" "destroy" "$(cat "$TMP/calls" 2>/dev/nul
 # --- exakit_uninstall_run: the record line and the status ----------------
 echo
 echo "exakit_uninstall_run does not claim a removal that did not happen:"
+# The harness's system tools: every command in /usr/bin and /bin EXCEPT the
+# container engines, linked into one directory that replaces both on PATH. A
+# real /usr/bin/docker (ubuntu-latest has one) is then unreachable from any
+# case, so a stub-less case answers "no engine" instead of running a real rmi.
+mkdir -p "$TMP/sysbin"
+for _sd in /usr/bin /bin; do
+    for _sf in "$_sd"/*; do
+        _sn="${_sf##*/}"
+        case "$_sn" in docker*|podman*|nerdctl*) continue ;; esac
+        [ -e "$TMP/sysbin/$_sn" ] || ln -s "$_sf" "$TMP/sysbin/$_sn" 2>/dev/null || true
+    done
+done
 cat > "$TMP/run.sh" <<HARNESS
 set -u
 HOME="$SBHOME"; export HOME
@@ -206,9 +218,9 @@ EXAKIT_SYSTEMD_USER_DIR="$SBHOME/.config/systemd/user"
 $(grep '^EXAKIT_AUTOSTART_PREFIX=' "$ROOT/setup/lib/common.sh")
 launchctl(){ printf 'LAUNCHCTL %s\n' "\$*" >> "$TMP/supervisor"; }
 systemctl(){ printf 'SYSTEMCTL %s\n' "\$*" >> "$TMP/supervisor"; }
-# The engines: only the stubs in STUB_ENG_DIR are on PATH (no real docker or
-# podman lives in /usr/bin or /bin), and the bounded runner just runs them.
-PATH="\${STUB_ENG_DIR:-$TMP/eng}:/usr/bin:/bin"; export PATH
+# The engines: only the stubs in STUB_ENG_DIR are on PATH (sysbin holds no
+# docker or podman), and the bounded runner just runs them.
+PATH="\${STUB_ENG_DIR:-$TMP/eng}:$TMP/sysbin"; export PATH
 detect_os(){ printf '%s' "\${STUB_OS:-macos}"; }
 exakit_run_bounded(){ shift; "\$@"; }
 $(grep '^EXAKIT_KIT_IMAGE_REPOS=' "$ROOT/setup/lib/common.sh")
@@ -350,20 +362,19 @@ STUB
 done
 DOCKER_IMGS="$(printf '%s\n' 'exasol/nano|2026.2.0-nano.8|aaa111|812MB' 'exasol/nano|<none>|ggg777|800MB' 'exasol/mcp-server|<none>|bbb222|426MB' 'exasol/nanoX|1|ccc333|1MB' 'library/postgres|16|ddd444|400MB' 'someone/exasol/nano|1|eee555|1MB')"
 PODMAN_IMGS='docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
-# Every image case runs the code with PATH="<dir>:/usr/bin:/bin". A real docker
-# or podman in /usr/bin (ubuntu-latest has one) must never be reached: before a
-# case runs, each engine must resolve inside <dir> or not at all, else the case
-# is SKIPPED, before any part of the uninstall runs.
-SKIP=0
-engines_sealed() { # engines_sealed <stub dir>
+# Every image case runs the code with PATH="<dir>:$TMP/sysbin". Before any of
+# them, each engine must resolve inside <dir> or not at all; anything else
+# FAILS the suite and the cases do not run, so no real engine is ever called.
+engines_sealed() { # engines_sealed <stub dir> <label>
+    _ses=0
     for _se in docker podman; do
-        _sp="$(PATH="$1:/usr/bin:/bin" command -v "$_se" 2>/dev/null || true)"
-        case "$_sp" in ''|"$1/"*) : ;; *) return 1 ;; esac
+        _sp="$(PATH="$1:$TMP/sysbin" command -v "$_se" 2>/dev/null || true)"
+        case "$_sp" in ''|"$1/"*) : ;; *) _ses=1; FAIL=$((FAIL + 1)); printf '  FAIL %s: %s resolves outside the stub dir (%s)\n' "$2" "$_se" "$_sp" ;; esac
     done
-    return 0
+    [ "$_ses" = 0 ] && { PASS=$((PASS + 1)); printf '  ok   %s: no real engine reachable\n' "$2"; }
+    return "$_ses"
 }
-skip_case() { SKIP=$((SKIP + 1)); printf '  skip %s: a real %s is on /usr/bin:/bin, so the case could reach it\n' "$1" "$(PATH=/usr/bin:/bin command -v docker podman 2>/dev/null | tr '\n' ' ')"; }
-if engines_sealed "$TMP/eng"; then
+if engines_sealed "$TMP/eng" "image cases"; then
 # (i1) dry run: the kit's images listed with engine and size, nothing removed.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DRY=1 STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
@@ -422,17 +433,13 @@ rm -rf "$DEPLOY"
 rm -f "$TMP/engcalls"; rm -rf "$DEPLOY"
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_PODMAN_IMAGES="$PODMAN_IMGS" bash "$TMP/run.sh" 2>&1)"
 check    "i9: no deployment dir, no engine call" "" "$(cat "$TMP/engcalls" 2>/dev/null)"
-else
-    skip_case "i1-i4, i7, i8 (stub engines)"
 fi
 # (i5) no engine at all: one hint, exit unchanged.
-if engines_sealed "$TMP/noeng"; then
+if engines_sealed "$TMP/noeng" "i5 (no engine)"; then
 seed_deploy
 out="$(STUB_OS=linux STUB_ENG_DIR="$TMP/noeng" bash "$TMP/run.sh" 2>&1)"
 contains "i5: no engine gets a hint" "Neither docker nor podman is on PATH" "$out"
 contains "i5: and the run still answers 0" "RC=0" "$out"
-else
-    skip_case "i5 (no engine)"
 fi
 # (i6) macOS: the database lives in the launcher's VM; the host engine is left alone.
 rm -f "$TMP/engcalls"; seed_deploy
@@ -471,5 +478,5 @@ check    "--dry-run still exits 0" "0" "$rc"
 lacks    "and never runs the removal for real" "RUN dry=0" "$out"
 
 echo
-echo "PASS=$PASS FAIL=$FAIL SKIP=${SKIP:-0}"
+echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
