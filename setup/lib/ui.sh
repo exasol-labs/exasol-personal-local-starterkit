@@ -1534,11 +1534,11 @@ ui_table_frame() {
     # The line each row starts on, for a click (see ui_table_menu).
     _UI_TABLE_AT=()
     _utr_now="$(date +%s 2>/dev/null || echo 0)"
-    # An activity line above each add-on that is saying what it does, directly
-    # above its bar: the side channel holds one "row|text" record per add-on
-    # (several install side by side). No record, no line - nothing is reserved.
+    # No activity lines in the table: each row's bar and status say enough. The
+    # side channel ("row|text" per add-on) is still written; the log keeps what
+    # each install did. UI_TABLE_ACTIVITY=1 draws a line above each such row.
     _utr_acts=""
-    if [ -s "$1.activity" ]; then
+    if [ "${UI_TABLE_ACTIVITY:-0}" = 1 ] && [ -s "$1.activity" ]; then
         _utr_acts="
 $(cat "$1.activity" 2>/dev/null)
 "

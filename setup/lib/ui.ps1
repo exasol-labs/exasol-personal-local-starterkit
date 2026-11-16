@@ -1215,8 +1215,11 @@ function Get-ExakitTableFrame {
     # An activity line above each add-on that is saying what it does: one per row
     # (several install side by side). No text, no line - nothing is reserved.
     # Twin of the one-record-per-row side channel in ui_table_frame.
+    # No activity lines in the table: each row's bar and status say enough (the log
+    # keeps what each install did). $env:UI_TABLE_ACTIVITY = "1" draws them. Twin of ui_table_frame.
     $activities = @{}
-    if ($Table.ContainsKey("Activities") -and $Table.Activities) {
+    if ($env:UI_TABLE_ACTIVITY -ne "1") {
+    } elseif ($Table.ContainsKey("Activities") -and $Table.Activities) {
         foreach ($k in @($Table.Activities.Keys)) { if ($Table.Activities[$k]) { $activities[[int]$k] = "" + $Table.Activities[$k] } }
     } elseif ($Table.ContainsKey("Activity") -and $Table.Activity) {
         $activityRow = 2
