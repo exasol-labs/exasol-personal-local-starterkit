@@ -808,6 +808,10 @@ jobs:
         if: matrix.shard == 3
       - run: bash tests/uninstall.sh
         if: matrix.shard == 3
+      # A full uninstall never reports success while the deployment is still
+      # on the machine (directory, runner, container): exit 1 and the remedy.
+      - run: bash tests/uninstall-leftovers.sh
+        if: matrix.shard == 3
       # An installation made by an older kit has a database this kit cannot
       # drive, and the crossing is the only code that touches one. What it
       # DECIDES and what it HANDS to the engine and to exapump are both
@@ -961,6 +965,7 @@ jobs:
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
+            pwsh -NoProfile -File tests/uninstall-leftovers-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1

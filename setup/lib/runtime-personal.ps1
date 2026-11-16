@@ -1998,8 +1998,20 @@ function Stop-Personal {
 # deliberately untouched: it is shared host-wide, the launcher never
 # reconfigures an existing one, and it stays running after destroy - this
 # module owns the deployment, nothing else. Twin of personal_teardown.
+#
+# THE END STATE IS CHECKED, NOT ASSUMED. A destroy that failed, exited 0 and
+# left the deployment behind, or never ran (Test-PersonalDeploymentExists asks
+# `exasol info`, which a "deployment_failed" deployment refuses) used to end
+# the same way as a clean one, and uninstall printed "Database removed" over a
+# database that was still there. What remains is left in
+# $script:PersonalTeardownLeftovers (one line per item, empty when clean) and
+# the command that removes it in $script:PersonalTeardownRemedy.
 function Remove-Personal {
-    if (Test-PersonalDeploymentExists) {
+    $script:PersonalTeardownLeftovers = @()
+    $script:PersonalTeardownRemedy = ""
+    # Read BEFORE the destroy, which deletes the state file that names it.
+    $deploymentId = "" + (Get-PersonalDeploymentId)
+    if ((Test-Path -LiteralPath $script:PersonalDeployDir) -or (Test-PersonalDeploymentExists)) {
         Warn2 "An Exasol Personal deployment keeps the database software and your data together - removing it deletes every table you loaded."
         # --auto-approve: the launcher's destroy prompts for confirmation by
         # itself; the caller (uninstall) has already asked its own question.
@@ -2007,7 +2019,42 @@ function Remove-Personal {
             Warn2 "The launcher reported errors while destroying the deployment. What it said: exakit logs setup"
         }
     }
+    Find-PersonalTeardownLeftovers -Id $deploymentId
+    if (@($script:PersonalTeardownLeftovers).Count -gt 0) { return }
     Set-ExakitManifestValue "runtime.status" "removed"
+}
+
+# Find-PersonalTeardownLeftovers -Id <deployment-id> - what of the deployment
+# is still on this machine after a destroy: a container carrying its id (Docker
+# or Podman, whichever answers) and its directory. Fills
+# $script:PersonalTeardownLeftovers and $script:PersonalTeardownRemedy. Twin of
+# personal_teardown_leftovers (which also checks the macOS runner on the port;
+# on Windows the port is held by the engine's relay, not by a kit process).
+function Find-PersonalTeardownLeftovers {
+    param([string]$Id = "")
+    $left = @()
+    $steps = @()
+    if ($Id) {
+        foreach ($engineName in @("docker", "podman")) {
+            $engineCmd = Get-Command $engineName -ErrorAction SilentlyContinue
+            if (-not $engineCmd) { continue }
+            $names = Invoke-ExakitBounded -FilePath $engineCmd.Source -TimeoutSeconds 15 -Arguments @("ps", "-a", "--format", "{{.Names}}")
+            foreach ($line in @(("" + ($names -join "`n")) -split "`r?`n")) {
+                $n = $line.Trim()
+                if (-not $n) { continue }
+                if (Test-PersonalNamesCarryId $n $Id) {
+                    $left += "the $engineName container $n"
+                    $steps += "$engineName rm -f $n"
+                }
+            }
+        }
+    }
+    if (Test-Path -LiteralPath $script:PersonalDeployDir) {
+        $left += "the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)"
+        $steps += "Remove-Item -Recurse -Force '" + ($script:PersonalDeployDir -replace "'", "''") + "'"
+    }
+    $script:PersonalTeardownLeftovers = $left
+    $script:PersonalTeardownRemedy = ($steps -join "; ")
 }
 
 # Update-Personal - bring the kit-managed launcher to the advertised version and

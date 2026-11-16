@@ -323,3 +323,5 @@ Then see `skills/local-agent-ready-starter/SKILL.md` for the full query-loop dis
 ```bash
 exakit uninstall --yes    # database + data, MCP configs, skills, binaries
 ```
+
+Exit `0` means the database is gone. Exit `1` means it is still on the machine (the launcher could not remove it): the output names what remains - the deployment directory, the runner process or a container - and the one command that removes it. Never report an uninstall as done on exit `1`.

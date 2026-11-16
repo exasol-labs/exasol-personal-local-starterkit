@@ -3003,13 +3003,32 @@ personal_stop() {
 # Personal deployment keeps runtime and data together, so removing it always
 # deletes the database content; without --data we refuse instead of silently
 # destroying data the documented contract says would be kept.
+#
+# THE END STATE IS CHECKED, NOT ASSUMED. This used to return the status of its
+# last line - a manifest write - so a destroy that failed, a destroy that
+# exited 0 and left the deployment behind, and a destroy that never ran at all
+# all answered 0, and `exakit uninstall` printed "Database removed" over a
+# database that was still there. Returns 1 when anything of the deployment
+# remains, with what remains in EXAKIT_TEARDOWN_LEFTOVERS (one item per line)
+# and the one command that removes it in EXAKIT_TEARDOWN_REMEDY. Twin of
+# Remove-Personal.
 personal_teardown() {
+    EXAKIT_TEARDOWN_LEFTOVERS=""
+    EXAKIT_TEARDOWN_REMEDY=""
     if [ "${1:-}" != "--data" ]; then
         warn "An Exasol Personal deployment keeps the database software and your data together — removing it deletes every table you loaded."
         info "Use 'exakit stop' to stop it without deleting, or 'exakit uninstall' to remove everything."
         return 1
     fi
-    if personal_deployment_exists; then
+    # Read BEFORE the destroy: both live in the deployment's own state files,
+    # which the destroy deletes, and the check afterwards needs them.
+    _ptd_id="$(_personal_deployment_id 2>/dev/null || true)"
+    _ptd_port="$(personal_db_port 2>/dev/null || true)"
+    # The directory alone decides whether destroy is tried. `exasol info`
+    # fails on a deployment the launcher records as "deployment_failed", and
+    # gating on it skipped the destroy entirely for exactly the deployments
+    # people uninstall to get rid of.
+    if [ -d "$EXAKIT_PERSONAL_DEPLOY_DIR" ] || personal_deployment_exists; then
         info "Destroying the local Exasol Personal deployment"
         # --auto-approve: the launcher's 'destroy' prompts for confirmation by
         # default. run_logged sends its output to the log, so that prompt is
@@ -3025,7 +3044,57 @@ personal_teardown() {
     # dir) so a future deploy and MCP clients get a clean port.
     personal_reap_orphan_daemon || \
         warn "Could not fully free port $(personal_db_port); if a later deploy fails to bind it, stop the leftover process holding that port and retry."
+    if ! personal_teardown_leftovers "$_ptd_id" "$_ptd_port"; then
+        return 1
+    fi
     manifest_set runtime.status "removed"
+    return 0
+}
+
+# personal_teardown_leftovers <deployment-id> <port> — what of the deployment
+# is still on this machine after a destroy: its directory, the kit's own
+# runner listening on its port, and (on Linux/WSL) a container carrying its
+# id. Fills EXAKIT_TEARDOWN_LEFTOVERS and EXAKIT_TEARDOWN_REMEDY; returns 1
+# when anything remains. A foreign listener on the port is not ours and is not
+# counted (personal_reap_orphan_daemon already said so).
+personal_teardown_leftovers() {
+    _ptl_id="${1:-}"
+    _ptl_port="${2:-$EXAKIT_PERSONAL_PORT}"
+    EXAKIT_TEARDOWN_LEFTOVERS=""
+    _ptl_kill=""; _ptl_rm=""; _ptl_dir=""
+    _ptl_add() { EXAKIT_TEARDOWN_LEFTOVERS="${EXAKIT_TEARDOWN_LEFTOVERS:+$EXAKIT_TEARDOWN_LEFTOVERS
+}$1"; }
+    if command -v lsof >/dev/null 2>&1; then
+        for _ptl_pid in $(lsof -nP -iTCP:"$_ptl_port" -sTCP:LISTEN -t 2>/dev/null | sort -u); do
+            _personal_is_runner_process "$_ptl_pid" || continue
+            _ptl_add "the Exasol runner process (pid $_ptl_pid) still listening on port $_ptl_port"
+            _ptl_kill="${_ptl_kill:+$_ptl_kill }$_ptl_pid"
+        done
+    fi
+    if [ -n "$_ptl_id" ] && personal_engine_platform; then
+        for _ptl_eng in docker podman; do
+            command -v "$_ptl_eng" >/dev/null 2>&1 || continue
+            for _ptl_name in $(exakit_run_bounded "${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}" "$_ptl_eng" ps -a --format '{{.Names}}' 2>/dev/null | \
+                    awk -v id="$_ptl_id" '
+                        { n = $0; sub(/\r$/, "", n); li = length(id); ln = length(n); f = 0 }
+                        n == id { f = 1 }
+                        ln > li && (substr(n, 1, li + 1) == id "-" || substr(n, 1, li + 1) == id "_") { f = 1 }
+                        ln > li && (substr(n, ln - li) == "-" id || substr(n, ln - li) == "_" id) { f = 1 }
+                        f { print n }'); do
+                _ptl_add "the $_ptl_eng container $_ptl_name"
+                _ptl_rm="${_ptl_rm:+$_ptl_rm && }$_ptl_eng rm -f $_ptl_name"
+            done
+        done
+    fi
+    if [ -e "$EXAKIT_PERSONAL_DEPLOY_DIR" ]; then
+        _ptl_add "the deployment directory $EXAKIT_PERSONAL_DEPLOY_DIR (the database and ALL its data)"
+        _ptl_dir="rm -rf '$EXAKIT_PERSONAL_DEPLOY_DIR'"
+    fi
+    EXAKIT_TEARDOWN_REMEDY=""
+    [ -n "$_ptl_kill" ] && EXAKIT_TEARDOWN_REMEDY="kill $_ptl_kill"
+    [ -n "$_ptl_rm" ]   && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY && }$_ptl_rm"
+    [ -n "$_ptl_dir" ]  && EXAKIT_TEARDOWN_REMEDY="${EXAKIT_TEARDOWN_REMEDY:+$EXAKIT_TEARDOWN_REMEDY && }$_ptl_dir"
+    [ -z "$EXAKIT_TEARDOWN_LEFTOVERS" ]
 }
 
 personal_upgrade_plan() {

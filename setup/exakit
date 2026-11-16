@@ -1796,7 +1796,14 @@ cmd_uninstall() {
         info "  exapump sql -p $EXAKIT_EXAPUMP_PROFILE -f csv 'SELECT * FROM <SCHEMA>.<TABLE>' > <TABLE>.csv"
         info "  ...which exakit data-load <TABLE>.csv loads back into a new install (the file name becomes the table name)."
         printf '\n'
-        exakit_uninstall_run 0
+        if ! exakit_uninstall_run 0; then
+            # The run has just named what survived and the command that removes
+            # it. "Uninstall complete" here was the bug: exit 0 over a database
+            # still on disk, with the launcher that could remove it deleted.
+            printf '\n'
+            error "Uninstall did not finish: the database is still on this machine (see above)."
+            exit 1
+        fi
         printf '\n'
         ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
         info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
