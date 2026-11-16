@@ -823,6 +823,34 @@ lacks "  ...and not on stdout" "WARN" "$(cat "$TMP/dj.out")"
 _rc="$(doctor_json running_unused 1 1 2>/dev/null)"
 check "--json, launcher not failed: exit 3" 3 "$_rc"
 lacks "  ...no stale-record remedy hint" "remedy_hint" "$(cat "$TMP/dj.out")"
+# An override inherited from the caller's environment is cleared: a healthy
+# run's JSON carries no stale-record remedy (MAC-R3-02).
+_dj_healthy() {
+    (
+        for _fn in _mcp_doctor_failed_record_but_answers _mcp_doctor_db_reachable cmd_mcp_doctor; do
+            eval "$(awk -v n="$_fn" '$0 ~ ("^" n "\\(\\)") {f=1} f{print} f&&/^}$/{if(f)exit}' "$ROOT/setup/exakit")"
+        done
+        EXAKIT_MANIFEST="$TMP/doctor-manifest.json"; : > "$EXAKIT_MANIFEST"
+        _runtime_type() { printf 'personal'; }
+        exakit_installation_runtime_type() { printf 'personal'; }
+        exakit_init_logging() { :; }
+        exakit_runtime_is_running() { return 0; }
+        exakit_mcp_operation() {
+            printf '{"operation": "doctor", "findings": []}' > "$TMP/dj.result"
+            python3 "$TMP/stamp.py" "$TMP/dj.result"
+        }
+        warn() { printf 'WARN %s\n' "$*" >&2; }; info() { :; }
+        EXAKIT_MCP_RESULT_REMEDY="exakit start"; EXAKIT_MCP_RESULT_REMEDY_HINT="inherited hint"
+        export EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
+        cmd_mcp_doctor --json
+    ) > "$TMP/dj.out" 2> "$TMP/dj.err"
+    echo "$?"
+}
+_rc="$(_dj_healthy)"
+check "--json, healthy run with an inherited override: exit 0" 0 "$_rc"
+check "  ...the inherited remedy is not used" "None" "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("remedy"))' "$TMP/dj.out" 2>&1)"
+lacks "  ...nor the inherited hint" "inherited hint" "$(cat "$TMP/dj.out")"
+check "mcp-status clears an inherited override too" 1 "$(sed -n '/^cmd_mcp_status()/,/^}/p' "$ROOT/setup/exakit" | grep -c 'unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT')"
 check "personal_deployment_running still never consults the runner" 0 "$(sed -n '/^personal_deployment_running()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '_personal_port_held_by_own_runner')"
 
 echo "passed: $PASS, failed: $FAIL"

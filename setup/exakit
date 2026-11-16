@@ -2080,6 +2080,9 @@ _mcp_doctor_db_reachable() {
 }
 
 cmd_mcp_doctor() {
+    # The remedy override is this run's own (_mcp_doctor_db_reachable); one
+    # inherited from the caller's environment must never answer for it.
+    unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     # Parse BEFORE the install check: the check's own answer has to honour
     # --json, and it has to exit 4 rather than 1. Reversing these two lines is
     # what made `mcp-doctor --json` print nothing on a machine with no install.
@@ -2203,6 +2206,8 @@ cmd_mcp_doctor() {
 }
 
 cmd_mcp_status() {
+    # No inherited remedy override: the MCP result stamp honours it.
+    unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     # --json is read BEFORE the install check, so the check answers in the shape
     # the caller asked for. The other order printed no JSON at all on a machine
     # with nothing installed - the one state a parser most needs an answer for.
