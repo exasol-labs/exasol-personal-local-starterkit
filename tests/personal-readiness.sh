@@ -340,6 +340,17 @@ echo "personal_stop_runner_of_failed_deployment: no KILL for a pid that is no lo
 _out="$(probe TPID="$_tpid" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=1 -- '_personal_port_held_by_own_runner() { _ppo_pids="$TPID"; }; _personal_is_own_runner_pid() { return 1; }; personal_launcher_cache_dir() { echo /nonexistent-cache; }; personal_db_port_pids() { echo "$TPID"; }; personal_stop_runner_of_failed_deployment')"
 contains "a pid no longer proven is named, not forced" "is no longer proven to be this deployment's runner - it was not forced" "$_out"
 check    "  ...and it is still alive" 0 "$(kill -0 "$_tpid" 2>/dev/null; echo $?)"
+# No launcher cache to prove against: refused, even if the identity check would pass.
+_out="$(probe TPID="$_tpid" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=1 -- '_personal_port_held_by_own_runner() { _ppo_pids="$TPID"; }; _personal_is_own_runner_pid() { return 0; }; personal_launcher_cache_dir() { :; }; personal_db_port_pids() { :; }; personal_stop_runner_of_failed_deployment')"
+contains "an empty launcher cache is not forced" "it was not forced" "$_out"
+check    "  ...and it is still alive" 0 "$(kill -0 "$_tpid" 2>/dev/null; echo $?)"
+# A proven runner that already let go of the port but ignores TERM: forced, so
+# the deploy that follows does not meet its VM.
+( trap '' TERM; exec sleep 30 ) & _tpid2=$!; echo "$_tpid2" >> "$CHILD_PIDS"
+_out="$(probe TPID="$_tpid2" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=1 -- '_personal_port_held_by_own_runner() { _ppo_pids="$TPID"; }; _personal_is_own_runner_pid() { return 0; }; personal_launcher_cache_dir() { echo /nonexistent-cache; }; personal_db_port_pids() { :; }; personal_stop_runner_of_failed_deployment')"
+contains "a proven runner off the port is forced" "did not exit within 1s - forcing it" "$_out"
+_w=0; while kill -0 "$_tpid2" 2>/dev/null && [ "$_w" -lt 20 ]; do sleep 0.1; _w=$((_w + 1)); done
+check    "  ...and it is gone" 1 "$(kill -0 "$_tpid2" 2>/dev/null; echo $?)"
 # The same process still proven (and on the port): forced, as before.
 _out="$(probe TPID="$_tpid" EXAKIT_PERSONAL_RUNNER_STOP_WAIT=1 -- '_personal_port_held_by_own_runner() { _ppo_pids="$TPID"; }; _personal_is_own_runner_pid() { return 0; }; personal_launcher_cache_dir() { echo /nonexistent-cache; }; personal_db_port_pids() { kill -0 "$TPID" 2>/dev/null && echo "$TPID"; }; personal_stop_runner_of_failed_deployment')"
 contains "a pid still proven is forced" "did not exit within 1s - forcing it" "$_out"

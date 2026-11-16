@@ -1321,9 +1321,9 @@ personal_stop_runner_of_failed_deployment() {
     for _psr_pid in $_psr_pids; do
         if kill -0 "$_psr_pid" 2>/dev/null; then
             # Proven again before a KILL: after the wait the pid may be another
-            # process, or another start's runner that no longer holds the port.
-            if [ -z "$_psr_cache" ] || ! _personal_is_own_runner_pid "$_psr_pid" "$_psr_cache" ||
-               ! printf ' %s ' $(personal_db_port_pids) | grep -q " $_psr_pid "; then
+            # process. A proven runner that already let go of the port is still
+            # forced: it may hold the VM, and the deploy that follows needs it.
+            if [ -z "$_psr_cache" ] || ! _personal_is_own_runner_pid "$_psr_pid" "$_psr_cache"; then
                 warn "Process $_psr_pid is still running but is no longer proven to be this deployment's runner - it was not forced."
                 continue
             fi
