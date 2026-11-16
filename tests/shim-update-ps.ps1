@@ -121,6 +121,37 @@ function Get-CimInstance { throw "WMI unavailable" }
 $lp = @(Get-ExakitShimLauncherPids -ShimPath $shimPath)
 Check "WMI fails: the chain counts as under the shim" "$PID" ($lp -join ",")
 Remove-Item Function:\Get-CimInstance
+# The parent chain, from a fixed table: only a chain that reaches a cmd.exe is
+# under the shim. exakit.ps1 started directly (a scheduled task, an agent) has
+# no cmd.exe above it and is never made to wait on explorer.exe.
+$script:fakeChain = @{}
+function Get-CimInstance {
+    param([string]$ClassName, [string]$Filter, $ErrorAction)
+    $id = [int]($Filter -replace '^ProcessId=', '')
+    return $script:fakeChain[$id]
+}
+function Set-FakeChain([object[]]$Procs) {
+    $script:fakeChain = @{}
+    foreach ($p in $Procs) { $script:fakeChain[[int]$p.ProcessId] = $p }
+}
+$selfCl = "powershell.exe -NoProfile -File C:\kit\setup\exakit.ps1 update"
+Set-FakeChain @(
+    [pscustomobject]@{ ProcessId = $PID; ParentProcessId = 9001; Name = "powershell.exe"; CommandLine = $selfCl },
+    [pscustomobject]@{ ProcessId = 9001; ParentProcessId = 9002; Name = "node.exe"; CommandLine = "node.exe agent.js" },
+    [pscustomobject]@{ ProcessId = 9002; ParentProcessId = 0; Name = "explorer.exe"; CommandLine = "C:\Windows\Explorer.EXE" })
+Check "no cmd.exe in the chain: not under the shim" "" ((@(Get-ExakitShimLauncherPids -ShimPath $shimPath)) -join ",")
+Set-FakeChain @(
+    [pscustomobject]@{ ProcessId = $PID; ParentProcessId = 9010; Name = "powershell.exe"; CommandLine = $selfCl },
+    [pscustomobject]@{ ProcessId = 9010; ParentProcessId = 9002; Name = "cmd.exe"; CommandLine = "C:\Windows\system32\cmd.exe /c `"`"$shimPath`" update`"" },
+    [pscustomobject]@{ ProcessId = 9002; ParentProcessId = 0; Name = "explorer.exe"; CommandLine = "C:\Windows\Explorer.EXE" })
+$want = (@($PID, 9010) | Sort-Object) -join ","
+Check "cmd /c exakit.cmd: waits on itself and that cmd.exe, not above" $want ((@(Get-ExakitShimLauncherPids -ShimPath $shimPath)) -join ",")
+Set-FakeChain @(
+    [pscustomobject]@{ ProcessId = $PID; ParentProcessId = 9020; Name = "powershell.exe"; CommandLine = $selfCl },
+    [pscustomobject]@{ ProcessId = 9020; ParentProcessId = 9002; Name = "cmd.exe"; CommandLine = "C:\Windows\system32\cmd.exe" },
+    [pscustomobject]@{ ProcessId = 9002; ParentProcessId = 0; Name = "explorer.exe"; CommandLine = "C:\Windows\Explorer.EXE" })
+Check "interactive cmd.exe: waits on itself only" "$PID" ((@(Get-ExakitShimLauncherPids -ShimPath $shimPath)) -join ",")
+Remove-Item Function:\Get-CimInstance
 function Get-ExakitShimLauncherPids { param([string]$ShimPath) return @() }
 function Get-ExakitLauncherRunningPids { param([string]$Path) return @(2147483001) }
 function Start-ExakitDetachedPowerShell { param([string]$Script) $script:helperScript = $Script; return $true }
