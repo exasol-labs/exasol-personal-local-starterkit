@@ -176,11 +176,17 @@ $script:PersonalProbeTimeout = $savedProbeTimeout
 # pipefail), and only negative cases were pinned, so nothing noticed: the
 # installer then waited out its budget and redeployed over a running database.
 # A throwaway self-signed certificate, as Exasol's own is. Skipped, not failed,
-# where openssl is not on PATH (Windows runners may lack it).
+# where openssl is not on PATH (Windows runners may lack it) - except in CI on
+# Windows, where a missing openssl is a runner change that would silently drop
+# the only positive TLS case: there it fails.
 $openssl = Get-Command openssl -ErrorAction SilentlyContinue
 if (-not $openssl) {
-    $script:SKIP++
-    Write-Host "  skip a completed TLS handshake answers (openssl not on PATH)"
+    if ($env:CI -eq "true" -and $env:OS -eq "Windows_NT") {
+        Check "a completed TLS handshake answers (openssl must be on PATH in CI on Windows)" "openssl" "missing"
+    } else {
+        $script:SKIP++
+        Write-Host "  skip a completed TLS handshake answers (openssl not on PATH)"
+    }
 } else {
     $tlsDir = Join-Path $work "tls"
     New-Item -ItemType Directory -Force -Path $tlsDir | Out-Null
