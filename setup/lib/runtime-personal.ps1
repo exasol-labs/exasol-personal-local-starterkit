@@ -2088,7 +2088,7 @@ function Get-PersonalOtherDeployments {
     $dirs = @()
     $parent = Split-Path -Parent $script:PersonalDeployDir
     if ($parent) { $dirs += [System.IO.Path]::GetFullPath($parent).TrimEnd('\', '/') }
-    $homeDir = $HOME
+    $homeDir = Get-ExakitProfileHome
     if ($homeDir) {
         $default = [System.IO.Path]::GetFullPath((Join-Path $homeDir ".exasol\personal\deployments")).TrimEnd('\', '/')
         if ($dirs -notcontains $default) { $dirs += $default }
