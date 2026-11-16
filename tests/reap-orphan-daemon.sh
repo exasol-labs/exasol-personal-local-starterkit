@@ -216,6 +216,108 @@ check "the deploy path waits for a young runner, then judges again" yes \
     "$(has "$_dp_body" 'personal_wait_out_young_runner "${PERSONAL_PORT_HOLDER_WAIT:-0}"')"
 check "...and names the command that frees the port"     yes "$(has "$_dp_body" 'free the port with: kill ${PERSONAL_PORT_HOLDER_PID}')"
 
+echo
+echo "a VM left by a failed first boot no longer blocks its own retry:"
+# REPORTED FROM THE SAME INSTALL: the launcher recorded the deployment as
+# failed, its VM runner stayed alive, and every `exasol deploy` after that
+# ended in "Error: VM is already running" - then 150 s of waiting for a
+# database that could not come, and a start that does nothing in this state.
+# Every process here is this suite's own, on a port it picked: the function
+# under test looks at the database port only, never at process names.
+cat > "$TMP/stale.sh" <<HARNESS
+info(){ :; }; ok(){ :; }; warn(){ :; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+source "$ROOT/setup/lib/runtime-personal.sh"
+EXAKIT_PERSONAL_PORT="\$1"
+personal_clear_stale_vm; echo "RC \$?"
+HARNESS
+P8="$(pick_port $((P7 + 1)))"
+PID8="$(start_daemon "$P8")"
+SAID="$(EXAKIT_PERSONAL_REAP_MIN_AGE=180 bash "$TMP/stale.sh" "$P8")"
+check "a runner inside its start budget is never stopped" "yes RC 1" "$(alive "$PID8") $SAID"
+SAID="$(EXAKIT_PERSONAL_REAP_MIN_AGE=1 bash "$TMP/stale.sh" "$P8")"; sleep 1
+check "the leftover runner on the port is stopped"        "no RC 0"  "$(alive "$PID8") $SAID"
+P9="$(pick_port $((P8 + 1)))"
+PID9="$(start_foreign "$P9")"
+P10="$(pick_port $((P9 + 1)))"
+PID10="$(start_daemon "$P10")"
+SAID="$(EXAKIT_PERSONAL_REAP_MIN_AGE=1 bash "$TMP/stale.sh" "$P9")"; sleep 1
+check "another program on the port is not a VM to stop"   "yes RC 1" "$(alive "$PID9") $SAID"
+check "...and a runner on ANOTHER port is another deployment's: untouched" "yes" "$(alive "$PID10")"
+kill -9 "$PID9" "$PID10" 2>/dev/null || true
+_csv_code="$(sed -n '/^personal_clear_stale_vm()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | sed -e 's/[[:space:]]*#.*$//')"
+check "...it never looks a runner up by name"             no  "$(has "$_csv_code" "pgrep")"
+
+cat > "$TMP/said.sh" <<HARNESS
+source "$ROOT/setup/lib/runtime-personal.sh"
+EXAKIT_LOG_FILE="$TMP/install.log"
+_personal_vm_already_running "\$1"; echo "RC \$?"
+HARNESS
+printf '%s\n' "old line" "Error: VM is already running" "INFO  this run starts here" > "$TMP/install.log"
+check "the launcher's words from an earlier run do not count" "RC 1" "$(bash "$TMP/said.sh" 3)"
+printf '%s\n' 'Error: local runner command "start" failed: exit status 1' "Error: VM is already running" >> "$TMP/install.log"
+check "...this run's do"                                      "RC 0" "$(bash "$TMP/said.sh" 3)"
+check "...and no log line to read from is no evidence"        "RC 1" "$(bash "$TMP/said.sh" "")"
+_dp_code="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d')"
+_dp_stale="$(printf '%s\n' "$_dp_code" | grep -n '_personal_vm_already_running' | head -1 | cut -d: -f1)"
+_dp_wait="$(printf '%s\n' "$_dp_code" | grep -n 'personal_recover_slow_first_boot' | head -1 | cut -d: -f1)"
+check "the retry reads the launcher's error before it waits 150 s" "yes" \
+    "$([ -n "$_dp_stale" ] && [ -n "$_dp_wait" ] && [ "$_dp_stale" -lt "$_dp_wait" ] && echo yes || echo no)"
+check "...and stops an answering VM only when it never held data" "yes" \
+    "$(has "$_dp_code" '{ personal_first_boot_pending || ! personal_tls_answers; }')"
+
+echo
+echo "the health check reads the handshake, not the client's exit status:"
+# THE ROOT CAUSE OF THAT INSTALL. The probe was `openssl s_client ... | grep -q
+# 'BEGIN CERTIFICATE'` and the installer runs with pipefail: macOS's own
+# openssl (LibreSSL) exits 1 after a handshake that succeeded, so the probe
+# said "no database" about one that answered, on every Mac without another
+# openssl first on PATH. A stand-in openssl with exactly that behaviour.
+mkdir -p "$TMP/libressl" "$TMP/silent"
+printf '%s\n' '#!/bin/sh' 'echo "CONNECTED(00000003)"; echo "-----BEGIN CERTIFICATE-----"; echo "-----END CERTIFICATE-----"; exit 1' > "$TMP/libressl/openssl"
+printf '%s\n' '#!/bin/sh' 'echo "connect: Connection refused" >&2; exit 1' > "$TMP/silent/openssl"
+chmod +x "$TMP/libressl/openssl" "$TMP/silent/openssl"
+cat > "$TMP/probe.sh" <<HARNESS
+set -o pipefail
+info(){ :; }; ok(){ :; }; warn(){ :; }
+exakit_run_bounded(){ shift; "\$@"; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+source "$ROOT/setup/lib/runtime-personal.sh"
+EXAKIT_PERSONAL_PORT=18563
+personal_tls_answers; echo "RC \$?"
+HARNESS
+check "a handshake that succeeded answers, whatever openssl exits with (pipefail on)" "RC 0" \
+    "$(PATH="$TMP/libressl:$PATH" bash "$TMP/probe.sh")"
+check "...and no certificate is still no database" "RC 1" \
+    "$(PATH="$TMP/silent:$PATH" bash "$TMP/probe.sh")"
+_pta_code="$(sed -n '/^personal_tls_answers()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | sed -e 's/[[:space:]]*#.*$//')"
+check "...the probe is not a pipeline whose status pipefail can turn" no "$(has "$_pta_code" "| grep")"
+
+echo
+echo "a VM that is running is never deployed over:"
+P11="$(pick_port $((P10 + 1)))"
+PID11="$(start_daemon "$P11")"
+cat > "$TMP/vm.sh" <<HARNESS
+info(){ :; }; ok(){ :; }; warn(){ :; }
+EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
+source "$ROOT/setup/lib/runtime-personal.sh"
+EXAKIT_PERSONAL_PORT="\$1"
+EXAKIT_LOG_FILE="$TMP/install.log"
+echo "PID \$(personal_vm_runner_pid)"; echo "HINT\$(personal_stuck_vm_hint 3)"
+HARNESS
+SAID="$(bash "$TMP/vm.sh" "$P11")"
+check "the VM's runner on the port is found"             yes "$(has "$SAID" "PID $PID11")"
+check "...and a stuck one is named with its kill"        yes "$(has "$SAID" "stop it with kill $PID11, then re-run")"
+kill -9 "$PID11" 2>/dev/null || true; sleep 1
+SAID="$(bash "$TMP/vm.sh" "$P11")"
+check "no runner on the port: nothing to name"           "PID  HINT" "$(printf '%s' "$SAID" | tr '\n' ' ' | sed 's/ $//')"
+_wr_code="$(sed -n '/^personal_wait_ready_or_deploy()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | sed -e 's/[[:space:]]*#.*$//' -e '/^[[:space:]]*$/d')"
+_wr_vm="$(printf '%s\n' "$_wr_code" | grep -n 'personal_vm_runner_pid' | head -1 | cut -d: -f1)"
+_wr_stop="$(printf '%s\n' "$_wr_code" | grep -n 'personal_clear_stale_vm' | head -1 | cut -d: -f1)"
+_wr_deploy="$(printf '%s\n' "$_wr_code" | grep -n 'personal_cli)" deploy' | head -1 | cut -d: -f1)"
+check "a silent database with a running VM is waited for, then its VM stopped, before any deploy" "yes" \
+    "$([ -n "$_wr_vm" ] && [ -n "$_wr_stop" ] && [ -n "$_wr_deploy" ] && [ "$_wr_vm" -lt "$_wr_stop" ] && [ "$_wr_stop" -lt "$_wr_deploy" ] && echo yes || echo no)"
+
 # The predicate itself, on the two questions it now asks beyond the name.
 _rod_src="$(sed -n '/^personal_is_orphan_daemon()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 case "$_rod_src" in

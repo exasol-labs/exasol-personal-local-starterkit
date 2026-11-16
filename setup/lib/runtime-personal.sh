@@ -987,8 +987,18 @@ personal_db_answers() {
 personal_tls_answers() {
     _pta_port="$(personal_db_port)"
     if command -v openssl >/dev/null 2>&1; then
-        exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" openssl s_client -connect "127.0.0.1:$_pta_port" </dev/null 2>/dev/null | grep -q 'BEGIN CERTIFICATE'
-        return $?
+        # WHAT THE HANDSHAKE PRINTED, NEVER THE CLIENT'S EXIT STATUS. This was a
+        # pipeline into grep, and the installer and exakit run with pipefail:
+        # macOS's own openssl (LibreSSL) exits 1 at the end of stdin after a
+        # handshake that succeeded, so on every Mac without another openssl
+        # first on PATH the probe said "no database" about one that answered.
+        # The readiness wait then ran out its whole budget, the kit "repaired"
+        # the running database by deploying over it, and the launcher recorded
+        # the deployment as failed for good. Reported from a real install;
+        # machines with Homebrew's openssl (exit 0) never showed it.
+        _pta_out="$(exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" openssl s_client -connect "127.0.0.1:$_pta_port" </dev/null 2>/dev/null || true)"
+        case "$_pta_out" in *'BEGIN CERTIFICATE'*) return 0 ;; esac
+        return 1
     fi
     if command -v python3 >/dev/null 2>&1; then
         exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" python3 -c 'import socket, ssl, sys
@@ -1281,6 +1291,92 @@ personal_reap_orphan_daemon() {
         return 1
     fi
     ok "Freed port $_rod_port (removed a leftover Exasol runner daemon)"
+    return 0
+}
+
+# _personal_vm_already_running <log-line> - did the launcher, since that line of
+# this run's log, refuse a deploy or start because its VM is already running?
+# Its own words ("Error: VM is already running"), read from the log the way
+# _personal_start_network_blocked reads netavark's.
+_personal_vm_already_running() {
+    [ -n "${1:-}" ] && [ -n "${EXAKIT_LOG_FILE:-}" ] && [ -f "$EXAKIT_LOG_FILE" ] || return 1
+    tail -n "+$(( ${1} + 1 ))" "$EXAKIT_LOG_FILE" 2>/dev/null | grep -qi 'VM is already running'
+}
+
+# personal_vm_runner_pid - the Exasol runner (the process that IS the VM on
+# macOS and Linux) listening on this deployment's database port; nothing when
+# none does. A container deployment has no such process: its port is the
+# engine's.
+personal_vm_runner_pid() {
+    for _vrp_pid in $(personal_db_port_pids); do
+        if _personal_is_runner_process "$_vrp_pid"; then
+            printf '%s' "$_vrp_pid"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# personal_stuck_vm_hint <log-line> - one sentence for a deployment the
+# launcher refuses to deploy because its VM runs: what it is and the command
+# that ends it. Empty without the launcher's own "VM is already running".
+personal_stuck_vm_hint() {
+    _personal_vm_already_running "${1:-}" || return 0
+    _svh_pid="$(personal_vm_runner_pid 2>/dev/null || true)"
+    [ -n "$_svh_pid" ] || return 0
+    printf ' Its VM is still running (pid %s) and the launcher will not deploy over it: stop it with kill %s, then re-run.' "$_svh_pid" "$_svh_pid"
+}
+
+# personal_clear_stale_vm - stop the Exasol runner an earlier, failed attempt
+# left alive. For the caller that has the launcher's own "VM is already
+# running" and a database that does not answer. Returns 0 only when a runner
+# was stopped and is gone.
+#
+# WHICH PROCESS: only an Exasol runner LISTENING ON THIS DEPLOYMENT'S DATABASE
+# PORT. Never one found by name alone: a machine can run a second deployment,
+# its runner carries the same name, and the name cannot say whose it is - the
+# port can. A leftover that never reached the port is left for the ladder
+# below (the replace offer). NEVER A YOUNG ONE: inside
+# EXAKIT_PERSONAL_REAP_MIN_AGE a runner is a VM still booting, and killing
+# that is the data-loss path the reaper's age gate exists for
+# (personal_is_orphan_daemon).
+personal_clear_stale_vm() {
+    _csv_pids=""
+    for _csv_pid in $(personal_db_port_pids); do
+        _personal_is_runner_process "$_csv_pid" && _csv_pids="$_csv_pids $_csv_pid"
+    done
+    [ -n "$_csv_pids" ] || return 1
+    for _csv_pid in $_csv_pids; do
+        _csv_age="$(_personal_proc_age_seconds "$_csv_pid" 2>/dev/null || true)"
+        if [ "${EXAKIT_PERSONAL_REAP_MIN_AGE:-0}" -gt 0 ] && [ -n "$_csv_age" ] && \
+           [ "$_csv_age" -lt "$EXAKIT_PERSONAL_REAP_MIN_AGE" ]; then
+            command -v _exakit_log_file >/dev/null 2>&1 &&
+                _exakit_log_file "INFO  not stopping runner pid $_csv_pid: ${_csv_age}s old, still within the start budget"
+            return 1
+        fi
+    done
+    for _csv_pid in $_csv_pids; do
+        command -v _exakit_log_file >/dev/null 2>&1 &&
+            _exakit_log_file "INFO  stopping the runner an earlier attempt left alive (pid $_csv_pid)"
+        pkill -P "$_csv_pid" 2>/dev/null || true
+        kill "$_csv_pid" 2>/dev/null || true
+    done
+    _csv_waited=0
+    while [ "$_csv_waited" -lt 10 ]; do
+        _csv_alive=0
+        for _csv_pid in $_csv_pids; do kill -0 "$_csv_pid" 2>/dev/null && _csv_alive=1; done
+        [ "$_csv_alive" = 1 ] || return 0
+        sleep 1
+        _csv_waited=$((_csv_waited + 1))
+    done
+    for _csv_pid in $_csv_pids; do
+        if kill -0 "$_csv_pid" 2>/dev/null; then
+            pkill -9 -P "$_csv_pid" 2>/dev/null || true
+            kill -9 "$_csv_pid" 2>/dev/null || true
+        fi
+    done
+    sleep 1
+    for _csv_pid in $_csv_pids; do kill -0 "$_csv_pid" 2>/dev/null && return 1; done
     return 0
 }
 
@@ -2404,14 +2500,38 @@ personal_deploy_local() {
             info "The launcher records this deployment as failed - retrying its deploy."
             EXAKIT_ACTIVE_LABEL="Retrying the deployment"
             PERSONAL_CONTAINER_ERROR=""
-            if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy) || \
-               personal_recover_slow_first_boot; then
+            _pdl_redeployed=0
+            if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy); then
+                _pdl_redeployed=1
+            elif _personal_vm_already_running "$_pdl_start_log_at" && \
+                 { personal_first_boot_pending || ! personal_tls_answers; } && \
+                 personal_clear_stale_vm; then
+                # THE RETRY WAS BLOCKED BY THE THING IT RETRIES. Reported from a
+                # real install: a deploy was run over a VM that was still
+                # running, the launcher recorded the deployment as failed, and
+                # every later deploy ended in "VM is already running" - the
+                # launcher cannot adopt its own running VM, and its start and
+                # stop do nothing in this state. So the runner is stopped and
+                # the deploy run once more. Never a runner still inside its
+                # start budget; and a database that answers is only stopped
+                # when it has never held data (a first boot the kit made and
+                # never saw answer) - one that may hold data is left running
+                # and named below.
+                info "A VM left running by an earlier attempt blocked the deploy; it was stopped, deploying again."
+                if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy) || \
+                   personal_recover_slow_first_boot; then
+                    _pdl_redeployed=1
+                fi
+            elif personal_recover_slow_first_boot; then
+                _pdl_redeployed=1
+            fi
+            if [ "$_pdl_redeployed" = 1 ]; then
                 ok "Reusing the existing Exasol deployment (deployed again)"
                 personal_wait_ready_or_deploy || return 1
                 personal_record_manifest "healthy"
                 return 0
             fi
-            warn "The failed deployment could not be brought up.$(personal_foreign_db_hint)"
+            warn "The failed deployment could not be brought up.$(personal_foreign_db_hint)$(personal_stuck_vm_hint "$_pdl_start_log_at")"
             personal_explain_failure
             # A DEPLOYMENT THAT NEVER STARTED HOLDS NO DATA, so the ladder below
             # asks the wrong questions of it: "start it and keep its data" is a
@@ -2857,8 +2977,26 @@ personal_wait_ready_or_deploy() {
         exakit_note_failure "The database never answered${PERSONAL_FAILURE_CAUSE}"
         return 1
     fi
-    warn "The database did not answer after the launcher accepted the start."
-    info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
+    # A VM THAT IS RUNNING IS NOT DEPLOYED OVER. The launcher refuses that
+    # ("VM is already running") and then records the deployment as failed, after
+    # which it refuses everything - a slow first boot turned into an install
+    # that could not be re-run. So while the VM's runner holds the port the
+    # database is given a second budget, and a VM still silent after that is
+    # stopped before the deploy that starts it again.
+    _pwrd_vm="$(personal_vm_runner_pid 2>/dev/null || true)"
+    if [ -n "$_pwrd_vm" ]; then
+        info "The database VM is running (pid $_pwrd_vm) but has not answered yet - a first boot can take several minutes. Waiting once more instead of deploying over it."
+        _personal_wait_ready_probe && { ok "The database answered"; return 0; }
+        if ! personal_clear_stale_vm; then
+            warn "The database VM is still running (pid $_pwrd_vm) and never answered. Stop it with: kill $_pwrd_vm   then: exakit start"
+            exakit_note_failure "The database VM runs (pid $_pwrd_vm) but never answered: stop it with kill $_pwrd_vm, then exakit start"
+            return 1
+        fi
+        info "The VM that never answered was stopped; the launcher's deploy starts it again."
+    else
+        warn "The database did not answer after the launcher accepted the start."
+        info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
+    fi
     _pwrd_log_at=""
     if [ -n "${EXAKIT_LOG_FILE:-}" ] && [ -f "$EXAKIT_LOG_FILE" ]; then
         _pwrd_log_at="$(wc -l < "$EXAKIT_LOG_FILE" 2>/dev/null | tr -d ' ')"
