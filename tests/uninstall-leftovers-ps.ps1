@@ -447,6 +447,13 @@ Seed-Kit; Seed-Deploy; $script:engCalls = @()
 Invoke-ExakitUninstallRun
 Check "i2b: one rmi for one image id" "1" (@($script:engCalls | Where-Object { $_ -like "podman rmi*" }).Count)
 Lacks "i2b: the duplicate row is not reported kept" "kept image" $script:out
+# (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
+$env:STUB_PODMAN_IMAGES = ""
+$env:STUB_DOCKER_IMAGES = @('exasol/nano|2026.2.0|abc123|812MB', 'exasol/nano|latest|abc123|812MB') -join "`n"
+Seed-Kit; Seed-Deploy; $script:engCalls = @()
+Invoke-ExakitUninstallRun
+Check "i2c: both tags of one image are removed" "2" (@($script:engCalls | Where-Object { $_ -like "docker rmi exasol/nano:*" }).Count)
+Has   "i2c: the second tag by its name" "docker rmi exasol/nano:latest" ($script:engCalls -join "; ")
 $env:STUB_PODMAN_IMAGES = $savedPodman; $env:STUB_DOCKER_IMAGES = $savedDocker
 # (i7) another deployment still runs from the image: no engine is asked.
 Seed-Kit; Seed-Deploy; $script:engCalls = @()
@@ -469,7 +476,7 @@ Check "i9: no deployment dir, no engine call" "0" (@($script:engCalls).Count)
 # (i3) rmi refused (a container still uses it): kept, one hint, not flagged.
 Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
 Invoke-ExakitUninstallRun
-Has   "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: still used by a container; remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
+Has   "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: the engine refused (a container may still use it); remove later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
 Has   "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" $script:out
 Check "i3: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 $env:STUB_RMI_FAIL = ""
