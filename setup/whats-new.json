@@ -20,6 +20,14 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.2.5": [
+    "macOS: install works with stock OpenSSL and recovers a stuck one.",
+    "Uninstall removes all the kit added: cache, folders, autostart,",
+    "the kit's Docker/Podman image and old permission rules.",
+    "Uninstall now says plainly when something stays, and why.",
+    "Windows: mcp-doctor and mcp-setup work from AI agent shells.",
+    "Windows: leftover launchers clean themselves up after uninstall."
+  ],
   "0.2.4": [
     "Exasol Personal 2.4: Linux/Windows installs use Docker if running.",
     "Podman on WSL or Windows: if exakit start fails, run wsl --update",
