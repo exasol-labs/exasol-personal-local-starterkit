@@ -186,7 +186,9 @@ function Install-DashServer {
 
     $instance = Join-Path $script:DashServerHome "instance"
     New-Item -ItemType Directory -Force -Path $instance | Out-Null
-    if (-not (Write-DashServerLauncher)) { return $false }
+    $launcherHow = Write-DashServerLauncher
+    if (-not $launcherHow) { return $false }
+    if ($launcherHow -eq "staged") { Restart-DashServerForStagedLauncher }
 
     Set-ExakitManifestValue "components.dash_server.version" $script:DashServerVersion
     Set-ExakitManifestValue "components.dash_server.venv" $script:DashServerVenv
@@ -237,6 +239,8 @@ function Confirm-DashServerPip {
 # from the environment (DASH_SERVER_EXASOL_*, read fresh at RUN time - the
 # password never lands in the wrapper, only the path of the credential file).
 # Every variable yields to one the user set. Twin of dash_server_write_launcher.
+# Answers "staged" when the new launcher waits in <launcher>.new for a running
+# copy to exit, "written" when it is in place, $false when it could not be written.
 function Write-DashServerLauncher {
     $dsn = Get-ExakitManifestValue "runtime.dsn"
     $user = Get-ExakitManifestValue "components.mcp_server.connection.user"
@@ -402,7 +406,22 @@ function Write-DashServerLauncher {
     }
     if ($launcherHow -eq "staged") { Info "dash-server launcher update staged; it applies when dash-server next starts" }
     else { Ok "dash-server launcher written: $(Get-DashServerLauncherPath)" }
-    return $true
+    return $launcherHow
+}
+
+# Restart-DashServerForStagedLauncher - a launcher refresh staged while OUR
+# server ran waits for that server to exit, and the Startup entry at the next
+# login runs the old launcher, so an update that never restarts a healthy
+# server never lands it. Restart our own server now: once its launcher copy
+# has exited, Start-DashServer applies the staged file. A port that is not
+# proven ours (Test-DashServerPortIsOurs) is left alone, and the staged message
+# stands.
+function Restart-DashServerForStagedLauncher {
+    if (-not (Test-DashServerPortIsOurs)) { return }
+    Info "Restarting dash-server so it runs the new launcher"
+    [void](Stop-DashServer)
+    for ($i = 0; $i -lt 10 -and @(Get-ExakitLauncherRunningPids -Path (Get-DashServerLauncherPath)).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }
+    [void](Start-DashServer)
 }
 
 # Test-DashServer - prove the package imports, then start the server briefly
@@ -961,7 +980,7 @@ function Update-DashServer {
     if ($current -and $current -eq $available) {
         # Same version can still need repair: regenerate the launcher so a
         # DSN/credential change since the install is picked up.
-        [void](Write-DashServerLauncher)
+        if ((Write-DashServerLauncher) -eq "staged") { Restart-DashServerForStagedLauncher }
         Ok "dash-server is already current ($current)"
         return
     }

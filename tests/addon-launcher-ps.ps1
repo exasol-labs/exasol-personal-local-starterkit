@@ -199,6 +199,47 @@ foreach ($c in $cases) {
     }
 }
 
+# --- an update that stages dash-server's launcher restarts OUR server ------
+# The Startup entry at the next login runs the old launcher, so a refresh
+# staged under a healthy server would never land. Our server (port proven
+# ours) is stopped and started, and the start applies the staged file; a port
+# held by anything else is never stopped, and the refresh stays staged.
+Write-Host ""
+Write-Host "dash-server update with the server running"
+foreach ($d in (Import-Functions -File (Join-Path $repo "setup/lib/dash-server.ps1") -Names @("Update-DashServer", "Restart-DashServerForStagedLauncher"))) { Invoke-Expression $d }
+function Resolve-DashServerPort { }
+function Get-ExakitComponentAvailable($id) { return "9.9.9" }
+function Get-DashServerInstalledVersion { return "9.9.9" }
+$script:portOurs = $true; $script:stopped = 0; $script:started = 0
+function Test-DashServerPortIsOurs { return $script:portOurs }
+function Stop-DashServer { $script:stopped++; $script:running = @(); return $true }
+# The real Start-DashServer applies a staged launcher before it starts one
+# (pinned under "static" below); the stub does the same and starts nothing.
+function Start-DashServer { $script:started++; Complete-ExakitAddonLauncherUpdate -Path (Get-DashServerLauncherPath); return $true }
+$dsPath = Get-DashServerLauncherPath
+$script:running = @(); [void](Write-DashServerLauncher)
+$dsNew = [System.IO.File]::ReadAllText($dsPath)
+$dsOld = "@echo off`r`nrem an older launcher`r`n"
+[System.IO.File]::WriteAllText($dsPath, $dsOld, [System.Text.Encoding]::ASCII)
+$script:running = @(2147483001); $script:helperScript = $null; $script:said = @()
+Update-DashServer
+Check "ours: the server is stopped once" "1" $script:stopped
+Check "ours: and started again" "1" $script:started
+Check "ours: the new launcher is in place" "True" ([System.IO.File]::ReadAllText($dsPath) -eq $dsNew)
+Check "ours: no .new is left" "False" (Test-Path -LiteralPath "$dsPath.new")
+[System.IO.File]::WriteAllText($dsPath, $dsOld, [System.Text.Encoding]::ASCII)
+$script:portOurs = $false; $script:stopped = 0; $script:started = 0
+$script:running = @(2147483001); $script:helperScript = $null; $script:said = @()
+Update-DashServer
+Check "not ours: nothing is stopped" "0" $script:stopped
+Check "not ours: nothing is started" "0" $script:started
+Check "not ours: the launcher is not rewritten in place" "True" ([System.IO.File]::ReadAllText($dsPath) -eq $dsOld)
+Check "not ours: the refresh stays staged and says so" "True" ((Test-Path -LiteralPath "$dsPath.new") -and ((@($script:said) -join "`n") -match 'launcher update staged'))
+Remove-Item -Force -LiteralPath "$dsPath.new" -ErrorAction SilentlyContinue
+$script:running = @()
+$installBody = "" + (Import-Functions -File (Join-Path $repo "setup/lib/dash-server.ps1") -Names @("Install-DashServer"))
+Check "Install-DashServer restarts our server when its launcher is staged" "True" ($installBody.Contains('if ($launcherHow -eq "staged") { Restart-DashServerForStagedLauncher }'))
+
 # --- Windows only: a real cmd.exe runs the launcher while it is rewritten ---
 # The real running-copy scan, the real detached helper, sandbox paths only.
 # While the copy runs the file must not change; once it exits the helper swaps
