@@ -1741,7 +1741,14 @@ function Invoke-ExakitUninstallKitImages {
         }
         $gone = @()
         $seenIds = @{}
-        foreach ($line in (("" + $list) -split "`r?`n")) {
+        # Tagged rows first, then <none> rows: every tag of an image is removed
+        # by its own name (an image with two tags needs both, or it stays), and
+        # a <none> row whose id a tag already covered is skipped (podman lists
+        # one image twice when it carries a tag AND a <none> row).
+        $allLines = @(("" + $list) -split "`r?`n")
+        $taggedLines = @($allLines | Where-Object { $p = $_.Trim() -split '\|'; $p.Count -ge 2 -and $p[1] -and $p[1] -ne "<none>" })
+        $noneLines = @($allLines | Where-Object { $p = $_.Trim() -split '\|'; $p.Count -ge 2 -and (-not $p[1] -or $p[1] -eq "<none>") })
+        foreach ($line in ($taggedLines + $noneLines)) {
             $parts = $line.Trim() -split '\|'
             if ($parts.Count -lt 3) { continue }
             $listed = $parts[0]
@@ -1750,7 +1757,8 @@ function Invoke-ExakitUninstallKitImages {
             if ($kitRepos -notcontains $repo) { continue }
             # podman lists one image twice when it carries a tag AND a <none>
             # row; one rmi handles it, and the second row is not "kept".
-            if ($parts[2] -and $seenIds.ContainsKey($parts[2])) { continue }
+            $isNone = (-not $parts[1]) -or ($parts[1] -eq "<none>")
+            if ($isNone -and $parts[2] -and $seenIds.ContainsKey($parts[2])) { continue }
             if ($parts[2]) { $seenIds[$parts[2]] = $true }
             $tag = $parts[1]
             $size = ""
@@ -1769,7 +1777,7 @@ function Invoke-ExakitUninstallKitImages {
             }
             $rmi = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 60 -Arguments @("rmi", $ref)
             if ($null -ne $rmi) { $gone += $name }
-            else { Info "kept image ${name}: still used by a container; remove later with: $engineName rmi $ref" }
+            else { Info "kept image ${name}: the engine refused (a container may still use it); remove later with: $engineName rmi $ref" }
         }
         if ((-not $DryRun) -and $gone.Count -gt 0) {
             OkStep "Container images removed ($engineName): $($gone -join ', ')"

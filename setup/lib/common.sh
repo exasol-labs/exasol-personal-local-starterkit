@@ -12872,12 +12872,18 @@ _exakit_uninstall_kit_images() {
         [ -n "$_kim_rows" ] || continue
         # A here-document, not a pipe: the loop sets _kim_gone, and a pipe
         # would run it in a subshell that drops the value.
+        # Tagged rows first, then <none> rows: every tag of an image is removed
+        # by its own name (an image with two tags needs both, or it stays), and
+        # a <none> row whose id a tag already covered is skipped - podman lists
+        # one image twice when it carries a tag AND a <none> row, and that
+        # second row is not "kept".
         _kim_seen=" "
+        _kim_rows="$(printf '%s\n' "$_kim_rows" | awk -F'|' '$2!="" && $2!="<none>"'; printf '%s\n' "$_kim_rows" | awk -F'|' '$2=="" || $2=="<none>"')"
         while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size _kr_listed; do
             [ -n "$_kr_repo" ] || continue
-            # podman lists one image twice when it carries a tag AND a <none>
-            # row; one rmi handles it, and the second row is not "kept".
-            case "$_kim_seen" in *" $_kr_id "*) continue ;; esac
+            case "$_kr_tag" in
+                ''|'<none>') case "$_kim_seen" in *" $_kr_id "*) continue ;; esac ;;
+            esac
             [ -n "$_kr_id" ] && _kim_seen="$_kim_seen$_kr_id "
             _kr_name="$_kr_repo:$_kr_tag"
             # A dangling image has no tag to name it by; its id is the handle.
@@ -12891,7 +12897,7 @@ _exakit_uninstall_kit_images() {
             if exakit_run_bounded 60 "$_kim_eng" rmi "$_kr_ref" >/dev/null 2>&1; then
                 _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_name"
             else
-                info "kept image $_kr_name: still used by a container; remove later with: $_kim_eng rmi $_kr_ref"
+                info "kept image $_kr_name: the engine refused (a container may still use it); remove later with: $_kim_eng rmi $_kr_ref"
             fi
         done <<KIMROWS
 $_kim_rows

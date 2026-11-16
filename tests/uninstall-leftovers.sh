@@ -445,10 +445,15 @@ rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_PODMAN_IMAGES="$(printf '%s\n' 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB' 'docker.io/exasol/nano|<none>|fff666|812MB')" bash "$TMP/run.sh" 2>&1)"
 check    "i2b: one rmi for one image id" "1" "$(grep -c '^podman rmi' "$TMP/engcalls" 2>/dev/null)"
 lacks    "i2b: the duplicate row is not reported kept" "kept image" "$out"
+# (i2c) one image with TWO tags: each tag is removed by name, or the image stays.
+rm -f "$TMP/engcalls"; seed_deploy
+out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$(printf '%s\n' 'exasol/nano|2026.2.0|abc123|812MB' 'exasol/nano|latest|abc123|812MB')" bash "$TMP/run.sh" 2>&1)"
+check    "i2c: both tags of one image are removed" "2" "$(grep -c '^docker rmi exasol/nano:' "$TMP/engcalls" 2>/dev/null)"
+contains "i2c: the second tag by its name" "docker rmi exasol/nano:latest" "$(cat "$TMP/engcalls" 2>/dev/null)"
 # (i3) rmi refused (a container still uses it): kept, one hint, exit unchanged.
 rm -f "$TMP/engcalls"; seed_deploy
 out="$(STUB_OS=linux STUB_DOCKER_IMAGES="$DOCKER_IMGS" STUB_RMI_FAIL="exasol/nano:2026.2.0-nano.8" bash "$TMP/run.sh" 2>&1)"
-contains "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: still used by a container; remove later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
+contains "i3: a refused rmi is kept with its remedy" "kept image exasol/nano:2026.2.0-nano.8: the engine refused (a container may still use it); remove later with: docker rmi exasol/nano:2026.2.0-nano.8" "$out"
 contains "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" "$out"
 contains "i3: and the run still answers 0" "RC=0" "$out"
 # (i4) the engine does not answer: one hint, exit unchanged.
