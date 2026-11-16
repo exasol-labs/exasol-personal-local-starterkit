@@ -179,7 +179,8 @@ check "GH_TOKEN works too" "0" "$?"
 reset_cache; : > "$WORK/curl.args"
 GITHUB_TOKEN=tok EXAKIT_DATASETS_REPO=someone/else exakit_dataset_files "$KIT" "$DS" demo_ref
 check "a release the token cannot see: it fails" "1" "$?"
-check "...after trying the plain link as well" "https://github.com/someone/else/releases/download/datasets/$ARCHIVE" "$(cat "$WORK/fetch.calls")"
+check "...after trying the plain link, then the public kit's copy (checked by its SHA-256)" "https://github.com/someone/else/releases/download/datasets/$ARCHIVE
+https://github.com/exasol-labs/exasol-personal-local-starterkit/releases/download/datasets/$ARCHIVE" "$(cat "$WORK/fetch.calls")"
 has "...and the reason names the token" "GITHUB_TOKEN" "$EXAKIT_DATASET_FETCH_ERROR"
 reset_cache; : > "$WORK/curl.args"
 exakit_dataset_files "$KIT" "$DS" demo_ref

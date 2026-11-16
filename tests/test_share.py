@@ -8,6 +8,7 @@ import math
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -72,6 +73,59 @@ class ShareTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         self.workflow_id = workflow("share-test")
+
+    def test_a_preview_built_from_the_same_files_is_used_again(self):
+        module = sys.modules["exakit_nb.share"]   # the package's name "share" is the function
+
+        class Shown(Tools):
+            revision = 3
+
+            def __call__(self, name, args):
+                if name == "app_get_status":
+                    self.calls.append((name, args))
+                    return {"app": {"preview_mounted": True, "preview_revision_number": self.revision,
+                                    "preview_path": f"/preview/example/{self.revision}"}}
+                return super().__call__(name, args)
+
+        sql = "SELECT CATEGORY, COUNT(*) AS N FROM T GROUP BY 1"
+        tool = Shown()
+        deploys = lambda: [n for n, _ in tool.calls].count("app_deploy_draft")
+        health = lambda: [n for n, _ in tool.calls].count("app_run_healthcheck")
+        self.assertEqual("/preview/example/3", share(Dataset(), sql, "Example", "example").preview(tool))
+        self.assertEqual((1, 1), (deploys(), health()))
+        again = share(Dataset(), sql, "Example", "example")
+        self.assertEqual("/preview/example/3", again.preview(tool))
+        self.assertEqual((1, 1, True, 3), (deploys(), health(), again.healthy, again.revision_number),
+                         "the same files, still the preview shown, checked a moment ago: used as it is")
+        later = time.time() + module.HEALTH_FRESH_SECONDS + 5
+        with patch.object(module.time, "time", return_value=later):
+            share(Dataset(), sql, "Example", "example").preview(tool)
+        self.assertEqual((1, 2), (deploys(), health()), "checked again after ten minutes, not built again")
+        tool.revision = 4
+        share(Dataset(), sql, "Example", "example").preview(tool)
+        self.assertEqual(2, deploys(), "another revision is shown now: built again")
+        tool.revision = 3
+        share(Dataset(), sql + " ORDER BY 2", "Example", "example").preview(tool)
+        self.assertEqual(3, deploys(), "other files: built again")
+        tool.changed_path = "app.py"
+        with self.assertRaises(RuntimeError):
+            share(Dataset(), sql + " ORDER BY 2", "Example", "example").preview(tool)
+        self.assertEqual(4, deploys(), "the shown revision no longer holds these files: built again (and refused)")
+        self.assertEqual({}, module._read_record("example"), "a failed build leaves nothing to use again")
+
+    def test_a_preview_being_built_elsewhere_is_waited_for_unless_its_notebook_closed(self):
+        module = sys.modules["exakit_nb.share"]   # the package's name "share" is the function
+
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        module._write_record("example", {"building_since": time.time(), "pid": 2 ** 22 + 7})
+        started = time.time()
+        draft._wait_for_building()
+        self.assertLess(time.time() - started, 0.5, "its process is gone: not waited for")
+        module._write_record("example", {"building_since": time.time(), "pid": os.getpid() + 1})
+        with patch.object(module, "_alive", return_value=True), patch.object(module, "BUILDING_WAIT_SECONDS", 1.5):
+            started = time.time()
+            draft._wait_for_building()
+            self.assertGreaterEqual(time.time() - started, 1.0, "being built elsewhere: waited for")
 
     def test_preview_then_confirm(self):
         draft = share(Dataset(), "SELECT CATEGORY, COUNT(*) AS N FROM T GROUP BY 1", "Example", "example")
@@ -188,14 +242,57 @@ class ShareTests(unittest.TestCase):
     def test_dash_endpoint_comes_from_status_and_stays_local(self):
         class Result:
             stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"running"}}'
-        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()):
-            self.assertEqual(dash_server_url(), "http://127.0.0.1:5101")
+        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()), patch("exakit_nb.dash_mcp._KNOWN_URL", None):
+            self.assertEqual(dash_server_url(fresh=True), "http://127.0.0.1:5101")
             Result.stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"stopped"}}'
             with self.assertRaisesRegex(RuntimeError, "stopped"):
-                dash_server_url()
+                dash_server_url(fresh=True)
             Result.stdout = '{"urls":{"dash-server":"https://remote.example"},"services":{"dash-server":"running"}}'
             with self.assertRaisesRegex(RuntimeError, "unexpected"):
-                dash_server_url()
+                dash_server_url(fresh=True)
+
+    def test_the_dash_endpoint_comes_from_the_manifest_when_it_answers(self):
+        import socket
+        from exakit_nb import dash_mcp
+
+        with tempfile.TemporaryDirectory() as home, socket.socket() as listening:
+            listening.bind(("127.0.0.1", 0))
+            listening.listen(1)
+            port = listening.getsockname()[1]
+            Path(home, "manifest.json").write_text(json.dumps({"components": {"dash_server": {"port": port}}}), encoding="utf-8")
+            with patch.dict(os.environ, {"EXAKIT_HOME": home}), patch("exakit_nb.dash_mcp._KNOWN_URL", None), \
+                    patch("exakit_nb.dash_mcp.subprocess.run") as status:
+                self.assertEqual(f"http://127.0.0.1:{port}", dash_mcp.dash_server_url())
+                self.assertEqual(0, status.call_count, "no exakit status when the recorded port answers")
+            listening.close()
+            with patch.dict(os.environ, {"EXAKIT_HOME": home}):
+                self.assertIsNone(dash_mcp._manifest_url(), "nothing answers: exakit status says why")
+
+    def test_the_dash_endpoint_is_read_once_and_again_when_unreachable(self):
+        import httpx
+        from exakit_nb import dash_mcp
+
+        class Result:
+            stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"running"}}'
+        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()) as status, patch("exakit_nb.dash_mcp._KNOWN_URL", None), \
+                patch("exakit_nb.dash_mcp._manifest_url", return_value=None):
+            tools = dash_mcp.DashTools()
+            dash_mcp.DashTools()
+            self.assertEqual(1, status.call_count, "exakit status read once")
+            Result.stdout = Result.stdout.replace("5101", "5102")
+            calls = []
+
+            def call(name, arguments):
+                calls.append(tools.url)
+                if len(calls) == 1:
+                    raise ExceptionGroup("mcp", [httpx.ConnectError("refused")])
+                return {"ok": True}
+            with patch.object(tools, "_call", side_effect=call):
+                self.assertEqual({"ok": True}, tools("app_list", {}))
+            self.assertEqual(["http://127.0.0.1:5101", "http://127.0.0.1:5102"], calls, "moved: looked up again, then called")
+            with patch.object(tools, "_call", side_effect=ValueError("a tool error")), self.assertRaises(ValueError):
+                tools("app_list", {})
+            self.assertEqual(2, status.call_count, "a tool's own error is not a reason to look it up again")
 
 
 

@@ -13,6 +13,7 @@ from runtime import AddonFailure, KitContext
 from persona_services import command_prefix, start_services
 
 ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PERSONA = "general"     # what an install sets up when no persona was named: no question is asked
 sys.path.insert(0, str(ROOT / "setup/lib"))
 import persona_service as personas
 
@@ -25,6 +26,13 @@ def plan(root: Path, env: dict[str, str], *, phase: str = "begin", interactive: 
         return [("data", "", "")]
     requested = env.get("EXAKIT_PERSONA", "")
     actions = []
+    quiet = False
+    if phase == "begin" and not requested:
+        # No question: the install sets up the kit's default persona (General) and says nothing about personas.
+        requested = DEFAULT_PERSONA
+        quiet = True
+        actions.append(("set", "EXAKIT_PERSONA", requested))
+        phase = "selected"
     if phase == "selected" and requested:
         try:
             docs = personas.picked(root, requested)
@@ -41,13 +49,9 @@ def plan(root: Path, env: dict[str, str], *, phase: str = "begin", interactive: 
             if addons and addons != "none":
                 actions.append(("set", "EXAKIT_MARKETPLACE_PRESELECT", addons))
             actions.extend([("record", ",".join(doc["id"] for doc in docs), ""),
-                            ("set", "EXAKIT_PERSONA_ACTIVE", "1"),
-                            ("notice", "Persona: " + " + ".join(doc["title"] for doc in docs), "")])
-    elif phase == "begin" and not requested:
-        answered = bool((env.get("EXAKIT_DATASETS") or env.get("EXAKIT_LOAD_SAMPLE") in ("0", "1"))
-                        and env.get("EXAKIT_MARKETPLACE_ADDONS"))
-        if interactive and not answered:
-            return [("question", "", "")]
+                            ("set", "EXAKIT_PERSONA_ACTIVE", "1")])
+            if not quiet:
+                actions.append(("notice", "Persona: " + " + ".join(doc["title"] for doc in docs), ""))
     if not requested and not env.get("EXAKIT_DATASETS_PRESELECT"):
         defaults = ",".join(personas.bundled_datasets(root, defaults_only=True))
         if defaults:

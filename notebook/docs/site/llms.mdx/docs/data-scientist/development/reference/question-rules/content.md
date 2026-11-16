@@ -17,11 +17,28 @@ questions this dataset's roles can answer. Nothing leaves the computer: no model
 ## nb.draft_question [#draft_question]
 
 ```python
-nb.draft_question(conn, ds, question: str)
+nb.draft_question(conn, ds, question: str, rules: dict | None=None)
 ```
 
 A Proposal for `question` drafted by rules from the column map (no AI model): read-only SQL, with the
-drafter's assumptions, not approved yet. Approve and run it as any proposal.
+drafter's assumptions, not approved yet. Approve and run it as any proposal. `rules` changes the drafter's rules
+for this question (nb.draft_rules() lists them).
+
+**Used in:** `data-scientist/02_ask_your_data`
+
+## nb.draft_rules [#draft_rules]
+
+```python
+nb.draft_rules() -> dict
+```
+
+The rules the no-AI drafter (nb.draft_question) writes SQL with, to copy, change and pass:
+
+MIN_GROUP_ROWS   a group or a period with fewer rows is left out of a rate (its rate jumps around)
+VALUE_LIMIT      a group column with more values than this is not offered as a filter
+SYNONYMS         words of a question that mean a column: \{"amount": \["revenue", "sales", ...], ...}
+GENERIC_WORDS    words in a column's name that say nothing about it (id, code, no ...)
+TIME_WORDS       words of a question that ask for time (monthly, year, when ...)
 
 **Used in:** `data-scientist/02_ask_your_data`
 

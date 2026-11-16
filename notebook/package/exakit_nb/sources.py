@@ -476,6 +476,13 @@ def source_engine(*words: str, text: str | None = None) -> dict[str, Any]:
     return answer
 
 
+def sources() -> list[dict[str, Any]]:
+    """The external sources connected to this kit (`exakit connect`), as `exakit source list --json` lists them: one
+    row a source with its name, connector_name, schema (VS_<NAME>, queried live, nothing copied), status, host and
+    tls. Read from the kit's own record, so it needs no database connection; empty when none is connected."""
+    return [row for row in source_engine("list").get("sources") or [] if isinstance(row, dict)]
+
+
 def read_connection_string(connector: str, text: str, **settings: Any) -> dict[str, Any]:
     """Read a source's connection string exactly as `exakit connect --url` does: it is handed to the kit's engine
     (its ``paste`` command, on standard input, never as an argument). Returns {connector, values, notes, dropped,

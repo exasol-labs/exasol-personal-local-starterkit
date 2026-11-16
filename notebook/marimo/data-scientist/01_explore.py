@@ -17,7 +17,7 @@ def _(mo):
     mo.md(r"""
     <div class="guide-start-hint">
 
-    **Step 2 · Explore and predict.** Click into the cell below and press **Shift + Enter** to open it: checks, a cleaned view, groups and trends, and a first model. Its **Guided / Code** switch, top right, shows the code behind this page.
+    **Step 2 · Understand, explore and predict.** Click into the cell below and press **Shift + Enter** to open it: what each column means and the semantic views over your data, then checks, a cleaned view, groups and trends, and a first model. Its **Guided / Code** switch, top right, shows the code behind this page.
 
     </div>
     """)
@@ -27,7 +27,6 @@ def _(mo):
 @app.cell
 def _():
     # Cell tags: exakit-guide, skip-ci
-    # Explore and predict: the guided view of this page. Guided / Code, top right, switches to the code cells below.
     import exakit.guide as guide
 
     guide.explore()
@@ -50,24 +49,72 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Prepare, explore, model, validate
+    ## Understand, prepare, explore, model, validate
 
-    **Dataset:** the one you approved last (else `amazon_sales`). Change `DATASET` for `fraud_transactions` or your own file.
+    **Dataset:** the tables chosen in the quickstart (else the one approved last, else `amazon_sales`). Set `DATASET` for `fraud_transactions` or your own file.
 
-    ![Steps 3 Prepare, 4 Explore, 5 Model and 6 Validate . All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4ODAnIGhlaWdodD0nMjcwJyB2aWV3Qm94PScwIDAgODgwIDI3MCc+PGRlZnM+PG1hcmtlciBpZD0nYScgdmlld0JveD0nMCAwIDEwIDEwJyByZWZYPSc5JyByZWZZPSc1JyBtYXJrZXJXaWR0aD0nNycgbWFya2VySGVpZ2h0PSc3JyBvcmllbnQ9J2F1dG8nPjxwYXRoIGQ9J00wIDAgTDEwIDUgTDAgMTAgeicgZmlsbD0nIzk4QTJCMycvPjwvbWFya2VyPjwvZGVmcz48cmVjdCB4PScxLjAnIHk9JzEnIHdpZHRoPScyNjguNycgaGVpZ2h0PScyNDAnIHJ4PScxMicgZmlsbD0nI0Y4RkFGQycgc3Ryb2tlPScjRDBENUREJyBzdHJva2Utd2lkdGg9JzEnLz48dGV4dCB4PScxMzUuMycgeT0nMjInIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTIuNScgZm9udC13ZWlnaHQ9JzcwMCcgZmlsbD0nIzQ3NTQ2Nyc+R2V0IHRoZSBkYXRhPC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nMScgZGF0YS1jdXJyZW50PScwJyB4PScxMy4wJyB5PSczNCcgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nI0ZGRkZGRicgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nMTM1LjMnIHk9JzU3JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjMzQ0MDU0Jz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+MTwvdHNwYW4+ICBBY2Nlc3M8L3RleHQ+PGxpbmUgeDE9JzEzNS4zJyB5MT0nNzEnIHgyPScxMzUuMycgeTI9Jzg0JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPScyJyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzEzLjAnIHk9Jzg2JyB3aWR0aD0nMjQ0LjcnIGhlaWdodD0nMzYnIHJ4PSc4JyBmaWxsPScjRkZGRkZGJyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PScxMzUuMycgeT0nMTA5JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjMzQ0MDU0Jz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+MjwvdHNwYW4+ICBVbmRlcnN0YW5kPC90ZXh0PjxsaW5lIHgxPScyNzIuNycgeTE9JzUyLjAnIHgyPSczMDIuNycgeTI9JzUyLjAnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCB4PSczMDUuNycgeT0nMScgd2lkdGg9JzI2OC43JyBoZWlnaHQ9JzI0MCcgcng9JzEyJyBmaWxsPScjRjhGQUZDJyBzdHJva2U9JyMxRjZGRUInIHN0cm9rZS13aWR0aD0nMS41Jy8+PHRleHQgeD0nNDQwLjAnIHk9JzIyJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEyLjUnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyMxRjZGRUInPlByZXBhcmUgYW5kIG1vZGVsPC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nMycgZGF0YS1jdXJyZW50PScxJyB4PSczMTcuNycgeT0nMzQnIHdpZHRoPScyNDQuNycgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzQ0MC4wJyB5PSc1NycgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nI0ZGRkZGRic+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjM8L3RzcGFuPiAgUHJlcGFyZTwvdGV4dD48bGluZSB4MT0nNDQwLjAnIHkxPSc3MScgeDI9JzQ0MC4wJyB5Mj0nODQnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzQnIGRhdGEtY3VycmVudD0nMScgeD0nMzE3LjcnIHk9Jzg2JyB3aWR0aD0nMjQ0LjcnIGhlaWdodD0nMzYnIHJ4PSc4JyBmaWxsPScjMUY2RkVCJyBzdHJva2U9JyMxRjZGRUInLz48dGV4dCB4PSc0NDAuMCcgeT0nMTA5JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjRkZGRkZGJz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+NDwvdHNwYW4+ICBFeHBsb3JlPC90ZXh0PjxsaW5lIHgxPSc0NDAuMCcgeTE9JzEyMycgeDI9JzQ0MC4wJyB5Mj0nMTM2JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPSc1JyBkYXRhLWN1cnJlbnQ9JzEnIHg9JzMxNy43JyB5PScxMzgnIHdpZHRoPScyNDQuNycgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzQ0MC4wJyB5PScxNjEnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyNGRkZGRkYnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz41PC90c3Bhbj4gIE1vZGVsPC90ZXh0PjxsaW5lIHgxPSc0NDAuMCcgeTE9JzE3NScgeDI9JzQ0MC4wJyB5Mj0nMTg4JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPSc2JyBkYXRhLWN1cnJlbnQ9JzEnIHg9JzMxNy43JyB5PScxOTAnIHdpZHRoPScyNDQuNycgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzQ0MC4wJyB5PScyMTMnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyNGRkZGRkYnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz42PC90c3Bhbj4gIFZhbGlkYXRlPC90ZXh0PjxsaW5lIHgxPSc1NzcuMycgeTE9JzUyLjAnIHgyPSc2MDcuMycgeTI9JzUyLjAnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCB4PSc2MTAuMycgeT0nMScgd2lkdGg9JzI2OC43JyBoZWlnaHQ9JzI0MCcgcng9JzEyJyBmaWxsPScjRjhGQUZDJyBzdHJva2U9JyNEMEQ1REQnIHN0cm9rZS13aWR0aD0nMScvPjx0ZXh0IHg9Jzc0NC43JyB5PScyMicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMi41JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjNDc1NDY3Jz5Vc2UgYW5kIHNoYXJlPC90ZXh0PjxyZWN0IGRhdGEtc3RlcD0nNycgZGF0YS1jdXJyZW50PScwJyB4PSc2MjIuMycgeT0nMzQnIHdpZHRoPScyNDQuNycgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyNGRkZGRkYnIHN0cm9rZT0nI0QwRDVERCcvPjx0ZXh0IHg9Jzc0NC43JyB5PSc1NycgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjc8L3RzcGFuPiAgQXNrIHdpdGggQUk8L3RleHQ+PGxpbmUgeDE9Jzc0NC43JyB5MT0nNzEnIHgyPSc3NDQuNycgeTI9Jzg0JyBzdHJva2U9JyM5OEEyQjMnIHN0cm9rZS13aWR0aD0nMS41JyBtYXJrZXItZW5kPSd1cmwoI2EpJy8+PHJlY3QgZGF0YS1zdGVwPSc4JyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzYyMi4zJyB5PSc4Nicgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nI0ZGRkZGRicgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNzQ0LjcnIHk9JzEwOScgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjg8L3RzcGFuPiAgU2hhcmU8L3RleHQ+PGxpbmUgeDE9Jzc0NC43JyB5MT0nMTIzJyB4Mj0nNzQ0LjcnIHkyPScxMzYnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzknIGRhdGEtY3VycmVudD0nMCcgeD0nNjIyLjMnIHk9JzEzOCcgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nI0ZGRkZGRicgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNzQ0LjcnIHk9JzE2MScgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nIzM0NDA1NCc+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjk8L3RzcGFuPiAgSGFuZCBvZmY8L3RleHQ+PHJlY3QgeD0nMScgeT0nMjUxJyB3aWR0aD0nMTQnIGhlaWdodD0nMTQnIHJ4PSczJyBmaWxsPScjMUY2RkVCJy8+PHRleHQgeD0nMjInIHk9JzI2MicgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMi41JyBmaWxsPScjNDc1NDY3Jz5UaGlzIG5vdGVib29rPC90ZXh0Pjwvc3ZnPg==)
+    ![Steps 2 Understand, 3 Prepare, 4 Explore, 5 Model and 6 Validate . All steps: Access, Understand, Prepare, Explore, Model, Validate, Ask with AI, Share, Hand off](data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPSc4ODAnIGhlaWdodD0nMjcwJyB2aWV3Qm94PScwIDAgODgwIDI3MCc+PGRlZnM+PG1hcmtlciBpZD0nYScgdmlld0JveD0nMCAwIDEwIDEwJyByZWZYPSc5JyByZWZZPSc1JyBtYXJrZXJXaWR0aD0nNycgbWFya2VySGVpZ2h0PSc3JyBvcmllbnQ9J2F1dG8nPjxwYXRoIGQ9J00wIDAgTDEwIDUgTDAgMTAgeicgZmlsbD0nIzk4QTJCMycvPjwvbWFya2VyPjwvZGVmcz48cmVjdCB4PScxLjAnIHk9JzEnIHdpZHRoPScyNjguNycgaGVpZ2h0PScyNDAnIHJ4PScxMicgZmlsbD0nI0Y4RkFGQycgc3Ryb2tlPScjMUY2RkVCJyBzdHJva2Utd2lkdGg9JzEuNScvPjx0ZXh0IHg9JzEzNS4zJyB5PScyMicgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMi41JyBmb250LXdlaWdodD0nNzAwJyBmaWxsPScjMUY2RkVCJz5HZXQgdGhlIGRhdGE8L3RleHQ+PHJlY3QgZGF0YS1zdGVwPScxJyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzEzLjAnIHk9JzM0JyB3aWR0aD0nMjQ0LjcnIGhlaWdodD0nMzYnIHJ4PSc4JyBmaWxsPScjRkZGRkZGJyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PScxMzUuMycgeT0nNTcnIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyMzNDQwNTQnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz4xPC90c3Bhbj4gIEFjY2VzczwvdGV4dD48bGluZSB4MT0nMTM1LjMnIHkxPSc3MScgeDI9JzEzNS4zJyB5Mj0nODQnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzInIGRhdGEtY3VycmVudD0nMScgeD0nMTMuMCcgeT0nODYnIHdpZHRoPScyNDQuNycgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzEzNS4zJyB5PScxMDknIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyNGRkZGRkYnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz4yPC90c3Bhbj4gIFVuZGVyc3RhbmQ8L3RleHQ+PGxpbmUgeDE9JzI3Mi43JyB5MT0nNTIuMCcgeDI9JzMwMi43JyB5Mj0nNTIuMCcgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IHg9JzMwNS43JyB5PScxJyB3aWR0aD0nMjY4LjcnIGhlaWdodD0nMjQwJyByeD0nMTInIGZpbGw9JyNGOEZBRkMnIHN0cm9rZT0nIzFGNkZFQicgc3Ryb2tlLXdpZHRoPScxLjUnLz48dGV4dCB4PSc0NDAuMCcgeT0nMjInIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTIuNScgZm9udC13ZWlnaHQ9JzcwMCcgZmlsbD0nIzFGNkZFQic+UHJlcGFyZSBhbmQgbW9kZWw8L3RleHQ+PHJlY3QgZGF0YS1zdGVwPSczJyBkYXRhLWN1cnJlbnQ9JzEnIHg9JzMxNy43JyB5PSczNCcgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nNDQwLjAnIHk9JzU3JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjRkZGRkZGJz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+MzwvdHNwYW4+ICBQcmVwYXJlPC90ZXh0PjxsaW5lIHgxPSc0NDAuMCcgeTE9JzcxJyB4Mj0nNDQwLjAnIHkyPSc4NCcgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IGRhdGEtc3RlcD0nNCcgZGF0YS1jdXJyZW50PScxJyB4PSczMTcuNycgeT0nODYnIHdpZHRoPScyNDQuNycgaGVpZ2h0PSczNicgcng9JzgnIGZpbGw9JyMxRjZGRUInIHN0cm9rZT0nIzFGNkZFQicvPjx0ZXh0IHg9JzQ0MC4wJyB5PScxMDknIHRleHQtYW5jaG9yPSdtaWRkbGUnIGZvbnQtZmFtaWx5PSdzeXN0ZW0tdWksLWFwcGxlLXN5c3RlbSxTZWdvZSBVSSxSb2JvdG8sSGVsdmV0aWNhLEFyaWFsLHNhbnMtc2VyaWYnIGZvbnQtc2l6ZT0nMTMnIGZpbGw9JyNGRkZGRkYnPjx0c3BhbiBmb250LXdlaWdodD0nNzAwJz40PC90c3Bhbj4gIEV4cGxvcmU8L3RleHQ+PGxpbmUgeDE9JzQ0MC4wJyB5MT0nMTIzJyB4Mj0nNDQwLjAnIHkyPScxMzYnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzUnIGRhdGEtY3VycmVudD0nMScgeD0nMzE3LjcnIHk9JzEzOCcgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nNDQwLjAnIHk9JzE2MScgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nI0ZGRkZGRic+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjU8L3RzcGFuPiAgTW9kZWw8L3RleHQ+PGxpbmUgeDE9JzQ0MC4wJyB5MT0nMTc1JyB4Mj0nNDQwLjAnIHkyPScxODgnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzYnIGRhdGEtY3VycmVudD0nMScgeD0nMzE3LjcnIHk9JzE5MCcgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nIzFGNkZFQicgc3Ryb2tlPScjMUY2RkVCJy8+PHRleHQgeD0nNDQwLjAnIHk9JzIxMycgdGV4dC1hbmNob3I9J21pZGRsZScgZm9udC1mYW1pbHk9J3N5c3RlbS11aSwtYXBwbGUtc3lzdGVtLFNlZ29lIFVJLFJvYm90byxIZWx2ZXRpY2EsQXJpYWwsc2Fucy1zZXJpZicgZm9udC1zaXplPScxMycgZmlsbD0nI0ZGRkZGRic+PHRzcGFuIGZvbnQtd2VpZ2h0PSc3MDAnPjY8L3RzcGFuPiAgVmFsaWRhdGU8L3RleHQ+PGxpbmUgeDE9JzU3Ny4zJyB5MT0nNTIuMCcgeDI9JzYwNy4zJyB5Mj0nNTIuMCcgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IHg9JzYxMC4zJyB5PScxJyB3aWR0aD0nMjY4LjcnIGhlaWdodD0nMjQwJyByeD0nMTInIGZpbGw9JyNGOEZBRkMnIHN0cm9rZT0nI0QwRDVERCcgc3Ryb2tlLXdpZHRoPScxJy8+PHRleHQgeD0nNzQ0LjcnIHk9JzIyJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEyLjUnIGZvbnQtd2VpZ2h0PSc3MDAnIGZpbGw9JyM0NzU0NjcnPlVzZSBhbmQgc2hhcmU8L3RleHQ+PHJlY3QgZGF0YS1zdGVwPSc3JyBkYXRhLWN1cnJlbnQ9JzAnIHg9JzYyMi4zJyB5PSczNCcgd2lkdGg9JzI0NC43JyBoZWlnaHQ9JzM2JyByeD0nOCcgZmlsbD0nI0ZGRkZGRicgc3Ryb2tlPScjRDBENUREJy8+PHRleHQgeD0nNzQ0LjcnIHk9JzU3JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjMzQ0MDU0Jz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+NzwvdHNwYW4+ICBBc2sgd2l0aCBBSTwvdGV4dD48bGluZSB4MT0nNzQ0LjcnIHkxPSc3MScgeDI9Jzc0NC43JyB5Mj0nODQnIHN0cm9rZT0nIzk4QTJCMycgc3Ryb2tlLXdpZHRoPScxLjUnIG1hcmtlci1lbmQ9J3VybCgjYSknLz48cmVjdCBkYXRhLXN0ZXA9JzgnIGRhdGEtY3VycmVudD0nMCcgeD0nNjIyLjMnIHk9Jzg2JyB3aWR0aD0nMjQ0LjcnIGhlaWdodD0nMzYnIHJ4PSc4JyBmaWxsPScjRkZGRkZGJyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PSc3NDQuNycgeT0nMTA5JyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjMzQ0MDU0Jz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+ODwvdHNwYW4+ICBTaGFyZTwvdGV4dD48bGluZSB4MT0nNzQ0LjcnIHkxPScxMjMnIHgyPSc3NDQuNycgeTI9JzEzNicgc3Ryb2tlPScjOThBMkIzJyBzdHJva2Utd2lkdGg9JzEuNScgbWFya2VyLWVuZD0ndXJsKCNhKScvPjxyZWN0IGRhdGEtc3RlcD0nOScgZGF0YS1jdXJyZW50PScwJyB4PSc2MjIuMycgeT0nMTM4JyB3aWR0aD0nMjQ0LjcnIGhlaWdodD0nMzYnIHJ4PSc4JyBmaWxsPScjRkZGRkZGJyBzdHJva2U9JyNEMEQ1REQnLz48dGV4dCB4PSc3NDQuNycgeT0nMTYxJyB0ZXh0LWFuY2hvcj0nbWlkZGxlJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEzJyBmaWxsPScjMzQ0MDU0Jz48dHNwYW4gZm9udC13ZWlnaHQ9JzcwMCc+OTwvdHNwYW4+ICBIYW5kIG9mZjwvdGV4dD48cmVjdCB4PScxJyB5PScyNTEnIHdpZHRoPScxNCcgaGVpZ2h0PScxNCcgcng9JzMnIGZpbGw9JyMxRjZGRUInLz48dGV4dCB4PScyMicgeT0nMjYyJyBmb250LWZhbWlseT0nc3lzdGVtLXVpLC1hcHBsZS1zeXN0ZW0sU2Vnb2UgVUksUm9ib3RvLEhlbHZldGljYSxBcmlhbCxzYW5zLXNlcmlmJyBmb250LXNpemU9JzEyLjUnIGZpbGw9JyM0NzU0NjcnPlRoaXMgbm90ZWJvb2s8L3RleHQ+PC9zdmc+)
 
     Each query is built from the approved column map, so no cell names a column. If the data has no date or no text, the step that needs it skips and says why. Settings are in the first cell. The AI model has its own cell. The AI step at the end is optional and off.
     """)
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `DATASET` | `None`: the tables chosen in the quickstart; or `"fraud_transactions"`, or a file of your own |
+    | `USE_AI_THEMES` | `True`: your AI model sorts the texts into themes |
+    | `USE_JOINED`, `USE_PREPARED` | `True`: create the joined or the cleaned view proposed under Prepare, and explore that |
+    | `JOINED_SQL`, `CLEANING_SQL` | your own version of that view: the CREATE VIEW printed under Prepare, edited |
+    | `PLACEHOLDER_VALUES` | values that mean "not known"; `word*` matches anything starting with the word |
+    | `RARE_TARGET` | a target in fewer rows than this share is rare: judge a model by ROC AUC |
+    | `DATE_FORMATS`, `TIMESTAMP_FORMATS` | how a date written as text is read |
+    | `DROP_COPIES`, `CAST_TYPES` | the cleaned view drops copied rows, and gives text columns of numbers or dates their type |
+    | `GIVES_IT_AWAY` | a value whose target rate is this or more (or one minus this or less) decides the target |
+    | `ROLE_RULES` | changes to how a column map is drafted and how the table is read for it, such as `{"CATEGORY_DISTINCT": 100, "MEASURE_HINTS": ["revenue", "amount"], "VIRTUAL_ROWS": 50000}`; `nb.role_rules()` lists every rule with its value |
+    | `LINK_RULES` | changes to how links are found, such as `{"MIN_SHARE": 0.8}`; `nb.link_rules()` lists every rule |
+    """)
+    return
+
+
 @app.cell
 def _():
-    DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
-    USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
-    USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
-    USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
-    return DATASET, USE_AI_THEMES, USE_JOINED, USE_PREPARED
+    DATASET = None
+    USE_AI_THEMES = False
+    USE_JOINED = False
+    USE_PREPARED = False
+    JOINED_SQL = None
+    CLEANING_SQL = None
+    PLACEHOLDER_VALUES = ["unknown*", "invalid*", "n/a", "na", "none", "null", "nil", "missing", "not available",
+                          "not known", "not set", "undefined", "-", "?", "tbd", "#n/a"]
+    RARE_TARGET = 0.10
+    DATE_FORMATS = ["YYYY-MM-DD", "DD-MM-YYYY", "DD.MM.YYYY", "MM/DD/YYYY", "DD/MM/YYYY"]
+    TIMESTAMP_FORMATS = ["YYYY-MM-DD HH24:MI:SS", "YYYY-MM-DD HH24:MI"]
+    DROP_COPIES = True
+    CAST_TYPES = True
+    GIVES_IT_AWAY = 0.99
+    ROLE_RULES = {}
+    LINK_RULES = {}
+    return (
+        CAST_TYPES,
+        CLEANING_SQL,
+        DATASET,
+        DATE_FORMATS,
+        DROP_COPIES,
+        GIVES_IT_AWAY,
+        JOINED_SQL,
+        LINK_RULES,
+        PLACEHOLDER_VALUES,
+        RARE_TARGET,
+        ROLE_RULES,
+        TIMESTAMP_FORMATS,
+        USE_AI_THEMES,
+        USE_JOINED,
+        USE_PREPARED,
+    )
 
 
 @app.cell(hide_code=True)
@@ -84,13 +131,21 @@ def _(mo):
     return
 
 
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    `MODEL_ID`, for example `"claude-opus-5-5"`; `PROVIDER_BASE_URL`, any Chat Completions address; `LANGFUSE_BASE_URL`, where the calls are traced. Empty: no model.
+    """)
+    return
+
+
 @app.cell
 def _():
     import exakit.nb as nb
 
-    MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
-    PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
-    LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+    MODEL_ID = ""
+    PROVIDER_BASE_URL = ""
+    LANGFUSE_BASE_URL = ""
     nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
     return (nb,)
 
@@ -98,9 +153,9 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Step 2, continued · Your column map
+    ## Step 2 · Understand the data
 
-    Every query below is built from this map. A draft map is enough here.
+    The tables chosen in the quickstart, opened again here. For each you approve the column map: the key, the date, the groups and the outcome. The kit proposes it and shows the least certain columns first. Approving it publishes the table in **Exasol Semantic Views**, the database's semantic layer, and the model over all your tables is built from the same choices. Every later step reads this map, so the same notebooks run on any table.
     """)
     return
 
@@ -110,10 +165,414 @@ def _(DATASET, nb):
     import os
     workflow_id = nb.continue_workflow('explore')
     connection = nb.connect()
-    dataset_id = nb.chosen_dataset(DATASET)  # the quickstart's workflow, or the last one: nothing to paste
-    loaded_dataset = nb.review_roles(connection, dataset_id).dataset(draft_ok=True)
-    nb.show_roles(loaded_dataset)  # the table as loaded; `dataset` below is what the steps read
-    return connection, loaded_dataset
+    chosen_tables = nb.open_chosen(connection)
+    if DATASET or not chosen_tables:
+        chosen_data = nb.chosen_dataset(DATASET)
+    else:
+        chosen_data = next(iter(chosen_tables.values()))
+    return chosen_data, chosen_tables, connection
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Approve the column map
+
+    The column map (the descriptor) gives each column a role. Every later query is built from it, so no notebook types your column names.
+
+    The kit proposes the map from the data. A proposal can be wrong. In `amazon_sales`, `STATUS` gives the answer away. The kit warns about it when you approve, and the model leaves it out. Check the map before any query uses it.
+
+    **Roles:** `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes) and `other`.
+
+    **Slots:** the one column each step uses for `key`, `time`, `text`, `target` (the outcome to predict), `category` (groups to compare) and `entity` (who or what a row is about).
+
+    | Dataset | `key` | `time` | `text` | `target` | `category` | `entity` |
+    |---|---|---|---|---|---|---|
+    | Amazon sales | `ORDER_LINE_ID` | `ORDER_DATE` | — | `CANCELLED` | `CATEGORY` | `SHIP_STATE` |
+    | Fraud transactions | `ROW_ID` | — | — | `FRAUDULENT` | `TRANSACTION_TYPE` | `LOCATION` |
+
+    Neither dataset has a text column. The text steps skip and say why.
+
+    The kit never guesses the **target**. You choose it. Leave a slot as "—" when no column fits.
+
+    **Do now:**
+
+    1. Look at *Check these first*. These are the columns the kit was least sure about.
+    2. Correct what is wrong.
+    3. Click **Approve column map**. No click is needed if the map is already approved and you change nothing.
+    4. Run the next cell.
+
+    Approval checks the data again and warns about a column that gives the target away.
+
+    In plain Python: `role_review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
+    """)
+    return
+
+
+@app.cell
+def _(ROLE_RULES, chosen_data, connection, nb):
+    # Cell tags: review
+    role_review = nb.review_roles(connection, chosen_data, rules=ROLE_RULES)
+    return (role_review,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `AI_CHECK = True`: your AI model completes the draft from names, types and the kit's evidence, never a row. `AI_APPROVE = True`: approve with its answer.
+    """)
+    return
+
+
+@app.cell
+def _(nb, role_review):
+    # Cell tags: review
+    AI_CHECK = False
+    AI_APPROVE = False
+    if AI_CHECK:
+        ai_map = nb.fill_column_map(role_review)
+        if AI_APPROVE:
+            role_review.approve({r["column"]: r["role"] for r in ai_map["roles"]} or None, ai_map["slots"] or None, notes=ai_map["notes"])
+    return (AI_CHECK,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `ROLE_CHANGES`: `{"COLUMN": "role"}`. `SLOT_CHANGES`: `{"target": "COLUMN"}`. Empty: the picker above stands.
+    """)
+    return
+
+
+@app.cell
+def _(role_review):
+    # Cell tags: review
+    ROLE_CHANGES = {}
+    SLOT_CHANGES = {}
+    if ROLE_CHANGES or SLOT_CHANGES:
+        role_review.approve(ROLE_CHANGES or None, SLOT_CHANGES or None)
+    return
+
+
+@app.cell
+def _(nb, role_review):
+    # Cell tags: review
+    dataset = role_review.dataset()
+    nb.show_roles(dataset)
+    return (dataset,)
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    leaking = nb.leakage_check(connection, dataset)
+    versions = nb.column_map_versions(dataset.id)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Check the map again
+
+    The same map, read again after the approval. The table you approved now shows `approved vN, in semantic model <name>` and every slot by name. `not in a semantic model yet` means the roles are saved but agents cannot read them yet: approve again to publish.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset, nb):
+    # Cell tags: review
+    dataset
+    nb.data_map(connection)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### Your data map
+
+    Approving a column map put the table into **your data map**: `all_data`, one **Exasol Semantic Views** model over every approved table of every source. Its key, time, category and flag columns are dimensions; its amounts get a total and an average; each field says what the column holds. AI clients read it over MCP, and Ask writes its SQL from it.
+
+    Semantic Views needs a few things only you can say, and nothing here works them out for you:
+
+    | What | Why Semantic Views needs it |
+    |---|---|
+    | What one row of each table is (its grain) | so an amount is never counted once per row of another table |
+    | How the tables connect, and the type of each link | many-to-one (order lines to orders) or one-to-one; a join that would multiply an amount is refused |
+    | Where questions start | each such table becomes a semantic view that reaches the linked tables |
+    | Your metrics | "completed revenue" is a sum with a condition, defined once |
+    | Rules for AI tools | what anyone asking must know, such as what an amount includes |
+
+    `AI_CHECK = True` (above) has your AI model draft them from names, roles, notes and known values, never a row; what you set here wins. `CHECK_LINKS = True` runs one bounded count per link. Saving hands it all to Semantic Views, which checks it and says what is wrong. **Do now:** read the preview, then set `PUBLISH_SEMANTIC = True` and run it again.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    | Setting | What it does |
+    |---|---|
+    | `SEMANTIC_TABLES` | the tables, such as `"VS_LOGISTICS.COURIER_DAILY"` (each with an approved column map) |
+    | `SEMANTIC_LINKS` | `[{"from": "S.T.COL", "to": "S.T.KEY", "type": "MANY_TO_ONE", "note": "why"}]`; optional `"join": "INNER"` (rows without a match left out) and `"fanout"`: `ALLOCATE`, `DEDUPLICATE` or `REFERENCE_ONLY` (when one row meets several) |
+    | `SEMANTIC_GRAINS` | `{"S.T": "one row is one order line"}` |
+    | `SEMANTIC_TABLE_NOTES` | `{"S.T": "what the table is"}` |
+    | `SEMANTIC_STARTS` | the tables questions start from: `["S.T"]` |
+    | `SEMANTIC_METRICS` | `[{"table": "S.T", "name": "completed_revenue", "how": "sum", "column": "AMOUNT", "where": {"column": "STATUS", "values": ["COMPLETED"]}}]`; `how` is `sum`, `count` or `average` |
+    | `SEMANTIC_INSTRUCTIONS` | `["Revenue excludes tax"]`, or `{"table": "S.T", "text": "..."}` |
+    | `SEMANTIC_SYNONYMS` | your words for a field: `{"total_amount": ["sales", "revenue"]}` |
+    | `SEMANTIC_HIDDEN` | columns never shown in answers, still usable in filters: `{"S.T": ["CUSTOMER_NAME"]}` |
+    | `SEMANTIC_ABOUT` | what your data is about, in a sentence |
+    | `CHECK_LINKS` | `True`: count how many of each link's values its key holds |
+    | `PUBLISH_SEMANTIC` | `True`: save it; `False`: a preview, which prints every statement saving runs |
+    | `DATA_MAP_SQL` | your own version of those statements: the printed list, edited; it runs instead of the kit's |
+
+    `None` keeps what you saved before.
+    """)
+    return
+
+
+@app.cell
+def _(AI_CHECK, LINK_RULES, connection, dataset, nb):
+    # Cell tags: review
+    SEMANTIC_TABLES = [dataset.fact_table]
+    SEMANTIC_LINKS = None
+    SEMANTIC_GRAINS = None
+    SEMANTIC_TABLE_NOTES = None
+    SEMANTIC_STARTS = None
+    SEMANTIC_METRICS = None
+    SEMANTIC_INSTRUCTIONS = None
+    SEMANTIC_HIDDEN = None
+    SEMANTIC_SYNONYMS = None
+    SEMANTIC_ABOUT = None
+    CHECK_LINKS = False
+    PUBLISH_SEMANTIC = False
+    DATA_MAP_SQL = None
+    data_map_inputs = nb.data_map_inputs(SEMANTIC_TABLES, connection=connection)
+    your_map = {key: data_map_inputs[key] for key in ("links", "grains", "table_notes", "starts", "metrics", "instructions", "hidden", "synonyms", "description")}
+    if AI_CHECK:
+        drafted_map = nb.draft_data_map(SEMANTIC_TABLES)
+        your_map = {key: your_map[key] or drafted_map[key] for key in your_map}
+    your_map.update({key: value for key, value in (("links", SEMANTIC_LINKS), ("grains", SEMANTIC_GRAINS), ("table_notes", SEMANTIC_TABLE_NOTES),
+                                                   ("starts", SEMANTIC_STARTS), ("metrics", SEMANTIC_METRICS),
+                                                   ("instructions", SEMANTIC_INSTRUCTIONS), ("hidden", SEMANTIC_HIDDEN), ("synonyms", SEMANTIC_SYNONYMS),
+                                                   ("description", SEMANTIC_ABOUT)) if value is not None})
+    if CHECK_LINKS and your_map["links"]:
+        link_check = nb.find_links(connection, tables=SEMANTIC_TABLES, check=[f"{link['from']}={link['to']}" for link in your_map["links"]],
+                                   ai=False, rules=LINK_RULES)
+        print(link_check)
+    semantic = nb.semantic_model(connection, "all_data", tables=SEMANTIC_TABLES, links=your_map["links"], table_notes=your_map["table_notes"],
+                                 grains=your_map["grains"], starts=your_map["starts"] or None, metrics=your_map["metrics"],
+                                 instructions=your_map["instructions"], hidden=your_map["hidden"], synonyms=your_map["synonyms"],
+                                 description=your_map["description"] or None,
+                                 replace_links=True, ai=False, preview=not PUBLISH_SEMANTIC, sql=DATA_MAP_SQL if PUBLISH_SEMANTIC else None)
+    if PUBLISH_SEMANTIC:
+        data_map_check = nb.validate_data_map(connection)
+        print(data_map_check["issues"] or "Semantic Views finds nothing wrong with your data map.")
+    semantic
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    Every save that changes your data map is a version, kept in the model itself: what you said, and the whole model as Semantic Views exports it. A new computer reads them back from the model. `DATA_MAP_VERSION = 3` saves version 3 again as the newest.
+    """)
+    return
+
+
+@app.cell
+def _(connection, nb):
+    # Cell tags: review
+    DATA_MAP_VERSION = None
+    if DATA_MAP_VERSION:
+        restored = nb.restore_data_map(connection, DATA_MAP_VERSION)
+    data_map_versions = nb.data_map_versions(connection)
+    semantic_models = nb.semantic_models(connection)
+    data_map_versions
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### More from Semantic Views
+
+    | Setting | What it does |
+    |---|---|
+    | `STORE_TOTALS` | `{"view": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["ship_state"], "max_age": "1 DAYS"}`: pre-built totals for speed, stored in `EXAKIT_TOTALS`; Semantic Views answers from them while they are fresh |
+    | `REFRESH_TOTALS` | the name of stored totals to fill again from the live tables |
+    | `FREEZE_VIEWS` | `{"BI.REVENUE_BY_STATE": "SELECT ship_state, total_amount FROM SEM_ALL_DATA.ORDER_LINES GROUP BY ship_state"}`: views for BI tools, compiled once into plain SQL |
+    | `GOVERNANCE_MODE` | `"OPEN"`: Semantic Views reports sources read without their own row and column policy; `"GOVERNED"`: it refuses them |
+    | `QUERY_LOGGING` | `True` or `False`: Semantic Views' own log of Semantic SQL statements |
+    | `REVIEW_SUGGESTIONS` | `{12: ("CERTIFIED", "why")}`: your decision on a suggested change (from feedback on answers, AI tools, colleagues) |
+    | `IMPORT_DATABRICKS` | `{"model": "finance", "file": "metric_view.yaml", "apply": False}`: a Databricks metric view as a model of its own |
+    """)
+    return
+
+
+@app.cell
+def _(connection, nb):
+    # Cell tags: review
+    STORE_TOTALS = None
+    REFRESH_TOTALS = None
+    FREEZE_VIEWS = {}
+    GOVERNANCE_MODE = None
+    QUERY_LOGGING = None
+    REVIEW_SUGGESTIONS = {}
+    IMPORT_DATABRICKS = None
+    if STORE_TOTALS:
+        stored_totals = nb.store_totals(connection, STORE_TOTALS["view"], STORE_TOTALS["metrics"], STORE_TOTALS["dimensions"],
+                                        max_age=STORE_TOTALS.get("max_age", "1 DAYS"))
+    if REFRESH_TOTALS:
+        refreshed_totals = nb.refresh_totals(connection, REFRESH_TOTALS)
+    for frozen_name, frozen_sql in FREEZE_VIEWS.items():
+        frozen = nb.freeze_view(connection, frozen_name, frozen_sql)
+    if GOVERNANCE_MODE:
+        governance = nb.governance_mode(connection, GOVERNANCE_MODE)
+    if QUERY_LOGGING is not None:
+        query_log_setting = nb.query_logging(connection, QUERY_LOGGING)
+    for suggestion_id, (decision, note) in REVIEW_SUGGESTIONS.items():
+        reviewed = nb.review_change(connection, suggestion_id, decision, note)
+    if IMPORT_DATABRICKS:
+        with open(IMPORT_DATABRICKS["file"], encoding="utf-8") as metric_view:
+            imported = nb.import_databricks(connection, IMPORT_DATABRICKS["model"], metric_view.read(), apply=IMPORT_DATABRICKS.get("apply", False))
+    totals = nb.list_totals(connection)
+    frozen_views = nb.frozen_views(connection, sync=False)
+    data_map_suggestions = nb.suggestions(connection)
+    history = nb.query_history(connection)
+    data_map_suggestions
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ### The same thing in two sources
+
+    When another source holds the same rows as a table of the model - customers in the warehouse and in a CRM, orders here and in a lakehouse - declare them one thing with two sources (Exasol Semantic Views **fusion**). Requests are then answered from either, and for a value both hold the side you pick wins. `nb.fuse` checks it against the data first and changes nothing; `APPLY_FUSION = True` applies it, and the document is kept beside the model so a rebuild puts it back.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    `FUSE_TABLE`: a table of your data map. `FUSE_OTHER`: the same rows in another source. `FUSE_KEY`: its key there, when named differently. `FUSE_MAPPING`: when the two use different ids, the table pairing them, `{"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}`. `FUSE_SPLIT`: when the other holds the older rows, `{"column": "ORDER_DATE", "at": "2026-01-01"}`. `FUSION_DOCUMENT`: your own version of the printed document, edited. `APPLY_FUSION = True` applies it after the check.
+    """)
+    return
+
+
+@app.cell
+def _(connection, nb):
+    # Cell tags: review
+    FUSE_TABLE = ""
+    FUSE_OTHER = ""
+    FUSE_KEY = None
+    FUSE_MAPPING = None
+    FUSE_SPLIT = None
+    FUSION_DOCUMENT = None
+    APPLY_FUSION = False
+    if FUSION_DOCUMENT or (FUSE_TABLE and FUSE_OTHER):
+        fusion_document = FUSION_DOCUMENT or nb.fusion_document(connection, "all_data", FUSE_TABLE, FUSE_OTHER, key=FUSE_KEY, wins="model",
+                                                                    mapping=FUSE_MAPPING, split=FUSE_SPLIT)
+        print(fusion_document)
+        fusion_check = nb.fuse(connection, "all_data", fusion_document)
+        if APPLY_FUSION and fusion_check["status"] != "error":
+            fusion_applied = nb.fuse(connection, "all_data", fusion_document, dry_run=False)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Approve every table at once
+
+    With several tables chosen - six tables of one source, say - you do not have to approve them one by one. `nb.schema_review` says what to look at across all of them: the columns the kit guessed at, and the ones it marked personal data. `nb.approve_all` then approves every table as drafted, with the columns you change in `ALL_CHOICES`, and updates the semantic model once per source instead of once per table. What to predict is not set here: it stays each table's own choice.
+    """)
+    return
+
+
+@app.cell
+def _(chosen_data, chosen_tables, connection, nb):
+    APPROVE_ALL = False
+    ALL_CHOICES = None
+    if APPROVE_ALL and chosen_tables:
+        role_reviews = {table: nb.review_roles(connection, data) for table, data in chosen_tables.items()}
+        schema_summary = nb.schema_review(role_reviews)
+        print(f"{len(schema_summary['check'])} columns to look at, {len(schema_summary['sensitive'])} marked personal data, {schema_summary['fine']} look fine.")
+        approved_all = nb.approve_all(role_reviews, ALL_CHOICES)
+        dataset_1 = approved_all[str(chosen_data.fact_table)]
+    return (dataset_1,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Add another source
+
+    Fusion: data from several places in one model. Every source connected with `exakit connect` (S3, Snowflake, MongoDB, PostgreSQL and the rest) is listed here, read live where it lives. Name a table of one in `ADD_SOURCE` to add it to the tables above; the card's **Add a source or table** does the same and connects a new source too.
+    """)
+    return
+
+
+@app.cell
+def _(chosen_tables, connection, nb):
+    sources = nb.sources()
+    ADD_SOURCE = ""
+    if ADD_SOURCE:
+        source_data = nb.load_source(connection, ADD_SOURCE)
+        chosen_tables[str(source_data.fact_table)] = source_data
+        remembered = nb.remember_chosen(chosen_tables)
+    print("Sources: " + (", ".join(f"{s['schema']} ({s.get('connector_name') or s.get('connector')})" for s in sources) or "none connected yet"))
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### A first result
+
+    Rows per group, and the % where the target is 1 when the map has a target. Each query shows its SQL before the result.
+    """)
+    return
+
+
+@app.cell
+def _(connection, dataset_1, nb):
+    _missing_roles = {missing['role']: missing['reason'] for missing in dataset_1.missing}
+    GROUP_ROLE, GROUP_COLUMN = dataset_1.group_by()
+    if GROUP_ROLE != 'category':
+        print(f"No category ({_missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
+    if 'label' in _missing_roles:
+        print(f"No target ({_missing_roles['label']}): the target rate is left out. Later steps that need it say so.")
+    _GROUP_HEADER, COUNT_HEADER = (nb.name(GROUP_COLUMN), nb.count_name(dataset_1))
+    LABEL_PCT_HEADER = nb.name(dataset_1.col('label'), 'PCT') if dataset_1.has('label') and GROUP_ROLE != 'label' else None
+    LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset_1.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ''
+    first_rows = nb.sql(connection, f'\nSELECT {GROUP_COLUMN} AS {_GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}\nFROM {dataset_1.fact_table}\nGROUP BY {GROUP_COLUMN}\nORDER BY {COUNT_HEADER} DESC\nLIMIT 10')
+    nb.show_sql()
+    _overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset_1.col('label')}), 1) AS PCT FROM {dataset_1.fact_table}") if LABEL_PCT_HEADER else None
+    nb.note_groups(first_rows, dataset_1, _GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]) if LABEL_PCT_HEADER else None)
+    first_rows
+    return
+
+
+@app.cell
+def _(role_review):
+    loaded_dataset = role_review.dataset(draft_ok=True)
+    return (loaded_dataset,)
 
 
 @app.cell(hide_code=True)
@@ -131,14 +590,14 @@ def _(mo):
     mo.md(r"""
     ### Is the data clean?
 
-    Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. `fraud_transactions` has all of them.
+    Finds repeated IDs, empty cells, placeholders such as "Unknown" and a rare target, and says what each does to a result. It changes nothing. What counts as a placeholder and when a target is rare are `PLACEHOLDER_VALUES` and `RARE_TARGET` in the first cell. `fraud_transactions` has all of them.
     """)
     return
 
 
 @app.cell
-def _(connection, loaded_dataset, nb):
-    findings = nb.data_checks(connection, loaded_dataset)
+def _(PLACEHOLDER_VALUES, RARE_TARGET, connection, loaded_dataset, nb):
+    findings = nb.data_checks(connection, loaded_dataset, placeholder_values=PLACEHOLDER_VALUES, rare=RARE_TARGET)
     findings
     return
 
@@ -165,15 +624,16 @@ def _(connection, loaded_dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The joined view combines this table with every linked table. Read the joins and the SQL. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+    The joined view combines this table with every linked table. Read the joins and the SQL. To change the SQL, copy it into `JOINED_SQL` in the first cell and edit it there. To use it, set `USE_JOINED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
     """)
     return
 
 
 @app.cell
-def _(USE_JOINED, connection, loaded_dataset, schema_map):
+def _(JOINED_SQL, USE_JOINED, connection, loaded_dataset, schema_map):
     joined_view_proposal = schema_map.joined_view(loaded_dataset)
-    joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joined_view_proposal.needed else loaded_dataset
+    joined_dataset = (joined_view_proposal.create(connection, sql=JOINED_SQL) if USE_JOINED and joined_view_proposal.needed
+                      else loaded_dataset)
     joined_view_proposal
     return (joined_dataset,)
 
@@ -185,17 +645,28 @@ def _(mo):
 
     Proposes a view with correct types (numbers, dates), blanks and placeholders as NULL, and exact copies removed. The table never changes.
 
-    Read what changes. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
+    Read what changes. The rules are in the first cell (`PLACEHOLDER_VALUES`, `DATE_FORMATS`, `DROP_COPIES`, `CAST_TYPES`): change one and run this cell again. To change the SQL itself, copy it into `CLEANING_SQL` in the first cell and edit it there. To use it, set `USE_PREPARED = True` in the first cell and run the cells below again (Marimo reruns them for you). The view goes into `EXAKIT_PREPARED`, and the steps below read it.
     """)
     return
 
 
 @app.cell
-def _(USE_PREPARED, connection, joined_dataset, nb):
-    typed_view_proposal = nb.typed_view(connection, joined_dataset)
-    dataset = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset   # the dataset every step below reads
+def _(
+    CAST_TYPES,
+    CLEANING_SQL,
+    DATE_FORMATS,
+    DROP_COPIES,
+    PLACEHOLDER_VALUES,
+    TIMESTAMP_FORMATS,
+    USE_PREPARED,
+    connection,
+    joined_dataset,
+    nb,
+):
+    typed_view_proposal = nb.typed_view(connection, joined_dataset, placeholder_values=PLACEHOLDER_VALUES, date_formats=DATE_FORMATS, timestamp_formats=TIMESTAMP_FORMATS, drop_copies=DROP_COPIES, cast_types=CAST_TYPES)
+    dataset_2 = typed_view_proposal.create(connection, sql=CLEANING_SQL) if USE_PREPARED and (typed_view_proposal.needed or CLEANING_SQL) else joined_dataset
     typed_view_proposal
-    return (dataset,)
+    return (dataset_2,)
 
 
 @app.cell(hide_code=True)
@@ -219,18 +690,18 @@ def _(mo):
 
 
 @app.cell
-def _(dataset):
-    ENTITY_COLUMN = dataset.col("entity") if dataset.has("entity") else None
-    CATEGORY_COLUMN = dataset.col("category") if dataset.has("category") else None
-    TEXT_SQL = dataset.text_sql() if dataset.has("text") else None
-    DATE_COLUMN = dataset.col("date") if dataset.has("date") else None      # a role no column fits is None here, never guessed
-    LABEL_COLUMN = dataset.col("label") if dataset.has("label") else None
-    missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing if not dataset.has(missing["role"])}
-    SHOWN = {"date": "time", "label": "target"}   # the column map's names for these two roles
-    missing_line = "; ".join(f"no {SHOWN.get(role, role)}: {reason}" for role, reason in missing_roles.items())
-    for role in ("entity", "category", "date", "label", "text"):
-        if role in missing_roles:
-            print(f"No {SHOWN.get(role, role)} ({missing_roles[role]}): steps that need it explain why they skip below.")
+def _(dataset_2):
+    ENTITY_COLUMN = dataset_2.col('entity') if dataset_2.has('entity') else None
+    CATEGORY_COLUMN = dataset_2.col('category') if dataset_2.has('category') else None
+    TEXT_SQL = dataset_2.text_sql() if dataset_2.has('text') else None
+    DATE_COLUMN = dataset_2.col('date') if dataset_2.has('date') else None
+    LABEL_COLUMN = dataset_2.col('label') if dataset_2.has('label') else None
+    _missing_roles = {missing['role']: missing['reason'] for missing in dataset_2.missing if not dataset_2.has(missing['role'])}
+    SHOWN = {'date': 'time', 'label': 'target'}
+    missing_line = '; '.join((f'no {SHOWN.get(role, role)}: {reason}' for role, reason in _missing_roles.items()))
+    for role in ('entity', 'category', 'date', 'label', 'text'):
+        if role in _missing_roles:
+            print(f'No {SHOWN.get(role, role)} ({_missing_roles[role]}): steps that need it explain why they skip below.')
     return (
         CATEGORY_COLUMN,
         DATE_COLUMN,
@@ -257,41 +728,25 @@ def _(
     ENTITY_COLUMN,
     LABEL_COLUMN,
     connection,
-    dataset,
+    dataset_2,
     missing_line,
     nb,
 ):
     landscape = landscape_grid = None
-    # Result columns are named after the data (SHIP_STATE, ORDER_LINES, CANCELLED_PCT); a note under each result says
-    # what its numbers mean.
-    COUNT_HEADER = nb.count_name(dataset)
+    COUNT_HEADER_1 = nb.count_name(dataset_2)
     ENTITY_HEADER = nb.name(ENTITY_COLUMN) if ENTITY_COLUMN else None
     CATEGORY_HEADER = nb.name(CATEGORY_COLUMN) if CATEGORY_COLUMN else None
-    LABEL_PCT_HEADER = nb.name(LABEL_COLUMN, "PCT") if LABEL_COLUMN else None
-    if not all(dataset.has(role) for role in ("entity", "category", "label")):
-        print(f"Skipped - the landscape needs an entity, a category and a target ({missing_line}).")
+    LABEL_PCT_HEADER_1 = nb.name(LABEL_COLUMN, 'PCT') if LABEL_COLUMN else None
+    if not all((dataset_2.has(role) for role in ('entity', 'category', 'label'))):
+        print(f'Skipped - the landscape needs an entity, a category and a target ({missing_line}).')
     else:
-        overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL_COLUMN}), 1) AS PCT FROM {dataset.fact_table}")
-        landscape = nb.sql(connection, f"""
-    WITH TOP_ENTITIES AS (
-        SELECT {ENTITY_COLUMN} AS ENTITY, COUNT(*) AS N_ROWS
-        FROM {dataset.fact_table}
-        GROUP BY {ENTITY_COLUMN}
-        ORDER BY N_ROWS DESC
-        LIMIT 10)
-    SELECT T.ENTITY AS {ENTITY_HEADER},
-           F.{CATEGORY_COLUMN} AS {CATEGORY_HEADER},
-           COUNT(*) AS {COUNT_HEADER},
-           ROUND(100 * AVG(F.{LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER}
-    FROM {dataset.fact_table} F
-    JOIN TOP_ENTITIES T ON F.{ENTITY_COLUMN} = T.ENTITY
-    GROUP BY T.ENTITY, F.{CATEGORY_COLUMN}
-    ORDER BY T.ENTITY, {COUNT_HEADER} DESC""")
+        _overall_rate = nb.sql(connection, f'SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL_COLUMN}), 1) AS PCT FROM {dataset_2.fact_table}')
+        landscape = nb.sql(connection, f'\nWITH TOP_ENTITIES AS (\n    SELECT {ENTITY_COLUMN} AS ENTITY, COUNT(*) AS N_ROWS\n    FROM {dataset_2.fact_table}\n    GROUP BY {ENTITY_COLUMN}\n    ORDER BY N_ROWS DESC\n    LIMIT 10)\nSELECT T.ENTITY AS {ENTITY_HEADER},\n       F.{CATEGORY_COLUMN} AS {CATEGORY_HEADER},\n       COUNT(*) AS {COUNT_HEADER_1},\n       ROUND(100 * AVG(F.{LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER_1}\nFROM {dataset_2.fact_table} F\nJOIN TOP_ENTITIES T ON F.{ENTITY_COLUMN} = T.ENTITY\nGROUP BY T.ENTITY, F.{CATEGORY_COLUMN}\nORDER BY T.ENTITY, {COUNT_HEADER_1} DESC')
         nb.show_sql()
-        nb.note_groups(landscape, dataset, (ENTITY_HEADER, CATEGORY_HEADER), COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]))
-        landscape_grid = landscape.pivot_table(index=ENTITY_HEADER, columns=CATEGORY_HEADER, values=COUNT_HEADER, fill_value=0, aggfunc="sum")
+        nb.note_groups(landscape, dataset_2, (ENTITY_HEADER, CATEGORY_HEADER), COUNT_HEADER_1, LABEL_PCT_HEADER_1, overall=(_overall_rate['N'][0], _overall_rate['PCT'][0]))
+        landscape_grid = landscape.pivot_table(index=ENTITY_HEADER, columns=CATEGORY_HEADER, values=COUNT_HEADER_1, fill_value=0, aggfunc='sum')
     landscape
-    return COUNT_HEADER, LABEL_PCT_HEADER, landscape_grid
+    return COUNT_HEADER_1, LABEL_PCT_HEADER_1, landscape_grid
 
 
 @app.cell(hide_code=True)
@@ -311,6 +766,30 @@ def _(landscape_grid):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### Compare by a group of a linked table
+
+    When this table links to another table (the links you saved in step 2), its rows can be compared by a group kept there, such as orders by the customer's segment. `nb.linked_groups` lists those groups, each with the table and system it comes from. With no saved link the list is empty and this cell does nothing.
+    """)
+    return
+
+
+@app.cell
+def _(COUNT_HEADER_1, connection, dataset_2, nb):
+    linked = nb.linked_groups(dataset_2)
+    LINKED_GROUP = linked[0] if linked else None
+    groups = None
+    if LINKED_GROUP:
+        _GROUP_HEADER = nb.name(LINKED_GROUP['column'])
+        groups = nb.sql(connection, f'''\nSELECT b."{LINKED_GROUP['column']}" AS {_GROUP_HEADER},\n       COUNT(*) AS {COUNT_HEADER_1}\nFROM {dataset_2.fact_table} a\nJOIN {LINKED_GROUP['table']} b ON a."{LINKED_GROUP['link_column']}" = b."{LINKED_GROUP['key']}"\nGROUP BY 1\nORDER BY 2 DESC\nLIMIT 15''')
+        nb.show_sql()
+    print('\n'.join((g['label'] for g in linked)) or 'No linked table with a group.')
+    groups
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ### Over time
 
     Rows per day, month or year, and the % where the target is 1. Needs a time and a target.
@@ -320,32 +799,25 @@ def _(mo):
 
 @app.cell
 def _(
-    COUNT_HEADER,
+    COUNT_HEADER_1,
     DATE_COLUMN,
     LABEL_COLUMN,
-    LABEL_PCT_HEADER,
+    LABEL_PCT_HEADER_1,
     connection,
-    dataset,
+    dataset_2,
     missing_line,
     nb,
 ):
     over_time = None
-    if not (dataset.has("date") and dataset.has("label")):
-        print(f"Skipped - rows and target rate per period need a time and a target ({missing_line}).")
+    if not (dataset_2.has('date') and dataset_2.has('label')):
+        print(f'Skipped - rows and target rate per period need a time and a target ({missing_line}).')
     else:
-        date_span = nb.sql(connection, f"SELECT DAYS_BETWEEN(MAX({DATE_COLUMN}), MIN({DATE_COLUMN})) AS DAYS FROM {dataset.fact_table}")
-        span_days = int(date_span["DAYS"][0] or 0)
-        period = "DAY" if span_days <= 62 else "MONTH" if span_days <= 3 * 366 else "YEAR"
-
-        over_time = nb.sql(connection, f"""
-    SELECT CAST(DATE_TRUNC('{period}', {DATE_COLUMN}) AS DATE) AS {period}_START,
-           COUNT(*) AS {COUNT_HEADER},
-           ROUND(100 * AVG({LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER}
-    FROM {dataset.fact_table}
-    GROUP BY 1
-    ORDER BY 1""")
+        date_span = nb.sql(connection, f'SELECT DAYS_BETWEEN(MAX({DATE_COLUMN}), MIN({DATE_COLUMN})) AS DAYS FROM {dataset_2.fact_table}')
+        span_days = int(date_span['DAYS'][0] or 0)
+        period = 'DAY' if span_days <= 62 else 'MONTH' if span_days <= 3 * 366 else 'YEAR'
+        over_time = nb.sql(connection, f"\nSELECT CAST(DATE_TRUNC('{period}', {DATE_COLUMN}) AS DATE) AS {period}_START,\n       COUNT(*) AS {COUNT_HEADER_1},\n       ROUND(100 * AVG({LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER_1}\nFROM {dataset_2.fact_table}\nGROUP BY 1\nORDER BY 1")
         nb.show_sql()
-        nb.note_trend(over_time, dataset, f"{period}_START", COUNT_HEADER, LABEL_PCT_HEADER)
+        nb.note_trend(over_time, dataset_2, f'{period}_START', COUNT_HEADER_1, LABEL_PCT_HEADER_1)
     over_time
     return
 
@@ -371,8 +843,8 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset, nb):
-    LEAKING_COLUMNS = nb.leakage_check(connection, dataset)
+def _(GIVES_IT_AWAY, connection, dataset_2, nb):
+    LEAKING_COLUMNS = nb.leakage_check(connection, dataset_2, pure=GIVES_IT_AWAY)
     return (LEAKING_COLUMNS,)
 
 
@@ -398,53 +870,37 @@ def _(
     LABEL_COLUMN,
     LEAKING_COLUMNS,
     connection,
-    dataset,
+    dataset_2,
     missing_line,
     nb,
 ):
     MODEL_ROW_LIMIT = 20000
-    # The features the model reads, each only when its role exists and does not give the target away: the category and the
-    # entity as text, then the month of the date.
-    USE_CATEGORY = dataset.has("category") and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
-    USE_ENTITY = dataset.has("entity") and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
-    CATEGORY_FEATURE = f"CAST({dataset.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ""
-    ENTITY_FEATURE = f"CAST({dataset.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ""
-    MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset.col('date')}) AS MONTH_,\n       " if dataset.has("date") else ""
-    # Which rows: the newest by date, else the first by the key - the same rows on every rerun either way.
-    KEY_COLUMN = dataset.descriptor.slots.get("key")
-    ROW_ORDER = f"{dataset.col('date')} DESC" if dataset.has("date") else (f'"{KEY_COLUMN}"' if KEY_COLUMN else "1")
-
+    USE_CATEGORY = dataset_2.has('category') and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
+    USE_ENTITY = dataset_2.has('entity') and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
+    CATEGORY_FEATURE = f"CAST({dataset_2.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ''
+    ENTITY_FEATURE = f"CAST({dataset_2.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ''
+    MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset_2.col('date')}) AS MONTH_,\n       " if dataset_2.has('date') else ''
+    KEY_COLUMN = dataset_2.descriptor.slots.get('key')
+    ROW_ORDER = f"{dataset_2.col('date')} DESC" if dataset_2.has('date') else f'"{KEY_COLUMN}"' if KEY_COLUMN else '1'
     model = None
-    if not (dataset.has("label") and (USE_CATEGORY or USE_ENTITY)):
-        print(f"Skipped - the small model predicts the target from the category and entity, so it needs a target and a "
-              f"category or entity that does not give the target away ({missing_line or 'see the cell above'}).")
+    if not (dataset_2.has('label') and (USE_CATEGORY or USE_ENTITY)):
+        print(f"Skipped - the small model predicts the target from the category and entity, so it needs a target and a category or entity that does not give the target away ({missing_line or 'see the cell above'}).")
     else:
-        # What each feature is called on screen: the column it comes from, or "month".
-        FEATURE_LABELS = {"MONTH_": "month", "CATEGORY_": (CATEGORY_COLUMN or "").strip('"'), "ENTITY_": (ENTITY_COLUMN or "").strip('"')}
+        FEATURE_LABELS = {'MONTH_': 'month', 'CATEGORY_': (CATEGORY_COLUMN or '').strip('"'), 'ENTITY_': (ENTITY_COLUMN or '').strip('"')}
         if not DATE_COLUMN:
-            print("No date: the model reads the first rows by the key and leaves the month out.")
-        model_rows = nb.sql(connection, f"""
-    SELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL_COLUMN} AS LABEL_
-    FROM {dataset.fact_table}
-    WHERE {LABEL_COLUMN} IS NOT NULL
-    ORDER BY {ROW_ORDER}
-    LIMIT {MODEL_ROW_LIMIT}""")
+            print('No date: the model reads the first rows by the key and leaves the month out.')
+        model_rows = nb.sql(connection, f'\nSELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL_COLUMN} AS LABEL_\nFROM {dataset_2.fact_table}\nWHERE {LABEL_COLUMN} IS NOT NULL\nORDER BY {ROW_ORDER}\nLIMIT {MODEL_ROW_LIMIT}')
         nb.show_sql()
-
         from sklearn.linear_model import LogisticRegression
         from sklearn.model_selection import train_test_split
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import OneHotEncoder
-
-        feature_columns = [name for name in ("CATEGORY_", "ENTITY_", "MONTH_") if name in model_rows.columns]
-        feature_values, label_values = model_rows[feature_columns].fillna("(none)").astype(str), model_rows["LABEL_"].astype(int)
+        feature_columns = [name for name in ('CATEGORY_', 'ENTITY_', 'MONTH_') if name in model_rows.columns]
+        feature_values, label_values = (model_rows[feature_columns].fillna('(none)').astype(str), model_rows['LABEL_'].astype(int))
         train_features, test_features, train_labels, test_labels = train_test_split(feature_values, label_values, test_size=0.25, random_state=0, stratify=label_values)
-        model = Pipeline([
-            ("onehot", OneHotEncoder(handle_unknown="ignore")),
-            ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
-        ])
+        model = Pipeline([('onehot', OneHotEncoder(handle_unknown='ignore')), ('classifier', LogisticRegression(max_iter=1000, class_weight='balanced'))])
         model.fit(train_features, train_labels)
-        print(f"Trained on {len(train_labels):,} rows; {len(test_labels):,} rows kept back for the test in step 6.")
+        print(f'Trained on {len(train_labels):,} rows; {len(test_labels):,} rows kept back for the test in step 6.')
     return (
         FEATURE_LABELS,
         feature_columns,
@@ -478,7 +934,7 @@ def _(mo):
 
 @app.cell
 def _(
-    dataset,
+    dataset_2,
     label_values,
     model,
     model_rows,
@@ -489,10 +945,9 @@ def _(
     roc_auc = None
     if model is not None:
         from sklearn.metrics import roc_auc_score
-
         roc_auc = roc_auc_score(test_labels, model.predict_proba(test_features)[:, 1])
-        print(f"ROC AUC on the held-out quarter: {roc_auc:.3f}")
-        nb.note_model(roc_auc, dataset, len(model_rows), label_values.mean())
+        print(f'ROC AUC on the held-out quarter: {roc_auc:.3f}')
+        nb.note_model(roc_auc, dataset_2, len(model_rows), label_values.mean())
     return
 
 
@@ -519,7 +974,7 @@ def _(FEATURE_LABELS, LABEL_COLUMN, feature_columns, model):
             feature, value = name.split("_", 1)[0] + "_", name.split("__", 1)[1]
             return f"{FEATURE_LABELS[feature]} = {value}"
 
-        CLUES_PER_SIDE = min(8, len(feature_names) // 2)        # each side its own values: few values are split, never shown twice
+        CLUES_PER_SIDE = min(8, len(feature_names) // 2)
         print(f"Make {LABEL_COLUMN} = 1 more likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[-CLUES_PER_SIDE:]][::-1]))
         print(f"Make {LABEL_COLUMN} = 1 less likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[:CLUES_PER_SIDE]]))
     return
@@ -536,21 +991,21 @@ def _(mo):
 
 
 @app.cell
-def _(connection, dataset, nb):
+def _(connection, dataset_2, nb):
     # Cell tags: skip-ci
-    LAB_TASK = "predict_yes_no"   # or "predict_number", "find_groups", "find_unusual"
-    lab_data = nb.lab_data(connection, dataset)   # read once; lab_data.left_out says what was left out and why
+    LAB_TASK = 'predict_yes_no'
+    lab_data = nb.lab_data(connection, dataset_2)
     kept_features = {}
-    lab = nb.model_lab(connection, dataset, LAB_TASK, model="all", target_number=None, data=lab_data, features=kept_features)
+    lab = nb.model_lab(connection, dataset_2, LAB_TASK, model='all', target_number=None, data=lab_data, features=kept_features)
     print(lab.note or lab)
-    lab.board if LAB_TASK in ("predict_yes_no", "predict_number") else lab.result
+    lab.board if LAB_TASK in ('predict_yes_no', 'predict_number') else lab.result
     return LAB_TASK, kept_features, lab
 
 
 @app.cell
 def _(LAB_TASK, connection, kept_features, lab, nb):
     # Cell tags: skip-ci
-    ideas = nb.feature_ideas(lab, ai=False, conn=connection)   # ai=True: your AI model adds more (names and roles only)
+    ideas = nb.feature_ideas(lab, ai=False, conn=connection)
     for index, idea in enumerate(ideas[:3] if LAB_TASK in ("predict_yes_no", "predict_number") else []):
         tried = nb.try_feature(lab, ideas[index])
         print(f"{idea.title}: {tried['text']}")
@@ -558,7 +1013,7 @@ def _(LAB_TASK, connection, kept_features, lab, nb):
             kept_features[ideas[index].id] = tried["series"]
         else:
             kept_features.pop(ideas[index].id, None)
-    kept_features   # run the model lab cell again to train with them
+    kept_features
     return
 
 
@@ -582,32 +1037,27 @@ def _(
     TEXT_SQL,
     USE_AI_THEMES,
     connection,
-    dataset,
+    dataset_2,
     missing_line,
     nb,
 ):
-    SAMPLE_TEXTS = 20      # per side: the newest texts where the target is 1, and as many where it is 0
+    SAMPLE_TEXTS = 20
     text_sample = themes = None
-    NEWEST_FIRST = f"{dataset.col('date')} DESC" if dataset.has("date") else dataset.col("entity") if dataset.has("entity") else "1"
-    PER_LABEL = f"PARTITION BY {dataset.col('label')} " if dataset.has("label") else ""
-    LABELLED_ONLY = f" AND {dataset.col('label')} IS NOT NULL" if dataset.has("label") else ""
-    if not dataset.has("text"):
-        print(f"Skipped - the themes need a text role ({missing_line}).")
+    NEWEST_FIRST = f"{dataset_2.col('date')} DESC" if dataset_2.has('date') else dataset_2.col('entity') if dataset_2.has('entity') else '1'
+    PER_LABEL = f"PARTITION BY {dataset_2.col('label')} " if dataset_2.has('label') else ''
+    LABELLED_ONLY = f" AND {dataset_2.col('label')} IS NOT NULL" if dataset_2.has('label') else ''
+    if not dataset_2.has('text'):
+        print(f'Skipped - the themes need a text role ({missing_line}).')
     else:
-        TEXT_SAMPLE_SQL = f"""
-    SELECT {LABEL_COLUMN or 'NULL'} AS LABEL_, {TEXT_SQL} AS TEXT_
-    FROM {dataset.fact_table}
-    WHERE LENGTH(TRIM({TEXT_SQL})) > 0{LABELLED_ONLY}
-    QUALIFY ROW_NUMBER() OVER ({PER_LABEL}ORDER BY {NEWEST_FIRST}) <= {SAMPLE_TEXTS}"""
+        TEXT_SAMPLE_SQL = f"\nSELECT {LABEL_COLUMN or 'NULL'} AS LABEL_, {TEXT_SQL} AS TEXT_\nFROM {dataset_2.fact_table}\nWHERE LENGTH(TRIM({TEXT_SQL})) > 0{LABELLED_ONLY}\nQUALIFY ROW_NUMBER() OVER ({PER_LABEL}ORDER BY {NEWEST_FIRST}) <= {SAMPLE_TEXTS}"
         text_sample = nb.sql(connection, TEXT_SAMPLE_SQL)
         nb.show_sql()
         if not USE_AI_THEMES:
-            print("The AI step is off: above is the sample it would read. To run it, switch USE_AI_THEMES on in the first "
-                  "cell. Everything else in this notebook runs without a model.")
+            print('The AI step is off: above is the sample it would read. To run it, switch USE_AI_THEMES on in the first cell. Everything else in this notebook runs without a model.')
         else:
             model_endpoint = nb.model_client()
-            if model_endpoint is not None and nb.confirm_send(dataset, len(text_sample)):
-                themes = nb.themes(connection, dataset, text_sample, model_endpoint, sql=TEXT_SAMPLE_SQL)
+            if model_endpoint is not None and nb.confirm_send(dataset_2, len(text_sample)):
+                themes = nb.themes(connection, dataset_2, text_sample, model_endpoint, sql=TEXT_SAMPLE_SQL)
     themes if themes is not None else text_sample
     return
 

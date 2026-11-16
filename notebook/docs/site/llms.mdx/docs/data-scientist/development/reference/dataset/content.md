@@ -82,7 +82,7 @@ nb.dataset(conn, name: str | Path) -> Dataset
 The dataset `name`, checked against the database: a kit dataset id, a descriptor file or its folder, or a data
 file of your own (CSV, Parquet or JSON) with its descriptor beside it, which is loaded first (load_own_file).
 
-**Used in:** `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/01_train`, `ml-engineer/02_rust_score`, `ml-engineer/03_score_external_model`
+**Used in:** `data-scientist/00_quickstart`, `data-scientist/02_ask_your_data`, `data-scientist/03_share`, `ml-engineer/01_train`, `ml-engineer/02_rust_score`, `ml-engineer/03_score_external_model`
 
 ## nb.DescriptorNotApproved [#DescriptorNotApproved]
 

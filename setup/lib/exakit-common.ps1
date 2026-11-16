@@ -605,13 +605,13 @@ function InfoStep([string]$Msg) {
 #
 # Two spaces, the same column as Begin-ExakitStep's own arrow, because that is
 # what it IS: a top-level heading with its own children under it. At four it sat
-# in the action gutter, level with the "Explore marketplace ?" question it
-# introduces, and the two read as siblings when one contains the other.
+# in the action gutter, level with the rows it introduces, and the two read as
+# siblings when one contains the other.
 # Never gated by ExakitQuietDetail: nothing that uses it runs inside a one-line
 # step. Twin of heading in common.sh.
 function Write-ExakitHeading([string]$Msg) {
     if ($script:UiFancy) {
-        Write-Host ("  {0}{1}{2} {3}" -f $script:UiOk, $script:UiArrow, $script:UiReset, $Msg)
+        Write-Host ("  {0}{1}{2} {3}{4}{5}" -f $script:UiOk, $script:UiArrow, $script:UiReset, $script:UiBold, $Msg, $script:UiReset)
     } else {
         Write-Host ("  {0} {1}" -f $script:UiArrow, $Msg)
     }
@@ -6715,7 +6715,7 @@ function Test-ExakitTextualInline {
 }
 
 function Show-ExakitMarketplaceMenu {
-    if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and
+    if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and $env:EXAKIT_MARKETPLACE_NO_TEXTUAL -ne '1' -and
         $env:UI_TABLE_AUTO -ne '1' -and (Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and
         $env:EXAKIT_NO_FANCY -ne '1' -and (Test-ExakitTextualInline)) {
         $root = Get-ExakitMarketplaceRoot
@@ -6933,17 +6933,29 @@ function Show-ExakitMarketplaceMenu {
     # managed outside the kit, not in this kit copy) as dim, unpickable rows
     # saying why, the way the MCP client list shows "Cursor - not installed".
     # Twin of _exakit_addon_table_build in common.sh.
+    # The install's table: the add-ons that install on their own on top, then the
+    # rest in the registry's order. Twin of the reorder in exakit_marketplace_menu.
+    if ($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1") {
+        $firstIds = @(("" + $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $selectable = @(@($selectable | Where-Object { $firstIds -contains $_.Id }) + @($selectable | Where-Object { $firstIds -notcontains $_.Id }))
+    }
     $addonIds = New-Object 'System.Collections.Generic.List[string]'
     # Above the table, not under it: the Description column is a repository's
     # About line, which is a table cell and not a reference. The reference is
     # the help document, and nothing on this screen named it. Twin of the same
     # line in exakit_marketplace_menu.
-    Info "Details on any add-on: exakit help <id>"
+    if ($env:UI_TABLE_AUTO -ne "1" -and -not $env:EXAKIT_MARKETPLACE_AUTO_FIRST) { Info "Details on any add-on: exakit help <id>" }
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     $script:ExakitAddonTable.Activity = ""
-    [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
-    [void]$addonIds.Add("")
+    # The install's table (EXAKIT_MARKETPLACE_AUTO_FIRST): no "Select All" row and
+    # no tree - two rows install on their own and the rest are single picks.
+    # Twin of EXAKIT_ADDON_TABLE_NO_GROUP in _exakit_addon_table_build.
+    $flat = [bool]($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1")
+    if (-not $flat) {
+        [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
+        [void]$addonIds.Add("")
+    }
     $addonCount = $selectable.Count
     $coveredCount = $covered.Count
     # The defaults and the inner group specs the child rows add as they are
@@ -6962,7 +6974,8 @@ function Show-ExakitMarketplaceMenu {
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
         # after the installable ones, the last installable one is a tee.
-        if ($i -eq ($addonCount - 1) -and $coveredCount -eq 0) { $kind = "corner" } else { $kind = "tee" }
+        if ($flat) { $kind = "plain" }
+        elseif ($i -eq ($addonCount - 1) -and $coveredCount -eq 0) { $kind = "corner" } else { $kind = "tee" }
         # One line, whatever the About says: the column truncates, and a folded
         # cell would make the row two lines tall - which is the frame-height
         # invariant the redraw depends on.
@@ -6986,7 +6999,8 @@ function Show-ExakitMarketplaceMenu {
         $innerGroups += ("{0}:{1}:{2}:claim" -f $parentRow, ($parentRow + 1), ($parentRow + $kids.Count))
     }
     for ($i = 0; $i -lt $coveredCount; $i++) {
-        if ($i -eq ($coveredCount - 1)) { $kind = "corner" } else { $kind = "tee" }
+        if ($flat) { $kind = "plain" }
+        elseif ($i -eq ($coveredCount - 1)) { $kind = "corner" } else { $kind = "tee" }
         # The state word goes to Description (the selection screen) AND to the
         # disabled note (the Status cell on the install screen), so the row says
         # the same thing on either.
@@ -6998,6 +7012,7 @@ function Show-ExakitMarketplaceMenu {
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
     $rowSkip = $addonCount + $kidCount + $coveredCount + 2
+    if ($flat) { $rowSkip = $rowSkip - 1 }
     $script:ExakitAddonTableIds = $addonIds.ToArray()
     # Default: the group AND every available add-on pre-selected - the same
     # posture as the data-load menu, where Enter alone acts on what is on offer
@@ -7010,12 +7025,59 @@ function Show-ExakitMarketplaceMenu {
     # in the add-ons' own child rows, so Select All means every row - and a
     # child row its add-on starts unticked (a choice recorded earlier) leaves
     # Select All unticked too, which is what "all" means.
-    if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
+    # Without the group row, row 1 is an add-on: the group's own default goes.
+    if (-not $allTicked -or $flat) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
     # Nothing ticked (the persona's add-ons are all in already): Skip, so Enter answers.
     if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
-    $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
-        -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
-        -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
+    # THE INSTALL'S ADD-ONS TABLE (EXAKIT_MARKETPLACE_AUTO_FIRST): every add-on on
+    # offer is listed; the ones named install at once, in this table - no checkbox
+    # on their rows, the bar to the right - and then the same table asks about
+    # the rest, Skip ticked so Enter goes on. Twin of the same stage in
+    # exakit_marketplace_menu.
+    $onScreen = 0
+    $autoNotes = @()
+    $autoDone = $false
+    if ($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1") {
+        $autoIds = @(("" + $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $autoRows = @()
+        for ($r = 0; $r -lt $addonIds.Count; $r++) { if ($autoIds -contains $addonIds[$r]) { $autoRows += ($r + 1) } }
+        if ($autoRows.Count -gt 0) {
+            $script:ExakitAddonTable.Col3 = ""
+            $script:UiTableNoBox = $autoRows
+            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
+            Write-Host ""
+            $script:ExakitAddonTableKeep = $true
+            try { Invoke-ExakitMarketplaceApplyPython -Ids $autoIds } catch { Write-ExakitLog "WARN" "$_" } finally {
+                $script:ExakitAddonTableKeep = $false
+            }
+            $autoNotes = @($script:ExakitAddonTableNotes)
+            $script:ExakitAddonTableNotes = @()
+            # Their activity line goes with them: the question has no blank line in it.
+            [void]$script:ExakitAddonTable.Remove("Activity")
+            $autoDone = $true
+            $onScreen = [int]$script:ExakitAddonTable.Lines + 1
+            $defaults = @($rowSkip)
+        }
+    }
+    $groupParent = 1
+    $groupFirst = 2
+    $groupLast = $addonCount + $kidCount + 1
+    if ($flat) { $groupParent = 0; $groupFirst = 0; $groupLast = 0 }
+    try {
+        $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
+            -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent $groupParent `
+            -GroupFirst $groupFirst -GroupLast $groupLast -GroupMode "all" -OnScreen $onScreen)
+    } finally {
+        # The two keep no checkbox while the rest install in the same table.
+        if (-not $autoDone) { $script:UiTableNoBox = @() }
+    }
+    if ($autoDone) {
+        # What the two installs had to say: the table's rows already say it, so the
+        # log keeps the lines (a warning still shows). Twin of the shell's.
+        foreach ($note in $autoNotes) { if ($note.Kind -eq 'ok') { Write-ExakitLog "OK" $note.Text } else { Warn2 $note.Text } }
+        # Skip, or nothing more ticked: the two are in, and that is the whole answer.
+        if ($selection.Count -eq 0 -or $selection -contains $rowSkip) { Reset-ExakitAddonTable; return }
+    }
     # ONLY A PRESSED ENTER INSTALLS - the defaults standing without a console
     # would install every add-on on a machine where nobody chose anything.
     # Twin of the same gate in _exakit_marketplace_menu (common.sh).
@@ -7073,7 +7135,7 @@ function Show-ExakitMarketplaceMenu {
         $keys = @($pickedKids | Where-Object { $_.StartsWith($id + ":") } | ForEach-Object { $_.Substring($id.Length + 1) })
         & $addon.ChildrenPickedFn -Keys $keys
     }
-    Invoke-ExakitMarketplaceApply -Ids $picked
+    try { Invoke-ExakitMarketplaceApply -Ids $picked } finally { $script:UiTableNoBox = @() }
 }
 
 # Show-ExakitMarketplaceList - the READ-ONLY answer to "what add-ons exist and
@@ -7400,7 +7462,9 @@ function Invoke-ExakitMarketplaceApplyPython {
         if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
         $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
         Remove-Item Env:EXAKIT_MARKETPLACE_ACTIVITY_FILE -ErrorAction SilentlyContinue
-        & $uv run --python $script:ManagedPythonVersion --no-project python $runner ($Ids -join ',') --stream 2>&1 |
+        # No console input for the installs (their questions were asked before the table): a child that turned the
+        # console's echo back on would let every key pressed meanwhile push the frame down. Twin of </dev/null.
+        $null | & $uv run --python $script:ManagedPythonVersion --no-project python $runner ($Ids -join ',') --stream 2>&1 |
             ForEach-Object {
                 $line = "$_"
                 if ($line.StartsWith('@@EXAKIT|')) {
@@ -7500,7 +7564,15 @@ function Invoke-ExakitMarketplaceApplyPython {
             Stop-ExakitTable -Table $script:ExakitAddonTable
             $script:ExakitAddonTableLive = $false
         }
-        Reset-ExakitAddonTable
+        if (-not $script:ExakitAddonTableKeep) { Reset-ExakitAddonTable }
+    }
+    # $script:ExakitAddonTableKeep: the same table asks next (the install's
+    # add-ons), so nothing is printed under it; the notes wait for the caller.
+    # Twin of EXAKIT_ADDON_TABLE_KEEP in _exakit_marketplace_apply_python.
+    if ($script:ExakitAddonTableKeep) {
+        $script:ExakitAddonTableNotes = @($notes)
+        if ($code -ne 0 -and $script:ExakitApplyLastError) { Write-ExakitLog "WARN" $script:ExakitApplyLastError }
+        return
     }
     foreach ($note in $notes) {
         if ($note.Kind -eq 'ok') { Ok $note.Text } else { Warn2 $note.Text }
@@ -7558,89 +7630,89 @@ function Write-ExakitReadyLine {
     }
 }
 
-function Request-ExakitMarketplaceOffer {
-    # Several checks per add-on and a description fetched for each take
-    # seconds: a turning spinner says the install is still going, not stuck.
-    # Twin of exakit_marketplace_offer.
-    Start-ExakitSpinner "Getting the add-ons ready"
-    try {
-        if (-not (Test-ExakitMarketplaceHasPending)) { return }
-        # Fill the About cache now, while the gate question below is still being
-        # read: this is the one screen where the cache is reliably cold (a machine
-        # minutes old), and the table it feeds does not exist yet.
-        Update-ExakitMarketplaceAboutCache
-    } finally { Stop-ExakitSpinner }
+# THE ADD-ONS EVERY KIT GETS. Installed at the end of the install when they are
+# missing - no question first: their rows are drawn at once, ticked, and turn
+# into the live progress table while both install side by side (apply.py runs
+# parallel-safe add-ons in one turn). Twin of EXAKIT_AUTO_ADDONS in common.sh.
+$script:ExakitAutoAddons = @("dash-server", "json-tables")
 
-    # A scripted answer wins over any prompt (same contract as the menu).
+# Get-ExakitMarketplaceCatalogAbout - "id|description" lines from the catalog's own
+# copy of each repository's About: no lookup stands between the install and the
+# table. Twin of _exakit_marketplace_catalog_about.
+function Get-ExakitMarketplaceCatalogAbout {
+    param([string[]]$Ids)
+    $catalog = Join-Path (Get-ExakitMarketplaceRoot) "marketplace\catalog.json"
+    try { $doc = Get-Content -LiteralPath $catalog -Raw -Encoding UTF8 | ConvertFrom-Json } catch { return @() }
+    $lines = @()
+    foreach ($row in @($doc.addons)) {
+        if ($Ids -notcontains $row.id) { continue }
+        $about = ""
+        if ($row.kit_about) { $about = "" + $row.kit_about } elseif ($row.github -and $row.github.about) { $about = "" + $row.github.about }
+        $lines += "$($row.id)|$(($about -replace '\|', '/') -replace '\r?\n', ' ')"
+    }
+    return $lines
+}
+
+function Request-ExakitMarketplaceOffer {
+    # A scripted answer wins (same contract as the menu): EXAKIT_MARKETPLACE_ADDONS=none installs nothing.
     if ($env:EXAKIT_MARKETPLACE_ADDONS) {
         Show-ExakitMarketplaceMenu
         return
     }
-
-    # "Done and working" must be true before it is said: a run that recorded
-    # soft failures points at the marketplace without the celebration.
-    $softFailed = $false
-    $softState = Get-Variable -Scope Script -Name ExakitSoftFailed -ErrorAction SilentlyContinue
-    if ($softState -and $softState.Value -and $softState.Value.Count -gt 0) { $softFailed = $true }
-    $interactive = ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
-    # Personas picked on screen: their add-ons, ticked, and nothing else - the
-    # rest of the marketplace is named once by Write-ExakitPersonaMarketplaceNote.
-    # A persona whose add-ons are "all" is the whole marketplace, every row
-    # ticked: "all" is not an id, and as a filter it matched nothing, which ended
-    # the offer with "Everything available is already covered." Twin of
-    # exakit_marketplace_offer.
-    # Independent of the data: a dataset that failed to download is repaired with
-    # `exakit data-load` and is no reason to withhold the persona's notebooks and
-    # dashboards. Only a database that never installed holds them back.
-    $runtimeFailed = ($softState -and $softState.Value -and $softState.Value.Contains("runtime"))
-    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $runtimeFailed -and $interactive) {
-        # No rule above it: the personas' add-ons carry on from their data, as
-        # one setup, rather than reading as a separate offer.
-        Write-ExakitHeading "Add-ons for your personas"
-        # Every add-on is listed; the personas' own are the ones ticked
-        # (EXAKIT_MARKETPLACE_PRESELECT), the rest can be ticked too.
+    # Only a database that never installed holds them back. Twin of exakit_marketplace_offer.
+    if (Test-ExakitSoftFailed "runtime") { return }
+    $ids = @()
+    $wanted = @($script:ExakitAutoAddons) + @(("" + $env:EXAKIT_MARKETPLACE_PRESELECT) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    foreach ($id in $wanted) {
+        if ($ids -contains $id) { continue }
+        if (-not (Test-ExakitAddonOfferable $id)) { continue }
+        if (Test-ExakitMarketplaceAddonInstalled $id) { continue }
+        if (Test-ExakitAddonSystemPresent $id) { continue }
+        $ids += $id
+    }
+    # Nothing to install and nobody to ask: nothing on screen.
+    if ($ids.Count -eq 0 -and -not ((Test-ExakitInteractive) -and (Test-ExakitMarketplaceHasPending))) { return }
+    Write-ExakitHeading "Supercharging Exasol with Add-ons"
+    if (Test-ExakitInteractive) {
+        # ONE table: every add-on on offer, the missing ones of the two installing
+        # in it at once, then the rest waits for a pick (Enter alone is Skip).
+        # Every row's description from the catalog's own copy: no lookup first.
+        # Twin of the same branch in exakit_marketplace_offer.
+        $allIds = @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id })
+        $env:EXAKIT_MARKETPLACE_REASONS = (@(Get-ExakitMarketplaceCatalogAbout -Ids $allIds) -join "`n")
+        $env:EXAKIT_MARKETPLACE_PRESELECT = "none"
+        $env:EXAKIT_MARKETPLACE_NO_TEXTUAL = "1"
+        $env:EXAKIT_MARKETPLACE_AUTO_FIRST = ($ids -join ',')
         Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-        # Each row says what the add-on does for the persona, in the persona's own
-        # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
-        if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {
-            $env:EXAKIT_MARKETPLACE_REASONS = (@(Invoke-ExakitPersonaService "addon-reasons" $env:EXAKIT_PERSONA) -join "`n")
+        # A spinner until the table is up: the rows are read first. Twin of the shell's.
+        Start-ExakitSpinner ""
+        $script:ExakitMarketplaceSpinning = $true
+        try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
+            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
+            foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST")) {
+                Remove-Item "env:$name" -ErrorAction SilentlyContinue
+            }
         }
-        try { Show-ExakitMarketplaceMenu } finally {
-            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
-            Remove-Item env:EXAKIT_MARKETPLACE_REASONS -ErrorAction SilentlyContinue
-        }
-        return
+    } elseif ($ids.Count -gt 0) {
+        # Nobody to ask: the two, drawn ticked and installed, and nothing else.
+        Install-ExakitAutoAddons -Ids $ids
     }
-    if ($softFailed -or -not $interactive) {
-        Info "Optional add-ons (dashboards & more): exakit marketplace"
-        return
-    }
+}
 
-    # One gate question first - the same cursor menu every other kit choice
-    # uses, no typing: Yes is pre-ticked, No is the exclusive opt-out. Only a
-    # Yes opens the marketplace selection itself (where the available add-ons
-    # come pre-selected, so Enter installs them and Skip still backs out).
-    # "Your starter kit is ready to use." used to be printed here. It is now
-    # Write-ExakitReadyLine, called by the setup script before this offer:
-    # behind these gates it reached only an interactive, fully-successful run
-    # that still had an add-on left to install, which is a minority of runs.
-    # The install is over; what follows is a different question. A rule with air
-    # around it is the seam, so the offer does not read as one more install step.
-    Write-ExakitRule
-    # A heading, not an action: what follows the rule is a separate offer, and
-    # the dim bullet marked it as one more thing being done TO the machine.
-    Write-ExakitHeading "Supercharge Exasol with add-ons from marketplace"
-    $gate = Read-ExakitCheckboxMenu -Title "Explore marketplace ?" `
-        -Options @("Yes", "No") `
-        -Defaults @(1) -ExclusiveIndex 2
-    if ($gate -contains 1) {
-        try { Show-ExakitMarketplaceMenu } catch { Warn2 "The marketplace did not finish cleanly: $_" }
-        # "Browse again: exakit marketplace | how to use one: exakit help
-        # <add-on>" stood here. The table above has just said what was installed
-        # and what each one gives you; the reader has not asked to browse again,
-        # and the closing support line already names `exakit help`.
-    } else {
-        Info "Maybe later - browse any time with: exakit marketplace"
+# Install-ExakitAutoAddons - the add-ons every kit gets, drawn ticked and
+# installed at once, side by side. Twin of the first stage of exakit_marketplace_offer.
+function Install-ExakitAutoAddons {
+    param([string[]]$Ids)
+    $env:EXAKIT_MARKETPLACE_REASONS = (@(Get-ExakitMarketplaceCatalogAbout -Ids $ids) -join "`n")
+    $env:EXAKIT_MARKETPLACE_ONLY = ($ids -join ',')
+    $previousPreselect = $env:EXAKIT_MARKETPLACE_PRESELECT
+    $env:EXAKIT_MARKETPLACE_PRESELECT = ($ids -join ',')
+    $env:UI_TABLE_AUTO = "1"
+    try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
+        Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+        Remove-Item env:EXAKIT_MARKETPLACE_REASONS -ErrorAction SilentlyContinue
+        Remove-Item env:UI_TABLE_AUTO -ErrorAction SilentlyContinue
+        if ($previousPreselect) { $env:EXAKIT_MARKETPLACE_PRESELECT = $previousPreselect } else { Remove-Item env:EXAKIT_MARKETPLACE_PRESELECT -ErrorAction SilentlyContinue }
     }
 }
 

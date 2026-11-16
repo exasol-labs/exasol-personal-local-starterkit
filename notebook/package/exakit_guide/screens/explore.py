@@ -59,6 +59,20 @@ def _state():
 
 
 # =====================================================================================================
+def _live() -> str | None:
+    """The source a table is read live from (a virtual schema), else None: every statement on it goes to that system
+    (measured on Snowflake: about 10 s each), so the cards below wait for a click instead of querying it on their own."""
+    ds = SESSION.dataset
+    return getattr(ds, "source", None) if ds is not None else None
+
+
+def _waiting(head: dict, what: str) -> list[dict]:
+    ds = SESSION.dataset
+    return [head, {"t": "msg", "kind": "info",
+                   "v": f"{ds.fact_table} is read live from {_live()}: {what} sends its queries there, so it waits for you."},
+            {"t": "actions", "items": [{"id": "run_live", "label": "Run it now", "busy": f"Reading {_live()}…"}]}]
+
+
 class WorkingOn(Screen):
     help = (('Pick the data for a notebook', 'get-the-data/the-dataset'),)
     kind = "card"
@@ -74,7 +88,12 @@ class WorkingOn(Screen):
 
     def _load(self) -> None:
         try:
-            SESSION.open_latest("explore.open")
+            if SESSION.understanding:
+                # Step 2's card above opens the quickstart's tables: everything below follows the one whose column
+                # map is approved there, not the dataset approved last.
+                SESSION.opened.wait(900)
+            else:
+                SESSION.open_latest("explore.open")
             self.kit_said = SESSION.said
             self._count()
         except Exception as exc:
@@ -89,17 +108,20 @@ class WorkingOn(Screen):
     def _count(self) -> None:
         ds = SESSION.dataset
         self.rows = None
-        if ds is not None:
+        if ds is not None and not _live():             # a live table: its rows are counted at the source, on request
             frame = actions.run("explore.count", sql=f"SELECT COUNT(*) AS N FROM {ds.fact_table}")
             self.rows = int(frame["N"][0])
 
     def build(self) -> list[dict]:
         head = {"t": "head", "kicker": KICKER, "title": "Working on",
-                "sub": "The data you approved in step 1. Everything below uses it."}
+                "sub": "The table whose column map you approved above. Everything below uses it."}
         if self.loading:
             return [head, {"t": "empty", "v": "Opening the data you approved last…"}]
         ds = SESSION.dataset
         blocks = [head]
+        if ds is None and SESSION.understanding and SESSION.source is not None:
+            blocks.append({"t": "msg", "kind": "info", "v": f"Approve the column map of {SESSION.source.fact_table} above: "
+                                                            "the steps below use it."})
         if ds is not None:
             rows = f" · {self.rows:,} rows" if getattr(self, "rows", None) is not None else ""
             blocks.append({"t": "summary_row", "v": _ds_label(ds) + rows,
@@ -127,6 +149,11 @@ class WorkingOn(Screen):
         self.flash = {"kind": "ok", "v": f"Now working on {ds_id}."}
 
     def on_session(self, what: str) -> None:
+        if what == "dataset":
+            try:
+                self._count()
+            except Exception:
+                self.rows = None
         self.refresh()
 
 
@@ -144,10 +171,19 @@ class Prepare(Screen):
         SESSION.listen(self)
         self.refresh()
 
+    waiting = False
+
     def on_session(self, what: str) -> None:
         if what == "dataset" and SESSION.dataset is not None:
-            self._check()
+            self.waiting = bool(_live())
+            if not self.waiting:
+                self._check()
         self.refresh()
+
+    def on_run_live(self, _v: dict) -> None:
+        self.waiting = False
+        with SESSION.showing_queries():
+            self._check()
 
     def _check(self) -> None:
         print("Checking the data: empty values, repeated rows, odd values in every column")
@@ -161,8 +197,10 @@ class Prepare(Screen):
         self.kit_said = "\n".join(x for x in (said, SESSION.said) if x)
 
     def build(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "Is the data clean?",
+        head = {"t": "head", "kicker": KICKER, "title": "Data quality",
                 "sub": "The kit checked every row. It can make a cleaned copy (a view); your table stays as it is."}
+        if SESSION.dataset is not None and self.waiting:
+            return _waiting(head, "checking every row")
         if SESSION.dataset is None or self.findings is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
         items = []
@@ -232,12 +270,22 @@ class Compare(Screen):
         SESSION.listen(self)
         self.refresh()
 
+    waiting = False
+
     def on_session(self, what: str) -> None:
         if what == "dataset" and SESSION.dataset is not None:
             self._options()
+            self.waiting = bool(_live())
+            if not self.waiting:
+                self._groups()
+                self._trend()
+        self.refresh()
+
+    def on_run_live(self, _v: dict) -> None:
+        self.waiting = False
+        with SESSION.showing_queries():
             self._groups()
             self._trend()
-        self.refresh()
 
     def _options(self) -> None:
         ds = SESSION.dataset
@@ -246,8 +294,12 @@ class Compare(Screen):
         cands = [c for c, e in cols.items() if e.get("role") in ("category", "flag") and c != label and not e.get("sensitive")]
         first = _bare(ds.group_by()[1])
         self.groups = ([first] if first in cands else []) + [c for c in cands if c != first]
-        if self.group not in self.groups:
-            self.group = self.groups[0] if self.groups else None
+        try:            # groups that live in a linked table, maybe of another source (the links saved in the data map)
+            self.linked = {g["value"]: g for g in actions.run("explore.linked") or []}
+        except Exception:
+            self.linked = {}
+        if self.group not in self.groups and self.group not in self.linked:
+            self.group = self.groups[0] if self.groups else next(iter(self.linked), None)
 
     def _groups(self) -> None:
         import exakit.nb as nb
@@ -257,13 +309,22 @@ class Compare(Screen):
         if not self.group:
             return
         ds = SESSION.dataset
+        far = getattr(self, "linked", {}).get(self.group)          # a group of a linked table: one query over both
+        shown = far["column"] if far else self.group
         g = f'"{self.group}"'
-        group_h, count_h = nb.name(self.group), nb.count_name(ds)
+        group_h, count_h = nb.name(shown), nb.count_name(ds)
         has_label = ds.has("label")
         pct_h = nb.name(ds.col("label"), "PCT") if has_label else None
         rate = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {pct_h}" if pct_h else ""
-        sql = f"SELECT {g} AS {group_h},\n       COUNT(*) AS {count_h}{rate}\nFROM {ds.fact_table}\nGROUP BY {g}\nORDER BY {count_h} DESC\nLIMIT 15"
-        frame = actions.run("explore.groups", sql=sql)
+        if far:          # the same query as the notebook's cell: this table joined to the one the link points at
+            rate_b = rate.replace(f"AVG({ds.col('label')})", f"AVG(a.{ds.col('label')})") if rate else ""
+            sql = (f'SELECT b."{far["column"]}" AS {group_h},\n       COUNT(*) AS {count_h}{rate_b}\n'
+                   f'FROM {ds.fact_table} a\nJOIN {far["table"]} b ON a."{far["link_column"]}" = b."{far["key"]}"\n'
+                   f"GROUP BY 1\nORDER BY {count_h} DESC\nLIMIT 15")
+            frame = actions.run("explore.groups", sql=sql)
+        else:
+            sql = f"SELECT {g} AS {group_h},\n       COUNT(*) AS {count_h}{rate}\nFROM {ds.fact_table}\nGROUP BY {g}\nORDER BY {count_h} DESC\nLIMIT 15"
+            frame = actions.run("explore.groups", sql=sql)
         overall = (actions.run("explore.overall", sql=f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}")
                    if pct_h else None)
         note = actions.run("explore.groups_note", group=group_h, count=count_h, pct=pct_h,
@@ -272,10 +333,10 @@ class Compare(Screen):
             items = [{"label": "(no value)" if r[group_h] is None else str(r[group_h]), "value": float(r[pct_h] or 0) / 100, "rows": int(r[count_h])}
                      for _, r in frame.iterrows() if int(r[count_h]) >= SMALL]
             items.sort(key=lambda i: -i["value"])
-            title = f"{_bare(ds.col('label'))} rate by {self.group}"
+            title = f"{_bare(ds.col('label'))} rate by {shown}"
         else:
             items = [{"label": "(no value)" if r[group_h] is None else str(r[group_h]), "value": int(r[count_h]), "rows": int(r[count_h])} for _, r in frame.iterrows()]
-            title = f"{count_h.replace('_', ' ').capitalize()} by {self.group}"
+            title = f"{count_h.replace('_', ' ').capitalize()} by {shown}"
         self.result = {"title": title, "items": items, "pct": bool(pct_h),
                        "overall": float(overall["PCT"][0]) / 100 if pct_h else None, "note": note, "sql": sql}
 
@@ -312,14 +373,17 @@ class Compare(Screen):
         self.trend = {"title": title, "points": pts, "pct": bool(pct_h), "note": note, "sql": sql}
 
     def build(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "Compare groups and see trends",
+        head = {"t": "head", "kicker": KICKER, "title": "Group comparison and trends",
                 "sub": "Where the outcome is higher or lower, and how it changes over time."}
         if SESSION.dataset is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
+        if self.waiting:
+            return _waiting(head, "counting the groups and the trend")
         blocks = [head]
-        if self.groups:
+        if self.groups or getattr(self, "linked", {}):
             blocks.append({"t": "inline_form", "fields": [{"id": "group", "type": "select", "label": "Compare by", "value": self.group,
-                                                           "options": [{"value": g, "label": g} for g in self.groups]}],
+                                                           "options": [{"value": g, "label": g} for g in self.groups]
+                                                           + [{"value": v, "label": g["label"]} for v, g in getattr(self, "linked", {}).items()]}],
                            "action": {"id": "regroup", "label": "Show"}, "live": True})
         r = self.result
         if r:
@@ -359,10 +423,19 @@ class Predict(Screen):
         SESSION.listen(self)
         self.refresh()
 
+    waiting = False
+
     def on_session(self, what: str) -> None:
         if what == "dataset" and SESSION.dataset is not None:
-            self._load()
+            self.waiting = bool(_live())
+            if not self.waiting:
+                self._load()
         self.refresh()
+
+    def on_run_live(self, _v: dict) -> None:
+        self.waiting = False
+        with SESSION.showing_queries():
+            self._load()
 
     def _load(self) -> None:
         self.result, self.result_task = None, None
@@ -380,8 +453,10 @@ class Predict(Screen):
         return opts
 
     def build(self) -> list[dict]:
-        head = {"t": "head", "kicker": KICKER, "title": "Build a model",
+        head = {"t": "head", "kicker": KICKER, "title": "Predictive model",
                 "sub": "Choose what to do, which model and how to split the data. Or keep the recommendations."}
+        if SESSION.dataset is not None and self.waiting:
+            return _waiting(head, "reading the rows to train on")
         if SESSION.dataset is None or self.data is None:
             return [head, {"t": "empty", "v": "Waiting for the data…"}]
         d = self.data
@@ -627,8 +702,55 @@ class Ideas(Screen):
                       else "The AI didn't suggest anything usable for this data."}
 
 
-def explore():
-    """Step 2 in the guided view: check and clean, compare, then predict and test feature ideas."""
-    from ..card import show
+class _WorkingPart(WorkingOn):
+    """The table the analysis cards use, as the top of the Data quality card: the same choice and code as Working on."""
+    owner = None
 
-    return show(WorkingOn(), Prepare(), Compare(), Predict(), Ideas(), docs="prepare")
+    def refresh(self) -> None:
+        if self.owner is not None:
+            self.owner.refresh()
+
+
+class DataQuality(Prepare):
+    """Data quality, with the table to analyse at its top: one of the tables whose column roles are approved, the one
+    every card below (comparison, model, feature ideas) works on."""
+
+    def __init__(self) -> None:
+        part = _WorkingPart.__new__(_WorkingPart)
+        part.owner = self
+        self.working = None
+        super().__init__()
+        part.__init__()
+        self.working = part
+        self.refresh()
+
+    def build(self) -> list[dict]:
+        blocks = super().build()
+        part = self.__dict__.get("working")
+        if part is None:
+            return blocks
+        picked = [dict(b, fields=[dict(f, label="Table to analyse") for f in b.get("fields") or []])
+                  if b.get("t") == "inline_form" else b
+                  for b in part.build()[1:] if b.get("t") in ("summary_row", "inline_form", "msg", "empty")]
+        if part.flash:
+            picked.insert(0, {"t": "msg", **{k: v for k, v in part.flash.items() if k != "said"}})
+        return blocks[:1] + picked + blocks[1:]
+
+    def on_switch(self, v: dict) -> None:
+        self.working.flash = None
+        try:
+            WorkingOn.on_switch(self.working, v)
+        finally:
+            if self.working.flash:
+                self.flash, self.working.flash = self.working.flash, None
+
+
+def explore():
+    """Step 2 in the guided view: choose your data (more beside the quickstart's), the one AI button and one card for what each column means and the semantic views
+    over the tables chosen in the quickstart; then check and clean, compare, predict and test feature ideas on the
+    table approved there."""
+    from ..card import show
+    from .understand import AiHelp, ExploreChoose, SemanticViews, Understand
+
+    understand = Understand()        # first: it opens the quickstart's tables, the cards below wait for it
+    return show(ExploreChoose(), AiHelp(), understand, SemanticViews(), DataQuality(), Compare(), Predict(), Ideas(), docs="prepare")

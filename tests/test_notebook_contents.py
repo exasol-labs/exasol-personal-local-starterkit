@@ -197,7 +197,7 @@ class NotebookShapeTest(unittest.TestCase):
         still names them for a screen reader."""
         import base64
         import xml.etree.ElementTree as ET
-        expected = {"00_quickstart": {"0", "1", "2"}, "01_explore": {"3", "4", "5", "6"},
+        expected = {"00_quickstart": {"0", "1"}, "01_explore": {"2", "3", "4", "5", "6"},
                     "02_ask_your_data": {"7"}, "03_share": {"8", "9"}}
         for name, current in expected.items():
             with self.subTest(notebook=name):
@@ -230,18 +230,29 @@ class NotebookShapeTest(unittest.TestCase):
                     self.assertNotIn("Run time:", first)
 
     def test_both_quickstarts_carry_the_same_shared_cells(self):
-        shared = [(c["cell_type"], c["source"]) for c in _built_cells(SOURCES / "00_shared" / "data_paths.py")[1:]]
-        for persona in ("data-scientist", "ml-engineer"):
-            with self.subTest(persona=persona):
-                cells = [(c["cell_type"], c["source"]) for c in _built_cells(SOURCES / persona / "00_quickstart.py")
-                         if c["metadata"].get("tags") and not set(c["metadata"]["tags"]) & GUIDE_TAGS]
-                self.assertEqual(cells, shared)
+        """The shared cells, word for word: both quickstarts connect and load with them; the ML Engineer's reviews
+        the column map there too, the Data Scientist's in 01_explore (its step 2, after the quickstart's choice)."""
+        built = _built_cells(SOURCES / "00_shared" / "data_paths.py")[1:]
+        shared = [(c["cell_type"], c["source"]) for c in built]
+        review = [(c["cell_type"], c["source"]) for c in built if "review" in (c["metadata"].get("tags") or [])]
+        self.assertTrue(review)
+        places = {"ml-engineer": [("00_quickstart", shared)],
+                  "data-scientist": [("00_quickstart", [c for c in shared if c not in review]), ("01_explore", review)]}
+        for persona, notebooks in places.items():
+            for name, expected in notebooks:
+                with self.subTest(persona=persona, notebook=name):
+                    only = {"review"} if name == "01_explore" else None      # its own tagged cells aside
+                    cells = [(c["cell_type"], c["source"]) for c in _built_cells(SOURCES / persona / f"{name}.py")
+                             if c["metadata"].get("tags") and not set(c["metadata"]["tags"]) & GUIDE_TAGS
+                             and (only is None or set(c["metadata"]["tags"]) & only)]
+                    self.assertEqual(cells, expected)
 
     def test_role_review_follows_selection_and_precedes_queries(self):
-        for persona in ("data-scientist", "ml-engineer"):
-            cells = ["".join(c["source"]) for c in _built_cells(SOURCES / persona / "00_quickstart.py")]
-            selected = next(i for i, cell in enumerate(cells) if "nb.first(source_data, own_data, sample_data)" in cell)
-            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(connection, chosen_data)" in cell)
+        for persona, notebook, chosen in (("data-scientist", "01_explore", "chosen_tables = nb.open_chosen(connection)"),
+                                          ("ml-engineer", "00_quickstart", "nb.first(source_data, own_data, sample_data)")):
+            cells = ["".join(c["source"]) for c in _built_cells(SOURCES / persona / f"{notebook}.py")]
+            selected = next(i for i, cell in enumerate(cells) if chosen in cell)
+            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(connection, chosen_data" in cell)
             approved = next(i for i, cell in enumerate(cells) if "dataset = role_review.dataset()" in cell)
             query = next(i for i, cell in enumerate(cells) if "first_rows = nb.sql(" in cell)
             self.assertLess(selected, review)
@@ -405,6 +416,10 @@ class NotebookShapeTest(unittest.TestCase):
                 # The clear-text check (audit SEC-08) names the loopback host to ALLOW plain http there;
                 # it is a rule about hosts, not a connection value. Exactly that one line is exempt.
                 text = text.replace('if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):', "")
+            if path == ROOT / "notebook/package/exakit_nb/dash_mcp.py":
+                # Dash Server's address is built from the port the kit recorded, on this computer only: a rule about
+                # where it listens, not a connection value. Exactly that one line is exempt.
+                text = text.replace('LOOPBACK = "127.0.0.1"   # dash-server listens on this computer only: the port comes from the manifest', "")
             if path == ROOT / "notebook/package/exakit_nb/sources.py":
                 # connect_source names the loopback hosts to REPLACE them (a Mac's database reaches this computer
                 # at 192.168.64.1) and the query parameter to TAKE a password out of a pasted URL: rules, not values.

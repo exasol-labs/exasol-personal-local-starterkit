@@ -6,7 +6,9 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +16,7 @@ from typing import Callable, Iterator
 
 from integration import install_addon_skills, register_autostart
 from model import CatalogError, load_addons, parse_ids
-from runtime import AddonFailure, KitContext
+from runtime import AddonFailure, KitContext, activity_sink, append_log, current_activity_sink, log_sink
 from service import _module, invoke
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -49,8 +51,10 @@ Failure = (AddonFailure, CatalogError, OSError, ValueError)
 
 
 def apply(ctx: KitContext, ids: str, emit: Callable[[Event], None]) -> bool:
-    """Install the selected add-ons, one after the other; ``emit`` receives one Event per phase. Every selection
-    problem is raised before anything is touched. Returns True when every add-on installed."""
+    """Install the selected add-ons; ``emit`` receives one Event per phase, in selection order. Consecutive
+    parallel-safe add-ons download and build at the same time (_apply_side_by_side); everything else, and every step
+    after an install, runs one after the other. Every selection problem is raised before anything is touched.
+    Returns True when every add-on installed."""
     selected = _selection(ctx.root, ids)
     ctx.manifest.read()
     modules = {addon_id: _module(ctx.root, addon_id)[1] for addon_id in selected}
@@ -59,7 +63,126 @@ def apply(ctx: KitContext, ids: str, emit: Callable[[Event], None]) -> bool:
         if callable(validate_selection):
             validate_selection(ctx)
     with _activity_rows():
-        return all([_apply_one(ctx, addon_id, module, emit) for addon_id, module in modules.items()])
+        results: list[bool] = []
+        for group in _groups(selected, modules):
+            if len(group) == 1:
+                results.append(_apply_one(ctx, group[0], modules[group[0]], emit))
+            else:
+                results.extend(_apply_side_by_side(ctx, group, modules, emit))
+        return all(results)
+
+
+# At most this many installs run at the same time; the rest wait for a free place.
+WORKERS = 4
+
+
+def _parallel_safe(module: object) -> bool:
+    """An add-on whose install() only fetches files and builds its own environment under its own folders, and writes
+    its receipt through the locked manifest, declares PARALLEL_INSTALL = True. Anything else (a container, the
+    database's UDF setup, an add-on that needs another one installed first) installs on its own, as before."""
+    return getattr(module, "PARALLEL_INSTALL", False) is True
+
+
+def _groups(selected: list[str], modules: dict[str, object]) -> list[list[str]]:
+    """The selection in its own order, cut into turns: consecutive parallel-safe add-ons share one turn; every other
+    add-on is a turn of its own, so nothing that was installed before it in a serial run is still installing when it
+    starts, and nothing after it has started. EXAKIT_MARKETPLACE_PARALLEL=0 makes every add-on its own turn."""
+    serial = os.environ.get("EXAKIT_MARKETPLACE_PARALLEL", "1") == "0"
+    groups: list[list[str]] = []
+    joinable = False                     # the last turn is a parallel-safe one another may join
+    for addon_id in selected:
+        safe = not serial and _parallel_safe(modules[addon_id])
+        if safe and joinable:
+            groups[-1].append(addon_id)
+        else:
+            groups.append([addon_id])
+        joinable = safe
+    return groups
+
+
+class _Turn:
+    """What one add-on's install says while it waits for its turn. Activity and marketplace.log records are held
+    until the add-on is the one being shown, then replayed in the order they happened and passed straight through
+    from there on; so the progress output and the log read exactly as a one-after-the-other install's would."""
+
+    def __init__(self, ctx: KitContext, show: Callable[[str], None]):
+        self._ctx = ctx
+        self._show = show
+        self._lock = threading.Lock()
+        self._held: list[tuple[str, str]] = []
+        self._live = False
+
+    def activity(self, label: str) -> None:
+        with self._lock:
+            if self._live:
+                self._show(label)
+            else:
+                self._held.append(("activity", label))
+
+    def log(self, record: str) -> None:
+        with self._lock:
+            if self._live:
+                append_log(self._ctx.home, record)
+            else:
+                self._held.append(("log", record))
+
+    def go_live(self) -> None:
+        with self._lock:
+            for kind, text in self._held:
+                if kind == "activity":
+                    self._show(text)
+                else:
+                    append_log(self._ctx.home, text)
+            self._held.clear()
+            self._live = True
+
+
+def _install_held(ctx: KitContext, addon_id: str, turn: _Turn) -> tuple[BaseException | None, float]:
+    """One add-on's install on a worker thread, everything it says held by its turn: (the failure, seconds taken)."""
+    started = time.monotonic()
+    with activity_sink(turn.activity), log_sink(turn.log):
+        try:
+            invoke(ctx.root, addon_id, "install", ctx=ctx)
+        except Failure as error:
+            return error, time.monotonic() - started
+    return None, time.monotonic() - started
+
+
+def _apply_side_by_side(ctx: KitContext, group: list[str], modules: dict[str, object],
+                        emit: Callable[[Event], None]) -> list[bool]:
+    """Install a turn's parallel-safe add-ons at the same time, then finish each in selection order on this thread:
+    its events, the steps after the install (validation, skills, autostart, start) and its summary come out exactly
+    as _apply_one's would. An add-on the kit already has is skipped as before and starts no worker."""
+    force = os.environ.get("EXAKIT_FORCE_COMPONENT_INSTALL") == "1"
+    pending = [addon_id for addon_id in group if force or not _installed(ctx, addon_id, modules[addon_id])]
+    if len(pending) < 2:
+        return [_apply_one(ctx, addon_id, modules[addon_id], emit) for addon_id in group]
+    sink = current_activity_sink()
+    show = sink if sink is not None else ctx.show_activity
+    turns = {addon_id: _Turn(ctx, show) for addon_id in pending}
+    results: list[bool] = []
+    with ThreadPoolExecutor(max_workers=min(WORKERS, len(pending)), thread_name_prefix="exakit-addon") as pool:
+        futures: dict[str, Future] = {addon_id: pool.submit(_install_held, ctx, addon_id, turns[addon_id])
+                                      for addon_id in pending}
+        # Every one of them is installing NOW: each row gets its bar at once, side by side. What they say (the
+        # activity line, the log) still comes out one add-on after the other, in selection order.
+        for addon_id in pending:
+            emit(Event(addon_id, "installing"))
+        for addon_id in group:
+            if addon_id not in futures:
+                results.append(_apply_one(ctx, addon_id, modules[addon_id], emit))
+                continue
+            _point_activity_at(addon_id)
+            turns[addon_id].go_live()
+            error, seconds = futures[addon_id].result()
+            finishing = time.monotonic()
+            if error is not None:
+                emit(Event(addon_id, "failed", str(error), int(seconds)))
+                results.append(False)
+                continue
+            _finish(ctx, addon_id, modules[addon_id], emit, lambda: seconds + time.monotonic() - finishing)
+            results.append(True)
+    return results
 
 
 @contextmanager
@@ -108,6 +231,13 @@ def _apply_one(ctx: KitContext, addon_id: str, module: object, emit: Callable[[E
     except Failure as error:
         emit(Event(addon_id, "failed", str(error), int(time.monotonic() - started)))
         return False
+    _finish(ctx, addon_id, module, emit, lambda: time.monotonic() - started)
+    return True
+
+
+def _finish(ctx: KitContext, addon_id: str, module: object, emit: Callable[[Event], None],
+            elapsed: Callable[[], float]) -> None:
+    """After a successful install: the steps that follow, each of which can only warn, then done and the tool rows."""
     for phase, said, step in _after_install(ctx, addon_id, module):
         if phase:
             emit(Event(addon_id, phase))
@@ -119,10 +249,9 @@ def _apply_one(ctx: KitContext, addon_id: str, module: object, emit: Callable[[E
             warning = f"{said}: {type(error).__name__}: {error}"
         if warning:
             emit(Event(addon_id, "warning", warning))
-    emit(Event(addon_id, "done", _summary(ctx, addon_id, module), int(time.monotonic() - started)))
+    emit(Event(addon_id, "done", _summary(ctx, addon_id, module), int(elapsed())))
     for event in _tool_rows(ctx, addon_id, module):
         emit(event)
-    return True
 
 
 def _after_install(ctx: KitContext, addon_id: str, module: object) -> list[tuple[str, str, Callable[[], str]]]:

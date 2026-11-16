@@ -31,7 +31,9 @@ class MarketplaceModelTest(unittest.TestCase):
         shutil.copy2(ROOT / "marketplace/defaults.env", self.root / "marketplace/defaults.env")
         shutil.copy2(ROOT / "versions.json", self.root / "versions.json")
         shutil.copy2(ROOT / "setup/lib/persona_service.py", self.root / "setup/lib/persona_service.py")
-        shutil.copy2(ROOT / "personas/data-scientist.json", self.root / "personas/data-scientist.json")
+        # An offered persona to work with: data-scientist, switched on (this release ships it disabled).
+        persona = json.loads((ROOT / "personas/data-scientist.json").read_text(encoding="utf-8"))
+        (self.root / "personas/data-scientist.json").write_text(json.dumps({**persona, "visible": True}), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.workspace.cleanup()
@@ -212,11 +214,11 @@ class MarketplaceModelTest(unittest.TestCase):
     def test_unavailable_addons_cannot_be_confirmed(self) -> None:
         addons = load_addons(self.root)
         states = {item.id: {"status": "available"} for item in addons}
-        states["notebook"] = {"status": "managed outside the kit"}
+        states["json-tables"] = {"status": "managed outside the kit"}
         with self.assertRaisesRegex(CatalogError, "not available"):
-            choose_addons(addons, states, ["notebook"])
-        self.assertEqual(["dash-server", "json-tables"],
-                         choose_addons(addons, states, ["json-tables", "dash-server"]))
+            choose_addons(addons, states, ["json-tables"])
+        self.assertEqual(["dash-server", "semantic-views"],
+                         choose_addons(addons, states, ["semantic-views", "dash-server"]))
 
     def test_ui_pin_is_validated_and_noninteractive_start_is_read_only(self) -> None:
         self.assertEqual("8.2.8", textual_pin(self.root / "marketplace/defaults.env"))

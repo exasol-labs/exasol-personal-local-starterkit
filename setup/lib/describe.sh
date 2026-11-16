@@ -43,6 +43,14 @@ describe_installed() {
 # command's. ⇄ twin:
 # Invoke-DescribeService.
 describe_run() {
+    describe_run_script describe_service.py "$@"
+}
+
+# describe_run_script <script> <args> - a service of setup/lib in the same
+# Python with the same settings: describe_service.py, or semantic_cli.py for
+# exakit semantic and exakit board. ⇄ twin: Invoke-DescribeService -Script.
+describe_run_script() {
+    _dr_script="$1"; shift
     _dr_python="$(manifest_get components.notebook.python 2>/dev/null || true)"
     [ -n "$_dr_python" ] || _dr_python="${EXAKIT_NOTEBOOK_VENV:-$EXAKIT_HOME/notebook-venv}/bin/python"
     [ -x "$_dr_python" ] || die "The notebook environment is missing ($_dr_python). Repair it with: exakit notebook setup"
@@ -50,7 +58,32 @@ describe_run() {
     EXAKIT_PYX_USER="$(manifest_get runtime.user 2>/dev/null || echo sys)" \
     EXAKIT_PYX_PWFILE="$(manifest_get runtime.password_file 2>/dev/null || true)" \
     EXAKIT_MCP_READER="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)" \
-        "$_dr_python" "$(exakit_repo_root)/setup/lib/describe_service.py" "$@"
+        "$_dr_python" "$(exakit_repo_root)/setup/lib/$_dr_script" "$@"
+}
+
+# exakit semantic <action> [...] - the semantic layer from the command line:
+# models, fields, compile, verify, verified, fuse, fusion, column-maps,
+# restore-maps, refresh. exakit board <action> [...] - the dashboard of pinned
+# answers: list, show, pin, move, remove, kind, preview, publish. Both are the
+# notebook's own functions (setup/lib/semantic_cli.py checks every argument and
+# says why it refuses); this shell keeps only the help and the add-on check.
+# ⇄ twins: Invoke-CmdSemantic, Invoke-CmdBoard.
+cmd_semantic() {
+    case "${1:-}" in
+        ''|--help|-h) exakit_help_render command semantic; return $? ;;
+    esac
+    case "$*" in *--json*) EXAKIT_REFUSAL_JSON=1 ;; esac
+    describe_installed || die "The notebook add-on is not installed; its Python runs the semantic layer's commands. Install it with: exakit marketplace notebook"
+    describe_run_script semantic_cli.py semantic "$@"
+}
+
+cmd_board() {
+    case "${1:-}" in
+        ''|--help|-h) exakit_help_render command board; return $? ;;
+    esac
+    case "$*" in *--json*) EXAKIT_REFUSAL_JSON=1 ;; esac
+    describe_installed || die "The notebook add-on is not installed; its Python builds the dashboards of pinned answers. Install it with: exakit marketplace notebook"
+    describe_run_script semantic_cli.py board "$@"
 }
 
 # exakit describe <table> [--sample N] [--id <slug>] [--json] [--write <path>]

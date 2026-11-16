@@ -233,6 +233,12 @@ def _run_installer(ctx: KitContext, release: Path) -> None:
                    timeout=INSTALL_TIMEOUT)
 
 
+# install() fetches its release into its own folder, installs its own schemas (only reading the kit's pyexasol
+# environment), and writes its receipt through the locked manifest: apply.py may run it beside other parallel-safe
+# add-ons (the steps after it stay serial).
+PARALLEL_INSTALL = True
+
+
 def install(ctx: KitContext) -> None:
     if not applicable(ctx):
         raise AddonFailure(applicable_reason(ctx))

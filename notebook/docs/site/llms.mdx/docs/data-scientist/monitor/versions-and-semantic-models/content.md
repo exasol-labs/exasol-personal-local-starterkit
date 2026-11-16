@@ -10,7 +10,7 @@ Every approval is a new version. Nothing is overwritten.
 
 * `nb.column_map_versions(id)` lists each version with its approval time, its roles, its slots and its evidence.
 * `nb.current_version(id)` gives the approved one.
-* In the quickstart's card, **History** lists the versions. **Restore** applies an older version's choices and saves them as a new version. The card says which version it restored and which new one it saved.
+* In the column map card of `01_explore`, **History** lists the versions. **Restore** applies an older version's choices and saves them as a new version. The card says which version it restored and which new one it saved.
 * In code, restoring means approving that version's roles again. The version the kit saves is the newest.
 
 ```python

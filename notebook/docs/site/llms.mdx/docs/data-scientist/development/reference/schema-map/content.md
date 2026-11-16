@@ -39,19 +39,19 @@ class nb.JoinedView
 
 The proposal for one wide view. `joins` lists each table it adds and how; `sql` is what create() runs.
 
-| Member                      | What it is                                                                                                                                                       |
-| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `schema_map`                | `SchemaMap`                                                                                                                                                      |
-| `view`                      | \`str                                                                                                                                                            | None\` |
-| `main`                      | `str`                                                                                                                                                            |
-| `built`                     | `dict[str, Any]`                                                                                                                                                 |
-| `source_id`                 | \`str                                                                                                                                                            | None\` |
-| `source`                    | `Any`                                                                                                                                                            |
-| `created`                   | `Any`                                                                                                                                                            |
-| `joins`                     |                                                                                                                                                                  |
-| `needed`                    | Whether the main table has links to follow at all.                                                                                                               |
-| `sql`                       |                                                                                                                                                                  |
-| `create(connection) -> Any` | Approve the schema map (when it is a draft), create the view, describe it with the main table's roles carried over and approve that; returns the view's dataset. |
+| Member                                             | What it is                                                                                                                                                       |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `schema_map`                                       | `SchemaMap`                                                                                                                                                      |
+| `view`                                             | \`str                                                                                                                                                            | None\` |
+| `main`                                             | `str`                                                                                                                                                            |
+| `built`                                            | `dict[str, Any]`                                                                                                                                                 |
+| `source_id`                                        | \`str                                                                                                                                                            | None\` |
+| `source`                                           | `Any`                                                                                                                                                            |
+| `created`                                          | `Any`                                                                                                                                                            |
+| `joins`                                            |                                                                                                                                                                  |
+| `needed`                                           | Whether the main table has links to follow at all.                                                                                                               |
+| `sql`                                              |                                                                                                                                                                  |
+| `create(connection, sql: str \| None=None) -> Any` | Approve the schema map (when it is a draft), create the view, describe it with the main table's roles carried over and approve that; returns the view's dataset. |
 
 ## nb.SchemaMap [#SchemaMap]
 

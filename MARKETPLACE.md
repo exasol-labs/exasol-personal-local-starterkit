@@ -417,6 +417,18 @@ add-on needs no shell or PowerShell lifecycle implementation.
    `marketplace/runtime.py` for version selection, verified downloads,
    manifest receipts, and ownership. See `dash_server.py` for a service and
    `exasol_vscode.py` for a host application extension.
+   Set `PARALLEL_INSTALL = True` in the module only when `install()` fetches
+   and builds under the add-on's own folders, writes its receipt through
+   `ctx.manifest`, reports through `ctx.activity` / `ctx.run_logged` /
+   `ctx.log_event` (never `print`), and needs no other add-on installed first.
+   `marketplace/apply.py` then runs it at the same time as the parallel-safe
+   add-ons next to it in the selection. Its activity and log records are held
+   back and replayed in selection order, and validate, skills, autostart and
+   start still run one after the other, so the progress output and
+   `marketplace.log` match a serial install. Leave the flag out for anything
+   that drives a container, sets up UDFs in the database, or depends on
+   another add-on. `EXAKIT_MARKETPLACE_PARALLEL=0` turns concurrency off for
+   a whole run.
 3. Add the tested version and any published artifact digests to root
    `versions.json`. The catalog's `default_version` is an offline fallback;
    it is not the update pin. `exakit_component_latest_source` and the Python

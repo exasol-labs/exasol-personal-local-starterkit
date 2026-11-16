@@ -226,16 +226,18 @@ def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict
         )
     if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise AddonFailure(f"Invalid checksum for JSON Tables asset {name}")
-    # Where the asset may come from, in order. The kit's own repository first; a PRIVATE one answers its
-    # releases/download link with 404 even to a token, so with GITHUB_TOKEN (or GH_TOKEN) the asset is fetched
-    # through the API, as the datasets are (_exakit_dataset_fetch_token). Then the public kit repository's copy of
-    # the same release - only with a pinned checksum, which makes any copy as good as the original.
-    attempts: list[tuple[str, dict[str, str]]] = [(f"https://github.com/{repo}/releases/download/{tag}/{name}", {})]
+    # Where the asset may come from, in order. With a pinned checksum any copy is as good as the original, so the
+    # public kit repository's copy comes FIRST: one plain download. Then the kit's own repository; a PRIVATE one
+    # answers its releases/download link with 404 even to a token, so with GITHUB_TOKEN (or GH_TOKEN) the asset is
+    # fetched through the API, as the datasets are (_exakit_dataset_fetch_token). Measured on an install, that API
+    # path cost about 30 s of the add-on's 39; the public copy takes about 1 s.
+    attempts: list[tuple[str, dict[str, str]]] = []
+    if digest and repo != PUBLIC_REPO:
+        attempts.append((f"https://github.com/{PUBLIC_REPO}/releases/download/{tag}/{name}", {}))
+    attempts.append((f"https://github.com/{repo}/releases/download/{tag}/{name}", {}))
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
         attempts.append((f"api:{repo}:{tag}", {"Authorization": f"Bearer {token}"}))
-    if digest and repo != PUBLIC_REPO:
-        attempts.append((f"https://github.com/{PUBLIC_REPO}/releases/download/{tag}/{name}", {}))
     last: Exception | None = None
     for url, headers in attempts:
         try:
@@ -337,6 +339,11 @@ def _write_launchers(ctx: KitContext) -> None:
                             f': "${{{variable}={value}}}"\nexport {variable}\nexec '
                             + shlex.quote(str(cli)) + ' "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
+
+
+# install() fetches files and builds under this add-on's own folders, and writes its receipt through the
+# locked manifest: apply.py may run it beside other parallel-safe add-ons (the steps after it stay serial).
+PARALLEL_INSTALL = True
 
 
 def install(ctx: KitContext) -> None:

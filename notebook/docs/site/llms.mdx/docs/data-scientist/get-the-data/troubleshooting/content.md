@@ -10,7 +10,7 @@ Each entry gives the message the kit shows, then what to do.
   </Accordion>
 
   <Accordion title="How do I switch to another dataset?">
-    Approve it in the quickstart. With `DATASET = None`, the other notebooks follow the dataset you approved last, when you run their first cell again. To pin one notebook to a dataset, set `DATASET = "..."` in that notebook. See [The dataset](/data-scientist/get-the-data/the-dataset).
+    Approve it in `01_explore`. With `DATASET = None`, the other notebooks follow the dataset you approved last, when you run their first cell again. To pin one notebook to a dataset, set `DATASET = "..."` in that notebook. See [The dataset](/data-scientist/get-the-data/the-dataset).
   </Accordion>
 
   <Accordion title="My file will not load">

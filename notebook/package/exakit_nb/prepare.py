@@ -108,9 +108,16 @@ class TypedView:
             html.append(f"<pre style=\"white-space: pre-wrap\">{escape(self.sql)}</pre>")
         return "\n".join(html)
 
-    def create(self, conn) -> Any:
+    def create(self, conn, sql: str | None = None) -> Any:
         """Create the view (after the user has read it), describe it, carry the table's roles over and approve them;
-        returns the view's dataset, which the later steps then use. With nothing to change, the dataset as it was."""
+        returns the view's dataset, which the later steps then use. With nothing to change, the dataset as it was.
+        ``sql`` is your own version of the CREATE VIEW (the one printed, edited): it must create this same view."""
+        if sql and str(sql).strip():
+            own = " ".join(str(sql).split())
+            if not re.match(r"(?i)^CREATE\s+(OR\s+REPLACE\s+)?VIEW\s+" + re.escape(self.view), own):
+                raise ValueError(f"Your SQL must start with CREATE OR REPLACE VIEW {self.view} AS ...: the steps below read that view.")
+            self.sql = str(sql).strip().rstrip(";")
+            self.cleaning = self.cleaning or ["your own SQL"]
         if not self.needed:
             print(self._state())
             return self.dataset
@@ -153,7 +160,7 @@ def _prepared_id(dataset_id: str) -> str:
     return dataset_id if dataset_id.endswith("_prepared") else f"{dataset_id}_prepared"
 
 
-def _detect(conn, table: str, text_columns: list[str]):
+def _detect(conn, table: str, text_columns: list[str], date_formats=DATE_FORMATS, timestamp_formats=TIMESTAMP_FORMATS):
     """One query: for every text column, how many values are not blank and how many parse as each type."""
     from . import sql
 
@@ -167,15 +174,21 @@ def _detect(conn, table: str, text_columns: list[str]):
                   f"MAX(LENGTH(REGEXP_REPLACE(REGEXP_REPLACE({value}, '[.].*$', ''), '[^0-9]', ''))) AS INT{i}",
                   f"MAX(CASE WHEN INSTR({value}, '.') > 0 THEN LENGTH({value}) - INSTR({value}, '.') ELSE 0 END) AS SC{i}",
                   f"COUNT(CASE WHEN IS_BOOLEAN({value}) THEN 1 END) AS B{i}"]
-        parts += [f"COUNT(CASE WHEN IS_DATE({value}, {_literal(f)}) THEN 1 END) AS D{i}_{k}" for k, f in enumerate(DATE_FORMATS)]
+        parts += [f"COUNT(CASE WHEN IS_DATE({value}, {_literal(f)}) THEN 1 END) AS D{i}_{k}" for k, f in enumerate(date_formats)]
         parts += [f"COUNT(CASE WHEN IS_TIMESTAMP({value}, {_literal(f)}) THEN 1 END) AS T{i}_{k}"
-                  for k, f in enumerate(TIMESTAMP_FORMATS)]
+                  for k, f in enumerate(timestamp_formats)]
     return sql(conn, f"SELECT {', '.join(parts)} FROM {table}")
 
 
-def typed_view(conn, ds) -> TypedView:
+def typed_view(conn, ds, *, placeholder_values: list[str] | None = None, date_formats=None, timestamp_formats=None,
+               drop_copies: bool = True, cast_types: bool = True) -> TypedView:
     """The proposal for ``ds``'s table: its types, its cleaning and the CREATE VIEW, built from the data and the
-    descriptor. Only SELECTs run; nothing is created until ``create()``."""
+    descriptor. Only SELECTs run; nothing is created until ``create()``. The rules come from the notebook's cell:
+    ``placeholder_values`` (the values that mean "not known" and become NULL), ``date_formats`` and
+    ``timestamp_formats`` (how a date written as text is recognised), ``drop_copies`` (drop rows that copy another)
+    and ``cast_types`` (give a text column of numbers or dates its type)."""
+    date_formats = tuple(date_formats) if date_formats is not None else DATE_FORMATS
+    timestamp_formats = tuple(timestamp_formats) if timestamp_formats is not None else TIMESTAMP_FORMATS
     from . import sql
     from .data_checks import placeholders
 
@@ -186,8 +199,8 @@ def typed_view(conn, ds) -> TypedView:
     columns = list(zip(types["NAME_"], types["TYPE_"]))
     entries = dict(getattr(ds.descriptor, "columns", {}) or {})
     text = [c for c, t in columns if str(t).upper().startswith(("VARCHAR", "CHAR"))]
-    found = _detect(conn, ds.fact_table, text).iloc[0] if text else {}
-    unknown = placeholders(conn, ds)
+    found = _detect(conn, ds.fact_table, text, date_formats, timestamp_formats).iloc[0] if text else {}
+    unknown = placeholders(conn, ds, values=placeholder_values)
 
     changes: list[Change] = []
     select: list[str] = []
@@ -204,7 +217,7 @@ def typed_view(conn, ds) -> TypedView:
             value = f"CASE WHEN TRIM({quoted}) IN ({listed}) THEN NULL ELSE {value} END"
         target = None
         role = (entries.get(column) or {}).get("role")
-        if (n and int(found[f"NUM{i}"]) == n and role not in ("identifier", "key") and not int(found[f"LZ{i}"])
+        if (cast_types and n and int(found[f"NUM{i}"]) == n and role not in ("identifier", "key") and not int(found[f"LZ{i}"])
                 and not CODE_NAME.search(column)):
             if int(found[f"EXP{i}"]):
                 target, why, expression = "DOUBLE", f"all {n:,} values are numbers, some with an exponent", f"CAST({value} AS DOUBLE)"
@@ -216,16 +229,16 @@ def typed_view(conn, ds) -> TypedView:
                 else:
                     target, expression = f"DECIMAL({precision},{scale})", f"CAST({value} AS DECIMAL({precision},{scale}))"
                 why = f"all {n:,} values are numbers"
-        if target is None and n:
-            fmt = next((f for k, f in enumerate(DATE_FORMATS) if int(found[f"D{i}_{k}"]) == n), None)
+        if target is None and n and cast_types:
+            fmt = next((f for k, f in enumerate(date_formats) if int(found[f"D{i}_{k}"]) == n), None)
             if fmt:
                 target, why, expression = "DATE", f"all {n:,} values are dates written {fmt}", f"TO_DATE({value}, {_literal(fmt)})"
-        if target is None and n:
-            fmt = next((f for k, f in enumerate(TIMESTAMP_FORMATS) if int(found[f"T{i}_{k}"]) == n), None)
+        if target is None and n and cast_types:
+            fmt = next((f for k, f in enumerate(timestamp_formats) if int(found[f"T{i}_{k}"]) == n), None)
             if fmt:
                 target, why, expression = ("TIMESTAMP", f"all {n:,} values are timestamps written {fmt}",
                                            f"TO_TIMESTAMP({value}, {_literal(fmt)})")
-        if target is None and n and int(found[f"B{i}"]) == n:
+        if target is None and n and cast_types and int(found[f"B{i}"]) == n:
             target, why, expression = "BOOLEAN", f"all {n:,} values are true/false", f"CAST({value} AS BOOLEAN)"
         if target is None:
             expression = value
@@ -247,7 +260,7 @@ def typed_view(conn, ds) -> TypedView:
     copies = 0
     worth_distinct = False
     same = others if key else [c for c, _ in columns]
-    if same:
+    if same and drop_copies:
         total = sql(conn, f"SELECT COUNT(*) AS N FROM {ds.fact_table}")
         distinct = sql(conn, f"SELECT COUNT(*) AS N FROM (SELECT DISTINCT {', '.join(_q(c) for c in same)} FROM {cleaned})")
         copies = int(total["N"][0]) - int(distinct["N"][0])

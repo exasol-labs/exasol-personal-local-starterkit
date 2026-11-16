@@ -352,9 +352,14 @@ ui_spin_begin() {
             _f="${UI_SPIN_FRAMES[$_i]}"
             _now="$(date +%s 2>/dev/null || echo 0)"
             _el=$((_now - _UI_STEP_T0))
-            printf '\r  %s%s%s %s %s(%ss)%s\033[K' \
-                "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
-                "$UI_DIM" "$_el" "$UI_RESET"
+            if [ -z "$_UI_STEP_LABEL" ]; then
+                # No label: the spinner alone (the heading above says what is coming).
+                printf '\r  %s%s%s\033[K' "$UI_ACCENT" "$_f" "$UI_RESET"
+            else
+                printf '\r  %s%s%s %s %s(%ss)%s\033[K' \
+                    "$UI_ACCENT" "$_f" "$UI_RESET" "$_UI_STEP_LABEL" \
+                    "$UI_DIM" "$_el" "$UI_RESET"
+            fi
             _i=$(((_i + 1) % 10))
             sleep 0.08
         done
@@ -1581,7 +1586,10 @@ ui_table_frame() {
         # one row whose status was already known. The 5-space indent is the
         # width of the pointer and checkbox it replaces, so the tree connectors
         # still line up.
-        if [ "$_utr_state" = "disabled" ]; then
+        # UI_TABLE_NOBOX (" 1 ") names rows that are never a choice - the install's
+        # sample row, which loads whatever is picked below it: no checkbox in any
+        # state, while it loads and after.
+        if [ "$_utr_state" = "disabled" ] || case "${UI_TABLE_NOBOX:- }" in *" $_utr_i "*) true ;; *) false ;; esac; then
             # Three spaces, the width of "[ ]": with two the tree connector
             # sat a column left of every pickable row above it.
             _utr_ptr=" "; _utr_box="   "; _utr_boxlen=3
@@ -2076,7 +2084,7 @@ ui_table_menu() {
     while IFS='|' read -r _u1 _u2 _u3 _u4 _urest; do
         [ -n "$_u1" ] || continue
         _utm_n=$(( _utm_n + 1 ))
-        if [ "$_u4" = "disabled" ]; then
+        if [ "$_u4" = "disabled" ] || case "${UI_TABLE_NOBOX:- }" in *" $_utm_n "*) true ;; *) false ;; esac; then
             _utm_dis="$_utm_dis $_utm_n"
         else
             _UI_CHECKBOX_SELECTABLE="${_UI_CHECKBOX_SELECTABLE:+$_UI_CHECKBOX_SELECTABLE }$_utm_n"

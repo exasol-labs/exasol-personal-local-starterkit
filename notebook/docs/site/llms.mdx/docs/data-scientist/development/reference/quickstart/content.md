@@ -70,7 +70,25 @@ nb.load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | N
 A table in a connected external source (a virtual schema). `descriptor` is `VS_<NAME>.<TABLE>` (any case,
 the VS\_ prefix optional), `VS_<NAME>` alone (its one table, or a list of them), or a descriptor file whose
 fact_table is in a source. None skips it and lists the sources there are. A name that cannot be used stops the
-cell with one line naming what is there and how to connect one; the table is read once (one row) to prove it.
+cell with one line naming what is there and how to connect one; the table is read once (one row) to prove it -
+once per source in five minutes, on the same connection: each read of a live source is a round trip (a Snowflake
+source took \~9 s, even for one row), so the next tables of a source just proven are not read here; a problem of
+one table (a grant, a type) shows when its column roles are drawn up.
+
+**Used in:** `data-scientist/01_explore`
+
+## nb.prove_sources [#prove_sources]
+
+```python
+nb.prove_sources(conn, tables: list[str]) -> dict[str, str]
+```
+
+Read one row of one table of every live source in `tables` ("VS\_\<NAME>.\<TABLE>"), every source at the same
+time on a connection of its own, so the load_source calls that follow on `conn` do not read them again one
+after another (each read of a live source is a round trip: \~9 s for Snowflake, \~5 s for MySQL in our run).
+\{source: "ok" | why it could not be read}; a source that failed is read again by load_source, which says why.
+
+**Used in:** `data-scientist/00_quickstart`
 
 ## nb.show_roles [#show_roles]
 
@@ -80,4 +98,4 @@ nb.show_roles(ds: Dataset) -> None
 
 The descriptor's roles, one per line, as the notebook will use them.
 
-**Used in:** `data-scientist/01_explore`, `data-scientist/02_ask_your_data`
+**Used in:** `data-scientist/02_ask_your_data`

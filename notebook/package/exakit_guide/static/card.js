@@ -140,7 +140,7 @@ function lineChart(points, isPct) {
     s += `<text x="${X(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === n - 1 ? "end" : "middle"}" class="guide-c-lbl">${esc(points[i].period)}</text>`;
   });
   s += `<path d="M${vals.map((v, i) => `${X(i).toFixed(1)},${Y(v).toFixed(1)}`).join(" L")}" class="guide-c-line"/>`;
-  vals.forEach((v, i) => { s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="7" class="guide-c-hit"><title>${esc(points[i].period)}: ${lab(v)} (${fmt(points[i].rows)} rows)</title></circle>`; });
+  vals.forEach((v, i) => { s += `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="7" class="guide-c-hit"><title>${esc(points[i].period)}: ${esc(points[i].display || lab(v))}${points[i].rows != null ? ` (${fmt(points[i].rows)} rows)` : ""}</title></circle>`; });
   return h("div", { html: s + "</svg>" });
 }
 
@@ -370,6 +370,22 @@ function render({ model, el }) {
       return h("div", { class: "guide-chips" }, b.label ? h("span", { class: "guide-chips-label" }, b.label) : null,
         b.items.map((c) => h("span", { class: `guide-chip guide-chip-${c.kind || "muted"}`, "data-tip": c.title || null }, c.kind === "ok" ? icon("check") : null, c.label)));
     },
+    // The fusion flow: every source (its kind, its tables, how many column maps are approved) feeding one semantic
+    // model, then the steps after it. A source or a step with an action is a button.
+    flow(b) {
+      const node = (n) => h(n.action ? "button" : "div", {
+          class: `guide-flow-node guide-flow-${n.state || "todo"}`, "data-tip": n.tip || null, type: n.action ? "button" : null,
+          disabled: n.action ? !!ui.busy : null, onClick: n.action ? () => send(n.action) : null },
+        h("span", { class: "guide-flow-kind" }, n.kind || ""),
+        h("span", { class: "guide-flow-name" }, n.state === "done" ? icon("check") : null, n.label),
+        n.sub ? h("span", { class: "guide-flow-sub" }, n.sub) : null);
+      return h("div", { class: "guide-flow" },
+        h("div", { class: "guide-flow-sources" }, (b.sources || []).map(node),
+          b.add ? h("button", { type: "button", class: "guide-flow-node guide-flow-add", disabled: !!ui.busy, onClick: () => send(b.add.action) },
+            h("span", { class: "guide-flow-name" }, "+ " + b.add.label)) : null),
+        h("div", { class: "guide-flow-arrow", "aria-hidden": "true" }, "→"),
+        h("div", { class: "guide-flow-steps" }, (b.steps || []).map((n, i) => [i ? h("span", { class: "guide-flow-arrow guide-flow-arrow-sm", "aria-hidden": "true" }, "→") : null, node(n)])));
+    },
     journey(b) {
       return h("div", { class: `guide-journey${b.compact ? " guide-journey-compact" : ""}` }, b.items.map((j) => h("a", { class: `guide-step guide-step-${j.state}`, href: labUrl(j.path),
           "aria-current": j.state === "here" ? "step" : null, onClick: (e) => { if (j.state === "here") { e.preventDefault(); return; } openInLab(j.path, e); } },
@@ -568,7 +584,7 @@ function render({ model, el }) {
               h("span", { class: "guide-tree-name" }, t.name),
               t.rows ? h("span", { class: "guide-muted guide-small" }, `${t.rows} rows`) : null,
               t.approved ? null : h("span", { class: "guide-chip guide-chip-warn", "data-tip": "Approve its column map above (What each column means), then it can be ticked." }, "Column map not approved")),
-            st.fields[t.id] ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[t.note_id], spellcheck: "true", disabled: !!ui.busy,
+            st.fields[t.id] ? h("input", { class: "guide-input guide-notebox", type: "text", value: st.fields[t.note_id], spellcheck: "true", disabled: !!ui.busy,
               placeholder: "What this table is, in a sentence (optional)", "aria-label": `Description of ${t.table}`,
               onInput: (e) => { st.fields[t.note_id] = e.target.value; } }) : null))));
       }));
@@ -595,7 +611,7 @@ function render({ model, el }) {
             l.confidence === "high" ? h("span", { class: "guide-chip guide-chip-ok-soft", "data-tip": l.evidence || null, tabindex: "0" }, "The data backs it")
               : h("span", { class: "guide-chip guide-chip-warn", "data-tip": `${l.evidence ? l.evidence + " " : ""}Tick it only if you know the two columns mean the same thing.`, tabindex: "0" }, "Confirm this one")),
 
-          used ? h("input", { class: "guide-input guide-note", type: "text", value: st.fields[l.note_id], spellcheck: "true", disabled: !!ui.busy,
+          used ? h("input", { class: "guide-input guide-notebox", type: "text", value: st.fields[l.note_id], spellcheck: "true", disabled: !!ui.busy,
             placeholder: "Why these two belong together, in a sentence (optional)", "aria-label": `Note on the link ${l.from} to ${l.to}`,
             onInput: (e) => { st.fields[l.note_id] = e.target.value; } }) : null);
       }));
@@ -644,6 +660,9 @@ function render({ model, el }) {
       return h("div", { class: "guide-proposal" },
         h("div", { class: "guide-proposal-head" }, h("span", { class: "guide-q-num guide-q-num-sm" }, icon("info")),
           h("div", {}, h("div", { class: "guide-proposal-title" }, b.summary), h("div", { class: "guide-muted guide-small" }, `Drafted by ${b.by}.`))),
+        b.checked === true || b.checked === false ? h("div", { class: b.checked ? "guide-checked" : "guide-doubts", title: b.checked_line || "" },
+          icon(b.checked ? "check" : "warn"), h("span", {}, b.checked ? "Checked by your data map" : "Not checked by your data map: read the joins and sums before you approve")) : null,
+        (b.plan || []).length ? h("div", {}, h("div", { class: "guide-group-title" }, "How it is put together"), h("ul", { class: "guide-list guide-list-muted" }, b.plan.map((a) => h("li", {}, a)))) : null,
         b.assumptions.length ? h("div", {}, h("div", { class: "guide-group-title" }, "What it assumes"), h("ul", { class: "guide-list guide-list-muted" }, b.assumptions.map((a) => h("li", {}, a)))) : null,
         b.doubts.length ? h("div", { class: "guide-doubts" }, icon("warn"), h("div", {}, h("strong", {}, "Check before you approve"), h("ul", { class: "guide-list" }, b.doubts.map((a) => h("li", {}, a))))) : null,
         fold,
@@ -777,7 +796,7 @@ function render({ model, el }) {
       const none = { value: "", label: "Nothing, just explore", text: "Look at counts and trends without predicting anything.", verdict: "none" };
       const q1 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "1"), h("div", {},
-          h("div", { class: "guide-q-title" }, "What do you want to predict?", tipMark("Pick a yes-or-no column. Everything else helps explain it. The kit never picks this for you.")))),
+          h("div", { class: "guide-q-title" }, "Prediction target", tipMark("Pick a yes-or-no column. Everything else helps explain it. The kit never picks this for you.")))),
         b.no_target_reason && !targets.length ? h("div", { class: "guide-explain" }, icon("info"), b.no_target_reason) : null,
         h("div", { class: "guide-targets", role: "radiogroup" }, [...targets.map(tCard), tCard(none)]));
 
@@ -795,7 +814,7 @@ function render({ model, el }) {
       };
       const q2 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "2"), h("div", {},
-          h("div", { class: "guide-q-title" }, "Check the kit's guesses",
+          h("div", { class: "guide-q-title" }, "Columns to confirm",
             h("span", { class: `guide-chip ${guesses.length ? "guide-chip-warn" : "guide-chip-ok-soft"}` }, guesses.length ? `${guesses.length} to check` : "Nothing to check"),
             tipMark(guesses.length ? "The kit wasn't sure about these columns. Keep its guess or pick another." : "The kit is confident about every column.")))),
         guesses.length ? h("div", { class: "guide-guesses" }, guesses.map(guessRow)) : null);
@@ -842,7 +861,7 @@ function render({ model, el }) {
       };
       const q3 = h("section", { class: "guide-q" },
         h("div", { class: "guide-q-head" }, h("span", { class: "guide-q-num" }, "3"), h("div", {},
-          h("div", { class: "guide-q-title" }, "The other choices", tipMark("The kit filled these in. Change them only if they look wrong.")))),
+          h("div", { class: "guide-q-title" }, "Column settings", tipMark("The kit filled these in. Change them only if they look wrong.")))),
         h("div", { class: "guide-slotgrid" }, b.slots.map(slotRow)));
 
       // All columns, folded
@@ -852,7 +871,7 @@ function render({ model, el }) {
         return h("div", { class: `guide-col${r.low ? " is-low" : ""}` },
           h("div", { class: "guide-col-name" }, h("strong", {}, r.column), h("span", { class: "guide-col-ev" }, r.evidence),
             // the column's description: a sentence saying what it holds (the semantic model shows it as the field's comment)
-            h("input", { class: "guide-input guide-note", type: "text", value: st.notes[r.column] || "", spellcheck: "true", disabled: !!ui.busy,
+            h("input", { class: "guide-input guide-notebox", type: "text", value: st.notes[r.column] || "", spellcheck: "true", disabled: !!ui.busy,
               placeholder: "What this column holds, in a sentence", "aria-label": `Description of ${r.column}`,
               onInput: (e) => { st.notes[r.column] = e.target.value; } }),
             w ? h("span", { class: "guide-inline-warn" }, icon("warn"), w) : null),
@@ -939,11 +958,45 @@ function render({ model, el }) {
           `${b.outcome || "Outcome"} is 1 for ${pct(g.rate)}`, h("span", { class: "guide-muted" }, ` (all rows: ${pct(b.overall)})`)) : null,
         h("ul", { class: "guide-list guide-small" }, (g.traits && g.traits.length ? g.traits : ["Nothing stands out: these are the typical rows."]).map((t) => h("li", {}, t))))));
     },
+    // Save an answer: each item a file made here, in the browser (nothing is sent); "png" draws the card's chart.
+    downloads(b) {
+      const save = (blob, name) => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob); a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+      };
+      const png = (e, name) => {
+        const card = e.currentTarget.closest(".guide-root");
+        const svg = card && card.querySelector("svg.guide-chart, .guide-bars svg, .guide-line svg, svg");
+        if (!svg) return;
+        const box = svg.getBoundingClientRect();
+        const clone = svg.cloneNode(true);
+        clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+        const style = getComputedStyle(card);
+        clone.setAttribute("style", `font-family:${style.fontFamily};color:${style.color};background:${style.backgroundColor || "#fff"}`);
+        const img = new Image();
+        img.onload = () => {
+          const scale = 2, canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, box.width) * scale; canvas.height = Math.max(1, box.height) * scale;
+          const g = canvas.getContext("2d");
+          g.fillStyle = "#ffffff"; g.fillRect(0, 0, canvas.width, canvas.height);
+          g.drawImage(img, 0, 0, canvas.width, canvas.height);
+          canvas.toBlob((blob) => blob && save(blob, name));
+        };
+        img.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+      };
+      return h("div", { class: "guide-downloads" }, b.label ? h("span", { class: "guide-chips-label" }, b.label) : null,
+        b.items.map((d) => h("button", { type: "button", class: "guide-btn guide-btn-quiet", "data-tip": d.tip || null,
+          onClick: (e) => d.png ? png(e, d.filename) : save(new Blob([d.text], { type: d.mime || "text/plain" }), d.filename) }, d.label)));
+    },
     table(b) {
       const isNum = b.columns.map((_, j) => b.rows.length > 0 && b.rows.every((r) => r[j] == null || typeof r[j] === "number"));
       return h("div", { class: "guide-tablewrap" }, h("table", { class: b.wrap_first ? "guide-table guide-table-wrapfirst" : "guide-table" },
         h("thead", {}, h("tr", {}, b.columns.map((c, j) => h("th", { class: isNum[j] ? "num" : "", title: c }, readable(c))))),
-        h("tbody", {}, b.rows.slice(0, 200).map((r) => h("tr", {}, r.map((v, j) => h("td", { class: isNum[j] ? "num" : "" }, typeof v === "number" ? fmt(v) : (v ?? ""))))))));
+        // display: each value written out by the kit (money in its currency, counts, shares); else the plain number
+        h("tbody", {}, b.rows.slice(0, 200).map((r, i) => h("tr", {}, r.map((v, j) => h("td", { class: isNum[j] ? "num" : "" },
+          b.display && b.display[i] ? b.display[i][j] : (typeof v === "number" ? fmt(v) : (v ?? "")))))))));
     },
   };
   const block = (b) => (B[b.t] ? B[b.t](b) : null);
@@ -1014,8 +1067,15 @@ function render({ model, el }) {
       const cur = Array.isArray(st.fields[f.id]) ? st.fields[f.id] : (st.fields[f.id] ? [st.fields[f.id]] : []);
       st.fields[f.id] = cur;
       const has = (o) => cur.map(String).includes(String(o.value));
+      // Select all / Clear, when there are three or more things to tick. An entry that starts something else
+      // ("Load a new file…", "New connection…": values starting with "__") is never ticked by Select all.
+      const real = (f.options || []).filter((o) => !String(o.value).startsWith("__") && !o.disabled).map((o) => o.value);
+      const special = cur.filter((x) => String(x).startsWith("__"));
+      const allOn = real.length > 0 && real.every((x) => cur.map(String).includes(String(x)));
+      const bulk = real.length >= 3 ? h("button", { type: "button", class: "guide-link guide-picks-all", disabled: !!ui.busy,
+        onClick: () => { st.fields[f.id] = allOn ? special : real.concat(special); draw(); } }, allOn ? "Clear" : "Select all") : null;
       return h("div", { class: "guide-field guide-picks", role: "group", "aria-label": f.label },
-        h("span", {}, f.label, cur.length > 1 ? ` · ${cur.length} ticked` : ""),
+        h("span", {}, f.label, cur.length > 1 ? ` · ${cur.length} ticked` : "", bulk),
         h("div", { class: "guide-checks guide-picks-list" }, (f.options || []).map((o) => h("label", { class: "guide-checkrow" },
           h("input", { type: "checkbox", checked: has(o) ? true : null, disabled: !!ui.busy, onChange: (e) => {
             const next = (f.options || []).map((x) => x.value).filter((x) => (String(x) === String(o.value) ? e.target.checked : cur.map(String).includes(String(x))));

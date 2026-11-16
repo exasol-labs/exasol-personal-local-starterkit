@@ -2567,8 +2567,7 @@ function Show-ExakitBulkPlan {
     # near-identical sentences stacked under a three-file plan was more lines
     # about what is NOT being loaded than about what is.
     $ignored = ""
-    $other = @($Plan | Where-Object { $_.StartsWith("skip|unsupported|") }).Count
-    if ($other -gt 0) { $ignored = "$other of other kinds" }
+    # Files of other kinds (images, notes beside the exports) are left alone without a word: they were never data.
     $empty = @($Plan | Where-Object { $_.StartsWith("skip|empty|") }).Count
     if ($empty -gt 0) {
         if ($ignored) { $ignored = "$ignored, $empty empty" } else { $ignored = "$empty empty" }
@@ -2961,6 +2960,9 @@ function Get-ExakitBundledDatasets {
                 if ($line -match '^([a-z_]+)=(.*)$') { $kv[$Matches[1]] = $Matches[2] }
             }
             if (-not $kv.id -or -not $kv.label) { continue }
+            # Not part of this release (hidden=yes): its folder stays, but it is not
+            # offered, listed or loaded. Twin of the same skip in exakit_bundled_datasets.
+            if (("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
             # A dataset that will be downloaded says how big the download is, in
             # every list that offers it ("... - 3.9 MB download").
             $label = $kv.label
@@ -2971,7 +2973,8 @@ function Get-ExakitBundledDatasets {
             $schema = if ($kv.schema) { $kv.schema } else { $kv.id.ToUpper() }
             $order = 50
             if ($kv.order -match '^[0-9]+$') { $order = [int]$kv.order }
-            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order
+            $hidden = ("" + $kv.hidden) -match '^(yes|true|1)$'
+            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order; Hidden = $hidden
                             Description = ("" + $kv.description) }
         }
     }
@@ -3225,6 +3228,14 @@ function Get-ExakitDatasetFiles {
         for ($attempt = 1; -not $viaToken -and $attempt -le 3; $attempt++) {
             if (Get-ExakitFile -Url $source -Dest $part -Soft) { break }
             if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+        }
+        # A kit installed from a private repository (a fork, a backup) reaches its release only with a token. The
+        # public kit's release holds the same file, and the SHA-256 below checks it either way: try that one.
+        $public = $url.Replace("{repo}", "exasol-labs/exasol-personal-local-starterkit")
+        $got = (Test-Path -LiteralPath $part) -and ((Get-Item -LiteralPath $part).Length -gt 0)
+        if (-not $got -and -not $mirror -and $public -ne $source) {
+            Write-ExakitLog "INFO" "$source was not reachable without a token; trying the public kit's copy $public"
+            if (Get-ExakitFile -Url $public -Dest $part -Soft) { $source = $public }
         }
     }
     if (-not (Test-Path -LiteralPath $part) -or (Get-Item -LiteralPath $part).Length -eq 0) {
@@ -3549,7 +3560,8 @@ function Get-ExakitVerifiedDatasets {
 
 # Datasets that are NOT loaded yet - drives the dynamic data menus.
 function Get-ExakitPendingDatasets {
-    return @(Get-ExakitBundledDatasets | Where-Object { -not (Test-ExakitDatasetLoaded $_) })
+    # A dataset its conf hides (hidden=yes) is kept and loads when named, never offered. Twin of exakit_pending_datasets.
+    return @(Get-ExakitBundledDatasets | Where-Object { -not $_.Hidden -and -not (Test-ExakitDatasetLoaded $_) })
 }
 
 function Invoke-ExakitDatasetLoad {
@@ -3950,10 +3962,27 @@ function New-ExakitDataTable {
     $script:ExakitTableGroupFirst = 0
     $script:ExakitTableGroupLast = 0
     $pending = @(Get-ExakitPendingDatasets)
+    $script:ExakitTableSampleIds = @()
     # EVERY SAMPLE IS LISTED, a persona or not: a persona's datasets are the
     # ones ticked (EXAKIT_DATASETS_PRESELECT, below), the rest can be ticked too.
     # Twin of the same comment in exakit_data_table_build.
-    if ($pending.Count -gt 0) {
+    if ($pending.Count -gt 0 -and $env:EXAKIT_DATA_TABLE_COMPACT -eq "1") {
+        # THE INSTALL'S FORM: one row for the samples, named by what it loads, no
+        # tree under it - the default persona's datasets still to load, else every
+        # pending one. Its load shows on that one row. Twin of the compact row in
+        # exakit_data_table_build.
+        $preselect = "$env:EXAKIT_DATASETS_PRESELECT"
+        $sampleIds = @($pending | ForEach-Object { $_.Id })
+        if ($preselect -and $preselect -ne "none") {
+            $wanted = @($preselect -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+            $picked = @($sampleIds | Where-Object { $wanted -ccontains $_ })
+            if ($picked.Count -gt 0) { $sampleIds = $picked }
+        }
+        $script:ExakitTableSampleIds = $sampleIds
+        [void](Add-ExakitTableRow -Kind "plain" -Label ("Sample datasets (" + ($sampleIds -join ', ') + ")") -Ticked)
+        [void]$ids.Add("samples")
+        [void]$defaults.Add(1)
+    } elseif ($pending.Count -gt 0) {
         # The parent row "Sample datasets" is itself a checkbox: pre-selected with
         # every dataset; unchecking it clears them all, after which they can be
         # picked individually. Each dataset hangs off it with a tree connector,
@@ -4048,6 +4077,8 @@ function New-ExakitDataTable {
 # Twin of exakit_data_table_row in exapump.sh.
 function Get-ExakitDataTableRow {
     param([Parameter(Mandatory)][string]$Id)
+    # The install's one sample row carries every one of its datasets.
+    if (@($script:ExakitTableSampleIds) -ccontains $Id) { $Id = "samples" }
     for ($i = 0; $i -lt $script:ExakitTableIds.Count; $i++) {
         if ($script:ExakitTableIds[$i] -eq $Id) { return $i + 1 }
     }
@@ -4099,15 +4130,56 @@ function Select-ExakitDataLoad {
     # untitled, so the names get their width (twin of exakit_data_samples_select).
     if ($script:UiTable) {
         if ($script:ExakitTableHasDesc) { $script:UiTable.Col2 = "Description" } else { $script:UiTable.Col2 = " " }
+        # The install's compact table has no descriptions: no blank column either, so the names keep their width.
+        if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1") { $script:UiTable.Col2 = "" }
     }
-    Write-Host ""
+    $onScreen = 0
+    $startRow = 0
+    if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1" -and @($script:ExakitTableSampleIds).Count -gt 0) {
+        # THE INSTALL'S SAMPLE ROW, before the question: no column heading, no
+        # checkbox on it, and its datasets loading at once with the bar to the
+        # right of the row. Then the same table asks about the rows under it,
+        # Skip ticked so Enter goes on. Twin of _exakit_data_compact_samples.
+        if ($script:UiTable) { $script:UiTable.Col1 = " " }
+        $script:UiTableNoBox = @(1)
+        Write-Host ""
+        Start-ExakitDataTableRun
+        $okCount = 0
+        $all = @($script:ExakitTableSampleIds)
+        foreach ($sampleId in $all) {
+            try {
+                Invoke-ExakitDatasetLoad -KitRoot (Get-ExakitRepoRoot) -Id $sampleId
+                $okCount++
+            } catch {
+                $reason = Get-ExakitFailureReason
+                if (-not $reason) { $reason = "$_" }
+                Write-ExakitLog "WARN" "Dataset '$sampleId' did not load: $reason"
+                $script:ExakitCompactFailedIds = @($script:ExakitCompactFailedIds) + @($sampleId)
+            }
+        }
+        if ($okCount -eq $all.Count) {
+            Set-ExakitTableRow -Row 1 -State "done" -Final "$($all.Count) of $($all.Count) loaded"
+        } else {
+            Set-ExakitTableRow -Row 1 -State "failed" -Final "$okCount of $($all.Count) loaded"
+        }
+        Stop-ExakitDataTableRun
+        # Loaded: the row is no longer a choice, and nothing more loads from it.
+        $script:ExakitTableIds[0] = ""
+        $script:ExakitTableSampleIds = @()
+        $script:ExakitTableDefaults = @($script:ExakitTableRowSkip)
+        if ($script:UiTable) { $onScreen = [int]$script:UiTable.Lines + 1 }
+        $startRow = 2
+    } else {
+        Write-Host ""
+    }
     try {
         $selection = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults `
             -ExclusiveIndex $script:ExakitTableRowSkip `
             -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
-            -GroupLast $script:ExakitTableGroupLast -GroupMode "all")
+            -GroupLast $script:ExakitTableGroupLast -GroupMode "all" -OnScreen $onScreen -StartRow $startRow)
     } finally {
-        if ($script:UiTable) { $script:UiTable.Col2 = "" }
+        if ($script:UiTable) { $script:UiTable.Col2 = ""; $script:UiTable.Col1 = "Dataset" }
+        $script:UiTableNoBox = @()
     }
     if ($selection -contains $script:ExakitTableRowSkip) { return @("none") }
     # With nothing pending the local-file row is pre-ticked so Enter does
@@ -4126,6 +4198,10 @@ function Select-ExakitDataLoad {
     foreach ($row in $selection) {
         if ($row -lt 1 -or $row -gt $script:ExakitTableIds.Count) { continue }
         $id = $script:ExakitTableIds[$row - 1]
+        if ($id -eq "samples") {
+            foreach ($sampleId in @($script:ExakitTableSampleIds)) { if (-not $chosen.Contains($sampleId)) { [void]$chosen.Add($sampleId) } }
+            continue
+        }
         if ($id -and -not $chosen.Contains($id)) { [void]$chosen.Add($id) }
     }
     if ($chosen.Count -eq 0) { return @("none") }
@@ -4464,13 +4540,19 @@ function Request-ExakitDataLoadOffer {
         # datasets that are not loaded yet are offered, pre-selected, plus the
         # local-file option, the external source and an explicit skip.
         # Non-interactive installs keep the pre-selected defaults.
+        $script:ExakitCompactFailedIds = @()
         $chosen = Select-ExakitDataLoad -FinalLabel "Skip"
+        $failedIds += @($script:ExakitCompactFailedIds)
         if ($chosen -contains "none") {
-            Info "Skipping data loading. Run it any time with: exakit data-load"
-            return
+            # The install's compact table loaded its samples before it asked: Skip is only "nothing more".
+            if ($env:EXAKIT_DATA_TABLE_COMPACT -ne "1") {
+                Info "Skipping data loading. Run it any time with: exakit data-load"
+                return
+            }
+            $chosen = @()
         }
         $chosen = @(Get-ExakitDataLoadOrder -Chosen $chosen)
-        Start-ExakitDataTableRun
+        if ($chosen.Count -gt 0) { Start-ExakitDataTableRun }
         try {
             foreach ($id in $chosen) {
                 if ($id -eq "external") {

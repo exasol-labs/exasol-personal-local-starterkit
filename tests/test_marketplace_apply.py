@@ -21,6 +21,13 @@ from model import CatalogError, load_addons  # noqa: E402
 from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
 
 
+def _notebook_enabled():
+    """The notebook add-on as it behaves when offered: this release hides it (visible: false), and these tests are
+    about what it does once picked."""
+    return patch.object(market_apply, "load_addons", return_value=[
+        replace(addon, visible=True) if addon.id == "notebook" else addon for addon in load_addons(ROOT)])
+
+
 class ApplyTest(unittest.TestCase):
     def context(self, home: Path) -> KitContext:
         (home / "manifest.json").write_text('{"components":{}}\n', encoding="utf-8")
@@ -49,7 +56,7 @@ class ApplyTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             ctx = self.context(Path(temp))
             with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "jupyterlab,unknown-tool"}), \
-                 patch.object(market_apply, "invoke") as invoke:
+                 _notebook_enabled(), patch.object(market_apply, "invoke") as invoke:
                 with self.assertRaisesRegex(AddonFailure, "Unknown or repeated notebook frontend"):
                     market_apply.apply(ctx, "dash-server,notebook", lambda _: None)
             invoke.assert_not_called()
@@ -67,7 +74,7 @@ class ApplyTest(unittest.TestCase):
                 return 0, "notebooks: exakit notebook" if operation == "summary" else None
 
             out = io.StringIO()
-            with patch.object(market_apply, "invoke", side_effect=invoke), \
+            with patch.object(market_apply, "invoke", side_effect=invoke), _notebook_enabled(), \
                  patch.object(market_apply, "install_addon_skills", return_value=[]), \
                  patch.object(market_apply, "register_autostart", return_value=False), \
                  patch.object(market_apply.KitContext, "from_environment", return_value=ctx), \

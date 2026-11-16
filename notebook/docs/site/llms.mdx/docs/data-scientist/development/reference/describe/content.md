@@ -38,11 +38,13 @@ nb.describe(
     conn=None,
     id: str | None=None,
     force: bool=False,
+    rules: dict | None=None,
 ) -> Draft
 ```
 
 Describe `SCHEMA.TABLE` (or a dataset id's table): the approved descriptor when the table still matches it,
-else a fresh draft. Uses the connection given, else opens the kit's. Only SELECTs run.
+else a fresh draft (one prepare_drafts made is used as it is; one it is still making is waited for). Uses the
+connection given, else opens the kit's. Only SELECTs run.
 
 ## nb.Draft [#Draft]
 
@@ -75,3 +77,40 @@ A descriptor proposed for a table (status draft), or the approved one describe()
 | `approve(owner: str \| None=None, comments: bool=True, *, conn=None, sample: int \| None=None)` | Approve: every column has a role and none sits in two slots, the table has not changed since it was profiled, the next version is written into the kit's store with current.yaml, and the schema's Exasol Semantic Views model is rebuilt with it (`comments=False` skips that). |
 | `rows() -> list[dict[str, str]]`                                                                | One dict per column, low confidence first: the schema and table it came from, its name, type, role, confidence, evidence and note.                                                                                                                                               |
 | `show() -> None`                                                                                | Print each column with its schema and table, type, role, confidence, evidence and note, low confidence first, the slots above.                                                                                                                                                   |
+
+## nb.link_rules [#link_rules]
+
+```python
+nb.link_rules() -> dict
+```
+
+The rules links between tables are found with, as a dict to copy, change and pass:
+nb.find_links(connection, tables=\[...], rules=\{"MIN_SHARE": 0.8}).
+
+**Used in:** `data-scientist/01_explore`, `ml-engineer/00_quickstart`
+
+## nb.prepare_drafts [#prepare_drafts]
+
+```python
+nb.prepare_drafts(tables: list[str], *, workers: int=4, wait: bool=False) -> dict[str, str]
+```
+
+Draw up the column roles of `tables` in the background, from the moment they are chosen. Every source is read
+at the same time, each on a connection of its own; the tables of one source are read one after another, first
+chosen first, because a source answers one statement at a time (Snowflake took \~9 s a statement, whatever its
+size: at once they only queued). Returns at once (`wait`: when all are done). nb.describe then uses each fresh
+draft instead of reading the table again, and waits for a table still being read rather than reading it twice.
+\{table: reading | ready | why it failed}.
+
+**Used in:** `data-scientist/00_quickstart`
+
+## nb.role_rules [#role_rules]
+
+```python
+nb.role_rules() -> dict
+```
+
+The rules a column map is drafted with - thresholds and the words in a column's name that suggest a role - as
+a dict to copy, change and pass: nb.review_roles(connection, data, rules=\{"CATEGORY_DISTINCT": 100}).
+
+**Used in:** `data-scientist/01_explore`, `ml-engineer/00_quickstart`

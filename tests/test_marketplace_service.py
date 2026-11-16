@@ -43,10 +43,10 @@ class ServiceTest(unittest.TestCase):
             ctx = KitContext(ROOT, home, home / "bin", Manifest(home / "manifest.json"), Path("uv"))
             with patch.object(KitContext, "from_environment", return_value=ctx), \
                  patch.object(service, "_module") as module:
-                module.return_value = (next(row for row in service.load_addons(ROOT) if row.id == "notebook"),
+                module.return_value = (next(row for row in service.load_addons(ROOT) if row.id == "dash-server"),
                                        type("Addon", (), {"install": staticmethod(lambda _ctx: None)}))
                 with self.assertRaisesRegex(AddonFailure, "No starter kit installation"):
-                    service.invoke(ROOT, "notebook", "install")
+                    service.invoke(ROOT, "dash-server", "install")
 
     def test_external_component_is_never_claimed_by_install_dispatch(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

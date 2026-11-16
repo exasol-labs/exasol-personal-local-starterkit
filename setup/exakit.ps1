@@ -74,6 +74,8 @@
 #                         served from this computer and opened in the browser
 #   mlflow                start | stop | status | url | replay: local model run server
 #   describe <table>      profile SCHEMA.TABLE and draft its descriptor, or approve
+#   semantic <action>     the semantic layer: fields, compile, verified questions, fusion, column maps
+#   board <action>        a dashboard of approved answers: pin, arrange, preview, publish
 #                         one: --sample N, --id, --json, --write, --approve, --versions
 #   udf-setup             Python (or --language rust) UDFs: install the container
 #   udf-use               install a container: default, or a tarball; --list, --json
@@ -5464,6 +5466,14 @@ try {
         "describe"     {
             if (-not (Get-Command Invoke-CmdDescribe -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdDescribe -CmdArgs $RestArgs
+        }
+        "semantic"     {
+            if (-not (Get-Command Invoke-CmdSemantic -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }
+            Invoke-CmdSemantic -CmdArgs $RestArgs
+        }
+        "board"        {
+            if (-not (Get-Command Invoke-CmdBoard -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }
+            Invoke-CmdBoard -CmdArgs $RestArgs
         }
         "rust-udf"     {
             Invoke-ExakitMarketplaceCli -Script rust_cli -CmdArgs $RestArgs

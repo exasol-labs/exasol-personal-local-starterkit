@@ -24,8 +24,6 @@ nb.effort_levels(provider_id: str, model_id: str) -> list[str]
 
 The effort levels this model takes (sent as reasoning_effort); \[] when the provider documents none for it.
 
-**Used in:** `data-scientist/00_quickstart`
-
 ## nb.model_providers [#model_providers]
 
 ```python

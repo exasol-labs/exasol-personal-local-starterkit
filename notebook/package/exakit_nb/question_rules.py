@@ -411,12 +411,68 @@ def context_for(conn, ds) -> DraftContext:
                         default_group=group if roles.get(group) in ("category", "flag") else None, values=values)
 
 
-def draft_question(conn, ds, question: str):
+DRAFT_RULES = ("MIN_GROUP_ROWS", "VALUE_LIMIT", "SYNONYMS", "GENERIC_WORDS", "TIME_WORDS")
+_NAMES = {"MIN_GROUP_ROWS": "MIN_GROUP_ROWS", "VALUE_LIMIT": "VALUE_LIMIT", "SYNONYMS": "_SYNONYMS",
+          "GENERIC_WORDS": "_GENERIC", "TIME_WORDS": "_TIME_TOKENS"}
+
+
+def draft_rules() -> dict:
+    """The rules the no-AI drafter (nb.draft_question) writes SQL with, to copy, change and pass:
+
+    MIN_GROUP_ROWS   a group or a period with fewer rows is left out of a rate (its rate jumps around)
+    VALUE_LIMIT      a group column with more values than this is not offered as a filter
+    SYNONYMS         words of a question that mean a column: {"amount": ["revenue", "sales", ...], ...}
+    GENERIC_WORDS    words in a column's name that say nothing about it (id, code, no ...)
+    TIME_WORDS       words of a question that ask for time (monthly, year, when ...)"""
+    g = globals()
+    shown = lambda v: {k: list(w) for k, w in v.items()} if isinstance(v, dict) else sorted(v) if isinstance(v, set) else v
+    return {name: shown(g[_NAMES[name]]) for name in DRAFT_RULES}
+
+
+def _with_rules(rules: dict | None):
+    import contextlib
+    import threading
+
+    lock = globals().setdefault("_RULES_LOCK", threading.RLock())
+
+    @contextlib.contextmanager
+    def using():
+        g = globals()
+        changes = {}
+        for name, value in (rules or {}).items():
+            if name not in DRAFT_RULES:
+                raise ValueError(f"{name} is not a drafter rule: the rules are {', '.join(DRAFT_RULES)}")
+            now = g[_NAMES[name]]
+            if isinstance(now, int):
+                if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                    raise ValueError(f"{name} is a whole number, not {value!r}")
+            elif isinstance(now, dict):
+                if not isinstance(value, dict):
+                    raise ValueError(f"{name} is {{word: [words]}}, not {value!r}")
+                value = {str(k).lower(): [str(w).lower() for w in v] for k, v in value.items()}
+            else:
+                if not isinstance(value, (list, tuple, set)):
+                    raise ValueError(f"{name} is a list of words, not {value!r}")
+                value = {str(w).lower() for w in value}
+            changes[_NAMES[name]] = value
+        with lock:
+            saved = {k: g[k] for k in changes}
+            g.update(changes)
+            try:
+                yield
+            finally:
+                g.update(saved)
+    return using()
+
+
+def draft_question(conn, ds, question: str, rules: dict | None = None):
     """A Proposal for ``question`` drafted by rules from the column map (no AI model): read-only SQL, with the
-    drafter's assumptions, not approved yet. Approve and run it as any proposal."""
+    drafter's assumptions, not approved yet. Approve and run it as any proposal. ``rules`` changes the drafter's rules
+    for this question (nb.draft_rules() lists them)."""
     from .ask import ask
 
-    drafted = RuleDrafter(context_for(conn, ds)).draft(question)
+    with _with_rules(rules):
+        drafted = RuleDrafter(context_for(conn, ds)).draft(question)
     proposal = ask(ds, question, proposed_sql=ensure_read_only(drafted["sql"]))
     proposal.assumptions = list(drafted.get("assumptions") or [])
     if drafted.get("summary"):

@@ -30,14 +30,14 @@ function Test-DescribeInstalled {
 # PendingExitCode - not a return value, which would swallow the output. Twin
 # of describe_run.
 function Invoke-DescribeService {
-    param([string[]]$ServiceArgs = @())
+    param([string[]]$ServiceArgs = @(), [string]$Script = "describe_service.py")
     $python = Get-ExakitManifestValue "components.notebook.python"
     if (-not $python) {
         $venv = if ($env:EXAKIT_NOTEBOOK_VENV) { $env:EXAKIT_NOTEBOOK_VENV } else { Join-Path $script:ExakitHome "notebook-venv" }
         $python = Join-Path $venv "Scripts/python.exe"
     }
     if (-not (Test-Path $python)) { Fail "The notebook environment is missing ($python). Repair it with: exakit notebook setup" }
-    $service = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "lib") "describe_service.py"
+    $service = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "lib") $Script
     $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitPinnedDsn); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
                EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file")
                EXAKIT_MCP_READER = (Get-ExakitManifestValue "components.mcp_server.connection.user") }
@@ -307,4 +307,24 @@ function Invoke-CmdDescribe {
     }
     if (-not (Test-DescribeInstalled)) { Fail "The notebook add-on is not installed; its Python runs the profiler. Install it with: exakit marketplace notebook" }
     Invoke-DescribeService -ServiceArgs $serviceArgs
+}
+
+# exakit semantic <action> [...] and exakit board <action> [...]: the semantic
+# layer and the dashboard of pinned answers from the command line, the
+# notebook's own functions in setup/lib/semantic_cli.py (which checks every
+# argument). Twins of cmd_semantic and cmd_board in describe.sh.
+function Invoke-CmdSemantic {
+    param([string[]]$CmdArgs = @())
+    if ($CmdArgs.Count -eq 0 -or $CmdArgs[0] -eq "--help" -or $CmdArgs[0] -eq "-h") { Show-ExakitHelpCommand -Name "semantic" | Out-Null; return }
+    if ($CmdArgs -contains "--json") { $script:ExakitRefusalJson = $true }
+    if (-not (Test-DescribeInstalled)) { Fail "The notebook add-on is not installed; its Python runs the semantic layer's commands. Install it with: exakit marketplace notebook" }
+    Invoke-DescribeService -Script "semantic_cli.py" -ServiceArgs (@("semantic") + $CmdArgs)
+}
+
+function Invoke-CmdBoard {
+    param([string[]]$CmdArgs = @())
+    if ($CmdArgs.Count -eq 0 -or $CmdArgs[0] -eq "--help" -or $CmdArgs[0] -eq "-h") { Show-ExakitHelpCommand -Name "board" | Out-Null; return }
+    if ($CmdArgs -contains "--json") { $script:ExakitRefusalJson = $true }
+    if (-not (Test-DescribeInstalled)) { Fail "The notebook add-on is not installed; its Python builds the dashboards of pinned answers. Install it with: exakit marketplace notebook" }
+    Invoke-DescribeService -Script "semantic_cli.py" -ServiceArgs (@("board") + $CmdArgs)
 }

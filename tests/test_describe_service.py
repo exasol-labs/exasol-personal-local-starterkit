@@ -205,7 +205,7 @@ class Service(unittest.TestCase):
         self.assertTrue(out.startswith("descriptor: 1"))
         code, out, _ = self.run_main("comments", "support_tickets")
         self.assertEqual(0, code)
-        self.assertTrue(out.startswith("Published semantic model support (SEM_SUPPORT): 1 views, 4 dimensions, 1 metrics"), out)
+        self.assertTrue(out.startswith("Published semantic model support (SEM_SUPPORT): 1 views, 5 dimensions, 1 metrics"), out)
 
     def test_a_multi_source_model_its_ai_proposal_its_refresh_and_the_list(self):
         self.run_main("draft", "support.tickets", "--id", "support_tickets")
@@ -232,7 +232,7 @@ class Service(unittest.TestCase):
         self.assertTrue(any("ticket_total" in d for d in self.db.sv.models["support_360"]["definitions"]),
                         "a refresh keeps the AI's accepted metrics")
         code, out, _ = self.run_main("models", "--json")
-        self.assertEqual({"support", "support_360"}, {m["model"] for m in json.loads(out)})
+        self.assertEqual({"support", "support_360", "all_data"}, {m["model"] for m in json.loads(out)})
         self.assertTrue(all(m["kit"] and m["refreshable"] for m in json.loads(out)))
         self.assertEqual(3, self.run_main("refresh", "never_built")[0])
 
@@ -342,6 +342,399 @@ class Service(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertIn("approve <dataset id", out)
 
+
+class SemanticSurfaces(unittest.TestCase):
+    """Structured requests, verified questions and fusion, through the product's own scripts (a stand-in answers)."""
+
+    class Conn:
+        def __init__(self, answers):
+            self.answers, self.sent = answers, []
+
+        def execute(self, sql):
+            self.sent.append(sql)
+            for marker, rows in self.answers.items():
+                if marker in sql:
+                    return FakeStatement(rows(sql) if callable(rows) else rows)
+            return FakeStatement([])
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        env = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.temp.name})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_a_request_compiles_to_sql_or_comes_back_with_the_products_reason(self):
+        ok = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT\n 1", "PLAN_JSON": '{"joins": []}',
+                                                  "CLARIFICATION_JSON": None, "AGENT_REQUEST_ID": 7}]})
+        found = svc.compile_request(ok, {"model": "sales", "object": "ORDERS", "metrics": ["total_amount"]})
+        self.assertEqual(("ok", "SELECT 1", {"joins": []}, 7), (found["status"], found["sql"], found["plan"], found["request_id"]))
+        self.assertIn('"client": "exakit-notebook"', ok.sent[0])
+        bad = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "ERROR", "ERROR_CODE": "SEMANTIC_REQUEST_020",
+                                                   "ERROR_MESSAGE": "unknown metric x", "CLARIFICATION_JSON": '{"choices": ["a"]}'}]})
+        found = svc.compile_request(bad, {"model": "sales", "metrics": ["x"]})
+        self.assertEqual(("error", {"choices": ["a"]}), (found["status"], found["clarification"]))
+        self.assertIn("SEMANTIC_REQUEST_020", found["error"])
+        with self.assertRaises(svc.Refused):
+            svc.compile_request(ok, {"model": "sales"})
+
+    def test_a_view_you_wrote_is_adopted_and_a_refusal_says_why(self):
+        view = [{"VIEW_SCHEMA": "MART_SEMANTIC", "VIEW_NAME": "SHIPPING",
+                 "VIEW_TEXT": "CREATE VIEW SHIPPING AS SELECT ship_mode, SUM(freight) AS freight FROM MART.ORDERS GROUP BY 1"}]
+        conn = self.Conn({"EXA_ALL_SCRIPTS": [{"SCRIPT_NAME": "ADOPT_VIEW"}], "EXA_ALL_VIEWS": view, "ADOPT_VIEW": [{"MODEL_NAME": "logistics", "OBJECT_NAME": "SHIPPING", "DIMENSIONS": 1,
+                                                                  "METRICS": 1, "STATUS": "PUBLISHED", "DDL": "CREATE_MODEL;\nPUBLISH"}]})
+        planned = svc.adopt_view(conn, "Logistics", "mart_semantic.shipping", dry_run=True)
+        self.assertEqual(("dry_run", "EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW('logistics', 'MART_SEMANTIC', 'SHIPPING')"),
+                         (planned["status"], planned["sql"]))
+        self.assertFalse(any("EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW" in sql for sql in conn.sent), "a dry run reads the view only")
+        self.assertIn("SUM(freight)", planned["view_sql"])
+        found = svc.adopt_view(conn, "logistics", "MART_SEMANTIC.SHIPPING")
+        self.assertEqual(("logistics", "SHIPPING", 1, 1, "published", ["CREATE_MODEL", "PUBLISH"]),
+                         (found["model"], found["object"], found["dimensions"], found["metrics"], found["status"], found["ddl"]))
+
+        class Refusing(self.Conn):
+            def execute(self, sql):
+                if "EXECUTE SCRIPT SEMANTIC_ADMIN.ADOPT_VIEW" in sql:
+                    raise RuntimeError("[SEMANTIC_ADMIN_229] the view has a join")
+                return super().execute(sql)
+        with self.assertRaisesRegex(svc.Refused, "another shape.*SEMANTIC_ADMIN_229"):
+            svc.adopt_view(Refusing({"EXA_ALL_SCRIPTS": [{"SCRIPT_NAME": "ADOPT_VIEW"}], "EXA_ALL_VIEWS": view}), "logistics", "MART_SEMANTIC.SHIPPING")
+        with self.assertRaisesRegex(svc.Refused, "arrives with Semantic Views 0.7.1"):
+            svc.adopt_view(self.Conn({"EXA_ALL_VIEWS": view, "PRODUCT_VERSION": [{"DISPLAY_VERSION": "0.6.1"}]}), "logistics", "MART_SEMANTIC.SHIPPING")
+        with self.assertRaises(svc.NotFound):
+            svc.adopt_view(self.Conn({}), "logistics", "MART_SEMANTIC.NOPE")
+        with self.assertRaisesRegex(svc.Refused, "SCHEMA.VIEW"):
+            svc.adopt_view(conn, "logistics", "SHIPPING")
+        from descriptor import publish
+        publish.keep({"model": "sales"}, {"tables": []})
+        with self.assertRaisesRegex(svc.Refused, "column maps"):
+            svc.adopt_view(conn, "sales", "MART_SEMANTIC.SHIPPING")
+
+    def test_validation_explanation_and_glossary_are_semantic_views_own_words(self):
+        conn = self.Conn({"VALIDATE_MODEL": [{"SEVERITY": "error", "OBJECT_TYPE": "METRIC", "OBJECT_NAME": "x", "RULE_CODE": "SEMANTIC_MODEL_076",
+                                              "MESSAGE": "declares  DECIMAL"}],
+                          "CHECK_METRIC_TYPES": [{"OBJECT_NAME": "ORDERS", "METRIC_NAME": "x", "DECLARED_TYPE": "DECIMAL(18,2)",
+                                                  "COMPILED_TYPE": "DOUBLE", "COMPATIBLE": False, "PROBE_ERROR": None},
+                                                 {"OBJECT_NAME": "ORDERS", "METRIC_NAME": "y", "COMPATIBLE": True}],
+                          "SUGGEST_GRAIN_METADATA": [],
+                          "COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT 1 FROM S.T", "AGENT_REQUEST_ID": 42}],
+                          "EXPLAIN_COMPILED_SQL": [{"GOVERNANCE": "Certified model.\nRow policy: none.", "SELECTED_MATERIALIZATION": None}],
+                          "GET_BUSINESS_GLOSSARY": [{"GLOSSARY_TEXT": "total_amount: revenue incl. tax"}]})
+        found = svc.validate_model(conn, "Sales")
+        self.assertEqual((1, "SEMANTIC_MODEL_076", "declares DECIMAL", ["x"]),
+                         (found["errors"], found["issues"][0]["rule"], found["issues"][0]["message"], [t["metric"] for t in found["types"]]))
+        self.assertIn("ALTER SESSION SET QUERY_TIMEOUT=60", conn.sent, "the product's data probes are bounded")
+        compiled = svc.compile_request(conn, {"model": "sales", "object": "ORDERS", "metrics": ["m"]})
+        self.assertEqual(["Semantic Views: Certified model.", "Semantic Views: Row policy: none.", "Reads S.T."], compiled["explained"],
+                         "the product's own words first")
+        self.assertIn("EXPLAIN_COMPILED_SQL('AGENT_REQUEST', 42)", " ".join(conn.sent))
+        self.assertEqual("total_amount: revenue incl. tax", svc.glossary(conn, "sales", "orders"))
+        self.assertEqual("", svc.glossary(self.Conn({}), "sales", "orders"))
+
+    def test_the_metric_type_check_is_not_run_again_for_the_same_metrics(self):
+        hashes = [{"FIELD_KIND": "METRIC", "FIELD_NAME": "x", "DEFINITION_HASH": "a"},
+                  {"FIELD_KIND": "FACT", "FIELD_NAME": "qty", "DEFINITION_HASH": "b"},
+                  {"FIELD_KIND": "DIMENSION", "FIELD_NAME": "state", "DEFINITION_HASH": "c"}]
+        answers = {"DEFINITION_HASHES_FOR_AGENT": lambda _sql: hashes, "VALIDATE_MODEL": [],
+                   "CHECK_METRIC_TYPES": [{"OBJECT_NAME": "ORDERS", "METRIC_NAME": "x", "COMPATIBLE": False}]}
+        checks = lambda conn: sum("CHECK_METRIC_TYPES" in sql for sql in conn.sent)
+        first, again = self.Conn(answers), self.Conn(answers)
+        self.assertEqual(["x"], [t["metric"] for t in svc.validate_model(first, "sales")["types"]])
+        self.assertEqual(["x"], [t["metric"] for t in svc.validate_model(again, "sales")["types"]], "the same finding")
+        self.assertEqual((1, 0), (checks(first), checks(again)), "same metrics and facts: not checked twice")
+        hashes[2]["DEFINITION_HASH"] = "changed"
+        unrelated = self.Conn(answers)
+        svc.validate_model(unrelated, "sales")
+        self.assertEqual(0, checks(unrelated), "a dimension changed: the metric types did not")
+        hashes[1]["DEFINITION_HASH"] = "changed"
+        changed = self.Conn(answers)
+        svc.validate_model(changed, "sales")
+        self.assertEqual(1, checks(changed), "a fact changed: checked again")
+        with mock.patch.object(svc.time if hasattr(svc, "time") else __import__("time"), "time",
+                               return_value=__import__("time").time() + svc.TYPES_CHECKED_SECONDS + 1):
+            later = self.Conn(answers)
+            svc.validate_model(later, "sales")
+        self.assertEqual(1, checks(later), "a day later: checked again")
+
+    def test_a_new_computer_reads_the_data_map_back_from_the_model_and_restores_a_version(self):
+        from descriptor import publish
+        record = {"version": 3, "inputs": {"all": True, "tables": ["SHOP.ORDERS"], "grains": {"SHOP.ORDERS": "one order"},
+                                           "links": [], "metrics": [], "instructions": ["Tax included."]}}
+        conn = self.Conn({"GET_CUSTOM_EXTENSIONS": [{"SCOPE_TYPE": "MODEL", "EXTENSION_NAME": "data_map_v3", "DATA_JSON": json.dumps(record)}]})
+        with mock.patch.object(publish, "data_map_inputs", side_effect=lambda t, m: {"tables": {}, "missing": [], "saved": publish.kept(m) is not None}), \
+                mock.patch.object(svc, "restore_column_maps") as maps:
+            found = svc.data_map_inputs(["shop.orders"], "all_data", conn)
+        maps.assert_not_called()
+        self.assertTrue(found["saved"], "put back from the model, which is the record")
+        self.assertEqual((3, ["Tax included."]), (publish.kept("all_data")["version"], publish.kept("all_data")["inputs"]["instructions"]))
+        self.assertEqual([3], [v["version"] for v in svc.data_map_versions(conn)])
+        with mock.patch.object(svc, "semantic_model", return_value={"version": 4}) as saved:
+            self.assertEqual({"version": 4}, svc.restore_data_map(conn, 3))
+        self.assertEqual(({"SHOP.ORDERS": "one order"}, ["Tax included."], True),
+                         (saved.call_args.kwargs["grains"], saved.call_args.kwargs["instructions"], saved.call_args.kwargs["replace_links"]))
+        with self.assertRaises(svc.NotFound):
+            svc.restore_data_map(conn, 9)
+
+    def test_allowed_combinations_are_semantic_views_own(self):
+        conn = self.Conn({"VALID_COMBINATIONS_FOR_AGENT": [{"METRIC_NAME": "m", "DIMENSION_NAME": "d", "IS_VALID": False, "REASON_CODE": "FANOUT"}]})
+        self.assertEqual([{"metric": "m", "dimension": "d", "valid": False, "reason": "FANOUT"}],
+                         svc.valid_combinations(conn, "sales", "orders", ["m"]))
+        self.assertIn("METRIC_NAME IN ('m')", conn.sent[-1])
+        self.assertEqual([], svc.valid_combinations(self.Conn({}), "sales", "orders"))
+
+    def test_the_request_format_and_definition_hashes_are_semantic_views_own(self):
+        conn = self.Conn({"COMPILE_REQUEST_SCHEMA_FOR_AGENT": [{"CONTRACT_SECTION": "REQUEST_KEY", "NAME": "limit", "DESCRIPTION": "rows",
+                                                                "IS_REQUIRED": False, "VALUE_TYPE": "integer", "ALLOWED_VALUES": None}],
+                          "DEFINITION_HASHES_FOR_AGENT": [{"FIELD_KIND": "MODEL", "FIELD_NAME": None, "DEFINITION_HASH": "a"},
+                                                          {"FIELD_KIND": "metric", "FIELD_NAME": "total_amount", "DEFINITION_HASH": "b"}]})
+        self.assertEqual([{"section": "REQUEST_KEY", "name": "limit", "about": "rows", "required": False, "type": "integer"}],
+                         svc.request_contract(conn))
+        self.assertEqual({"MODEL": "a", "METRIC:total_amount": "b"}, svc.definition_hashes(conn, "sales"))
+        self.assertEqual(({}, []), (svc.definition_hashes(self.Conn({}), "sales"), svc.request_contract(self.Conn({}))))
+
+    def test_a_sources_lower_case_table_keeps_its_spelling(self):
+        """A MySQL or PostgreSQL source names its tables in lower case (category_costs): a plain name finds it once the
+        database or the store has shown how it is spelt, and a link's column keeps the column map's spelling."""
+        from descriptor import flow, store
+        flow._TRUE_CASE.clear()
+        flow._STORE_READ.clear()
+        self.assertEqual("VS_CATALOG.CATEGORY_COSTS", flow.table_name("vs_catalog.category_costs"), "nothing known: upper case")
+        calls = []
+
+        def run(sql):
+            calls.append(sql)
+            if "COLUMN_TABLE = 'CATEGORY_COSTS'" in sql:
+                return []
+            return [{"S": "VS_CATALOG", "T": "category_costs"}]
+        self.assertEqual("VS_CATALOG.category_costs", flow.resolve_table(run, "VS_CATALOG.CATEGORY_COSTS"))
+        self.assertEqual("VS_CATALOG.category_costs", flow.table_name("vs_catalog.Category_Costs"), "remembered")
+        self.assertEqual(("VS_CATALOG", "category_costs"), svc.split_table("VS_CATALOG.CATEGORY_COSTS"))
+        store.write_version("VS_CATALOG.category_costs", 1, 'descriptor: 1\ncolumns:\n  "category": {role: "key"}\n')
+        store.replace_current("VS_CATALOG.category_costs", 'descriptor: 1\ncolumns:\n  "category": {role: "key"}\n')
+        self.assertEqual("VS_CATALOG.category_costs.category", svc._link_end("vs_catalog.CATEGORY_COSTS.CATEGORY"))
+        flow._TRUE_CASE.clear()
+        flow._STORE_READ.clear()
+        self.assertEqual("VS_CATALOG.category_costs", flow.table_name("VS_CATALOG.CATEGORY_COSTS"),
+                         "a new process knows an approved table's spelling from the store")
+        flow._TRUE_CASE.clear()
+        flow._STORE_READ.clear()
+
+    def test_fusion_health_and_feedback_are_semantic_views_own(self):
+        conn = self.Conn({"CHECK_FUSION_HEALTH": [{"ENTITY_NAME": "customers", "ATTRIBUTE_NAME": "region", "FUSION_STRATEGY": "COALESCE",
+                                                   "TOTAL_KEYS": 10, "FROM_FIRST_SOURCE": 8, "FILLED": 1, "UNRESOLVED": 1}]})
+        self.assertEqual([("region", 1)], [(h["attribute"], h["unresolved"]) for h in svc.fusion_health(conn, "crm")])
+        self.assertTrue(svc.record_feedback(conn, 5, "ACCEPTED", "ok"))
+        self.assertIn("RECORD_AGENT_FEEDBACK('AGENT_REQUEST', 5, 'ACCEPTED', 'ok', NULL)", conn.sent[-1])
+        self.assertFalse(svc.record_feedback(conn, None, "ACCEPTED"))
+
+    def test_stored_totals_are_compiled_stored_registered_and_refreshed_by_semantic_views(self):
+        from descriptor import publish
+        publish.keep({"model": "all_data", "objects": [{"metrics": [{"name": "total_amount", "kind": "ADDITIVE"},
+                                                                    {"name": "avg_amount", "kind": "RATIO"}]}]}, {"tables": []})
+        conn = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT s AS SHIP_STATE, x AS TOTAL_AMOUNT FROM T"}],
+                          "EXA_ALL_COLUMNS": [{"COLUMN_NAME": "SHIP_STATE"}, {"COLUMN_NAME": "TOTAL_AMOUNT"}, {"COLUMN_NAME": "AVG_AMOUNT"}]})
+        found = svc.store_totals(conn, "all_data", "order_lines", ["total_amount", "avg_amount"], ["ship_state"], max_age="6 hours")
+        sent = " | ".join(conn.sent)
+        self.assertIn('CREATE OR REPLACE TABLE EXAKIT_TOTALS."ORDER_LINES_SHIP_STATE" AS SELECT s AS SHIP_STATE', sent)
+        self.assertIn("REGISTER_MATERIALIZATION('all_data', 'order_lines_ship_state', 'EXAKIT_TOTALS', 'ORDER_LINES_SHIP_STATE', 'AGGREGATE', 'MAX_AGE 6 HOURS')", sent)
+        self.assertEqual(["DIRECT", "SUM", "NONE"], [c["rollup"] for c in found["columns"]], "only additive metrics roll up")
+        self.assertIn("MARK_MATERIALIZATION_REFRESHED('all_data', 'order_lines_ship_state', NULL, NULL)", sent)
+        self.assertIn("'totals_order_lines_ship_state')", sent, "kept in the model, so a rebuild registers it again")
+        with self.assertRaisesRegex(svc.Refused, "MINUTES, HOURS or DAYS"):
+            svc.store_totals(conn, "all_data", "order_lines", ["total_amount"], [], max_age="soon")
+        record = {"name": "t", "schema": "EXAKIT_TOTALS", "table": "T", "sql": "SELECT 1", "max_age": "1 DAYS", "columns": []}
+        later = self.Conn({"GET_CUSTOM_EXTENSIONS": [{"SCOPE_TYPE": "MODEL", "EXTENSION_NAME": "totals_t", "DATA_JSON": json.dumps(record)}]})
+        svc.refresh_totals(later, "all_data", "t")
+        self.assertEqual(['DELETE FROM EXAKIT_TOTALS."T"', 'INSERT INTO EXAKIT_TOTALS."T" SELECT 1'], later.sent[1:3])
+        with self.assertRaises(svc.NotFound):
+            svc.refresh_totals(later, "all_data", "nope")
+
+    def test_frozen_views_governance_logging_suggestions_and_imports(self):
+        conn = self.Conn({"CHECK_FROZEN_VIEWS": [{"VIEW_SCHEMA": "BI", "VIEW_NAME": "R", "STATUS": "STALE", "DETAIL": "metric changed"}],
+                          "SET_QUERY_LOGGING": [{"DEPLOYMENT_VALUE": "ON", "SESSION_VALUE": None, "EFFECTIVE_VALUE": "ON"}],
+                          "MODEL_EVOLUTION_SUGGESTIONS": [{"SUGGESTION_ID": 1, "REVIEW_STATUS": "PENDING"}, {"SUGGESTION_ID": 2, "REVIEW_STATUS": "CERTIFIED"}],
+                          "REVIEW_MODEL_EVOLUTION": [{"SUGGESTION_ID": 1, "REVIEW_STATUS": "CERTIFIED"}],
+                          "VALIDATE_MODEL": []})
+        made = svc.freeze_view(conn, "bi.revenue", "SELECT ship_state, total_amount FROM SEMANTIC_ALL_DATA.ORDER_LINES GROUP BY ship_state;")
+        self.assertEqual("BI.REVENUE", made["view"])
+        at = conn.sent.index("EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL()")
+        self.assertTrue(conn.sent[at + 1].startswith("CREATE OR REPLACE VIEW BI.REVENUE AS SELECT ship_state"))
+        self.assertEqual("EXECUTE SCRIPT SEMANTIC_ADMIN.DISABLE_SEMANTIC_SQL()", conn.sent[at + 2], "the preprocessor is switched off after")
+        with self.assertRaisesRegex(svc.Refused, "one SELECT over a semantic view"):
+            svc.freeze_view(conn, "bi.x", "SELECT 1 FROM DUAL")
+        self.assertEqual([("BI.R", "STALE")], [(v["view"], v["status"]) for v in svc.frozen_views(conn, "all_data")])
+        self.assertEqual("GOVERNED", svc.governance_mode(conn, "all_data", "governed")["mode"])
+        with self.assertRaises(svc.Refused):
+            svc.governance_mode(conn, "all_data", "strict")
+        self.assertEqual("ON", svc.query_logging(conn, True)["effective"])
+        self.assertIn("SET_QUERY_LOGGING('DEPLOYMENT', 'ON')", conn.sent[-1])
+        self.assertEqual([1], [r["SUGGESTION_ID"] for r in svc.suggestions(conn, "all_data")], "only those waiting")
+        self.assertEqual("CERTIFIED", svc.review_change(conn, 1, "certified", "matches finance")["status"])
+        with self.assertRaises(svc.Refused):
+            svc.review_change(conn, 1, "certified", "")
+        from descriptor import publish
+        publish.keep({"model": "all_data"}, {"tables": []})
+        with self.assertRaisesRegex(svc.Refused, "a model of its own"):
+            svc.import_databricks(conn, "all_data", "version: 0.1")
+        with self.assertRaises(svc.Refused):
+            svc.import_osi(conn, {"no": "operations"})
+
+    def test_a_verified_question_is_compiled_first_and_kept_beside_the_model(self):
+        from descriptor import publish
+        publish.keep({"model": "sales"}, {"tables": []})
+        conn = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "OK", "GENERATED_SQL": "SELECT 1"}]})
+        svc.verify_question(conn, "sales", "orders", "Revenue by state", "What is revenue per state?",
+                            {"metrics": ["total_amount"], "dimensions": ["state"]})
+        self.assertTrue(conn.sent[-1].startswith("EXECUTE SCRIPT SEMANTIC_ADMIN.ADD_VERIFIED_QUERY('sales', 'ORDERS', 'Revenue by state'"))
+        self.assertEqual("Revenue by state", publish.kept("sales")["verified"][0]["name"])
+        with self.assertRaises(svc.Refused):                         # a name is kept once
+            svc.verify_question(conn, "sales", "orders", "Revenue by state", "again?", {"metrics": ["total_amount"]})
+        refused = self.Conn({"COMPILE_REQUEST_JSON": [{"STATUS": "ERROR", "ERROR_MESSAGE": "no"}]})
+        with self.assertRaises(svc.Refused):
+            svc.verify_question(refused, "sales", "orders", "Other", "q?", {"metrics": ["x"]})
+        self.assertFalse(any("ADD_VERIFIED_QUERY" in s for s in refused.sent), "a refused request is never stored")
+
+    def test_fusion_is_dry_run_first_and_an_applied_document_is_kept(self):
+        from descriptor import publish
+        publish.keep({"model": "crm"}, {"tables": []})
+        doc = {"entities": {"customer": {"representations": [{"name": "mongo", "source_schema": "VS_MONGO",
+                                                               "source_object": "CUSTOMERS", "priority": 20}]}}}
+        conn = self.Conn({"APPLY_FUSION_DECLARATION": [{"STATUS": "DRY_RUN", "APPLIED_COUNT": 0}],
+                          "EXPORT_FUSION_DECLARATION": [{"DECLARATION_JSON": json.dumps(doc)}]})
+        found = svc.fuse(conn, "crm", doc)
+        self.assertEqual(("dry_run", True), (found["status"], found["dry_run"]))
+        self.assertEqual("ALTER SESSION SET QUERY_TIMEOUT=60", conn.sent[0])
+        self.assertTrue(conn.sent[1].endswith(", TRUE)"))
+        self.assertNotIn("fusion", publish.kept("crm"))
+        conn.answers["APPLY_FUSION_DECLARATION"] = [{"STATUS": "OK", "APPLIED_COUNT": 3}]
+        found = svc.fuse(conn, "crm", doc, dry_run=False)
+        self.assertEqual(doc, publish.kept("crm")["fusion"])
+        conn.answers["APPLY_FUSION_DECLARATION"] = [{"STATUS": "ERROR", "MESSAGE": "SEMANTIC_FUSION_011 unknown key"}]
+        self.assertEqual("error", svc.fuse(conn, "crm", doc, dry_run=False)["status"])
+
+    def test_a_lost_store_is_put_back_from_the_column_maps_the_model_carries(self):
+        from descriptor import store
+        older = {"table": "SHOP.ORDERS", "version": 1, "text": "version: 1\n"}
+        newer = {"table": "SHOP.ORDERS", "version": 2, "text": "version: 2\n"}
+        rows = [{"MODEL_NAME": "sales", "OBJECT_NAME": "orders", "EXTENSION_KEY": f"column_map_v{d['version']}",
+                 "EXTENSION_VALUE": json.dumps(d)} for d in (older, newer)]
+        rows.append({"MODEL_NAME": "other", "EXTENSION_KEY": "column_map_v9", "EXTENSION_VALUE": json.dumps(dict(newer, version=9))})
+        old = self.Conn({"CUSTOM_EXTENSIONS": rows})
+        old.execute = (lambda inner: lambda sql: (_ for _ in ()).throw(RuntimeError("no such script")) if "GET_CUSTOM_EXTENSIONS" in sql
+                       else inner(sql))(old.execute)
+        self.assertEqual({"SHOP.ORDERS": {"version": 2, "text": "version: 2\n"}}, svc.column_maps_in_model(old, "sales"),
+                         "an older product: its catalog view, this model's rows")
+        conn = self.Conn({"GET_CUSTOM_EXTENSIONS": [{"SCOPE_TYPE": "ENTITY", "SCOPE_NAME": "orders", "VENDOR_NAME": "exakit",
+                                                     "EXTENSION_NAME": f"column_map_v{d['version']}", "DATA_JSON": json.dumps(d)}
+                                                    for d in (older, newer)]})
+        self.assertEqual({"SHOP.ORDERS": {"version": 2, "text": "version: 2\n"}}, svc.column_maps_in_model(conn, "sales"))
+        self.assertIn("GET_CUSTOM_EXTENSIONS('sales', NULL, NULL, 'exakit')", " ".join(conn.sent), "Semantic Views' own reader")
+        said = svc.restore_column_maps(conn, "sales")
+        self.assertEqual("would be written to the store", said[0]["action"])
+        self.assertEqual([], store.versions("SHOP.ORDERS"), "nothing written without write=True")
+        svc.restore_column_maps(conn, "sales", write=True)
+        self.assertEqual(([2], "version: 2\n"), (store.versions("SHOP.ORDERS"), store.current("SHOP.ORDERS")))
+        self.assertEqual("the store is current", svc.restore_column_maps(conn, "sales", write=True)[0]["action"])
+
+    def test_a_fusion_document_binds_every_field_on_the_other_copy_and_names_one_winner(self):
+        from descriptor import publish
+        spec = {"model": "crm", "entities": [{"name": "customers", "schema": "SHOP", "table": "CUSTOMERS", "alias": "t1",
+                                              "key": ["ID"]}],
+                "objects": [{"name": "CUSTOMERS", "root": "customers",
+                             "dimensions": [{"name": "region", "entity": "customers", "expression": 't1."REGION"',
+                                             "type": "VARCHAR(20)", "column": "REGION"},
+                                            {"name": "tier", "entity": "customers", "expression": 't1."TIER"',
+                                             "type": "VARCHAR(10)", "column": "TIER"}],
+                             "facts": [{"name": "customers_row", "entity": "customers", "row": True, "expression": "1", "type": "DECIMAL(1,0)"}]}]}
+        publish.keep(spec, {"tables": ["SHOP.CUSTOMERS"]})
+        conn = self.Conn({"EXA_ALL_COLUMNS": [{"COLUMN_NAME": "CUST_ID", "COLUMN_TYPE": "DECIMAL(18,0)", "COLUMN_ORDINAL_POSITION": 1, "IS_VIRTUAL": 1},
+                                              {"COLUMN_NAME": "REGION", "COLUMN_TYPE": "VARCHAR(20) UTF8", "COLUMN_ORDINAL_POSITION": 2, "IS_VIRTUAL": 1}]})
+        doc = svc.fusion_document(conn, "crm", "shop.customers", "VS_CRM.CUSTOMERS", key="cust_id", wins="other")
+        customers = doc["entities"]["customers"]
+        primary, other = customers["representations"]
+        self.assertEqual(("primary", "SUPPLEMENTAL"), (primary["name"], primary["authority"]))
+        self.assertEqual(("VIRTUAL_SCHEMA", "VS_CRM", "CUSTOMERS", "AUTHORITATIVE"),
+                         (other["source_kind"], other["source_schema"], other["source_object"], other["authority"]))
+        self.assertEqual("DIRECT", other["identity_binding"]["binding_kind"], "keys named differently: one identity")
+        self.assertEqual('t1.CUST_ID', other["identity_binding"]["source_expression"])
+        bound = {b["attribute_name"]: b["source_expression"] for b in other["attribute_bindings"]}
+        self.assertEqual({"region": 't1."REGION"', "tier": "CAST(NULL AS VARCHAR(10))"}, bound)
+        self.assertEqual([("region", "RECONCILE")], [(p["attribute_name"], p["strategy"]) for p in customers["attribute_policies"]])
+        with self.assertRaises(svc.Refused):
+            svc.fusion_document(conn, "crm", "SHOP.ORDERS", "VS_CRM.CUSTOMERS")
+        # different ids: a certified mapping table pairs them (a MAPPED identity)
+        both = self.Conn({"EXA_ALL_COLUMNS": [{"COLUMN_NAME": c, "COLUMN_TYPE": t, "COLUMN_ORDINAL_POSITION": i, "IS_VIRTUAL": 0}
+                                              for i, (c, t) in enumerate((("CUST_ID", "DECIMAL(18,0)"), ("ACCOUNT_ID", "DECIMAL(18,0)"),
+                                                                          ("REGION", "VARCHAR(20) UTF8"), ("CREATED", "DATE")), 1)]})
+        mapped = svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID",
+                                     mapping={"table": "CRM.XREF", "local": "account_id", "key": "cust_id"})
+        binding = mapped["entities"]["customers"]["representations"][1]["identity_binding"]
+        self.assertEqual(("MAPPED", {"source_schema": "CRM", "source_object": "XREF", "source_local_column": "ACCOUNT_ID",
+                                     "semantic_key_column": "CUST_ID", "certification_status": "CERTIFIED"}),
+                         (binding["binding_kind"], binding["mapping"]))
+        self.assertIn("identity", mapped["entities"]["customers"])
+        # older rows in another source: a date split, each side's window, no winner
+        split = svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID",
+                                    split={"column": "created", "at": "2026-01-01"})
+        hot, cold = split["entities"]["customers"]["representations"]
+        self.assertEqual(({"predicate": "t1.CREATED >= TIMESTAMP '2026-01-01 00:00:00'", "valid_from": "2026-01-01 00:00:00"},
+                          {"predicate": "t1.CREATED < TIMESTAMP '2026-01-01 00:00:00'", "valid_to": "2026-01-01 00:00:00"}),
+                         (hot["coverage"], cold["coverage"]))
+        self.assertFalse({"authority", "identity_binding"} & (set(hot) | set(cold)))
+        self.assertNotIn("attribute_policies", split["entities"]["customers"], "a date split reconciles nothing")
+        self.assertEqual(["primary", split["split"]["representation"]], [c["representation_name"] for c in split["split"]["coverage"]],
+                         "both windows go to Semantic Views as one batch")
+
+        class Tx(self.Conn):
+            def __init__(self, answers):
+                super().__init__(answers)
+                self.log = []
+
+            def set_autocommit(self, on):
+                self.log.append(("autocommit", on))
+
+            def rollback(self):
+                self.log.append(("rollback",))
+        tx = Tx({"ADD_ENTITY_REPRESENTATION_WITH_COVERAGE": [{"STATUS": "OK"}]})
+        checked = svc.fuse(tx, "crm", split, dry_run=True)
+        self.assertEqual("dry_run", checked["status"])
+        self.assertTrue(any("ADD_ENTITY_REPRESENTATION_WITH_COVERAGE('crm', 'customers'" in x for x in tx.sent))
+        self.assertEqual([("autocommit", False), ("rollback",), ("autocommit", True)], tx.log, "a check is rolled back")
+        with self.assertRaisesRegex(svc.Refused, "not both"):
+            svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", mapping={"table": "CRM.XREF"}, split={"column": "CREATED"})
+        with self.assertRaisesRegex(svc.Refused, "YYYY-MM-DD"):
+            svc.fusion_document(both, "crm", "SHOP.CUSTOMERS", "VS_CRM.CUSTOMERS", key="CUST_ID", split={"column": "CREATED", "at": "soon"})
+
+
+class RulesTest(unittest.TestCase):
+    """The rules a column map is drafted with and links are found with can be read and changed for one run."""
+
+    def test_a_rule_changes_the_draft_and_the_defaults_come_back(self):
+        from descriptor import roles, rules
+        column = {"column": "SEGMENT", "type": "VARCHAR(20) UTF8", "kind": "string", "rows": 1000, "non_null": 1000,
+                  "approx_distinct": 80, "avg_length": 6.0}
+        before = roles.classify(dict(column))
+        with rules.using({"CATEGORY_DISTINCT": 100}):
+            during = roles.classify(dict(column))
+        self.assertEqual(("category", "low"), (before["role"], before["confidence"]), "80 values: over the default 50, a guess")
+        self.assertEqual(("category", "high", "80 distinct"), (during["role"], during["confidence"], during["evidence"]),
+                         "under the rule's 100: a sure group")
+        self.assertEqual(before, roles.classify(dict(column)), "the defaults are back afterwards")
+        self.assertIn("MEASURE_HINTS", svc.role_rules())
+        self.assertEqual(0.9, svc.link_rules()["MIN_SHARE"])
+        with self.assertRaisesRegex(ValueError, "not a link rule"):
+            with rules.using(None, {"NOPE": 1}):
+                pass
+        with self.assertRaisesRegex(ValueError, "is a number"):
+            with rules.using({"CATEGORY_DISTINCT": "many"}):
+                pass
+
+    def test_a_link_search_runs_with_the_rules_given(self):
+        from descriptor import links
+        seen = {}
+        with mock.patch.object(svc, "_find_links", side_effect=lambda *a, **k: seen.setdefault("share", links.MIN_SHARE)):
+            svc.find_links(None, ["A", "B"], rules={"MIN_SHARE": 0.75})
+        self.assertEqual((0.75, 0.9), (seen["share"], links.MIN_SHARE))
 
 if __name__ == "__main__":
     unittest.main()

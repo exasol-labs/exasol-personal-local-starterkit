@@ -54,7 +54,7 @@ The proposal for one wide view. `joins` lists each table it adds and how; `sql` 
 | `joins` |  |
 | `needed` | Whether the main table has links to follow at all. |
 | `sql` |  |
-| `create(connection) -> Any` | Approve the schema map (when it is a draft), create the view, describe it with the main table's roles carried over and approve that; returns the view's dataset. |
+| `create(connection, sql: str \| None=None) -> Any` | Approve the schema map (when it is a draft), create the view, describe it with the main table's roles carried over and approve that; returns the view's dataset. |
 
 
 ## nb.SchemaMap [#SchemaMap]

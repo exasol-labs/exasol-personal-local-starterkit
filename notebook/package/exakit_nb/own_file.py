@@ -282,13 +282,14 @@ def _prepare(frame, descriptor=None) -> list[tuple[str, str]]:
         # the column type, without asking the user to map roles before the role picker appears.
         for name in frame.columns:
             column = frame[name]
-            if not types.is_object_dtype(column) or column.dropna().empty:
+            # text: object in pandas 2, its own string dtype in pandas 3
+            if not (types.is_object_dtype(column) or types.is_string_dtype(column)) or column.dropna().empty:
                 continue
-            sample = column.dropna().astype(str).head(1000)
-            if not sample.str.contains(r"[-/:]", regex=True).mean() >= 0.9:
+            sample = column.dropna().astype(str).head(int(LOAD_RULES["DATE_SAMPLE"]))
+            if not sample.str.contains(r"[-/:]", regex=True).mean() >= float(LOAD_RULES["DATE_SHARE"]):
                 continue
             parsed = pd.to_datetime(sample, errors="coerce")
-            if parsed.notna().mean() >= 0.9:
+            if parsed.notna().mean() >= float(LOAD_RULES["DATE_SHARE"]):
                 frame[name] = pd.to_datetime(column, errors="coerce").dt.date
                 date = name
                 break
@@ -311,7 +312,7 @@ def _prepare(frame, descriptor=None) -> list[tuple[str, str]]:
             frame[name] = column.where(column.isna(), column.astype(str))
             lengths = frame[name].dropna().str.len()
             width = int(lengths.max()) if len(lengths) else 1      # a column with no value at all is still a column
-            out.append((name, f"VARCHAR({min(max(width, 1), MAX_VARCHAR)})"))
+            out.append((name, f"VARCHAR({min(max(width, 1), int(LOAD_RULES['MAX_VARCHAR']))})"))
     return out
 
 
@@ -363,6 +364,18 @@ def _keep_roles(file: Path, doc: dict[str, Any]) -> None:
 
 
 DEFAULT_SCHEMA = "MY_DATA"                # where your own data loads when no schema is named
+LOAD_RULES = {"DEFAULT_SCHEMA": "MY_DATA", "REPLACE": False, "MAX_VARCHAR": 2000000, "DATE_SHARE": 0.9, "DATE_SAMPLE": 1000}
+
+
+def load_rules() -> dict:
+    """The rules your own files are loaded with, to copy, change and pass (nb.load_own_file(..., rules={...})):
+
+    DEFAULT_SCHEMA   where a file loads when no schema is named and its folder gives none
+    REPLACE          load a file again over a table of that name (False: a table the kit did not load is left alone)
+    MAX_VARCHAR      the widest a text column is made
+    DATE_SHARE       a text column is a date when this share of its values reads as one (and looks like one)
+    DATE_SAMPLE      how many values are looked at to decide that"""
+    return dict(LOAD_RULES)
 LOADABLE = (".csv", ".parquet", ".json", ".geojson")   # what `exakit data-load` takes from a folder
 
 
@@ -376,7 +389,7 @@ def _sql_name(text: str) -> str:
 def _schema_and_table(table: str | None, folder: Path | None = None) -> tuple[str, str]:
     """``table`` as (SCHEMA, TABLE or ""): SCHEMA alone or SCHEMA.TABLE, plain SQL names. Empty means the folder's
     name (``folder``: the folder loaded, or the one the file is in), else MY_DATA."""
-    default = (_sql_name(folder.resolve().name) if folder is not None else "") or DEFAULT_SCHEMA
+    default = (_sql_name(folder.resolve().name) if folder is not None else "") or str(LOAD_RULES["DEFAULT_SCHEMA"])
     named = str(table or "").strip().strip("\"'").upper() or default
     schema, _, wanted = named.partition(".")
     if not re.fullmatch(r"[A-Z][A-Z0-9_]*", schema) or (wanted and not re.fullmatch(r"[A-Z][A-Z0-9_]*", wanted)):
@@ -428,8 +441,29 @@ def _table_from_file(file: Path) -> str:
     return name or "MY_TABLE"
 
 
-def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *, conn=None, replace: bool = False,
-                  missing_ok: bool = False) -> Dataset | LoadedTable | None:
+def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *, conn=None, replace: bool | None = None,
+                  missing_ok: bool = False, rules: dict | None = None) -> Dataset | LoadedTable | None:
+    """``rules`` changes how the file is loaded (nb.load_rules() lists them); the rest as _load_own_file."""
+    import threading
+
+    lock = globals().setdefault("_LOAD_LOCK", threading.RLock())
+    given = dict(rules or {})
+    wrong = [k for k in given if k not in LOAD_RULES]
+    if wrong:
+        raise ValueError(f"{wrong[0]} is not a load rule: the rules are {', '.join(LOAD_RULES)}")
+    with lock:
+        saved = dict(LOAD_RULES)
+        LOAD_RULES.update(given)
+        try:
+            return _load_own_file(path, table, descriptor, conn=conn,
+                                  replace=bool(LOAD_RULES["REPLACE"]) if replace is None else replace, missing_ok=missing_ok)
+        finally:
+            LOAD_RULES.clear()
+            LOAD_RULES.update(saved)
+
+
+def _load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *, conn=None, replace: bool = False,
+                   missing_ok: bool = False) -> Dataset | LoadedTable | None:
     """Load your own data and return it as a Dataset the notebooks run on (or a LoadedTable whose roles are reviewed
     next). ``path`` is a CSV, Parquet or JSON file, or a folder of them (loaded by `exakit data-load`, exapump, one
     table per file). ``table`` is the schema the tables go into (empty: the folder's name), each named after its file; or

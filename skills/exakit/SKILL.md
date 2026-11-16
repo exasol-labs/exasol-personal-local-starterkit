@@ -75,12 +75,21 @@ and offer `exakit marketplace <id>` — install only when the user agrees.
 
 The kit's semantic layer is **Exasol Semantic Views** (the `semantic-views`
 add-on: `SEMANTIC_CATALOG`, `SEMANTIC_ADMIN`, `SEMANTIC_AGENT`). Approving a
-column map builds it: each approved table becomes an entity of its schema's
-semantic model, each approved link a relationship, its time, category and flag
-columns dimensions, its measures facts with `total_` and `average_` metrics,
-and every table a row count. The views are published in `SEM_<MODEL>`. There
-is no other semantic layer: never create or recommend views of your own as a
-semantic layer.
+column map builds it, in two models: its schema's, and **`all_data`** - one
+model over every approved table of every source (sample data, files, every
+external source), kept current by each approval. Each table is an entity whose
+description says what it is and where it lives (an external source names its
+connector and is read live); each approved link a relationship with its
+evidence and why; key, identifier, time, category and flag columns dimensions,
+measures facts with `total_` and `average_` metrics, every table a row count.
+Each field's comment says what the column holds and why it is used that way;
+free-text columns are described in agent instructions, a personal-data column
+is a SAFETY instruction (never select, group, filter or show it), and the same
+rows kept in two sources are one entity (fusion). Approved questions are
+verified queries: prefer them. The approved column map is kept on the entity,
+one per version. The views are published in `SEM_<MODEL>`. There is no other
+semantic layer: never create or recommend views of your own as a semantic
+layer. Start from `all_data`.
 
 **Before you describe, query or chart any table, read the models.** They are
 the user's own statement of what the data means, and they win over anything you
@@ -96,6 +105,14 @@ SELECT MODEL_NAME, METRIC_NAME, DISPLAY_NAME, DESCRIPTION, EXPRESSION
 FROM SEMANTIC_CATALOG.METRICS WHERE STATUS = 'ACTIVE';
 SELECT MODEL_NAME, FROM_ENTITY_NAME, TO_ENTITY_NAME, JOIN_CONDITION
 FROM SEMANTIC_CATALOG.RELATIONSHIPS WHERE STATUS = 'ACTIVE';
+```
+
+Then read what the model says to agents, and its reviewed questions:
+
+```sql
+SELECT * FROM SEMANTIC_AGENT.INSTRUCTIONS_FOR_AGENT WHERE MODEL_NAME = 'all_data';
+SELECT QUERY_NAME, NATURAL_LANGUAGE_TEXT, REQUEST_JSON FROM SEMANTIC_AGENT.VERIFIED_QUERIES_FOR_AGENT
+WHERE MODEL_NAME = 'all_data';
 ```
 
 - **Answer from the model's metrics and dimensions**, not from hand-written
@@ -179,6 +196,37 @@ lists them; in a notebook `nb.refresh_semantic(connection, "<NAME>")`). A
 column map whose table changed since approval is shown as a draft again by
 `exakit describe`: treat its table as missing from the model and say so.
 
+**The rest of the semantic layer is `exakit semantic` - the notebook's own functions, never SQL of your own
+against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, after you showed what it will do.
+
+| Need | Command | Writes |
+|---|---|---|
+| A model's fields, with what each holds and why it is used | `exakit semantic fields all_data --json` | no |
+| A draft of the data map to show the user (grains, links with their type, starts, metrics, rules), never saved by itself | `exakit semantic draft --table S.T --table S.T` | no |
+| The fields that match the user's words, best first (use it before picking names from a large model) | `exakit semantic search "revenue country" --model all_data --json` | no |
+| The SQL for a question, from metric and dimension names | `exakit semantic compile '{"model": "all_data", "object": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["state"]}' --json` - a refusal with choices means ask the user which one | no |
+| Questions already reviewed (use them before drafting) | `exakit semantic verified all_data --json` | no |
+| Keep an approved question in the model | `exakit semantic verify all_data --object ORDER_LINES --name "Revenue by state" --question "..." --request '{...}'` | yes |
+| The same rows in two sources (customers here and in a CRM) | `exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS [--key CUST_ID] [--wins model\|other]` - a dry run; show its result, then add `--apply` on a yes | only with `--apply` |
+| The same rows with different ids, or older rows elsewhere | `exakit semantic fuse ... --mapping-table S.XREF --mapping-local COL --mapping-key COL`, or `--split-column DATE --split-at YYYY-MM-DD` - a dry run; `--apply` on a yes; `exakit semantic coverage all_data` after a split | only with `--apply` |
+| The model's fusion, its column maps | `exakit semantic fusion all_data`, `exakit semantic column-maps all_data` | no |
+| A view the user already wrote (one table, grouped, SUM / COUNT / AVG / MIN / MAX) | `exakit semantic adopt logistics MART_SEMANTIC.SHIPPING --dry-run` shows the view and the statement; drop `--dry-run` on a yes. A join, a WHERE or several tables is refused: approve the tables' column maps instead | without `--dry-run` |
+| A dashboard's tiles after the model changed | `exakit board recheck <NAME>` lists tiles whose SQL the model now writes differently; `--update` on a yes | only with `--update` |
+| What Semantic Views finds wrong with a model, in its own words | `exakit semantic validate all_data` | no |
+| A metric as Semantic Views explains it | `exakit semantic explain all_data <VIEW> <METRIC>` | no |
+| The data map's versions, kept in the model; an older one saved again | `exakit semantic versions all_data`; `exakit semantic restore-version all_data <N>` on a yes | restore-version |
+| Suggested changes to review; a decision on one | `exakit semantic suggestions all_data`; `exakit semantic review <ID> certified\|rejected --why "..."` on the user's word | review |
+| Faster dashboards on large tables | `exakit semantic totals all_data --store <VIEW> --metric M --dimension D` on a yes; `--refresh <NAME>` later | yes |
+| A view a BI tool can read | `exakit semantic freeze SCHEMA.NAME --sql "SELECT ... FROM SEM_ALL_DATA.<VIEW> ..."` on a yes; `exakit semantic frozen all_data` | freeze |
+| A lost store, a lost model | `exakit semantic restore-maps all_data` (add `--write` on a yes); `exakit semantic refresh all_data` | `--write`, refresh |
+
+**A dashboard of several answers is `exakit board`, on Dash Server.** Show each query to the user; pinning it is
+its approval: `exakit board pin <NAME> --page <PAGE> --question "..." --sql "SELECT ..."` (from a verified question
+or a compiled request where there is one). `exakit board show <NAME>`, `move`, `remove`, `kind` arrange it.
+`exakit board preview <NAME>` builds a health-checked preview - a tab per page, filters on the columns every
+tile of a page returns - and gives its URL. Only after the user opened it and said the figures are right:
+`exakit board publish <NAME> --figures-checked`. One chart or a custom app is still the dash-server tools.
+
 ## 4. MANDATORY: the order of tools for each task
 
 Use the first that fits. Go further down only when the one above cannot do
@@ -230,7 +278,7 @@ write the read-only MCP path refused.
 | Task | First choice | Then |
 |---|---|---|
 | Notebook work | the kit's notebooks via `exakit notebook` (§6) | — never a bare `pip install jupyter` |
-| Dashboard or chart | dash-server (`dash-server`, `exasol-dash`) | if missing: offer `exakit marketplace dash-server` — no other dashboard tool |
+| Dashboard or chart | approved answers on pages: `exakit board pin` / `preview` / `publish` (§3); one custom app: dash-server (`dash-server`, `exasol-dash`) | if missing: offer `exakit marketplace dash-server` — no other dashboard tool |
 | Run SQL on a schedule | exasol-scheduler | offer `exakit marketplace exasol-scheduler` |
 | UDFs, model scoring in the database | udf-devkit commands (`exakit udf-setup`, `udf-use`, `model put`, `udf-file`) | `exasol-udfs` for the `CREATE SCRIPT` itself |
 | Files for UDFs | `exakit udf-file` / `exakit model put` | `exasol-bucketfs` |

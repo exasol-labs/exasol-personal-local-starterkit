@@ -183,10 +183,12 @@ def _discover_clients(args: argparse.Namespace) -> int:
 
 
 def _record_entry_name(record: dict) -> str:
+    """The server a record is the kit's entry for (exasol, dash-server): its own name, also when the entry was
+    written under "<name>-starter-kit" beside a user's entry of the same name."""
     metadata = record.get("metadata") or {}
     if not isinstance(metadata, dict):
         return "exasol"
-    return str(metadata.get("entry_name", "exasol"))
+    return str(metadata.get("server", metadata.get("entry_name", "exasol")))
 
 
 def _connected_clients(

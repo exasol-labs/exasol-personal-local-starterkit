@@ -17,19 +17,28 @@ leaks = nb.leakage_check(conn, ds)         # Validate: columns whose values (alm
 ## nb.data_checks [#data_checks]
 
 ```python
-nb.data_checks(conn, ds, *, show: bool=True)
+nb.data_checks(
+    conn,
+    ds,
+    *,
+    show: bool=True,
+    placeholder_values: list[str] | None=None,
+    rare: float=RARE,
+)
 ```
 
 Prepare: one row per finding - CHECK, COLUMN_NAME, ROWS_AFFECTED, PCT, MEANS - for repeated keys, repeated
 identifiers, exact copies of a row, empty cells, placeholder values and a rare label. Prints each finding in one
 sentence (`show=False` only returns them); an empty frame means the table passed every check.
+`placeholder_values` is the list of values that mean "not known" (PLACEHOLDER_VALUES by default); `rare` the
+target rate under which a target counts as rare (0.10).
 
 **Used in:** `data-scientist/01_explore`
 
 ## nb.leakage_check [#leakage_check]
 
 ```python
-nb.leakage_check(conn, ds, *, show: bool=True) -> list[str]
+nb.leakage_check(conn, ds, *, show: bool=True, pure: float=PURE) -> list[str]
 ```
 
 Validate: the columns whose values (almost) decide the label on their own - each a value or values where the

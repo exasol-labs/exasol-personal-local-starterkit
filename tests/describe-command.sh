@@ -225,5 +225,20 @@ contains "and where its links go" "SEMANTIC_CATALOG.RELATIONSHIPS" "$_cd_page"
 contains "with a multi-source model example" "exakit describe --model sales_360" "$_cd_page"
 contains "with a schema example" "exakit describe --schema" "$_cd_page"
 
+echo "exakit semantic and exakit board pass everything to semantic_cli.py in the same Python:"
+cp "$ROOT/test_data/describe/stub_service.py" "$WORK/root/setup/lib/semantic_cli.py"
+unset STUB_EXIT
+OUT="$( (cmd_semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key CUST_ID --json) 2>&1 )"; CODE=$?
+check "semantic: the group, the action and every argument, as given" "semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS --key CUST_ID --json" "$(asked args)"
+OUT="$( (cmd_board pin sales --page Revenue --question 'Revenue by state?' --sql 'SELECT 1') 2>&1 )"; CODE=$?
+check "board: a question with spaces stays one argument" "board pin sales --page Revenue --question Revenue by state? --sql SELECT 1" "$(asked args)"
+OUT="$( (cmd_semantic) 2>&1 )"; check "semantic alone shows its help page" "help page: command semantic" "$OUT"
+OUT="$( (cmd_board --help) 2>&1 )"; check "board --help shows its help page" "help page: command board" "$OUT"
+check "the CLI dispatches semantic" "1" "$(grep -c '^    semantic) shift; command -v cmd_semantic' "$ROOT/setup/exakit")"
+check "and board" "1" "$(grep -c '^    board) shift; command -v cmd_board' "$ROOT/setup/exakit")"
+for _cmd in semantic board; do
+    check "the help document has $_cmd" "1" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum(c["command"] == sys.argv[2] for c in d["commands"]))' "$ROOT/setup/help/exakit.json" "$_cmd")"
+done
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -15,6 +15,7 @@ import time
 import re
 import importlib.util
 import json
+import types
 import os
 import stat
 import string
@@ -31,7 +32,11 @@ SOURCES = ROOT / "notebook" / "notebooks"
 sys.path.insert(0, str(ROOT / "tools"))
 sys.path.insert(0, str(PACKAGE))
 
-import notebooks as build_tool  # noqa: E402
+# tools/notebooks.py, under a name of its own (notebook/kit/notebooks.py is "notebooks" in another suite, and the
+# first one imported in a run would win)
+_spec = importlib.util.spec_from_file_location("kit_build_notebooks", ROOT / "tools" / "notebooks.py")
+build_tool = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(build_tool)
 
 HAVE_ANYWIDGET = importlib.util.find_spec("anywidget") is not None
 HAVE_SKLEARN = importlib.util.find_spec("sklearn") is not None and importlib.util.find_spec("numpy") is not None
@@ -375,6 +380,37 @@ class CardTest(unittest.TestCase):
         self.assertIn("Client One", rows["assistants"]["text"])
         load = next(a for a in rows["data"]["actions"] if a["label"] == "Load d2")
         self.assertEqual('nb.exakit("data-load", "d2")', load["cmd"])
+
+    def test_the_explore_notebook_starts_with_choose_your_data_which_adds(self):
+        understand = importlib.import_module("exakit_guide.screens.understand")
+        self.assertTrue(understand.ExploreChoose.ADDING, "what the quickstart chose stays; ticks are added beside it")
+        card = understand.ExploreChoose.__new__(understand.ExploreChoose)
+        with mock.patch.object(understand.ChooseData, "build", return_value=[{"t": "head", "kicker": understand.KICKER,
+                                                                                "title": "Choose your data", "sub": "x"}]), \
+                mock.patch.object(understand.SESSION, "chosen", [{"table": "AMAZON.ORDER_LINES"}]):
+            head = card.build()[0]
+        self.assertEqual(("Step 1 of 4 · Understand your data", "Choose your data"), (head["kicker"], head["title"]))
+        self.assertIn("You are working on AMAZON.ORDER_LINES", head["sub"])
+        explore = importlib.import_module("exakit_guide.screens.explore")
+        import inspect
+        self.assertIn("show(ExploreChoose(), AiHelp(), understand", inspect.getsource(explore.explore))
+
+    def test_the_home_card_says_where_you_left_off_and_what_you_did(self):
+        home = importlib.import_module("exakit_guide.screens.home")
+        notebooks = [{"id": "data-scientist-quickstart", "title": "Start here: your kit and your data", "file": "00_quickstart.ipynb"},
+                     {"id": "explore", "title": "Understand and explore", "file": "01_explore.ipynb"}]
+        events = [{"kind": "start", "name": "data-scientist-quickstart", "ts": "2026-11-16T00:00:00Z"},
+                  {"kind": "guide_action", "card": "ChooseData", "action": "use", "ok": True, "ts": "2026-11-16T00:01:00Z"},
+                  {"kind": "sql", "ts": "2026-11-16T00:02:00Z"}]
+        left = home._left_off(notebooks, events)
+        self.assertEqual(("Start here: your kit and your data", "chose your data", "00_quickstart.ipynb"),
+                         (left["where"], left["did"], left["path"]))
+        events += [{"kind": "step", "name": "explore"}, {"kind": "guide_action", "card": "_ViewsPart", "ok": True},
+                   {"kind": "describe.approve", "dataset": "amazon_sales"}, {"kind": "guide_action", "card": "Ask", "ok": False}]
+        left = home._left_off(notebooks, events)
+        self.assertEqual(("Understand and explore", "approved the column map of amazon_sales"), (left["where"], left["did"]),
+                         "a button that failed is not what you did")
+        self.assertIsNone(home._left_off(notebooks, [{"kind": "sql"}]))
 
     def test_the_journey_reads_the_kits_event_kinds(self):
         home = importlib.import_module("exakit_guide.screens.home")
@@ -1172,7 +1208,7 @@ class SeveralTablesTest(unittest.TestCase):
                 ns["chosen_tables"] = {}
             elif action_id == "data.keep":
                 ns["chosen_tables"][values["table"]] = ns[values["data"].expr]
-            elif action_id == "data.switch":
+            elif action_id in ("data.switch", "understand.switch"):
                 ns["chosen_data"] = ns["chosen_tables"][values["table"]]
             elif action_id == "data.choose":
                 ns["chosen_data"] = ns[values["data"].expr]
@@ -1194,7 +1230,12 @@ class SeveralTablesTest(unittest.TestCase):
     def use(self, values):
         with mock.patch.object(self.session, "changed"):
             self.card.on_use(values)
-        return [a for a, _v in self.ran if a != "kit.approved"]      # (a refused load looks its table up there)
+        ran = [a for a, _v in self.ran if a != "kit.approved"]      # (a refused load looks its table up there)
+        if not ran or ran[-1] != "data.remember":     # nothing opened: nothing to note
+            self.assertNotIn("data.remember", ran)
+            return ran
+        self.assertEqual([e["table"] for e in self.session.chosen], self.ran[-1][1]["tables"], "noted for 01_explore")
+        return ran[:-1]
 
     def test_one_table_runs_the_cells_it_always_ran(self):
         for values in ({"kind": "sample", "sample": "amazon"}, {"kind": ["sample"], "sample": ["amazon"]}):
@@ -1206,12 +1247,140 @@ class SeveralTablesTest(unittest.TestCase):
         ran = self.use({"kind": ["sample", "file", "source"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"],
                         "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY", "STATE_LOGISTICS"]})
         self.assertEqual(["data.several", "data.sample", "data.keep", "data.table", "data.keep", "data.source", "data.keep",
-                          "data.source", "data.switch"], ran)
+                          "data.source", "data.switch", "data.prepare"], ran)
         self.assertEqual(["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"],
                          [e["table"] for e in self.session.chosen])
         self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table)
         # one that could not be read is named with the reason's first line; the others are used
         self.assertEqual(["VS_LOGISTICS.STATE_LOGISTICS (the source refused the read)"], self.card.failed)
+
+    def test_adding_in_explore_keeps_the_tables_there_and_works_on_the_new_one(self):
+        """01_explore's Add a source or table: what is ticked joins the tables already chosen (each kept by name, no
+        new dict), the first one added is worked on next, and the quickstart's way on is not shown."""
+        self.session._ns["chosen_tables"] = {"AMAZON.ORDER_LINES": mock.Mock(fact_table="AMAZON.ORDER_LINES")}
+        self.session.chosen = [{"label": "Amazon", "table": "AMAZON.ORDER_LINES", "variable": None, "rows": None, "broken": None}]
+        self.card.ADDING = True
+        ran = self.use({"kind": ["source"], "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY"]})
+        self.assertEqual(["data.source", "data.keep", "data.switch", "data.prepare"], ran,
+                         "the tables there stay (no data.several); all of them are drafted in the background")
+        self.assertEqual(["VS_LOGISTICS.COURIER_DAILY", "AMAZON.ORDER_LINES"], [e["table"] for e in self.session.chosen])
+        self.assertEqual({"AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"}, set(self.session._ns["chosen_tables"]))
+        with self.assertRaisesRegex(ValueError, "Nothing new"):
+            self.use({"kind": ["source"], "src_schema": ["VS_LOGISTICS"], self.card._tid("VS_LOGISTICS"): ["COURIER_DAILY"]})
+
+    def test_the_flow_shows_each_source_its_approved_maps_and_the_steps(self):
+        card = self.understand.Understand.__new__(self.understand.Understand)
+        card.__dict__.update(map=None, views=mock.Mock(links=[{"from": "A", "to": "B"}], models=[{"model": "sales_360", "kit": True}]),
+                             sources=None, adding=False, kinds={"VS_LOGISTICS": "Snowflake"}, approved={"AMAZON.ORDER_LINES"})
+        self.session.chosen = [{"table": t} for t in ("AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY", "VS_LOGISTICS.STATE_LOGISTICS")]
+        flow = card._flow()
+        self.assertEqual([("this database", "AMAZON", "done", "1 table · 1 approved"), ("Snowflake", "VS_LOGISTICS", "now", "2 tables · 0 approved")],
+                         [(s["kind"], s["label"], s["state"], s["sub"]) for s in flow["sources"]])
+        steps = {s["label"]: (s["state"], s["sub"]) for s in flow["steps"]}
+        self.assertEqual(("now", "1 of 3 approved"), steps["Column maps"])
+        self.assertEqual(("done", "1 added"), steps["Links"])
+        self.assertEqual(("done", "saved"), steps["Data map"])
+        self.assertEqual("src_add", flow["add"]["action"])
+
+    def test_a_live_table_waits_for_a_click_and_only_the_chosen_tables_are_linked(self):
+        explore = importlib.import_module("exakit_guide.screens.explore")
+        card = explore.Prepare.__new__(explore.Prepare)
+        card.__dict__.update(findings=None, typed=None, joined=None, kit_said="", flash=None)
+        card.refresh = lambda: None
+        self.session._ns["dataset"] = mock.Mock(source="snowflake_sales", fact_table="VS_SALES.ORDERS")
+        with mock.patch.object(card, "_check") as check:
+            card.on_session("dataset")
+            check.assert_not_called()
+            self.assertIn("Run it now", json.dumps(card.build()))
+            card.on_run_live({})
+            check.assert_called_once()
+        part = self.understand._ViewsPart.__new__(self.understand._ViewsPart)
+        part.__dict__.update(owner=None, tables=[], columns={}, models=[], links=None, loading=False, error=None,
+                             ticked=set(), gen=0, link_gen=0, flash=None, fill=None, fill_n=0)
+        self.session.chosen = [{"table": "AMAZON.ORDER_LINES"}, {"table": "VS_LOGISTICS.COURIER_DAILY"}]
+        every = types.SimpleNamespace(table_rows=[{"table": t, "origin_label": "x", "map": "approved v1", "rows_shown": ""}
+                                                  for t in ("AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY", "TPCH.ORDERS")],
+                                      column_rows=[{"table": "TPCH.ORDERS", "column": "O_ORDERKEY"}])
+        with mock.patch.object(self.understand.actions, "run", side_effect=lambda a, **k: every if a == "understand.map" else
+                               ({"links": [], "checked": 1, "statements": 1} if a == "semantic.links_tables" else [])):
+            part._load()
+        self.assertEqual(["AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"], [t["table"] for t in part.tables],
+                         "only the tables chosen, never every table of the database")
+        self.assertNotIn("Semantic views", json.dumps(part.build()))
+
+    def test_all_tables_are_reviewed_and_approved_together_with_one_publish_per_schema(self):
+        """nb.schema_review shows only what needs a person (low-confidence columns, personal data); nb.approve_all
+        approves each table as drafted with the changes given, publishing once per schema with its last table."""
+        picker = importlib.import_module("exakit_nb.role_picker")
+
+        def review(status, columns):
+            made = mock.Mock()
+            made.draft.status, made.draft.doc = status, {"columns": columns}
+            made.approve.side_effect = lambda choices=None, publish=True: f"approved publish={publish} {choices}"
+            made.dataset.return_value = "as it was"
+            return made
+        reviews = {
+            "VS_S.ORDERS": review("draft", {"ID": {"role": "key", "confidence": "high"},
+                                            "STATUS": {"role": "measure", "confidence": "low", "evidence": "5 distinct"}}),
+            "VS_S.CUSTOMERS": review("draft", {"EMAIL": {"role": "text", "confidence": "high", "sensitive": True}}),
+            "VS_S.STORES": review("approved", {"NAME": {"role": "text", "confidence": "low"}}),
+            "MY_DATA.TARGETS": review("draft", {"STATE": {"role": "category", "confidence": "high"}})}
+        found = picker.schema_review(reviews)
+        self.assertEqual([("VS_S.ORDERS", "STATUS", "measure", "5 distinct")],
+                         [(c["table"], c["column"], c["role"], c["evidence"]) for c in found["check"]],
+                         "only the guesses of tables still to approve")
+        self.assertEqual([{"table": "VS_S.CUSTOMERS", "column": "EMAIL"}], found["sensitive"])
+        self.assertEqual((["VS_S.STORES"], 4), (found["approved"], found["fine"]))
+        with mock.patch("builtins.print"):
+            done = picker.approve_all(reviews, {"vs_s.orders": {"STATUS": "category"}})
+        self.assertEqual({"VS_S.ORDERS": "approved publish=False {'STATUS': 'category'}",
+                          "VS_S.CUSTOMERS": "approved publish=True None",     # the schema's last table publishes it
+                          "VS_S.STORES": "as it was",                          # approved already: left alone
+                          "MY_DATA.TARGETS": "approved publish=True None"}, done)
+        reviews["VS_S.ORDERS"].approve.side_effect = ValueError("STATUS sits in two slots")
+        with self.assertRaisesRegex(ValueError, "VS_S.ORDERS: STATUS sits in two slots"):
+            picker.approve_all(reviews)
+
+    def test_the_card_offers_all_tables_at_once_and_sends_only_the_changed_columns(self):
+        card = self.understand.ColumnMap.__new__(self.understand.ColumnMap)
+        card.__dict__.update(all_review=None, kit_said="", flash=None, seen={})
+        self.session.chosen = [{"table": "VS_S.ORDERS"}, {"table": "VS_S.CUSTOMERS"}]
+        self.assertEqual("map_all", card._all_blocks(2)[0]["items"][0]["id"])
+        self.assertEqual([], card._all_blocks(1), "one table left: its own tab approves it")
+        card.all_review = {"tables": ["VS_S.ORDERS", "VS_S.CUSTOMERS"], "approved": [], "fine": 7,
+                           "check": [{"table": "VS_S.ORDERS", "column": "STATUS", "role": "measure", "evidence": "5 distinct"},
+                                     {"table": "VS_S.ORDERS", "column": "QTY", "role": "measure", "evidence": ""}],
+                           "sensitive": [{"table": "VS_S.CUSTOMERS", "column": "EMAIL"}]}
+        text = json.dumps(card._all_blocks(2))
+        for needle in ("ORDERS.STATUS (5 distinct)", "CUSTOMERS.EMAIL", "7 other columns look fine", "Approve all 2 tables"):
+            self.assertIn(needle, text)
+        self.session._ns["chosen_data"] = mock.Mock(fact_table="VS_S.ORDERS")
+        self.ran.clear()
+        with mock.patch.object(card, "_reload_saved"), mock.patch.object(self.session, "changed_later") as later:
+            card.on_map_all_approve({"all:VS_S.ORDERS:STATUS": "category", "all:VS_S.ORDERS:QTY": "measure"})
+        approve = next(v for a, v in self.ran if a == "map.approve_all")
+        self.assertEqual(({"VS_S.ORDERS": {"STATUS": "category"}}, "VS_S.ORDERS"), (approve["choices"], approve["table"]))
+        later.assert_called_once_with("dataset", card)
+        self.assertIsNone(card.all_review)
+
+    def test_the_cards_run_with_the_rules_the_notebook_set_else_the_kits_own(self):
+        actions = importlib.import_module("exakit_guide.actions")
+        self.session._ns = {"nb": None}
+        ns = self.session.namespace()
+        self.assertEqual(({}, {}, 0.99), (ns["ROLE_RULES"], ns["ASK_RULES"], ns["GIVES_IT_AWAY"]), "nothing set: the kit's own")
+        self.assertIn("unknown*", ns["PLACEHOLDER_VALUES"])
+        self.assertIsNone(self.session.your_rules("ROLE_RULES"))
+        self.session._ns["ROLE_RULES"] = {"CATEGORY_DISTINCT": 100}
+        self.assertIn("CATEGORY_DISTINCT = 100", self.session.your_rules("ROLE_RULES", "LINK_RULES")["v"])
+        self.assertEqual({"CATEGORY_DISTINCT": 100}, self.session.namespace()["ROLE_RULES"], "what the notebook set stays")
+        for action_id, name in (("map.review", "rules=ROLE_RULES"), ("semantic.check_link", "rules=LINK_RULES"),
+                                ("explore.checks", "placeholder_values=PLACEHOLDER_VALUES"), ("explore.typed", "date_formats=DATE_FORMATS"),
+                                ("map.leakage", "pure=GIVES_IT_AWAY"), ("ask.model", "rules=ASK_RULES"),
+                                ("ask.rules", "rules=DRAFT_RULES"), ("ask.insights", "rules=INSIGHT_RULES"),
+                                ("share.starter", "rules=STARTER_RULES"), ("share.board_draft", "DASHBOARD_RULES"),
+                                ("data.own_file", "rules=LOAD_RULES")):
+            with self.subTest(action=action_id):
+                self.assertIn(name, actions.ACTIONS[action_id].code)
 
     def test_nothing_ticked_and_nothing_loaded_are_said(self):
         with self.assertRaisesRegex(ValueError, "Tick at least one"):
@@ -1236,7 +1405,7 @@ class SeveralTablesTest(unittest.TestCase):
                 mock.patch.object(self.card, "_load_options"):
             ran = self.use({**values, "table": "COURIER_DAILY"})
         connect.assert_called_once()
-        self.assertEqual(["data.several", "data.table", "data.keep", "data.source", "data.keep", "data.switch"], ran)
+        self.assertEqual(["data.several", "data.table", "data.keep", "data.source", "data.keep", "data.switch", "data.prepare"], ran)
         self.assertEqual(["MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"], [e["table"] for e in self.session.chosen])
         self.ran.clear()
         self.card.connector = "postgresql"
@@ -1347,7 +1516,7 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual("linkcard", built[-1]["t"], [b["t"] for b in built])
         done = built[-1]
         self.assertEqual(("All 2 tables are approved", None), (done["title"], done.get("button")))
-        self.assertIn("Semantic views", done["text"])
+        self.assertIn("how they connect", done["text"])
         self.session.chosen = self.session.chosen[:1]                                 # one table: no tabs, no step
         self.assertEqual(["head", "aicheck", "rolemap", "actions"], [b["t"] for b in self._built(card)])
 
@@ -1402,130 +1571,175 @@ class SeveralTablesTest(unittest.TestCase):
         card._review()
         self.assertIsNone(card.ai)
 
-    def _views(self):
+    INPUTS = {"tables": {
+        "AMAZON.ORDER_LINES": {"key": ["ORDER_LINE_ID"], "grain": "one order line", "columns": [
+            {"name": "ORDER_LINE_ID", "role": "key", "note": ""}, {"name": "ORDER_ID", "role": "identifier", "note": ""},
+            {"name": "SHIP_STATE", "role": "category", "note": "", "values": ["CA", "NY"]},
+            {"name": "STATUS", "role": "category", "note": "", "values": ["COMPLETED", "CANCELLED"]},
+            {"name": "AMOUNT", "role": "measure", "note": "incl. tax"}]},
+        "MY_DATA.TARGETS": {"key": ["STATE"], "grain": "", "columns": [
+            {"name": "STATE", "role": "key", "note": ""}, {"name": "TARGET", "role": "measure", "note": ""}]}},
+        "missing": ["MY_DATA.DRAFTS"], "saved": False, "grains": {}, "table_notes": {}, "links": [], "starts": [],
+        "metrics": [], "instructions": [], "description": ""}
+
+    def _views(self, inputs=None):
+        self.session.chosen = [{"table": t} for t in ("AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "MY_DATA.DRAFTS")]
+        self.sent = []
+        answers = {"semantic.inputs": inputs or json.loads(json.dumps(self.INPUTS))}
+        self.answers = answers
+        self.understand.actions.run.side_effect = lambda action_id, session=None, **values: self.sent.append((action_id, values)) or answers[action_id]
         views = self.understand.SemanticViews.__new__(self.understand.SemanticViews)
-        views.__dict__.update(ticked=set(), gen=0, link_gen=0, fill=None, fill_n=0, links=None, links_note="", loading=False, error=None, models=[],
-                              preview_text="", result_text="",
-                              tables=[{"table": t, "schema": t.split(".")[0], "origin": o, "approved": ok, "rows": "10"}
-                                      for t, o, ok in (("AMAZON.ORDER_LINES", "Kit dataset", True), ("AMAZON.RETURNS", "Kit dataset", True),
-                                                       ("MY_DATA.TARGETS", "Your data", True), ("MY_DATA.DRAFTS", "Your data", False),
-                                                       ("VS_LOGISTICS.COURIER_DAILY", "External source", True))],
-                              columns={"AMAZON.ORDER_LINES": ["ORDER_ID", "SHIP_STATE"], "AMAZON.RETURNS": ["ORDER_ID"],
-                                       "MY_DATA.TARGETS": ["STATE"], "VS_LOGISTICS.COURIER_DAILY": ["STATE"]})
+        views.__dict__.update(n=0, facts={"tables": {}, "missing": []}, dm=views._empty(), checked={}, warnings=[],
+                              result_text="", preview_text="", saved=False, loading=True, error=None, flash=None)
+        views.refresh = lambda: None
+        views._load()
         return views
 
-    def test_semantic_views_lists_the_tables_under_their_schemas_with_the_chosen_ones_ticked(self):
-        """The model is about tables, not whole schemas: every schema lists its tables, the ones chosen in step 1
-        start ticked, one without an approved column map cannot be, and a new choice starts the ticks afresh."""
-        views = self._views()
-        self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
-        with mock.patch.object(views, "refresh"), mock.patch.object(views, "_load"):
-            views.on_session("source")
-        for thread in __import__("threading").enumerate():
-            if thread is not __import__("threading").current_thread() and thread.daemon:
-                thread.join(timeout=2)
-        self.assertEqual(({"AMAZON.ORDER_LINES", "MY_DATA.TARGETS"}, 1, None), (views.ticked, views.gen, views.links))
-        views.loading = False
+    def _build(self, views):
         with mock.patch.object(self.understand.actions, "code", return_value=""):
-            blocks = views.build()
-        tree = next(b for b in blocks if b["t"] == "schematree")
-        self.assertEqual(["AMAZON", "MY_DATA", "VS_LOGISTICS"], sorted(g["schema"] for g in tree["groups"]))
-        ticks = {t["table"]: (t["id"], t["value"], t["approved"]) for g in tree["groups"] for t in g["tables"]}
-        self.assertEqual({"AMAZON.ORDER_LINES": ("svt1:AMAZON.ORDER_LINES", True, True), "AMAZON.RETURNS": ("svt1:AMAZON.RETURNS", False, True),
-                          "MY_DATA.TARGETS": ("svt1:MY_DATA.TARGETS", True, True), "MY_DATA.DRAFTS": ("svt1:MY_DATA.DRAFTS", False, False),
-                          "VS_LOGISTICS.COURIER_DAILY": ("svt1:VS_LOGISTICS.COURIER_DAILY", False, True)}, ticks)
-        picked = views._picked({"svt1:AMAZON.ORDER_LINES": True, "svt1:MY_DATA.DRAFTS": True, "svt:AMAZON.RETURNS": True,
-                                "svd:AMAZON.ORDER_LINES": "  One row per   order line. ", "sv_about": " Orders  and targets "})
-        self.assertEqual((["AMAZON.ORDER_LINES"], {"AMAZON.ORDER_LINES": "One row per order line."}, "Orders and targets", "my_data"),
-                         (picked["tables"], picked["table_notes"], picked["description"], picked["name"]))
-        # a link of your own is picked from lists: the tables with a column map, and each one's columns
-        own = next(f for b in blocks if b["t"] == "fields" for f in b["items"] if f["id"] == "sv_own")["fields"]
-        self.assertEqual(["sv_from_table", "sv_to_table", "sv_from_col", "sv_to_col"], [f["id"] for f in own])
-        self.assertNotIn("MY_DATA.DRAFTS", [o["value"] for o in own[0]["options"]])
-        self.assertEqual(["ORDER_ID", "SHIP_STATE"], [o["value"] for o in own[2]["options_from"]["map"]["AMAZON.ORDER_LINES"]])
+            return views.build()
 
-    def test_links_are_found_between_the_ticked_tables_checked_when_added_and_go_into_the_model_with_their_notes(self):
+    def test_the_data_map_opens_from_your_column_maps_and_asks_what_semantic_views_needs(self):
+        """No query while it opens: the approved column maps and what was saved before, read from this computer. It
+        asks for exactly what Semantic Views needs - the grain, the links and their type, where questions start,
+        metrics, rules - and nothing is found or guessed for you."""
         views = self._views()
-        high = {"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "confidence": "high", "proposed_by": "values",
-                "evidence_text": "128,921 of 128,942 rows"}
-        low = {"from": "AMAZON.RETURNS.ORDER_ID", "to": "AMAZON.ORDER_LINES.ORDER_ID", "confidence": "low", "proposed_by": "values",
-               "evidence_text": "CONFIRM THIS ONE"}
-        own = {"from": "MY_DATA.TARGETS.STATE", "to": "VS_LOGISTICS.COURIER_DAILY.STATE", "confidence": "high", "proposed_by": "values",
-               "evidence_text": "36 of 36 rows"}
-        answers = {"semantic.links_tables": {"links": [high, low], "partial": [], "checked": 4, "statements": 11, "ai": None},
-                   "semantic.check_link": {"links": [own], "partial": [], "rejected": []},
-                   "semantic.preview_tables": "the preview"}
-        sent = []
-        self.understand.actions.run.side_effect = lambda action_id, session=None, **values: sent.append((action_id, values)) or answers[action_id]
-        tick = {"svt:AMAZON.ORDER_LINES": True, "svt:AMAZON.RETURNS": True, "svt:MY_DATA.TARGETS": True}
-        with self.assertRaisesRegex(ValueError, "at least two tables"):
-            views.on_sv_find({"svt:AMAZON.ORDER_LINES": True})
-        views.on_sv_find(tick)
-        self.assertEqual(("semantic.links_tables", {"tables": ["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "MY_DATA.TARGETS"], "ai": False}), sent[-1],
-                         "the ticked tables, two of one schema among them: not whole schemas")
-        with mock.patch.object(self.understand.actions, "code", return_value=""):
-            rows = next(b for b in views.build() if b["t"] == "linklist")["items"]
-        self.assertEqual([("svl1:" + high["from"] + "=" + high["to"], True), ("svl1:" + low["from"] + "=" + low["to"], False)],
-                         [(r["id"], r["value"]) for r in rows], "what the data backs is ticked; plain numbers are left for you")
-        # a link of your own: checked against the data first
-        for bad, said in (({"sv_from_table": "MY_DATA.TARGETS"}, "Pick the table and the column"),
-                          ({"sv_from_table": "MY_DATA.TARGETS", "sv_from_col": "STATE", "sv_to_table": "MY_DATA.TARGETS", "sv_to_col": "STATE"}, "between two tables")):
+        self.assertEqual([("semantic.inputs", {"tables": ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS", "MY_DATA.DRAFTS"]})], self.sent)
+        blocks = self._build(views)
+        heads = [b["v"] for b in blocks if b["t"] == "subhead"]
+        self.assertEqual(["1 · Tables", "2 · Relationships", "3 · Entry points", "4 · Metrics", "5 · Business rules"], heads)
+        self.assertEqual(("head", "Semantic model"), (blocks[0]["t"], blocks[0]["title"]))
+        self.assertEqual("Advanced", next(b for b in blocks if b["t"] == "details")["title"], "advanced settings start closed")
+        self.assertIn("MY_DATA.DRAFTS", next(b["v"] for b in blocks if b["t"] == "msg"), "a table to approve first is named")
+        grains = {f["id"]: f["value"] for b in blocks if b["t"] == "fields" for g in b["items"] if g.get("type") == "group"
+                  for f in g["fields"] if f["id"].startswith("dmgrain")}
+        self.assertEqual({"dmgrain1:AMAZON.ORDER_LINES": "one order line", "dmgrain1:MY_DATA.TARGETS": ""}, grains)
+        self.assertIn("No relationships yet.", json.dumps(blocks))
+        keys = next(f for b in blocks if b["t"] == "fields" for g in b["items"] if g["id"] == "dm_new_link" for f in g["fields"]
+                    if f["id"] == "dm_to_col")["options_from"]["map"]["MY_DATA.TARGETS"]
+        self.assertEqual("STATE (key)", keys[0]["label"], "a link ends on the other table's key, listed first")
+        self.assertFalse(any(a in ("semantic.check_link", "semantic.draft") for a, _ in self.sent), "nothing is checked or guessed by itself")
+
+    def test_your_links_metrics_and_rules_go_to_semantic_views_as_you_said_them(self):
+        views = self._views()
+        for bad, said in (({"dm_from_table": "MY_DATA.TARGETS"}, "Pick the table and the column"),
+                          ({"dm_from_table": "MY_DATA.TARGETS", "dm_from_col": "STATE", "dm_to_table": "MY_DATA.TARGETS", "dm_to_col": "STATE"}, "between two tables")):
             with self.assertRaisesRegex(ValueError, said):
-                views.on_sv_add(bad)
-        pick = {"sv_from_table": "MY_DATA.TARGETS", "sv_from_col": "STATE", "sv_to_table": "VS_LOGISTICS.COURIER_DAILY", "sv_to_col": "STATE"}
-        views.on_sv_add(pick)
-        self.assertEqual(("semantic.check_link", {"tables": ["MY_DATA.TARGETS", "VS_LOGISTICS.COURIER_DAILY"],
-                                                  "check": ["MY_DATA.TARGETS.STATE=VS_LOGISTICS.COURIER_DAILY.STATE"]}), sent[-1])
-        self.assertEqual("you", views.links[-1]["proposed_by"])
-        with self.assertRaisesRegex(ValueError, "in the list already"):
-            views.on_sv_add(pick)
-        answers["semantic.check_link"] = {"links": [], "partial": [], "rejected": [{"from": "AMAZON.RETURNS.ORDER_ID", "to": "MY_DATA.TARGETS.STATE", "why": "the two columns are of different kinds"}]}
-        with self.assertRaisesRegex(ValueError, "Not added: AMAZON.RETURNS.ORDER_ID -> MY_DATA.TARGETS.STATE: the two columns are of different kinds"):
-            views.on_sv_add({"sv_from_table": "AMAZON.RETURNS", "sv_from_col": "ORDER_ID", "sv_to_table": "MY_DATA.TARGETS", "sv_to_col": "STATE"})
-        # the model: the ticked tables, the links in use with what was said about them
-        lid = views._lid
-        values = {**tick, lid(high): True, lid(low): False, lid(views.links[-1]): True, "sv_name": "sales_360",
-                  f"svn:{high['from']}={high['to']}": " The state  an order ships to. "}
-        views.on_sv_preview(values)
-        action, given = sent[-1]
-        self.assertEqual(("semantic.preview_tables", "sales_360", ["AMAZON.ORDER_LINES", "AMAZON.RETURNS", "MY_DATA.TARGETS"]),
-                         (action, given["name"], given["tables"]))
-        self.assertEqual([{**high, "note": "The state an order ships to."}], self.session.get("model_links"),
-                         "a link whose table is not ticked (the courier table) is left out; an unticked one is not used")
-        self.assertEqual("the preview", views.preview_text)
-        with self.assertRaisesRegex(ValueError, "at least one table"):
-            views.on_sv_preview({})
+                views.on_dm_add_link(bad)
+        views.on_dm_add_link({"dm_from_table": "AMAZON.ORDER_LINES", "dm_from_col": "SHIP_STATE", "dm_to_table": "MY_DATA.TARGETS",
+                              "dm_to_col": "STATE", "dm_link_type": "MANY_TO_ONE"})
+        self.assertEqual([("AMAZON.ORDER_LINES.SHIP_STATE", "MY_DATA.TARGETS.STATE", "MANY_TO_ONE", "you")],
+                         [(l["from"], l["to"], l["type"], l["by"]) for l in views.links])
+        with self.assertRaisesRegex(ValueError, "Say which values"):
+            views.on_dm_add_metric({"dm_m_table": "AMAZON.ORDER_LINES", "dm_m_name": "x", "dm_m_how": "sum", "dm_m_column": "AMOUNT",
+                                    "dm_m_where": "STATUS"})
+        views.on_dm_add_metric({"dm_m_table": "AMAZON.ORDER_LINES", "dm_m_name": "Completed revenue", "dm_m_how": "sum",
+                                "dm_m_column": "AMOUNT", "dm_m_where": "STATUS", "dm_m_values": "COMPLETED, Shipped"})
+        self.assertIn("Shipped is not among the values", views.flash["v"], "a value the column map never saw is pointed out")
+        self.assertEqual({"table": "AMAZON.ORDER_LINES", "name": "completed_revenue", "how": "sum", "column": "AMOUNT",
+                          "where": {"column": "STATUS", "values": ["COMPLETED", "Shipped"]}, "about": ""}, views.dm["metrics"][0])
+        n = views.n
+        form = {f"dmlinks{n}:": ["0"], f"dmltype{n}:0": "ONE_TO_ONE", f"dmlnote{n}:0": " the  state ", f"dmmetrics{n}:": ["0"],
+                f"dmgrain{n}:MY_DATA.TARGETS": "one state's target", f"dmstarts{n}:": ["AMAZON.ORDER_LINES"],
+                f"dmrule{n}:0": "Revenue includes tax", f"dmabout{n}:": "Orders and targets"}
+        self.answers["semantic.save_map"] = mock.Mock(sql=["EXECUTE SCRIPT SEMANTIC_ADMIN.CREATE_MODEL('all_data')"])
+        views.on_sv_preview(form)
+        action, given = self.sent[-1]
+        self.assertEqual("semantic.save_map", action)
+        self.assertEqual(([{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "ONE_TO_ONE", "note": "the state",
+                            "join": "LEFT"}],
+                          {"MY_DATA.TARGETS": "one state's target"}, ["AMAZON.ORDER_LINES"], ["Revenue includes tax"], "Orders and targets", True),
+                         (given["links"], given["grains"], given["starts"], given["instructions"], given["description"], given["preview"]))
+        self.assertEqual("completed_revenue", given["metrics"][0]["name"])
+        self.assertIn("CREATE_MODEL", views.preview_text)
+        # an unticked link is removed; Check with data runs only when pressed, one bounded count per link
+        self.answers["semantic.check_link"] = {"links": [{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "found": 48, "checked": 50}]}
+        views.on_dm_check({**form})
+        self.assertEqual(("semantic.check_link", ["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE"]), (self.sent[-1][0], self.sent[-1][1]["check"]))
+        self.assertIn("48 of 50", views.checked["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE"])
+        self.answers["semantic.save_map"] = mock.Mock(views=["SEM_ALL_DATA.ORDER_LINES"],
+                                                      found={"warnings": ["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], "notes": []})
+        self.answers["semantic.validate"] = {"issues": [{"severity": "ERROR", "object_type": "METRIC", "object": "completed_revenue",
+                                                        "rule": "SEMANTIC_MODEL_076", "message": "declares DECIMAL, returns DOUBLE"}],
+                                             "types": [], "suggestions": [], "errors": 1}
+        views.on_sv_publish({f"dmlinks{views.n}:": [], f"dmmetrics{views.n}:": ["0"], f"dmhide{views.n}:AMAZON.ORDER_LINES": ["SHIP_STATE"]})
+        saved = next(given for action, given in reversed(self.sent) if action == "semantic.save_map")
+        self.assertEqual([], saved["links"], "unticked: removed from your data map")
+        self.assertEqual({"AMAZON.ORDER_LINES": ["SHIP_STATE"]}, saved["hidden"], "hidden in answers by Semantic Views' MASK")
+        self.assertEqual("semantic.validate", self.sent[-1][0], "Semantic Views checks it right after the save")
+        built = json.dumps(self._build(views))
+        self.assertIn("SEMANTIC_MODEL_076", built)
+        self.assertIn('"label": "Validate"', built)
+        self.assertEqual(["ORDER_LINES: SEMANTIC_DDL_095 metric exists"], views.warnings, "what Semantic Views said, word for word")
+        self.assertTrue(views.saved)
 
+    def test_more_from_semantic_views_reads_only_when_asked_and_records_decisions(self):
+        inputs = json.loads(json.dumps(self.INPUTS))
+        inputs["saved"] = True
+        views = self._views(inputs)
+        self.assertIn("More from Semantic Views", json.dumps(self._build(views)))
+        self.assertEqual(["semantic.inputs"], [a for a, _ in self.sent], "nothing of it is read until a button is pressed")
+        self.answers["semantic.suggestions"] = [{"SUGGESTION_ID": 4, "OBJECT_NAME": "completed_revenue", "REVIEW_STATUS": "PENDING"}]
+        self.answers["semantic.review"] = {"status": "CERTIFIED"}
+        views.on_dm_suggestions({})
+        with self.assertRaisesRegex(ValueError, "Say why"):
+            views.on_dm_review_send({"dm_review_id": "4", "dm_review_decision": "CERTIFIED", "dm_review_note": " "})
+        views.on_dm_review_send({"dm_review_id": "4", "dm_review_decision": "REJECTED", "dm_review_note": "counts tax twice"})
+        self.assertIn(("semantic.review", {"suggestion": 4, "decision": "REJECTED", "note": "counts tax twice"}), self.sent)
+        self.answers["semantic.totals_store"] = {"table": "EXAKIT_TOTALS.T", "name": "t"}
+        self.answers["semantic.totals_list"] = []
+        views.on_dm_totals_store({"dm_t_view": "ORDER_LINES", "dm_t_metrics": "total_amount, order_lines_count", "dm_t_dimensions": "ship_state",
+                                  "dm_t_max_age": "6 HOURS"})
+        self.assertIn(("semantic.totals_store", {"view": "ORDER_LINES", "metrics": ["total_amount", "order_lines_count"],
+                                                 "dimensions": ["ship_state"], "max_age": "6 HOURS"}), self.sent)
 
-    def test_one_button_fills_every_table_the_links_and_the_descriptions(self):
-        """Fill everything in with AI: for every chosen table its column map answer (kept per table, so each tab
-        shows its own), the links between the tables, and a sentence for each table, each link and the model. The
-        cards below are filled; nothing is approved or published. A part that fails is named, the rest stands."""
+    def test_your_words_and_the_two_sources_choices_reach_semantic_views(self):
+        views = self._views()
+        with self.assertRaisesRegex(ValueError, "Name the field"):
+            views.on_dm_add_words({"dm_syn_field": "total_amount"})
+        views.on_dm_add_words({"dm_syn_field": "Total_Amount", "dm_syn_words": "sales, revenue"})
+        views.on_dm_add_words({"dm_syn_field": "total_amount", "dm_syn_words": "revenue, turnover"})
+        self.assertEqual({"total_amount": ["sales", "revenue", "turnover"]}, views.dm["synonyms"])
+        self.answers["semantic.save_map"] = mock.Mock(sql=["x"])
+        views.on_sv_preview({})
+        self.assertEqual({"total_amount": ["sales", "revenue", "turnover"]}, self.sent[-1][1]["synonyms"])
+        base = {"sv_fuse_table": "AMAZON.ORDER_LINES", "sv_fuse_other": "VS_LAKE.ORDER_LINES"}
+        with self.assertRaisesRegex(ValueError, "pairing the ids"):
+            views._fusion_inputs({**base, "sv_fuse_how": "mapped"})
+        found = views._fusion_inputs({**base, "sv_fuse_how": "split", "sv_fuse_split_column": "order_date", "sv_fuse_split_at": "2026-01-01"})
+        self.assertEqual((None, (("at", "2026-01-01"), ("column", "ORDER_DATE"))), found[5:])
+        self.answers["semantic.fusion_doc"] = {"entities": {}}
+        self.answers["semantic.fuse_check"] = {"status": "ok", "dry_run": True}
+        views.on_sv_fuse_check({**base, "sv_fuse_how": "mapped", "sv_fuse_xref": "CRM.XREF", "sv_fuse_local": "account_id",
+                                "sv_fuse_semantic": "customer_id"})
+        drawn = next(given for action, given in self.sent if action == "semantic.fusion_doc")
+        self.assertEqual(({"table": "CRM.XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}, None), (drawn["mapping"], drawn["split"]))
+
+    def test_one_button_fills_every_table_and_drafts_the_data_map_without_reading_a_row(self):
+        """Fill everything in with AI: each chosen table's column map answer (kept per table), then one call drafting
+        the data map - grains, links with their type, starts, metrics, rules - from names, roles, notes and known values.
+        No value scan, nothing approved or saved. A part that fails is named, the rest stands."""
         self.use({"kind": ["sample", "file"], "sample": ["amazon"], "own": ["tbl:MY_DATA.TARGETS"]})
         self.session.ai_maps, self.session.ai_model, self.session.ai_runs = {}, None, 0
         self.addCleanup(lambda: self.session.__dict__.update(ai_maps={}, ai_model=None, ai_runs=0))
-        link = {"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "confidence": "high", "proposed_by": "values"}
-        real, ran, checked = self.understand.actions.run.side_effect, [], []
+        draft = {"description": "Orders and targets.", "grains": {"MY_DATA.TARGETS": "one state's target"}, "table_notes": {},
+                 "links": [{"from": "AMAZON.ORDER_LINES.SHIP_STATE", "to": "MY_DATA.TARGETS.STATE", "type": "MANY_TO_ONE", "note": "Same state.", "by": "ai"}],
+                 "starts": ["AMAZON.ORDER_LINES"], "metrics": [], "instructions": ["Amounts include tax."], "refused": []}
+        real, ran = self.understand.actions.run.side_effect, []
 
         def run(action_id, session=None, **values):
             ran.append(action_id)
-            table = str(self.session.source.fact_table)
             if action_id == "kit.model":
                 return {"configured": True, "model_id": "m1"}
             if action_id in ("map.reviews", "map.review_keep"):
                 return None
-            if action_id == "map.ai_together":                       # each table, with the others in view
+            if action_id == "map.ai_together":
                 if values["table"] == "MY_DATA.TARGETS":
                     raise RuntimeError("429 too many requests\nmore")
                 return {"roles": [{"column": "B", "kit_role": "measure", "role": "identifier", "why": "A code."}],
-                        "slots": {"entity": "B"}, "notes": {"B": "x", "C": "y"},
-                        "same_as": [("AMAZON.ORDER_LINES.SHIP_STATE", "MY_DATA.TARGETS.STATE")]}
-            if action_id == "semantic.links_checked":
-                checked.append(values)
-                return {"links": [link], "checked": 3, "statements": 9, "ai": "the model proposed 1 pair(s)"}
-            if action_id == "semantic.ai_notes":
-                return {"tables": {"AMAZON.ORDER_LINES": "One row per order line."}, "links": {"AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE": "Same state."},
-                        "name": "sales_360", "about": "Orders and targets."}
+                        "slots": {"entity": "B"}, "notes": {"B": "x", "C": "y"}}
+            if action_id == "semantic.draft":
+                return draft
             return real(action_id, session, **values)
 
         self.understand.actions.run.side_effect = run
@@ -1535,39 +1749,20 @@ class SeveralTablesTest(unittest.TestCase):
         with mock.patch.object(self.session, "changed", side_effect=lambda what, source=None: heard.append(what)):
             card.on_ai_all({})
         self.assertEqual(["source", "ai"], heard)
-        self.assertEqual(["map.reviews", "map.review_keep", "map.review_keep", "map.ai_together", "map.ai_together"],
-                         [a for a in ran if a.startswith("map.")], "every table is read first, then each is filled with the others in view")
-        self.assertEqual([{"tables": ["AMAZON.ORDER_LINES", "MY_DATA.TARGETS"], "ai": True,
-                           "check": ["AMAZON.ORDER_LINES.SHIP_STATE=MY_DATA.TARGETS.STATE", "MY_DATA.TARGETS.STATE=AMAZON.ORDER_LINES.SHIP_STATE"]}],
-                         checked, "what the AI read as the same thing across sources is checked against the data, both ways round")
-        self.assertEqual("AMAZON.ORDER_LINES", self.session.source.fact_table, "it ends on the table it started on")
-        self.assertEqual(["AMAZON.ORDER_LINES"], list(self.session.ai_maps))
-        self.assertEqual(({"B": "x", "C": "y"}, {"entity": "B"}), (self.session.ai_maps["AMAZON.ORDER_LINES"]["notes"], self.session.ai_maps["AMAZON.ORDER_LINES"]["slots"]))
-        self.assertEqual(["1 column map (1 meaning changed, 2 descriptions)", "1 link found", "1 table description"], card.said)
+        self.assertNotIn("semantic.check_link", ran, "no value scan")
+        self.assertEqual(1, ran.count("semantic.draft"), "one call for the whole data map")
+        self.assertEqual(["1 column map (1 meaning changed, 2 descriptions)", "your data map (1 links, 1 rules, 1 grains)"], card.said)
         self.assertEqual(["MY_DATA.TARGETS (429 too many requests)"], card.failed)
-        self.assertFalse([a for a in ran if a in ("map.approve", "semantic.publish_tables", "semantic.publish")], "it fills in; it approves and publishes nothing")
-        blocks = card.build()
-        self.assertEqual(["head", "actions", "msg", "msg"], [b["t"] for b in blocks])
-        self.assertEqual("ai_all", blocks[1]["items"][0]["id"])
-        # the column map card shows this table's answer; semantic views its links and what was said
-        column_map = self._map_card()
-        with mock.patch.object(column_map, "refresh"):
-            column_map.on_session("ai")
-        self.assertEqual(self.session.ai_maps["AMAZON.ORDER_LINES"], column_map.ai)
-        views = self._views()
-        with mock.patch.object(views, "refresh"):
-            views.on_session("ai")
-        self.assertEqual(([link], 1, 1), (views.links, views.link_gen, views.fill_n))
-        with mock.patch.object(self.understand.actions, "code", return_value=""):
-            built = views.build()
-        tree = next(b for b in built if b["t"] == "schematree")
-        notes = {t["table"]: (t["note_id"], t["note"]) for g in tree["groups"] for t in g["tables"]}
-        self.assertEqual(("svd:AMAZON.ORDER_LINES#1", "One row per order line."), notes["AMAZON.ORDER_LINES"])
-        self.assertEqual("Same state.", next(b for b in built if b["t"] == "linklist")["items"][0]["note"])
-        model = next(f for b in built if b["t"] == "fields" for f in b["items"] if f["id"] == "sv_model")["fields"]
-        self.assertEqual([("sv_name#1", "sales_360"), ("sv_about#1", "Orders and targets.")], [(f["id"], f["value"]) for f in model])
-        picked = views._picked({"svt:AMAZON.ORDER_LINES": True, "sv_name#1": "sales_360", "svd:AMAZON.ORDER_LINES#1": "One row per order line."})
-        self.assertEqual(("sales_360", {"AMAZON.ORDER_LINES": "One row per order line."}), (picked["name"], picked["table_notes"]))
+        self.assertFalse([a for a in ran if a in ("map.approve", "semantic.save_map")], "it fills in; it approves and saves nothing")
+        self.assertEqual("ai_all", card.build()[1]["items"][0]["id"])
+        # the data map card takes the AI's suggestions where you said nothing; what you said stays
+        inputs = json.loads(json.dumps(self.INPUTS))
+        inputs["grains"] = {"MY_DATA.TARGETS": "yours"}
+        views = self._views(inputs)
+        views.on_session("ai")
+        self.assertEqual(({"MY_DATA.TARGETS": "yours"}, ["ai"], ["AMAZON.ORDER_LINES"], "Orders and targets."),
+                         (views.dm["grains"], [l["by"] for l in views.links], views.dm["starts"], views.dm["description"]))
+        self.assertIn("suggested by AI", json.dumps(self._build(views)))
         self.understand.actions.run.side_effect = lambda action_id, session=None, **values: {"configured": False}
         self.assertEqual(["head", "msg"], [b["t"] for b in card.build()], "without a model: no button, one line saying so")
         self.session._ns["chosen_data"] = None
@@ -1769,6 +1964,115 @@ class ToggleTest(unittest.TestCase):
         self.assertIn('exakit_guide = ["static/*.js", "static/*.css"]', toml)
         self.assertIn('"anywidget==0.11.0"', toml)
         self.assertIn('"exakit_guide.screens"', toml)
+
+
+class PrepareDraftsTest(unittest.TestCase):
+    """Use this data: every chosen table's column roles drawn up in the background, sources at once, one source's
+    tables in order, and a table being read waited for instead of read twice."""
+
+    def setUp(self):
+        import threading
+
+        import exakit_nb  # noqa: F401 - loads the module below (the package's name "describe" is the function)
+
+        module = sys.modules["exakit_nb.describe"]
+        self.module = module
+        self.lock = threading.Lock()
+        self.release = threading.Event()
+        self.order: list[str] = []
+        self.busy: dict[str, int] = {}
+        self.most: dict[str, int] = {}
+        self.connections = 0
+        test = self
+
+        class Service:
+            @staticmethod
+            def describe(conn, table):
+                schema = table.split(".")[0]
+                with test.lock:
+                    test.order.append(table)
+                    test.busy[schema] = test.busy.get(schema, 0) + 1
+                    test.most[schema] = max(test.most.get(schema, 0), test.busy[schema])
+                test.release.wait(5)
+                with test.lock:
+                    test.busy[schema] -= 1
+                if table.endswith("BROKEN"):
+                    raise RuntimeError("the source refused\nmore detail")
+                return {"status": "draft"}
+
+        class Conn:
+            def close(self):
+                pass
+
+        def connect():
+            with self.lock:
+                self.connections += 1
+            return Conn()
+
+        patches = [mock.patch.object(module, "describe_service", return_value=Service()),
+                   mock.patch("exakit_nb.connect", side_effect=connect),
+                   mock.patch.dict(module._PREPARING, clear=True), mock.patch.dict(module.PREPARED, clear=True)]
+        for patch in patches:
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_sources_are_read_at_once_and_one_sources_tables_in_order(self):
+        tables = ["VS_TEST.ORDERS", "VS_TEST.CUSTOMERS", "VS_CATALOG.category_costs", "AMAZON.ORDER_LINES", "VS_TEST.BROKEN"]
+        said = self.module.prepare_drafts(tables)
+        self.assertEqual({t: "reading" for t in tables}, said, "returns at once")
+        self.module.prepare_drafts(["VS_TEST.ORDERS"])          # a table being read is not queued again (read once, below)
+        time.sleep(0.2)
+        self.release.set()
+        for table in tables:
+            self.assertTrue(self.module._PREPARING[table.upper()].wait(5))
+        self.assertEqual({"VS_TEST": 1, "VS_CATALOG": 1, "AMAZON": 1}, self.most, "one statement at a time per source")
+        self.assertEqual(["VS_TEST.ORDERS", "VS_TEST.CUSTOMERS", "VS_TEST.BROKEN"],
+                         [t for t in self.order if t.startswith("VS_TEST.")], "first chosen, first read")
+        self.assertEqual(3, self.connections, "one connection a source")
+        self.assertEqual(5, len(self.order), "each table read once")
+        self.assertEqual("the source refused", self.module.PREPARED["VS_TEST.BROKEN"])
+        self.assertEqual("ready", self.module.PREPARED["VS_TEST.ORDERS"])
+
+    def test_describe_waits_for_a_table_being_read(self):
+        import threading
+
+        self.module.prepare_drafts(["VS_TEST.ORDERS"])
+        waited = threading.Event()
+        with mock.patch.object(self.module, "_resolve", side_effect=lambda t: (t, None)), \
+                mock.patch.object(self.module._PREPARING["VS_TEST.ORDERS"], "wait",
+                                  side_effect=lambda timeout=None: waited.set() or True):
+            try:
+                self.module.describe("VS_TEST.ORDERS", conn=object())
+            except Exception:  # noqa: BLE001 - only the wait is checked here, not the rest of describe
+                pass
+        self.assertTrue(waited.is_set(), "nb.describe waits for the background read of the same table")
+        self.release.set()
+        self.assertTrue(self.module._PREPARING["VS_TEST.ORDERS"].wait(5))     # finished before the next test
+
+
+class PinTitleTest(unittest.TestCase):
+    """A pinned answer keeps the title you give it: rewritten SQL answers something else than the question drafted."""
+
+    def test_the_title_given_is_the_tiles_and_a_new_question_resets_it(self):
+        from exakit_guide.screens import ask as module
+
+        card = object.__new__(module.Ask)
+        card.board, card.page, card.tile_title, card.flash = "my-dashboard", "Overview", None, None
+        sent = []
+        with mock.patch.object(module.actions, "run", side_effect=lambda action_id, **kw: sent.append((action_id, kw)) or {"kind": "bar"}):
+            card.on_pin({"tile_title": "  Quantity   by supplier ", "board": "Sales", "page": "Sources"})
+            card.on_pin({"board": "sales"})
+        pins = [kw for action_id, kw in sent if action_id == "ask.pin"]
+        self.assertEqual({"board": "sales", "page": "Sources", "title": "Quantity by supplier"}, pins[0])
+        self.assertIsNone(pins[1]["title"], "left empty: the question asked")
+        self.assertEqual([("ask.prepare_preview", {"board": "sales"})] * 2, [x for x in sent if x[0] == "ask.prepare_preview"],
+                         "each pin starts the dashboard's preview in the background")
+        card.tile_title = "Quantity by supplier"
+        with mock.patch.object(module, "_model_ready", return_value=False), \
+                mock.patch.object(module.actions, "run", side_effect=RuntimeError("stop after the reset")):
+            with self.assertRaises(RuntimeError):
+                card._draft("count by STATUS")
+        self.assertIsNone(card.tile_title)
 
 
 if __name__ == "__main__":

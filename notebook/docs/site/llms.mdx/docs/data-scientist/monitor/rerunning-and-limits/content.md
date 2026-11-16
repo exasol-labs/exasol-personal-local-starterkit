@@ -6,7 +6,7 @@
 
 Run a notebook again to see what has changed. These are the things that move:
 
-* `DATASET = None` picks up the dataset approved last. Approve a different one in the quickstart, then run the first cell of the other notebook again to follow it. To pin a dataset, set `DATASET = "..."` in the notebook.
+* `DATASET = None` picks up the dataset approved last. Approve a different one in `01_explore`, then run the first cell of the other notebook again to follow it. To pin a dataset, set `DATASET = "..."` in the notebook.
 * The baseline reads the newest 20,000 rows, and the lab reads the newest 50,000, when the table has a date. New rows change which rows the models see.
 * The log grows. Every rerun adds lines to the same workflow.
 * Dashboards and hand-off bundles are not rebuilt by a rerun. Make a new draft and a new bundle when the result changes.

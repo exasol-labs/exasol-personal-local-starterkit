@@ -30,10 +30,27 @@ it is described; a data file with no descriptor beside it is loaded, profiled an
 saved beside it so the assignment reopens it. The active workflow's log gets `describe.draft` and
 `describe.approve` lines (X-1).
 
+## nb.approve_all [#approve_all]
+
+```python
+nb.approve_all(
+    reviews: dict[str, 'RoleReview'],
+    choices: dict[str, dict[str, str]] | None=None,
+) -> dict[str, Dataset]
+```
+
+Approve the column maps of several tables at once: each as drafted, with `choices` (\{SCHEMA.TABLE: \{COLUMN:
+role}}) applied where you changed a column. A table approved already, with nothing changed, is left as it is. The
+semantic models are updated once per schema - with its last table - not once per table, so six tables of one
+source are one publish. What to predict is never set here: it stays each table's own choice. Returns
+\{SCHEMA.TABLE: its Dataset}; a table that cannot be approved raises, naming it, and the ones before it stand.
+
+**Used in:** `data-scientist/01_explore`
+
 ## nb.review_roles [#review_roles]
 
 ```python
-nb.review_roles(conn, source: Any) -> RoleReview
+nb.review_roles(conn, source: Any, rules: dict[str, Any] | None=None) -> RoleReview
 ```
 
 Profile the loaded sample, file or connected table, show evidence and role choices, then await approval. Given
@@ -52,18 +69,35 @@ class nb.RoleReview
 One proposal. Jupyter shows a dropdown per column and an Approve button; elsewhere approve(choices) is the same
 path. dataset() stops the next cell until approval happened (a headless run hands the draft on, see the module).
 
-| Member                                                                                                                                                      | What it is                                                                                                                                                                                                                                                                        |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `suggestions() -> dict[str, str]`                                                                                                                           | \{column: drafted role} (one of the eight), in table order.                                                                                                                                                                                                                       |
-| `low_confidence() -> list[str]`                                                                                                                             | The columns drafted at low confidence, in table order: where the draft guessed, so a person looks first.                                                                                                                                                                          |
-| `review_order() -> list[str]`                                                                                                                               | The columns as the pickers show them: low confidence first, then the rest, each in table order.                                                                                                                                                                                   |
-| `slot_suggestions() -> dict[str, str \| None]`                                                                                                              | \{slot: drafted column or None}: the columns the notebooks use.                                                                                                                                                                                                                   |
-| `labels() -> dict[str, tuple[str, str]]`                                                                                                                    | \{column: (summary, note)}: the column's type, role and confidence with the evidence that chose the role, and its model note when there is one.                                                                                                                                   |
-| `guide() -> str`                                                                                                                                            | Explain what is measured and what the user must decide, in every front end.                                                                                                                                                                                                       |
-| `explanations() -> dict[str, str]`                                                                                                                          | Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied.                                                                                                                                                                                 |
-| `approve( choices: dict[str, str \| None] \| None=None, slots: dict[str, str \| None] \| None=None, notes: dict[str, str \| None] \| None=None) -> Dataset` | Apply the reviewed roles (\{COLUMN: role}, one of the eight; the proposal when None) and slots (\{slot: COLUMN or None}), then save and comment the approved descriptor.                                                                                                          |
-| `auto_approve(mode: str) -> str`                                                                                                                            | The headless decision for EXAKIT_NB_AUTO_APPROVE=`mode`: `force` approves the proposal; `1` approves only a proposal whose roles equal the current approved version's - then nothing is written (`unchanged`); a proposal that differs stays a `draft` and the reason is printed. |
-| `dataset(draft_ok: bool=False) -> Dataset`                                                                                                                  | The approved dataset: the one approved here, else the approved version the review opened on.                                                                                                                                                                                      |
-| `show()`                                                                                                                                                    | Print the proposal with its evidence, then the picker the front end has (or the headless decision).                                                                                                                                                                               |
-| `jupyter_picker()`                                                                                                                                          | The ipywidgets picker, or None when this is not a Jupyter kernel with ipywidgets.                                                                                                                                                                                                 |
-| `build_jupyter_picker(widgets)`                                                                                                                             | One dropdown per column with the eight roles (the drafted one set), its reason and evidence under it - the columns drafted at low confidence first, under their own heading; then one dropdown per slot with the table's columns; then the Approve button.                        |
+| Member                                                                                                                                                                             | What it is                                                                                                                                                                                                                                                                        |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `suggestions() -> dict[str, str]`                                                                                                                                                  | \{column: drafted role} (one of the eight), in table order.                                                                                                                                                                                                                       |
+| `low_confidence() -> list[str]`                                                                                                                                                    | The columns drafted at low confidence, in table order: where the draft guessed, so a person looks first.                                                                                                                                                                          |
+| `review_order() -> list[str]`                                                                                                                                                      | The columns as the pickers show them: low confidence first, then the rest, each in table order.                                                                                                                                                                                   |
+| `slot_suggestions() -> dict[str, str \| None]`                                                                                                                                     | \{slot: drafted column or None}: the columns the notebooks use.                                                                                                                                                                                                                   |
+| `labels() -> dict[str, tuple[str, str]]`                                                                                                                                           | \{column: (summary, note)}: the column's type, role and confidence with the evidence that chose the role, and its model note when there is one.                                                                                                                                   |
+| `guide() -> str`                                                                                                                                                                   | Explain what is measured and what the user must decide, in every front end.                                                                                                                                                                                                       |
+| `explanations() -> dict[str, str]`                                                                                                                                                 | Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied.                                                                                                                                                                                 |
+| `approve( choices: dict[str, str \| None] \| None=None, slots: dict[str, str \| None] \| None=None, notes: dict[str, str \| None] \| None=None, *, publish: bool=True) -> Dataset` | Apply the reviewed roles (\{COLUMN: role}, one of the eight; the proposal when None) and slots (\{slot: COLUMN or None}), then save and comment the approved descriptor.                                                                                                          |
+| `auto_approve(mode: str) -> str`                                                                                                                                                   | The headless decision for EXAKIT_NB_AUTO_APPROVE=`mode`: `force` approves the proposal; `1` approves only a proposal whose roles equal the current approved version's - then nothing is written (`unchanged`); a proposal that differs stays a `draft` and the reason is printed. |
+| `dataset(draft_ok: bool=False) -> Dataset`                                                                                                                                         | The approved dataset: the one approved here, else the approved version the review opened on.                                                                                                                                                                                      |
+| `show()`                                                                                                                                                                           | Print the proposal with its evidence, then the picker the front end has (or the headless decision).                                                                                                                                                                               |
+| `jupyter_picker()`                                                                                                                                                                 | The ipywidgets picker, or None when this is not a Jupyter kernel with ipywidgets.                                                                                                                                                                                                 |
+| `build_jupyter_picker(widgets)`                                                                                                                                                    | One dropdown per column with the eight roles (the drafted one set), its reason and evidence under it - the columns drafted at low confidence first, under their own heading; then one dropdown per slot with the table's columns; then the Approve button.                        |
+
+## nb.schema_review [#schema_review]
+
+```python
+nb.schema_review(reviews: dict[str, 'RoleReview']) -> dict[str, Any]
+```
+
+What a person should look at before approving several tables at once (\{SCHEMA.TABLE: nb.review_roles(...)}):
+
+* `check`: the columns drafted at low confidence, where the draft guessed - \{table, column, role, evidence}
+* `sensitive`: the columns marked personal data (never charted, grouped or sent to a model)
+* `fine`: how many columns were drafted at high confidence
+* `approved`: the tables whose column map is approved already
+
+Nothing is read from the database: it is the drafts' own evidence.
+
+**Used in:** `data-scientist/01_explore`

@@ -5,7 +5,7 @@ schema map (the links between tables) become one model in Exasol Semantic Views,
 layer the semantic-views add-on installs (SEMANTIC_ADMIN, SEMANTIC_CATALOG, SEMANTIC_AGENT):
 
     table                      ->  entity (its alias, its key, its grain)
-    link  ORDERS.O_CUSTKEY     ->  relationship ORDERS -> CUSTOMER, MANY_TO_ONE, with its key mapping
+    link  ORDERS.O_CUSTKEY     ->  relationship ORDERS -> CUSTOMER, MANY_TO_ONE (ONE_TO_ONE when both sides are unique), with its key mapping
     role  time, category, flag ->  dimension (a time column also gives <column>_month)
     role  measure              ->  fact, and the metrics total_<column> (SUM) and average_<column> (per row)
     every entity               ->  a private row fact and the metric <entity>_count
@@ -39,7 +39,19 @@ MAX_DEPTH = 3
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 _PLAIN_COLUMN = re.compile(r"^[A-Z][A-Z0-9_]*$")
 _NUMERIC = ("DECIMAL", "DOUBLE", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "FLOAT", "NUMBER", "NUMERIC", "REAL")
-DIMENSION_ROLES = ("time", "category", "flag")
+DIMENSION_ROLES = ("time", "category", "flag", "key", "identifier")
+# What each role is for: the second half of every field's comment, so a person or an AI reading the model knows
+# why a column is used the way it is, not only what it holds.
+ROLE_WHY = {
+    "key": "the key: it identifies one row, and joins and counts use it",
+    "identifier": "an identifier of something else: filter or join on it, never add it up",
+    "time": "when the row happened: group by it for a trend",
+    "category": "one of a small set of groups: compare the groups",
+    "flag": "a yes or no: filter by it, or take its rate",
+    "measure": "a number: add it up or average it",
+    "text": "free text: read or search it, never group by it",
+    "other": "kept for reference: not grouped or added up",
+}
 # SQL words a name may not be (Exasol reserves many more; these are the ones a column is commonly called).
 RESERVED = frozenset("""absolute action add all alter and any are as asc at authorization avg begin between bit both by
 call cascade case cast char character check close collate column commit connect connection constraint continue count
@@ -124,7 +136,7 @@ def _words(name: str) -> str:
 # --- the spec: no database ------------------------------------------------------------------------------------------------
 
 def table_input(table: str, doc: dict[str, Any], types: dict[str, str], *, virtual: bool = False,
-                profile: dict[str, Any] | None = None) -> dict[str, Any]:
+                profile: dict[str, Any] | None = None, origin: dict[str, Any] | None = None) -> dict[str, Any]:
     """One table for build(): its approved column map (doc), its column types ({COLUMN: TYPE}) and, when kept, the
     profile the map came from (a category's most frequent values, for an AI's filters; never a sensitive column's)."""
     top = {str(c.get("column")): [str(t[0]) for t in c.get("top") or [] if t and t[0] is not None][:10]
@@ -135,12 +147,31 @@ def table_input(table: str, doc: dict[str, Any], types: dict[str, str], *, virtu
         columns.append({"name": str(name), "type": types.get(str(name), "VARCHAR(2000000)"),
                         "role": str(entry.get("role") or "other"), "sensitive": sensitive,
                         "note": str(entry.get("note") or "").strip(),
+                        "evidence": str(entry.get("evidence") or "").strip(),
                         "values": [] if sensitive else top.get(str(name), [])})
     slots = doc.get("slots") or {}
     key = [slots["key"]] if slots.get("key") else [c["name"] for c in columns if c["role"] == "key"][:1]
     return {"table": table, "columns": columns, "key": key, "grain": str(doc.get("grain") or "").strip(),
             "virtual": virtual or (doc.get("source") or {}).get("kind") == "virtual",
-            "version": doc.get("version")}
+            "version": doc.get("version"), "origin": dict(origin or {})}
+
+
+def comment(column: dict[str, Any], schema: str, table: str) -> str:
+    """A field's comment: what the column holds (the approved note, else its name and table), then why it is used
+    that way - its role and what the kit measured that gave it."""
+    what = column.get("note") or f"{column['name']} of {schema}.{table}"
+    why = ROLE_WHY.get(column.get("role") or "other", "")
+    measured = f" ({column['evidence']})" if column.get("evidence") else ""
+    return f"{what.rstrip('.')}. Used as {why}{measured}." if why else what
+
+
+def where_from(origin: dict[str, Any], schema: str, virtual: bool) -> str:
+    """Where a table's rows live, in a sentence: the connector and source for an external one, else this database."""
+    if virtual or origin.get("connector"):
+        kind = origin.get("connector_name") or origin.get("connector") or "an external source"
+        named = f", source {origin['source']}" if origin.get("source") else ""
+        return f"Source: {kind}{named} (schema {schema}), read live where it lives; nothing is copied."
+    return f"Source: a table in this Exasol database (schema {schema})."
 
 
 def _paths(root: str, edges: dict[str, list[tuple[str, str]]]) -> dict[str, list[list[str]]]:
@@ -160,10 +191,15 @@ def _paths(root: str, edges: dict[str, list[tuple[str, str]]]) -> dict[str, list
 
 
 def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], name: str, *,
-          description: str | None = None) -> dict[str, Any]:
+          description: str | None = None, grains: dict[str, str] | None = None,
+          starts: Iterable[str] | None = None) -> dict[str, Any]:
     """The model as a dict. ``tables`` from table_input(); ``links`` as {"from": "SCHEMA.TABLE.COLUMN",
-    "to": "SCHEMA.TABLE.KEY"} (many-to-one: the key side is unique). A link naming a table that is not modelled is
-    left out, and so is a table whose schema or name the product cannot take; ``notes`` says what was left out."""
+    "to": "SCHEMA.TABLE.KEY"} (many-to-one: the key side is unique; one-to-one when the pointer is unique too). A link naming a table that is not modelled is
+    left out, and so is a table whose schema or name the product cannot take; ``notes`` says what was left out.
+    ``grains`` ({SCHEMA.TABLE: "one row is ..."}) says what one row of a table is, in your words; ``starts``
+    (SCHEMA.TABLE) are the tables questions start from - each a semantic view (default: the tables with an amount)."""
+    grains = {str(k).upper(): " ".join(str(v).split())[:200] for k, v in (grains or {}).items() if str(v).strip()}
+    starts = {str(t).upper() for t in starts or []}
     model = model_name(name)
     notes: list[str] = []
     entities: list[dict[str, Any]] = []
@@ -181,12 +217,13 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         while entity in used:
             entity = f"{entity}_{index}"
         used.add(entity)
-        record = {"name": entity, "schema": schema.upper(), "table": object_name.upper(), "alias": f"t{index}",
+        origin = dict(table.get("origin") or {})
+        record = {"name": entity, "schema": schema, "table": object_name, "alias": f"t{index}",
                   "key": [k for k in table.get("key") or [] if k], "virtual": bool(table.get("virtual")),
-                  "grain": table.get("grain") or f"one row of {schema}.{object_name}",
-                  "description": table.get("description") or f"{schema}.{object_name}"
-                  + (" (an external source, read live)" if table.get("virtual") else ""),
-                  "columns": table["columns"]}
+                  "grain": grains.get(f"{schema}.{object_name}".upper()) or table.get("grain") or f"one row of {schema}.{object_name}",
+                  "description": (table.get("description") or f"{schema}.{object_name}").rstrip(".") + ". "
+                  + where_from(origin, schema.upper(), bool(table.get("virtual"))),
+                  "origin": origin, "columns": table["columns"]}
         entities.append(record)
         by_table[f"{schema}.{object_name}".upper()] = record
 
@@ -203,13 +240,26 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             name_ = f"{name_}_{len(relationships) + 1}"
         used.add(name_)
         relationships.append({"name": name_, "from": a["name"], "to": b["name"], "from_column": from_column,
-                              "to_column": to_column, "evidence": link.get("evidence"),
+                              "to_column": to_column, "evidence": link.get("evidence"), "given": link.get("cardinality"),
+                              "join_type": str(link.get("join_type") or "LEFT").upper(),
+                              "fanout": (str(link["fanout"]).upper() if link.get("fanout") else None),
                               "join": f"{column_sql(a['alias'], from_column)} = {column_sql(b['alias'], to_column)}"})
         edges.setdefault(a["name"], []).append((b["name"], name_))
         # a many-to-one link must end on a unique key the model declares: the column map's key, or this column,
         # which the link's own check found unique (Semantic Views refuses the relationship otherwise)
         if to_column not in b["key"] and to_column not in b.setdefault("unique", []):
             b["unique"].append(to_column)
+    for r in relationships:
+        # one-to-one when the pointer is unique as well: its table's key, a column a link ends on, or measured so by
+        # the link's own check. Else many-to-one: the key side is unique, the pointer repeats
+        a = next(e for e in entities if e["name"] == r["from"])
+        given = str(r.get("given") or "").upper()
+        unique_from = given == "ONE_TO_ONE" if given in ("ONE_TO_ONE", "MANY_TO_ONE") else (
+            a["key"] == [r["from_column"]] or r["from_column"] in (a.get("unique") or [])
+            or bool((r.get("evidence") or {}).get("from_unique")))
+        r["cardinality"] = "ONE_TO_ONE" if unique_from else "MANY_TO_ONE"
+        if unique_from and r["from_column"] not in a["key"] and r["from_column"] not in a.setdefault("unique", []):
+            a["unique"].append(r["from_column"])
 
     def free(wanted: str, *prefixes: str) -> str:
         """A name not yet in the model: the wanted one, else prefixed with its entity (or view); never a keyword."""
@@ -243,7 +293,7 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             facts.append({"name": free(column["name"], e["name"]), "entity": e["name"], "expression": expression,
                           "type": kind, "private": column["sensitive"], "column": column["name"],
                           "display": _words(column["name"].lower()),
-                          "comment": column["note"] or f"{column['name']} of {e['schema']}.{e['table']}"})
+                          "comment": comment(column, e["schema"], e["table"])})
         facts_of[e["name"]] = facts
 
     def dimensions_of(e: dict[str, Any], owner: str) -> list[dict[str, Any]]:
@@ -252,9 +302,9 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
             if column["role"] not in DIMENSION_ROLES or column["sensitive"]:
                 continue
             expression, kind = column_sql(e["alias"], column["name"]), sql_type(column["type"])
-            comment = column["note"] or f"{column['name']} of {e['schema']}.{e['table']}"
             found.append({"name": free(column["name"], e["name"], owner), "entity": e["name"], "expression": expression,
-                          "type": kind, "display": _words(column["name"].lower()), "comment": comment,
+                          "type": kind, "display": _words(column["name"].lower()),
+                          "comment": comment(column, e["schema"], e["table"]),
                           "column": column["name"], "role": column["role"],
                           "values": column.get("values") or [] if column["role"] in ("category", "flag") else []})
             if column["role"] == "time" and kind.startswith(("DATE", "TIMESTAMP")):
@@ -266,7 +316,8 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
         return found
 
     objects: list[dict[str, Any]] = []
-    roots = [e for e in entities if any(not f.get("row") for f in facts_of[e["name"]])] or list(entities)
+    chosen = [e for e in entities if f"{e['schema']}.{e['table']}" in starts]
+    roots = chosen or [e for e in entities if any(not f.get("row") for f in facts_of[e["name"]])] or list(entities)
     covered: set[str] = set()
     # The tables with measures first; then every table no view reached yet gets a view of its own (its row count and
     # its dimensions), so a table without measures and without a link is still asked about.
@@ -312,11 +363,31 @@ def build(tables: Iterable[dict[str, Any]], links: Iterable[dict[str, str]], nam
     schemas = sorted({e["schema"] for e in entities})
     about = description or f"{'Multi-source model over ' if len(schemas) > 1 else 'Model of '}{', '.join(schemas)}"
     sources = [{"table": f"{e['schema']}.{e['table']}", "entity": e["name"],
-                "origin": "external source, read live" if e["virtual"] else "table in this database"} for e in entities]
+                "origin": "external source, read live" if e["virtual"] else "table in this database",
+                **{k: e["origin"][k] for k in ("connector", "connector_name", "source") if e["origin"].get(k)}}
+               for e in entities]
+    # Every column has its meaning in the model: a field's comment for the ones that are fields; an instruction on its
+    # table for the rest (free text, other) and a safety rule for personal data; and a table read live says so.
+    instructions = []
+    for e in entities:
+        for column in e["columns"]:
+            if column["sensitive"]:
+                instructions.append({"entity": e["name"], "kind": "SAFETY", "priority": 10,
+                                     "text": f"{column['name']} of {e['schema']}.{e['table']} holds personal data: never "
+                                             "select, group, filter or show its values."})
+            elif column["role"] in ("text", "other"):
+                instructions.append({"entity": e["name"], "kind": "DEFINITION", "priority": 100,
+                                     "text": f"{e['schema']}.{e['table']}.{column['name']}: {comment(column, e['schema'], e['table'])}"})
+        if e["virtual"]:
+            instructions.append({"entity": e["name"], "kind": "PRECONDITION", "priority": 50,
+                                 "text": f"{e['schema']}.{e['table']} is read live from "
+                                         f"{e['origin'].get('connector_name') or 'an external source'}: every query reaches "
+                                         "that system. Ask for aggregates with filters, not every row."})
     return {"model": model, "published_schema": published_schema(model), "description": f"{about} {MARK}",
             "sources": sources,
             "entities": [{k: v for k, v in e.items() if k != "columns"} for e in entities],
-            "relationships": relationships, "objects": objects, "notes": notes, "schemas": schemas}
+            "relationships": relationships, "objects": objects, "notes": notes, "schemas": schemas,
+            "instructions": instructions}
 
 
 # --- the statements -------------------------------------------------------------------------------------------------------
@@ -372,8 +443,10 @@ def statements(spec: dict[str, Any]) -> list[str]:
             found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk"),
                                  "UNIQUE", f"{column} is unique in {e['schema']}.{e['table']}: a link ends on it", "NATIVE",
                                  json.dumps([{"column_name": column, "ordinal_position": 1}])))
+        found += column_map_statements(model, e)
     for r in spec["relationships"]:
-        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], "MANY_TO_ONE", "LEFT", None))
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE",
+                             r.get("join_type") or "LEFT", r.get("fanout")))
         found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
         if r.get("evidence"):
             # why this link is in the model (who proposed it, what the data showed): kept on the relationship itself,
@@ -387,6 +460,136 @@ def statements(spec: dict[str, Any]) -> list[str]:
         found.append(_script("ADD_SEMANTIC_OBJECT", model, obj["name"], obj["root"], obj["description"]))
         found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
     found.append(_script("PUBLISH_MODEL", model))
+    found += instruction_statements(model, spec.get("instructions") or [])
+    return found
+
+
+def instruction_statements(model: str, instructions: list[dict[str, Any]], before: list[dict[str, Any]] | None = None) -> list[str]:
+    """The model's own instructions for agents (ADD_AGENT_INSTRUCTION on each table's entity): a column's meaning when
+    it is no field, a personal-data rule, a source read live. Added after the publish, as the product asks; on a
+    change, only the ones that are new."""
+    had = {(i["entity"], i["kind"], i["text"]) for i in before or []}
+    return [_script("ADD_AGENT_INSTRUCTION", model, i.get("scope") or "ENTITY", i["entity"], i["kind"], i["text"], None,
+                    int(i["priority"]))
+            for i in instructions if (i["entity"], i["kind"], i["text"]) not in had]
+
+
+def column_map_statements(model: str, e: dict[str, Any], before: dict[str, Any] | None = None) -> list[str]:
+    """The table's approved column map, kept in the model on its entity (a custom extension under the key
+    column_map_v<version>, the approved text as the kit's store holds it): the model carries its own column maps, and
+    a store that is lost is put back from it (restore_column_maps). One extension per approved version - a new
+    approval adds the next, so the model holds the history too. Nothing when the version is already there."""
+    found = e.get("map") or {}
+    if not found.get("text") or not isinstance(found.get("version"), int):
+        return []
+    if before and (before.get("map") or {}).get("version") == found["version"]:
+        return []
+    return [_script("ADD_CUSTOM_EXTENSION", model, "ENTITY", e["name"], "exakit",
+                    json.dumps(found, ensure_ascii=False), "EXAKIT", f"column_map_v{found['version']}")]
+
+
+def _entity_shape(e: dict[str, Any]) -> tuple:
+    return (e["schema"], e["table"], e["alias"], tuple(e["key"]), bool(e.get("virtual")))
+
+
+def changes(previous: dict[str, Any] | None, spec: dict[str, Any]) -> list[str] | None:
+    """The statements that turn the published ``previous`` spec into ``spec`` in place, each Semantic Views' own
+    script, then one publish; [] when nothing changed:
+
+        a semantic view taken away or rooted elsewhere   REMOVE_SEMANTIC_OBJECT (then added again)
+        a link taken away or joined differently          REMOVE_RELATIONSHIP_KEY_MAPPING, REMOVE_RELATIONSHIP
+        a link of another type                           SET_RELATIONSHIP
+        a unique key taken away                          REMOVE_UNIQUE_KEY_WITH_COLUMNS
+        a new table, key, link or view; a changed view   ADD_ENTITY, ADD_UNIQUE_KEY_WITH_COLUMNS, ADD_RELATIONSHIP, ...
+
+    None only where the product has no script for the change: a table taken away or moved to another source, or
+    another model name or description - then the model is rebuilt.
+
+    In-place is the product's own path for a published model (every published mutator validates before it returns
+    and restores the catalog when it fails), and it keeps what a rebuild loses: verified queries, feedback, the query
+    log and the model's history."""
+    if not previous or previous.get("model") != spec["model"] or previous.get("description") != spec["description"] \
+            or previous.get("published_schema") != spec["published_schema"]:
+        return None
+    model = spec["model"]
+    before = {e["name"]: e for e in previous.get("entities") or []}
+    after = {e["name"]: e for e in spec["entities"]}
+    if any(name not in after or _entity_shape(before[name]) != _entity_shape(after[name]) for name in before):
+        return None
+    old_links = {r["name"]: r for r in previous.get("relationships") or []}
+    new_links = {r["name"]: r for r in spec["relationships"]}
+    shape = lambda r: {k: v for k, v in r.items() if k not in ("evidence", "cardinality", "given", "join_type", "fanout")}
+    rules = lambda r: (r.get("cardinality") or "MANY_TO_ONE", r.get("join_type") or "LEFT", r.get("fanout"))
+    old_objects = {o["name"]: o for o in previous.get("objects") or []}
+    new_objects = {o["name"]: o for o in spec["objects"]}
+    found: list[str] = []
+    gone_objects = [n for n, o in old_objects.items() if n not in new_objects or new_objects[n]["root"] != o["root"]]
+    retyped: list[str] = []                          # after the keys: one-to-one needs the pointer's unique key first
+    for name in gone_objects:                        # first: a view may reach through a link about to go
+        found.append(_script("REMOVE_SEMANTIC_OBJECT", model, name))
+    for name, r in old_links.items():
+        if name not in new_links or shape(new_links[name]) != shape(r):
+            found.append(_script("REMOVE_RELATIONSHIP_KEY_MAPPING", model, name, 1))
+            found.append(_script("REMOVE_RELATIONSHIP", model, name))
+        elif rules(r) != rules(new_links[name]):
+            kind, join_type, fanout = rules(new_links[name])
+            # to one-to-one after the pointer's unique key is added; back to many-to-one before that key is removed
+            (retyped if kind == "ONE_TO_ONE" else found).append(_script("SET_RELATIONSHIP", model, name, None, kind, join_type,
+                                                                        fanout or ("NONE" if rules(r)[2] else None)))
+    for name, e in after.items():
+        if name not in before:
+            found.append(_script("ADD_ENTITY", model, e["name"], e["schema"], e["table"], e["alias"],
+                                 ", ".join(column_sql(e["alias"], k) for k in e["key"]) or None, e["grain"], e["description"]))
+            if e["key"]:
+                found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], f"{e['name']}_pk", "PRIMARY",
+                                     f"Key of {e['schema']}.{e['table']}", "NATIVE",
+                                     json.dumps([{"column_name": k, "ordinal_position": i} for i, k in enumerate(e["key"], 1)])))
+        found += column_map_statements(model, e, before.get(name))
+        had = set(before[name].get("unique") or []) if name in before else set()
+        for column in e.get("unique") or []:
+            if column not in had:
+                found.append(_script("ADD_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk"),
+                                     "UNIQUE", f"{column} is unique in {e['schema']}.{e['table']}: a link ends on it", "NATIVE",
+                                     json.dumps([{"column_name": column, "ordinal_position": 1}])))
+        for column in sorted(had - set(e.get("unique") or [])):
+            found.append(_script("REMOVE_UNIQUE_KEY_WITH_COLUMNS", model, e["name"], identifier(f"{e['name']}_{column}_uk", "uk")))
+    found += retyped
+    for name, r in new_links.items():
+        if name in old_links and shape(old_links[name]) == shape(r):
+            continue
+        found.append(_script("ADD_RELATIONSHIP", model, r["name"], r["from"], r["to"], r["join"], r.get("cardinality") or "MANY_TO_ONE",
+                             r.get("join_type") or "LEFT", r.get("fanout")))
+        found.append(_script("ADD_RELATIONSHIP_KEY_MAPPING", model, r["name"], r["from_column"], None, r["to_column"], None, 1))
+        if r.get("evidence"):
+            found.append(_script("ADD_CUSTOM_EXTENSION", model, "RELATIONSHIP", r["name"], "exakit",
+                                 json.dumps(r["evidence"], ensure_ascii=False, default=str), "EXAKIT", "link_evidence"))
+    for name, obj in new_objects.items():
+        if name not in old_objects or name in gone_objects:
+            found.append(_script("ADD_SEMANTIC_OBJECT", model, obj["name"], obj["root"], obj["description"]))
+            found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
+        elif definition(previous, old_objects[name]) != definition(spec, obj):
+            found.append(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", definition(spec, obj), False))
+    if found:
+        found.append(_script("PUBLISH_MODEL", model))
+    found += instruction_statements(model, spec.get("instructions") or [], previous.get("instructions") or [])
+    return found
+
+
+def governance(model: str, kept: dict[str, Any] | None) -> list[str]:
+    """What a person added to a model that a rebuild would lose, as the statements that put it back: the fusion
+    document (APPLY_FUSION_DECLARATION), the verified questions (ADD_VERIFIED_QUERY) and the agent instructions
+    (ADD_AGENT_INSTRUCTION) the kit keeps beside the model."""
+    found = []
+    for q in (kept or {}).get("verified") or []:
+        found.append(_script("ADD_VERIFIED_QUERY", model, q["object"], q["name"], q["question"],
+                             json.dumps(q["request"], ensure_ascii=False, sort_keys=True), q.get("shape"),
+                             bool(q.get("onboarding"))))
+    for i in (kept or {}).get("instructions") or []:
+        found.append(_script("ADD_AGENT_INSTRUCTION", model, i.get("scope_type") or "MODEL", i.get("scope_name"),
+                             i.get("kind") or "GENERAL", i["text"], None, int(i.get("priority") or 100)))
+    if (kept or {}).get("fusion"):
+        found.insert(0, "ALTER SESSION SET QUERY_TIMEOUT=60")
+        found.insert(1, _script("APPLY_FUSION_DECLARATION", model, json.dumps(kept["fusion"], ensure_ascii=False), False))
     return found
 
 
@@ -431,36 +634,60 @@ def models(rows: Run) -> list[dict[str, Any]]:
 
 def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, reader: str | None = None,
           previous: dict[str, Any] | None = None, extra: list[tuple[str, str]] | None = None,
-          progress: Callable[[str], None] | None = None) -> dict[str, Any]:
-    """Rebuild the model in the database and publish it. A model of that name the kit did not build is refused
-    (ModelRefused). A statement that fails drops the half-built model and, when ``previous`` (the spec that was
-    published before) is given, puts that one back; the error is raised. ``extra`` is [(view, Semantic SQL)] tried
-    one at a time after the build (a refused one is skipped and named in the result's warnings: the product rolls it
-    back). The read-only user, when given, gets SEMANTIC_USER and SELECT on the published schema."""
+          progress: Callable[[str], None] | None = None, kept: dict[str, Any] | None = None,
+          previous_extra: list[tuple[str, str]] | None = None) -> dict[str, Any]:
+    """Publish the model. A model of that name the kit did not build is refused (ModelRefused).
+
+    When the model is in the database and ``previous`` (the spec published before) differs only by additions and
+    changed views, the change is made in place (changes()): a few statements, and verified questions, feedback and the
+    query log stay. Otherwise - or when an in-place step is refused - the model is rebuilt: dropped and created again,
+    then what ``kept`` holds (verified questions, instructions: governance()) is put back. A rebuild that fails drops
+    the half-built model and puts ``previous`` back; the error is raised. ``extra`` is [(view, Semantic SQL)] tried
+    one at a time after the build (a refused one is skipped and named in the warnings: the product rolls it back).
+    The read-only user, when given, gets SEMANTIC_USER and SELECT on the published schema."""
     say = progress or (lambda _line: None)
     model = spec["model"]
     found = existing(rows, model)
     if found and not found["kit"]:
         raise ModelRefused(f"A semantic model named {found['name']} already exists and the kit did not build it; it is "
                            "left alone. Choose another name (name=...).")
-    if found:
-        say(f"Replacing semantic model {model}")
-        execute(_script("DROP_MODEL_IF_EXISTS", model))
-    sent = statements(spec)
-    try:
-        for index, sql in enumerate(sent, 1):
-            say(f"Semantic model {model}: step {index} of {len(sent)}")
-            execute(sql)
-    except Exception:
-        try:
-            execute(_script("DROP_MODEL_IF_EXISTS", model))
-            if previous:
-                for sql in statements(previous):
-                    execute(sql)
-        except Exception:
-            pass
-        raise
     warnings: list[str] = []
+    mode, sent = "rebuilt", []
+    step = changes(previous, spec) if found else None
+    if step is not None:
+        try:
+            for index, sql in enumerate(step, 1):
+                say(f"Semantic model {model}: change {index} of {len(step)}")
+                execute(sql)
+            mode, sent = ("unchanged" if not step else "changed in place"), step
+        except Exception as err:
+            warnings.append(f"changing the model in place was refused ({' '.join(str(err).split())[:200]}); it was rebuilt")
+            step = None
+    if step is None:
+        if found:
+            say(f"Replacing semantic model {model}")
+            execute(_script("DROP_MODEL_IF_EXISTS", model))
+        sent = statements(spec)
+        try:
+            for index, sql in enumerate(sent, 1):
+                say(f"Semantic model {model}: step {index} of {len(sent)}")
+                execute(sql)
+        except Exception:
+            try:
+                execute(_script("DROP_MODEL_IF_EXISTS", model))
+                if previous:
+                    for sql in statements(previous):
+                        execute(sql)
+            except Exception:
+                pass
+            raise
+        for sql in governance(model, kept):
+            try:
+                execute(sql)
+            except Exception as err:
+                warnings.append(f"put back after the rebuild: {' '.join(str(err).split())[:200]}")
+    if mode == "unchanged" and [tuple(x) for x in extra or []] == [tuple(x) for x in previous_extra or []]:
+        extra = []                                  # nothing changed: the extra definitions are in the model already
     for view, ddl in extra or []:
         try:
             execute(_script("APPLY_SEMANTIC_DEFINITION_OR_FAIL", ddl, False))
@@ -471,12 +698,22 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
             execute(_script("PUBLISH_MODEL", model))
         except Exception as err:
             warnings.append(f"publish after the extra definitions: {' '.join(str(err).split())[:300]}")
+    for word in spec.get("synonym_calls") or []:
+        try:
+            execute(_script("ADD_SYNONYM", model, word["type"], word["name"], word["synonym"], "MANUAL"))
+        except Exception as err:
+            if not re.search(r"(?i)exist|duplicate|already", str(err)):
+                warnings.append(f"synonym {word['synonym']} of {word['name']}: {' '.join(str(err).split())[:160]}")
+    policies = list(spec.get("policies") or [])
+    gone = [x for x in (previous or {}).get("policies") or [] if x not in policies] if mode != "rebuilt" else []
+    for policy, masked in [(x, True) for x in policies] + [(x, False) for x in gone]:
+        try:
+            execute(_script("SET_FIELD_POLICY", model, policy["object"], policy["field"], "MASK" if masked else None,
+                            "personal data" if masked else None))
+        except Exception as err:
+            warnings.append(f"{policy['object']}.{policy['field']}: {' '.join(str(err).split())[:200]} (not hidden)")
     if reader:
-        for sql in (f'GRANT SEMANTIC_USER TO "{reader}"', f'GRANT SELECT ON SCHEMA {spec["published_schema"]} TO "{reader}"'):
-            try:
-                execute(sql)
-            except Exception as err:
-                warnings.append(f"the read-only user {reader}: {' '.join(str(err).split())[:200]}")
+        warnings += grant_reader(execute, model, reader)
     counts = {"views": len(spec["objects"]), "entities": len(spec["entities"]),
               "relationships": len(spec["relationships"]),
               "dimensions": sum(len(o["dimensions"]) for o in spec["objects"]),
@@ -484,7 +721,37 @@ def apply(execute: Callable[[str], Any], rows: Run, spec: dict[str, Any], *, rea
               "metrics": sum(len(o["metrics"]) for o in spec["objects"])}
     return {"model": model, "published_schema": spec["published_schema"],
             "views": [f"{spec['published_schema']}.{o['name']}" for o in spec["objects"]], "counts": counts,
-            "statements": len(sent), "notes": list(spec.get("notes") or []), "warnings": warnings}
+            "statements": len(sent), "mode": mode, "notes": list(spec.get("notes") or []), "warnings": warnings}
+
+
+def materialization_statements(model: str, record: dict[str, Any]) -> list[str]:
+    """What registers stored totals with a model, in order: REGISTER_MATERIALIZATION, each column
+    (ADD_MATERIALIZATION_COLUMN), then MARK_MATERIALIZATION_REFRESHED - also after the model was rebuilt."""
+    found = [_script("REGISTER_MATERIALIZATION", model, record["name"], record["schema"], record["table"], "AGGREGATE",
+                     f"MAX_AGE {record['max_age']}")]
+    found += [_script("ADD_MATERIALIZATION_COLUMN", model, record["name"], c["kind"], c["field"], c["column"], c["rollup"])
+              for c in record["columns"]]
+    return found + [_script("MARK_MATERIALIZATION_REFRESHED", model, record["name"], None, None)]
+
+
+READER_ROLE = "EXAKIT_SEMANTIC_READERS"
+
+
+def grant_reader(execute: Callable[[str], Any], model: str, reader: str) -> list[str]:
+    """The read-only user may use the model, the way Semantic Views grants it: GRANT_MODEL_ROLE to a role (it records
+    the grant, gives SELECT on the published schema and SEMANTIC_USER), and that role to the user. The user's SELECT on
+    the sources the compiled SQL reads is the kit's read-only grant (SELECT ANY TABLE). [what did not work]."""
+    said = []
+    for sql in (f"CREATE ROLE {READER_ROLE}", f'GRANT {READER_ROLE} TO "{reader}"',
+                _script("GRANT_MODEL_ROLE", model, READER_ROLE)):
+        try:
+            execute(sql)
+        except Exception as err:
+            text = " ".join(str(err).split())
+            if sql.startswith("CREATE ROLE") and ("exist" in text.lower() or "conflict" in text.lower()):
+                continue                                   # made for an earlier model
+            said.append(f"the read-only user {reader}: {text[:200]}")
+    return said
 
 
 def summary(spec: dict[str, Any]) -> str:
@@ -505,6 +772,144 @@ def summary(spec: dict[str, Any]) -> str:
 _TOKEN = re.compile(r"\s*(?:([A-Za-z_][A-Za-z0-9_]*)|(\d+(?:\.\d+)?)|([-+*/(),]))")
 _FUNCTIONS = {"SUM", "NULLIF"}
 _FILTER = re.compile(r"^\s*([a-z][a-z0-9_]*)\s*(=|<>|IN)\s*(\(.*\)|'(?:[^']|'')*')\s*$", re.IGNORECASE)
+
+
+HOW = ("sum", "count", "average")
+
+
+def _view_of(spec: dict[str, Any], table: str) -> dict[str, Any] | None:
+    schema, _, name = str(table).upper().partition(".")
+    entity = next((e for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema, name)), None)
+    return next((o for o in spec["objects"] if entity and o["root"] == entity["name"]), None)
+
+
+def _field_of(items: list[dict[str, Any]], column: str, entity: str | None = None) -> dict[str, Any] | None:
+    """The fact or dimension over ``column`` (COLUMN, or SCHEMA.TABLE.COLUMN of a joined table)."""
+    wanted = str(column).upper().rsplit(".", 1)[-1].strip('"')
+    for item in items:
+        if str(item.get("expression") or "").rsplit(".", 1)[-1].strip('"').upper() == wanted and (
+                entity is None or item.get("entity") == entity):
+            return item
+    return None
+
+
+def user_metrics(spec: dict[str, Any], metrics: Iterable[dict[str, Any]]) -> tuple[list[tuple[str, str]], list[str]]:
+    """([(view, Semantic SQL)], what was refused and why) for metrics a person defined: {table, name, how: sum | count
+    | average, column (for sum and average), where: {column, values: [...]} (optional: only these rows count), about}.
+    Each is written as Semantic Views' own definition; Semantic Views checks it when it is saved and says what is
+    wrong. Here only the names are checked: the table must be a starting point, the column one of its amounts, the
+    condition's column one of its dimensions."""
+    extra, refused = [], []
+    taken = {f["name"] for o in spec["objects"] for f in o["dimensions"] + o["facts"] + o["metrics"]}
+    for m in metrics or []:
+        if not isinstance(m, dict):
+            continue
+        name = identifier(m.get("name") or "", "metric")
+        how = str(m.get("how") or "sum").lower()
+        view = _view_of(spec, m.get("table") or "")
+        why = None
+        if view is None:
+            why = f"{m.get('table')} is not a starting point of the data map"
+        elif how not in HOW:
+            why = f"'{how}' is not one of {', '.join(HOW)}"
+        elif name in taken:
+            why = f"the name {name} is taken"
+        fact = row = None
+        if not why:
+            row = next(f for f in view["facts"] if f.get("row"))
+            if how != "count":
+                fact = _field_of([f for f in view["facts"] if not f.get("row")], m.get("column") or "", view["root"])
+                if fact is None:
+                    why = f"{m.get('column')} is not an amount of {m.get('table')}"
+        flt = ""
+        where = m.get("where") or {}
+        if not why and where.get("column"):
+            dim = _field_of(view["dimensions"], where["column"])
+            values = [str(v) for v in where.get("values") or [] if str(v) != ""]
+            if dim is None:
+                why = f"{where['column']} is not a column to group by in {m.get('table')}"
+            elif not values:
+                why = f"name the values of {where['column']} that count"
+            else:
+                flt = (f"{dim['name']} = {literal(values[0])}" if len(values) == 1
+                       else f"{dim['name']} IN ({', '.join(literal(v) for v in values)})")
+        if why:
+            refused.append(f"metric {name}: {why}")
+            continue
+        about = " ".join(str(m.get("about") or "").split())[:300] or _words(name)
+        tail = lambda display, kind, comment: (f"\n  DISPLAY {_text(display)}\n  COMMENT {_text(comment)}\n  {kind} PUBLIC")
+        head = lambda metric, expression, kind_type: (f"ALTER SEMANTIC VIEW {spec['model']}.{view['name']}\nADD OR REPLACE METRIC "
+                                                      f"{metric}\n  AS {expression}\n  ON ENTITY {view['root']}\n  RETURNS {kind_type}"
+                                                      + (f"\n  FILTER (WHERE {flt})" if flt and "/" not in expression else ""))
+        if how == "sum":
+            extra.append((view["name"], head(name, f"SUM({fact['name']})", fact["type"] if fact["type"].startswith("DECIMAL") else "DOUBLE")
+                          + tail(_words(name), "ADDITIVE", about)))
+        elif how == "count":
+            extra.append((view["name"], head(name, f"SUM({row['name']})", "DECIMAL(36,0)") + tail(_words(name), "ADDITIVE", about)))
+        else:
+            total, rows_ = identifier(f"{name}_total", "metric"), identifier(f"{name}_rows", "metric")
+            extra.append((view["name"], head(total, f"SUM({fact['name']})", "DOUBLE") + tail(f"{_words(name)} (total)", "ADDITIVE", about)))
+            extra.append((view["name"], head(rows_, f"SUM({row['name']})", "DECIMAL(36,0)") + tail(f"{_words(name)} (rows)", "ADDITIVE", about)))
+            extra.append((view["name"], head(name, f"{total} / NULLIF({rows_}, 0)", "DOUBLE") + tail(_words(name), "RATIO", about)))
+            taken.update([total, rows_])
+        taken.add(name)
+    return extra, refused
+
+
+def field_policies(spec: dict[str, Any], hidden: dict[str, Iterable[str]] | None) -> tuple[list[dict[str, str]], list[str]]:
+    """([{object, field}], what was refused) for columns to hide in answers ({SCHEMA.TABLE: [COLUMN]}): every semantic
+    view that has a dimension over that column gets Semantic Views' own MASK policy (SET_FIELD_POLICY) - the value is
+    never returned, filtering on it still works. A personal-data column of a column map is not in the model at all."""
+    found, refused = [], []
+    for table, columns in (hidden or {}).items():
+        schema, _, name = str(table).upper().partition(".")
+        entity = next((e for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema, name)), None)
+        for column in columns or []:
+            hits = [{"object": o["name"], "field": d["name"]} for o in spec["objects"] for d in o["dimensions"]
+                    if entity and d.get("entity") == entity["name"] and _field_of([d], column)]
+            if not hits:
+                refused.append(f"hide {table}.{column}: it is not a column to group by in your data map")
+            found += [h for h in hits if h not in found]
+    return found, refused
+
+
+def user_synonyms(spec: dict[str, Any], synonyms: dict[str, Iterable[str]] | None,
+                  metrics: Iterable[dict[str, Any]] | None = None) -> tuple[list[dict[str, str]], list[str]]:
+    """Your words for a field ({field name: ["sales", "turnover"]}), found by search and by AI tools: a dimension's or
+    metric's own definition carries them (its SYNONYMS); a metric of your own gets them with ADD_SYNONYM after it is
+    defined. ([{type, name, synonym}] to add with ADD_SYNONYM, what was refused)."""
+    calls, refused = [], []
+    yours = {identifier(m.get("name") or "", "metric") for m in metrics or [] if isinstance(m, dict)}
+    for name, words in (synonyms or {}).items():
+        words = [" ".join(str(w).split())[:60] for w in words or [] if str(w).strip()]
+        hit = False
+        for obj in spec["objects"]:
+            for kind, items in (("DIMENSION", obj["dimensions"]), ("METRIC", obj["metrics"])):
+                for item in items:
+                    if item["name"] == name:
+                        item["synonyms"] = list(dict.fromkeys(list(item.get("synonyms") or []) + words))[:12]
+                        hit = True
+        if not hit and name in yours:
+            calls += [{"type": "METRIC", "name": name, "synonym": w} for w in words]
+            hit = True
+        if not hit:
+            refused.append(f"synonyms for {name}: no field of that name in your data map")
+    return calls, refused
+
+
+def user_instructions(spec: dict[str, Any], instructions: Iterable[Any]) -> list[dict[str, Any]]:
+    """Instructions in a person's words for AI tools ("revenue excludes tax"): a text is about the whole data map, a
+    {table, text} about one table."""
+    found = []
+    for item in instructions or []:
+        table, text = (item.get("table"), item.get("text")) if isinstance(item, dict) else (None, item)
+        text = " ".join(str(text or "").split())[:1000]
+        if not text:
+            continue
+        schema, _, name = str(table or "").upper().partition(".")
+        entity = next((e["name"] for e in spec["entities"] if (e["schema"].upper(), e["table"].upper()) == (schema, name)), None)
+        found.append({"entity": entity, "scope": "ENTITY" if entity else "MODEL", "kind": "GENERAL", "priority": 20, "text": text})
+    return found
 
 
 def ai_facts(spec: dict[str, Any]) -> dict[str, Any]:

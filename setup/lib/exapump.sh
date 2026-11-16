@@ -2909,11 +2909,10 @@ exakit_bulk_print_plan() {
     # The two counts on ONE line when both happen, and each with its own
     # plural. Two near-identical sentences stacked under a three-file plan was
     # more lines about what is NOT being loaded than about what is.
-    _bpp_other="$(printf '%s\n' "$1" | grep -c '^skip|unsupported|' || true)"
     _bpp_empty="$(printf '%s\n' "$1" | grep -c '^skip|empty|' || true)"
     _bpp_hdr="$(printf '%s\n' "$1" | grep -c '^skip|header-only|' || true)"
     _bpp_ig=""
-    [ "$_bpp_other" -gt 0 ] && _bpp_ig="$_bpp_other of other kinds"
+    # Files of other kinds (images, notes beside the exports) are left alone without a word: they were never data.
     [ "$_bpp_empty" -gt 0 ] && _bpp_ig="${_bpp_ig:+$_bpp_ig, }$_bpp_empty empty"
     [ "$_bpp_hdr" -gt 0 ] && _bpp_ig="${_bpp_ig:+$_bpp_ig, }$_bpp_hdr with a header and no rows"
     # Not folded into "ignored": these hold data, and one rename loads them.
@@ -3027,6 +3026,9 @@ exakit_bundled_datasets() {
         _bdr_order="$(_exakit_dataset_conf_get order "$_bdr_conf")"
         _bdr_schema="$(_exakit_dataset_conf_get schema "$_bdr_conf")"
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
+        # Not part of this release (hidden=yes): its folder stays, but it is not
+        # offered, listed or loaded - asked for by name, it is an unknown id.
+        case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
         # A dataset that will be downloaded says how big the download is, in
         # every list that offers it ("... - 3.9 MB download").
         _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"
@@ -3202,6 +3204,14 @@ EXAKIT_EDF_EOF
         fi
         if [ "$_edf_tok" != 1 ]; then
             fetch_quiet "$_edf_src" "$_edf_part" || rm -f "$_edf_part"
+        fi
+        # A kit installed from a private repository (a fork, a backup) reaches its release only with a token. The
+        # public kit's release holds the same file, and the SHA-256 below checks it either way: try that one.
+        _edf_public="$(printf '%s' "$_edf_url" | sed "s|{repo}|exasol-labs/exasol-personal-local-starterkit|")"
+        if [ ! -s "$_edf_part" ] && [ -z "${EXAKIT_DATASETS_MIRROR:-}" ] && [ "$_edf_public" != "$_edf_src" ]; then
+            _exakit_log_file "INFO  $_edf_src was not reachable without a token; trying the public kit's copy $_edf_public"
+            fetch_quiet "$_edf_public" "$_edf_part" || rm -f "$_edf_part"
+            [ -s "$_edf_part" ] && _edf_src="$_edf_public"
         fi
         EXAKIT_ACTIVE_LABEL=""
     fi
@@ -3456,9 +3466,23 @@ exakit_dataset_loaded() {
 
 # exakit_pending_datasets — "id|label" lines for bundled datasets that are NOT
 # loaded yet. Drives the dynamic data menus: loaded datasets are not offered.
+# exakit_hidden_datasets — the ids whose dataset.conf hides them (hidden=yes):
+# kept in the kit and loaded when named, never offered. One per line.
+exakit_hidden_datasets() {
+    _hd_root="$(exakit_repo_root 2>/dev/null)" || return 0
+    for _hd_conf in "$_hd_root"/data/datasets/*/dataset.conf; do
+        [ -f "$_hd_conf" ] || continue
+        case "$(_exakit_dataset_conf_get hidden "$_hd_conf")" in
+            yes|true|1) _exakit_dataset_conf_get id "$_hd_conf" ;;
+        esac
+    done
+}
+
 exakit_pending_datasets() {
+    _pd_hidden=" $(exakit_hidden_datasets | tr '\n' ' ') "
     exakit_bundled_datasets | while IFS='|' read -r _bd_id _bd_label _bd_flag _bd_markers _bd_schema; do
         [ -n "$_bd_id" ] || continue
+        case "$_pd_hidden" in *" $_bd_id "*) continue ;; esac     # kept, not offered
         exakit_dataset_loaded "$_bd_flag" "$_bd_markers" "$_bd_schema" "$_bd_id" \
             || printf '%s|%s\n' "$_bd_id" "$_bd_label"
     done
@@ -3903,6 +3927,62 @@ _exakit_data_persona_pending() {
     done | tr '\n' ',' | sed 's/,$//'
 }
 
+# _exakit_data_compact_samples — the install's sample row, before the question:
+# no column heading, no checkbox on it, and its datasets loading at once with
+# the bar to the right of the row. When they are in, the row is no longer a
+# choice and the same table asks about the rows under it (upload, external
+# source, Skip - Skip ticked, so Enter goes on). Reads and books like the load
+# loop in exakit_maybe_offer_data_load (_exakit_offer_fail, deferred errors).
+_exakit_data_compact_samples() {
+    UI_TABLE_COL1=" "
+    UI_TABLE_NOBOX=" 1 "
+    printf '\n'
+    EXAKIT_TABLE_LIVE=0
+    ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
+    EXAKIT_DEFER_ERRORS=""
+    if [ "$EXAKIT_TABLE_LIVE" = 1 ]; then
+        EXAKIT_DEFER_ERRORS="$EXAKIT_TABLE_STATE.fatal"
+        : > "$EXAKIT_DEFER_ERRORS"
+    fi
+    _dcs_root="$(exakit_repo_root 2>/dev/null || true)"
+    _dcs_n=0
+    _dcs_ok=0
+    for _dcs_id in $(printf '%s' "$EXAKIT_TABLE_SAMPLE_IDS" | tr ',' ' '); do
+        _dcs_n=$(( _dcs_n + 1 ))
+        if ( ui_table_detach; exakit_load_dataset "$_dcs_root" "$_dcs_id" ); then
+            _dcs_ok=$(( _dcs_ok + 1 ))
+        else
+            command -v _exakit_offer_fail >/dev/null 2>&1 && \
+                _exakit_offer_fail "loading dataset '$_dcs_id' did not finish (see the log)"
+        fi
+    done
+    if [ "$_dcs_ok" -eq "$_dcs_n" ]; then
+        ui_table_set "$EXAKIT_TABLE_STATE" 1 done "" "" "" "" "$_dcs_n of $_dcs_n loaded"
+    else
+        ui_table_set "$EXAKIT_TABLE_STATE" 1 failed "" "" "" "" "$_dcs_ok of $_dcs_n loaded"
+    fi
+    [ "$EXAKIT_TABLE_LIVE" = 1 ] && ui_table_end "$EXAKIT_TABLE_STATE"
+    EXAKIT_TABLE_LIVE=0
+    if [ -n "$EXAKIT_DEFER_ERRORS" ] && [ -s "$EXAKIT_DEFER_ERRORS" ]; then
+        while IFS='|' read -r _dcs_kind _dcs_text; do
+            [ -n "$_dcs_text" ] && error "$_dcs_text"
+        done < "$EXAKIT_DEFER_ERRORS"
+        rm -f "$EXAKIT_DEFER_ERRORS"
+    else
+        # Nothing printed under the frame: the question reuses it where it stands.
+        UI_TABLE_MENU_ONSCREEN="${UI_TABLE_LINES:-0}"
+    fi
+    EXAKIT_DEFER_ERRORS=""
+    # Loaded: the row is no longer a choice, and nothing more loads from it.
+    EXAKIT_TABLE_IDS="
+$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed '1d')"
+    EXAKIT_TABLE_SAMPLE_IDS=""
+    EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_SKIP"
+    UI_TABLE_MENU_START=2
+    [ "$_dcs_ok" -eq "$_dcs_n" ] || warn "Data loading did not finish cleanly. Retry any time with: exakit data-load"
+    return 0
+}
+
 # exakit_data_samples_select <final-label> — the table of the data question
 # (exakit_data_load_select), which then shows the load's progress. Each says, in a
 # "For" column, the personas it is for; the personas picked for this machine
@@ -3924,6 +4004,9 @@ exakit_data_samples_select() {
     exakit_track_tmp "$EXAKIT_TABLE_STATE"
     exakit_data_table_build "$EXAKIT_TABLE_STATE"
     UI_TABLE_TITLE="Data to load"
+    if [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] && [ -n "${EXAKIT_TABLE_SAMPLE_IDS:-}" ]; then
+        _exakit_data_compact_samples
+    fi
     # What each dataset is (description= in its dataset.conf) gets a column of
     # its own while the reader picks; the progress display that follows has no
     # room for it, and needs none. With no description the second column is
@@ -3932,9 +4015,13 @@ exakit_data_samples_select() {
     # the names their width here.
     UI_TABLE_COL2=" "
     [ "${EXAKIT_TABLE_HAS_DESC:-0}" = 1 ] && UI_TABLE_COL2="Description"
-    printf '\n'
+    # The install's compact table has no descriptions: no blank column either, so the names keep their width.
+    [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] && UI_TABLE_COL2=""
+    [ "${UI_TABLE_MENU_ONSCREEN:-0}" != 0 ] || printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
     UI_TABLE_COL2=""
+    UI_TABLE_COL1=""
+    UI_TABLE_NOBOX=""
 
     # Skip answers none; the caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in
@@ -3956,6 +4043,7 @@ exakit_data_samples_select() {
     for _dls_row in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         _dls_id="$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed -n "${_dls_row}p")"
         [ -n "$_dls_id" ] || continue
+        [ "$_dls_id" = samples ] && _dls_id="$EXAKIT_TABLE_SAMPLE_IDS"
         EXAKIT_DATA_LOAD_SELECTION="${EXAKIT_DATA_LOAD_SELECTION:+$EXAKIT_DATA_LOAD_SELECTION,}$_dls_id"
     done
     # Nothing picked, nothing to show progress in: the table is done.
@@ -4076,7 +4164,27 @@ exakit_data_table_build() {
     _dtb_count="$(grep -c '.' "$_dtb_pend" 2>/dev/null)"
     case "$_dtb_count" in ''|*[!0-9]*) _dtb_count=0 ;; esac
     _dtb_n=0
-    if [ "$_dtb_count" -gt 0 ]; then
+    EXAKIT_TABLE_SAMPLE_IDS=""
+    if [ "$_dtb_count" -gt 0 ] && [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ]; then
+        # THE INSTALL'S FORM: one row for the samples, named by what it loads
+        # ("Sample datasets (tpch, energy, weather)"), no tree under it - the
+        # default persona's datasets still to load, else every pending one. Its
+        # load shows on that one row, dataset after dataset.
+        while IFS='|' read -r _dtb_id _dtb_label; do
+            [ -n "$_dtb_id" ] || continue
+            if [ -n "${EXAKIT_DATASETS_PRESELECT:-}" ] && [ "$EXAKIT_DATASETS_PRESELECT" != none ]; then
+                case ",$EXAKIT_DATASETS_PRESELECT," in *",$_dtb_id,"*) ;; *) continue ;; esac
+            fi
+            EXAKIT_TABLE_SAMPLE_IDS="${EXAKIT_TABLE_SAMPLE_IDS:+$EXAKIT_TABLE_SAMPLE_IDS,}$_dtb_id"
+        done < "$_dtb_pend"
+        [ -n "$EXAKIT_TABLE_SAMPLE_IDS" ] || EXAKIT_TABLE_SAMPLE_IDS="$(cut -d'|' -f1 "$_dtb_pend" | tr '\n' ',' | sed 's/,$//')"
+        printf 'plain|Sample datasets (%s)|1|idle|||||| \n' "$(printf '%s' "$EXAKIT_TABLE_SAMPLE_IDS" | sed 's/,/, /g')" >> "$_dtb_f"
+        EXAKIT_TABLE_IDS="samples
+"
+        _dtb_n=1
+        EXAKIT_TABLE_GROUP=""
+        EXAKIT_TABLE_DEFAULTS="1"
+    elif [ "$_dtb_count" -gt 0 ]; then
         # The parent row: ticking it ticks every dataset under it, unticking
         # one releases it (EXAKIT_TABLE_GROUP mode "all").
         printf 'group|Sample datasets|1|idle|||||| \n' >> "$_dtb_f"
@@ -4204,6 +4312,10 @@ EXAKIT_DTP_EOF
 
 # exakit_data_table_row <dataset-id> — which row that dataset is on, or 0.
 exakit_data_table_row() {
+    case ",${EXAKIT_TABLE_SAMPLE_IDS:-}," in
+        ,,) ;;
+        *",$1,"*) set -- samples ;;          # the install's one sample row carries every one of them
+    esac
     _dtr_i=0
     while IFS= read -r _dtr_id; do
         _dtr_i=$(( _dtr_i + 1 ))

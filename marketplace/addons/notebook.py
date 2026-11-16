@@ -28,6 +28,22 @@ IMPORT_CHECK = ("import exasol.nb_connector, exakit.nb, exakit_nb, exasol_mlflow
 KERNEL = "exasol-starter-kit"
 KERNEL_TITLE = "Exasol (Starter Kit)"
 FRONTENDS = ("jupyterlab", "marimo", "positron")
+# The connector requires exasol-transformers-extension, which brings PyTorch, transformers, accelerate and
+# bitsandbytes - 24 packages, about 0.7 GB - and nothing the kit's notebooks use: only the connector's transformers
+# wrappers and the transformers example lessons import them. Measured cold (empty cache), the notebook environment is
+# 1.6 GB to download and 1.5 GB on disk with it, 0.89 GB and 0.82 GB without it. So it is left out unless asked for
+# (EXAKIT_NOTEBOOK_TRANSFORMERS=1, or a receipt that already has it); a marker that never holds drops it.
+TRANSFORMERS_OVERRIDE = 'exasol-transformers-extension; sys_platform == "never"\n'
+
+
+def _transformers(ctx: KitContext) -> bool:
+    """The transformers extension (and PyTorch) in the notebook environment: only when asked for, or kept once in."""
+    asked = os.environ.get("EXAKIT_NOTEBOOK_TRANSFORMERS", "").strip()
+    if asked in ("0", "1"):
+        return asked == "1"
+    return bool(ctx.manifest.get(f"{RECEIPT}.transformers"))
+
+
 COMPANIONS = (
     "ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3",
     "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14",
@@ -345,6 +361,11 @@ def _register_kernel(ctx: KitContext) -> None:
     _run_helper(ctx, "register_kernel.py", env=env)
 
 
+# install() fetches files and builds under this add-on's own folders, and writes its receipt through the
+# locked manifest: apply.py may run it beside other parallel-safe add-ons (the steps after it stay serial).
+PARALLEL_INSTALL = True
+
+
 def install(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") in ("user", "unknown"):
         return
@@ -361,13 +382,18 @@ def install(ctx: KitContext) -> None:
     for local in (ctx.root / "notebook" / "package" / "build", ctx.root / "packages" / "exasol-mlflow" / "build"):
         if local.is_dir():
             shutil.rmtree(local)
+    transformers = _transformers(ctx)
+    override = home / "uv-overrides.txt"                  # kept beside the environment: an update resolves the same way
+    home.mkdir(parents=True, exist_ok=True)
+    override.write_text("" if transformers else TRANSFORMERS_OVERRIDE, encoding="utf-8")
     for number, (label, specs) in enumerate(_stages(ctx, version, selected)):
-        command = [str(ctx.uv), "pip", "install", "--python", str(python)]
+        command = [str(ctx.uv), "pip", "install", "--python", str(python), "--override", str(override)]
         if number == 0:                                   # the kit's own two packages, rebuilt once
             command += ["--reinstall-package", "exakit-nb", "--reinstall-package", "exasol-mlflow"]
-        if sys.platform != "darwin":
+        if transformers and sys.platform != "darwin":
             command.extend(("--torch-backend", "cpu"))
         ctx.run_logged(label, *command, *specs)
+    ctx.manifest.set_many({f"{RECEIPT}.transformers": transformers})
     ctx.activity("Validating notebook connector")
     if _package_version(ctx) != version:
         raise AddonFailure("The notebook connector does not report the requested version")

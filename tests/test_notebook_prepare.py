@@ -58,10 +58,20 @@ class Answers:
                 row.update({f"D{i}_{k}": got.get(f"D{k}", 0) for k in range(len(prepare.DATE_FORMATS))})
                 row.update({f"T{i}_{k}": 0 for k in range(len(prepare.TIMESTAMP_FORMATS))})
             return pd.DataFrame([row])
-        if "GROUP BY 1" in statement:
-            column = re.search(r'SELECT "([A-Z_]+)" AS VALUE_', statement).group(1)
-            values = {"CHANNEL": [("web", 3), ("Unknown", 1), ("shop", 1)], "RETURNED": [("0", 3), ("1", 2)]}[column]
-            return pd.DataFrame(values, columns=["VALUE_", "N"])
+        values = {"CHANNEL": [("web", 3), ("Unknown", 1), ("shop", 1)], "RETURNED": [("0", 3), ("1", 2)]}
+        if "APPROXIMATE_COUNT_DISTINCT" in statement:      # how many values each column has, all in one statement
+            names = re.findall(r'APPROXIMATE_COUNT_DISTINCT\("([A-Z_]+)"\)', statement)
+            return pd.DataFrame([{f"D_{c}": len(values[c]) for c in names}])
+        if "GROUPING SETS" in statement:                   # the values of every listable column, in one statement
+            names = re.findall(r'GROUPING\("([A-Z_]+)"\)', statement)
+            rows = []
+            for i, column in enumerate(names):
+                for value, n in values[column]:
+                    row = {f"G{j}": 1 for j in range(len(names))}
+                    row.update({f"V{j}": None for j in range(len(names))})
+                    row.update({f"G{i}": 0, f"V{i}": value, "N": n})
+                    rows.append(row)
+            return pd.DataFrame(rows)
         if "SELECT DISTINCT" in statement:
             return pd.DataFrame({"N": [self.distinct]})
         if "COUNT(*) AS N FROM" in statement:

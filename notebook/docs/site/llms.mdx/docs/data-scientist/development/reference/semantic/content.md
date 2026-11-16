@@ -34,6 +34,90 @@ it is offered, and the product validates it again when it is applied: a refused 
 The work is the kit's describe service (the one `exakit describe --model` runs), loaded from the kit copy. A model
 the kit builds is marked as such; one of the same name somebody else made is never touched.
 
+## nb.adopt_view [#adopt_view]
+
+```python
+nb.adopt_view(conn, model: str, view: str, *, dry_run: bool=False) -> dict[str, Any]
+```
+
+A view you already wrote (SCHEMA.VIEW over one table: plain columns grouped, SUM / COUNT / AVG / MIN / MAX)
+made a semantic view of `model` (ADOPT_VIEW): plain columns become dimensions, aggregates metrics, comments
+their descriptions. Adopt it again after the view changes. `dry_run=True` shows the view and the statement only.
+A model the kit builds from your column maps is refused: give the adopted view a model of its own.
+
+## nb.column_maps_in_model [#column_maps_in_model]
+
+```python
+nb.column_maps_in_model(conn, model: str) -> dict[str, dict[str, Any]]
+```
+
+The approved column maps the model carries, the newest version of each table: \{SCHEMA.TABLE: \{version, text}}.
+Every model the kit publishes keeps each table's approved column map on its entity, one per version.
+
+## nb.compile_request [#compile_request]
+
+```python
+nb.compile_request(conn, request: dict[str, Any], *, show: bool=True) -> dict[str, Any]
+```
+
+Compile a structured request - \{"model", "object", "metrics": \[...], "dimensions": \[...], "filters": \[\{"field",
+"op", "value"}], "order_by": \[\{"field", "direction"}], "limit"} - into the SQL the semantic layer stands behind
+(COMPILE_REQUEST_JSON). Returns \{status, sql, plan, clarification, request_id, error}; nothing of the data is read.
+A question the model finds ambiguous comes back with `clarification`: the choices to pick from.
+
+## nb.data_map_inputs [#data_map_inputs]
+
+```python
+nb.data_map_inputs(tables: list[str], model: str='all_data', connection=None) -> dict[str, Any]
+```
+
+What your data map holds for these tables: each table's key, grain and columns from its approved column map,
+and what you said before - grains, notes, links with their type, metrics, starting points, instructions, hidden
+columns. Read from this computer; with `connection`, what this computer does not have (a new computer, a deleted
+folder) is put back from the model first, which is the record.
+
+## nb.data_map_versions [#data_map_versions]
+
+```python
+nb.data_map_versions(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Every saved version of your data map, from the model itself, newest first: \{version, saved_at, tables, links,
+metrics, definitions}. Each holds what you said and the whole model as Semantic Views exported it.
+
+## nb.derived_composition [#derived_composition]
+
+```python
+nb.derived_composition(conn, allowed: bool, model: str='all_data') -> dict[str, Any]
+```
+
+Whether your semantic views may be joined like tables in ordinary SQL.
+
+## nb.draft_data_map [#draft_data_map]
+
+```python
+nb.draft_data_map(tables: list[str]) -> dict[str, Any]
+```
+
+The AI set up for the kit drafts the data map for these tables in one call: what one row of each is, what each
+is, the links with their type, the tables questions start from, metrics (with a condition where one fits) and
+instructions. It sees names, roles, notes and known values, never a row; nothing is saved. Check it, change it,
+then pass it to nb.semantic_model.
+
+## nb.explain_metric [#explain_metric]
+
+```python
+nb.explain_metric(
+    conn,
+    object_name: str,
+    metric: str,
+    model: str='all_data',
+) -> list[dict[str, str]]
+```
+
+A metric as Semantic Views explains it: its definition, where it comes from, what it can be grouped by and
+whether it validates. \[\{section, item, detail}].
+
 ## nb.find_links [#find_links]
 
 ```python
@@ -45,6 +129,7 @@ nb.find_links(
     ai: bool | None=None,
     check: list[str] | None=None,
     show: bool=True,
+    rules: dict[str, Any] | None=None,
 ) -> dict[str, Any]
 ```
 
@@ -56,6 +141,105 @@ Bounded reads only; nothing is written. `ai` (default: when a model is configure
 pairs from names, types and notes; `check` is pairs you have in mind ("S.T.COL=S.T.KEY"); each is checked against
 the data and comes back with its evidence or under "rejected". Returns \{links, partial, ...}; a link's
 `confidence` is "low" for plain numbers, which match by chance: confirm those before using them.
+
+## nb.freeze_view [#freeze_view]
+
+```python
+nb.freeze_view(conn, view: str, semantic_sql: str) -> dict[str, Any]
+```
+
+A view for BI tools: Semantic SQL compiled once by Semantic Views and stored as plain SQL (SCHEMA.NAME).
+
+## nb.frozen_views [#frozen_views]
+
+```python
+nb.frozen_views(conn, model: str='all_data', *, sync: bool=False) -> list[dict[str, Any]]
+```
+
+The views frozen from your data map and whether each still matches it; `sync` retires the stale ones.
+
+## nb.fuse [#fuse]
+
+```python
+nb.fuse(conn, model: str, declaration: dict[str, Any], *, dry_run: bool=True) -> dict[str, Any]
+```
+
+The same thing in several sources, declared once (APPLY_FUSION_DECLARATION): `dry_run=True` (the default)
+checks it against the data and changes nothing; `dry_run=False` applies it and keeps the exported document
+beside the model, so a rebuild puts it back. Build the document with nb.fusion_document(...).
+
+## nb.fusion [#fusion]
+
+```python
+nb.fusion(conn, model: str) -> dict[str, Any] | None
+```
+
+The model's whole fusion layer, exported as one document (None when it has none).
+
+## nb.fusion_document [#fusion_document]
+
+```python
+nb.fusion_document(
+    conn,
+    model: str,
+    table: str,
+    other: str,
+    *,
+    key: str | None=None,
+    wins: str='model',
+    mapping: dict[str, str] | None=None,
+    split: dict[str, str] | None=None,
+) -> dict[str, Any]
+```
+
+The fusion document saying `other` (a table of another source) holds the same thing as `table` (an entity
+of the published `model`), at the same grain: a second copy of the entity, matched by its key (`key`: its
+column in `other` when it is named differently), every field bound there (a column of the same name, else
+empty), and the values of a field both hold reconciled - `wins="model"` keeps the model's copy authoritative,
+`wins="other"` makes the other one win. When the two use different ids, `mapping` names the table that pairs
+them: \{"table": "CRM.CUSTOMER_XREF", "local": "ACCOUNT_ID", "key": "CUSTOMER_ID"}. When `other` holds the older
+rows, `split` says from when this table answers: \{"column": "ORDER_DATE", "at": "2026-01-01"}. Nothing is
+written: check it with nb.fuse(connection, model, document).
+
+## nb.governance_mode [#governance_mode]
+
+```python
+nb.governance_mode(conn, mode: str, model: str='all_data') -> dict[str, Any]
+```
+
+OPEN (Semantic Views reports unprotected sources) or GOVERNED (it refuses them); then what validation says.
+
+## nb.import_databricks [#import_databricks]
+
+```python
+nb.import_databricks(conn, model: str, yaml_text: str, *, apply: bool=False) -> dict[str, Any]
+```
+
+A Databricks metric view (its YAML) as a model of your own: shown first, created only with `apply`.
+
+## nb.import_osi [#import_osi]
+
+```python
+nb.import_osi(conn, plan: dict[str, Any]) -> list[dict[str, Any]]
+```
+
+An import plan from another semantic layer (OSI's normalized form), applied and validated.
+
+## nb.list_totals [#list_totals]
+
+```python
+nb.list_totals(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Your data map's stored totals, with their state and freshness, as Semantic Views keeps them.
+
+## nb.model_fields [#model_fields]
+
+```python
+nb.model_fields(conn, model: str)
+```
+
+Every metric and dimension of a published model, in one read: object, kind, name, business name, what it is.
 
 ## nb.model_notes [#model_notes]
 
@@ -76,14 +260,89 @@ is shown each table's name and its columns' names, types and roles - never a row
 written: pass them on (nb.semantic_model(..., table_notes=..., description=...)). Raises ValueError when no model
 is set up.
 
+## nb.partition_coverage [#partition_coverage]
+
+```python
+nb.partition_coverage(conn, model: str='all_data') -> list[dict[str, Any]]
+```
+
+Rows of a date-split source outside its window, which no answer counts; \[] when all is well.
+
+## nb.propose_change [#propose_change]
+
+```python
+nb.propose_change(
+    conn,
+    kind: str,
+    object_type: str,
+    object_name: str | None,
+    change: dict[str, Any],
+    rationale: str,
+    model: str='all_data',
+) -> dict[str, Any]
+```
+
+A suggested change to your data map, kept by Semantic Views for review; nothing changes until it is certified.
+
+## nb.query_history [#query_history]
+
+```python
+nb.query_history(conn, limit: int=50) -> dict[str, list[dict[str, Any]]]
+```
+
+What was asked of your data map, newest first: requests and Semantic SQL statements, as Semantic Views logged them.
+
+## nb.query_logging [#query_logging]
+
+```python
+nb.query_logging(conn, on: bool | None=None, scope: str='DEPLOYMENT') -> dict[str, Any]
+```
+
+Semantic Views' log of Semantic SQL statements: on, off, or None to read the setting.
+
 ## nb.refresh_semantic [#refresh_semantic]
 
 ```python
 nb.refresh_semantic(conn, name: str) -> dict[str, Any]
 ```
 
-Rebuild a model the kit published, with the column maps and links approved since (`exakit describe --model
-NAME --refresh`). Approving a column map refreshes every model it is in by itself.
+Bring a model the kit published up to date with the column maps and links approved since (`exakit describe --model NAME --refresh`): changed in place, or built again from the kit's store when the model is gone from the
+database - with its verified questions and fusion put back. Approving a column map refreshes every model it is
+in by itself.
+
+## nb.refresh_totals [#refresh_totals]
+
+```python
+nb.refresh_totals(conn, name: str, model: str='all_data') -> dict[str, Any]
+```
+
+Fill stored totals again from the live tables.
+
+## nb.restore_column_maps [#restore_column_maps]
+
+```python
+nb.restore_column_maps(conn, model: str, *, write: bool=False) -> list[dict[str, Any]]
+```
+
+Put the kit's store back from the model (a computer replaced, the store deleted): each table whose store has
+no column map, or an older one, gets the model's. `write=False` (the default) only says what it would write.
+The other way round - the model lost, the store kept - is nb.refresh_semantic(connection, model).
+
+## nb.restore_data_map [#restore_data_map]
+
+```python
+nb.restore_data_map(conn, version: int, model: str='all_data') -> dict[str, Any]
+```
+
+Save an earlier version of your data map again (it becomes the newest version).
+
+## nb.review_change [#review_change]
+
+```python
+nb.review_change(conn, suggestion_id: int, decision: str, note: str) -> dict[str, Any]
+```
+
+Certify or reject a suggested change, with a note.
 
 ## nb.semantic_model [#semantic_model]
 
@@ -100,6 +359,14 @@ nb.semantic_model(
     description: str | None=None,
     preview: bool=False,
     table_notes: dict[str, str] | None=None,
+    sql: list[str] | str | None=None,
+    grains: dict[str, str] | None=None,
+    starts: list[str] | None=None,
+    metrics: list | None=None,
+    instructions: list | None=None,
+    replace_links: bool=False,
+    hidden: dict[str, list[str]] | None=None,
+    synonyms: dict[str, list[str]] | None=None,
 ) -> SemanticModel
 ```
 
@@ -110,7 +377,16 @@ map; `find=True` finds the links between the schemas from their values (nb.find_
 data backs. A link may also be one of nb.find_links' own (\{"from", "to", ...}): its evidence is stored in the
 model with it, and a "note" you add says in your words why the two belong together. `table_notes` (\{SCHEMA.TABLE:
 text}) says what each table is. `ai` (default: when a model is configured) lets your model propose the
-fields' business names, synonyms and extra metrics. Publishing installs Semantic Views when the database does not
+fields' business names, synonyms and extra metrics.
+
+What Semantic Views needs from you: `grains` (\{SCHEMA.TABLE: "one row is one order line"}), each link's "type"
+(MANY_TO_ONE, or ONE_TO_ONE when both sides hold each value once), `starts` (the tables questions start from),
+`metrics` (\[\{"table", "name", "how": "sum"|"count"|"average", "column", "where": \{"column", "values"}, "about"}])
+`instructions` (rules for AI tools, as text or \{"table", "text"}) and `hidden` (\{SCHEMA.TABLE: \[COLUMN]}:
+never shown in answers - Semantic Views' MASK policy - but usable in filters) and `synonyms` (\{field: \["sales"]}:
+your words for a field). A link may say "join": "INNER" (default LEFT) and "fanout": ALLOCATE, DEDUPLICATE or
+REFERENCE_ONLY. nb.draft_data_map drafts them with AI;
+Semantic Views checks them when they are saved. Publishing installs Semantic Views when the database does not
 have it, replaces the model the kit built before under that name, and grants it to the read-only MCP user.
 
 ## nb.semantic_models [#semantic_models]
@@ -151,7 +427,92 @@ A semantic model: what it holds (`spec`), what the AI proposed, and - once publi
 | `find`                                | `bool`                                                                                              |
 | `table_notes`                         | `dict[str, str]`                                                                                    |
 | `status`                              |                                                                                                     |
+| `sql`                                 | The statements publishing runs (a preview's), or the ones that ran: SQL to read, copy and edit.     |
 | `views`                               |                                                                                                     |
 | `spec`                                |                                                                                                     |
 | `fields`                              | One row per dimension and metric: view, kind, name, display name, what it is.                       |
 | `publish(conn=None) -> SemanticModel` | Build the previewed model in the database (the AI's proposal is asked again only if none was kept). |
+
+## nb.store_totals [#store_totals]
+
+```python
+nb.store_totals(
+    conn,
+    object_name: str,
+    metrics: list[str],
+    dimensions: list[str],
+    *,
+    name: str | None=None,
+    max_age: str='1 DAYS',
+    model: str='all_data',
+) -> dict[str, Any]
+```
+
+Pre-built totals for speed: the metrics by the dimensions, stored once in EXAKIT_TOTALS and registered with your
+data map; Semantic Views answers from them when a question fits, and reads the live tables once they are older
+than `max_age`. Refresh with nb.refresh_totals.
+
+## nb.suggestions [#suggestions]
+
+```python
+nb.suggestions(conn, model: str='all_data', pending_only: bool=True) -> list[dict[str, Any]]
+```
+
+The suggested changes waiting for review: from feedback on answers, AI tools and colleagues.
+
+## nb.totals_status [#totals_status]
+
+```python
+nb.totals_status(conn, name: str, status: str, model: str='all_data') -> dict[str, Any]
+```
+
+Turn stored totals off (INACTIVE), on (ACTIVE), or mark them STALE.
+
+## nb.valid_combinations [#valid_combinations]
+
+```python
+nb.valid_combinations(
+    conn,
+    object_name: str,
+    metrics: list[str] | None=None,
+    model: str='all_data',
+) -> list[dict[str, Any]]
+```
+
+Which metric may be grouped by which dimension, as Semantic Views proves it: \[\{metric, dimension, valid, reason}].
+
+## nb.validate_data_map [#validate_data_map]
+
+```python
+nb.validate_data_map(conn, model: str='all_data') -> dict[str, Any]
+```
+
+What Semantic Views finds wrong with your data map, in its own words: every issue of a fresh validation run
+(severity, the part, its rule code, the message), metrics whose result type differs from what they declare, and
+the keys it suggests. \{issues, types, suggestions, errors}.
+
+## nb.verified_questions [#verified_questions]
+
+```python
+nb.verified_questions(conn, model: str)
+```
+
+The model's verified questions: name, question, request and the SQL it compiles to.
+
+## nb.verify_question [#verify_question]
+
+```python
+nb.verify_question(
+    conn,
+    model: str,
+    object_name: str,
+    name: str,
+    question: str,
+    request: dict[str, Any],
+    *,
+    onboarding: bool=False,
+) -> dict[str, Any]
+```
+
+Keep an approved question in the model as a verified query: the next time anyone asks it - here, or an AI
+client over MCP - the reviewed request is used, with no new draft. Compiled first; kept beside the model too.

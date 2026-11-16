@@ -300,7 +300,7 @@ try {
     }
 
     # --- step 5: AI bridge (server, clients, skills) ----------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 5/7  AI bridge (MCP server, clients and skills)")) {
+    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 5/7  Setting up AI bridge (MCP server, clients and skills)")) {
         if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
                 # One line for this step's server work: the spinner narrates
                 # starting the launcher's MCP server and its healing, so the
@@ -359,7 +359,12 @@ try {
         [void](Invoke-ExakitBestEffort -Component "skills" -Repair "exakit skills-install" `
             -Label "AI skills" `
             -Warning "Skills install did not finish cleanly." `
-            -Body { Request-ExakitSkillsInstallOffer })
+            -Body {
+                # The skills are placed without a word on screen (the log keeps every line): the AI
+                # clients connected above are the step's last line. A warning still shows.
+                $script:ExakitQuietDetail = $true
+                try { Request-ExakitSkillsInstallOffer } finally { $script:ExakitQuietDetail = $false }
+            })
     }
 
     # --- step 6: pyexasol (Exasol Python driver) --------------------------------

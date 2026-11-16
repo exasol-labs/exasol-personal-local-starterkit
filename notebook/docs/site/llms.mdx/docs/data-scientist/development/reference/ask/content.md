@@ -21,6 +21,7 @@ nb.ask(
     request_timeout: float | None=None,
     max_output_tokens: int | None=None,
     conn=None,
+    rules: dict[str, Any] | None=None,
 ) -> Proposal
 ```
 
@@ -31,6 +32,28 @@ from the semantic layer: it is shown the model's metrics and dimensions, writes 
 view, and Exasol Semantic Views compiles that into the plain SQL you read and approve - the same definitions an
 AI client over MCP uses, so both give the same number. Without a model over the data, or when the question
 cannot be put in its terms, the SQL is drafted from the approved column map as before, and the proposal says so.
+`rules` changes the order of the ways tried, and every word the AI is given (nb.ask_rules() lists them).
+
+**Used in:** `data-scientist/02_ask_your_data`
+
+## nb.ask_rules [#ask_rules]
+
+```python
+nb.ask_rules() -> dict[str, Any]
+```
+
+How a question is drafted, as values to copy, change and pass (nb.ask(..., rules=\{...})):
+
+ORDER                 the ways tried, first to last: trusted (a trusted question, no AI), data_map_request (the
+AI picks names, the data map writes the SQL), data_map_sql (the AI writes Semantic SQL),
+column_map (the AI writes SQL from the column map). Leave one out to skip it.
+REQUEST_LIMIT         the most rows a request may ask for
+SEARCH_ABOVE          with more fields than this, the data map is searched for the question's words first and the
+AI is shown the fields that match (all of them when none matches)
+SEARCH_WORDS          how many of the question's words are looked up
+\*\_SYSTEM, \*\_PROMPT    every instruction each way gives the AI, word for word
+Also the no-AI drafter's rules (nb.draft_question) and the insights' rules: see nb.draft_rules() and
+nb.insight_rules().
 
 **Used in:** `data-scientist/02_ask_your_data`
 
@@ -43,13 +66,20 @@ class nb.Proposal
 A question with the SQL proposed for it. Nothing runs until `approve()` accepts that exact text; `edit()` replaces
 the SQL and removes the approval; `run()` runs the approved text through the kit's read-only service.
 
-| Member                       | What it is  |
-| ---------------------------- | ----------- |
-| `dataset`                    | `Any`       |
-| `question`                   | `str`       |
-| `sql`                        | `str`       |
-| `assumptions`                | `list[str]` |
-| `doubts`                     | `list[str]` |
-| `edit(sql: str) -> Proposal` |             |
-| `approve() -> Proposal`      |             |
-| `run()`                      |             |
+| Member                                                   | What it is                                                                                                                                                                                            |
+| -------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dataset`                                                | `Any`                                                                                                                                                                                                 |
+| `question`                                               | `str`                                                                                                                                                                                                 |
+| `sql`                                                    | `str`                                                                                                                                                                                                 |
+| `assumptions`                                            | `list[str]`                                                                                                                                                                                           |
+| `doubts`                                                 | `list[str]`                                                                                                                                                                                           |
+| `request`                                                | \`dict\[str, Any]                                                                                                                                                                                     | None\` |
+| `plan`                                                   | `list[str]`                                                                                                                                                                                           |
+| `checked`                                                | \`bool                                                                                                                                                                                                | None\` |
+| `request_id`                                             | `Any`                                                                                                                                                                                                 |
+| `conn`                                                   | `Any`                                                                                                                                                                                                 |
+| `checked_line`                                           |                                                                                                                                                                                                       |
+| `edit(sql: str) -> Proposal`                             |                                                                                                                                                                                                       |
+| `verify(conn, name: str \| None=None) -> dict[str, Any]` | Keep this approved question in the semantic model as a verified question (nb.verify_question): the next time it is asked - here or by an AI client over MCP - its request is used, with no new draft. |
+| `approve() -> Proposal`                                  |                                                                                                                                                                                                       |
+| `run()`                                                  |                                                                                                                                                                                                       |

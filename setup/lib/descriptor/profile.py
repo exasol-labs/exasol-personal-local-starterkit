@@ -3,9 +3,10 @@ numbers computed here from rows already read (profile_rows(), for files and for 
 
 The shape comes from EXA_ALL_COLUMNS in COLUMN_ORDINAL_POSITION order; schema_digest is the SHA-256 of its
 NAME:TYPE lines and is how everything downstream knows the table has not changed since approval. A local table is
-profiled in full. A virtual table is read through (SELECT * FROM <table> LIMIT 10000): a prefix, not a sample, and
-the evidence says "first 10,000 rows". A profile over 30 seconds is flagged slow with its timings; there is no
-sampling option.
+profiled in full, in SQL. A virtual table (an external source) is read once - its first 10,000 rows in one statement,
+a prefix, not a sample, and the evidence says "first 10,000 rows" - and profiled here from those rows
+(profile_rows), so the remote system answers one query, not one per statement. A profile over 30 seconds is flagged
+slow with its timings; there is no sampling option.
 
 The statements: one per batch of 40 columns (COUNT(*), and per column COUNT, APPROXIMATE_COUNT_DISTINCT, MIN/MAX
 for numbers and dates, and for strings AVG(LENGTH) plus one count per pattern: the sensitive ones, the date ones and the value shapes), then three follow-ups and nothing
@@ -161,7 +162,15 @@ def profile(conn, table: str, *, run: Callable[[str], list[dict[str, Any]]] | No
 
     columns, virtual = _shape(timed, schema, name)
     ref = f"{quoted(schema)}.{quoted(name)}"
-    source = f"(SELECT * FROM {ref} LIMIT {VIRTUAL_ROWS})" if virtual else ref
+    if virtual:
+        # An external source is read ONCE: its first rows come over in one statement and are profiled here, as a
+        # file is (profile_rows). Profiling it in SQL sent every statement - the batch and each follow-up - to the
+        # remote system, which read the same rows again each time (measured on Snowflake: about 10 s a statement).
+        rows_read = timed(f"SELECT {', '.join(quoted(c['column']) for c in columns)} FROM {ref} LIMIT {VIRTUAL_ROWS}")
+        found = profile_rows([(c["column"], c["type"]) for c in columns], (list(r.values()) for r in rows_read),
+                             f"{schema}.{name}", virtual=True)
+        return _finish(found["columns"], found["source"]["profiled_rows"], True, f"{schema}.{name}", statements)
+    source = ref
     rows = 0
     for start in range(0, len(columns), BATCH):
         answer = timed(_batch_sql(source, columns[start:start + BATCH], start))[0]

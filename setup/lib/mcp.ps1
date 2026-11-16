@@ -1230,6 +1230,9 @@ function Get-McpClientsFromArgs {
 }
 
 function Invoke-McpSetup {
+    # -Auto: the install connects every AI client found here without a table;
+    # `exakit mcp-setup` run by hand still asks. Twin of EXAKIT_MCP_AUTO.
+    param([switch]$Auto)
     # About to create/verify the read-only database user: a stopped database
     # here used to surface as a bare connection failure - heal it first.
     if (Get-Command Confirm-ExakitRuntimeRunning -ErrorAction SilentlyContinue) {
@@ -1273,6 +1276,28 @@ function Invoke-McpSetup {
             }
         }
         Info "Configuring MCP clients from EXAKIT_MCP_CLIENTS: $($clients -join ',')"
+    } elseif ($Auto) {
+        # THE INSTALL CONNECTS WHAT IS THERE. Every AI client found on this machine
+        # and not connected yet; nothing found, nothing said. The read-only user
+        # says its one line, then a spinner turns while every client's file is
+        # written (side by side). Twin of the EXAKIT_MCP_AUTO branch in common.sh.
+        $states = Get-McpClientStates
+        $pending = @()
+        if ($states) { $pending = @($states.Keys | Where-Object { $states[$_] -eq "pending" } | Sort-Object) }
+        if ($pending.Count -eq 0) { return $true }
+        try { Set-McpReadonlyAccess } catch { return $false }
+        $script:McpReadonlyReady = $true
+        Start-ExakitSpinner "Connecting AI clients"
+        try { $resultJson = Invoke-McpSetupCli -Clients $pending } finally { Stop-ExakitSpinner }
+        if (-not $resultJson) { return $false }
+        $labels = @{ "claude_desktop" = "Claude (desktop app)"; "claude_code" = "Claude Code"; "codex" = "Codex";
+            "cursor" = "Cursor"; "vscode_copilot" = "GitHub Copilot"; "gemini_cli" = "Gemini CLI";
+            "opencode" = "OpenCode"; "continue" = "Continue" }
+        $names = @(Get-McpConfiguredClients -ResultJson $resultJson | ForEach-Object { if ($labels.ContainsKey($_)) { $labels[$_] } else { $_ } })
+        if ($names.Count -eq 0) { $names = @("none") }
+        Ok "AI clients connected: $($names -join ', ')"
+        if (Get-Command Clear-ExakitSoftFailure -ErrorAction SilentlyContinue) { Clear-ExakitSoftFailure -Component "mcp_clients" }
+        return $true
     }
 
     Reset-McpClientTable
@@ -1729,7 +1754,7 @@ function Request-ExakitMcpSetupOffer {
     }
     # No lead-in: the ticks directly above already said the runtime and the
     # server are ready, and this restated them in a sentence.
-    if (-not (Invoke-McpSetup)) {
+    if (-not (Invoke-McpSetup -Auto)) {
         Warn2 "Your local runtime is installed, but MCP client setup did not finish cleanly."
         Warn2 "Retry any time with: exakit mcp-setup"
     }

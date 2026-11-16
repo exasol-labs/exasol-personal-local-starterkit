@@ -33,19 +33,27 @@ nb.load_own_file(
     descriptor: Any=None,
     *,
     conn=None,
-    replace: bool=False,
+    replace: bool | None=None,
     missing_ok: bool=False,
+    rules: dict | None=None,
 ) -> Dataset | LoadedTable | None
 ```
 
-Load your own data and return it as a Dataset the notebooks run on (or a LoadedTable whose roles are reviewed
-next). `path` is a CSV, Parquet or JSON file, or a folder of them (loaded by `exakit data-load`, exapump, one
-table per file). `table` is the schema the tables go into (empty: the folder's name), each named after its file; or
-SCHEMA.TABLE to name the file's table, or the folder's table to describe next.
-`descriptor` (a file only) maps each role to a column of the file (`text` may name several), or is a
-descriptor mapping or file (YAML or JSON; its fact_table names the table when `table` is None). `conn`
-defaults to a new exakit.nb.connect(). With `missing_ok`, a path that is not there says so in one line and
-returns None.
+`rules` changes how the file is loaded (nb.load_rules() lists them); the rest as \_load_own_file.
+
+## nb.load_rules [#load_rules]
+
+```python
+nb.load_rules() -> dict
+```
+
+The rules your own files are loaded with, to copy, change and pass (nb.load_own_file(..., rules=\{...})):
+
+DEFAULT_SCHEMA   where a file loads when no schema is named and its folder gives none
+REPLACE          load a file again over a table of that name (False: a table the kit did not load is left alone)
+MAX_VARCHAR      the widest a text column is made
+DATE_SHARE       a text column is a date when this share of its values reads as one (and looks like one)
+DATE_SAMPLE      how many values are looked at to decide that
 
 ## nb.LoadedTable [#LoadedTable]
 

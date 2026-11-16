@@ -1130,6 +1130,7 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_role_picker.py
       - run: python3 tests/test_role_check.py
+      - run: python3 tests/test_number_format.py
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_bundle.py
       - run: python3 tests/test_notebook_setup_env.py

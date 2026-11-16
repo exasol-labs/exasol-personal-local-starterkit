@@ -226,7 +226,7 @@ exakit_persona_data() {
         return 0
     fi
     exakit_clear_failure_note
-    if ! exakit_maybe_offer_data_load "$1"; then
+    if ! EXAKIT_DATA_TABLE_COMPACT=1 exakit_maybe_offer_data_load "$1"; then
         exakit_record_soft_failure sample_data "exakit data-load" "$(exakit_take_failure_note)" "some of the data"
         warn "Some of the data did not finish loading - carrying on so the rest of the install completes"
     fi
