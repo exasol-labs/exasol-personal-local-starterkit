@@ -186,7 +186,7 @@ function Get-ExakitVsDefs { return (Join-Path (Join-Path $repo "setup") "virtual
 $script:Guides = New-Object System.Collections.ArrayList
 function Show-ExakitVsGuideBack { param([string]$Connector) [void]$script:Guides.Add($Connector) }
 $script:Guides.Clear()
-Check "? on a row shows its connector's guide; the menu goes on" "PICKED=sqlserver CATALOG= FILES=" (Run-Pick "jj?? E")
+Check "? on a row shows the connector guide; the menu goes on" "PICKED=sqlserver CATALOG= FILES=" (Run-Pick 'jj?? E')
 Check "...SQL Server's, once per ?" "sqlserver sqlserver" ($script:Guides -join ' ')
 $script:Guides.Clear()
 Check "? on a Lakehouse catalog row: Lakehouse's guide" "lakehouse" (& { [void](Run-Pick ($lake + "j? E")); $script:Guides -join ' ' })
