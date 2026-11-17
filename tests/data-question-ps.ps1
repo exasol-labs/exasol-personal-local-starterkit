@@ -102,13 +102,13 @@ try {
     Write-Host "the table's rows:"
     [void](Table @("tpch", "energy"))
     Check "parent, datasets, your file, external (disabled), Skip" `
-        "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - unavailable|disabled;plain|Skip|idle~,tpch,energy,local,," `
+        "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Federation: Connect other data sources - unavailable|disabled;plain|Skip|idle~,tpch,energy,local,," `
         (Rows)
     Check "the parent spans the datasets" "2~3" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "a dataset and the file row know their rows" "3~4" "$(Get-ExakitDataTableRow -Id 'energy')~$(Get-ExakitDataTableRow -Id 'local')"
     [void](Table @())
     Check "every sample loaded: the parent is a disabled row that says so" `
-        "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - unavailable|disabled;plain|Skip|idle~,local,," `
+        "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Federation: Connect other data sources - unavailable|disabled;plain|Skip|idle~,local,," `
         (Rows)
     Check "...and no group" "0~0" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "one screen: no separate source question" "False" "$($null -ne (Get-Command Select-ExakitDataSource -ErrorAction SilentlyContinue))"
@@ -166,7 +166,7 @@ try {
     Write-Host "what each dataset is goes in a column, not on the name:"
     Set-Pending @("tpch", "amazon_sales")
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "the names stay names" "Sample datasets;tpch label;amazon_sales label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
+    Check "the names stay names" "Sample datasets;tpch label;amazon_sales label;Upload a file or folder: CSV/Parquet/JSON;Federation: Connect other data sources - unavailable;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
     Check "the descriptions go in column 2" ";tpch about;amazon_sales about;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
     Check "the table knows it has them" "True" "$($script:ExakitTableHasDesc)"
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")
@@ -422,11 +422,11 @@ try {
         return "$($row.Label)|$($row.State)~$($script:ExakitTableIds[3])"
     }
     $script:VenvPython = $existing
-    Check "the module and the kit's pyexasol: pickable, under its own name" "Connect an external source|idle~external" (ExternalRow)
+    Check "the module and the kit's pyexasol: pickable, under its own name" "Federation: Connect other data sources|idle~external" (ExternalRow)
     $script:VenvPython = (Join-Path $work "no-such-python")
-    Check "no pyexasol: disabled, and says so" "Connect an external source - no pyexasol|disabled~" (ExternalRow)
+    Check "no pyexasol: disabled, and says so" "Federation: Connect other data sources - no pyexasol|disabled~" (ExternalRow)
     function Get-ExakitVsDefs { return $null }
-    Check "no definitions in this kit copy: disabled, and says so" "Connect an external source - unavailable|disabled~" (ExternalRow)
+    Check "no definitions in this kit copy: disabled, and says so" "Federation: Connect other data sources - unavailable|disabled~" (ExternalRow)
     Has "the installer loads the module, so its table can offer the row" '. (Join-Path $LibDir "virtual-schemas.ps1")' (Get-Content -Raw (Join-Path $repo "setup/setup-windows.ps1"))
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

@@ -130,8 +130,9 @@ if ($jcPart -ne "2") {
     $doc = Parse-Json "persona list --json" $r.Out
     if ($doc) {
         $ids = @($doc.personas | ForEach-Object { $_.id })
-        # The ML Engineer is disabled on this branch (kept, "visible": false): listed no more, still shown by name below.
-        Check "persona list --json lists every persona it offers (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "general" -and -not ($ids -contains "ml-engineer")) "exit $($r.Code): $($ids -join ',')"
+        # The ML Engineer and the Data Scientist are not offered on this branch (kept, "visible": false,
+        # aaabaca8): listed no more, still shown by name below.
+        Check "persona list --json lists every persona it offers (AGT-07)" ($r.Code -eq 0 -and $ids -contains "general" -and -not ($ids -contains "data-scientist") -and -not ($ids -contains "ml-engineer")) "exit $($r.Code): $($ids -join ',')"
     }
     $r = Run-Cli @("persona", "show", "ml-engineer", "--json")
     $doc = Parse-Json "persona show ml-engineer --json" $r.Out
@@ -160,7 +161,8 @@ if ($doc) {
     $c = $doc.counts
     Check "skills --json carries counts" ($null -ne $c -and $c.PSObject.Properties["installed"] -and $c.PSObject.Properties["needs_addon"] -and $c.PSObject.Properties["missing"] -and $c.PSObject.Properties["total"]) (Head $r.Out 160)
     if ($c) {
-        Check "skills --json counts add up" (([int]$c.installed + [int]$c.needs_addon + [int]$c.missing) -eq [int]$c.total) "installed=$($c.installed) needs_addon=$($c.needs_addon) missing=$($c.missing) total=$($c.total)"
+        # needs_persona: a skill its persona brings, counted on its own (exakit-common.ps1, Get-ExakitSkillsJson).
+        Check "skills --json counts add up" (([int]$c.installed + [int]$c.needs_addon + [int]$c.needs_persona + [int]$c.missing) -eq [int]$c.total) "installed=$($c.installed) needs_addon=$($c.needs_addon) needs_persona=$($c.needs_persona) missing=$($c.missing) total=$($c.total)"
         Check "skills --json counts.total is the list's length" ([int]$c.total -eq @($doc.skills).Count) "total=$($c.total) list=$(@($doc.skills).Count)"
     }
 }

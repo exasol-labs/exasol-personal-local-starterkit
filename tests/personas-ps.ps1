@@ -66,12 +66,12 @@ try {
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
     Check "the persona's row ticked, the file and external rows after the datasets, each described in the Description column" `
-        "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip~;Orders, customers, parts;Online orders;;;" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Federation: Connect other data sources - unavailable;Skip~;Orders, customers, parts;Online orders;;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"
     Check "a persona picked: every sample listed, only its own ticked, then upload, external and Skip" `
-        "Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - unavailable;Skip~3" `
+        "Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Federation: Connect other data sources - unavailable;Skip~3" `
         "$((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ';')~$($script:ExakitTableDefaults -join ',')"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,amazon_sales"

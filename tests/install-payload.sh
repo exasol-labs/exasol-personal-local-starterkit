@@ -70,7 +70,8 @@ for needed in \
     setup/virtual-schemas/engine/guide.py \
     docs/virtual-schemas/README.md \
     docs/virtual-schemas/postgresql.md \
-    data/datasets/tpch/data/lineitem.csv
+    data/datasets/retail_sales/data/retail_sales.csv \
+    data/datasets/bank_transaction/data/bank_transactions.csv
 do
     if printf '%s\n' "$listing" | grep -qxF "$needed"; then
         pass "archive contains $needed"

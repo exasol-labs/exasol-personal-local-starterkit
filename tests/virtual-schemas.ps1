@@ -179,15 +179,16 @@ Write-Host "== the query hint after connect: a quoted name, piped to exakit.cmd 
 # quotes of an argument it hands to a batch file: a quoted name needs \".
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result ([pscustomobject]@{ example = 'SELECT * FROM VS_X."actor" LIMIT 10'; tips = @("a tip") }) -Name "x"
-Check "the hint opens the list" 'INFO Query it like any schema:' $script:shown[0]
+# 8f7e44c9: shorter post-connect lines - "Query it:" and the sql line, no tips line.
+Check "the hint opens the list" 'INFO Query it:' $script:shown[0]
 Check "...a query with a double quote is piped to exakit sql, as PowerShell keeps its quotes in a pipe" '''SELECT * FROM VS_X."actor" LIMIT 10'' | exakit sql' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_X."actor" LIMIT 10')
 Check "...one without is an argument" 'exakit sql ''SELECT * FROM VS_SALES.ORDERS LIMIT 10''' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_SALES.ORDERS LIMIT 10')
 Check "...a single quote in it is doubled" 'exakit sql ''SELECT * FROM VS_X.IT''''S LIMIT 10''' (Format-ExakitVsSqlLine -Query "SELECT * FROM VS_X.IT'S LIMIT 10")
-Check "...the tips are exakit source show's" 'INFO Type and naming notes for it: exakit source show x' $script:shown[1]
+Check "...and says nothing else: the tips are exakit source show's" 1 @($script:shown).Count
 $connectResult = Show-ExakitVsLines -Lines $connectLines
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result $connectResult -Name "sales"
-Check "the real connect: the list, then where the notes are" 'INFO Query it like any schema:|INFO Type and naming notes for it: exakit source show sales' (@($script:shown) -join "|")
+Check "the real connect: the list, nothing after it" 'INFO Query it:' (@($script:shown) -join "|")
 Check "...and nothing says From PowerShell" $false ((@($script:shown) -join "|").Contains("From PowerShell"))
 
 Write-Host ""
@@ -1512,9 +1513,8 @@ Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $env:EXAKIT_PUBLIC_IP_URL = $ipUrl
 $script:shown.Clear()
 $picked = @(Invoke-ExakitVsPick)
-Check "the menu's first line is this computer's public IP, then its own, then the table" `
-    "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|INFO Tick one or more sources; the details for each are asked next.|MENU" `
-    ((@($script:shown) | Select-Object -First 3) -join "|")
+# 8f7e44c9: the menu is the table alone; the IP is the review's "Whitelist IP" line.
+Check "the menu is the table, no line before it" "MENU" ((@($script:shown) | Select-Object -First 1) -join "|")
 Check "...the answer is kept for the rest of the command" "203.0.113.7" $env:_EXAKIT_VS_PUBLIC_IP
 $t = $script:menuTable
 Check "the table: the Source column alone, no Status column either" "Source||0" ("{0}|{1}{2}|{3}" -f $t.Col1, $t.Col2, $t.Col3, $t.StatMin)
@@ -1532,8 +1532,8 @@ Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $env:EXAKIT_PUBLIC_IP_URL = $ipUrl
 $script:shown.Clear()
 $picked = @(Invoke-ExakitVsPick)
-Check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line first" "INFO Tick one or more sources; the details for each are asked next.|MENU" `
-    ((@($script:shown) | Select-Object -First 2) -join "|")
+Check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the table first" "MENU" `
+    ((@($script:shown) | Select-Object -First 1) -join "|")
 Remove-Item Env:\EXAKIT_PUBLIC_IP_URL, Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $catalogDoc = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("catalog")).Lines
 Check "no connector reports Beta: every tier is GA" "GA" ((@($catalogDoc.connectors | ForEach-Object { "" + $_.tier }) | Sort-Object -Unique) -join " ")

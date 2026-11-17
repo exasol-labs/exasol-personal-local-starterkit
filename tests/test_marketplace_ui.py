@@ -223,7 +223,10 @@ class MarketplaceModelTest(unittest.TestCase):
     def test_ui_pin_is_validated_and_noninteractive_start_is_read_only(self) -> None:
         self.assertEqual("8.2.8", textual_pin(self.root / "marketplace/defaults.env"))
         result = self.root / "result.json"
-        self.assertEqual(10, run(self.root, ["persona", "--out", str(result)]))
+        # A non-Windows host: on Windows the launcher answers 11 before anything else
+        # (test_windows_never_gets_a_full_screen_menu), so these run as Linux would.
+        with patch("launch.sys.platform", "linux"):
+            self.assertEqual(10, run(self.root, ["persona", "--out", str(result)]))
         self.assertFalse(result.exists())
 
     def test_windows_never_gets_a_full_screen_menu(self) -> None:
@@ -243,6 +246,7 @@ class MarketplaceModelTest(unittest.TestCase):
         home = self.root / "kit home"
         terminal = SimpleNamespace(isatty=lambda: True)
         with patch.dict(os.environ, {"EXAKIT_HOME": str(home)}, clear=True), \
+             patch("launch.sys.platform", "linux"), \
              patch("launch.sys.stdin", terminal), patch("launch.sys.stdout", terminal), \
              patch("launch.shutil.which", return_value="/usr/bin/uv"), \
              patch("launch.subprocess.run", return_value=SimpleNamespace(returncode=0)) as call:
@@ -253,6 +257,7 @@ class MarketplaceModelTest(unittest.TestCase):
         (self.root / "marketplace/ui.py").write_text("", encoding="utf-8")
         terminal = SimpleNamespace(isatty=lambda: True)
         with patch.dict(os.environ, {"EXAKIT_MANAGED_PYTHON_VERSION": "3.13"}, clear=True), \
+             patch("launch.sys.platform", "linux"), \
              patch("launch.sys.stdin", terminal), patch("launch.sys.stdout", terminal), \
              patch("launch.shutil.which", return_value="/usr/bin/uv"), \
              patch("launch.subprocess.run", return_value=SimpleNamespace(returncode=0)) as call:
