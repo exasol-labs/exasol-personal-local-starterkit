@@ -1,19 +1,45 @@
-# Lakehouse (Iceberg / Delta)
+# Lakehouse (Iceberg / Delta) · Federation guide
 
-Iceberg, Delta and Parquet tables, read straight from their files by an engine
-inside your Exasol database. Nothing runs on a warehouse, Athena or Databricks
-compute. One connector covers every catalog the engine knows: you pick where
-the table list is kept (the catalog), then how Exasol opens the files.
+> **Federation** lets your local Exasol query Iceberg, Delta and Parquet tables
+> in place, read straight from their files by an engine inside your Exasol
+> database. Nothing runs on a warehouse, Athena or Databricks compute.
+> `exakit connect lakehouse` makes them a virtual schema, `VS_<NAME>`, that you
+> query with SQL. One connector covers every catalog the engine knows: you pick
+> where the table list is kept (the **catalog**), then how Exasol opens the
+> files (the **files**).
+
+> **Easiest: let your AI agent do it.** The kit installs the skill
+> `exasol-vs-lakehouse` for your AI client; it knows this connector. A ready-to-use prompt is in
+> [Ask your AI agent](#ask-your-ai-agent).
+>
+> **You still need, on your computer:** the console or CLI of your catalog and
+> your storage (AWS CLI, Databricks CLI or workspace, Azure portal or `az`), to
+> look up the values and make a read-only login.
+
+## At a glance
+
+Pick a catalog (row) and the files (column). ✓ works, ✗ is refused.
+
+| Catalog \ Files | `vended` (the catalog gives access) | `s3` (Amazon S3 / S3-compatible) | `azure` (Azure ADLS Gen2) |
+|---|---|---|---|
+| `iceberg-rest` (Iceberg REST catalog) | ✓ | ✓ | ✓ |
+| `unity` (Unity Catalog) | ✓ | ✓ | ✓ |
+| `glue` (AWS Glue) | ✗ | ✓ automatic | ✗ |
+| `none` (Parquet files in a folder) | ✗ | ✓ | ✓ |
+
+- That is 9 combinations that work.
+- Google Cloud Storage is refused for every catalog (4 more), which makes 7
+  refused combinations in all. [Why](#why-7-combinations-are-refused).
+- A combination shows as "Lakehouse · <catalog label> · <files label>" in
+  panels and in `exakit source show`, for example "Lakehouse · Unity Catalog ·
+  Azure ADLS Gen2".
 
 The connector id is `lakehouse`. The old ids `iceberg-rest` and `unity` are
-gone and have no aliases. A source you saved with one of them is moved to
+gone and have no aliases. A source saved with one of them is moved to
 `lakehouse` (with its catalog and files) the first time the kit reads it, so
 `exakit source list`, `show`, `check` and `remove` keep working.
 
-## The simplest way: ask your AI agent
-
-**Easiest: let your AI agent do it.** The kit installs the skill
-`exasol-vs-lakehouse` for your AI client; it knows this connector.
+## Ask your AI agent
 
 Copy this prompt, fill in the `<...>` parts, and give it to your agent:
 
@@ -25,11 +51,7 @@ s3 or azure>. Set up a read-only login for the catalog and the files, and
 write each secret to a file, never into the chat.
 ```
 
-**You still need, on your computer:** the console or CLI of your catalog and
-your storage (AWS CLI, Databricks CLI or workspace, Azure portal or `az`), to
-look up the values and make a read-only login.
-
-**Prefer to do it by hand?** Follow the steps below.
+Prefer to do it by hand? Follow the steps below.
 
 ## Databricks or Lakehouse?
 
@@ -45,14 +67,14 @@ Both can read a Databricks Unity Catalog schema. They work differently.
 | Default Storage schemas | yes | no |
 | Catalogs | Unity Catalog only | Iceberg REST, Unity Catalog, AWS Glue, or no catalog |
 
-Use [Databricks](databricks.md) for files on GCS, for a schema on Default
-Storage, for catalog-managed tables, or when you cannot get the Unity grants.
-Use Lakehouse when you want no Databricks compute, or the catalog is not
-Databricks.
+- Use [Databricks](databricks.md) for files on GCS, a schema on Default
+  Storage, catalog-managed tables, or when you cannot get the Unity grants.
+- Use Lakehouse when you want no Databricks compute, or the catalog is not
+  Databricks.
 
 ## Catalogs and files
 
-The first choice is the **catalog**: who answers "where are my tables?".
+The **catalog** answers "where are my tables?":
 
 | `catalog` | Label | Typical use |
 |---|---|---|
@@ -61,7 +83,7 @@ The first choice is the **catalog**: who answers "where are my tables?".
 | `glue` | AWS Glue | tables written by Athena, EMR, Spark or Glue jobs |
 | `none` | No catalog - Parquet files in a folder | Parquet files under one prefix, no catalog at all |
 
-The second choice is the **files**: how Exasol opens the data files.
+The **files** say how Exasol opens the data files:
 
 | `files` | Label | What Exasol uses |
 |---|---|---|
@@ -70,31 +92,18 @@ The second choice is the **files**: how Exasol opens the data files.
 | `azure` | Azure ADLS Gen2 | your storage account key or a SAS |
 | (none) | Google Cloud Storage - not supported yet | not shown in the menu, cannot be picked |
 
-### The 9 combinations that work
-
-| Catalog \ Files | `vended` | `s3` | `azure` | Google Cloud Storage |
-|---|---|---|---|---|
-| `iceberg-rest` | yes | yes | yes | no (adapter) |
-| `unity` | yes | yes | yes | no (adapter) |
-| `glue` | no | yes, automatic | no | no |
-| `none` | no | yes | yes | no (adapter) |
-
-A combination is shown as "Lakehouse · <catalog label> · <files label>" in
-panels and in `exakit source show`, for example "Lakehouse · Unity Catalog ·
-Azure ADLS Gen2".
-
-Why the other 7 are not possible:
+### Why 7 combinations are refused
 
 - **Any catalog + Google Cloud Storage (4).** The engine has two storage
-  backends, S3 and ADLS, and refuses `gs://` paths. For Unity tables on GCS, use
-  the [Databricks](databricks.md) connector.
+  backends, S3 and ADLS, and refuses `gs://` paths. For Unity tables on GCS,
+  use the [Databricks](databricks.md) connector.
 - **Glue + vended.** Glue does not hand out file access.
 - **Glue + Azure.** Glue tables live on S3. With `catalog=glue` there is no
   files question: the files are S3, opened with the same AWS key.
 - **No catalog + vended.** There is no catalog to hand out access.
 
-A combination that is not valid stops the connect with kind `input`, and the
-remedy names the `files` values that work for that catalog.
+A combination that is not valid stops the connect with kind `input`. The remedy
+names the `files` values that work for that catalog.
 
 ## What `exakit connect` asks for
 
@@ -142,9 +151,9 @@ echo. The `--set` key is in brackets.
 | `token` (default) | Catalog token (hidden) * (`secret`, `--password-file`). For Unity the label is "Databricks token". |
 | `oauth` | Client ID * (`client_id`), Client secret (hidden) * (`secret`, `--password-file`), Token endpoint (`token_endpoint`, optional), Scope (`scope`, optional) |
 
-Pick one. A token and an OAuth client together are refused. Glue signs its
-requests with the AWS key, and `none` has no catalog, so neither asks for a
-login.
+- Pick one. A token and an OAuth client together are refused.
+- Glue signs its requests with the AWS key, and `none` has no catalog, so
+  neither asks for a login.
 
 ### Notes on the files fields
 
@@ -153,16 +162,19 @@ login.
   credentials carry no region. Without it, the connect fails with kind
   `region` and names the bucket.
 - **Account key or SAS.** A query string (a leading `?` is dropped) that holds
-  `sig=` and at least one of `sv=`, `se=` or `sp=`, in any order, is a SAS;
-  anything else is taken as the account key.
+  `sig=` and at least one of `sv=`, `se=` or `sp=`, in any order, is a SAS.
+  Anything else is taken as the account key.
 - **No catalog on Azure.** The storage account comes from the `abfss://` path,
   so it is not asked.
 
 ## Two secrets
 
-A connection can carry two secrets: the **catalog secret** (a token or an OAuth
-client secret) and the **storage secret** (an S3 secret key or an Azure key or
-SAS). Neither ever goes on the command line.
+A connection can carry two secrets:
+
+- the **catalog secret**: a token or an OAuth client secret;
+- the **storage secret**: an S3 secret key, or an Azure key or SAS.
+
+Neither ever goes on the command line.
 
 | Combination | `secret`: `--password-file F` or `--password-stdin` | `storage_secret`: `--storage-secret-file F` |
 |---|---|---|
@@ -174,17 +186,6 @@ SAS). Neither ever goes on the command line.
 There is only one stdin, so the second secret comes from a file, or from a
 hidden prompt at a terminal. Each file holds the secret alone, not JSON, and
 should be readable by you only.
-
-A pasted connection string (`--url`, or the first question of the form) fills
-the catalog and its address, never a secret: an `https://` catalog gives
-`catalog=iceberg-rest` and `catalog_url` (a Databricks workspace gives
-`catalog=unity` and `workspace_url`), a Glue endpoint or ARN gives
-`catalog=glue`, `region` and the `database`, and an `s3://` or `abfss://`
-folder gives `catalog=none` and `path`. A credential inside the string - a
-`user:token@`, a `?token=` or any other query string, a presigned or SAS
-signature - is taken out and not used, and a warning says so. The secret is
-still asked at a hidden prompt, or comes from `--password-file` (or
-`--password-stdin`), and the storage secret from `--storage-secret-file`.
 
 Write a secret to a file without it showing on screen or in the history:
 
@@ -198,65 +199,6 @@ New-Item -ItemType Directory -Force "$HOME\.config\exakit" | Out-Null
 $s = [Net.NetworkCredential]::new("", (Read-Host "Secret" -AsSecureString)).Password
 [IO.File]::WriteAllText("$HOME\.config\exakit\lake.token", $s); Remove-Variable s
 ```
-
-## What the adapter receives
-
-All four catalogs run the same adapter, exasol-labs/lakehouse-engine-rs, as the
-shared script `EXAKIT_VS.LAKEHOUSE_ADAPTER`. The kit turns your answers into
-its properties:
-
-| `catalog` | `CATALOG_KIND` | Connection `TO` | `NAMESPACE` |
-|---|---|---|---|
-| `iceberg-rest` | not set (REST is the default) | the catalog URL | the namespace |
-| `unity` | `UNITY_CATALOG` | the workspace URL | `catalog.schema` |
-| `glue` | `GLUE` | `https://glue.<region>.amazonaws.com` | the Glue database |
-| `none` | `DIRECT_STORAGE` | the folder path | not set |
-
-The connection's password is a JSON object with these keys:
-
-| Part | JSON keys |
-|---|---|
-| `iceberg-rest` | `warehouse` |
-| `login=token` | `token` |
-| `login=oauth` | `client_id`, `client_secret`, and `oauth2_server_uri` and `scope` when given |
-| `files=vended` | `use_vended_credentials: true`, and `region` when given |
-| `files=s3` | `access_key`, `secret_key`, `region`, and `endpoint` plus `path_style: true` when an endpoint is given |
-| `files=azure` | `account_name`, and `account_key` or `sas_token` |
-| `glue` | `access_key`, `secret_key`, `region`, and `warehouse` = the catalog ID when given |
-
-When any URL is `http://`, the virtual schema also gets `ALLOW_HTTP=TRUE`.
-
-## S3-compatible stores: the Endpoint field
-
-Leave Endpoint empty for Amazon S3. Fill it for any other store that speaks
-the S3 API; the kit then sends `endpoint` and `path_style: true`. These stores
-are not tested in the kit yet.
-
-| Store | Endpoint example | Notes |
-|---|---|---|
-| Amazon S3 | (leave empty) | region only |
-| MinIO | `http://minio.local:9000` | `http` adds `ALLOW_HTTP=TRUE` |
-| Ceph Object Gateway (RGW) | `https://rgw.example.com` | |
-| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` | region `auto` |
-| Wasabi | `https://s3.<region>.wasabisys.com` | |
-| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | |
-| DigitalOcean Spaces | `https://<region>.digitaloceanspaces.com` | |
-| Akamai / Linode Object Storage | `https://<region>.linodeobjects.com` | |
-| Scaleway Object Storage | `https://s3.<region>.scw.cloud` | |
-| Hetzner Object Storage | `https://<region>.your-objectstorage.com` | |
-| IBM Cloud Object Storage | `https://s3.<region>.cloud-object-storage.appdomain.cloud` | HMAC keys |
-| Oracle OCI Object Storage | `https://<namespace>.compat.objectstorage.<region>.oraclecloud.com` | Customer Secret Keys |
-| Dell ECS, NetApp StorageGRID, Pure FlashBlade, Cloudian, Hitachi HCP | the vendor's S3 URL | on-premises appliances |
-| Google Cloud Storage (S3 interoperability) | `https://storage.googleapis.com` | HMAC keys; untested, not the native `gs://` path |
-
-**Azure needs no endpoint.** The adapter builds the address from the storage
-account name (`<account>.dfs.core.windows.net`), so Azure asks only for the
-account and the key or SAS.
-
-**Google Cloud Storage is not supported.** The adapter (v0.57.3, and v0.58.1)
-has no GCS backend and refuses `gs://`. The S3 interoperability row above is a
-possible workaround, untested. When the adapter adds a storage or a catalog,
-the kit adds one choice to the menu, not a new connector.
 
 ## Connection string you can paste
 
@@ -280,13 +222,17 @@ abfss://lake@mystorageacct.dfs.core.windows.net/sales/orders/
 | `s3://<bucket>/<prefix>/` | No catalog, files on S3 | `catalog=none` and `path` |
 | `abfss://<container>@<account>.dfs.core.windows.net/<prefix>/` | No catalog, files on ADLS Gen2 | `catalog=none` and `path` |
 
-The string fills the catalog and its address. [Two secrets](#two-secrets) says
-how the secrets are given.
+- The string (`--url`, or the first question of the form) fills the catalog
+  and its address, never a secret.
+- A credential inside the string is taken out and not used, and a warning says
+  so: a `user:token@`, a `?token=` or any other query string, a presigned or
+  SAS signature. The secret is still asked at a hidden prompt, or comes from
+  `--password-file` (or `--password-stdin`); the storage secret from
+  `--storage-secret-file`. See [Two secrets](#two-secrets).
+- The string is optional: press Enter alone at the prompt and
+  `exakit connect` asks for the fields one by one.
 
-### Where to find the connection string
-
-You do not build most of them: copy the address your catalog or storage
-shows.
+**Where to copy it from.** You do not build most of them:
 
 - **Iceberg REST catalog** (Polaris, Snowflake Open Catalog, Lakekeeper,
   Nessie, Gravitino): the catalog's console or docs name its REST base URL.
@@ -297,27 +243,15 @@ shows.
   `https://` and the host only.
 - **AWS Glue:** no console page shows the ARN whole. Write
   `arn:aws:glue:<region>:<account-id>:database/<database>` from the region, the
-  12-digit account ID and the database name (AWS Glue → Data Catalog →
-  Databases).
+  12-digit account ID (the account menu, top right of the AWS console, or
+  `aws sts get-caller-identity`) and the database name (AWS Glue → Data Catalog
+  → Databases).
 - **A Parquet folder on S3:** S3 → Buckets → `<bucket>` → select the folder →
   Copy S3 URI.
 - **A Parquet folder on ADLS Gen2:** write
   `abfss://<container>@<account>.dfs.core.windows.net/<folder>/` from the
-  storage account and container names.
-
-Leave any token, key or SAS out of the string. The kit asks for each secret at
-a hidden prompt, or reads it from a file. The string is optional. At the prompt, press Enter alone and `exakit connect` asks for the fields one by one.
-
-### Where to find each part of the string
-
-| Part of the string | Where to find it |
-|---|---|
-| catalog URL (host and path) | The catalog's console or docs ([Iceberg REST](#iceberg-rest-catalog)). |
-| workspace host | Your browser's address bar ([Unity](#unity-catalog)). |
-| Glue region and database | AWS Glue → Data Catalog → Databases ([Glue](#aws-glue)). |
-| account ID (Glue ARN) | The account menu, top right of the AWS console, or `aws sts get-caller-identity`. |
-| bucket and prefix | S3 → Buckets → `<bucket>` ([Files on S3](#files-on-s3)). |
-| container and storage account | Azure portal → Storage accounts → `<account>` → Containers ([Files on Azure](#files-on-azure-adls-gen2)). |
+  storage account and container names (Azure portal → Storage accounts →
+  `<account>` → Containers).
 
 ## Where to find each value
 
@@ -352,8 +286,8 @@ a hidden prompt, or reads it from a file. The string is optional. At the prompt,
    `databricks metastores summary` shows `external_access_enabled: true`.
 4. **The schema is on your own storage**, not Default Storage: Catalog →
    `<schema>` → Details → Storage location is an `s3://` or `abfss://` path.
-5. **Grants** for the token's user, from the catalog's owner (only the owner may
-   grant `EXTERNAL USE SCHEMA`, and it is never implied):
+5. **Grants** for the token's user, from the catalog's owner. Only the owner
+   may grant `EXTERNAL USE SCHEMA`, and it is never implied:
 
    ```sql
    GRANT USE CATALOG ON CATALOG main TO `reader@example.com`;
@@ -404,7 +338,8 @@ through [Databricks](databricks.md).
 - **Region:** S3 → Buckets → the AWS Region column, or
   `aws s3api get-bucket-location --bucket <bucket>` (`null` means `us-east-1`).
 - **Key:** an IAM user with `s3:ListBucket` on the bucket and `s3:GetObject` on
-  the table prefix. For another store, its own access key and the Endpoint.
+  the table prefix. For another store, its own access key and the Endpoint
+  ([S3-compatible stores](#s3-compatible-stores-the-endpoint-field)).
 
 ### Files on Azure ADLS Gen2
 
@@ -412,7 +347,8 @@ through [Databricks](databricks.md).
   hierarchical namespace (ADLS Gen2).
 - **Account key:** the account → Security + networking → Access keys.
 - **Or a SAS:** the account → Shared access signature, with Read and List; or
-  a container SAS with Read and List. Use the token itself (`sv=...&sig=...`), not the full URL.
+  a container SAS with Read and List. Use the token itself (`sv=...&sig=...`),
+  not the full URL.
 - Service principals and managed identities are not supported by the adapter.
 
 ### Network
@@ -428,9 +364,17 @@ allow your public IP (`curl https://checkip.amazonaws.com`).
 exakit connect lakehouse
 ```
 
-The kit asks for the catalog, then the files, then only the fields of that
-combination. It shows a plan and asks once. The first lakehouse source
-installs the Rust language container (a download and one database restart).
+1. Pick **Lakehouse (Iceberg / Delta)** in the Federation picker, then its
+   catalog and its files in the tree under it.
+2. For Iceberg REST and Unity, choose the catalog login (Token or OAuth
+   client) with the arrow keys.
+3. Answer only the fields of that combination. The kit shows a plan and
+   connects.
+4. The first lakehouse source also runs **Enabling Federation**: it installs
+   the Rust language container (a download and one database restart).
+
+**Windows:** put every secret in a file, never in `--url` or `--set` (a SAS
+contains `&`), and pipe a query with quoted names into `exakit sql`.
 
 ### Without prompts: bash (macOS, Linux)
 
@@ -462,8 +406,6 @@ exakit connect lakehouse --name glue_lake --set catalog=glue --set region=eu-cen
 exakit connect lakehouse --name orders_files --set catalog=none --set files=s3 \
   --set path=s3://sales-lake/orders/ --set region=eu-central-1 --set access_key_id=AKIAIOSFODNN7EXAMPLE \
   --password-file ~/.config/exakit/s3.secret --yes
-
-exakit sql "SELECT * FROM VS_SALES_LAKE.ORDERS LIMIT 10"
 ```
 
 ### Without prompts: Windows PowerShell
@@ -479,17 +421,28 @@ exakit connect lakehouse --name sales_lake --set catalog=unity --set files=azure
 exakit connect lakehouse --name orders_files --set catalog=none --set files=azure `
   --set path=abfss://lake@saleslake.dfs.core.windows.net/orders/ `
   --password-file "$HOME\.config\exakit\azkey.txt" --yes
+```
 
+- Add `--dry-run` to see the plan first.
+- One namespace, schema, Glue database or folder is one source: connect again
+  with another `--name` for the next.
+
+## Query
+
+Names arrive in upper case (`ORDERS`, `ORDER_ID`), so no quotes are needed.
+
+```bash
+exakit sql "SELECT * FROM VS_SALES_LAKE.ORDERS LIMIT 10"
+exakit sql "SELECT EXAKIT_VS.LAKEHOUSE_VERSION()"
+```
+
+```powershell
 exakit sql "SELECT * FROM VS_SALES_LAKE.ORDERS LIMIT 10"
 'SELECT "ORDER_ID" FROM VS_SALES_LAKE."ORDERS" LIMIT 10' | exakit sql
 ```
 
 In PowerShell 5.1 an argument loses its inner double quotes: pipe a query with
-quoted names, or use `exakit sql --file query.sql`. A SAS contains `&`: put it
-in the secret file, never in `--url` or `--set`.
-
-Add `--dry-run` to see the plan first. One namespace, schema, Glue database or
-folder is one source: connect again with another `--name` for the next.
+quoted names, or use `exakit sql --file query.sql`.
 
 ## After you connect
 
@@ -499,7 +452,6 @@ exakit source check sales_lake
 exakit source refresh sales_lake       # tables added at the source
 exakit source reauth sales_lake --password-file ~/.config/exakit/uc.token \
   --storage-secret-file ~/.config/exakit/azkey.txt
-exakit sql "SELECT EXAKIT_VS.LAKEHOUSE_VERSION()"
 ```
 
 `exakit source reauth <name> --password-file F [--storage-secret-file F2]`
@@ -511,27 +463,88 @@ the kit never stores secrets, so a reauth gives all of them again:
 | `iceberg-rest` or `unity` + `s3` or `azure` (two secrets) | `--password-file` and `--storage-secret-file`, even if only one changed |
 | `vended`, `glue`, `none` (one secret) | `--password-file` only |
 
-## Common problems
+## Troubleshooting
 
-| Symptom or error text | Fix |
+| Error you see | Why | Fix |
+|---|---|---|
+| kind `input`: the combination is not valid | That catalog does not take those files. | The remedy names the `files` values for that catalog. Glue takes S3 only; no catalog takes `s3` or `azure`. |
+| Both a token and an OAuth client given | Only one catalog login is allowed. | Pick `login=token` or `login=oauth`, not both. |
+| A `gs://` path, or `abfs://` / `wasbs://`, refused | GCS is not supported; Azure needs ADLS Gen2 over `abfss://`. | Use `abfss://...dfs.core.windows.net/...`. For Unity tables on GCS use `exakit connect databricks`. |
+| kind `auth`: "request failed with HTTP 401" (Polaris, Lakekeeper, open-source Unity Catalog, Databricks), "NotAuthorizedException", "Invalid access token", OAuth `unauthorized_client` | The catalog refused the token or client. The remedy starts "the catalog refused the ...". | Make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). |
+| kind `auth`: "PermissionDenied (persistent) at read - caused by S3 SignatureDoesNotMatch" or "InvalidAccessKeyId" | The store refused the S3 key, not the catalog. The remedy starts "the store refused the ...". | `exakit source reauth <name> --password-file F --storage-secret-file F2`, F2 holding the right secret access key (`catalog=none`: `--password-file` only). |
+| kind `denied`: "caused by S3 AccessDenied", or "request failed with HTTP 403" from the catalog | The key or principal signs in but may not read. | Grant `s3:ListBucket` and `s3:GetObject` on the files, or the catalog's read grants. |
+| "Unity Catalog does not let engines outside Databricks read this schema's files" | External Data Access is off, or `EXTERNAL USE SCHEMA` is missing. | Turn on External Data Access and grant `EXTERNAL USE SCHEMA`. A Default Storage schema never works: use `exakit connect databricks`. |
+| "catalog-managed table, which this adapter version cannot read yet" | The adapter cannot read catalog-managed tables. | Read it with `exakit connect databricks`. |
+| `PERMISSION_DENIED` (Unity) | The grants are missing. | Grant USE CATALOG, USE SCHEMA and SELECT. |
+| "no such namespace that this credential can see" | Wrong namespace or warehouse, or missing grants. | Check the namespace and warehouse (Databricks Iceberg endpoint: warehouse = catalog, namespace = schema) and the grants. |
+| "AccessDeniedException ... not authorized to perform: glue:GetTables" | The key may not read that database, or the name is wrong (AWS answers both the same). | Check the name, else grant the action. |
+| "The security token included in the request is invalid" | AWS does not know the key. | Make a new one, then `exakit source reauth <name> --password-file F`. |
+| "x-amz-bucket-region", "incorrectly configured region" | The bucket is in another region. | Connect again with `--set region=<the bucket's region>`. |
+| "the catalog vended S3 credentials but no region was given" (kind `region`; the raw error names "s3..amazonaws.com") | Unity or Iceberg REST with `files=vended` on S3 and no `region`. | Connect again with `--set region=<the bucket's region>`. The bucket is in the table's `s3://` storage URL (for Unity: Catalog > External data > External locations); its region is in the AWS console under S3 > the bucket > Properties, or `aws s3api get-bucket-location --bucket <bucket>` (`null` means `us-east-1`). |
+| "AuthenticationFailed" (Azure) | A wrong key, an expired SAS, or a SAS without Read and List. | Make a new one, then `exakit source reauth <name>` with both secret files (with `catalog=none`, `--password-file` only). |
+| Every bucket answers "NoSuchBucket" on a non-AWS store | The endpoint is missing. | Give the store's endpoint with `--set endpoint=`; the kit adds `path_style`. Leave it empty for Amazon S3. |
+| A signed request refused for the clock | The database clock is off by more than 15 minutes (after the laptop slept). | `exakit stop`, then `exakit start`. |
+| "... is plain http to <host>, a public host" | `http` works only for this computer or a private network. | Use `https`. |
+| A table left out by name | ORC, Avro, Hudi, views and Iceberg tables with equality deletes are not read. | Read those tables another way. |
+| `norust` (exit 23) | The Rust language container is missing. | Run the connect again with `--yes`. |
+
+## Reference
+
+### What the adapter receives
+
+All four catalogs run the same adapter, exasol-labs/lakehouse-engine-rs, as the
+shared script `EXAKIT_VS.LAKEHOUSE_ADAPTER`. The kit turns your answers into
+its properties:
+
+| `catalog` | `CATALOG_KIND` | Connection `TO` | `NAMESPACE` |
+|---|---|---|---|
+| `iceberg-rest` | not set (REST is the default) | the catalog URL | the namespace |
+| `unity` | `UNITY_CATALOG` | the workspace URL | `catalog.schema` |
+| `glue` | `GLUE` | `https://glue.<region>.amazonaws.com` | the Glue database |
+| `none` | `DIRECT_STORAGE` | the folder path | not set |
+
+The connection's password is a JSON object with these keys:
+
+| Part | JSON keys |
 |---|---|
-| kind `input`: the combination is not valid | The remedy names the `files` values for that catalog. Glue takes S3 only; no catalog takes `s3` or `azure`. |
-| Both a token and an OAuth client given | Pick `login=token` or `login=oauth`, not both. |
-| A `gs://` path, or `abfs://` / `wasbs://`, refused | GCS is not supported; Azure needs `abfss://...dfs.core.windows.net/...`. For Unity tables on GCS use `exakit connect databricks`. |
-| kind `auth`: "request failed with HTTP 401" (Polaris, Lakekeeper, open-source Unity Catalog, Databricks), "NotAuthorizedException", "Invalid access token", OAuth `unauthorized_client` | The catalog refused the token or client: make a new one, then `exakit source reauth <name> --password-file F` (add `--storage-secret-file F2` for a two-secret combination). The remedy starts "the catalog refused the ...". |
-| kind `auth`: "PermissionDenied (persistent) at read - caused by S3 SignatureDoesNotMatch" or "InvalidAccessKeyId" | The store refused the S3 key, not the catalog: `exakit source reauth <name> --password-file F --storage-secret-file F2`, F2 holding the right secret access key (`catalog=none`: `--password-file` only). The remedy starts "the store refused the ...". |
-| kind `denied`: "caused by S3 AccessDenied", or "request failed with HTTP 403" from the catalog | The key or principal signs in but may not read: grant s3:ListBucket and s3:GetObject on the files, or the catalog's read grants. |
-| "Unity Catalog does not let engines outside Databricks read this schema's files" | Turn on External Data Access and grant `EXTERNAL USE SCHEMA`. A Default Storage schema never works: use `exakit connect databricks`. |
-| "catalog-managed table, which this adapter version cannot read yet" | Read it with `exakit connect databricks`. |
-| `PERMISSION_DENIED` (Unity) | Grant USE CATALOG, USE SCHEMA and SELECT. |
-| "no such namespace that this credential can see" | Check the namespace and warehouse (Databricks Iceberg endpoint: warehouse = catalog, namespace = schema) and the grants. |
-| "AccessDeniedException ... not authorized to perform: glue:GetTables" | The key may not read that database, or the name is wrong (AWS answers both the same). Check the name, else grant the action. |
-| "The security token included in the request is invalid" | AWS does not know the key: make a new one, then `exakit source reauth <name> --password-file F`. |
-| "x-amz-bucket-region", "incorrectly configured region" | The bucket is in another region: connect again with `--set region=<the bucket's region>`. |
-| "the catalog vended S3 credentials but no region was given" (kind `region`; the raw error names "s3..amazonaws.com") | Unity or Iceberg REST with `files=vended` on S3 and no `region`. Connect again with `--set region=<the bucket's region>`. The bucket is in the table's `s3://` storage URL (for Unity: Catalog > External data > External locations); its region is in the AWS console under S3 > the bucket > Properties, or `aws s3api get-bucket-location --bucket <bucket>` (`null` means `us-east-1`). |
-| "AuthenticationFailed" (Azure) | A wrong key, an expired SAS, or a SAS without Read and List: make a new one, then `exakit source reauth <name>` with both secret files (with `catalog=none`, `--password-file` only). |
-| Every bucket answers "NoSuchBucket" on a non-AWS store | Give the store's endpoint with `--set endpoint=`; the kit adds `path_style`. Leave it empty for Amazon S3. |
-| A signed request refused for the clock | The database clock is off by more than 15 minutes (after the laptop slept): `exakit stop`, then `exakit start`. |
-| "... is plain http to <host>, a public host" | Use `https`. `http` works only for this computer or a private network. |
-| A table left out by name | ORC, Avro, Hudi, views and Iceberg tables with equality deletes are not read. |
-| `norust` (exit 23) | The Rust language container is missing: run the connect again with `--yes`. |
+| `iceberg-rest` | `warehouse` |
+| `login=token` | `token` |
+| `login=oauth` | `client_id`, `client_secret`, and `oauth2_server_uri` and `scope` when given |
+| `files=vended` | `use_vended_credentials: true`, and `region` when given |
+| `files=s3` | `access_key`, `secret_key`, `region`, and `endpoint` plus `path_style: true` when an endpoint is given |
+| `files=azure` | `account_name`, and `account_key` or `sas_token` |
+| `glue` | `access_key`, `secret_key`, `region`, and `warehouse` = the catalog ID when given |
+
+When any URL is `http://`, the virtual schema also gets `ALLOW_HTTP=TRUE`.
+
+### S3-compatible stores: the Endpoint field
+
+Leave Endpoint empty for Amazon S3. Fill it for any other store that speaks
+the S3 API; the kit then sends `endpoint` and `path_style: true`. These stores
+are not tested in the kit yet.
+
+| Store | Endpoint example | Notes |
+|---|---|---|
+| Amazon S3 | (leave empty) | region only |
+| MinIO | `http://minio.local:9000` | `http` adds `ALLOW_HTTP=TRUE` |
+| Ceph Object Gateway (RGW) | `https://rgw.example.com` | |
+| Cloudflare R2 | `https://<account-id>.r2.cloudflarestorage.com` | region `auto` |
+| Wasabi | `https://s3.<region>.wasabisys.com` | |
+| Backblaze B2 | `https://s3.<region>.backblazeb2.com` | |
+| DigitalOcean Spaces | `https://<region>.digitaloceanspaces.com` | |
+| Akamai / Linode Object Storage | `https://<region>.linodeobjects.com` | |
+| Scaleway Object Storage | `https://s3.<region>.scw.cloud` | |
+| Hetzner Object Storage | `https://<region>.your-objectstorage.com` | |
+| IBM Cloud Object Storage | `https://s3.<region>.cloud-object-storage.appdomain.cloud` | HMAC keys |
+| Oracle OCI Object Storage | `https://<namespace>.compat.objectstorage.<region>.oraclecloud.com` | Customer Secret Keys |
+| Dell ECS, NetApp StorageGRID, Pure FlashBlade, Cloudian, Hitachi HCP | the vendor's S3 URL | on-premises appliances |
+| Google Cloud Storage (S3 interoperability) | `https://storage.googleapis.com` | HMAC keys; untested, not the native `gs://` path |
+
+**Azure needs no endpoint.** The adapter builds the address from the storage
+account name (`<account>.dfs.core.windows.net`), so Azure asks only for the
+account and the key or SAS.
+
+**Google Cloud Storage is not supported.** The adapter (v0.57.3, and v0.58.1)
+has no GCS backend and refuses `gs://`. The S3 interoperability row above is a
+possible workaround, untested. When the adapter adds a storage or a catalog,
+the kit adds one choice to the menu, not a new connector.
