@@ -16,6 +16,12 @@ $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $script:PASS = 0
 $script:FAIL = 0
+# Two halves, so CI can run them as two jobs (.github/workflows/windows-ps51.yml):
+# EXAKIT_JC_PART=1 is the not-installed answers, 2 is everything after them.
+# Unset, both run. Part 2 does not depend on part 1: it starts from the same
+# empty sandboxed kit home.
+$jcPart = "" + $env:EXAKIT_JC_PART
+if ($jcPart -notin @("", "1", "2")) { throw "EXAKIT_JC_PART: $jcPart is not 1 or 2" }
 function Pass($label) { $script:PASS++; Write-Host "  ok   $label" }
 function Miss($label, $detail) { $script:FAIL++; Write-Host "  FAIL $label -- $detail" }
 function Check($label, $condition, $detail) { if ($condition) { Pass $label } else { Miss $label "$detail" } }
@@ -55,6 +61,14 @@ function Run-Cli {
         $ErrorActionPreference = $previous
     }
 }
+function Complete-Contracts {
+    Remove-Item -Recurse -Force -Path $kitHome -ErrorAction SilentlyContinue
+    Remove-Item -Recurse -Force -Path $userSandbox -ErrorAction SilentlyContinue
+    Write-Host ""
+    Write-Host "$($script:PASS) passed, $($script:FAIL) failed"
+    if ($script:FAIL -gt 0) { exit 1 }
+    exit 0
+}
 function Parse-Json($label, $text) {
     try { return ("$text" | ConvertFrom-Json) } catch {
         Miss "$label is one valid JSON object" ("parse error: " + $_.Exception.Message + " :: " + (Head $text 160))
@@ -62,67 +76,70 @@ function Parse-Json($label, $text) {
     }
 }
 
-# --- 1. the not-installed answers: one shape, exit 4 ------------------------
-Write-Host "--- not installed"
-foreach ($case in @(
-    @{ Args = @("status", "--json");     Label = "status --json" },
-    @{ Args = @("info", "--json");       Label = "info --json" },
-    @{ Args = @("mcp-doctor", "--json"); Label = "mcp-doctor --json" },
-    @{ Args = @("version", "--json");    Label = "version --json" },
-    @{ Args = @("update", "--json");     Label = "update --json" }
-)) {
-    $r = Run-Cli $case.Args
-    Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
-    $doc = Parse-Json "$($case.Label) (not installed)" $r.Out
+if ($jcPart -ne "2") {
+    # --- 1. the not-installed answers: one shape, exit 4 ------------------------
+    Write-Host "--- not installed"
+    foreach ($case in @(
+        @{ Args = @("status", "--json");     Label = "status --json" },
+        @{ Args = @("info", "--json");       Label = "info --json" },
+        @{ Args = @("mcp-doctor", "--json"); Label = "mcp-doctor --json" },
+        @{ Args = @("version", "--json");    Label = "version --json" },
+        @{ Args = @("update", "--json");     Label = "update --json" }
+    )) {
+        $r = Run-Cli $case.Args
+        Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
+        $doc = Parse-Json "$($case.Label) (not installed)" $r.Out
+        if ($doc) {
+            Check "$($case.Label) (not installed) says installed=false" ($doc.installed -eq $false) "installed=$($doc.installed)"
+            Check "$($case.Label) (not installed) carries status and remedy" ($doc.PSObject.Properties["status"] -and $doc.PSObject.Properties["remedy"]) (Head $r.Out 160)
+            # The state queries' answer; update --json's not-installed answer is a result, as in the shell twin.
+            if ($case.Label -ne "update --json") { Check "$($case.Label) (not installed) carries platform and wsl_version (audit WIN-02)" `
+                ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"] -and $null -eq $doc.wsl_version) (Head $r.Out 200) }
+        }
+    }
+
+    $bareHome = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-ps51-bare-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $bareHome | Out-Null
+    $env:EXAKIT_HOME = $bareHome
+    foreach ($q in @("status", "version", "info", "skills")) { Run-Cli @($q, "--json") | Out-Null }
+    $env:EXAKIT_HOME = $kitHome
+    Check "the state queries write nothing into the kit home (audit AGT-14)" (@(Get-ChildItem -Force $bareHome).Count -eq 0) "$(Get-ChildItem -Force -Name $bareHome)"
+    Remove-Item -Recurse -Force $bareHome -ErrorAction SilentlyContinue
+
+    # The commands that also write answer a machine with no kit the same way, and
+    # refuse a wrong persona as bad input, before anything is fetched (AGT-05/06/09).
+    foreach ($case in @(
+        @{ Args = @("marketplace", "--list", "--json"); Label = "marketplace --list --json" },
+        @{ Args = @("persona", "add", "data-scientist", "--json"); Label = "persona add --json" }
+    )) {
+        $r = Run-Cli $case.Args
+        Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
+        $doc = Parse-Json "$($case.Label) (not installed)" $r.Out
+        if ($doc) { Check "$($case.Label) (not installed) names the installer" ($doc.installed -eq $false -and $doc.remedy) (Head $r.Out 160) }
+    }
+    foreach ($case in @(
+        @{ Args = @("persona", "plan", "--json"); Label = "persona plan --json with no persona recorded" },
+        @{ Args = @("persona", "show", "nope", "--json"); Label = "persona show <unknown> --json" }
+    )) {
+        $r = Run-Cli $case.Args
+        Check "$($case.Label) is bad input: exit 2" ($r.Code -eq 2) "exit $($r.Code): $(Head $r.Out 120)"
+        $doc = Parse-Json $case.Label $r.Out
+        if ($doc) { Check "$($case.Label) is a refusal object" ($doc.rejected -eq $true -and $doc.error) (Head $r.Out 160) }
+    }
+    $r = Run-Cli @("persona", "list", "--json")
+    $doc = Parse-Json "persona list --json" $r.Out
     if ($doc) {
-        Check "$($case.Label) (not installed) says installed=false" ($doc.installed -eq $false) "installed=$($doc.installed)"
-        Check "$($case.Label) (not installed) carries status and remedy" ($doc.PSObject.Properties["status"] -and $doc.PSObject.Properties["remedy"]) (Head $r.Out 160)
-        # The state queries' answer; update --json's not-installed answer is a result, as in the shell twin.
-        if ($case.Label -ne "update --json") { Check "$($case.Label) (not installed) carries platform and wsl_version (audit WIN-02)" `
-            ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"] -and $null -eq $doc.wsl_version) (Head $r.Out 200) }
+        $ids = @($doc.personas | ForEach-Object { $_.id })
+        # The ML Engineer is disabled on this branch (kept, "visible": false): listed no more, still shown by name below.
+        Check "persona list --json lists every persona it offers (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "general" -and -not ($ids -contains "ml-engineer")) "exit $($r.Code): $($ids -join ',')"
+    }
+    $r = Run-Cli @("persona", "show", "ml-engineer", "--json")
+    $doc = Parse-Json "persona show ml-engineer --json" $r.Out
+    if ($doc) {
+        Check "persona show --json names the notebooks it brings (AGT-12)" ($r.Code -eq 0 -and @($doc.notebooks | ForEach-Object { $_.jupyter }) -contains "ml-engineer/01_train.ipynb") (Head $r.Out 200)
     }
 }
-
-$bareHome = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-ps51-bare-" + [guid]::NewGuid().ToString("N"))
-New-Item -ItemType Directory -Force -Path $bareHome | Out-Null
-$env:EXAKIT_HOME = $bareHome
-foreach ($q in @("status", "version", "info", "skills")) { Run-Cli @($q, "--json") | Out-Null }
-$env:EXAKIT_HOME = $kitHome
-Check "the state queries write nothing into the kit home (audit AGT-14)" (@(Get-ChildItem -Force $bareHome).Count -eq 0) "$(Get-ChildItem -Force -Name $bareHome)"
-Remove-Item -Recurse -Force $bareHome -ErrorAction SilentlyContinue
-
-# The commands that also write answer a machine with no kit the same way, and
-# refuse a wrong persona as bad input, before anything is fetched (AGT-05/06/09).
-foreach ($case in @(
-    @{ Args = @("marketplace", "--list", "--json"); Label = "marketplace --list --json" },
-    @{ Args = @("persona", "add", "data-scientist", "--json"); Label = "persona add --json" }
-)) {
-    $r = Run-Cli $case.Args
-    Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
-    $doc = Parse-Json "$($case.Label) (not installed)" $r.Out
-    if ($doc) { Check "$($case.Label) (not installed) names the installer" ($doc.installed -eq $false -and $doc.remedy) (Head $r.Out 160) }
-}
-foreach ($case in @(
-    @{ Args = @("persona", "plan", "--json"); Label = "persona plan --json with no persona recorded" },
-    @{ Args = @("persona", "show", "nope", "--json"); Label = "persona show <unknown> --json" }
-)) {
-    $r = Run-Cli $case.Args
-    Check "$($case.Label) is bad input: exit 2" ($r.Code -eq 2) "exit $($r.Code): $(Head $r.Out 120)"
-    $doc = Parse-Json $case.Label $r.Out
-    if ($doc) { Check "$($case.Label) is a refusal object" ($doc.rejected -eq $true -and $doc.error) (Head $r.Out 160) }
-}
-$r = Run-Cli @("persona", "list", "--json")
-$doc = Parse-Json "persona list --json" $r.Out
-if ($doc) {
-    $ids = @($doc.personas | ForEach-Object { $_.id })
-    # The ML Engineer is disabled on this branch (kept, "visible": false): listed no more, still shown by name below.
-    Check "persona list --json lists every persona it offers (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "general" -and -not ($ids -contains "ml-engineer")) "exit $($r.Code): $($ids -join ',')"
-}
-$r = Run-Cli @("persona", "show", "ml-engineer", "--json")
-$doc = Parse-Json "persona show ml-engineer --json" $r.Out
-if ($doc) {
-    Check "persona show --json names the notebooks it brings (AGT-12)" ($r.Code -eq 0 -and @($doc.notebooks | ForEach-Object { $_.jupyter }) -contains "ml-engineer/01_train.ipynb") (Head $r.Out 200)
-}
+if ($jcPart -eq "1") { Complete-Contracts }
 
 # --- 2. the catalog and skills are one object each, nothing else on stdout --
 Write-Host "--- catalog, help, skills"
@@ -288,9 +305,4 @@ Remove-Item -Force $probe -ErrorAction SilentlyContinue
 Check "the digest is a sha256" ($viaCmdlet -match '^[0-9a-f]{64}$') "got $viaCmdlet"
 Check "and the fallback agrees with the cmdlet" ($viaFallback -eq $viaCmdlet) "cmdlet=$viaCmdlet fallback=$viaFallback"
 
-Remove-Item -Recurse -Force -Path $kitHome -ErrorAction SilentlyContinue
-Remove-Item -Recurse -Force -Path $userSandbox -ErrorAction SilentlyContinue
-Write-Host ""
-Write-Host "$($script:PASS) passed, $($script:FAIL) failed"
-if ($script:FAIL -gt 0) { exit 1 }
-exit 0
+Complete-Contracts
