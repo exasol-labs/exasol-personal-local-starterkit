@@ -20,29 +20,28 @@
       }
     },
     "exapump": {
-      "version": "0.13.1",
+      "version": "0.14.0",
       "repo": "exasol-labs/exapump",
       "severity": "normal",
       "sha256": {
-        "linux-aarch64": "7c70992fffe272332e855b02c2070c4d12fff92cc421858fb471954b9f261d73",
-        "linux-x86_64": "663225d45fd121d274ffac559cd8c703672ff1e8d4e8e88e37e70797b91004cc",
-        "macos-aarch64": "131e81d32cf658d7d3a2e151fd35deab78ddd5aa61f585079e68dc4bab74da04",
-        "macos-x86_64": "1a43954f5f51b16c068d024ea3d88f7f3375b47e6c2145c7a662c8b361928edd",
-        "windows-x86_64": "17ecc7557ced3ec619fbee35ad025ea38c0f86613e451e350dc6b869a761cf41"
+        "linux-aarch64": "f0c72d2defd4820843e2f9ef3da70c294d4cbd31604457687ef74f0cdadaa7d1",
+        "linux-x86_64": "56644fed9ab18631cf3163257c6f207deb03c5df76d7dc376ad8df3a6489e08b",
+        "macos-aarch64": "36e9cfd328bf39b02d16226c1a277b97d41d90cc4367ec023758441e58018e40",
+        "macos-x86_64": "d09f0b9cef7b81cfdf7ec87e14b5073d39ddb245d6a60c3ab339dad7bc90b785",
+        "windows-x86_64": "c3fbfdbc1a6e5017f6cd869b432f552f3f8999743ebdd0c9eae5e88421165fa4"
       }
     },
     "uv": {
-      "version": "0.13.7",
+      "version": "0.13.8",
       "min_version": "0.13.4",
       "repo": "astral-sh/uv",
-      "severity": "critical",
-      "note": "uv below 0.13.4 trusts a compromised emSign root CA (GHSA-hq85-5cpj-mr62); the kit refuses to run it",
+      "severity": "normal",
       "sha256": {
-        "linux-aarch64": "71279f8d3c67241e807b9d8db872d1bf541579fb9f08b7d1eb1682196d1e57dc",
-        "linux-x86_64": "c5221ff41b7892bfc223543883600125f6a47fe845093e0f5bdff4f359196d83",
-        "macos-aarch64": "81b811b57e4624df7ed3aac148e0359100d9962f3d9dce00aec533dc2e086731",
-        "macos-x86_64": "20c47e4c1f630b8abaff8c291fa9b9aa300fef92c4fbff95adf198b55287cda7",
-        "windows-x86_64": "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021"
+        "linux-aarch64": "74f2f5c6024d397481db228db8fc25eed420db192243f88438c118e7e013e585",
+        "linux-x86_64": "5acfd9177cfecf0bf87578f059728215ccc884388988f55f7a65041b57387d91",
+        "macos-aarch64": "6b71028a6b904f2ae3340ef52e595512de807d06c0a20eaef2f692581b246558",
+        "macos-x86_64": "a04c2ffeac28b2003a2c13caf538ab425fcd7def3e4a41571f4a8fb370a66af3",
+        "windows-x86_64": "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8"
       }
     },
     "mcp": {
@@ -53,7 +52,7 @@
       "severity": "normal"
     },
     "pyexasol": {
-      "version": "3.0.1",
+      "version": "4.1.0",
       "package": "pyexasol",
       "severity": "normal"
     },
