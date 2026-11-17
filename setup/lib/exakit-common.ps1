@@ -7615,6 +7615,9 @@ function Show-ExakitMarketplaceMenu {
         # that are in already without a checkbox. Twin of the shell's.
         $script:ExakitAddonTable.Col3 = ""
         if ($topRows.Count -gt 0) { $script:UiTableNoBox = $topRows; $script:UiTableLocked = $topRows }
+        # The offer's spinner gives its line back first, as on the auto-install
+        # path: written under it, the blank line came out as two.
+        if ($script:ExakitMarketplaceSpinning -or $null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll; $script:ExakitMarketplaceSpinning = $false }
         Write-Host ""
     }
     $groupParent = 1

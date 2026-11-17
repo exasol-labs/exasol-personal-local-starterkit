@@ -2095,7 +2095,10 @@ function Show-McpSidecarProblem {
 function Install-McpSidecarStep {
     $script:McpStepT0 = Get-Date
     $ready = $true
-    try { Set-McpReadonlyAccess } catch { $ready = $false; Write-ExakitLog "WARN" "MCP: read-only setup: $_" }
+    # Quiet, like its twin `( exakit_configure_mcp_readonly_access ) >/dev/null`:
+    # the client connection that follows says the read-only user's one line, so
+    # saying it here too printed it twice in the same step.
+    try { Set-McpReadonlyAccess *> $null } catch { $ready = $false; Write-ExakitLog "WARN" "MCP: read-only setup: $_" }
     Start-ExakitSpinner "Starting the MCP server and checking it answers"
     $served = $false
     try { $served = Set-McpSidecar -Quiet } catch { Write-ExakitLog "WARN" "MCP sidecar: $_" }

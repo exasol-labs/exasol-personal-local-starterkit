@@ -3942,7 +3942,8 @@ _exakit_data_persona_pending() {
 # source, Skip - Skip ticked, so Enter goes on). Reads and books like the load
 # loop in exakit_maybe_offer_data_load (_exakit_offer_fail, deferred errors).
 _exakit_data_compact_samples() {
-    UI_TABLE_COL1=" "
+    # Its column heading stays ("Dataset"), the same as on a re-run, where the
+    # table has no sample row: one table, one heading.
     # A narrow terminal (under 100 columns): a narrower Status, so no row's name
     # is cut short, and the sample row says how many rather than which.
     _dcs_cols="$(set -- $(stty size < /dev/tty 2>/dev/null || true); printf '%s' "${2:-}")"
