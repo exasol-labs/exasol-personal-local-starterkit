@@ -5718,7 +5718,7 @@ _exakit_addon_table_build() {
             # Drawn as a row this install settled ("✓ installed"), not a dim
             # "covered" one: the same table either way. No checkbox (UI_TABLE_NOBOX).
             printf 'plain|%s|0|done|||||%s|%s|%s|%s\n' \
-                "$(_exakit_addon_table_label "$_atb_tid")" "" "$(_exakit_addon_table_cell installed "")" "$_atb_tver" "$_atb_twhy" >> "$_atb_f"
+                "$(_exakit_addon_table_label "$_atb_tid")" "" "$(_exakit_addon_table_cell "Auto installed" "")" "$_atb_tver" "$_atb_twhy" >> "$_atb_f"
             EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
             _atb_row=$(( _atb_row + 1 ))
@@ -5965,6 +5965,7 @@ _exakit_addon_table_cleanup() {
           "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop" \
           "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     UI_TABLE_NOBOX=""
+    UI_TABLE_LOCKED=""
     EXAKIT_ADDON_TABLE_STATE=""
     UI_TABLE_COL2=""
     UI_TABLE_COL2_YIELDS=0
@@ -6174,9 +6175,15 @@ EXAKIT_MM_ABOUT
         if [ -n "${EXAKIT_MARKETPLACE_ONLY:-}" ]; then
             case ",$EXAKIT_MARKETPLACE_ONLY," in *",$_mm_id,"*) ;; *) continue ;; esac
         fi
-        # The row's name: the repository's on GitHub, the id beside it when different.
-        _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_label "$_mm_id")
+        # The row's name: the repository's on GitHub, the id beside it when different
+        # - except in the install's table, where the name alone says it.
+        if [ "${EXAKIT_MARKETPLACE_INSTALL_TABLE:-0}" = 1 ]; then
+            _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_name "$_mm_id")
 "
+        else
+            _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_label "$_mm_id")
+"
+        fi
         # Disabled placeholders keep menu row indexes stable.
         if exakit_marketplace_addon_installed "$_mm_id"; then
             # Keep the version in its own table column.
@@ -6410,6 +6417,9 @@ EXAKIT_MM_CSPLIT
                 *) _mm_rest+=("$_mm_one") ;;
             esac
         done
+        # Each group A-Z by the name the row shows.
+        _mm_first=($(for _mm_one in ${_mm_first[@]+"${_mm_first[@]}"}; do printf '%s|%s\n' "$(_exakit_addon_table_label "$_mm_one" | tr '[:upper:]' '[:lower:]')" "$_mm_one"; done | sort | cut -d'|' -f2))
+        _mm_rest=($(for _mm_one in ${_mm_rest[@]+"${_mm_rest[@]}"}; do printf '%s|%s\n' "$(_exakit_addon_table_label "$_mm_one" | tr '[:upper:]' '[:lower:]')" "$_mm_one"; done | sort | cut -d'|' -f2))
         _mm_pick_ids=(${_mm_first[@]+"${_mm_first[@]}"} ${_mm_rest[@]+"${_mm_rest[@]}"})
     fi
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
@@ -6440,6 +6450,8 @@ EXAKIT_MM_CSPLIT
         if [ "$_mm_auto_rows" != " " ]; then
             UI_TABLE_COL3=""
             UI_TABLE_NOBOX="$_mm_auto_rows"
+            # Ticked and locked, like the sample datasets: they install, no choice.
+            UI_TABLE_LOCKED="$_mm_auto_rows"
             # Nothing is ticked while the two install: the question comes after.
             ui_table_tick "$EXAKIT_ADDON_TABLE_STATE" ""
             UI_TABLE_LINES=0
@@ -6468,7 +6480,7 @@ EXAKIT_MM_CSPLIT
         done <<EXAKIT_MM_TROWS
 ${_mm_ctop:-}
 EXAKIT_MM_TROWS
-        [ "$_mm_trows" = " " ] || UI_TABLE_NOBOX="$_mm_trows"
+        [ "$_mm_trows" = " " ] || { UI_TABLE_NOBOX="$_mm_trows"; UI_TABLE_LOCKED="$_mm_trows"; }
         [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
         printf '\n\n'
     fi
@@ -6893,7 +6905,7 @@ _exakit_marketplace_apply_python() {
             installing)
                 _mpa_current="$_mpa_id"
                 _exakit_log_file "INFO  Installing add-on: $_mpa_id"
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 installing
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo installing)"
                 if ! _exakit_addon_table_live; then
                     info "Installing add-on: $_mpa_id"
                     _mpa_bar="$(mktemp "${TMPDIR:-/tmp}/exakit-addon-bar.XXXXXX")" || _mpa_bar=""
@@ -6904,19 +6916,19 @@ _exakit_marketplace_apply_python() {
                 fi
                 ;;
             validating)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 validating
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo validating)"
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 65 90 8 "$_mpa_id · validating"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Validating add-on: $_mpa_id"; fi
                 ;;
             starting)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 starting
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo starting)"
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 90 100 3 "$_mpa_id · starting"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Starting add-on: $_mpa_id"; fi
                 ;;
             done)
                 if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; _mpa_bar_live=0; fi
                 [ -z "$_mpa_bar" ] || { rm -f "$_mpa_bar"; _mpa_bar=""; }
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" done '' '' '' '' "$(_exakit_addon_table_cell "$_mpa_detail" "$_mpa_seconds")"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" done '' '' '' '' "$(_exakit_addon_table_cell "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installed' || printf '%s' "$_mpa_detail")" "$_mpa_seconds")"
                 _mpa_notes="$_mpa_notes
 ok|$_mpa_id installed${_mpa_detail:+ — $_mpa_detail}"
                 ;;
