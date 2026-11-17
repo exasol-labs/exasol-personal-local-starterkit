@@ -192,8 +192,8 @@ main() {
         printf '    %-14s %s (%s)\n' "Platform" "$platform" "$arch"
         printf '    %-14s %s\n' "Database" "$target"
         printf '    %-14s %s\n' "Kit home" "$EXAKIT_HOME"
-        printf '    %-14s %s\n' "Steps" "1 Exasol launcher, 2 the local database, 3 Setup Utilities (exapump, database features),"
-        printf '    %-14s %s\n' "" "4 AI bridge (MCP), 5 pyexasol, then your persona's data, 6 the exakit command"
+        printf '    %-14s %s\n' "Steps" "1 Exasol launcher, 2 the local database, 3 Setup Utilities (data loader,"
+        printf '    %-14s %s\n' "" "SQL preprocessor, Python driver, kit CLI), 4 AI bridge (MCP), then your persona's data"
         _plan_answers=""
         if [ -n "${_personas:-}" ] && command -v python3 >/dev/null 2>&1; then
             _plan_answers="$(python3 "$kit_dir/setup/lib/persona_service.py" "$kit_dir" answers "$_personas" 2>/dev/null)"

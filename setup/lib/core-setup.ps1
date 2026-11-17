@@ -143,7 +143,11 @@ function Invoke-ExakitCoreDatabaseStep {
         # works, then its tick and one line of what was done. Twin of the same
         # bracket in exakit_core_database_step.
         $asItem = ($script:ExakitStepGroup -and (Get-Command Start-ExakitStepItem -ErrorAction SilentlyContinue))
-        if ($asItem) { Start-ExakitStepItem (Get-ExakitCoreTaskItemTitle -Name $task -KitRoot $KitRoot) }
+        if ($asItem) {
+            # Drawn as a bar ("Setup Utilities"): the item's plain name, no version.
+            if ($script:ExakitItemTotal -gt 0 -and $task -eq "preprocessor") { Start-ExakitStepItem "SQL Preprocessor" }
+            else { Start-ExakitStepItem (Get-ExakitCoreTaskItemTitle -Name $task -KitRoot $KitRoot) }
+        }
         $ok = Invoke-ExakitSoftStep -Component $task -Repair "exakit update" -Label $label -Body {
             # The handler's LAST output is its verdict; anything a cmdlet
             # leaked onto the pipeline before it must not read as success.

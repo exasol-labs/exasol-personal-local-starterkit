@@ -140,12 +140,12 @@ try {
     # --- step 2: the launcher --------------------------------------------------
     # Its own step, matching the macOS shape and heading. Twin of the same
     # split in setup-macos.sh and setup-linux.sh.
-    if (Begin-ExakitStep "launcher" "Step 1/6  Exasol launcher") {
+    if (Begin-ExakitStep "launcher" "Step 1/4  Exasol launcher") {
         Install-PersonalLauncher
         Set-ExakitStepDone "launcher"
     }
 
-    if (Begin-ExakitStep "runtime" "Step 2/6  Local database deployment") {
+    if (Begin-ExakitStep "runtime" "Step 2/4  Local database deployment") {
         $script:PersonalNoDatabase = $false
         Install-PersonalDeployment
         if ($script:PersonalNoDatabase) {
@@ -229,16 +229,22 @@ try {
     # preprocessor framework) - installed when missing, verified on every pass.
     # A task that fails is booked in the closing summary and the steps after it
     # still run.
+    # Setup Utilities as one bar: Data Loader (exapump), SQL Preprocessor (the
+    # database features), Python Driver (pyexasol) and Kit CLI (the exakit
+    # helper). Without a database only the Kit CLI runs. Twin of
+    # kit_shared_steps (common.sh).
+    $utilItems = 1
+    if ($dbReady) { $utilItems = 4 }
+    Start-ExakitStepGroup "Step 3/4  Setup Utilities" -Items $utilItems
     if ($dbReady) {
-        Start-ExakitStepGroup "Step 3/6  Setup Utilities"
-        $epTitle = "exapump"
-        if ($script:ExapumpVersion) { $epTitle = "exapump v$($script:ExapumpVersion)" }
-        if ($exapumpSupported -and (Begin-ExakitStep "exapump" $epTitle)) {
-            # Three facts for this item, held while it works and said in two
-            # lines when it ends: what was installed, the profile name someone
-            # types again, and that the database can persist a schema, not
-            # merely answer SELECT 1. Twin of _exakit_install_exapump (common.sh).
-            Start-ExakitStepItem $epTitle
+        $epTitle = "Data Loader"
+        if ($exapumpSupported) { Start-ExakitStepItem $epTitle }
+        if ($exapumpSupported -and -not (Begin-ExakitStep "exapump" $epTitle)) {
+            Complete-ExakitStepItem -Ok $true
+        } elseif ($exapumpSupported) {
+            # Three facts for this item, held while it works: what was
+            # installed, the profile name, and that the database can persist a
+            # schema. Twin of _exakit_install_exapump (common.sh).
             if (Invoke-ExakitSoftStep -Component "exapump" -Repair "exakit update" -Body {
                     $prevQuiet = $script:ExakitQuietDetail
                     if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
@@ -279,167 +285,46 @@ try {
         } else {
             Invoke-ExakitCoreDatabaseStep -Label "Database features" -KitRoot $KitRoot
         }
-        Stop-ExakitStepGroup
-    }
-
-    # The sample data. With persona.ps1 in the kit it follows the persona
-    # question after every step (Invoke-ExakitPersonaFlow, below), so this
-    # branch is the fallback for a kit copy without it, which still loads here,
-    # before the AI bridge. Wrapped so a failed/declined load never aborts the
-    # rest of setup (mirrors kit_shared_steps in bash).
-    if (-not $dbReady) {
-        # already said above - nothing more to add here
-    } elseif ($exapumpSupported -and (Test-ExakitSoftFailed "exapump")) {
-        Info "Skipping the sample data - it is loaded with exapump, which is not installed"
-    } elseif ((Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)) {
-        # An installer an update started to finish new setup: the datasets were
-        # the first install's question, and its answer stands.
-    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
-        # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW: the parts everyone
-        # needs first, then "What will you use this machine for?", whose answer
-        # ticks the datasets (Invoke-ExakitPersonaFlow, after the steps). Loaded
-        # here only by a kit copy without persona.ps1. Twin of kit_shared_steps.
-    } elseif ($exapumpSupported) {
-        # YOUR OWN DATA FIRST, THEN THE SAMPLE. The copy out of the old
-        # container needs three things this point in the run is the first to
-        # have: a database that is up, an exapump binary, and a profile
-        # pointing at the new database. It used to run at the very end, after
-        # every other step, which put a user's own tables last in a run that is
-        # mostly about them. Twin of the call in exakit_maybe_offer_data_load.
-        if (Get-Command Invoke-LegacyCrossingAfter -ErrorAction SilentlyContinue) {
-            Invoke-LegacyCrossingAfter
-        }
-        [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
-            -Label "some of the data" `
-            -Warning "Some of the data did not finish loading." `
-            -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
-    }
-
-    # --- step 4: AI bridge (server, clients, skills) ----------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 4/6  Setting up AI bridge (MCP server, clients and skills)")) {
-        if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
-                # One line for this step's server work: the spinner narrates
-                # starting the launcher's MCP server and its healing, so the
-                # Info/Ok pairs beneath were the second telling. The launcher's
-                # server is the only one: a step that could not get it serving
-                # fails soft (its error and fix said) and the install goes on.
-                # try/finally because the body can throw and this is a soft
-                # step - a leaked quiet flag would silence every step after it.
-                # Twin of _exakit_install_mcp (common.sh).
-                $prevQuiet = $script:ExakitQuietDetail
-                if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
-                try {
-                    Install-McpSidecarStep
-                } finally {
-                    $script:ExakitQuietDetail = $prevQuiet
-                }
-            }) {
-            Set-ExakitStepDone "mcp"
-        }
-    } elseif (-not $exapumpSupported) {
-        Info "Step 4/6  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"
-    }
-
-    # The AI bridge is finished HERE, in the step that says it is being built:
-    # the server, the clients that talk to it, the skills those clients load, and
-    # the "restart your client" line that makes all three take effect. These two
-    # offers used to run at the very end of the run instead - so a reader watched
-    # this step announce the AI bridge, sat through pyexasol and the exakit
-    # helper, and was then asked which AI clients to connect, under no step at
-    # all. The step numbering said one thing and the screen did another.
-    #
-    # Nothing here needs a later step. The client configs point at `uvx
-    # <mcp-server>`, never at the exakit command, and the repo-root lookup falls
-    # back to the checkout for skills\ when the helper step has not staged its
-    # copy yet. What they DO need is the database and exapump, two steps back.
-    # Twin of the same block in kit_shared_steps (common.sh).
-
-    # Gated on $exapumpSupported like the step that builds the bridge. Ungated,
-    # the installer skipped building the AI bridge and then asked which AI
-    # clients to connect to it - pointing them at an MCP server this run never
-    # installed and a read-only database user it never provisioned. The skills
-    # offer below stays unconditional: skills are documents an AI client reads,
-    # and they are just as useful with the database alone.
-    # Neither offer is asked again by an installer an update started to finish
-    # new setup: which clients and skills to wire was the first install's
-    # question. Twin of the same guard in kit_shared_steps.
-    $coreRerun = (Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)
-    if ($dbReady -and $exapumpSupported -and -not $coreRerun) {
-        [void](Invoke-ExakitBestEffort -Component "mcp_clients" -Repair "exakit mcp-setup" `
-            -Label "AI client (MCP) setup" `
-            -Warning "Your local runtime is installed, but MCP client setup did not finish cleanly." `
-            -Body { Request-ExakitMcpSetupOffer })
-    }
-
-    if (-not $coreRerun) {
-        [void](Invoke-ExakitBestEffort -Component "skills" -Repair "exakit skills-install" `
-            -Label "AI skills" `
-            -Warning "Skills install did not finish cleanly." `
-            -Body {
-                # The skills are placed without a word on screen (the log keeps every line): the AI
-                # clients connected above are the step's last line. A warning still shows.
-                $script:ExakitQuietDetail = $true
-                try { Request-ExakitSkillsInstallOffer } finally { $script:ExakitQuietDetail = $false }
-            })
-    }
-
-    # --- step 5: pyexasol (Exasol Python driver) --------------------------------
-    # Not gated on $exapumpSupported: pyexasol is pure Python via uv, so it
-    # works on Windows-on-ARM too, where only exapump's binary is missing.
-    # A failed pyexasol install must not end the run: the exakit helper step
-    # below still has to happen, or the user is left without the command that
-    # manages everything else. The step stays unmarked so a re-run retries it.
-    #
-    # Test-PyexasolConnection runs INSIDE the soft step. Outside it, the step was
-    # soft in name only: the driver could install fine and any Fail() raised while
-    # validating (an unwritable manifest, say) still ended the run before the
-    # exakit helper below existed. Install and validate are one isolated unit.
-    if ($dbReady -and (Begin-ExakitStep "pyexasol" "Step 5/6  pyexasol (Exasol Python driver)")) {
-        # Two lines for this step, not five: the outcome, and the interpreter to
-        # run it with. Everything between is in the logfile, and the spinner
-        # covered it live. Twin of _exakit_install_pyexasol (common.sh).
-        if (Invoke-ExakitSoftStep -Component "pyexasol" -Repair "exakit update" -Body {
-                $prevQuiet = $script:ExakitQuietDetail
-                if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
-                try {
-                    if (-not (Install-Pyexasol)) { return $false }
-                    Test-PyexasolConnection
-                    return $true
-                } finally {
-                    $script:ExakitQuietDetail = $prevQuiet
-                }
-            }) {
-            Set-ExakitStepDone "pyexasol"
+        # Python Driver (pyexasol). Not gated on $exapumpSupported: pyexasol is
+        # pure Python via uv, so it works on Windows-on-ARM too, where only
+        # exapump's binary is missing. It needs only the database (and uv, which
+        # its install ensures on its own), so it runs here rather than after the
+        # AI bridge. A failure must not end the run; the step stays unmarked so
+        # a re-run retries it. Install and validate are one isolated unit.
+        Start-ExakitStepItem "Python Driver"
+        if (Begin-ExakitStep "pyexasol" "Python Driver") {
+            if (Invoke-ExakitSoftStep -Component "pyexasol" -Repair "exakit update" -Body {
+                    $prevQuiet = $script:ExakitQuietDetail
+                    if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
+                    try {
+                        if (-not (Install-Pyexasol)) { return $false }
+                        Test-PyexasolConnection
+                        return $true
+                    } finally {
+                        $script:ExakitQuietDetail = $prevQuiet
+                    }
+                }) {
+                Set-ExakitStepDone "pyexasol"
+                Complete-ExakitStepItem -Ok $true
+            } else {
+                Complete-ExakitStepItem -Ok $false
+            }
+        } else {
+            Complete-ExakitStepItem -Ok $true
         }
     }
-
-    # --- the personas, then the data -------------------------------------------
-    # "What will you use this machine for?" comes after the parts everyone
-    # needs, and its answer ticks the datasets (and, at the close, the add-ons).
-    # With EXAKIT_PERSONA set it was answered before step 1. Twin of the call in
-    # setup-macos.sh / setup-linux.sh.
-    # It needs the database: without one it returns at once (the skip was said
-    # above, with the other database steps).
-    # Not asked again by an installer an update started to finish new setup:
-    # the personas and the data were the first install's question, and its
-    # answer stands.
-    $env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
-    if ($coreRerun) {
-        # the first install's answer stands
-    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
-        Invoke-ExakitPersonaFlow -KitRoot $KitRoot
-        # The skills were placed before the question; a persona's own skill is placed now.
-        if (Get-Command Install-ExakitPersonaSkills -ErrorAction SilentlyContinue) { try { Install-ExakitPersonaSkills } catch { } }
-    }
-
-    # --- step 6: exakit helper command, last, after the persona's data ---------
-    # The command is in place from the start; this is the tick and the refresh,
-    # what the reader sees last before the panel. Twin of kit_helper_step.
+    # --- Kit CLI: the exakit helper, the last item of Setup Utilities --------
+    # The command is in place from the start; this is the tick and the refresh.
+    # It was the install's last step for the screen's sake only. As an item its
+    # tick is its line, and the PATH advice is printed after the item ends,
+    # never under a running bar. Twin of kit_helper_step.
     # The step flag alone is not trusted: if the shim was removed (cleanup,
     # testing, older builds), a re-run must reinstall it rather than skip -
     # and the PATH check must run either way, since the PATH entry can be
     # missing even when the step is marked done.
-    $helperNeeded = Begin-ExakitStep "exakit_helper" "Step 6/6  exakit helper command"
+    Start-ExakitStepItem "Kit CLI"
+    $helperPath = $false
+    $helperNeeded = Begin-ExakitStep "exakit_helper" "Kit CLI"
     if (-not $helperNeeded -and -not (Test-Path (Join-Path $script:BinDir "exakit.cmd"))) {
         Info "exakit command is missing - reinstalling it"
         $helperNeeded = $true
@@ -453,7 +338,7 @@ try {
         $helperNeeded = $true
     }
     if (-not $helperNeeded) {
-        Confirm-ExakitOnPath $script:BinDir
+        $helperPath = $true
     }
     if ($helperNeeded) {
         New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
@@ -545,10 +430,136 @@ try {
         # .cmd, pointing at the kit's copy by absolute path.
         $shimPath = Set-ExakitCmdShim -PsTarget (Join-Path $kitSetupDir "exakit.ps1")
 
-        Confirm-ExakitOnPath $script:BinDir
+        $helperPath = $true
         Set-ExakitStepDone "exakit_helper"
         OkStep "exakit installed ($(Get-ExakitTilde (Join-Path $script:BinDir 'exakit.cmd')))"
     }
+    Complete-ExakitStepItem -Ok $true
+    if ($helperPath) { Confirm-ExakitOnPath $script:BinDir }
+    Stop-ExakitStepGroup
+
+    # The sample data. With persona.ps1 in the kit it follows the persona
+    # question after every step (Invoke-ExakitPersonaFlow, below), so this
+    # branch is the fallback for a kit copy without it, which still loads here,
+    # before the AI bridge. Wrapped so a failed/declined load never aborts the
+    # rest of setup (mirrors kit_shared_steps in bash).
+    if (-not $dbReady) {
+        # already said above - nothing more to add here
+    } elseif ($exapumpSupported -and (Test-ExakitSoftFailed "exapump")) {
+        Info "Skipping the sample data - it is loaded with exapump, which is not installed"
+    } elseif ((Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)) {
+        # An installer an update started to finish new setup: the datasets were
+        # the first install's question, and its answer stands.
+    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW: the parts everyone
+        # needs first, then "What will you use this machine for?", whose answer
+        # ticks the datasets (Invoke-ExakitPersonaFlow, after the steps). Loaded
+        # here only by a kit copy without persona.ps1. Twin of kit_shared_steps.
+    } elseif ($exapumpSupported) {
+        # YOUR OWN DATA FIRST, THEN THE SAMPLE. The copy out of the old
+        # container needs three things this point in the run is the first to
+        # have: a database that is up, an exapump binary, and a profile
+        # pointing at the new database. It used to run at the very end, after
+        # every other step, which put a user's own tables last in a run that is
+        # mostly about them. Twin of the call in exakit_maybe_offer_data_load.
+        if (Get-Command Invoke-LegacyCrossingAfter -ErrorAction SilentlyContinue) {
+            Invoke-LegacyCrossingAfter
+        }
+        [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
+            -Label "some of the data" `
+            -Warning "Some of the data did not finish loading." `
+            -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
+    }
+
+    # --- step 4: AI bridge (server, clients, skills) ----------------------------
+    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 4/4  Setting up AI bridge (MCP server, clients and skills)")) {
+        if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
+                # One line for this step's server work: the spinner narrates
+                # starting the launcher's MCP server and its healing, so the
+                # Info/Ok pairs beneath were the second telling. The launcher's
+                # server is the only one: a step that could not get it serving
+                # fails soft (its error and fix said) and the install goes on.
+                # try/finally because the body can throw and this is a soft
+                # step - a leaked quiet flag would silence every step after it.
+                # Twin of _exakit_install_mcp (common.sh).
+                $prevQuiet = $script:ExakitQuietDetail
+                if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
+                try {
+                    Install-McpSidecarStep
+                } finally {
+                    $script:ExakitQuietDetail = $prevQuiet
+                }
+            }) {
+            Set-ExakitStepDone "mcp"
+        }
+    } elseif (-not $exapumpSupported) {
+        Info "Step 4/4  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"
+    }
+
+    # The AI bridge is finished HERE, in the step that says it is being built:
+    # the server, the clients that talk to it, the skills those clients load, and
+    # the "restart your client" line that makes all three take effect. These two
+    # offers used to run at the very end of the run instead - so a reader watched
+    # this step announce the AI bridge, sat through pyexasol and the exakit
+    # helper, and was then asked which AI clients to connect, under no step at
+    # all. The step numbering said one thing and the screen did another.
+    #
+    # Nothing here needs a later step. The client configs point at `uvx
+    # <mcp-server>`, never at the exakit command, and the repo-root lookup falls
+    # back to the checkout for skills\ when the helper step has not staged its
+    # copy yet. What they DO need is the database and exapump, two steps back.
+    # Twin of the same block in kit_shared_steps (common.sh).
+
+    # Gated on $exapumpSupported like the step that builds the bridge. Ungated,
+    # the installer skipped building the AI bridge and then asked which AI
+    # clients to connect to it - pointing them at an MCP server this run never
+    # installed and a read-only database user it never provisioned. The skills
+    # offer below stays unconditional: skills are documents an AI client reads,
+    # and they are just as useful with the database alone.
+    # Neither offer is asked again by an installer an update started to finish
+    # new setup: which clients and skills to wire was the first install's
+    # question. Twin of the same guard in kit_shared_steps.
+    $coreRerun = (Get-Command Test-ExakitCoreRerunActive -ErrorAction SilentlyContinue) -and (Test-ExakitCoreRerunActive)
+    if ($dbReady -and $exapumpSupported -and -not $coreRerun) {
+        [void](Invoke-ExakitBestEffort -Component "mcp_clients" -Repair "exakit mcp-setup" `
+            -Label "AI client (MCP) setup" `
+            -Warning "Your local runtime is installed, but MCP client setup did not finish cleanly." `
+            -Body { Request-ExakitMcpSetupOffer })
+    }
+
+    if (-not $coreRerun) {
+        [void](Invoke-ExakitBestEffort -Component "skills" -Repair "exakit skills-install" `
+            -Label "AI skills" `
+            -Warning "Skills install did not finish cleanly." `
+            -Body {
+                # The skills are placed without a word on screen (the log keeps every line): the AI
+                # clients connected above are the step's last line. A warning still shows.
+                $script:ExakitQuietDetail = $true
+                try { Request-ExakitSkillsInstallOffer } finally { $script:ExakitQuietDetail = $false }
+            })
+    }
+
+
+    # --- the personas, then the data -------------------------------------------
+    # "What will you use this machine for?" comes after the parts everyone
+    # needs, and its answer ticks the datasets (and, at the close, the add-ons).
+    # With EXAKIT_PERSONA set it was answered before step 1. Twin of the call in
+    # setup-macos.sh / setup-linux.sh.
+    # It needs the database: without one it returns at once (the skip was said
+    # above, with the other database steps).
+    # Not asked again by an installer an update started to finish new setup:
+    # the personas and the data were the first install's question, and its
+    # answer stands.
+    $env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
+    if ($coreRerun) {
+        # the first install's answer stands
+    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        Invoke-ExakitPersonaFlow -KitRoot $KitRoot
+        # The skills were placed before the question; a persona's own skill is placed now.
+        if (Get-Command Install-ExakitPersonaSkills -ErrorAction SilentlyContinue) { try { Install-ExakitPersonaSkills } catch { } }
+    }
+
+    # The exakit helper is the last item of Setup Utilities (above).
 
     # The upgrade news (Write-ExakitWhatsNewBox) and the closing summary
     # (Write-ExakitSoftFailures) are printed after the connection panel at the

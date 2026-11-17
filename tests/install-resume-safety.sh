@@ -507,7 +507,7 @@ _has "$_SWD" 'Info "exapump - not part of this installation, skipping"' \
 _has "$_SWD" '"Database features - skipped: they are set up through exapump, which is not installed"' \
     "...and the skipped database step" \
     "Windows-on-ARM skips the database step without printing it"
-_has "$_SWD" 'Info "Step 4/6  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"' \
+_has "$_SWD" 'Info "Step 4/4  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"' \
     "...and the skipped AI bridge step" \
     "Windows-on-ARM skips the AI bridge step without printing it"
 

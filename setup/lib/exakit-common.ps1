@@ -619,11 +619,17 @@ function InfoStep([string]$Msg) {
 $script:ExakitStepGroup = $false
 $script:ExakitItemTitle = ""
 $script:ExakitItemT0 = $null
-function Start-ExakitStepGroup([string]$Title) {
+$script:ExakitItemTotal = 0
+$script:ExakitItemDone = 0
+# Start-ExakitStepGroup <heading> [-Items n] - with a count, the items are drawn
+# as ONE bar (Start-ExakitStepBar) and each leaves only its tick, name and time.
+function Start-ExakitStepGroup([string]$Title, [int]$Items = 0) {
     Write-ExakitStepHeading $Title
     $script:ExakitStepGroup = $true
+    $script:ExakitItemTotal = $Items
+    $script:ExakitItemDone = 0
 }
-function Stop-ExakitStepGroup { $script:ExakitStepGroup = $false }
+function Stop-ExakitStepGroup { $script:ExakitStepGroup = $false; $script:ExakitItemTotal = 0; $script:ExakitItemDone = 0 }
 
 # Write-ExakitItemLine <mark> <title> [time] [detail] - an item's two lines. The
 # title is padded so the times line up; the detail is dim, one level further in.
@@ -637,7 +643,12 @@ function Start-ExakitStepItem([string]$Title) {
     $script:ExakitItemT0 = Get-Date
     $script:ExakitItemHeld = New-Object System.Collections.ArrayList
     $script:UiSpinIndent = "    "
-    $script:UiSpinPrefix = $Title
+    if ($script:ExakitItemTotal -gt 0) {
+        $script:UiSpinPrefix = ""
+        if (Get-Command Start-ExakitStepBar -ErrorAction SilentlyContinue) { Start-ExakitStepBar $script:ExakitItemDone $script:ExakitItemTotal $Title }
+    } else {
+        $script:UiSpinPrefix = $Title
+    }
 }
 # Test-ExakitItemHeld <pattern> - did the item's held lines say this (a regex)?
 function Test-ExakitItemHeld([string]$Pattern) {
@@ -656,8 +667,16 @@ function Complete-ExakitStepItem {
     if ($null -ne $script:ExakitItemT0) { $el = [int]((Get-Date) - $script:ExakitItemT0).TotalSeconds }
     $held = $script:ExakitItemHeld
     $script:ExakitItemHeld = $null
+    if (Get-Command Stop-ExakitStepBar -ErrorAction SilentlyContinue) { Stop-ExakitStepBar }
     $script:UiSpinIndent = "  "
     $script:UiSpinPrefix = ""
+    # Drawn as a bar: the item leaves its name and time only (no versions, no
+    # detail line) - the bar already said what it was doing while it did it.
+    if ($script:ExakitItemTotal -gt 0) {
+        $script:ExakitItemDone++
+        $Title = $script:ExakitItemTitle
+        $Detail = ""
+    }
     if ($Ok) {
         Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Title "${el}s" $Detail
     } else {
@@ -721,6 +740,7 @@ function Warn2([string]$Msg) {
     # some callers load this file without ui.ps1.
     $spinHeld = ($null -ne $script:UiSpinFlag) -and (Get-Command Suspend-ExakitSpinner -ErrorAction SilentlyContinue)
     if ($spinHeld) { Suspend-ExakitSpinner }
+    if ($script:UiBarActive) { try { [Console]::Write("`r$($script:UiEsc)[K") } catch { } }
     if ($script:UiFancy) { Write-Host ("      {0}!{1} {2}" -f $script:UiWarn, $script:UiReset, $Msg) }
     else { Write-Host "      ! $Msg" -ForegroundColor Yellow }
     if ($spinHeld) { Resume-ExakitSpinner }
@@ -755,6 +775,7 @@ function Write-ExakitError([string]$Msg) {
         return
     }
     Suspend-ExakitSpinner
+    if ($script:UiBarActive) { try { [Console]::Write("`r$($script:UiEsc)[K") } catch { } }
     if ($script:UiFancy) {
         Write-Host ("      {0}{1}{2} {3}" -f $script:UiErr, $script:UiCross, $script:UiReset, $Msg)
     } else {
@@ -4038,8 +4059,11 @@ function Begin-ExakitStep {
             $rerun = $true
         } elseif ($script:ExakitStepGroup) {
             # An item of a grouped step: one line at the item column, under the
-            # group's heading.
-            Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Description "" "already done, skipping"
+            # group's heading - unless the item is already open (the bar), in
+            # which case its own tick is that line.
+            if ($null -eq $script:ExakitItemHeld) {
+                Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Description "" "already done, skipping"
+            }
             Write-ExakitLog "OK" "$Description - already done, skipping"
             return $false
         } else {

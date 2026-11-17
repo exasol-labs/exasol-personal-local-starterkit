@@ -330,12 +330,94 @@ _UI_SPIN_OWNER=''
 _UI_SPIN_INDENT='  '
 _UI_SPIN_PREFIX=''
 
+# A GROUPED STEP DRAWN AS A BAR. "Setup Utilities" shows its items as one bar
+# line under the ticks of the items already done:
+#
+#     ✓ Data Loader                                          (14s)
+#     ███████░░░░░░░░░░░░░  1/4  SQL Preprocessor · verifying checksum (3s)
+#
+# The bar, the count and the item's name are fixed for the item; what follows
+# the dot is whatever the item's own code says it is doing now. That code calls
+# ui_spin_begin as it always has, often from a subshell (exakit_soft_step), so
+# the words go through a FILE the animator reads every frame: a subshell cannot
+# reach the animator's variables, and a second animator would paint over this
+# one. While the bar runs, ui_spin_begin/_end only write and clear that file,
+# and pause/resume do nothing (the item's own lines are held anyway). Display
+# only. Twins: Start-ExakitStepBar / Stop-ExakitStepBar in ui.ps1.
+_UI_BAR_FILE=''
+_UI_BAR_TITLE=''
+# ui_bar_begin <done> <total> <title> — start the bar for one item. Plain mode
+# or not a terminal: nothing (the item's tick line still prints when it ends).
+ui_bar_begin() {
+    _UI_BAR_FILE=''
+    _UI_BAR_TITLE="$3"
+    [ "${UI_FANCY:-0}" = 1 ] || return 0
+    [ -t 1 ] || return 0
+    _UI_BAR_FILE="$(mktemp "${TMPDIR:-/tmp}/exakit-bar.XXXXXX" 2>/dev/null)" || { _UI_BAR_FILE=''; return 0; }
+    # One animation at a time: whatever is drawing this line hands it over.
+    if [ -n "${_UI_SPIN_PID:-}" ]; then
+        _UI_SPIN_NESTED=0
+        _ui_step_stop_spinner
+    fi
+    _ubb_tot="$2"; [ "$_ubb_tot" -gt 0 ] 2>/dev/null || _ubb_tot=1
+    _ubb_done="$1"; [ "$_ubb_done" -gt "$_ubb_tot" ] 2>/dev/null && _ubb_done="$_ubb_tot"
+    _ubb_head="$(ui_bar $(( _ubb_done * 100 / _ubb_tot )))  ${_ubb_done}/${_ubb_tot}  $3"
+    _ubb_t0="$(date +%s 2>/dev/null || echo 0)"
+    _ubb_parent=$$
+    printf '\033[?25l'
+    (
+        while :; do
+            kill -0 "$_ubb_parent" 2>/dev/null || exit 0
+            _ubb_sub=''
+            [ -f "$_UI_BAR_FILE" ] || exit 0
+            read -r _ubb_sub < "$_UI_BAR_FILE" 2>/dev/null || true
+            _ubb_el=$(( $(date +%s 2>/dev/null || echo 0) - _ubb_t0 ))
+            if [ -n "$_ubb_sub" ]; then
+                printf '\r%s%s · %s %s(%ss)%s\033[K' "$_UI_SPIN_INDENT" "$_ubb_head" "$_ubb_sub" "$UI_DIM" "$_ubb_el" "$UI_RESET"
+            else
+                printf '\r%s%s %s(%ss)%s\033[K' "$_UI_SPIN_INDENT" "$_ubb_head" "$UI_DIM" "$_ubb_el" "$UI_RESET"
+            fi
+            sleep 0.2
+        done
+    ) &
+    _UI_SPIN_PID=$!
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
+    disown 2>/dev/null || true
+}
+# ui_bar_end — stop the bar and clear its line (the caller prints the tick).
+ui_bar_end() {
+    _ube_file="${_UI_BAR_FILE:-}"
+    _UI_BAR_FILE=''
+    _UI_BAR_TITLE=''
+    [ -n "$_ube_file" ] || return 0
+    rm -f "$_ube_file"
+    _UI_SPIN_NESTED=0
+    _ui_step_stop_spinner
+}
+# _ui_bar_say <label> — what the item is doing now, for the bar to show. The
+# item's own name is already on the bar, so a label that is just that name (the
+# step label run_logged hands down) says nothing new.
+_ui_bar_say() {
+    _ubs="$1"
+    case "$_ubs" in
+        "$_UI_BAR_TITLE"*) _ubs='' ;;
+    esac
+    [ -z "$_ubs" ] || _ubs="$(printf '%s' "${_ubs%"${_ubs#?}"}" | tr '[:upper:]' '[:lower:]')${_ubs#?}"
+    printf '%s\n' "$_ubs" > "$_UI_BAR_FILE" 2>/dev/null || true
+}
+
 # ui_spin_begin <label> — start ONLY the animated spinner (prints no line of
 # its own). No-op unless we are on an interactive fancy terminal *right now*:
 # it re-checks `-t 1` at call time so a spinner can never leak into a
 # $(command substitution) capture, even when UI_FANCY was 1 at load time.
 ui_spin_begin() {
     command -v exakit_addon_activity >/dev/null 2>&1 && exakit_addon_activity "$1"
+    # A step bar owns the line: say the words on it, keep the count.
+    if [ -n "${_UI_BAR_FILE:-}" ]; then
+        _ui_bar_say "$1"
+        _UI_SPIN_NESTED=$(( _UI_SPIN_NESTED + 1 ))
+        return 0
+    fi
     # Something is already animating this line: take a reference, draw nothing.
     # _UI_LINE_BUSY is checked as well as the pid because the loads run in
     # subshells that had to drop the pid, and run_logged starts one of these for
@@ -401,6 +483,11 @@ ui_spin_begin() {
 ui_spin_end() {
     # Give back a reference taken while something else owned the line; only the
     # call that actually started the animation stops it.
+    if [ -n "${_UI_BAR_FILE:-}" ] && [ "${_UI_SPIN_NESTED:-0}" -gt 0 ]; then
+        _UI_SPIN_NESTED=$(( _UI_SPIN_NESTED - 1 ))
+        _ui_bar_say ''
+        return 0
+    fi
     if [ "${_UI_SPIN_NESTED:-0}" -gt 0 ]; then
         _UI_SPIN_NESTED=$(( _UI_SPIN_NESTED - 1 ))
         return 0
@@ -415,6 +502,7 @@ ui_spin_end() {
 # frame stayed frozen above the add-ons table. Twin of Stop-ExakitSpinnerAll.
 ui_spin_end_all() {
     _UI_SPIN_NESTED=0
+    [ -z "${_UI_BAR_FILE:-}" ] || { rm -f "$_UI_BAR_FILE"; _UI_BAR_FILE=''; }
     _ui_step_stop_spinner
 }
 
@@ -432,6 +520,7 @@ ui_spin_end_all() {
 _UI_SPIN_PAUSED=0
 ui_spin_pause() {
     _UI_SPIN_PAUSED=0
+    [ -z "${_UI_BAR_FILE:-}" ] || return 0
     [ -n "${_UI_SPIN_PID:-}" ] || return 0
     [ "${_UI_SPIN_OWNER:-}" = "$$.${BASH_SUBSHELL:-0}" ] || return 0
     [ "${_UI_SPIN_NESTED:-0}" -eq 0 ] || return 0
@@ -455,6 +544,7 @@ ui_spin_resume() {
 # fresh counter. No spinner of our own (not a TTY, or a nested caller): nothing.
 # ⇄ twin: Set-ExakitSpinnerLabel in ui.ps1.
 ui_spin_relabel() {
+    if [ -n "${_UI_BAR_FILE:-}" ]; then _ui_bar_say "$1"; return 0; fi
     ui_spin_pause
     [ "${_UI_SPIN_PAUSED:-0}" = 1 ] || return 0
     _UI_SPIN_PAUSED=0
@@ -982,6 +1072,7 @@ ui_progress_begin() {
     # through its table row (or in plain lines) instead. Checked before the pid,
     # because a detached subshell has no pid to look at.
     [ -n "${_UI_LINE_BUSY:-}" ] && return 1
+    [ -n "${_UI_BAR_FILE:-}" ] && return 1
     # Same single-animation rule as ui_table_begin: whatever is animating now is
     # about to have its pid overwritten, and would print over this bar forever.
     if [ -n "${_UI_SPIN_PID:-}" ]; then
