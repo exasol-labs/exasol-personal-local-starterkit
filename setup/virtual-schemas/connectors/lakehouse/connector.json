@@ -66,6 +66,7 @@
   "settings": {
     "catalog": {
       "label": "Catalog",
+      "question": "Which catalog holds the tables?",
       "choices": [
         {
           "value": "iceberg-rest",
@@ -95,6 +96,7 @@
     },
     "files": {
       "label": "Files",
+      "question": "Where are the table files?",
       "choices": [
         {
           "value": "vended",
@@ -142,14 +144,17 @@
     },
     "login": {
       "label": "Catalog login",
+      "question": "How should Exasol log in to the catalog?",
       "choices": [
         {
           "value": "token",
-          "label": "Token"
+          "label": "Token",
+          "hint": "one access token from the catalog"
         },
         {
           "value": "oauth",
-          "label": "OAuth client (ID + secret)"
+          "label": "OAuth client (ID + secret)",
+          "hint": "client ID + secret"
         }
       ],
       "when": {

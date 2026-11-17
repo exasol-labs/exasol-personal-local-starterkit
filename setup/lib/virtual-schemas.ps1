@@ -2208,6 +2208,81 @@ function Read-ExakitVsLinePaste {
     }
 }
 
+# Read-ExakitVsTuiRadio -Question -Default -Values -Names -Hints [-Guide] - a
+# choice answered with the arrows instead of typed: the question, one
+# "(*) Name   hint" row per value, the default selected first; Enter takes the
+# selected one, and the whole block is then erased, so nothing of it stays on
+# the screen - the answer shows where answers show (the panel). With -Guide, ?
+# returns Code 3 (the caller opens the guide and asks again). Returns
+# @{ Code; Value }: 0 chosen, 1 end of input, 2 nothing drawn without a fancy
+# console (the caller asks the typed question instead). The stored values are
+# the ones the typed question takes. Twin of _exakit_vs_tui_radio.
+function Read-ExakitVsTuiRadio {
+    param([string]$Question, [string]$Default = "", [string[]]$Values = @(), [string[]]$Names = @(),
+          [string[]]$Hints = @(), [switch]$Guide)
+    $n = @($Values).Count
+    if ($n -eq 0 -or -not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return @{ Code = 2; Value = "" } }
+    $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+    if ("$env:COLUMNS" -match '^[0-9]+$' -and [int]$env:COLUMNS -ge 20) { $cols = [int]$env:COLUMNS }
+    if ($cols -lt 20) { $cols = 80 }
+    $fit = {
+        param([string]$Text, [int]$Chrome)
+        if (($Text.Length + $Chrome) -gt $cols) {
+            $keep = $cols - $Chrome - 1; if ($keep -lt 1) { $keep = 1 }
+            return ($Text.Substring(0, $keep) + $script:UiEllipsis)
+        }
+        return $Text
+    }
+    $rowNames = @(); $rowHints = @(); $w = 0
+    for ($i = 0; $i -lt $n; $i++) {
+        $nm = ""; if ($i -lt @($Names).Count) { $nm = "" + @($Names)[$i] }
+        if (-not $nm) { $nm = "" + @($Values)[$i] }
+        $h = ""; if ($i -lt @($Hints).Count) { $h = "" + @($Hints)[$i] }
+        $rowNames += $nm; $rowHints += $h
+        if ($nm.Length -gt $w) { $w = $nm.Length }
+    }
+    $cur = 0
+    for ($i = 0; $i -lt $n; $i++) { if (("" + @($Values)[$i]) -eq $Default) { $cur = $i } }
+    $keys = [string][char]0x2191 + "/" + [string][char]0x2193 + " choose " + $script:UiMidDot + " Enter confirm"
+    if ($Guide) { $keys += " " + $script:UiMidDot + " ? guide" }
+    $e = $script:UiEsc
+    $drawn = 0; $code = 0; $value = ""
+    while ($true) {
+        $lines = New-Object System.Collections.Generic.List[string]
+        [void]$lines.Add("  " + $script:UiAsk + "?" + $script:UiReset + " " + $script:UiBold + (& $fit $Question 4) + $script:UiReset)
+        for ($i = 0; $i -lt $n; $i++) {
+            $row = & $fit ($rowNames[$i] + (" " * ($w - $rowNames[$i].Length + 4)) + $rowHints[$i]) 9
+            $nm = $row.Substring(0, [Math]::Min($rowNames[$i].Length, $row.Length)); $h = $row.Substring($nm.Length)
+            if ($i -eq $cur) {
+                [void]$lines.Add("    " + $script:UiAccent + "(" + $script:UiBullet + ")" + $script:UiReset + " " + $script:UiBold + $nm + $script:UiReset + $script:UiDim + $h + $script:UiReset)
+            } else {
+                [void]$lines.Add("    ( ) " + $nm + $script:UiDim + $h + $script:UiReset)
+            }
+        }
+        [void]$lines.Add("    " + $script:UiDim + (& $fit $keys 4) + $script:UiReset)
+        $frame = ($lines.ToArray() -join "`r`n") + "`r`n"
+        if ($drawn -gt 0) { [Console]::Write("`r$($e)[${drawn}A$($e)[0J" + $frame) } else { [Console]::Write("`r" + $frame) }
+        $drawn = $lines.Count
+        $key = Read-ExakitMenuKey
+        if ($null -eq $key) { $code = 1; break }
+        if ($key.Name -eq 'Enter') { $value = "" + @($Values)[$cur]; break }
+        if ($key.Name -eq 'Up') { $cur-- }
+        elseif ($key.Name -eq 'Down') { $cur++ }
+        elseif ($key.Name -eq 'Char') {
+            # Ctrl-D: the end of the input, as at a typed question.
+            if ($key.Char -eq [string][char]4) { $code = 1; break }
+            if ($Guide -and $key.Char -eq '?') { $code = 3; break }
+            if ($key.Char -match '^[kK]$') { $cur-- }
+            if ($key.Char -match '^[jJ]$') { $cur++ }
+        }
+        if ($cur -lt 0) { $cur = $n - 1 }
+        if ($cur -ge $n) { $cur = 0 }
+    }
+    # Answered: the question and its rows go - nothing of them stays printed.
+    [Console]::Write("`r$($e)[${drawn}A$($e)[0J")
+    return @{ Code = $code; Value = $value }
+}
+
 # Read-ExakitVsTuiField - field $Index asked under the panel (with why it is
 # asked again, when there is a reason): its label, a red * when it is required,
 # its notes and its default. Enter takes the default; an optional one with none is
@@ -2254,8 +2329,19 @@ function Read-ExakitVsTuiField {
             $f.Val = "" + $a; $a = $null
             break
         }
-        $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
-        if ($null -eq $a) { return $false }
+        $radio = @{ Code = 2; Value = "" }
+        if ($f.Kind -eq "choice") {
+            # The arrows on a fancy console; the typed question everywhere else.
+            $q = $f.Question; if (-not $q) { $q = "Which " + $f.LabelFull + "?" }
+            $radio = Read-ExakitVsTuiRadio -Question $q -Default $def -Values @($f.Choices) -Names @($f.ChoiceNames) -Hints @($f.ChoiceHints) -Guide
+            if ($radio.Code -eq 1) { return $false }
+            $a = $radio.Value
+            if ($radio.Code -eq 3) { $a = "?" }
+        }
+        if ($radio.Code -eq 2) {
+            $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour
+            if ($null -eq $a) { return $false }
+        }
         # ? alone (then Enter): this source's guide, then the same question
         # again, every answer kept. ? with anything else is text. Never in a
         # hidden prompt (a credential, a connection string): ? can be part of
@@ -2586,10 +2672,28 @@ function Read-ExakitVsTuiSettings {
         if ($null -eq $open) { return ,$Sets }
         $words = @(); $labels = @($open.choice_labels)
         for ($c = 0; $c -lt @($open.choices).Count; $c++) { $words += ("{0}: {1}" -f @($open.choices)[$c], $labels[$c]) }
-        Write-Host ("  " + $script:UiDim + ($words -join "; ") + $script:UiReset)
         $default = ""; if ($open.PSObject.Properties["default"] -and $open.default) { $default = "" + $open.default }
-        $value = Read-ExakitPrompt ("{0} ({1})" -f $open.label, (@($open.choices) -join ", ")) $default
-        if ($null -eq $value) { return $null }
+        # The arrows on a fancy console (nothing of the question stays on the
+        # screen); the typed question everywhere else. A label with a hint
+        # beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+        $hints = @(); if ($open.PSObject.Properties["choice_hints"]) { $hints = @($open.choice_hints) }
+        $names = @()
+        for ($c = 0; $c -lt $labels.Count; $c++) {
+            $nm = "" + $labels[$c]
+            if ($c -lt $hints.Count -and $hints[$c]) { $nm = $nm.Split(@(" ("), [StringSplitOptions]::None)[0] }
+            $names += $nm
+        }
+        $q = ""; if ($open.PSObject.Properties["question"] -and $open.question) { $q = "" + $open.question }
+        if (-not $q) { $q = "Which " + $open.label + "?" }
+        $radio = Read-ExakitVsTuiRadio -Question $q -Default $default -Values @($open.choices) -Names $names -Hints $hints -Guide
+        if ($radio.Code -eq 1) { return $null }
+        if ($radio.Code -eq 3) { Show-ExakitVsGuideBack -Connector $Connector; continue }
+        if ($radio.Code -eq 0) { $value = $radio.Value }
+        else {
+            Write-Host ("  " + $script:UiDim + ($words -join "; ") + $script:UiReset)
+            $value = Read-ExakitPrompt ("{0} ({1})" -f $open.label, (@($open.choices) -join ", ")) $default
+            if ($null -eq $value) { return $null }
+        }
         if (@($open.choices) -contains $value) { $Sets = @($Sets) + @("--set", "$($open.name)=$value") }
         else { Write-Host ("  {0} {1} must be one of: {2}" -f $script:UiCross, $open.label, (@($open.choices) -join ", ")) -ForegroundColor Red }
     }
@@ -2633,7 +2737,19 @@ function Invoke-ExakitVsTuiForm {
         if ($spec.PSObject.Properties["prompt"] -and $spec.prompt) { $full = "" + $spec.prompt }
         $f = @{ Name = "" + $spec.name; Label = $label; LabelFull = $full; Kind = "" + $spec.kind; Req = [bool]$spec.required
                 Def = "" + $spec.default; Choices = @($spec.choices); Val = ""; Done = $false; From = $false
-                Hint = @(); Draft = ""; Drafted = "" }
+                Hint = @(); Draft = ""; Drafted = ""; Question = ""; ChoiceNames = @(); ChoiceHints = @() }
+        # A choice asked with the arrows: its question, names and hints.
+        if ($spec.PSObject.Properties["question"] -and $spec.question) { $f.Question = "" + $spec.question }
+        if ($spec.PSObject.Properties["choice_hints"]) { $f.ChoiceHints = @($spec.choice_hints) }
+        if ($spec.PSObject.Properties["choice_labels"]) {
+            # A label with a hint beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+            $cl = @($spec.choice_labels)
+            for ($c = 0; $c -lt $cl.Count; $c++) {
+                $nm = "" + $cl[$c]
+                if ($c -lt @($f.ChoiceHints).Count -and @($f.ChoiceHints)[$c]) { $nm = $nm.Split(@(" ("), [StringSplitOptions]::None)[0] }
+                $f.ChoiceNames += $nm
+            }
+        }
         if ($spec.PSObject.Properties["hint"]) { $f.Hint = @($spec.hint | Where-Object { $_ }) }
         if ($spec.PSObject.Properties["draft"] -and $spec.draft) { $f.Draft = "" + $spec.draft }
         if ($f.Kind -eq "source-name" -and $GivenName) { $f.Val = $GivenName; $f.Done = $true }

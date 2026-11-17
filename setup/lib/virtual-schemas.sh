@@ -1645,6 +1645,87 @@ EOF
     exakit_vs_engine "$@"
 }
 
+# _exakit_vs_tui_radio <question> <default> <values> <names> <hints> [guide] —
+# a choice answered with the arrows instead of typed: the question, one
+# "(•) Name   hint" row per value (values space-separated, names and hints
+# |-separated, in the same order), the default selected first; Enter takes the
+# selected one into _EVT_ANSWER, and the whole block is then erased, so nothing
+# of it stays on the screen - the answer shows where answers show (the panel).
+# With [guide] set, ? opens the source's guide (returns 3, the caller asks
+# again). Returns 2 with nothing drawn without a fancy terminal (the caller
+# asks the typed question instead), 1 at the end of the input. The stored values
+# are the same ones the typed question takes. ⇄ twin: Read-ExakitVsTuiRadio.
+_exakit_vs_tui_radio() {
+    _etc_q="$1"; _etc_def="$2"; _etc_guide="${6:-}"
+    _EVT_ANSWER=""
+    _etc_tty="$(_exakit_prompt_tty)"
+    [ -n "$_etc_tty" ] && [ "${UI_FANCY:-0}" = 1 ] || return 2
+    _etc_vals=(); _etc_names=(); _etc_hints=()
+    for _etc_v in $3; do _etc_vals[${#_etc_vals[@]}]="$_etc_v"; done
+    _etc_n=${#_etc_vals[@]}
+    [ "$_etc_n" -gt 0 ] || return 2
+    _etc_rest="$4|"; _etc_hrest="$5|"; _etc_i=0; _etc_w=0
+    while [ "$_etc_i" -lt "$_etc_n" ]; do
+        _etc_names[$_etc_i]="${_etc_rest%%|*}"; _etc_rest="${_etc_rest#*|}"
+        _etc_hints[$_etc_i]="${_etc_hrest%%|*}"; _etc_hrest="${_etc_hrest#*|}"
+        [ -n "${_etc_names[$_etc_i]}" ] || _etc_names[$_etc_i]="${_etc_vals[$_etc_i]}"
+        [ "${#_etc_names[$_etc_i]}" -gt "$_etc_w" ] && _etc_w=${#_etc_names[$_etc_i]}
+        _etc_i=$(( _etc_i + 1 ))
+    done
+    _etc_cur=0; _etc_i=0
+    while [ "$_etc_i" -lt "$_etc_n" ]; do
+        [ "${_etc_vals[$_etc_i]}" = "$_etc_def" ] && _etc_cur=$_etc_i
+        _etc_i=$(( _etc_i + 1 ))
+    done
+    _etc_cols="$(_ui_term_cols)"
+    _etc_keys="↑/↓ choose · Enter confirm"
+    [ -n "$_etc_guide" ] && _etc_keys="$_etc_keys · ? guide"
+    _UI_MENU_PREV_INT="$(trap -p INT)"; _UI_MENU_PREV_TERM="$(trap -p TERM)"
+    trap '_ui_interrupted INT _UI_MENU_PREV' INT
+    trap '_ui_interrupted TERM _UI_MENU_PREV' TERM
+    _etc_drawn=0; _etc_rc=0
+    while :; do
+        _etc_frame="  ${UI_ASK}?${UI_RESET} ${UI_BOLD}$(_ui_fit_row "$_etc_q" 4 "$_etc_cols")${UI_RESET}"$'\n'
+        _etc_i=0
+        while [ "$_etc_i" -lt "$_etc_n" ]; do
+            _etc_name="${_etc_names[$_etc_i]}"
+            _etc_row="$_etc_name$(ui_repeat ' ' $(( _etc_w - ${#_etc_name} + 4 )))${_etc_hints[$_etc_i]}"
+            _etc_row="$(_ui_fit_row "$_etc_row" 9 "$_etc_cols")"
+            _etc_name="${_etc_row:0:${#_etc_name}}"; _etc_hint="${_etc_row:${#_etc_name}}"
+            if [ "$_etc_i" -eq "$_etc_cur" ]; then
+                _etc_frame="$_etc_frame    ${UI_ACCENT}(•)${UI_RESET} ${UI_BOLD}$_etc_name${UI_RESET}${UI_DIM}$_etc_hint${UI_RESET}"$'\n'
+            else
+                _etc_frame="$_etc_frame    ( ) $_etc_name${UI_DIM}$_etc_hint${UI_RESET}"$'\n'
+            fi
+            _etc_i=$(( _etc_i + 1 ))
+        done
+        _etc_frame="$_etc_frame    ${UI_DIM}$(_ui_fit_row "$_etc_keys" 4 "$_etc_cols")${UI_RESET}"$'\n'
+        if [ "$_etc_drawn" -gt 0 ]; then printf '\r\033[%dA\033[0J%s' "$_etc_drawn" "$_etc_frame"
+        else printf '%s' "$_etc_frame"; fi
+        _etc_drawn=$(( _etc_n + 2 ))
+        _ui_menu_key "$_etc_tty" || { _etc_rc=1; break; }
+        case "$UI_KEY" in
+            "") _EVT_ANSWER="${_etc_vals[$_etc_cur]}"; break ;;
+            "$(printf '\004')") _etc_rc=1; break ;;
+            "?") [ -n "$_etc_guide" ] && { _etc_rc=3; break; } ;;
+            k|K) _etc_cur=$(( _etc_cur - 1 )) ;;
+            j|J) _etc_cur=$(( _etc_cur + 1 )) ;;
+            "$(printf '\033')")
+                case "$UI_KEY_SEQ" in
+                    '[A') _etc_cur=$(( _etc_cur - 1 )) ;;
+                    '[B') _etc_cur=$(( _etc_cur + 1 )) ;;
+                esac ;;
+        esac
+        [ "$_etc_cur" -lt 0 ] && _etc_cur=$(( _etc_n - 1 ))
+        [ "$_etc_cur" -ge "$_etc_n" ] && _etc_cur=0
+    done
+    # Answered: the question and its rows go - nothing of them stays printed.
+    printf '\r\033[%dA\033[0J' "$_etc_drawn"
+    if [ -n "$_UI_MENU_PREV_INT" ]; then eval "$_UI_MENU_PREV_INT"; else trap - INT; fi
+    if [ -n "$_UI_MENU_PREV_TERM" ]; then eval "$_UI_MENU_PREV_TERM"; else trap - TERM; fi
+    return "$_etc_rc"
+}
+
 # _exakit_vs_tui_field <i> [why] — field i asked under the panel (with why it is
 # asked again, when there is a reason): its label, a red * when it is required,
 # its notes and its default. Enter takes the default; an optional one with none is
@@ -1701,7 +1782,15 @@ _exakit_vs_tui_field() {
             _EVT_VAL[$_etf_i]="$_EVT_ANSWER"; _EVT_ANSWER=""
             break
         fi
-        _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 0 || return 1
+        _etf_crc=2
+        if [ "$_etf_k" = choice ]; then
+            # The arrows on a fancy terminal; the typed question everywhere else.
+            _exakit_vs_tui_radio "${_EVT_Q[$_etf_i]:-Which ${_etf_lab}?}" "$_etf_def" "${_EVT_CH[$_etf_i]}" \
+                "${_EVT_CHN[$_etf_i]}" "${_EVT_CHH[$_etf_i]}" 1; _etf_crc=$?
+            [ "$_etf_crc" = 1 ] && return 1
+            [ "$_etf_crc" = 3 ] && _EVT_ANSWER="?"
+        fi
+        if [ "$_etf_crc" = 2 ]; then _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 0 || return 1; fi
         # ? alone (then Enter): this source's guide, then the same question
         # again, every answer kept. ? with anything else is text. Never in a
         # hidden prompt (a credential, a connection string): ? can be part of
@@ -2089,15 +2178,29 @@ doc = json.load(sys.stdin)
 given = [l.split("=", 1)[0] for l in sys.argv[1].splitlines() if "=" in l]
 for f in doc["inputs"]:
     if f.get("setting") and f["name"] not in given:
+        labels = f.get("choice_labels") or f["choices"]
+        hints = list(f.get("choice_hints") or ()) + [""] * len(labels)
+        # A label with a hint beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+        names = [l.split(" (")[0] if h else l for l, h in zip(labels, hints)]
         print("|".join([f["name"], f["label"], " ".join(f["choices"]), f.get("default") or "",
-                        "; ".join("%s: %s" % c for c in zip(f["choices"], f.get("choice_labels") or f["choices"]))]))
+                        "; ".join("%s: %s" % c for c in zip(f["choices"], labels)),
+                        f.get("question") or "", "\x1f".join(names), "\x1f".join(hints[:len(labels)])]))
         break' "$_evo_sets" 2>/dev/null)"
         [ -n "$_ets_open" ] || return 0
-        IFS='|' read -r _ets_name _ets_label _ets_choices _ets_def _ets_words <<EOF
+        IFS='|' read -r _ets_name _ets_label _ets_choices _ets_def _ets_words _ets_q _ets_cn _ets_ch <<EOF
 $_ets_open
 EOF
-        printf '  %s%s%s\n' "${UI_DIM:-}" "$_ets_words" "${UI_RESET:-}" >&2
-        _ets_v="$(prompt_text "$_ets_label ($(printf '%s' "$_ets_choices" | sed 's/ /, /g'))" "$_ets_def")" || return 1
+        # The arrows on a fancy terminal (nothing of the question stays on the
+        # screen); the typed question everywhere else.
+        _exakit_vs_tui_radio "${_ets_q:-Which ${_ets_label}?}" "$_ets_def" "$_ets_choices" \
+            "${_ets_cn//$'\x1f'/|}" "${_ets_ch//$'\x1f'/|}" 1 >&2; _ets_crc=$?
+        case "$_ets_crc" in
+            0) _ets_v="$_EVT_ANSWER"; _EVT_ANSWER="" ;;
+            1) return 1 ;;
+            3) _exakit_vs_guide_back "$_evo_id"; continue ;;
+            *) printf '  %s%s%s\n' "${UI_DIM:-}" "$_ets_words" "${UI_RESET:-}" >&2
+               _ets_v="$(prompt_text "$_ets_label ($(printf '%s' "$_ets_choices" | sed 's/ /, /g'))" "$_ets_def")" || return 1 ;;
+        esac
         case " $_ets_choices " in
             *" $_ets_v "*) _evo_sets="$_evo_sets
 $_ets_name=$_ets_v" ;;
@@ -2136,17 +2239,24 @@ for f in doc["inputs"]:
     # and the lines said above it (the rest of the line, one per |).
     print("|".join(str(x).replace("|", "/") for x in
                    (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]),
-                    f.get("draft") or "", f.get("prompt") or "") + tuple(f.get("hint") or ())))
+                    f.get("draft") or "", f.get("prompt") or "", f.get("question") or "",
+                    # A label with a hint beside it is said short: "OAuth client (ID + secret)" -> "OAuth client".
+                    "\x1f".join(l.split(" (")[0] if h else l for l, h in
+                                 zip(f.get("choice_labels") or f["choices"], list(f.get("choice_hints") or ()) + [""] * 99)),
+                    "\x1f".join(f.get("choice_hints") or ())) + tuple(f.get("hint") or ())))
 PY
     _evo_label=""
     _EVT_NAME=(); _EVT_LAB=(); _EVT_LABF=(); _EVT_KIND=(); _EVT_REQ=(); _EVT_DEF=(); _EVT_CH=(); _EVT_VAL=(); _EVT_DONE=()
     _EVT_FROM=(); _EVT_NOTES=""; _EVT_DRAFT=(); _EVT_HINT=(); _EVT_DRAFTED=()
+    _EVT_Q=(); _EVT_CHN=(); _EVT_CHH=()
     _EVT_NF=0; _EVT_LW=0
-    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c _evo_dr _evo_pr _evo_h; do
+    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c _evo_dr _evo_pr _evo_q _evo_cn _evo_ch _evo_h; do
         if [ -z "$_evo_label" ]; then _evo_label="$_evo_n"; continue; fi
         _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_LABF[$_EVT_NF]="${_evo_pr:-$_evo_l}"; _EVT_KIND[$_EVT_NF]="$_evo_k"
         _EVT_DRAFT[$_EVT_NF]="$_evo_dr"; _EVT_HINT[$_EVT_NF]="$_evo_h"; _EVT_DRAFTED[$_EVT_NF]=""
         _EVT_REQ[$_EVT_NF]="$_evo_r"; _EVT_DEF[$_EVT_NF]="$_evo_d"; _EVT_CH[$_EVT_NF]="$_evo_c"
+        # A choice asked with the arrows: its question, names and hints (|-separated).
+        _EVT_Q[$_EVT_NF]="$_evo_q"; _EVT_CHN[$_EVT_NF]="${_evo_cn//$'\x1f'/|}"; _EVT_CHH[$_EVT_NF]="${_evo_ch//$'\x1f'/|}"
         _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""; _EVT_FROM[$_EVT_NF]=""
         # What the command line already said is an answer, not a question.
         if [ "$_evo_k" = source-name ] && [ -n "$4" ]; then _EVT_VAL[$_EVT_NF]="$4"; _EVT_DONE[$_EVT_NF]=1; fi

@@ -587,6 +587,8 @@ def specialize(connector, values):
             default = default.get(chosen.get("catalog"), "")
         field = {"name": key, "label": spec["label"], "kind": "choice", "required": True, "setting": True,
                  "choices": [c["value"] for c in options], "choice_labels": [c["label"] for c in options],
+                 # Display only: the arrow-key question and a hint beside each choice.
+                 "question": spec.get("question", ""), "choice_hints": [c.get("hint", "") for c in options],
                  "disabled": [c["label"] for c in spec["choices"] if c.get("disabled")]}
         if default:
             field["default"] = default

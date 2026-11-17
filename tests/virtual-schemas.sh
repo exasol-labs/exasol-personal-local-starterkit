@@ -3199,10 +3199,24 @@ Q_DB="$(when 'Database *:')"
 Q_SCHEMA="$(when 'Schema [public]:')"
 Q_USER="$(when 'Username *:')"
 Q_PW="$(when 'Password * (hidden')"
-Q_TLS="$(when 'TLS (')"
+# A choice is asked with the arrows (_exakit_vs_tui_radio): Enter takes the default.
+Q_TLS="$(when 'use TLS?')"
 Q_CA="$(when 'CA certificate file:')"
 Q_SUM="$(when 'Number to change, Enter to continue')"
 if command -v python3 >/dev/null 2>&1; then
+    # A choice (the catalog login here) is asked with the arrows, and its whole
+    # block is erased once answered; the stored values are the typed ones.
+    choice_ans() { printf '%s\n' "$TUI_OUT" | sed -n 's/^ANS=//p' | tail -1; }
+    TTY_REPLAY_RAW="$WORK/choice.raw" tui choice-menu-scenario.sh "none" 0 '\r'
+    check "choice by the arrows: Enter takes the default" "token RC=0" "$(choice_ans)"
+    has "...asked as a question" "? How should Exasol log in to the catalog?" "$(tr -d '\r' < "$WORK/choice.raw")"
+    has "...each choice a radio row with its hint" "(•) Token           one access token from the catalog" "$(tr -d '\r' < "$WORK/choice.raw")"
+    has "...and the keys under it" "↑/↓ choose · Enter confirm · ? guide" "$(tr -d '\r' < "$WORK/choice.raw")"
+    lacks "...nothing of it stays on the screen" "How should Exasol log in" "$TUI_SCREEN"
+    TTY_REPLAY_RAW="$WORK/choice.raw" tui choice-menu-scenario.sh "none" 0 '\x1b[B\r'
+    check "...Down then Enter takes the next one" "oauth RC=0" "$(choice_ans)"
+    TTY_REPLAY_RAW="$WORK/choice.raw" tui choice-menu-scenario.sh "none" 0 '?'
+    check "...? opens the guide (the caller asks again)" " RC=3" "$(choice_ans)"
     db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
     # Space ticks PostgreSQL - the cursor starts on the first connector, there
     # is no "Select All" above it - Enter passes the connection string by, then
