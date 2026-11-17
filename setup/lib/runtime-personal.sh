@@ -3938,8 +3938,12 @@ personal_teardown_leftovers() {
                     _ptl_why="$(sed -n '/./{p;q;}' "${_ptl_errf:-/dev/null}" 2>/dev/null | cut -c1-160)"
                     if [ -n "$_ptl_why" ]; then _ptl_why="$_ptl_eng said: $_ptl_why"; else _ptl_why="$_ptl_eng refused: exit $_ptl_rc"; fi
                 fi
+                # Short enough for one terminal row: the full filter (the
+                # deployment id) wrapped onto a second line. It goes to the log.
+                # Twin of the same warning in runtime-personal.ps1.
+                command -v _exakit_log_file >/dev/null 2>&1 && _exakit_log_file "WARN  Container check for deployment $_ptl_id unanswered ($_ptl_why); check by hand: $_ptl_eng ps -a --filter name=$_ptl_id (or with sudo)"
                 EXAKIT_TEARDOWN_WARNINGS="${EXAKIT_TEARDOWN_WARNINGS:+$EXAKIT_TEARDOWN_WARNINGS
-}Could not ask $_ptl_eng whether the database's container is gone ($_ptl_why). Check by hand once $_ptl_eng answers: $_ptl_eng ps -a --filter name=$_ptl_id (if $_ptl_eng needs sudo here: sudo $_ptl_eng ps -a --filter name=$_ptl_id)"
+}Could not confirm the database container is gone ($_ptl_why). Check: $_ptl_eng ps -a (or sudo $_ptl_eng ps -a)"
             fi
             [ -n "$_ptl_errf" ] && rm -f "$_ptl_errf"
             for _ptl_name in $(printf '%s\n' "$_ptl_list" | \

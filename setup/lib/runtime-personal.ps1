@@ -2677,7 +2677,10 @@ function Find-PersonalTeardownLeftovers {
                 if ($outcome -eq "timeout") { $why = "$engineName did not answer within 15s" }
                 elseif ($outcome -like "exit *") { $why = "$engineName refused: $outcome" }
                 elseif ($outcome -eq "error") { $why = "$engineName could not be run" }
-                $warnings += "Could not ask $engineName whether the database's container is gone ($why). Check by hand once $engineName answers: $engineName ps -a --filter name=$Id"
+                # Short enough for one console row: the full filter (the
+                # deployment id) wrapped onto a second line. It goes to the log.
+                if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "WARN" "Container check for deployment $Id unanswered ($why); check by hand: $engineName ps -a --filter name=$Id" }
+                $warnings += "Could not confirm the database container is gone ($why). Check: $engineName ps -a"
                 continue
             }
             foreach ($line in @(("" + ($names -join "`n")) -split "`r?`n")) {
