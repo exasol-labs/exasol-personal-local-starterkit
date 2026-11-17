@@ -68,6 +68,20 @@ $dis = [regex]::Match($cli, '(?s)\r?\nfunction Disable-ExakitAutostart \{.*?\r?\
 Check "Enable-ExakitAutostart marks user_set"  "True" ("" + $en.Contains('Set-ExakitManifestValue "autostart.user_set" $true'))
 Check "Disable-ExakitAutostart marks user_set" "True" ("" + $dis.Contains('Set-ExakitManifestValue "autostart.user_set" $true'))
 
+Write-Host "the install's closing line names the AI clients it connected (Get-ExakitReadyLineText)"
+$env:EXAKIT_READY_LINE_COLS = "120"
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": ["codex", "claude_code", "vscode_copilot"]}}}}'
+Check "three clients: the sentence names them" "Exasol starterkit is ready and connected into Claude Code, Codex and GitHub Copilot. Ask them about your data." (Get-ExakitReadyLineText)
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": ["claude_desktop"]}}}}'
+Check "one client: it, and the short desktop name" "Exasol starterkit is ready and connected into Claude Desktop. Ask it about your data." (Get-ExakitReadyLineText)
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": ["claude_code", "claude_desktop", "codex", "cursor", "vscode_copilot", "gemini_cli"]}}}}'
+$long = Get-ExakitReadyLineText
+Check "six clients: the list is cut" "True" ("" + $long.EndsWith(" more. Ask them about your data."))
+Check "  and the line fits a 120-column console with its tick" "True" ("" + (($long.Length + 8) -le 120))
+Reset '{"manifest_version": 1, "components": {"mcp_server": {"client_setup": {"configured_clients": []}}}}'
+Check "no client: the plain line" "Your starter kit is ready to use." (Get-ExakitReadyLineText)
+Remove-Item Env:EXAKIT_READY_LINE_COLS -ErrorAction SilentlyContinue
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "$($script:PASS) passed, $($script:FAIL) failed"

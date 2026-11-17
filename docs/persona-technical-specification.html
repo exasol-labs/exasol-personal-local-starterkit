@@ -183,15 +183,13 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <div class="flow">
 <div class="s"><b>Preamble</b>validate answers (bad → exit 2), logging, manifest, exakit.env, early helper, resolve versions</div><div class="ar">→</div>
 <div class="s you"><b>Persona from env</b>exakit_persona_apply_env when EXAKIT_PERSONA is set</div><div class="ar">→</div>
-<div class="s"><b>Step 1/6</b>Exasol launcher (personal_install_launcher)</div><div class="ar">→</div>
-<div class="s db"><b>Step 2/6</b>Local database deployment (personal_deploy_local); TLS cert pinned</div><div class="ar">→</div>
-<div class="s db"><b>Step 3/6</b>Setup Utilities: exapump + profile [starter-kit], then database features: core tasks (SQL preprocessor)</div>
+<div class="s"><b>Step 1/4</b>Exasol launcher (personal_install_launcher)</div><div class="ar">→</div>
+<div class="s db"><b>Step 2/4</b>Local database deployment (personal_deploy_local); TLS cert pinned</div><div class="ar">→</div>
+<div class="s db"><b>Step 3/4</b>Setup Utilities, one progress bar: Data Loader (exapump + profile [starter-kit]), SQL Preprocessor (database features: core tasks), Python Driver (pyexasol venv), Kit CLI (exakit helper: copy kit parts to kit/)</div>
 </div>
 <div class="flow">
-<div class="s"><b>Step 4/6</b>AI bridge: MCP server, mcp_readonly user, AI clients, skills</div><div class="ar">→</div>
-<div class="s"><b>Step 5/6</b>pyexasol venv</div><div class="ar">→</div>
+<div class="s"><b>Step 4/4</b>AI bridge: MCP server, mcp_readonly user, AI clients, skills</div><div class="ar">→</div>
 <div class="s you"><b>Persona question</b>exakit_persona_flow → datasets preselect, add-ons preselect, data table</div><div class="ar">→</div>
-<div class="s"><b>Step 6/6</b>exakit helper: copy kit parts to kit/</div><div class="ar">→</div>
 <div class="s you"><b>Add-ons for your personas</b>exakit_marketplace_offer (preselected, with reasons)</div><div class="ar">→</div>
 <div class="s"><b>Services + summary</b>installer_flow --phase services; connection summary; ready line</div>
 </div>

@@ -4059,7 +4059,12 @@ function New-ExakitDataTable {
             [void]$ids.Add("")
         }
     }
-    [void](Add-ExakitTableRow -Kind "plain" -Label $FinalLabel)
+    # The install's compact table loads its samples before it asks, so the last
+    # row goes on rather than skips (as the add-ons table does). `exakit
+    # data-load` keeps Skip. Twin of the same row in exakit_data_table_build.
+    $lastLabel = $FinalLabel
+    if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1" -and $FinalLabel -eq "Skip") { $lastLabel = "Continue" }
+    [void](Add-ExakitTableRow -Kind "plain" -Label $lastLabel)
     [void]$ids.Add("")
     $script:ExakitTableRowSkip = $ids.Count
     # With every bundled dataset already loaded there is nothing to tick but the

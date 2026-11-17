@@ -102,13 +102,13 @@ personal_check_requirements
 
 # --- step 1: the Exasol launcher ---------------------------------------------
 # Its own step, matching the macOS shape and heading.
-if begin_step launcher "Step 1/6  Exasol launcher"; then
+if begin_step launcher "Step 1/4  Exasol launcher"; then
     personal_install_launcher
     mark_step launcher
 fi
 
 # --- step 3: local deployment ------------------------------------------------
-if begin_step runtime "Step 2/6  Local database deployment"; then
+if begin_step runtime "Step 2/4  Local database deployment"; then
     # personal_deploy_local returns non-zero for ONE reason: Podman is not here
     # and the kit was not allowed, or not able, to install it. Everything else
     # in there still stops the run, because a deployment that half exists is
@@ -162,8 +162,8 @@ else
     fi
 fi
 
-# --- steps 3-5: Setup Utilities (exapump, database features), MCP server, pyexasol (shared)
-kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
+# --- steps 3-4: Setup Utilities (data loader, SQL preprocessor, Python driver, kit CLI), AI bridge (shared)
+kit_shared_steps 3 4 "$SCRIPT_DIR" "$KIT_ROOT"
 
 # --- the personas, then the data ---------------------------------------------
 # "What will you use this machine for?" comes after the parts everyone needs,
@@ -181,8 +181,7 @@ elif command -v exakit_persona_flow >/dev/null 2>&1; then
     command -v exakit_install_persona_skills >/dev/null 2>&1 && { exakit_install_persona_skills || true; }
 fi
 
-# --- step 6: the exakit helper, last, after the persona's data ---------------
-kit_helper_step 6 6 "$SCRIPT_DIR" "$KIT_ROOT"
+# The exakit helper is the last item of Setup Utilities (kit_shared_steps).
 
 # The other half of the crossing runs at the start of the sample-data offer
 # (exakit_maybe_offer_data_load, reached through the persona flow above): a

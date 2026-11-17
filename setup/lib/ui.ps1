@@ -287,8 +287,69 @@ $script:UiTableLive = $false
 $script:UiSpinIndent = "  "
 $script:UiSpinPrefix = ""
 
+# A GROUPED STEP DRAWN AS A BAR. "Setup Utilities" shows its items as one bar
+# line under the ticks of the items already done: the bar, the count and the
+# item's name stay fixed for the item, and what follows the dot is whatever the
+# item's own code says it is doing now (its Start-ExakitSpinner calls, which
+# only set the words while the bar runs). Pause/resume do nothing under a bar:
+# the item's own lines are held anyway. Display only.
+# Twins: ui_bar_begin / ui_bar_end in ui.sh.
+$script:UiBarActive = $false
+$script:UiBarTitle = ""
+function Start-ExakitStepBar([int]$Done, [int]$Total, [string]$Title) {
+    $script:UiBarActive = $false
+    $script:UiBarTitle = $Title
+    if (-not $script:UiFancy) { return }
+    if ($script:UiTableLive) { return }
+    if ($null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll }
+    if ($Total -lt 1) { $Total = 1 }
+    if ($Done -gt $Total) { $Done = $Total }
+    $head = "{0}  {1}/{2}  {3}" -f (Get-ExakitBar -Pct ([int]($Done * 100 / $Total))), $Done, $Total, $Title
+    try {
+        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $head; Sub = ""; T0 = (Get-Date); Indent = $script:UiSpinIndent; Dot = $script:UiMidDot })
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.Open()
+        $rs.SessionStateProxy.SetVariable('flag', $script:UiSpinFlag)
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript({
+            $e = [char]27
+            while ($flag.Run) {
+                $el = [int]((Get-Date) - $flag.T0).TotalSeconds
+                if ($flag.Sub) { [Console]::Write("`r$($flag.Indent)$($flag.Label) $($flag.Dot) $($flag.Sub) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                else { [Console]::Write("`r$($flag.Indent)$($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                Start-Sleep -Milliseconds 200
+            }
+        })
+        [Console]::Write("$($script:UiEsc)[?25l")
+        $script:UiSpinPs = $ps
+        $script:UiSpinRs = $rs
+        $script:UiSpinNested = 0
+        $script:UiBarActive = $true
+        [void]$ps.BeginInvoke()
+    } catch {
+        $script:UiSpinFlag = $null; $script:UiSpinPs = $null; $script:UiSpinRs = $null; $script:UiBarActive = $false
+    }
+}
+function Stop-ExakitStepBar {
+    $script:UiBarTitle = ""
+    if (-not $script:UiBarActive) { return }
+    $script:UiBarActive = $false
+    Stop-ExakitSpinnerAll
+}
+# Set-ExakitStepBarSub - what the item is doing now. The item's own name is
+# already on the bar, so a label that is just that name says nothing new.
+function Set-ExakitStepBarSub([string]$Label) {
+    if (-not $script:UiBarActive -or $null -eq $script:UiSpinFlag) { return }
+    if ($Label -and $script:UiBarTitle -and $Label.StartsWith($script:UiBarTitle)) { $Label = "" }
+    if ($Label) { $Label = $Label.Substring(0, 1).ToLowerInvariant() + $Label.Substring(1) }
+    try { $script:UiSpinFlag.Sub = $Label } catch { }
+}
+
 function Start-ExakitSpinner([string]$Label) {
     if (Get-Command Set-ExakitAddonActivity -ErrorAction SilentlyContinue) { Set-ExakitAddonActivity -Message $Label }
+    # A step bar owns the line: say the words on it, keep the count.
+    if ($script:UiBarActive) { Set-ExakitStepBarSub $Label; $script:UiSpinNested++; return }
     # A live table is the same single slot: it is already redrawing these rows, so
     # a spinner underneath it takes a reference and draws nothing. Without this a
     # dataset load's first Invoke-ExakitLogged would paint a spinner over the
@@ -336,8 +397,13 @@ function Start-ExakitSpinner([string]$Label) {
 function Stop-ExakitSpinner {
     # Give back a reference taken while something else owned the line; only the
     # call that actually started the animation stops it.
-    if ($script:UiSpinNested -gt 0) { $script:UiSpinNested--; return }
+    if ($script:UiSpinNested -gt 0) {
+        $script:UiSpinNested--
+        if ($script:UiBarActive) { Set-ExakitStepBarSub "" }
+        return
+    }
     if ($null -eq $script:UiSpinFlag) { return }
+    $script:UiBarActive = $false
     try { $script:UiSpinFlag.Run = $false; Start-Sleep -Milliseconds 110 } catch { }
     try { if ($script:UiSpinPs) { $script:UiSpinPs.Stop(); $script:UiSpinPs.Dispose() } } catch { }
     try { if ($script:UiSpinRs) { $script:UiSpinRs.Close(); $script:UiSpinRs.Dispose() } } catch { }
@@ -373,6 +439,7 @@ $script:UiSpinPausedLabel = ""
 $script:UiSpinPausedT0 = $null
 function Suspend-ExakitSpinner {
     $script:UiSpinPaused = $false
+    if ($script:UiBarActive) { return }
     if ($script:UiSpinNested -gt 0) { return }
     if ($null -eq $script:UiSpinFlag) { return }
     $script:UiSpinPausedLabel = [string]$script:UiSpinFlag.Label
@@ -395,6 +462,7 @@ function Resume-ExakitSpinner {
 # no spinner of our own (plain mode, or a nested caller): nothing.
 # Twin of ui_spin_relabel in ui.sh.
 function Set-ExakitSpinnerLabel([string]$Label) {
+    if ($script:UiBarActive) { Set-ExakitStepBarSub $Label; return }
     if ($script:UiSpinNested -gt 0) { return }
     if ($null -eq $script:UiSpinFlag) { return }
     try { $script:UiSpinFlag.Label = $Label; $script:UiSpinFlag.T0 = (Get-Date) } catch { }

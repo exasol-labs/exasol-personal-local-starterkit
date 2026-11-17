@@ -1691,13 +1691,11 @@ done
 _p2kss="$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "the db-dependent steps are skipped in one line"     "they all need the database, which is not installed" "$_p2kss"
 has "...decided by the recorded failure" 'exakit_soft_failed runtime' "$_p2kss"
-check "...guarding all four of them (Setup Utilities: exapump and database features, data, AI bridge, pyexasol)" "4"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
-# The helper is the install's last step (kit_helper_step), after the persona's
-# data: it still installs then, and both setup scripts run it after the persona.
+check "...guarding all three of them (Setup Utilities' database items, data, AI bridge)" "3"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
+# The helper is the last item of Setup Utilities (kit_helper_step, called from
+# kit_shared_steps): it still installs without a database, outside that guard.
 has "...and the exakit helper still runs" "begin_step exakit_helper" "$(sed -n '/^kit_helper_step()/,/^}/p' "$ROOT/setup/lib/common.sh")"
-for _p2os in macos linux; do
-    check "...last, after the persona's data ($_p2os)" "yes" "$(awk '/exakit_persona_flow "\$KIT_ROOT"/{p=1} p&&/^kit_helper_step 6 6/{print "yes"; exit}' "$ROOT/setup/setup-$_p2os.sh")"
-done
+has "...as the last item of Setup Utilities" 'kit_helper_step "" "" "$_script_dir" "$_kit_root"' "$_p2kss"
 
 # THE WINDOWS TWIN. There the LAUNCHER installs Podman, through winget, so the
 # kit cannot retry it - but a machine whose winget refused must reach the end of
@@ -1709,8 +1707,8 @@ has "...leaving the same kind of reason"     'Set-ExakitFailureReason "Podman is
 has "...and the windows step records it"     'Register-ExakitSoftFailure -Component "runtime"' "$_p2winsu"
 check "...on both arms, like the sh side" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'Register-ExakitSoftFailure -Component "runtime"')"
 has "...and the db-dependent steps skip in one line"     "they all need the database, which is not installed" "$_p2winsu"
-check "...guarding the rest too: the AI bridge, its client offers and pyexasol" "3"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
-check "...and Setup Utilities (exapump, database features) as one block" "1"     "$(printf '%s' "$_p2winsu" | grep -c '^    if (\$dbReady) {')"
+check "...guarding the rest too: the AI bridge and its client offers" "2"     "$(printf '%s' "$_p2winsu" | grep -c 'dbReady -and')"
+check "...and Setup Utilities' database items as one block" "1"     "$(printf '%s' "$_p2winsu" | grep -c '^    if (\$dbReady) {$')"
 
 # THE REPAIR IS THE INSTALLER. `exakit update` only moves components with a
 # newer advertised version, so a deployment that never happened is "already

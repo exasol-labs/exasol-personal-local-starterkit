@@ -121,7 +121,12 @@ exakit_core_database_step() {
         _cds_item=0
         if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ] && command -v exakit_item_begin >/dev/null 2>&1; then
             _cds_item=1
-            exakit_item_begin "$(exakit_core_task_item_title "$_cds_task" "$_cds_root")"
+            # Drawn as a bar ("Setup Utilities"): the item's plain name, no version.
+            if [ "${EXAKIT_ITEM_TOTAL:-0}" -gt 0 ] 2>/dev/null && [ "$_cds_task" = preprocessor ]; then
+                exakit_item_begin "SQL Preprocessor"
+            else
+                exakit_item_begin "$(exakit_core_task_item_title "$_cds_task" "$_cds_root")"
+            fi
         fi
         if exakit_soft_step "$_cds_task" "exakit update" "$(exakit_core_task_label "$_cds_task")" \
                 "exakit_core_task_$_cds_task" "$_cds_root"; then

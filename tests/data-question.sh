@@ -198,6 +198,12 @@ rows() { # rows <pending-ids...> — kind|label|state per row, then the id per r
 check "parent, datasets, your file, external (disabled), Skip" \
     "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Federation: Connect other data sources - unavailable|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
     "$(rows tpch energy)"
+check "the install's compact table ends with Continue, not Skip (its samples are in already)" \
+    "plain|Continue|idle" \
+    "$(EXAKIT_DATA_TABLE_COMPACT=1 rows tpch energy | tr ';' '\n' | grep '^plain|' | tail -n 1)"
+check "...and exakit data-load keeps Skip" \
+    "plain|Skip|idle" \
+    "$(rows tpch energy | tr ';' '\n' | grep '^plain|' | tail -n 1)"
 check "every sample loaded: the parent is a disabled row that says so" \
     "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Federation: Connect other data sources - unavailable|disabled;plain|Skip|idle;~,local,,," \
     "$(rows)"

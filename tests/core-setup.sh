@@ -378,9 +378,10 @@ _json="$( ( EXAKIT_HOME="$U/home"; EXAKIT_MANIFEST="$U/home/manifest.json"; . "$
 check "this kit's reader takes a five-field row" "failed wsl --update" \
     "$(printf '%s' "$_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["failed"][0]["remedy"])')"
 
-printf '\n== the installer: six steps, the database features inside Setup Utilities (third) ==\n'
+printf '\n== the installer: four steps, Setup Utilities (third) holds the data loader, the SQL preprocessor, the Python driver and the kit CLI ==\n'
 for _s in setup/setup-macos.sh setup/setup-linux.sh; do
-    check "$_s delegates steps 3-6" "1" "$(grep -c 'kit_shared_steps 3 6 ' "$ROOT/$_s")"
+    check "$_s delegates steps 3-4" "1" "$(grep -c 'kit_shared_steps 3 4 ' "$ROOT/$_s")"
+    check "$_s runs the exakit helper inside Setup Utilities, not as a step of its own" "0" "$(grep -c '^kit_helper_step ' "$ROOT/$_s")"
     check "$_s loads core-setup.sh" "1" "$(grep -c 'LIB_DIR/core-setup.sh' "$ROOT/$_s" | awk '{print ($1 > 0)}')"
     # EVERY offer, not the first one grep finds: the persona close and the
     # plain close each make one.
@@ -394,7 +395,10 @@ for _s in setup/setup-macos.sh setup/setup-linux.sh; do
     lacks "$_s has no step counted out of seven" "/7  " "$(cat "$ROOT/$_s")"
 done
 _win="$(cat "$ROOT/setup/setup-windows.ps1")"
-has "Windows has the same third step" '"Step 3/6  Setup Utilities"' "$_win"
+has "Windows has the same third step" '"Step 3/4  Setup Utilities" -Items' "$_win"
+has "...with the Python driver and the kit CLI as items" 'Start-ExakitStepItem "Python Driver"' "$_win"
+has "...the kit CLI" 'Start-ExakitStepItem "Kit CLI"' "$_win"
+lacks "Windows has no fifth or sixth step" "Step 5/" "$_win"
 has "...with the database features as its second item" 'Invoke-ExakitCoreDatabaseStep -Label "Database features"' "$_win"
 lacks "Windows has no step counted out of seven" "/7  " "$_win"
 has "the exakit command loads core-setup.sh" 'core-setup.sh' "$(cat "$ROOT/setup/exakit")"
@@ -420,25 +424,32 @@ _kss() {
       # The AI bridge step is gated on the launcher's MCP server (prod's sidecar).
       mcp_sidecar_apply() { :; }
       _exakit_install_mcp() { echo "mcp-step" >> "$K/order"; }
+      pyexasol_install() { :; }
+      _exakit_install_pyexasol() { echo "pyexasol-step" >> "$K/order"; }
       ensure_path_hint() { :; }
       # With persona.sh loaded the data follows the persona question instead.
       [ "${KSS_PERSONA:-0}" = 1 ] && exakit_persona_flow() { :; }
-      kit_shared_steps 3 6 "$ROOT/setup" "$ROOT"
-      # The exakit helper is the last step, after the persona's data.
-      kit_helper_step 6 6 "$ROOT/setup" "$ROOT"
+      # The exakit helper is the last item of Setup Utilities.
+      kit_shared_steps 3 4 "$ROOT/setup" "$ROOT"
       printf 'COMPLETED=%s\n' "$(manifest_get core_tasks.completed 2>/dev/null | tr -d ' \n')" )
 }
 rm -rf "$K/home" "$K/order"
 _o="$(_kss 2>&1)"
-check "order: exapump, the database step, the data load, the AI bridge" \
-    "exapump-step|preprocessor-task|data-load-offer|mcp-step|mcp-offer|skills-offer|" "$(tr '\n' '|' < "$K/order")"
-for _lbl in "Step 3/6  Setup Utilities" "Step 4/6  Setting up AI bridge" "Step 6/6  exakit helper"; do
+check "order: exapump, the database step, the Python driver, the data load, the AI bridge" \
+    "exapump-step|preprocessor-task|pyexasol-step|data-load-offer|mcp-step|mcp-offer|skills-offer|" "$(tr '\n' '|' < "$K/order")"
+for _lbl in "Step 3/4  Setup Utilities" "Step 4/4  Setting up AI bridge"; do
     has "the screen counts $_lbl" "$_lbl" "$_o"
 done
-# Setup Utilities: exapump and the database features as two items under one
-# heading, each a tick line and a dim detail line; the old two headings are gone.
-has "the framework is an item of Setup Utilities" "SQL preprocessor framework" "$_o"
-has "...whose detail is what it reported" "fake framework ready" "$_o"
+lacks "no fifth step" "Step 5/" "$_o"
+lacks "the exakit helper has no step of its own any more" "exakit helper command" "$_o"
+lacks "...nor pyexasol" "pyexasol (Exasol Python driver)" "$_o"
+# Setup Utilities: four items under one heading, each ONE line (tick, name,
+# time) - no tool names, no versions, no detail lines.
+for _it in "Data Loader" "SQL Preprocessor" "Python Driver" "Kit CLI"; do
+    has "Setup Utilities shows $_it" "$_it" "$_o"
+done
+lacks "...with no detail line (what the task reported stays in the log)" "fake framework ready" "$_o"
+lacks "...and no exakit installed line" "exakit installed (" "$_o"
 lacks "exapump has no heading of its own any more" "exapump (data loading CLI)" "$_o"
 lacks "...nor the database features" "Configure database features" "$_o"
 check "one heading for the two" "1" "$(printf '%s\n' "$_o" | grep -c 'Setup Utilities')"
@@ -499,6 +510,18 @@ has "Windows applies no persona in a rerun" 'Remove-Item Env:\EXAKIT_PERSONA_ACT
     "$(grep -B4 -A2 'Set-ExakitPersonaEnv$' "$ROOT/setup/setup-windows.ps1")"
 has "...and its persona close (offer and services) is not reached in one" 'EXAKIT_PERSONA_ACTIVE -and -not $coreRerun' \
     "$(grep -B2 'Script installer_flow' "$ROOT/setup/setup-windows.ps1")"
+
+printf '\n== Setup Utilities is one bar: an item says what it is doing on it ==\n'
+_bar="$( . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
+    _UI_BAR_FILE="$WORK/bar.txt"; _UI_BAR_TITLE="SQL Preprocessor"; : > "$_UI_BAR_FILE"
+    ui_spin_begin "Verifying checksum"; printf 'sub=%s;' "$(cat "$_UI_BAR_FILE")"
+    printf 'nested=%s;' "$_UI_SPIN_NESTED"
+    ui_spin_begin "SQL Preprocessor"; printf 'own=%s;' "$(cat "$_UI_BAR_FILE")"
+    ui_spin_end; ui_spin_end; printf 'after=%s;nested=%s;pid=%s' "$(cat "$_UI_BAR_FILE")" "$_UI_SPIN_NESTED" "${_UI_SPIN_PID:-none}" )"
+check "a spinner under the bar only sets its words (no second animator)" \
+    "sub=verifying checksum;nested=1;own=;after=;nested=0;pid=none" "$_bar"
+has "Windows has the same bar" 'function Start-ExakitStepBar' "$(cat "$ROOT/setup/lib/ui.ps1")"
+has "...and a spinner under it only sets its words" 'if ($script:UiBarActive) { Set-ExakitStepBarSub $Label; $script:UiSpinNested++; return }' "$(cat "$ROOT/setup/lib/ui.ps1")"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

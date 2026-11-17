@@ -514,13 +514,16 @@ info_step() {
     EXAKIT_QUIET_DETAIL="$_ifs_prev"
 }
 
-# A GROUPED STEP: one heading, several items under it, each drawn as a spinner
-# while it works and then as two lines -- a tick with the item and its time,
-# and one dim line of what was done:
+# A GROUPED STEP: one heading, several items under it. Given a count, the items
+# share ONE progress bar while they work and each leaves one line, a tick with
+# its name and time (the installer's "Setup Utilities"):
 #
-#   ▸ Step 3/6  Setup Utilities
-#       ✓ exapump v0.14.0                        (14s)
-#           profile [starter-kit] · connection verified
+#   ▸ Step 3/4  Setup Utilities
+#       ✓ Data Loader                            (14s)
+#       ███████░░░░░░░░░░░░░  1/4  SQL Preprocessor · verifying checksum (3s)
+#
+# Without a count each item is a spinner, then its tick and one dim line of
+# what was done.
 #
 # Display only: every step underneath runs, records and resumes exactly as it
 # does on its own. exakit_step_group_begin prints the heading and makes
@@ -529,12 +532,20 @@ info_step() {
 # Start-ExakitStepGroup, Start-ExakitStepItem, Complete-ExakitStepItem in
 # exakit-common.ps1.
 EXAKIT_STEP_GROUP=0
+EXAKIT_ITEM_TOTAL=0
+EXAKIT_ITEM_DONE=0
+# exakit_step_group_begin <heading> [items] — with a count, the items are drawn
+# as ONE bar (ui_bar_begin) and each leaves only its tick, name and time.
 exakit_step_group_begin() {
     exakit_step_heading "$1"
     EXAKIT_STEP_GROUP=1
+    EXAKIT_ITEM_TOTAL="${2:-0}"
+    EXAKIT_ITEM_DONE=0
 }
 exakit_step_group_end() {
     EXAKIT_STEP_GROUP=0
+    EXAKIT_ITEM_TOTAL=0
+    EXAKIT_ITEM_DONE=0
 }
 # exakit_item_line <mark> <title> [time] [detail] — an item's two lines. The
 # title is padded so the times line up; the detail is dim, one level further in.
@@ -553,7 +564,12 @@ exakit_item_begin() {
     EXAKIT_ITEM_T0="$(date +%s 2>/dev/null || echo 0)"
     EXAKIT_ITEM_LOG="$(mktemp "${TMPDIR:-/tmp}/exakit-item.XXXXXX" 2>/dev/null)" || EXAKIT_ITEM_LOG=""
     _UI_SPIN_INDENT='    '
-    _UI_SPIN_PREFIX="$1"
+    if [ "${EXAKIT_ITEM_TOTAL:-0}" -gt 0 ] 2>/dev/null; then
+        _UI_SPIN_PREFIX=''
+        ui_bar_begin "${EXAKIT_ITEM_DONE:-0}" "$EXAKIT_ITEM_TOTAL" "$1"
+    else
+        _UI_SPIN_PREFIX="$1"
+    fi
 }
 # exakit_item_end <rc> [title] [detail] — end the item. Done: the tick, the
 # title (the one it began with unless a better one is given), the time, and the
@@ -565,8 +581,16 @@ exakit_item_end() {
     _eie_el=$(( $(date +%s 2>/dev/null || echo 0) - ${EXAKIT_ITEM_T0:-0} ))
     _eie_log="${EXAKIT_ITEM_LOG:-}"
     EXAKIT_ITEM_LOG=""
+    command -v ui_bar_end >/dev/null 2>&1 && ui_bar_end
     _UI_SPIN_INDENT='  '
     _UI_SPIN_PREFIX=''
+    # Drawn as a bar: the item leaves its name and time only (no versions, no
+    # detail line) - the bar already said what it was doing while it did it.
+    if [ "${EXAKIT_ITEM_TOTAL:-0}" -gt 0 ] 2>/dev/null; then
+        EXAKIT_ITEM_DONE=$(( ${EXAKIT_ITEM_DONE:-0} + 1 ))
+        _eie_title="$EXAKIT_ITEM_TITLE"
+        set -- "$_eie_rc" "$_eie_title" ""
+    fi
     if [ "$_eie_rc" -eq 0 ]; then
         exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s" "${3:-}"
     else
@@ -629,11 +653,13 @@ _exakit_defer_under_addon_table() {
 }
 warn() {
     if _exakit_defer_under_addon_table "$*"; then _exakit_log_file "WARN  $*"; return 0; fi
+    [ -n "${_UI_BAR_FILE:-}" ] && [ -t 1 ] && printf '\r\033[K'
     printf '      %s!%s %s\n'  "${UI_WARN:-}" "${UI_RESET:-}" "$*" >&2
     _exakit_log_file "WARN  $*"
 }
 error() {
     if _exakit_defer_under_addon_table "$*"; then _exakit_log_file "ERROR $*"; return 0; fi
+    [ -n "${_UI_BAR_FILE:-}" ] && [ -t 1 ] && printf '\r\033[K'
     printf '      %s%s%s %s\n' "${UI_ERR:-}"  "${UI_CROSS:-[x]}" "${UI_RESET:-}" "$*" >&2
     _exakit_log_file "ERROR $*"
 }
@@ -6717,6 +6743,78 @@ EXAKIT_ML_OUT
 #     EXAKIT_MARKETPLACE_ADDONS pre-answers, which installs without asking.
 # Best-effort by contract: callers run it in a subshell so nothing in here can
 # end an install that already succeeded. ⇄ twin: Request-ExakitMarketplaceOffer.
+# exakit_ready_line_text — the words of the closing line. With AI clients
+# connected (what mcp-setup recorded in the manifest, so a re-run names the
+# clients an earlier run connected) it says which, with this line's own short
+# names ("Claude Desktop"); with none it is the plain "ready to use". The list is cut to "A, B and N more" so the line stays within
+# 80 columns after its 8-column tick prefix. Display only: nothing is re-run.
+# Twin: Get-ExakitReadyLineText in exakit-common.ps1.
+exakit_ready_line_text() {
+    _erl_fallback="Your starter kit is ready to use."
+    _erl_text=""
+    # tput answers 80 when it has no terminal to ask, so only a real one counts.
+    _erl_cols=""
+    if [ -t 2 ]; then _erl_cols="$(tput cols 2>/dev/null || true)"; fi
+    [ -z "${EXAKIT_READY_LINE_COLS:-}" ] || _erl_cols="$EXAKIT_READY_LINE_COLS"
+    case "$_erl_cols" in ''|*[!0-9]*) _erl_cols=120 ;; esac
+    if [ -n "${EXAKIT_MANIFEST:-}" ] && [ -f "$EXAKIT_MANIFEST" ] \
+        && exakit_can_run_python_any 2>/dev/null; then
+        _erl_text="$(run_python_any - "$EXAKIT_MANIFEST" "$_erl_cols" 2>/dev/null <<'EXAKIT_READY_LINE'
+import json, sys
+
+LABELS = [
+    ("claude_code", "Claude Code"),
+    ("claude_desktop", "Claude Desktop"),
+    ("codex", "Codex"),
+    ("cursor", "Cursor"),
+    ("vscode_copilot", "GitHub Copilot"),
+    ("gemini_cli", "Gemini CLI"),
+    ("opencode", "OpenCode"),
+    ("continue", "Continue"),
+]
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        doc = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+setup = (doc.get("components", {}) or {}).get("mcp_server", {}) or {}
+setup = setup.get("client_setup", {}) or {}
+configured = set(setup.get("configured_clients") or [])
+names = [label for key, label in LABELS if key in configured]
+if not names:
+    raise SystemExit(0)
+
+
+def join(items):
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def sentence(clients, count):
+    pronoun = "it" if count == 1 else "them"
+    return ("Exasol starterkit is ready and connected into "
+            + clients + ". Ask " + pronoun + " about your data.")
+
+
+try:
+    BUDGET = int(sys.argv[2]) - 8  # the "      ✓ " prefix
+except (IndexError, ValueError):
+    BUDGET = 112
+text = sentence(join(names), len(names))
+if len(text) > BUDGET and len(names) > 1:
+    for keep in range(len(names) - 1, 0, -1):
+        text = sentence(", ".join(names[:keep])
+                        + " and %d more" % (len(names) - keep), len(names))
+        if len(text) <= BUDGET:
+            break
+print(text)
+EXAKIT_READY_LINE
+)" || _erl_text=""
+    fi
+    printf '%s' "${_erl_text:-$_erl_fallback}"
+}
+
 # exakit_print_ready_line — the install's ONE closing line.
 #
 # There were two: an "ok Setup complete" before the connection panel, and this
@@ -6736,7 +6834,7 @@ EXAKIT_ML_OUT
 exakit_print_ready_line() {
     [ -z "${EXAKIT_SOFT_FAILED:-}" ] || return 0
     printf '\n'
-    ok "Your starter kit is ready to use."
+    ok "$(exakit_ready_line_text)"
     # Where each recorded persona starts, which only `exakit persona show` named
     # before (NEW-04). Nothing for a kit without a persona or one with no first step.
     if command -v _exakit_persona_service >/dev/null 2>&1; then
@@ -9426,8 +9524,11 @@ begin_step() {
             _bs_rerun=1
         elif [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
             # An item of a grouped step: one line at the item column, under the
-            # group's heading.
-            exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$2" "" "already done, skipping"
+            # group's heading -- unless the item is already open (the bar), in
+            # which case its own tick is that line.
+            if [ -z "${EXAKIT_ITEM_LOG:-}" ]; then
+                exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$2" "" "already done, skipping"
+            fi
             _exakit_log_file "OK    $2 — already done, skipping"
             return 1
         else
@@ -13565,7 +13666,18 @@ kit_helper_step() {
     # The step flag alone is not trusted: if the exakit command was removed
     # (cleanup, testing), a re-run must reinstall it rather than skip.
     _helper_needed=0
-    if begin_step exakit_helper "Step ${_step_no}/${_total}  exakit helper command"; then
+    # As the last item of "Setup Utilities" (kit_shared_steps) it is the item
+    # "Kit CLI": its tick is its line, and the PATH advice is printed after the
+    # item ends, never under a running bar.
+    _khs_item=0
+    _khs_path=0
+    _khs_title="Step ${_step_no}/${_total}  exakit helper command"
+    if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+        _khs_item=1
+        _khs_title="Kit CLI"
+        exakit_item_begin "Kit CLI"
+    fi
+    if begin_step exakit_helper "$_khs_title"; then
         _helper_needed=1
     elif [ ! -x "$EXAKIT_BIN_DIR/exakit" ]; then
         info "exakit command is missing — reinstalling it"
@@ -13582,7 +13694,7 @@ kit_helper_step() {
         info "exakit command is out of date — refreshing it"
         _helper_needed=1
     else
-        ensure_path_hint "$EXAKIT_BIN_DIR"
+        _khs_path=1
     fi
     if [ "$_helper_needed" -eq 1 ]; then
         mkdir -p "$EXAKIT_BIN_DIR" || die "Could not create $EXAKIT_BIN_DIR for the exakit command."
@@ -13672,10 +13784,13 @@ kit_helper_step() {
             [ -d "$_kit_root/setup/help" ] && cp -R "$_kit_root/setup/help" "$EXAKIT_HOME/kit/setup/"
             [ -f "$_script_dir/load-data.sh" ] && cp "$_script_dir/load-data.sh" "$EXAKIT_HOME/kit/setup/"
         fi
-        ensure_path_hint "$EXAKIT_BIN_DIR"
+        _khs_path=1
         mark_step exakit_helper
         ok_step "exakit installed ($(ui_tilde "$EXAKIT_BIN_DIR/exakit"))"
     fi
+    [ "$_khs_item" = 1 ] && exakit_item_end 0
+    [ "$_khs_path" = 1 ] && ensure_path_hint "$EXAKIT_BIN_DIR"
+    return 0
 }
 
 kit_shared_steps() {
@@ -13710,21 +13825,31 @@ kit_shared_steps() {
     # pass. A task that fails is booked in the closing summary and the steps
     # after it still run; each checks its own prerequisites.
     _kss_util_label="Step ${_step_no}/${_total}  Setup Utilities"
+    # SETUP UTILITIES AS ONE BAR: the data loader (exapump), the SQL
+    # preprocessor (the database features), the Python driver (pyexasol) and the
+    # kit's own command line, each one item. Every step underneath runs, records
+    # and resumes exactly as before -- the grouping is the screen's only. The
+    # Python driver used to be its own step after the AI bridge; it needs only
+    # the database (and uv, which exakit_ensure_uv provides on its own), so it
+    # runs here. The kit CLI was the install's last step for the screen's sake
+    # only (the command is in place from the start: exakit_install_helper_early).
+    # Without a database only the kit CLI runs: everything else needs one.
     if [ "$_kss_nodb" = 1 ]; then
-        :
+        exakit_step_group_begin "$_kss_util_label" 1
     else
-        exakit_step_group_begin "$_kss_util_label"
+        exakit_step_group_begin "$_kss_util_label" 4
         if command -v exapump_install >/dev/null 2>&1; then
-            _kss_ep_title="exapump${EXAKIT_EXAPUMP_VERSION:+ v$EXAKIT_EXAPUMP_VERSION}"
-            if begin_step exapump "$_kss_ep_title"; then
-                exakit_item_begin "$_kss_ep_title"
+            exakit_item_begin "Data Loader"
+            if begin_step exapump "Data Loader"; then
                 if exakit_soft_step exapump "exakit update" "exapump" \
                         _exakit_install_exapump; then
                     mark_step exapump
-                    exakit_item_end 0 "$(_exakit_exapump_item_title "$_kss_ep_title")" "$(_exakit_exapump_item_detail)"
+                    exakit_item_end 0
                 else
                     exakit_item_end 1
                 fi
+            else
+                exakit_item_end 0
             fi
         else
             info "exapump — not part of this installation, skipping"
@@ -13736,8 +13861,30 @@ kit_shared_steps() {
         else
             exakit_core_database_step "Database features" "$_kit_root"
         fi
-        exakit_step_group_end
+        # pyexasol is optional and must not be able to end the run: a soft
+        # failure explains itself, records validated=false, and leaves the step
+        # unmarked so a re-run (or `exakit update pyexasol`) retries.
+        if command -v pyexasol_install >/dev/null 2>&1; then
+            exakit_item_begin "Python Driver"
+            if begin_step pyexasol "Python Driver"; then
+                if exakit_soft_step pyexasol "exakit update" "pyexasol" _exakit_install_pyexasol; then
+                    mark_step pyexasol
+                    exakit_item_end 0
+                else
+                    exakit_item_end 1
+                fi
+            else
+                exakit_item_end 0
+            fi
+        else
+            info "pyexasol — not part of this installation, skipping"
+        fi
     fi
+    # kit_helper_step shares these globals' names; keep this function's own.
+    _kss_no="$_step_no"; _kss_tot="$_total"
+    kit_helper_step "" "" "$_script_dir" "$_kit_root"
+    _step_no="$_kss_no"; _total="$_kss_tot"
+    exakit_step_group_end
     _step_no=$((_step_no + 1))
 
     # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW. The parts everyone needs
@@ -13822,28 +13969,9 @@ kit_shared_steps() {
     exakit_clear_failure_note
     _step_no=$((_step_no + 1))
 
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif command -v pyexasol_install >/dev/null 2>&1; then
-        if begin_step pyexasol "Step ${_step_no}/${_total}  pyexasol (Exasol Python driver)"; then
-            # pyexasol is the last, optional Component and it must not be able to
-            # end the run: the exakit helper step below still has to happen, or
-            # the user is left without the command that fixes everything else. A
-            # soft failure explains itself, records validated=false, and leaves
-            # the step unmarked so a re-run (or `exakit update pyexasol`) retries.
-            if exakit_soft_step pyexasol "exakit update" "pyexasol" _exakit_install_pyexasol; then
-                mark_step pyexasol
-            fi
-        fi
-    else
-        info "Step ${_step_no}/${_total}  pyexasol — not part of this installation, skipping"
-    fi
-    _step_no=$((_step_no + 1))
 
-    # The exakit helper is the install's last step: kit_helper_step, which the
-    # setup scripts run after the persona's data, so it is what the reader sees
-    # last before the panel. The command itself is in place from the start
-    # (exakit_install_helper_early).
+    # The exakit helper is the last item of Setup Utilities (above). The command
+    # itself is in place from the start (exakit_install_helper_early).
 
     # Autostart is NOT decided here. It used to be: an unconditional
     # exakit_autostart_enable, which unconditionally writes

@@ -144,7 +144,7 @@
     },
     "login": {
       "label": "Catalog login",
-      "question": "How should Exasol log in to the catalog?",
+      "question": "How should Exasol login to the catalog?",
       "choices": [
         {
           "value": "token",
