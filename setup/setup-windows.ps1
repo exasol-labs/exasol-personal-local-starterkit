@@ -230,11 +230,13 @@ try {
     # A task that fails is booked in the closing summary and the steps after it
     # still run.
     # Setup Utilities as one bar: Data Loader (exapump), SQL Preprocessor (the
-    # database features), Python Driver (pyexasol) and Kit CLI (the exakit
-    # helper). Without a database only the Kit CLI runs. Twin of
+    # database features) and Python Driver (pyexasol), which also carries the
+    # exakit helper's work (no line of its own; "finishing" on the bar while it
+    # runs). Without a database only the helper runs, as "Command line ready".
+    # Twin of
     # kit_shared_steps (common.sh).
     $utilItems = 1
-    if ($dbReady) { $utilItems = 4 }
+    if ($dbReady) { $utilItems = 3 }
     Start-ExakitStepGroup "Step 3/4  Setup Utilities" -Items $utilItems
     if ($dbReady) {
         $epTitle = "Data Loader"
@@ -292,6 +294,7 @@ try {
         # AI bridge. A failure must not end the run; the step stays unmarked so
         # a re-run retries it. Install and validate are one isolated unit.
         Start-ExakitStepItem "Python Driver"
+        $pyOk = $true
         if (Begin-ExakitStep "pyexasol" "Python Driver") {
             if (Invoke-ExakitSoftStep -Component "pyexasol" -Repair "exakit update" -Body {
                     $prevQuiet = $script:ExakitQuietDetail
@@ -305,26 +308,27 @@ try {
                     }
                 }) {
                 Set-ExakitStepDone "pyexasol"
-                Complete-ExakitStepItem -Ok $true
             } else {
-                Complete-ExakitStepItem -Ok $false
+                $pyOk = $false
             }
-        } else {
-            Complete-ExakitStepItem -Ok $true
         }
+    } else {
+        Start-ExakitStepItem "Command line ready"
     }
-    # --- Kit CLI: the exakit helper, the last item of Setup Utilities --------
+    # --- the exakit helper, inside the Python Driver item ----------------------
     # The command is in place from the start; this is the tick and the refresh.
-    # It was the install's last step for the screen's sake only. As an item its
-    # tick is its line, and the PATH advice is printed after the item ends,
-    # never under a running bar. Twin of kit_helper_step.
+    # It was the install's last step for the screen's sake only. It has no line
+    # of its own: the open item's tick covers it, and the PATH advice is printed
+    # after that item ends, never under a running bar. A hard failure ends the
+    # item with its cross first. Twin of kit_helper_step.
     # The step flag alone is not trusted: if the shim was removed (cleanup,
     # testing, older builds), a re-run must reinstall it rather than skip -
     # and the PATH check must run either way, since the PATH entry can be
     # missing even when the step is marked done.
-    Start-ExakitStepItem "Kit CLI"
+    if ($dbReady) { Set-ExakitSpinnerLabel "finishing" }
     $helperPath = $false
-    $helperNeeded = Begin-ExakitStep "exakit_helper" "Kit CLI"
+    try {
+    $helperNeeded = Begin-ExakitStep "exakit_helper" "exakit command"
     if (-not $helperNeeded -and -not (Test-Path (Join-Path $script:BinDir "exakit.cmd"))) {
         Info "exakit command is missing - reinstalling it"
         $helperNeeded = $true
@@ -434,7 +438,11 @@ try {
         Set-ExakitStepDone "exakit_helper"
         OkStep "exakit installed ($(Get-ExakitTilde (Join-Path $script:BinDir 'exakit.cmd')))"
     }
-    Complete-ExakitStepItem -Ok $true
+    } catch {
+        Complete-ExakitStepItem -Ok $false
+        throw
+    }
+    if ($dbReady) { Complete-ExakitStepItem -Ok $pyOk } else { Complete-ExakitStepItem -Ok $true }
     if ($helperPath) { Confirm-ExakitOnPath $script:BinDir }
     Stop-ExakitStepGroup
 

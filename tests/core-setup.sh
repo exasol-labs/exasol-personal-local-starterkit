@@ -378,7 +378,7 @@ _json="$( ( EXAKIT_HOME="$U/home"; EXAKIT_MANIFEST="$U/home/manifest.json"; . "$
 check "this kit's reader takes a five-field row" "failed wsl --update" \
     "$(printf '%s' "$_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["failed"][0]["remedy"])')"
 
-printf '\n== the installer: four steps, Setup Utilities (third) holds the data loader, the SQL preprocessor, the Python driver and the kit CLI ==\n'
+printf '\n== the installer: four steps, Setup Utilities (third) holds the data loader, the SQL preprocessor and the Python driver ==\n'
 for _s in setup/setup-macos.sh setup/setup-linux.sh; do
     check "$_s delegates steps 3-4" "1" "$(grep -c 'kit_shared_steps 3 4 ' "$ROOT/$_s")"
     check "$_s runs the exakit helper inside Setup Utilities, not as a step of its own" "0" "$(grep -c '^kit_helper_step ' "$ROOT/$_s")"
@@ -396,8 +396,9 @@ for _s in setup/setup-macos.sh setup/setup-linux.sh; do
 done
 _win="$(cat "$ROOT/setup/setup-windows.ps1")"
 has "Windows has the same third step" '"Step 3/4  Setup Utilities" -Items' "$_win"
-has "...with the Python driver and the kit CLI as items" 'Start-ExakitStepItem "Python Driver"' "$_win"
-has "...the kit CLI" 'Start-ExakitStepItem "Kit CLI"' "$_win"
+has "...with the Python driver as an item" 'Start-ExakitStepItem "Python Driver"' "$_win"
+lacks "...and no Kit CLI line (the helper runs inside the Python driver)" 'Kit CLI' "$_win"
+has "...three items when the database is there" '{ $utilItems = 3 }' "$_win"
 lacks "Windows has no fifth or sixth step" "Step 5/" "$_win"
 has "...with the database features as its second item" 'Invoke-ExakitCoreDatabaseStep -Label "Database features"' "$_win"
 lacks "Windows has no step counted out of seven" "/7  " "$_win"
@@ -445,11 +446,14 @@ lacks "the exakit helper has no step of its own any more" "exakit helper command
 lacks "...nor pyexasol" "pyexasol (Exasol Python driver)" "$_o"
 # Setup Utilities: four items under one heading, each ONE line (tick, name,
 # time) - no tool names, no versions, no detail lines.
-for _it in "Data Loader" "SQL Preprocessor" "Python Driver" "Kit CLI"; do
+lacks "the end user never sees Kit CLI" "Kit CLI" "$_o"
+for _it in "Data Loader" "SQL Preprocessor" "Python Driver"; do
     has "Setup Utilities shows $_it" "$_it" "$_o"
 done
 lacks "...with no detail line (what the task reported stays in the log)" "fake framework ready" "$_o"
 lacks "...and no exakit installed line" "exakit installed (" "$_o"
+has "without a database the helper is the one line: Command line ready" 'exakit_item_begin "Command line ready"' "$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+has "...on Windows too" 'Start-ExakitStepItem "Command line ready"' "$_win"
 lacks "exapump has no heading of its own any more" "exapump (data loading CLI)" "$_o"
 lacks "...nor the database features" "Configure database features" "$_o"
 check "one heading for the two" "1" "$(printf '%s\n' "$_o" | grep -c 'Setup Utilities')"

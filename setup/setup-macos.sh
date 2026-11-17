@@ -162,7 +162,7 @@ else
     fi
 fi
 
-# --- steps 3-4: Setup Utilities (data loader, SQL preprocessor, Python driver, kit CLI), AI bridge (shared)
+# --- steps 3-4: Setup Utilities (data loader, SQL preprocessor, Python driver), AI bridge (shared)
 kit_shared_steps 3 4 "$SCRIPT_DIR" "$KIT_ROOT"
 
 # --- the personas, then the data ---------------------------------------------

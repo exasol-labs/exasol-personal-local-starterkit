@@ -520,7 +520,7 @@ info_step() {
 #
 #   ▸ Step 3/4  Setup Utilities
 #       ✓ Data Loader                            (14s)
-#       ███████░░░░░░░░░░░░░  1/4  SQL Preprocessor · verifying checksum (3s)
+#       ███████░░░░░░░░░░░░░  1/3  SQL Preprocessor · verifying checksum (3s)
 #
 # Without a count each item is a spinner, then its tick and one dim line of
 # what was done.
@@ -9556,6 +9556,11 @@ exakit_on_failure() {
     _status=$?
     # Runs on EXIT (any status). Stop any live spinner and un-hide the cursor
     # first, so a failure mid-animation never leaves a stuck/invisible cursor.
+    # A hard failure inside an item of Setup Utilities (the kit command's
+    # refresh dies loudly) ends that item with its cross first, then the card.
+    if [ $_status -ne 0 ] && [ -n "${EXAKIT_ITEM_LOG:-}" ] && command -v exakit_item_end >/dev/null 2>&1; then
+        exakit_item_end 1 2>/dev/null || true
+    fi
     ui_spin_end 2>/dev/null || true
     ui_restore_cursor
     exakit_sweep_sensitive_tmp     # never leave credential temp files behind
@@ -13666,17 +13671,12 @@ kit_helper_step() {
     # The step flag alone is not trusted: if the exakit command was removed
     # (cleanup, testing), a re-run must reinstall it rather than skip.
     _helper_needed=0
-    # As the last item of "Setup Utilities" (kit_shared_steps) it is the item
-    # "Kit CLI": its tick is its line, and the PATH advice is printed after the
-    # item ends, never under a running bar.
-    _khs_item=0
+    # Inside Setup Utilities (kit_shared_steps) it runs within an item the
+    # caller opened: no line of its own, and the PATH advice is left to the
+    # caller (EXAKIT_HELPER_PATH_HINT), to print once no bar owns the line.
     _khs_path=0
     _khs_title="Step ${_step_no}/${_total}  exakit helper command"
-    if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
-        _khs_item=1
-        _khs_title="Kit CLI"
-        exakit_item_begin "Kit CLI"
-    fi
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && _khs_title="exakit command"
     if begin_step exakit_helper "$_khs_title"; then
         _helper_needed=1
     elif [ ! -x "$EXAKIT_BIN_DIR/exakit" ]; then
@@ -13788,9 +13788,19 @@ kit_helper_step() {
         mark_step exakit_helper
         ok_step "exakit installed ($(ui_tilde "$EXAKIT_BIN_DIR/exakit"))"
     fi
-    [ "$_khs_item" = 1 ] && exakit_item_end 0
-    [ "$_khs_path" = 1 ] && ensure_path_hint "$EXAKIT_BIN_DIR"
+    if [ "$_khs_path" = 1 ]; then
+        if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then EXAKIT_HELPER_PATH_HINT=1
+        else ensure_path_hint "$EXAKIT_BIN_DIR"; fi
+    fi
     return 0
+}
+
+# _kss_helper — kit_helper_step inside an open item of Setup Utilities. It
+# shares kit_shared_steps' globals' names, so those are kept around the call.
+_kss_helper() {
+    _kssh_no="$_step_no"; _kssh_tot="$_total"
+    kit_helper_step "" "" "$_script_dir" "$_kit_root"
+    _step_no="$_kssh_no"; _total="$_kssh_tot"
 }
 
 kit_shared_steps() {
@@ -13825,19 +13835,26 @@ kit_shared_steps() {
     # pass. A task that fails is booked in the closing summary and the steps
     # after it still run; each checks its own prerequisites.
     _kss_util_label="Step ${_step_no}/${_total}  Setup Utilities"
-    # SETUP UTILITIES AS ONE BAR: the data loader (exapump), the SQL
-    # preprocessor (the database features), the Python driver (pyexasol) and the
-    # kit's own command line, each one item. Every step underneath runs, records
-    # and resumes exactly as before -- the grouping is the screen's only. The
-    # Python driver used to be its own step after the AI bridge; it needs only
-    # the database (and uv, which exakit_ensure_uv provides on its own), so it
-    # runs here. The kit CLI was the install's last step for the screen's sake
-    # only (the command is in place from the start: exakit_install_helper_early).
-    # Without a database only the kit CLI runs: everything else needs one.
+    # SETUP UTILITIES AS ONE BAR: three items the reader sees -- the data loader
+    # (exapump), the SQL preprocessor (the database features), the Python driver
+    # (pyexasol) -- each one line when done. Every step underneath runs, records
+    # and resumes exactly as before; the grouping is the screen's only. pyexasol
+    # used to be its own step after the AI bridge; it needs only the database
+    # (and uv, which exakit_ensure_uv provides on its own), so it runs here.
+    #
+    # The kit's own command (kit_helper_step: the exakit command's refresh, the
+    # kit copy, the step tick) was the install's last step for the screen's sake
+    # only -- the command is in place from the start (exakit_install_helper_early).
+    # It runs here, inside the Python driver item: no line of its own, its time
+    # in that item's, the bar saying "finishing" while it runs. Without a
+    # database it is the step's only work and reads "Command line ready".
     if [ "$_kss_nodb" = 1 ]; then
         exakit_step_group_begin "$_kss_util_label" 1
+        exakit_item_begin "Command line ready"
+        _kss_helper
+        exakit_item_end 0
     else
-        exakit_step_group_begin "$_kss_util_label" 4
+        exakit_step_group_begin "$_kss_util_label" 3
         if command -v exapump_install >/dev/null 2>&1; then
             exakit_item_begin "Data Loader"
             if begin_step exapump "Data Loader"; then
@@ -13864,26 +13881,26 @@ kit_shared_steps() {
         # pyexasol is optional and must not be able to end the run: a soft
         # failure explains itself, records validated=false, and leaves the step
         # unmarked so a re-run (or `exakit update pyexasol`) retries.
+        exakit_item_begin "Python Driver"
+        _kss_py=0
         if command -v pyexasol_install >/dev/null 2>&1; then
-            exakit_item_begin "Python Driver"
             if begin_step pyexasol "Python Driver"; then
                 if exakit_soft_step pyexasol "exakit update" "pyexasol" _exakit_install_pyexasol; then
                     mark_step pyexasol
-                    exakit_item_end 0
                 else
-                    exakit_item_end 1
+                    _kss_py=1
                 fi
-            else
-                exakit_item_end 0
             fi
         else
             info "pyexasol — not part of this installation, skipping"
         fi
+        ui_spin_relabel "finishing"
+        _kss_helper
+        exakit_item_end "$_kss_py"
     fi
-    # kit_helper_step shares these globals' names; keep this function's own.
-    _kss_no="$_step_no"; _kss_tot="$_total"
-    kit_helper_step "" "" "$_script_dir" "$_kit_root"
-    _step_no="$_kss_no"; _total="$_kss_tot"
+    # The PATH advice the helper found needed, now that no bar owns the line.
+    [ "${EXAKIT_HELPER_PATH_HINT:-0}" = 1 ] && ensure_path_hint "$EXAKIT_BIN_DIR"
+    EXAKIT_HELPER_PATH_HINT=0
     exakit_step_group_end
     _step_no=$((_step_no + 1))
 
