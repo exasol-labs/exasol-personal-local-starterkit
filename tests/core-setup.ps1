@@ -374,7 +374,8 @@ Remove-Item -Force -LiteralPath $swapCalls -ErrorAction SilentlyContinue
 # A Continue window: on 5.1 a native call with redirected stderr under Stop
 # is a terminating error before its output is read.
 $eapSwap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-$swapOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $swapScript -Repo $repo -Home2 (Join-Path $work "swap-home") -Calls $swapCalls 2>$null) -join "`n"
+$swapOut = (@(& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $swapScript -Repo $repo -Home2 (Join-Path $work "swap-home") -Calls $swapCalls 2>&1) |
+    Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
 $ErrorActionPreference = $eapSwap
 $swapJson = $null
 try { $swapJson = $swapOut | ConvertFrom-Json } catch { }
@@ -442,7 +443,11 @@ $env:EXAKIT_HOME = $hoHome
 # A Continue window: on 5.1 a native call with redirected stderr under Stop
 # is a terminating error before its output is read.
 $eapHo = $ErrorActionPreference; $ErrorActionPreference = "Continue"
-$hoOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $hoParent 2>$null) -join "`n"
+# 2>&1, then the stderr records dropped: on 5.1 a `2>$null` native call still
+# surfaces the child's stderr as a NativeCommandError on this run's own stderr,
+# which the CI step's powershell (ErrorAction Stop) turns into a failed step.
+$hoOut = (@(& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $hoParent 2>&1) |
+    Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] }) -join "`n"
 $hoCode = $LASTEXITCODE
 $ErrorActionPreference = $eapHo
 $hoJson = $null
