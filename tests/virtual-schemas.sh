@@ -1505,6 +1505,50 @@ for c in postgresql mysql sqlserver oracle; do
     lacks "C1: $c's CA prompt no longer says it is only for a private CA" "only for a private CA" "$(cat "$ROOT/setup/virtual-schemas/connectors/$c/connector.json")"
 done
 
+printf '\n== Required fields: what a connect needs, the form marks and asks for ==\n'
+# Measured 17 Nov: the S3 form showed "Access key ID" without a *, accepted it
+# empty, then the connect failed on the missing key. A value the connect needs
+# is marked required and asked for; a script that leaves it to the credential
+# file is refused before anything is downloaded, naming the field. A CA file
+# needed only with tls=verify says so in its question.
+REQ="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import plan, document
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+req = lambda c, n: any(s["name"] == n and s.get("required") for s in c["inputs"])
+s3 = defs.connector("s3")
+print("s3_key_required|%s" % req(s3, "access_key_id"))
+print("s3_mapping_optional|%s" % (not req(s3, "mapping")))
+for g in ({"catalog": "glue", "files": "s3"}, {"catalog": "none", "files": "s3"}):
+    print("lake_%s_key_required|%s" % (g["catalog"], req(defs.connector("lakehouse", g), "access_key_id")))
+try:
+    document._aws_keys({}, "x" * 40)
+    print("s3_raw_secret_no_key|accepted")
+except document.DocumentError as error:
+    print("s3_raw_secret_no_key|%s" % error)
+cred = json.dumps({"AccessKey": {"AccessKeyId": "AKIAABCDEFGHIJKLMNOP", "SecretAccessKey": "y" * 40}})
+print("s3_credential_file_no_key|%s" % document._aws_keys({}, cred)[0])
+try:
+    plan.validate_inputs(s3, {"bucket": "my-bucket", "region": "eu-central-1"})
+    print("s3_script_no_key|accepted")
+except plan.PlanError as error:
+    print("s3_script_no_key|refused: %s" % error)
+for c in ("postgresql", "mysql", "sqlserver", "oracle"):
+    print("%s_ca|%s" % (c, next(s["label"] for s in defs.connector(c)["inputs"] if s["name"] == "ca")))
+PYE
+)"
+check "S3: Access key ID is required in the form" "s3_key_required|True" "$(printf '%s\n' "$REQ" | grep '^s3_key_required')"
+check "...the EDML mapping stays optional (drafted from the bucket)" "s3_mapping_optional|True" "$(printf '%s\n' "$REQ" | grep '^s3_mapping_optional')"
+check "Lakehouse glue: Access key ID is required in the form" "lake_glue_key_required|True" "$(printf '%s\n' "$REQ" | grep '^lake_glue')"
+check "Lakehouse none + S3: Access key ID is required in the form" "lake_none_key_required|True" "$(printf '%s\n' "$REQ" | grep '^lake_none')"
+has "S3: a raw secret with no key ID is refused naming Access key ID" "Access key ID is required" "$(printf '%s\n' "$REQ" | grep '^s3_raw_secret_no_key')"
+check "...a credential file that holds the key ID is still enough for a script" "s3_credential_file_no_key|AKIAABCDEFGHIJKLMNOP" "$(printf '%s\n' "$REQ" | grep '^s3_credential_file_no_key')"
+check "...and plan validation leaves it to the credential, checked before any download" "s3_script_no_key|accepted" "$(printf '%s\n' "$REQ" | grep '^s3_script_no_key')"
+for c in postgresql mysql sqlserver oracle; do
+    has "$c: the CA question says it is required with TLS verify" "required with TLS verify" "$(printf '%s\n' "$REQ" | grep "^${c}_ca")"
+done
+
 printf '\n== Snowflake: the loader trusts the container'"'"'s CA store ==\n'
 # Measured on Exasol Personal 2.3.0 against a real account: the JDBC loader's
 # Java trusts nothing ("trustAnchors parameter must be non-empty"), and the

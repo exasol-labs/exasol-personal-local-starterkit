@@ -669,10 +669,14 @@ def _validate_flat(connector, given):
         if raw is None or raw == "":
             if "default" in spec:
                 raw = spec["default"]
-            elif spec.get("required"):
+            elif spec.get("required") and not spec.get("or_in_credential_file"):
                 problems.append("%s is required (%s)" % (name, spec.get("label", name)))
                 continue
             else:
+                # or_in_credential_file: the form asks for it (required there),
+                # a script may leave it to the credential file instead; a
+                # secret that holds no key ID is refused before anything is
+                # downloaded (document._aws_keys, in the connect's first step).
                 continue
         value, problem = check_value(spec, raw)
         if problem:

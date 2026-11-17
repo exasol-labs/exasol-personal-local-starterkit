@@ -76,7 +76,7 @@
     },
     {
       "name": "ca",
-      "label": "CA certificate file (PEM) - needed with TLS verify, a public CA too: its root (e.g. ISRG Root X1)",
+      "label": "CA certificate file (PEM) - required with TLS verify, a public CA too: its root (e.g. ISRG Root X1)",
       "kind": "ca-file"
     }
   ],

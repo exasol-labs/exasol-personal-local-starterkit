@@ -77,7 +77,7 @@
     },
     {
       "name": "ca",
-      "label": "CA certificate file (PEM) - needed with TLS verify, a public CA too: its root plus intermediates",
+      "label": "CA certificate file (PEM) - required with TLS verify, a public CA too: its root plus intermediates",
       "kind": "ca-file"
     }
   ],

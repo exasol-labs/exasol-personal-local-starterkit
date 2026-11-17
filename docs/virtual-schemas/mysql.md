@@ -177,6 +177,7 @@ exakit sql 'SELECT "first_name" FROM VS_SHOP."actor" LIMIT 10'
 | Database | `shop` | `SHOW DATABASES` ([step 2](#2-database)). |
 | Username | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That user's password. |
+| CA certificate file (PEM), with TLS `verify` (the default) | `~/certs/eu-central-1-bundle.pem` | The CA that signed the server ([step 5](#5-the-ca-certificate)); a public CA too. Not needed with `require` or `disable`. |
 
 ### Optional
 
@@ -184,7 +185,6 @@ exakit sql 'SELECT "first_name" FROM VS_SHOP."actor" LIMIT 10'
 |---|---|---|
 | Port | `3306` | `3306` |
 | TLS | `verify` | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
 
 ## Connection string you can paste (reference)
 

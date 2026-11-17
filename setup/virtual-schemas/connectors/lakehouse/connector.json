@@ -253,12 +253,14 @@
       "name": "access_key_id",
       "label": "Access key ID",
       "kind": "aws-key-id",
+      "required": true,
+      "or_in_credential_file": true,
       "when": {
         "catalog": [
           "glue"
         ]
       },
-      "prompt": "Access key ID (Enter if the credential file - the JSON aws iam create-access-key prints - holds it)"
+      "prompt": "Access key ID (AKIA... or ASIA...)"
     },
     {
       "name": "secret",
@@ -439,6 +441,8 @@
       "name": "access_key_id",
       "label": "Access key ID",
       "kind": "access-key",
+      "required": true,
+      "or_in_credential_file": true,
       "when": {
         "catalog": [
           "none"
@@ -447,7 +451,7 @@
           "s3"
         ]
       },
-      "prompt": "Access key ID (Enter if the credential file - the JSON aws iam create-access-key prints - holds it)"
+      "prompt": "Access key ID (AKIA... or ASIA...)"
     },
     {
       "name": "storage_secret",

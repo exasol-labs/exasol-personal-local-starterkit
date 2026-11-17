@@ -123,11 +123,13 @@ echo. The `--set` key is in brackets.
 | `glue`: AWS region * (`region`) | `eu-central-1` | AWS Glue → Data Catalog → Databases ([Glue](#aws-glue)). |
 | `glue`: Glue database * (`database`) | `sales_db` | The same page ([Glue](#aws-glue)). |
 | `glue`: Secret access key (hidden) * (`secret`, `--password-file`) | | The read-only key ([Glue](#aws-glue)). |
+| `glue`: Access key ID * (`access_key_id`) | `AKIA...` | Your IAM key ([Glue](#aws-glue)). A script may leave it out when the secret file is the JSON `aws iam create-access-key` prints. |
 | `none`: Folder path * (`path`) | `s3://sales-lake/orders/` or `abfss://lake@saleslake.dfs.core.windows.net/orders/` | The folder of Parquet files. |
 | `login=token`: Catalog token (hidden) * (`secret`, `--password-file`); for Unity "Databricks token" | | The catalog's token page ([Unity](#unity-catalog): step 6). |
 | `login=oauth`: Client ID * (`client_id`) and Client secret (hidden) * (`secret`, `--password-file`) | `exakit-reader` | The catalog's OAuth client. |
 | `files=s3`: AWS region * (`region`) | `eu-central-1` | S3 → Buckets ([Files on S3](#files-on-s3)). |
 | `files=s3` with a catalog: Access key ID * (`access_key_id`) | `AKIA...` | Your IAM key ([Files on S3](#files-on-s3)). |
+| `catalog=none`, `files=s3`: Access key ID * (`access_key_id`) | `AKIA...` | Your IAM key ([Files on S3](#files-on-s3)). A script may leave it out when the secret file is the AWS credential JSON. |
 | `files=s3`: Secret access key (hidden) * (`storage_secret`, `--storage-secret-file`; with `catalog=none`, `--password-file`) | | Your IAM key ([Files on S3](#files-on-s3)). |
 | `files=azure`: Azure storage account * (`account_name`) | `saleslake` | Azure portal → Storage accounts ([Files on Azure](#files-on-azure-adls-gen2)). |
 | `files=azure`: Account key or SAS (hidden) * (`storage_secret`, `--storage-secret-file`; with `catalog=none`, `--password-file`) | | The account's Access keys, or a SAS ([Files on Azure](#files-on-azure-adls-gen2)). |
@@ -136,13 +138,11 @@ echo. The `--set` key is in brackets.
 
 | Field | Default if left out | Example |
 |---|---|---|
-| `glue`: Access key ID (`access_key_id`) | read from the secret file, when it is the JSON `aws iam create-access-key` prints | `AKIA...` |
 | `glue`: Glue catalog ID (`catalog_id`) | this account's catalog | `123456789012` |
 | `login=oauth`: Token endpoint (`token_endpoint`) | Unity: `/oidc/v1/token` | `https://polaris.example.com/api/catalog/v1/oauth/tokens` |
 | `login=oauth`: Scope (`scope`) | none | `PRINCIPAL_ROLE:ALL` |
 | `files=vended`: AWS region (`region`) | none: the catalog's own | `us-east-2` |
 | `files=s3`: Endpoint (`endpoint`) | Amazon S3 | an S3-compatible store's URL |
-| `catalog=none`, `files=s3`: Access key ID (`access_key_id`) | read from the secret file, when it is the AWS credential JSON | `AKIA...` |
 
 ### Catalog login (`iceberg-rest` and `unity` only)
 

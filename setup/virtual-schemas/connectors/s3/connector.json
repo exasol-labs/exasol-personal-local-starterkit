@@ -40,8 +40,10 @@
     },
     {
       "name": "access_key_id",
-      "label": "Access key ID (Enter if the credential file holds it)",
-      "kind": "aws-key-id"
+      "label": "Access key ID",
+      "kind": "aws-key-id",
+      "required": true,
+      "or_in_credential_file": true
     },
     {
       "name": "secret",
