@@ -742,11 +742,11 @@ $named = @{ Fields = @(
     @{ Name = "ca"; LabelFull = "CA certificate file"; Kind = "ca-file" },
     @{ Name = "tls"; LabelFull = "TLS"; Kind = "choice" },
     @{ Name = "uri"; LabelFull = "MongoDB URI"; Kind = "mongodb-uri" },
-    @{ Name = "user"; LabelFull = "Reader account"; Kind = "text" }) }
+    @{ Name = "user"; LabelFull = "Username"; Kind = "text" }) }
 Check "a refusal naming host goes to host" 1 (Find-ExakitVsTuiNamed -Form $named -Text "host is required (Host name or address)")
 Check "...one naming ca and tls opens the summary" -2 (Find-ExakitVsTuiNamed -Form $named -Text "ca is used to verify the server, so it needs tls=verify (not require)")
 Check "...Port is not in report or export" -1 (Find-ExakitVsTuiNamed -Form $named -Text "the report could not be exported")
-Check "...a label counts when no name does, as a whole word in any case" 6 (Find-ExakitVsTuiNamed -Form $named -Text "the reader account may not read this")
+Check "...a label counts when no name does, as a whole word in any case" 6 (Find-ExakitVsTuiNamed -Form $named -Text "the username may not read this")
 Check "...the source name is named as such, not by the bare word name" 0 (Find-ExakitVsTuiNamed -Form $named -Text "the source name must be lower case")
 Check "...so a value that is not a valid name names only its input" 2 (Find-ExakitVsTuiNamed -Form $named -Text "port='x y' is not a valid name")
 Check "...the MongoDB URI with user: names uri and user, not user alone" -2 (Find-ExakitVsTuiNamed -Form $named -Text "the MongoDB URI carries credentials (user:password@): give the user with --set user=...")

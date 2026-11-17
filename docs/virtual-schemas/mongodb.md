@@ -34,7 +34,7 @@ self-hosted server.
 | MongoDB URI (without password) | `mongodb+srv://cluster0.abcde.mongodb.net/?authSource=admin` | Atlas: Connect → Drivers ([step 1](#1-uri)). |
 | Database | `sample_mflix` | `show dbs` ([step 2](#2-database-and-collection)). |
 | Collection | `movies` | `show collections` ([step 2](#2-database-and-collection)). |
-| Reader account | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Username | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That user's password. |
 
 ### Optional

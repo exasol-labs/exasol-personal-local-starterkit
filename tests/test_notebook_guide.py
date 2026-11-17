@@ -530,7 +530,7 @@ class CardTest(unittest.TestCase):
         card = understand.ChooseData.__new__(understand.ChooseData)
         card.forms, card.parsed = {"postgresql": nb.connector_inputs("postgresql")}, {}
         with mock.patch.object(understand.actions, "run") as run:
-            with self.assertRaisesRegex(ValueError, "Fill in: Host name or address, Database, Reader account"):
+            with self.assertRaisesRegex(ValueError, "Fill in: Host name or address, Database, Username"):
                 card._connect({"connector": "postgresql", "src_name": "sales"})
         run.assert_not_called()
 
@@ -678,7 +678,7 @@ class CardTest(unittest.TestCase):
         self.assertEqual("src_read", form[card._fid("postgresql", "url")]["send_on_change"])
         labels = [f["label"] for f in form[card._fid("postgresql", "needed")]["fields"]]
         self.assertIn("alias", labels[0])                                        # the name, then what is required
-        self.assertEqual(["Host name or address *", "Database *", "Reader account *"], labels[1:4])
+        self.assertEqual(["Host name or address *", "Database *", "Username *"], labels[1:4])
         self.assertIn("Password", labels[4])
         optional = form[card._fid("postgresql", "rest")]["fields"]
         self.assertTrue(optional and all("(optional)" in f["label"] for f in optional))
@@ -717,12 +717,12 @@ class CardTest(unittest.TestCase):
             needed, rest = card._groups("postgresql")
             fields = {f["id"]: f for f in needed + rest}
             sid = card._sid("postgresql")
-            self.assertEqual("Reader account *", fields[card._fid(sid, "user")]["label"])              # required
+            self.assertEqual("Username *", fields[card._fid(sid, "user")]["label"])              # required
             self.assertEqual([card._fid(sid, "user"), card._fid(sid, "password")], [f["id"] for f in needed])
             self.assertEqual("db.example.com", fields[card._fid(sid, "host")]["value"])               # read, optional
             self.assertIn("(optional)", fields[card._fid(sid, "host")]["label"])
             self.assertEqual("public", fields[card._fid(sid, "schema")]["value"])                     # kit default
-            with self.assertRaisesRegex(ValueError, "Fill in: Reader account"):
+            with self.assertRaisesRegex(ValueError, "Fill in: Username"):
                 card._connect({"connector": "postgresql", "src_name": "sales",
                                card._fid("postgresql", "url"): "postgres://db.example.com:5433/shop"})
             card._connect({"connector": "postgresql", "src_name": "sales",

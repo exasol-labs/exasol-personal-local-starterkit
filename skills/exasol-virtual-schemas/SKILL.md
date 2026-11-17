@@ -165,7 +165,7 @@ most 3 seconds). Fallback, when the IP is missing:
 python3 -c "import urllib.request;print(urllib.request.urlopen('https://checkip.amazonaws.com',timeout=5).read().decode().strip())"
 ```
 
-**A reader account without seeing its password.** Show the user every statement first;
+**A read-only user without seeing its password.** Show the user every statement first;
 run it only after they say yes. The admin sign-in is theirs (a `~/.pgpass`, a CLI
 profile, a cloud login): if the client would prompt, hand them the command to run.
 Generate the password straight into an owner-only file, fill it into the SQL without

@@ -28,7 +28,7 @@ e.g. `shop`): the tables appear as `VS_SHOP`.
 | `host` | yes | | RDS: console > RDS > Databases > *db* > Connectivity & security > Endpoint. Azure: portal > Azure Database for MySQL flexible server > Overview > Server name. Never `localhost` (section 5) |
 | `port` | no | 3306 | the same page |
 | `database` | yes | | `SHOW DATABASES`; case-sensitive on Linux servers |
-| `user` | yes | | the reader account (section 4) |
+| `user` | yes | | the read-only user (section 4) |
 | `password` | yes | | its password - only through `--password-file` or `--password-stdin` |
 | `tls` | no | `verify` | `verify`, `require` or `disable` (section 6) |
 | `ca` | no | | a PEM file or bundle - required in practice with `verify` (section 6) |

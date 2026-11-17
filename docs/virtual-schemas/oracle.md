@@ -34,7 +34,7 @@ Autonomous Database.
 | Host name or address | `hr.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint, or the host in your TNS entry ([step 1](#1-host-port-and-service)). |
 | Service name | `ORCL` | RDS: Configuration → DB name ([step 1](#1-host-port-and-service)). |
 | Schema (owner) | `HR` | The owner of the tables ([step 2](#2-schema)). |
-| Reader account | `EXAKIT_READER` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Username | `EXAKIT_READER` | The read-only user you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That user's password. |
 
 ### Optional

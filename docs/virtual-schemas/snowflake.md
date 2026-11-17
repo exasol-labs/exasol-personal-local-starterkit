@@ -33,7 +33,7 @@ users, roles and network policies (SECURITYADMIN or higher).
 | Account identifier (orgname-account) | `myorg-myaccount` | Snowsight account details ([step 1](#1-account-identifier)). |
 | Database | `SALES` | `SHOW DATABASES` ([step 2](#2-database-schema-and-warehouse)). |
 | Warehouse | `COMPUTE_WH` | `SHOW WAREHOUSES` ([step 2](#2-database-schema-and-warehouse)). |
-| Reader account | `EXAKIT_READER` | The service user you make ([step 3](#3-a-read-only-user-and-role)). |
+| Username | `EXAKIT_READER` | The service user you make ([step 3](#3-a-read-only-user-and-role)). |
 | Programmatic access token | (hidden) | The token you make for that user ([step 5](#5-the-programmatic-access-token)). |
 
 ### Optional

@@ -3197,7 +3197,7 @@ Q_HOST="$(when 'Host name or address *:')"
 Q_PORT="$(when 'Port [')"
 Q_DB="$(when 'Database *:')"
 Q_SCHEMA="$(when 'Schema [public]:')"
-Q_USER="$(when 'Reader account *:')"
+Q_USER="$(when 'Username *:')"
 Q_PW="$(when 'Password * (hidden')"
 Q_TLS="$(when 'TLS (')"
 Q_CA="$(when 'CA certificate file:')"
@@ -4204,7 +4204,7 @@ if command -v python3 >/dev/null 2>&1; then
     # Line by line too: e asks again, n types the fields; the hidden password
     # prompt (a canonical read) drops an arrow pressed in it.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
+        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Username')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the first string shown back" "    • Read: postgres://reader@first.example.com/one" "$TUI_RAW"
     has "...e asked again" "    • Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
@@ -4217,7 +4217,7 @@ if command -v python3 >/dev/null 2>&1; then
     # connection string.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg --name linedry --set host=pg.example.com --dry-run" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Reader account')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r"
+        "$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Username')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "--dry-run on a terminal: the questions as before" "? Database " "$TUI_RAW"
     has "...and the plan" "Plan for linedry" "$TUI_RAW"
@@ -4310,7 +4310,7 @@ lacks "...no connection string" "Connection string" "$OUT"
 # only when no name is named, as whole words too; several named is -2 (the
 # summary opens), none -1.
 mkdir -p "$WORK/named"
-printf 'PostgreSQL\nname|Name (alias) for this connection|source-name\nhost|Host name or address|host\nport|Port|port\nca|CA certificate file|ca-file\ntls|TLS|choice\nuri|MongoDB URI|mongodb-uri\nuser|Reader account|text\n' > "$WORK/named/fields"
+printf 'PostgreSQL\nname|Name (alias) for this connection|source-name\nhost|Host name or address|host\nport|Port|port\nca|CA certificate file|ca-file\ntls|TLS|choice\nuri|MongoDB URI|mongodb-uri\nuser|Username|text\n' > "$WORK/named/fields"
 rows() { ( . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
            _EVT_COLS=56; _exakit_vs_tui_rows "$@" ) 2>/dev/null; }
 check "a line exactly as wide as the terminal is one row: the terminal holds the wrap" "1" "$(rows 56)"
@@ -4321,7 +4321,7 @@ named() { ( . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/s
 check "a refusal naming host goes to host" "1" "$(named 'host is required (Host name or address)')"
 check "...one naming ca and tls opens the summary" "-2" "$(named 'ca is used to verify the server, so it needs tls=verify (not require)')"
 check "...Port is not in report or export" "-1" "$(named 'the report could not be exported')"
-check "...a label counts when no name does, as a whole word in any case" "6" "$(named 'the reader account may not read this')"
+check "...a label counts when no name does, as a whole word in any case" "6" "$(named 'the username may not read this')"
 check "...the source name is named as such, not by the bare word name" "0" "$(named 'the source name must be lower case')"
 check "...so a value that is not a valid name names only its input" "2" "$(named "port='x y' is not a valid name")"
 check "...the MongoDB URI with user: names uri and user, not user alone" "-2" \

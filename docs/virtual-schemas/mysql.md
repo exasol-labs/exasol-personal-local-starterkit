@@ -32,7 +32,7 @@ CLI (`az login`) for Azure.
 | Name (alias) for this connection | `shop` | You choose it. `shop` gives the schema `VS_SHOP`. |
 | Host name or address | `shop.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint or Azure server name ([step 1](#1-host-and-port)). |
 | Database | `shop` | `SHOW DATABASES` ([step 2](#2-database)). |
-| Reader account | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
+| Username | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That user's password. |
 
 ### Optional

@@ -33,7 +33,7 @@ as an admin, plus the AWS CLI (`aws configure`) for RDS or the Azure CLI
 | Name (alias) for this connection | `erp` | You choose it. `erp` gives the schema `VS_ERP`. |
 | Host name or address | `erp.abc123.eu-central-1.rds.amazonaws.com` | The RDS endpoint or the Azure SQL server name ([step 1](#1-host-and-port)). |
 | Database | `erp` | `sys.databases` ([step 2](#2-database-and-schema)). |
-| Reader account | `exakit_reader` | The SQL login you make ([step 3](#3-a-read-only-user)). |
+| Username | `exakit_reader` | The SQL login you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That login's password. |
 
 ### Optional
