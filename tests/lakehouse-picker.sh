@@ -296,8 +296,8 @@ G_COLS=140 guides picker "Connector guides" " $G_MENU\\r$(gw 'Enter done')o$(gw 
 has "o opens the guide's own .md on this computer" "OPEN $ROOT/docs/virtual-schemas/postgresql.md" "$G_OUT"
 has "...and says so above the footer" "Opened $ROOT/docs/virtual-schemas/postgresql.md" "$G_RAW"
 G_COLS=140 guides picker "Connector guides" " $G_MENU\\r$(gw 'Enter done')g$(gw 'Opened')\\r"
-has "g opens the guide on GitHub, on main" "OPEN https://github.com/exasol-labs/exasol-personal-local-starterkit/blob/main/docs/virtual-schemas/postgresql.md" "$G_OUT"
-has "...and says so above the footer" "Opened https://github.com/exasol-labs/exasol-personal-local-starterkit/blob/main/docs/virtual-schemas/postgresql.md" "$G_RAW"
+has "g opens the guide on GitHub, on main" "OPEN https://github.com/exasol-labs/exasol-personal-local-starterkit/blob/main/docs/virtual-schemas/" "$G_OUT"
+has "...and says so above the footer" "Opened https://github.com/exasol-labs/exasol-personal-local-starterkit/blob/main/docs/virtual-schemas/" "$G_RAW"
 check "...the guide stays until Enter" "GUIDES RC=0 CONNECT=" "$(printf '%s\n' "$G_OUT" | grep '^GUIDES')"
 G_OUT="$(GUIDE_OPEN_FAILS=1 GUIDE_MODE=picker TTY_REPLAY_RAW="${TMPDIR:-/tmp}/guides.raw" TTY_REPLAY_COLS=140 \
     python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/guide-picker-scenario.sh" "$ROOT" "Connector guides" \

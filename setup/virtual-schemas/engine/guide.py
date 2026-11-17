@@ -476,7 +476,7 @@ def guide_one(defs, docs, entry, width, shell):
         for need, code in commands:
             if len(code) > 8:
                 # Never a part of a block: a cut heredoc or statement list breaks when pasted.
-                say("D", "  %s: %d lines, in the guide below" % (need, len(code)))
+                say("D", "  %s: %d lines - open the guide (links below)" % (need, len(code)))
                 continue
             say("D", "  " + need)
             for line in code:
