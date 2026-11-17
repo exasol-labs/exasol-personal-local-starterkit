@@ -15,6 +15,11 @@ $frame = Get-ExakitTableFrame -Table $table
 $height = $table.Lines
 Start-ExakitSpinner "Downloading the Python ML container"
 Stop-ExakitSpinner
+# By default the tables draw no activity line (ec6fd240); UI_TABLE_ACTIVITY=1 draws it.
+$env:UI_TABLE_ACTIVITY = $null
+$frame = Get-ExakitTableFrame -Table $table
+if ($frame.Contains("Downloading the Python ML container")) { throw "activity drawn without UI_TABLE_ACTIVITY=1" }
+$env:UI_TABLE_ACTIVITY = "1"
 $frame = Get-ExakitTableFrame -Table $table
 if (-not $frame.Contains("Downloading the Python ML container")) { throw "missing download activity" }
 $lines = $frame -split "`r?`n"
@@ -25,7 +30,7 @@ if ($lines[$at - 1].IndexOf("Downloading") -ne $lines[$at].IndexOf("installing #
 Set-ExakitAddonActivity -Message "Checking packages"
 $frame = Get-ExakitTableFrame -Table $table
 if (-not $frame.Contains("Checking packages") -or $frame.Contains("Downloading the Python")) { throw "stale activity" }
-if ($table.Lines -ne $height -or $table.Rows[1].Pct -ne 40) { throw "frame height or progress changed" }
+if ($table.Lines -ne ($height + 1) -or $table.Rows[1].Pct -ne 40) { throw "frame height or progress changed" }
 Set-ExakitAddonActivity -Message ("x" * 120)
 $frame = Get-ExakitTableFrame -Table $table
 foreach ($line in ($frame -split "`r?`n")) { if ($line.Length -gt 80) { throw "activity wraps" } }
@@ -35,5 +40,5 @@ Set-ExakitAddonActivity -Message "Starting dashboard service"
 $frame = Get-ExakitTableFrame -Table $table
 $lines = $frame -split "`r?`n"
 $at = 0; while (-not $lines[$at].Contains("dash-server")) { $at++ }
-if (-not $lines[$at - 1].Contains("Starting dashboard service") -or $table.Lines -ne $height) { throw "phase failed to follow active bar at constant height" }
-Write-Host "PASS phase directly above the active bar, aligned, moves between rows, constant height"
+if (-not $lines[$at - 1].Contains("Starting dashboard service") -or $table.Lines -ne ($height + 2)) { throw "phase failed to follow active bar, one line per add-on" }
+Write-Host "PASS no activity line by default; with UI_TABLE_ACTIVITY=1 the phase sits directly above the active bar, aligned, one line per add-on"

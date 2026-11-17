@@ -5950,9 +5950,12 @@ exakit_addon_activity() {
     # One "row|text" record per add-on (several install side by side): this row's
     # replaces its own, the others stay. Written whole, then moved in, so the
     # table animator never reads half a file.
+    # grep -v exits 1 when this row was the only record: nothing to keep is
+    # not an error, and under a `set -e` caller it would end the whole run.
     {
-        [ -f "$EXAKIT_ADDON_TABLE_STATE.activity" ] && \
-            grep -v "^$EXAKIT_ADDON_TABLE_ROW|" "$EXAKIT_ADDON_TABLE_STATE.activity" 2>/dev/null
+        if [ -f "$EXAKIT_ADDON_TABLE_STATE.activity" ]; then
+            grep -v "^$EXAKIT_ADDON_TABLE_ROW|" "$EXAKIT_ADDON_TABLE_STATE.activity" 2>/dev/null || :
+        fi
         printf '%s|%s\n' "$EXAKIT_ADDON_TABLE_ROW" "$(printf '%s' "$1" | tr '\r\n' '  ')"
     } > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     mv -f "$EXAKIT_ADDON_TABLE_STATE.activity.new" "$EXAKIT_ADDON_TABLE_STATE.activity"
