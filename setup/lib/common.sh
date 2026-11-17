@@ -7040,6 +7040,71 @@ for row in json.load(open(sys.argv[1], encoding="utf-8")).get("addons", []):
 PY
 }
 
+# --- the add-ons every kit gets, started early --------------------------------
+# Dash Server and JSON Tables install on their own at the close of an install,
+# forty seconds or more that the reader watched - after minutes spent at the
+# data table with the machine idle. exakit_addons_early_begin starts that same
+# install in the background as soon as the parts it needs are there (uv, the
+# database), silently: everything it says goes to the log. By the time the
+# add-ons table is reached they are usually in, and it opens on "Auto
+# installed"; still running, the offer waits under its spinner
+# (exakit_addons_early_wait); failed, they are simply not installed and the
+# offer installs them the way it always has.
+#
+# Only where the offer would install them without asking (a terminal, the
+# fancy table, no scripted answer), and off with EXAKIT_ADDONS_EARLY=0.
+_exakit_addons_early_dir() {
+    printf '%s/.addons-early' "${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
+}
+exakit_addons_early_begin() {
+    [ "${EXAKIT_ADDONS_EARLY:-1}" = 1 ] || return 0
+    [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] || return 0
+    [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ] || return 0
+    exakit_soft_failed runtime && return 0
+    _exakit_marketplace_load_modules
+    _aeb_ids=""
+    for _aeb_id in $EXAKIT_AUTO_ADDONS; do
+        _exakit_addon_offerable "$_aeb_id" || continue
+        exakit_marketplace_addon_installed "$_aeb_id" && continue
+        _exakit_addon_system_present "$_aeb_id" && continue
+        _aeb_ids="${_aeb_ids:+$_aeb_ids,}$_aeb_id"
+    done
+    [ -n "$_aeb_ids" ] || return 0
+    _aeb_dir="$(_exakit_addons_early_dir)"
+    rm -rf "$_aeb_dir" 2>/dev/null || true
+    mkdir -p "$_aeb_dir" 2>/dev/null || return 0
+    _exakit_log_file "INFO  Add-ons started early, in the background: $_aeb_ids"
+    (
+        # Nothing of this reaches the screen, and it asks nothing.
+        exec </dev/null >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1
+        UI_FANCY=0
+        EXAKIT_NO_FANCY=1
+        EXAKIT_ADDONS_EARLY=0
+        EXAKIT_MARKETPLACE_ADDONS="$_aeb_ids"
+        EXAKIT_NOTEBOOK_FRONTENDS="${EXAKIT_NOTEBOOK_FRONTENDS:-jupyterlab,marimo}"
+        export UI_FANCY EXAKIT_NO_FANCY EXAKIT_ADDONS_EARLY EXAKIT_MARKETPLACE_ADDONS EXAKIT_NOTEBOOK_FRONTENDS
+        _aeb_rc=0
+        exakit_marketplace_menu || _aeb_rc=$?
+        printf '%s\n' "$_aeb_rc" > "$_aeb_dir/rc"
+    ) &
+    printf '%s\n' "$!" > "$_aeb_dir/pid" 2>/dev/null || true
+    return 0
+}
+# exakit_addons_early_running - is the early install still at it?
+exakit_addons_early_running() {
+    _aer_dir="$(_exakit_addons_early_dir)"
+    [ -f "$_aer_dir/pid" ] && [ ! -f "$_aer_dir/rc" ] || return 1
+    _aer_pid="$(cat "$_aer_dir/pid" 2>/dev/null || true)"
+    case "$_aer_pid" in ''|*[!0-9]*) return 1 ;; esac
+    kill -0 "$_aer_pid" 2>/dev/null
+}
+# exakit_addons_early_wait - until it is done (or gone), then its marks go.
+exakit_addons_early_wait() {
+    while exakit_addons_early_running; do sleep 0.2; done
+    rm -rf "$(_exakit_addons_early_dir)" 2>/dev/null || true
+    return 0
+}
+
 exakit_marketplace_offer() {
     # The installers run this in a subshell, where the loader keeps no memo:
     # this one is the subshell's own, and goes when it does.
@@ -7056,6 +7121,18 @@ exakit_marketplace_offer() {
     # Only a database that never installed holds them back.
     exakit_soft_failed runtime && return 0
 
+    # The two started early (exakit_addons_early_begin) and still installing:
+    # the heading and the spinner now, and the table once they are in. Asked
+    # BEFORE the list below, which would otherwise start them a second time.
+    _mo_early=0
+    if exakit_addons_early_running; then
+        _mo_early=1
+        printf '\n\n'
+        heading "Supercharging Exasol with Add-ons"
+        ui_spin_begin ""
+    fi
+    exakit_addons_early_wait
+
     _mo_ids=""
     for _mo_id in $EXAKIT_AUTO_ADDONS $(printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}" | tr ',' ' '); do
         case ",$_mo_ids," in *",$_mo_id,"*) continue ;; esac
@@ -7067,18 +7144,23 @@ exakit_marketplace_offer() {
     # The checks the tables do not need, behind them: the About cache the second table reads.
     ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
     # Nothing to install and nobody to ask: nothing on screen.
-    [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || return 0
+    [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || {
+        [ "$_mo_early" = 1 ] && ui_spin_end_all
+        return 0
+    }
     # Two empty lines first: the offer is a new part of the run, not one more
     # line of the install step above it. ⇄ twin: Request-ExakitMarketplaceOffer.
-    printf '\n\n'
-    heading "Supercharging Exasol with Add-ons"
+    if [ "$_mo_early" != 1 ]; then
+        printf '\n\n'
+        heading "Supercharging Exasol with Add-ons"
+    fi
     if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
         # ONE table: every add-on on offer, the missing ones of the two installing
         # in it at once, then the rest waits for a pick (Enter alone is Skip).
         # Every row's description from the catalog's own copy: no lookup before the table.
         _mo_about="$(_exakit_marketplace_catalog_about "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')")"
         # A spinner until the table is up: the rows are read first (a second or two).
-        ui_spin_begin ""
+        [ "$_mo_early" = 1 ] || ui_spin_begin ""
         EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none \
             EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" EXAKIT_MARKETPLACE_SPINNING=1 \
             EXAKIT_MARKETPLACE_INSTALL_TABLE=1 exakit_marketplace_menu || true

@@ -176,6 +176,9 @@ export EXAKIT_MARKETPLACE_PYTHON_APPLY
 if command -v exakit_core_rerun_active >/dev/null 2>&1 && exakit_core_rerun_active; then
     :
 elif command -v exakit_persona_flow >/dev/null 2>&1; then
+    # Dash Server and JSON Tables start installing now, in the background, while
+    # the data questions are on screen (exakit_addons_early_begin).
+    command -v exakit_addons_early_begin >/dev/null 2>&1 && { exakit_addons_early_begin || true; }
     exakit_persona_flow "$KIT_ROOT"
     # The skills were placed before the question; a persona's own skill is placed now.
     command -v exakit_install_persona_skills >/dev/null 2>&1 && { exakit_install_persona_skills || true; }
