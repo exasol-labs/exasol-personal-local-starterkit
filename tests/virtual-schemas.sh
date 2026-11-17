@@ -3213,7 +3213,7 @@ if command -v python3 >/dev/null 2>&1; then
     choice_ans() { printf '%s\n' "$TUI_OUT" | sed -n 's/^ANS=//p' | tail -1; }
     TTY_REPLAY_RAW="$WORK/choice.raw" tui choice-menu-scenario.sh "none" 0 '\r'
     check "choice by the arrows: Enter takes the default" "token RC=0" "$(choice_ans)"
-    has "...asked as a question" "? How should Exasol log in to the catalog?" "$(tr -d '\r' < "$WORK/choice.raw")"
+    has "...asked as a question" "? How should Exasol login to the catalog?" "$(tr -d '\r' < "$WORK/choice.raw")"
     has "...each choice a radio row with its hint" "(•) Token           one access token from the catalog" "$(tr -d '\r' < "$WORK/choice.raw")"
     has "...and the keys under it" "↑/↓ choose · Enter confirm · ? guide" "$(tr -d '\r' < "$WORK/choice.raw")"
     lacks "...nothing of it stays on the screen" "How should Exasol log in" "$TUI_SCREEN"
