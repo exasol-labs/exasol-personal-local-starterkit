@@ -619,11 +619,17 @@ function InfoStep([string]$Msg) {
 $script:ExakitStepGroup = $false
 $script:ExakitItemTitle = ""
 $script:ExakitItemT0 = $null
-function Start-ExakitStepGroup([string]$Title) {
+$script:ExakitItemTotal = 0
+$script:ExakitItemDone = 0
+# Start-ExakitStepGroup <heading> [-Items n] - with a count, the items are drawn
+# as ONE bar (Start-ExakitStepBar) and each leaves only its tick, name and time.
+function Start-ExakitStepGroup([string]$Title, [int]$Items = 0) {
     Write-ExakitStepHeading $Title
     $script:ExakitStepGroup = $true
+    $script:ExakitItemTotal = $Items
+    $script:ExakitItemDone = 0
 }
-function Stop-ExakitStepGroup { $script:ExakitStepGroup = $false }
+function Stop-ExakitStepGroup { $script:ExakitStepGroup = $false; $script:ExakitItemTotal = 0; $script:ExakitItemDone = 0 }
 
 # Write-ExakitItemLine <mark> <title> [time] [detail] - an item's two lines. The
 # title is padded so the times line up; the detail is dim, one level further in.
@@ -637,7 +643,12 @@ function Start-ExakitStepItem([string]$Title) {
     $script:ExakitItemT0 = Get-Date
     $script:ExakitItemHeld = New-Object System.Collections.ArrayList
     $script:UiSpinIndent = "    "
-    $script:UiSpinPrefix = $Title
+    if ($script:ExakitItemTotal -gt 0) {
+        $script:UiSpinPrefix = ""
+        if (Get-Command Start-ExakitStepBar -ErrorAction SilentlyContinue) { Start-ExakitStepBar $script:ExakitItemDone $script:ExakitItemTotal $Title }
+    } else {
+        $script:UiSpinPrefix = $Title
+    }
 }
 # Test-ExakitItemHeld <pattern> - did the item's held lines say this (a regex)?
 function Test-ExakitItemHeld([string]$Pattern) {
@@ -656,8 +667,16 @@ function Complete-ExakitStepItem {
     if ($null -ne $script:ExakitItemT0) { $el = [int]((Get-Date) - $script:ExakitItemT0).TotalSeconds }
     $held = $script:ExakitItemHeld
     $script:ExakitItemHeld = $null
+    if (Get-Command Stop-ExakitStepBar -ErrorAction SilentlyContinue) { Stop-ExakitStepBar }
     $script:UiSpinIndent = "  "
     $script:UiSpinPrefix = ""
+    # Drawn as a bar: the item leaves its name and time only (no versions, no
+    # detail line) - the bar already said what it was doing while it did it.
+    if ($script:ExakitItemTotal -gt 0) {
+        $script:ExakitItemDone++
+        $Title = $script:ExakitItemTitle
+        $Detail = ""
+    }
     if ($Ok) {
         Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Title "${el}s" $Detail
     } else {
@@ -721,6 +740,7 @@ function Warn2([string]$Msg) {
     # some callers load this file without ui.ps1.
     $spinHeld = ($null -ne $script:UiSpinFlag) -and (Get-Command Suspend-ExakitSpinner -ErrorAction SilentlyContinue)
     if ($spinHeld) { Suspend-ExakitSpinner }
+    if ($script:UiBarActive) { try { [Console]::Write("`r$($script:UiEsc)[K") } catch { } }
     if ($script:UiFancy) { Write-Host ("      {0}!{1} {2}" -f $script:UiWarn, $script:UiReset, $Msg) }
     else { Write-Host "      ! $Msg" -ForegroundColor Yellow }
     if ($spinHeld) { Resume-ExakitSpinner }
@@ -755,6 +775,7 @@ function Write-ExakitError([string]$Msg) {
         return
     }
     Suspend-ExakitSpinner
+    if ($script:UiBarActive) { try { [Console]::Write("`r$($script:UiEsc)[K") } catch { } }
     if ($script:UiFancy) {
         Write-Host ("      {0}{1}{2} {3}" -f $script:UiErr, $script:UiCross, $script:UiReset, $Msg)
     } else {
@@ -4038,8 +4059,11 @@ function Begin-ExakitStep {
             $rerun = $true
         } elseif ($script:ExakitStepGroup) {
             # An item of a grouped step: one line at the item column, under the
-            # group's heading.
-            Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Description "" "already done, skipping"
+            # group's heading - unless the item is already open (the bar), in
+            # which case its own tick is that line.
+            if ($null -eq $script:ExakitItemHeld) {
+                Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Description "" "already done, skipping"
+            }
             Write-ExakitLog "OK" "$Description - already done, skipping"
             return $false
         } else {
@@ -8182,10 +8206,60 @@ function Invoke-ExakitMarketplaceApply {
 # Silent after a soft failure, deliberately: "done and working" must be true
 # before it is said, and Write-ExakitSoftFailures has just listed what is not.
 # Twin of exakit_print_ready_line in common.sh.
+# Get-ExakitReadyLineText - the words of the closing line. With AI clients
+# connected (what mcp-setup recorded in the manifest, so a re-run names the
+# clients an earlier run connected) it says which, with this line's own short
+# names ("Claude Desktop"); with none it is the plain "ready to use". The list is cut to "A, B and N more" so the line stays within
+# 80 columns after its 8-column tick prefix. Display only: nothing is re-run.
+# Twin of exakit_ready_line_text in common.sh.
+function Get-ExakitReadyLineText {
+    $fallback = "Your starter kit is ready to use."
+    $labels = @(
+        @("claude_code", "Claude Code"), @("claude_desktop", "Claude Desktop"),
+        @("codex", "Codex"), @("cursor", "Cursor"),
+        @("vscode_copilot", "GitHub Copilot"), @("gemini_cli", "Gemini CLI"),
+        @("opencode", "OpenCode"), @("continue", "Continue")
+    )
+    $configured = @()
+    try { $configured = @(Get-ExakitManifestValue "components.mcp_server.client_setup.configured_clients") } catch { $configured = @() }
+    $names = @()
+    foreach ($pair in $labels) {
+        if ($configured -contains $pair[0]) { $names += $pair[1] }
+    }
+    if ($names.Count -eq 0) { return $fallback }
+    $cols = 120
+    try {
+        $w = [int]$Host.UI.RawUI.WindowSize.Width
+        if ($w -gt 0) { $cols = $w }
+    } catch { }
+    if ($env:EXAKIT_READY_LINE_COLS) { $cols = [int]$env:EXAKIT_READY_LINE_COLS }
+    $budget = $cols - 8
+    $text = Format-ExakitReadySentence (Join-ExakitReadyNames $names) $names.Count
+    if ($text.Length -gt $budget -and $names.Count -gt 1) {
+        for ($keep = $names.Count - 1; $keep -ge 1; $keep--) {
+            $head = ($names[0..($keep - 1)] -join ", ")
+            $text = Format-ExakitReadySentence ("{0} and {1} more" -f $head, ($names.Count - $keep)) $names.Count
+            if ($text.Length -le $budget) { break }
+        }
+    }
+    return $text
+}
+
+function Join-ExakitReadyNames([string[]]$Names) {
+    if ($Names.Count -eq 1) { return $Names[0] }
+    return (($Names[0..($Names.Count - 2)] -join ", ") + " and " + $Names[$Names.Count - 1])
+}
+
+function Format-ExakitReadySentence([string]$Clients, [int]$Count) {
+    $pronoun = "them"
+    if ($Count -eq 1) { $pronoun = "it" }
+    return ("Exasol starterkit is ready and connected into {0}. Ask {1} about your data." -f $Clients, $pronoun)
+}
+
 function Write-ExakitReadyLine {
     if ($script:ExakitSoftFailed.Count -gt 0) { return }
     Write-Host ""
-    Ok "Your starter kit is ready to use."
+    Ok (Get-ExakitReadyLineText)
     # Where each recorded persona starts (NEW-04). Twin of exakit_print_ready_line.
     if (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue) {
         foreach ($id in @(("" + (Get-ExakitManifestValue "persona.id")) -split ',' | Where-Object { $_ })) {
