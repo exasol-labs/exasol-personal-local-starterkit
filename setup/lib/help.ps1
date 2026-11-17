@@ -24,6 +24,9 @@ function Get-ExakitHelpIds {
     if (-not (Test-Path $dir)) { return @() }
     $ids = @()
     foreach ($file in (Get-ChildItem -Path $dir -Filter "*.json" -ErrorAction SilentlyContinue)) {
+        # A page marked "help_hidden": true (an add-on this release hides) is not
+        # one help offers. Twin of exakit_help_ids.
+        if (Select-String -Path $file.FullName -Pattern '"help_hidden": *true' -Quiet -ErrorAction SilentlyContinue) { continue }
         $ids += $file.BaseName
     }
     return ($ids | Sort-Object)
@@ -342,11 +345,17 @@ function Show-ExakitHelpAll {
     foreach ($entry in (Get-ExakitHelpVisibleCommands $doc)) { $byName[$entry.command] = $entry }
     $seen = @{}
     foreach ($group in $doc.groups) {
-        Write-ExakitHelpSection $group.title
+        $rows = @()
         foreach ($name in $group.commands) {
             $entry = $byName[$name]
             if (-not $entry -or $seen[$name]) { continue }
             $seen[$name] = $true
+            $rows += $entry
+        }
+        # A group whose every command is hidden leaves no empty heading behind. Twin of render_all.
+        if ($rows.Count -eq 0) { continue }
+        Write-ExakitHelpSection $group.title
+        foreach ($entry in $rows) {
             Write-ExakitHelpCommand -Pad 30 -Summary $entry.summary `
                 -Label (Get-ExakitHelpInvocationWithOptions -DocId "exakit" -Entry $entry -Doc $doc)
         }

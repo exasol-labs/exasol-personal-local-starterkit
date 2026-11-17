@@ -42,6 +42,9 @@ exakit_help_ids() {
     [ -d "$_hi_dir" ] || return 1
     for _hi_f in "$_hi_dir"/*.json; do
         [ -f "$_hi_f" ] || continue
+        # A page marked "help_hidden": true (an add-on this release hides) is not
+        # one help offers. Twin of Get-ExakitHelpIds.
+        grep -q '"help_hidden": *true' "$_hi_f" 2>/dev/null && continue
         _hi_b="${_hi_f##*/}"
         printf '%s\n' "${_hi_b%.json}"
     done
@@ -444,12 +447,18 @@ def render_all():
     by_name = {c.get("command"): c for c in commands_of(doc)}
     seen = set()
     for group in doc.get("groups", []):
-        section(group.get("title", ""))
+        rows = []
         for name in group.get("commands", []):
             entry = by_name.get(name)
             if not entry or name in seen:
                 continue
             seen.add(name)
+            rows.append(entry)
+        # A group whose every command is hidden leaves no empty heading behind.
+        if not rows:
+            continue
+        section(group.get("title", ""))
+        for entry in rows:
             cmd_line("", invocation_with_options("exakit", entry), "",
                      entry.get("summary", ""), pad=30)
     rest = [c for c in commands_of(doc) if c.get("command") not in seen]
