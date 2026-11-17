@@ -7410,6 +7410,9 @@ _exakit_notice_word() {
 # nothing about version news may change what a command reports.
 exakit_notice_after_command() {
     [ "${EXAKIT_NO_UPDATE_NOTICE:-0}" = "1" ] && return 0
+    # A run the person stopped with Ctrl+C ends now: no version lookup, no wait,
+    # no notice after it. The next command they run says it instead.
+    [ "${_EXAKIT_INTERRUPTED:-0}" = "1" ] && return 0
     [ "${EXAKIT_VERSION_POLICY:-manifest}" = "manifest" ] || return 0
     # stderr must be a terminal: a notice has no business in a log file, a pipe,
     # or a CI transcript.
@@ -7543,8 +7546,10 @@ _exakit_notice_say() {
 
     printf '\n' >&2
     if [ -n "$_notice_light" ]; then
-        printf '%s%s update is available for %s — apply in seconds:  exakit update%s\n' \
-            "${UI_DIM:-}" "$(_exakit_notice_word "$_notice_light_worst")" "$_notice_light" "${UI_RESET:-}" >&2
+        # One plain sentence, the command in green; which components are pending
+        # is what `exakit version` and `exakit update --check` show.
+        printf '%sUpdates are available to your starterkit. Run %sexakit update%s%s to upgrade anytime.%s\n' \
+            "${UI_DIM:-}" "${UI_OK:-}" "${UI_RESET:-}" "${UI_DIM:-}" "${UI_RESET:-}" >&2
     fi
     if [ -n "$_notice_heavy" ]; then
         # Never "run update now" for the runtime: it stops the database, so the

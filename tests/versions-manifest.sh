@@ -1921,9 +1921,10 @@ lacks "the kit is not in the notice" "available for exakit" "$flagged"
   echo "=== stub ==="; cat "$NT/bin/exapump" 2>&1
   echo "=== NOTICE_PTY ==="; echo "$NOTICE_PTY"
 } >> /tmp/vm-debug.out 2>&1
-has "a recommended light bump is announced as recommended" \
-    "A recommended update is available for exapump" "$flagged"
-has "with the cheap command" "apply in seconds:  exakit update" "$flagged"
+has "a pending light bump is announced in one plain sentence" \
+    "Updates are available to your starterkit." "$flagged"
+has "with the cheap command" "Run exakit update to upgrade anytime." "$flagged"
+lacks "and lists no components in that line" "available for exapump" "$flagged"
 has "a critical heavy bump is announced as critical" \
     "A critical update is available for personal" "$flagged"
 has "as a database stop, not a one-liner" "requires stopping the database" "$flagged"
@@ -1937,14 +1938,23 @@ has "a normal-severity bump is announced too" "mcp" "$flagged"
 
 repeat="$(notice "$WORK/notice-versions.json")"
 has "and it speaks again on the very next command" \
-    "A recommended update is available for exapump" "$repeat"
+    "Updates are available to your starterkit." "$repeat"
+
+# Ctrl+C gives the prompt back at once: a run the person interrupted asks for no
+# version lookup and prints no notice (a stub that would print FETCHED/RESOLVED
+# proves neither ran); the very next normal run (above) still speaks.
+interrupted="$(notice "$WORK/notice-versions.json" '_EXAKIT_INTERRUPTED=1
+exakit_versions_update_cache() { echo FETCHED; }
+exakit_versions_resolve_doc() { echo RESOLVED; }')"
+check "an interrupted run prints no notice and looks nothing up" "" \
+    "$(printf '%s' "$interrupted" | tr -d '[:space:]')"
 
 # The throttle is still there for anyone who wants it, just not the default. It
 # needs a clean slate: the runs above have already recorded a "last shown".
 rm -f "$NT/cache/notice-state.json"
 throttled_first="$(notice "$WORK/notice-versions.json" 'EXAKIT_NOTICE_INTERVAL=86400')"
 has "an explicit interval still shows it once" \
-    "A recommended update is available for exapump" "$throttled_first"
+    "Updates are available to your starterkit." "$throttled_first"
 throttled_again="$(notice "$WORK/notice-versions.json" 'EXAKIT_NOTICE_INTERVAL=86400')"
 check "and then holds off for the interval" "" \
     "$(printf '%s' "$throttled_again" | tr -d '[:space:]')"
@@ -1953,7 +1963,7 @@ rm -f "$NT/cache/notice-state.json"
 # The shipped document against an install that is behind it: a routine bump, which
 # must now be mentioned, and must not call itself recommended or critical.
 only_normal="$(notice "$REAL")"
-has "a routine bump is announced" "update is available for exapump" "$only_normal"
+has "a routine bump is announced" "Updates are available to your starterkit." "$only_normal"
 lacks "without claiming it is recommended" "A recommended" "$only_normal"
 lacks "or critical" "A critical" "$only_normal"
 
@@ -1977,7 +1987,7 @@ rm -f "$NT/cache/notice-state.json" "$NT/cache/notice-plan"
 ahead_notice="$(notice "$WORK/notice-ahead.json")"
 lacks "an install ahead of the tagged set is not announced" "exapump" "$ahead_notice"
 lacks "nor the other component that overshot" "mcp" "$ahead_notice"
-lacks "and no light line is printed at all" "apply in seconds" "$ahead_notice"
+lacks "and no light line is printed at all" "Updates are available to your starterkit." "$ahead_notice"
 has "while a component genuinely behind is still announced" \
     "A critical update is available for personal" "$ahead_notice"
 # The cached plan re-verification carried the same equality-only flaw, which is
@@ -1998,13 +2008,13 @@ printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
 chmod +x "$NT/bin/exapump"
 probe_count() { [ -f "$WORK/probe-count" ] && wc -c < "$WORK/probe-count" | tr -d ' ' || printf 0; }
 cached_first="$(notice "$WORK/notice-versions.json")"
-has "the first run still says its piece" "update is available" "$cached_first"
+has "the first run still says its piece" "available" "$cached_first"
 probes_after_first="$(probe_count)"
 check "and it did probe" "yes" "$([ "$probes_after_first" -gt 0 ] && printf yes || printf no)"
 plan_stamp() { sed -n 's/^computed_at=//p' "$NT/cache/notice-plan" 2>/dev/null | head -1; }
 stamp_after_first="$(plan_stamp)"
 cached_second="$(notice "$WORK/notice-versions.json")"
-has "the second run says the same thing" "update is available" "$cached_second"
+has "the second run says the same thing" "available" "$cached_second"
 # Served from the plan, not worked out again. The probe count is no longer the signal:
 # the cached path deliberately re-probes its pending candidates so it can never repeat
 # an update that has already been taken.
@@ -2546,14 +2556,24 @@ PSEOF
             *)   ps_notice="$(NT="$NT" VM_ROOT="$ROOT" script -q                     -c "pwsh -NoProfile -File $WORK/ps-notice.ps1" /dev/null </dev/null 2>&1)" ;;
         esac
         ps_notice="$(printf '%s' "$ps_notice" | tr -d '\r\n\004\010' | sed 's/\^D//g')"
-        has "powershell: recommended light bump" "A recommended update is available for exapump" "$ps_notice"
+        has "powershell: light bump in one plain sentence" "Updates are available to your starterkit." "$ps_notice"
         has "powershell: critical heavy bump" "A critical update is available for personal" "$ps_notice"
         has "powershell: the heavy line names the cost" "requires stopping the database" "$ps_notice"
+        # Ctrl+C: an interrupted run gives the prompt back with no notice.
+        sed 's/^Show-ExakitUpdateNotice$/$script:ExakitUserInterrupted = $true; Show-ExakitUpdateNotice/' \
+            "$WORK/ps-notice.ps1" > "$WORK/ps-notice-int.ps1"
+        case "$NOTICE_PTY" in
+            bsd) ps_int="$(NT="$NT" VM_ROOT="$ROOT" script -q /dev/null                     pwsh -NoProfile -File "$WORK/ps-notice-int.ps1" </dev/null 2>&1)" ;;
+            *)   ps_int="$(NT="$NT" VM_ROOT="$ROOT" script -q                     -c "pwsh -NoProfile -File $WORK/ps-notice-int.ps1" /dev/null </dev/null 2>&1)" ;;
+        esac
+        lacks "powershell: an interrupted run prints no notice" "available" \
+            "$(printf '%s' "$ps_int" | tr -d '\r\n\004\010')"
         cp "$REAL" "$NT/kit/versions.json"
     else
-        check "powershell: recommended light bump" "skipped" "skipped"
+        check "powershell: light bump in one plain sentence" "skipped" "skipped"
         check "powershell: critical heavy bump" "skipped" "skipped"
         check "powershell: the heavy line names the cost" "skipped" "skipped"
+        check "powershell: an interrupted run prints no notice" "skipped" "skipped"
     fi
     ps_version="$(EXAKIT_HOME="$UC" EXAKIT_BIN_DIR="$UC/bin" \
         EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json" \
