@@ -2738,6 +2738,7 @@ _exakit_manifest_log_stderr() {
 # Value is stored as JSON if it parses as JSON, otherwise as a string.
 manifest_set() {
     require_python3
+    _exakit_manifest_snap_drop
     # stdout is discarded and stderr is captured rather than redirected with
     # `2>>`: the log directory can already be gone (uninstall removes the kit
     # home while later steps still write), and a redirection onto a missing
@@ -2825,6 +2826,7 @@ PY
 manifest_set_many() {
     [ -f "$EXAKIT_MANIFEST" ] || return 0
     exakit_can_run_python || return 0
+    _exakit_manifest_snap_drop
     # THE LINES ARE READ HERE, NOT BY PYTHON. `run_python -` takes the program
     # itself from stdin - the heredoc below - so the script's own
     # sys.stdin.read() always came back empty: every caller's piped keys were
@@ -2896,7 +2898,89 @@ PY
 # routing it through the 3.11 gate is what made `exakit status` install uv on
 # a stock Mac. With no interpreter at all a read-only query answers "missing"
 # rather than dying; everything else still gets the explicit failure.
+# --- the manifest, read once (read-only commands) -----------------------------
+# manifest_get starts an interpreter per key: about 40 ms each, and status asks
+# twenty times, mcp-status twenty-five, version sixty-four - seconds of a screen
+# that only reads. A read-only command (EXAKIT_READONLY_QUERY=1, set by exakit
+# before the libraries load) flattens the manifest ONCE into "key<TAB>value"
+# lines, every node as manifest_get would print it, and each lookup after that
+# is a shell read with no fork.
+#
+# Only there: an install reads flags another process has just written, and must
+# see them. The copy is dropped by every manifest write in this process and
+# rebuilt when the manifest's file is newer; a value that spans lines is marked
+# and answered by the interpreter as before. One file per exakit process ($$ is
+# the top shell's in every subshell), swept on exit.
+_EXAKIT_MSNAP_MULTI="$(printf '\037')multiline"
+_exakit_manifest_snap_path() {
+    printf '%s/exakit-msnap.%s' "${TMPDIR:-/tmp}" "$$"
+}
+_exakit_manifest_snap_drop() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] || return 0
+    rm -f "$(_exakit_manifest_snap_path)" 2>/dev/null || true
+}
+# _exakit_manifest_snap - 0 with the snapshot in place and current, 1 when the
+# caller should ask the interpreter (not a read-only command, no manifest, no
+# Python, or the copy could not be written).
+_exakit_manifest_snap() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] && [ "${EXAKIT_NO_MANIFEST_SNAPSHOT:-0}" != 1 ] || return 1
+    [ -n "${EXAKIT_MANIFEST:-}" ] && [ -f "$EXAKIT_MANIFEST" ] || return 1
+    _ems_snap="$(_exakit_manifest_snap_path)"
+    if [ -f "$_ems_snap" ] && ! [ "$EXAKIT_MANIFEST" -nt "$_ems_snap" ]; then
+        return 0
+    fi
+    exakit_can_run_python_any || return 1
+    _ems_tmp="$(mktemp "$_ems_snap.XXXXXX" 2>/dev/null)" || return 1
+    if run_python_any - "$EXAKIT_MANIFEST" "$_EXAKIT_MSNAP_MULTI" > "$_ems_tmp" 2>/dev/null <<'PY'
+import json, sys
+path, multi = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f:
+        doc = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    sys.exit(1)
+if not isinstance(doc, dict):
+    sys.exit(1)
+out = []
+def walk(prefix, node):
+    for key, value in node.items():
+        if not isinstance(key, str) or "\t" in key or "\n" in key or "\r" in key:
+            continue
+        name = prefix + key
+        text = value if isinstance(value, str) else json.dumps(value)
+        out.append(name + "\t" + (multi if ("\n" in text or "\r" in text) else text))
+        if isinstance(value, dict):
+            walk(name + ".", value)
+walk("", doc)
+sys.stdout.write("\n".join(out) + ("\n" if out else ""))
+PY
+    then
+        mv -f "$_ems_tmp" "$_ems_snap" 2>/dev/null || { rm -f "$_ems_tmp"; return 1; }
+        return 0
+    fi
+    rm -f "$_ems_tmp"
+    return 1
+}
+# _exakit_manifest_snap_get <dot.path> - prints the value and returns 0; 1 when
+# the key is not there; 2 when the interpreter has to answer (a marked value).
+_exakit_manifest_snap_get() {
+    while IFS= read -r _emg_line; do
+        case "$_emg_line" in
+            "$1	"*)
+                _emg_val="${_emg_line#*	}"
+                [ "$_emg_val" = "$_EXAKIT_MSNAP_MULTI" ] && return 2
+                printf '%s\n' "$_emg_val"
+                return 0 ;;
+        esac
+    done < "$(_exakit_manifest_snap_path)"
+    return 1
+}
+
 manifest_get() {
+    if _exakit_manifest_snap; then
+        _exakit_manifest_snap_get "$1"
+        case $? in 0) return 0 ;; 1) return 1 ;; esac
+    fi
     if ! exakit_can_run_python_any; then
         [ "${EXAKIT_READONLY_QUERY:-0}" = "1" ] && return 1
         die "A Python runtime is required, and the automatic uv bootstrap failed."
@@ -2970,6 +3054,7 @@ PY
 manifest_del() {
     [ -f "$EXAKIT_MANIFEST" ] || return 0
     require_python3
+    _exakit_manifest_snap_drop
     # Same treatment as manifest_set: the interpreter reports to the log, the
     # reader gets one sentence. Still a warn rather than a die — a partial
     # uninstall must not fail over bookkeeping.
@@ -3854,12 +3939,53 @@ exakit_legacy_runtime_notice() {
     return 0
 }
 
+# --- yes/no checks asked ahead of time (read-only commands) -------------------
+# exakit_prefetch <name> <function> starts a side-effect-free yes/no check in
+# the background; the function itself then answers from that run instead of
+# starting again (_exakit_prefetched). `exakit info` asked whether add-ons are
+# pending and whether the database runs one after the other, two seconds each,
+# with a panel to draw in between: now both run while the panel is drawn.
+# Read-only commands only, and only for checks that change nothing.
+_EXAKIT_PREFETCH_DIR=""
+exakit_prefetch() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] || return 0
+    if [ -z "$_EXAKIT_PREFETCH_DIR" ]; then
+        _EXAKIT_PREFETCH_DIR="$(mktemp -d "${TMPDIR:-/tmp}/exakit-prefetch.XXXXXX" 2>/dev/null)" || { _EXAKIT_PREFETCH_DIR=""; return 0; }
+        exakit_track_tmp "$_EXAKIT_PREFETCH_DIR"
+    fi
+    [ -e "$_EXAKIT_PREFETCH_DIR/$1.started" ] && return 0
+    : > "$_EXAKIT_PREFETCH_DIR/$1.started"
+    (
+        # In here the check is not "prefetched": it is the run itself.
+        _EXAKIT_PREFETCH_SELF="$1"
+        "$2" >/dev/null 2>&1
+        printf '%s\n' "$?" > "$_EXAKIT_PREFETCH_DIR/$1.tmp" && mv -f "$_EXAKIT_PREFETCH_DIR/$1.tmp" "$_EXAKIT_PREFETCH_DIR/$1.rc"
+    ) &
+    return 0
+}
+# _exakit_prefetched <name> - the prefetched check's own exit status (0 or 1);
+# 255 when none was started, it is this very run, or it never answered.
+_exakit_prefetched() {
+    [ -n "$_EXAKIT_PREFETCH_DIR" ] && [ "${_EXAKIT_PREFETCH_SELF:-}" != "$1" ] && \
+        [ -e "$_EXAKIT_PREFETCH_DIR/$1.started" ] || return 255
+    _epf_n=0
+    while [ ! -f "$_EXAKIT_PREFETCH_DIR/$1.rc" ]; do
+        _epf_n=$(( _epf_n + 1 ))
+        [ "$_epf_n" -le 600 ] || return 255          # 30 s: ask directly instead
+        sleep 0.05
+    done
+    _epf_rc="$(cat "$_EXAKIT_PREFETCH_DIR/$1.rc" 2>/dev/null || true)"
+    case "$_epf_rc" in 0) return 0 ;; ''|*[!0-9]*) return 255 ;; *) return 1 ;; esac
+}
+
 # exakit_runtime_is_running — one question, no side effects: is the installed
 # database runtime up right now? The pure check that `exakit status` branches
 # its exit code on and `exakit mcp-doctor` consults BEFORE any operation that
 # needs a live database — so a stopped database is diagnosed as exactly that,
 # never as whatever downstream step happened to fail first.
 exakit_runtime_is_running() {
+    _exakit_prefetched running
+    case $? in 0) return 0 ;; 1) return 1 ;; esac
     case "$(exakit_installation_runtime_type 2>/dev/null || true)" in
         personal)
             command -v personal_deployment_running >/dev/null 2>&1 || return 1
@@ -5593,6 +5719,8 @@ EXAKIT_MA_EOF
 # this machine yet (neither kit-managed nor a system install). Drives the
 # discovery one-liners and the closing offer.
 exakit_marketplace_has_pending() {
+    _exakit_prefetched pending
+    case $? in 0) return 0 ;; 1) return 1 ;; esac
     [ -n "$(while IFS='|' read -r _mp_id _mp_label <&3; do
         [ -n "$_mp_id" ] || continue
         _exakit_addon_offerable "$_mp_id" || continue
@@ -7669,6 +7797,97 @@ exakit_update_kit2() {
 # Someone who asks explicitly gets fresh data: the TTL exists for the readers
 # that run behind other commands, not for this one.
 # ⇄ twin: Invoke-CmdVersion in setup/exakit.ps1.
+# _exakit_version_row <component> <against> - one row of the version table,
+# worked out on its own so the rows can run side by side: nine fields on one
+# record, each ended by US (0x1f) and the record by RS (0x1e) -
+# component, installed, status cell, note, maintenance note, available, raw
+# status, severity, and what it adds to the pending count.
+_exakit_version_row() {
+    _component="$1"
+    _uc_against="${2:-}"
+    _pending=0
+    _row_component="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
+    _row_installed="$(exakit_version_plain "$(exakit_version_installed_cell "$_row_component")")"
+    _row_available="$(exakit_version_plain "$(exakit_component_available "$_row_component" 2>/dev/null || true)")"
+    [ -n "$_row_available" ] || _row_available="unknown"
+    _row_note=""
+    _row_severity="$(exakit_component_severity "$_row_component" 2>/dev/null || true)"
+    _status="current"
+    if ! exakit_component_supported "$_row_component"; then
+        # Nothing to offer and nothing wrong: there is simply no build for
+        # this machine, and an update command that cannot succeed must not be
+        # printed.
+        _row_installed="not available"
+        _status="-"
+        _row_severity=""
+        _row_note="no $_row_component build exists for this platform"
+    elif [ "$_row_installed" = "not installed" ] && _exakit_addon_registered "$_row_component"; then
+        # An add-on nobody has installed is not behind on anything: it is an
+        # offer. The marketplace is the only path that installs one, so that
+        # is the whole status — naming a version here would read as a pending
+        # update to something that is not on the machine.
+        _status="exakit marketplace"
+        _row_severity=""
+    elif [ "$_row_installed" != "not installed" ] && ! exakit_component_is_managed "$_row_component"; then
+        _status="external"
+        _row_severity=""
+        _row_note="Reused; updates and removal stay with the owner."
+    elif [ "$_row_available" = "unknown" ] || [ "$_row_installed" = "unknown" ]; then
+        _status="inspect"
+    elif [ "$_row_installed" = "not installed" ] && exakit_component_is_heavy "$_row_component"; then
+        # A runtime that is not installed is not a runtime this machine wants:
+        # offering to deploy a second database onto an existing one would be
+        # actively wrong. (A missing light component, by contrast, is exactly
+        # the repair case below.)
+        _status="inspect"
+    elif [ "$_row_installed" != "not installed" ] && \
+         exakit_version_newer "$_row_installed" "$_row_available"; then
+        # Installed is ahead of the published set. The kit never moves a
+        # component backwards, so there is nothing to offer: lowering a
+        # version in versions.json is not a rollback lever, and a user who
+        # upgraded a component themselves keeps what they chose. Counts toward
+        # neither the "apply them in one go" hint nor the heavy deferral,
+        # because no command belongs in this row at all.
+        #
+        # The row says only "none". Not "yours is newer than tested", which
+        # apologised for the install and made the tested set sound abandoned;
+        # not the tagged number either, which invites the reader to go looking
+        # for a way back to it. There is nothing to do, so the row says so and
+        # stops. The severity goes with it — a severity rates the advertised
+        # version, and there is nothing to recommend to someone already past it.
+        _status="none"
+        _row_severity=""
+    elif [ "$_row_installed" != "$_row_available" ]; then
+        _row_min_kit="$(exakit_component_min_kit "$_row_component" 2>/dev/null || true)"
+        if [ -n "$_row_min_kit" ] && ! exakit_min_kit_satisfied "$_row_min_kit"; then
+            # Waiting, but not on this reader: `exakit update` cannot apply
+            # it until the kit itself moves, so it must not be counted into
+            # the closing line that promises it can.
+            _status="update exakit first (needs kit >= $_row_min_kit)"
+            _pending=$((_pending - 1))
+        elif [ "$_row_installed" = "not installed" ]; then
+            # Not an upgrade: the component the manifest says belongs here is
+            # missing, and `exakit update` puts it back.
+            _status="$_row_available available (repair)"
+        else
+            # No "(heavy)" or "(major)" suffix: what applying a component
+            # involves is `exakit update`'s to explain, at the point where it
+            # asks. Saying it here warned about a cost on a screen that cannot
+            # charge it, twice for the runtime, and left the Status column
+            # reading like a set of caveats rather than a set of versions.
+            _status="$_row_available available"
+        fi
+        _pending=$((_pending + 1))
+    fi
+    if [ "$_status" = "current" ] && [ -n "$_uc_against" ]; then
+        _status="current (manifest $_uc_against)"
+    fi
+    printf '%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037%s\037\036' \
+        "$_row_component" "$_row_installed" "$(_exakit_status_cell "$_status" "$_row_severity")" "$_row_note" \
+        "$(exakit_component_note "$_row_component" 2>/dev/null || true)" "$_row_available" "$_status" \
+        "${_row_severity:-normal}" "$_pending"
+}
+
 exakit_print_version_table() {
     # Everything down to the table itself is GATHERING, and on a cold cache or a
     # slow network it is the longest part of `exakit version` — the screen sat
@@ -7718,94 +7937,43 @@ exakit_print_version_table() {
     if [ "${EXAKIT_VERSION_POLICY:-manifest}" != "latest" ]; then
         _uc_against="$(exakit_versions_value updated 2>/dev/null | cut -c1-10)"
     fi
+    # EVERY COMPONENT AT ONCE. A row is a dozen lookups (installed? advertised?
+    # supported here? its notes?), and one after the other they were most of
+    # this screen's six seconds. Each row is its own background job writing its
+    # own record; they are read back in the table's order.
+    _uc_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-vrows.XXXXXX" 2>/dev/null)" || _uc_dir=""
+    _uc_n=0
+    _uc_pids=""
     for _component in $(exakit_version_table_targets); do
-        _row_component="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
-        _row_installed="$(exakit_version_plain "$(exakit_version_installed_cell "$_row_component")")"
-        _row_available="$(exakit_version_plain "$(exakit_component_available "$_row_component" 2>/dev/null || true)")"
-        [ -n "$_row_available" ] || _row_available="unknown"
-        _row_note=""
-        _row_severity="$(exakit_component_severity "$_row_component" 2>/dev/null || true)"
-        _status="current"
-        if ! exakit_component_supported "$_row_component"; then
-            # Nothing to offer and nothing wrong: there is simply no build for
-            # this machine, and an update command that cannot succeed must not be
-            # printed.
-            _row_installed="not available"
-            _status="-"
-            _row_severity=""
-            _row_note="no $_row_component build exists for this platform"
-        elif [ "$_row_installed" = "not installed" ] && _exakit_addon_registered "$_row_component"; then
-            # An add-on nobody has installed is not behind on anything: it is an
-            # offer. The marketplace is the only path that installs one, so that
-            # is the whole status — naming a version here would read as a pending
-            # update to something that is not on the machine.
-            _status="exakit marketplace"
-            _row_severity=""
-        elif [ "$_row_installed" != "not installed" ] && ! exakit_component_is_managed "$_row_component"; then
-            _status="external"
-            _row_severity=""
-            _row_note="Reused; updates and removal stay with the owner."
-        elif [ "$_row_available" = "unknown" ] || [ "$_row_installed" = "unknown" ]; then
-            _status="inspect"
-        elif [ "$_row_installed" = "not installed" ] && exakit_component_is_heavy "$_row_component"; then
-            # A runtime that is not installed is not a runtime this machine wants:
-            # offering to deploy a second database onto an existing one would be
-            # actively wrong. (A missing light component, by contrast, is exactly
-            # the repair case below.)
-            _status="inspect"
-        elif [ "$_row_installed" != "not installed" ] && \
-             exakit_version_newer "$_row_installed" "$_row_available"; then
-            # Installed is ahead of the published set. The kit never moves a
-            # component backwards, so there is nothing to offer: lowering a
-            # version in versions.json is not a rollback lever, and a user who
-            # upgraded a component themselves keeps what they chose. Counts toward
-            # neither the "apply them in one go" hint nor the heavy deferral,
-            # because no command belongs in this row at all.
-            #
-            # The row says only "none". Not "yours is newer than tested", which
-            # apologised for the install and made the tested set sound abandoned;
-            # not the tagged number either, which invites the reader to go looking
-            # for a way back to it. There is nothing to do, so the row says so and
-            # stops. The severity goes with it — a severity rates the advertised
-            # version, and there is nothing to recommend to someone already past it.
-            _status="none"
-            _row_severity=""
-        elif [ "$_row_installed" != "$_row_available" ]; then
-            _row_min_kit="$(exakit_component_min_kit "$_row_component" 2>/dev/null || true)"
-            if [ -n "$_row_min_kit" ] && ! exakit_min_kit_satisfied "$_row_min_kit"; then
-                # Waiting, but not on this reader: `exakit update` cannot apply
-                # it until the kit itself moves, so it must not be counted into
-                # the closing line that promises it can.
-                _status="update exakit first (needs kit >= $_row_min_kit)"
-                _pending=$((_pending - 1))
-            elif [ "$_row_installed" = "not installed" ]; then
-                # Not an upgrade: the component the manifest says belongs here is
-                # missing, and `exakit update` puts it back.
-                _status="$_row_available available (repair)"
-            else
-                # No "(heavy)" or "(major)" suffix: what applying a component
-                # involves is `exakit update`'s to explain, at the point where it
-                # asks. Saying it here warned about a cost on a screen that cannot
-                # charge it, twice for the runtime, and left the Status column
-                # reading like a set of caveats rather than a set of versions.
-                _status="$_row_available available"
-            fi
-            _pending=$((_pending + 1))
+        _uc_n=$(( _uc_n + 1 ))
+        if [ -n "$_uc_dir" ]; then
+            ( _exakit_version_row "$_component" "$_uc_against" > "$_uc_dir/$_uc_n" 2>/dev/null ) &
+            _uc_pids="$_uc_pids $!"
+        else
+            _exakit_version_row "$_component" "$_uc_against" > /dev/null
         fi
-        if [ "$_status" = "current" ] && [ -n "$_uc_against" ]; then
-            _status="current (manifest $_uc_against)"
-        fi
+    done
+    for _uc_pid in $_uc_pids; do wait "$_uc_pid" 2>/dev/null || true; done
+    _uc_i=0
+    while [ "$_uc_i" -lt "$_uc_n" ] && [ -n "$_uc_dir" ]; do
+        _uc_i=$(( _uc_i + 1 ))
+        [ -s "$_uc_dir/$_uc_i" ] || continue
+        IFS="$(printf '\037')" read -r -d "$(printf '\036')" _row_component _row_installed _uc_r_cell _row_note _uc_r_maint \
+            _row_available _status _row_severity _uc_r_pending < "$_uc_dir/$_uc_i" || true
+        case "$_uc_r_pending" in ''|*[!0-9-]*) _uc_r_pending=0 ;; esac
+        _pending=$(( _pending + _uc_r_pending ))
         [ "${#_row_component}" -gt "$_uc_cw" ] && _uc_cw="${#_row_component}"
         [ "${#_row_installed}" -gt "$_uc_vw" ] && _uc_vw="${#_row_installed}"
         _uc_comp+=("$_row_component")
         _uc_ver+=("$_row_installed")
-        _uc_status+=("$(_exakit_status_cell "$_status" "$_row_severity")")
+        _uc_status+=("$_uc_r_cell")
         _uc_note+=("$_row_note")
-        _uc_maint+=("$(exakit_component_note "$_row_component" 2>/dev/null || true)")
+        _uc_maint+=("$_uc_r_maint")
         _uc_avail+=("$_row_available")
         _uc_raw+=("$_status")
-        _uc_sev+=("${_row_severity:-normal}")
+        _uc_sev+=("$_row_severity")
     done
+    [ -z "$_uc_dir" ] || rm -rf "$_uc_dir"
 
     ui_spin_end
     if [ "$_uvt_json" -eq 1 ]; then
@@ -14952,6 +15120,11 @@ EXAKIT_AUTOSTART_PREFIX="com.exasol.exakit"
 # exakit_service_ids — every service on this machine, database first. Add-ons
 # appear only when installed AND carrying the service hooks.
 exakit_service_ids() {
+    # A read-only screen that already worked the list out (exakit status) keeps it.
+    if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] && [ -n "${EXAKIT_SERVICE_IDS_MEMO:-}" ]; then
+        printf '%s\n' "$EXAKIT_SERVICE_IDS_MEMO"
+        return 0
+    fi
     [ -n "$(manifest_get runtime.type 2>/dev/null || true)" ] && printf '%s\n' database
     for _si_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
         command -v "$(_exakit_addon_fn "$_si_id" status)" >/dev/null 2>&1 && printf '%s\n' "$_si_id"

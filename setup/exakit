@@ -225,6 +225,11 @@ export EXAKIT_MARKETPLACE_PYTHON_APPLY
 # A command that turns on the installer's failure handling replaces this with
 # exakit_on_failure, which sweeps as well.
 trap 'command -v ui_table_abort >/dev/null 2>&1 && ui_table_abort; exakit_sweep_tmp' EXIT
+# The manifest's read-once copy (read-only commands, see manifest_get) is a
+# scratch file of this process: named here, in the top shell, so the sweep has it.
+if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ] && command -v _exakit_manifest_snap_path >/dev/null 2>&1; then
+    exakit_track_tmp "$(_exakit_manifest_snap_path)"
+fi
 # The add-ons' read-only answers are remembered for this run (_EXAKIT_HOOK_MEMO):
 # one screen asks each of them many times, and every answer is a Python start.
 _exakit_hook_memo_begin 2>/dev/null || true
@@ -392,6 +397,19 @@ cmd_status() {
     # Each phase names what it is waiting on. Only drawn on a terminal, and
     # never for --json: ui_spin_begin re-checks that at call time, and the
     # command substitutions below capture their own stdout regardless.
+    # SIDE BY SIDE WITH THE DATABASE CHECK. Which services there are and which
+    # datasets are loaded do not wait on the launcher's answer, and one after
+    # the other they were a second and a half of this screen. Each writes its
+    # own file; they are read where they were computed before.
+    _cs_bg="$(mktemp -d "${TMPDIR:-/tmp}/exakit-status.XXXXXX" 2>/dev/null)" || _cs_bg=""
+    _cs_p_ids=""; _cs_p_ds=""
+    if [ -n "$_cs_bg" ]; then
+        exakit_track_tmp "$_cs_bg"
+        ( exakit_service_ids > "$_cs_bg/ids" 2>/dev/null ) &
+        _cs_p_ids=$!
+        ( exakit_loaded_datasets 2>/dev/null | tr '\n' ' ' | sed 's/ $//' > "$_cs_bg/datasets" ) &
+        _cs_p_ds=$!
+    fi
     if [ "$_cs_json" -eq 0 ]; then ui_spin_begin "Checking the database"; fi
     case "$_type" in
         personal) _cs_db="$(personal_status)" ;;
@@ -455,6 +473,12 @@ cmd_status() {
     _cs_autostart=false
     _cs_as_total=0
     _cs_as_on=0
+    # The service list, worked out once for this screen (it asked four times).
+    if [ -n "$_cs_p_ids" ]; then
+        wait "$_cs_p_ids" 2>/dev/null || true
+        EXAKIT_SERVICE_IDS_MEMO="$(cat "$_cs_bg/ids" 2>/dev/null || true)"
+        [ -n "$EXAKIT_SERVICE_IDS_MEMO" ] && export EXAKIT_SERVICE_IDS_MEMO
+    fi
     for _cs_as_id in $(exakit_service_ids 2>/dev/null); do
         _cs_as_total=$(( _cs_as_total + 1 ))
         if _exakit_autostart_registered "$_cs_as_id" 2>/dev/null; then
@@ -463,7 +487,13 @@ cmd_status() {
     done
     [ "$_cs_as_total" -gt 0 ] && [ "$_cs_as_on" -eq "$_cs_as_total" ] && _cs_autostart=true
     if [ "$_cs_json" -eq 0 ]; then ui_spin_begin "Checking which datasets are loaded"; fi
-    _cs_datasets="$(exakit_loaded_datasets 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+    if [ -n "$_cs_p_ds" ]; then
+        wait "$_cs_p_ds" 2>/dev/null || true
+        _cs_datasets="$(cat "$_cs_bg/datasets" 2>/dev/null || true)"
+    else
+        _cs_datasets="$(exakit_loaded_datasets 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+    fi
+    [ -z "$_cs_bg" ] || rm -rf "$_cs_bg"
     # The database's clock against this computer's: one query, 0.1 s. A
     # sleeping Mac leaves Exasol Personal's clock behind (see
     # exakit_db_clock_skew), and nothing else on this screen would show it.
@@ -2752,6 +2782,9 @@ usage() {
 # value: the installer prints the same panel and must not exit on it.
 cmd_info() {
     [ -f "$EXAKIT_MANIFEST" ] || _not_installed_answer 0
+    # Asked now, answered while the panel is drawn (see exakit_prefetch).
+    exakit_prefetch pending exakit_marketplace_has_pending
+    exakit_prefetch running exakit_runtime_is_running
     connection_panel || true
     exakit_runtime_is_running && return 0
     return 3
