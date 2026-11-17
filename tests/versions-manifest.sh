@@ -1882,7 +1882,7 @@ EOF
 
 if [ "$NOTICE_PTY" = "none" ]; then
     # Without a pty the notice cannot be observed at all (that is its own gate).
-    for _skipped in "a recommended light bump is announced as recommended" "with the cheap command" \
+    for _skipped in "a pending light bump is announced in one plain sentence" "with the cheap command" \
                     "a critical heavy bump is announced as critical" "as a database stop, not a one-liner" \
                     "and never told to just run update" "the kill switch is advertised" \
                     "a normal-severity bump is announced too" \
@@ -1934,7 +1934,10 @@ lacks "and never told to just run update" "personal — apply in seconds" "$flag
 lacks "the kill switch is not printed under the notice" "EXAKIT_NO_UPDATE_NOTICE" "$flagged"
 # Every severity is announced now, so the routine one appears too - and appears
 # WITHOUT borrowing urgency it was never given.
-has "a normal-severity bump is announced too" "mcp" "$flagged"
+# The sentence names no components now; the plan behind it still counts the
+# routine one (what `exakit version` lists).
+has "a normal-severity bump is announced too" "mcp" \
+    "$(sed -n 's/^light=//p' "$NT/cache/notice-plan" 2>/dev/null | head -1)"
 
 repeat="$(notice "$WORK/notice-versions.json")"
 has "and it speaks again on the very next command" \
@@ -2033,7 +2036,7 @@ printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
 chmod +x "$NT/bin/exapump"
 caught_up="$(notice "$WORK/notice-versions.json")"
 lacks "a candidate that caught up is dropped" "for exapump" "$caught_up"
-has "and the ones still behind are kept" "mcp" "$caught_up"
+has "and the ones still behind are kept" "Updates are available to your starterkit." "$caught_up"
 # Back to behind, so what follows sees the same fixture as before.
 printf '#!/bin/sh\nprintf x >> "%s"\necho "exapump %s"\n' "$WORK/probe-count" \
     "$NOTICE_INSTALLED_EXAPUMP" > "$NT/bin/exapump"
