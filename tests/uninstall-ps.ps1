@@ -131,6 +131,9 @@ function Get-ExakitSkillRoots {
     @((Join-Path $HOME ".claude\skills"), (Join-Path $HOME ".agents\skills"))
 }
 function Write-ExakitLog { param($Level, $Message) }
+# ui.ps1 shortens paths under the home to ~ on screen; identity here, so
+# the assertions read the paths the run removed.
+function Get-ExakitTilde([string]$Path) { $Path }
 # The allowlist removal lives in exakit-common.ps1, which this harness does not
 # load; the uninstall run calls it beside the skills step.
 function Remove-ExakitReadonlyAllowlist { return "REMOVED 0" }
