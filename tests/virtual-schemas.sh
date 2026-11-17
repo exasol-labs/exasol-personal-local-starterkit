@@ -3265,7 +3265,7 @@ PY
         "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when '%')\r"
     check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
     check "...no y/N at all: picking the source was the answer" "0" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
-    has "...the first table says what is missing" "Preparing the database" "$TUI_SCREEN"
+    has "...the first table says what is missing" "Enabling Federation" "$TUI_SCREEN"
     has "...one line says what the kit does and why" "Java language container installed" "$(tr -d '\r' < "$WORK/tui.raw")"
     lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
     lacks "...no y/N for the Java container either" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
@@ -3284,7 +3284,7 @@ PY
         tui connect-tui-scenario.sh "none" 0 \
         "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
-    has "line by line, Java missing: one line says what the kit does and why" "Preparing the database" "$TUI_RAW"
+    has "line by line, Java missing: one line says what the kit does and why" "Enabling Federation" "$TUI_RAW"
     lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
     check "...no y/N at all: not Connect now? either" "0" "$(printf '%s\n' "$TUI_RAW" | grep -c '\[y/N\]')"
     check "...and the source connects after it" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEJAVA"]["secret"]')"

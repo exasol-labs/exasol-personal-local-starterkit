@@ -661,7 +661,7 @@ _exakit_vs_and() {
 # _exakit_vs_prepare_said — is the database prepared without a question? A
 # person connecting at a terminal (picking the source was the permission) or
 # --yes. Then each step is one spinner line that its tick replaces, under the
-# "Preparing the database" header its caller printed.
+# "Enabling Federation" header its caller printed.
 _exakit_vs_prepare_said() {
     _exakit_vs_interactive || [ "${EXAKIT_VS_ASSUME_YES:-0}" = 1 ]
 }
@@ -673,10 +673,13 @@ _exakit_vs_prepare_said() {
 _exakit_vs_prep_step() {
     _eps_doing="$1"; _eps_done="$2"; shift 2
     _eps_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-prep.XXXXXX")" || _eps_out=/dev/null
+    # The spinner sits where its tick line will: under the heading, not at the margin.
+    _UI_SPIN_INDENT='      '
     ui_spin_begin "$_eps_doing"
     ( EXAKIT_QUIET_DETAIL=1; "$@" ) > "$_eps_out" 2>&1
     _eps_rc=$?
     ui_spin_end
+    _UI_SPIN_INDENT='  '
     cat "$_eps_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
     if [ "$_eps_rc" -eq 0 ]; then
         ok "$_eps_done"
@@ -724,7 +727,7 @@ _exakit_vs_java_restart() {
 # download of about 250 MiB and one database restart, done through the kit's
 # own stop/start so add-on services come back and DNS is repaired. A person
 # connecting at a terminal gave it by picking the source, and --yes gives it:
-# two steps under "Preparing the database", nothing asked. Otherwise asked.
+# two steps under "Enabling Federation", nothing asked. Otherwise asked.
 _exakit_vs_install_java() {
     if ! _exakit_vs_prepare_said; then
         info "Virtual schemas run Java inside the database, and its Java language container is not installed."
@@ -858,7 +861,7 @@ _exakit_vs_run() {
             grep '^FAIL ' "$_evx_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
             grep -v '^FAIL ' "$_evx_out" > "$_evx_out.said"
             _exakit_vs_render "$_evx_out.said"; rm -f "$_evx_out.said"
-            exakit_step_heading "Preparing the database"
+            exakit_step_heading "Enabling Federation"
         else
             _exakit_vs_render "$_evx_out"
         fi
@@ -2364,7 +2367,7 @@ print(" ".join(json.load(sys.stdin).get("missing") or []))' 2>/dev/null)"
     if [ "${UI_FANCY:-0}" = 1 ] && [ -t 1 ] && [ "$_etp_over" -gt 0 ]; then
         printf '\r\033[%dA\033[0J' "$_etp_over"
     fi
-    exakit_step_heading "Preparing the database"
+    exakit_step_heading "Enabling Federation"
     for _etp_l in java rust; do
         case " $_etp_missing " in *" $_etp_l "*) ;; *) continue ;; esac
         _EVT_PREPARED="$_EVT_PREPARED $_etp_l"

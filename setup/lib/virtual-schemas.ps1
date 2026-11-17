@@ -963,7 +963,7 @@ function Add-ExakitVsRust {
 # Test-ExakitVsPrepareSaid - is the database prepared without a question? A
 # person connecting at a console (picking the source was the permission) or
 # --yes. Then each step is one spinner line that its tick replaces, under the
-# "Preparing the database" header its caller printed. Twin of
+# "Enabling Federation" header its caller printed. Twin of
 # _exakit_vs_prepare_said.
 function Test-ExakitVsPrepareSaid {
     return ((Test-ExakitVsInteractive) -or [bool]$script:ExakitVsAssumeYes)
@@ -986,6 +986,8 @@ function Invoke-ExakitVsPrepStep {
     $previousQuiet = $script:ExakitQuietDetail
     # The spinner is ui.ps1's; a copy without it runs the step unanimated.
     $spin = [bool](Get-Command Start-ExakitSpinner -ErrorAction SilentlyContinue)
+    # The spinner sits where its tick line will: under the heading, not at the margin.
+    $script:UiSpinIndent = '      '
     if ($spin) { Start-ExakitSpinner $Doing }
     $fine = $false
     try {
@@ -994,6 +996,7 @@ function Invoke-ExakitVsPrepStep {
     } finally {
         $script:ExakitQuietDetail = $previousQuiet
         if ($spin) { Stop-ExakitSpinner }
+        $script:UiSpinIndent = '  '
     }
     if ($fine) { Ok $Done }
     return $fine
@@ -1122,7 +1125,7 @@ function Invoke-ExakitVsRun {
                 foreach ($l in @($run.Lines | Where-Object { $_ -like "FAIL *" })) { Write-ExakitLog "INFO" $l.Substring(5) }
             }
             $script:ExakitVsResult = Show-ExakitVsLines -Lines @($run.Lines | Where-Object { $_ -notlike "FAIL *" })
-            Write-ExakitVsStepHeading "Preparing the database"
+            Write-ExakitVsStepHeading "Enabling Federation"
         }
         else { $script:ExakitVsResult = Show-ExakitVsLines -Lines $run.Lines }
         if ($try -eq 2) { break }
@@ -2828,7 +2831,7 @@ function Invoke-ExakitVsTuiPrepare {
     if ($script:UiFancy -and $OnScreen -gt 0) {
         try { [Console]::Write(("`r{0}[{1}A{0}[0J" -f $script:UiEsc, $OnScreen)) } catch { }
     }
-    Write-ExakitVsStepHeading "Preparing the database"
+    Write-ExakitVsStepHeading "Enabling Federation"
     foreach ($lang in @("java", "rust")) {
         if ($missing -notcontains $lang) { continue }
         $script:EvtPrepared += $lang
