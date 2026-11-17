@@ -171,6 +171,7 @@ function Get-ExapumpExpectedSha256 {
 function Get-ExapumpPinnedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
     switch ($AssetName) {
+        "exapump-0.14.0-windows-x86_64.exe" { return "c3fbfdbc1a6e5017f6cd869b432f552f3f8999743ebdd0c9eae5e88421165fa4" }
         "exapump-0.13.0-windows-x86_64.exe" { return "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838" }
         "exapump-0.11.2-windows-x86_64.exe" { return "8a2e8199a94f1b21782e4c68179948bfa43217c82c9b9b2a25eaec4532305237" }
         default { return $null }
