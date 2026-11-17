@@ -2107,7 +2107,16 @@ function Invoke-ExakitUninstallRun {
         'exasol.exe' = Get-ExakitManifestValue 'components.personal.ownership_path'
         'exapump.exe' = Get-ExakitManifestValue 'components.exapump.ownership_path'
     }
-    foreach ($id in (@('exasol','exapump') + @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }))) {
+    # Read once, here: the registry is marketplace/catalog.json under the kit
+    # copy, and the kit home (that copy included) is gone by the time step 6
+    # sweeps the add-on launchers - asked again there, it threw "Cannot find
+    # path ...\.exasol-starter-kit\kit" and the uninstall stopped before the
+    # CLI binaries were handed to the deferred delete.
+    $uninstallAddonIds = @()
+    if (Get-Command Get-ExakitMarketplaceAddons -ErrorAction SilentlyContinue) {
+        $uninstallAddonIds = @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id })
+    }
+    foreach ($id in (@('exasol','exapump') + $uninstallAddonIds)) {
         if (-not (Test-ExakitComponentManaged $id)) { $protectedBinNames += $id }
     }
     function Test-PreservedEntry([string]$Entry) {
@@ -2370,9 +2379,7 @@ function Invoke-ExakitUninstallRun {
     # Marketplace add-on launchers are swept by registry id - a new add-on
     # needs no edit here.
     $binNames = @("exakit.cmd", "exapump.exe", "exasol.exe", "exakit.ps1")
-    if (Get-Command Get-ExakitMarketplaceAddons -ErrorAction SilentlyContinue) {
-        foreach ($addon in Get-ExakitMarketplaceAddons) { $binNames += "$($addon.Id).cmd" }
-    }
+    foreach ($addonId in $uninstallAddonIds) { $binNames += "$addonId.cmd" }
     # A staged <launcher>.cmd.new (the deferred shim writer's) whose swap has
     # not run yet goes too: it is the kit's file, and left behind it is a
     # stray launcher nobody removes.

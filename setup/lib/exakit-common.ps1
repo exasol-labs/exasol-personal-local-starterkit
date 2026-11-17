@@ -5548,7 +5548,9 @@ function Get-ExakitRepoRoot {
     $kitCopy = Join-Path $script:ExakitHome "kit"
     if (Test-Path (Join-Path $kitCopy "mcp")) { return $kitCopy }
     $commonDir = Split-Path -Parent $PSCommandPath
-    $repoRoot = (Resolve-Path (Join-Path $commonDir "..\..")).Path
+    # Not Resolve-Path: it throws once the folder is gone (an uninstall removes
+    # the kit copy this file was loaded from), and this answers "nothing found".
+    $repoRoot = [System.IO.Path]::GetFullPath((Join-Path $commonDir "..\.."))
     if (Test-Path (Join-Path $repoRoot "mcp")) { return $repoRoot }
     # When this finds nothing the callers print "Could not find the MCP package
     # source ..." and stop, and until now that was the whole record: the screen did
