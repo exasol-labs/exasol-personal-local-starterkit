@@ -7382,6 +7382,12 @@ function Show-ExakitMarketplaceMenu {
     # The fallback table shows selectable and covered add-ons together.
     $selectable = @($rows | Where-Object { $_.Id })
     $covered = @($rows | Where-Object { -not $_.Id })
+    # THE INSTALL'S TABLE: the offer's one table, whether or not the two still
+    # have to install - flat, no hint, the two on top. Twin of _mm_install_table
+    # in exakit_marketplace_menu.
+    $installTable = [bool](($env:EXAKIT_MARKETPLACE_INSTALL_TABLE -eq "1" -or $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -and $env:UI_TABLE_AUTO -ne "1")
+    # The spinner stops before anything is printed, whichever way the menu goes.
+    if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
     Write-Host ""
 
     if ($selectable.Count -eq 0) {
@@ -7423,24 +7429,46 @@ function Show-ExakitMarketplaceMenu {
     # rest in the registry's order. Twin of the reorder in exakit_marketplace_menu.
     if ($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1") {
         $firstIds = @(("" + $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $selectable = @(@($selectable | Where-Object { $firstIds -contains $_.Id }) + @($selectable | Where-Object { $firstIds -notcontains $_.Id }))
+        $byName = { (Get-ExakitMarketplaceAddonName $_.Id).ToLower() }
+        $selectable = @(@($selectable | Where-Object { $firstIds -contains $_.Id } | Sort-Object $byName) + @($selectable | Where-Object { $firstIds -notcontains $_.Id } | Sort-Object $byName))
     }
     $addonIds = New-Object 'System.Collections.Generic.List[string]'
     # Above the table, not under it: the Description column is a repository's
     # About line, which is a table cell and not a reference. The reference is
     # the help document, and nothing on this screen named it. Twin of the same
     # line in exakit_marketplace_menu.
-    if ($env:UI_TABLE_AUTO -ne "1" -and -not $env:EXAKIT_MARKETPLACE_AUTO_FIRST) { Info "Details on any add-on: exakit help <id>" }
+    if ($env:UI_TABLE_AUTO -ne "1" -and -not $installTable) { Info "Details on any add-on: exakit help <id>" }
+    # The two that install on their own and are in already: on top, drawn as
+    # settled rows ("installed"), not at the bottom as covered ones.
+    # The install's table names each add-on by its repository alone, no "(id)"
+    # beside it. Twin of the install-table labels in exakit_marketplace_menu.
+    $rowName = { param($id) if ($installTable) { Get-ExakitMarketplaceAddonName $id } else { Get-ExakitMarketplaceAddonLabel $id } }
+    $coveredTop = @()
+    if ($installTable) {
+        $coveredTop = @($covered | Where-Object { $script:ExakitAutoAddons -contains ("" + $_.Label) })
+        $covered = @($covered | Where-Object { $script:ExakitAutoAddons -notcontains ("" + $_.Label) })
+    }
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     $script:ExakitAddonTable.Activity = ""
     # The install's table (EXAKIT_MARKETPLACE_AUTO_FIRST): no "Select All" row and
     # no tree - two rows install on their own and the rest are single picks.
     # Twin of EXAKIT_ADDON_TABLE_NO_GROUP in _exakit_addon_table_build.
-    $flat = [bool]($env:EXAKIT_MARKETPLACE_AUTO_FIRST -and $env:UI_TABLE_AUTO -ne "1")
+    $flat = $installTable
     if (-not $flat) {
         [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
         [void]$addonIds.Add("")
+    }
+    $topRows = @()
+    foreach ($c in $coveredTop) {
+        $at = Add-ExakitTableRow -Kind "plain" -Label (& $rowName $c.Label) `
+            -Col2 ("" + $c.Version) -Col3 ("" + $c.Why) -Table $script:ExakitAddonTable
+        $tr = $script:ExakitAddonTable.Rows[$at - 1]
+        $tr.State = "done"
+        $tr.Tick = $false
+        $tr.Final = "Auto installed"
+        [void]$addonIds.Add("")
+        $topRows += $at
     }
     $addonCount = $selectable.Count
     $coveredCount = $covered.Count
@@ -7466,7 +7494,7 @@ function Show-ExakitMarketplaceMenu {
         # cell would make the row two lines tall - which is the frame-height
         # invariant the redraw depends on.
         $desc = ("" + $selectable[$i].Description) -replace "`r?`n", " "
-        $parentRow = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $selectable[$i].Id) `
+        $parentRow = Add-ExakitTableRow -Kind $kind -Label (& $rowName $selectable[$i].Id) `
             -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
         $pick = ($pre.Count -eq 0) -or ($pre -ccontains ("" + $selectable[$i].Id).ToLower())
@@ -7490,14 +7518,14 @@ function Show-ExakitMarketplaceMenu {
         # The state word goes to Description (the selection screen) AND to the
         # disabled note (the Status cell on the install screen), so the row says
         # the same thing on either.
-        $at = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $covered[$i].Label) `
+        $at = Add-ExakitTableRow -Kind $kind -Label (& $rowName $covered[$i].Label) `
             -Col2 ("" + $covered[$i].Version) -Col3 ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         Disable-ExakitTableRow -Row $at -Note ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         [void]$addonIds.Add("")
     }
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
-    $rowSkip = $addonCount + $kidCount + $coveredCount + 2
+    $rowSkip = $addonCount + $kidCount + $coveredCount + 2 + $topRows.Count
     if ($flat) { $rowSkip = $rowSkip - 1 }
     $script:ExakitAddonTableIds = $addonIds.ToArray()
     # Default: the group AND every available add-on pre-selected - the same
@@ -7530,6 +7558,7 @@ function Show-ExakitMarketplaceMenu {
         if ($autoRows.Count -gt 0) {
             $script:ExakitAddonTable.Col3 = ""
             $script:UiTableNoBox = $autoRows
+            $script:UiTableLocked = $autoRows   # ticked and locked, like the sample datasets
             if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
             Write-Host ""
             $script:ExakitAddonTableKeep = $true
@@ -7545,6 +7574,13 @@ function Show-ExakitMarketplaceMenu {
             $defaults = @($rowSkip)
         }
     }
+    if ($installTable -and -not $autoDone) {
+        # Nothing installs on its own: the same table, no Description, the two
+        # that are in already without a checkbox. Twin of the shell's.
+        $script:ExakitAddonTable.Col3 = ""
+        if ($topRows.Count -gt 0) { $script:UiTableNoBox = $topRows; $script:UiTableLocked = $topRows }
+        Write-Host ""
+    }
     $groupParent = 1
     $groupFirst = 2
     $groupLast = $addonCount + $kidCount + 1
@@ -7555,12 +7591,14 @@ function Show-ExakitMarketplaceMenu {
             -GroupFirst $groupFirst -GroupLast $groupLast -GroupMode "all" -OnScreen $onScreen)
     } finally {
         # The two keep no checkbox while the rest install in the same table.
-        if (-not $autoDone) { $script:UiTableNoBox = @() }
+        if (-not $autoDone -and -not $installTable) { $script:UiTableNoBox = @(); $script:UiTableLocked = @() }
     }
     if ($autoDone) {
         # What the two installs had to say: the table's rows already say it, so the
         # log keeps the lines (a warning still shows). Twin of the shell's.
         foreach ($note in $autoNotes) { if ($note.Kind -eq 'ok') { Write-ExakitLog "OK" $note.Text } else { Warn2 $note.Text } }
+    }
+    if ($installTable) {
         # Skip, or nothing more ticked: the two are in, and that is the whole answer.
         if ($selection.Count -eq 0 -or $selection -contains $rowSkip) { Reset-ExakitAddonTable; return }
     }
@@ -7621,7 +7659,7 @@ function Show-ExakitMarketplaceMenu {
         $keys = @($pickedKids | Where-Object { $_.StartsWith($id + ":") } | ForEach-Object { $_.Substring($id.Length + 1) })
         & $addon.ChildrenPickedFn -Keys $keys
     }
-    try { Invoke-ExakitMarketplaceApply -Ids $picked } finally { $script:UiTableNoBox = @() }
+    try { Invoke-ExakitMarketplaceApply -Ids $picked } finally { $script:UiTableNoBox = @(); $script:UiTableLocked = @() }
 }
 
 # Show-ExakitMarketplaceList - the READ-ONLY answer to "what add-ons exist and
@@ -7745,6 +7783,10 @@ function Reset-ExakitAddonTable {
     $script:ExakitAddonTableRow = 0
     $script:ExakitAddonTableChildRows = @{}
     $script:ExakitAddonTableLive = $false
+    # The rows without a checkbox (and the locked ones) go with the table. Twin of
+    # _exakit_addon_table_cleanup.
+    $script:UiTableNoBox = @()
+    $script:UiTableLocked = @()
 }
 
 # Get-ExakitAddonTableRow <id> - which row that add-on is on, or 0.
@@ -8002,7 +8044,7 @@ function Invoke-ExakitMarketplaceApplyPython {
                             Write-ExakitLog 'INFO' "Installing add-on: $id"
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
-                                    -Pct 0 -Ceiling 65 -Secs 40 -Phase 'installing' -Table $script:ExakitAddonTable
+                                    -Pct 0 -Ceiling 65 -Secs 40 -Phase $(if ($script:ExakitAddonTableKeep) { 'Auto installing' } else { 'installing' }) -Table $script:ExakitAddonTable
                             } else {
                                 Info "Installing add-on: $id"
                                 $script:ExakitAddonBarLive = [bool](Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40 -Phase "$id - installing")
@@ -8011,7 +8053,7 @@ function Invoke-ExakitMarketplaceApplyPython {
                         'validating' {
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
-                                    -Pct 65 -Ceiling 90 -Secs 8 -Phase 'validating' -Table $script:ExakitAddonTable
+                                    -Pct 65 -Ceiling 90 -Secs 8 -Phase $(if ($script:ExakitAddonTableKeep) { 'Auto installing' } else { 'validating' }) -Table $script:ExakitAddonTable
                             } elseif ($script:ExakitAddonBarLive) {
                                 Set-ExakitProgress -Pct 65 -Ceiling 90 -Secs 8 -Phase "$id - validating"
                             } else { Info "Validating add-on: $id" }
@@ -8019,19 +8061,22 @@ function Invoke-ExakitMarketplaceApplyPython {
                         'starting' {
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
-                                    -Pct 90 -Ceiling 100 -Secs 3 -Phase 'starting' -Table $script:ExakitAddonTable
+                                    -Pct 90 -Ceiling 100 -Secs 3 -Phase $(if ($script:ExakitAddonTableKeep) { 'Auto installing' } else { 'starting' }) -Table $script:ExakitAddonTable
                             } elseif ($script:ExakitAddonBarLive) {
                                 Set-ExakitProgress -Pct 90 -Ceiling 100 -Secs 3 -Phase "$id - starting"
                             } else { Info "Starting add-on: $id" }
                         }
                         'done' {
                             if ($script:ExakitAddonBarLive) { Stop-ExakitProgress; $script:ExakitAddonBarLive = $false }
+                            # The log keeps what the add-on said; the cell of one that installed
+                            # on its own says so. Twin of the shell's.
+                            $notes.Add(@{ Kind = 'ok'; Text = "$id installed$(if ($detail) { ' - ' + $detail })" })
+                            if ($script:ExakitAddonTableKeep) { $detail = 'Auto installed' }
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'done' `
                                     -Final (Get-ExakitAddonTableCell -Summary $detail -Seconds $seconds) `
                                     -Table $script:ExakitAddonTable
                             }
-                            $notes.Add(@{ Kind = 'ok'; Text = "$id installed$(if ($detail) { ' - ' + $detail })" })
                         }
                         'warning' { $notes.Add(@{ Kind = 'warn'; Text = "$($id): $detail" }) }
                         'failed' {
@@ -8195,13 +8240,14 @@ function Request-ExakitMarketplaceOffer {
         $env:EXAKIT_MARKETPLACE_PRESELECT = "none"
         $env:EXAKIT_MARKETPLACE_NO_TEXTUAL = "1"
         $env:EXAKIT_MARKETPLACE_AUTO_FIRST = ($ids -join ',')
+        $env:EXAKIT_MARKETPLACE_INSTALL_TABLE = "1"
         Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
         # A spinner until the table is up: the rows are read first. Twin of the shell's.
         Start-ExakitSpinner ""
         $script:ExakitMarketplaceSpinning = $true
         try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
             if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
-            foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST")) {
+            foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST", "EXAKIT_MARKETPLACE_INSTALL_TABLE")) {
                 Remove-Item "env:$name" -ErrorAction SilentlyContinue
             }
         }

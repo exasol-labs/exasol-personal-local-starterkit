@@ -1,4 +1,5 @@
 {
+  "help_hidden": true,
   "schema_version": 1,
   "id": "notebook",
   "kind": "addon",

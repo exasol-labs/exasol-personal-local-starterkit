@@ -37,7 +37,7 @@
       ]
     },
     {
-      "title": "Personas and notebooks",
+      "title": "Semantic layer and dashboards",
       "commands": [
         "persona",
         "notebook",
@@ -436,6 +436,7 @@
     },
     {
       "command": "persona",
+      "hidden": true,
       "options": "list | show <id> | plan [<id>] [--json] | add [<id>[,<id>]] | remove <id>",
       "summary": "Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.",
       "description": "A persona is a named set of the answers the installer already takes: which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit offers two, data-scientist and general, and they combine with a comma (both together load everything).\n\ndata-scientist: the Amazon sales and fraud transactions reference datasets (downloaded from the kit's datasets release), every AI client, the dash-server, notebook, json-tables and semantic-views add-ons. general: the kit's own TPC-H, energy and weather samples (bundled, loaded offline), every AI client.\n\nexakit persona add <id> (apply is its old name) joins the personas named to the ones this kit was set up as and brings in what is not here yet - the sample data, the AI clients, the add-ons - with no question, each step showing the installer's own table (plain lines without a terminal). What is already here is named once and not redone; a part that fails does not stop the others, and the closing line names the command that retries it. With no id, on a terminal, it asks the install's persona question with this kit's personas ticked; without a terminal it names the command instead. --yes is accepted and changes nothing.\n\nexakit persona plan [<id>] shows what the personas bring and what of it is still pending here - with no id, the ones recorded (--json for a script). exakit persona list and show <id> take --json too. exakit persona remove <id> takes a persona off the record and keeps everything it brought.\n\nAt install time: EXAKIT_PERSONA=<id>. An answer you give yourself replaces the persona's for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales loads only that dataset. Personas are files in personas/ (personas/README.md); adding one needs no installer code.",
@@ -457,7 +458,7 @@
     {
       "command": "marketplace",
       "options": "[<addon-id>...] | --list [--json]",
-      "summary": "Optional add-ons: dashboards, notebooks, UDFs, dbt, scheduling and more.",
+      "summary": "Optional add-ons: dashboards, JSON tables, semantic views, dbt, scheduling and more.",
       "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts: one object whose addons array carries id, status, installed, version, repo and docs - the repository as owner/name and the documentation URL - and name, url and about - the add-on repository's name, link and About on GitHub, as last looked up; version, repo, docs, url and about are null when unknown). The full reference for any add-on is on this machine: exakit help <id>. Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
       "environment": [
         "EXAKIT_MARKETPLACE_ADDONS=dash-server answers the menu non-interactively (ids csv, all, or none)"
@@ -498,6 +499,7 @@
     },
     {
       "command": "notebook",
+      "hidden": true,
       "options": "[jupyterlab | marimo] [check] [setup] [stop] [--no-browser] [--port <number>]",
       "summary": "Open JupyterLab or Marimo, connected to the local database (the notebook add-on).",
       "description": "Starts JupyterLab in the background on 127.0.0.1 (port 8888 unless you name one) with the kit's notebooks and the kernel 'Exasol (Starter Kit)', and opens it in your browser, logged in; the login token is a kit credential and is never printed. Every run first writes the kit's current database connection into the notebook connector's encrypted store, so a restart or a port change needs no edit, and copies any kit notebook you do not have yet (yours are never overwritten). check proves the connection and says whether JupyterLab runs, starting nothing; setup settles JupyterLab (yours, or the kit's after a yes) and starts nothing; stop stops the JupyterLab the kit started. JupyterLab is never installed unasked (EXAKIT_NOTEBOOK_JUPYTER=install|skip answers for a script) and never starts with the database or at login. Needs the add-on: exakit marketplace notebook.",
@@ -565,6 +567,7 @@
     },
     {
       "command": "workflow",
+      "hidden": true,
       "options": "list | show <id> [--json | -j]",
       "summary": "The workflow logs the notebook helpers write: list them, show one.",
       "description": "A notebook starts a workflow with nb.workflow('name') and gets an id, wf-YYYYMMDD-xxxxxx, that it prints with the log's path; nb.workflow(resume='wf-...') continues one from another kernel. While a workflow is active every step the helpers run - a statement (its session and statement ids, its SHA-256 and text), a Langfuse trace, an MLflow run, a descriptor draft or approval, a handoff, a dashboard revision, a model put - appends one JSON line carrying the id to ~/.exasol-starter-kit/workflows/<id>.jsonl, so a result can be traced back through every step that made it. Without a workflow nothing is written. The log never holds a credential: the helpers refuse a password, token, secret or api_key field and a DSN with a password in it. list shows one row per workflow (id, first and last timestamp, line count, name); show <id> prints its lines in order; --json gives the same as JSON. Exit 0; 1 when the add-on is not installed or there is no such workflow; 2 on bad arguments. Needs the notebook add-on, whose helpers write the log: exakit marketplace notebook.",
@@ -591,6 +594,7 @@
     },
     {
       "command": "mlflow",
+      "hidden": true,
       "options": "start|stop|disable|status|url|replay [action options]",
       "summary": "Start or stop the local MLflow server, show its address, or replay pending runs.",
       "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
@@ -712,6 +716,7 @@
     },
     {
       "command": "udf-setup",
+      "hidden": true,
       "options": "[--language python|rust] [--force] [--yes] [--json]",
       "summary": "Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).",
       "description": "python (the default, or EXAKIT_UDF_LANGUAGE): installs the launcher's official Python script language container (alias PYTHON3) when it is missing (--force reinstalls it), then creates and runs a smoke UDF that reports the Python version. rust (--language rust, or EXAKIT_UDF_LANGUAGE=rust): the pinned Rust container from the matrix in versions.json for your database's architecture and version, downloaded once into ~/.exasol-starter-kit/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR takes it from a folder or base URL instead), verified against its sha256 and size, installed as alias RUST; its smoke UDF arrives with the next kit step. Installing a container restarts the database: you are asked first (--yes answers, and so does a run with no terminal), running add-on services are stopped and started again once the database answers. Needs Exasol launcher 2.3.0 or later. --json prints one object and nothing else on stdout: {\"ok\": true, \"language\", \"alias\", \"container\": {\"url\", \"sha256\", \"arch\", \"db_versions\"}, \"smoke\": [{\"package\", \"version\"}]} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"} with step one of select-container, download, verify, install, smoke, so an agent branches on the language and the step. Exit 2 bad arguments (a language that is not python or rust, an unknown option); 3 the smoke UDF found a declared package missing; 4 no container in the matrix for this language, architecture or database version, or the downloaded file does not match its pinned digest (it is removed; run again); 5 not ready (the add-on is not installed, the database is not running, the launcher is older than 2.3.0, the download did not arrive, no disk, the install was not confirmed); 6 the launcher could not install the container (exakit logs); 7 the smoke UDF did not run, or reported a version other than the pinned one.",
@@ -773,6 +778,7 @@
     },
     {
       "command": "udf-use",
+      "hidden": true,
       "options": "default [--language python|rust] [--yes] [--json] | <container.tar.gz> [--alias NAME] [--language python|rust] [--yes] [--json] | --list",
       "summary": "Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.",
       "description": "udf-use default installs the matrix row (versions.json, components.udf-devkit.containers) for the language (--language, else EXAKIT_UDF_LANGUAGE, default python), your DATABASE's architecture (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one; EXAKIT_UDF_ARCH overrides) and its version: downloaded once into ~/.exasol-starter-kit/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR, a folder or base URL holding the file by name, instead of the release), verified against its pinned sha256 and size before the launcher sees it, installed as PYTHON3_ML (python: numpy, pandas, scikit-learn, scipy at the pinned versions, and the smoke UDF compares every package's version with the pin) or RUST (rust). udf-use <container.tar.gz> installs a container tarball under an alias (PYTHON3_CUSTOM unless --alias names one) and proves it the same way; the database restarts (--yes answers the question). --list shows the launcher's containers and which are installed. --json: the same objects as udf-setup ({\"ok\": true, \"language\", \"alias\", \"container\", \"smoke\"} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"}, step one of select-container, download, verify, install, smoke) and the same exit codes: 2 bad arguments (not a tarball, not a file, a bad alias, a language that is not python or rust); 3 a declared package missing; 4 no container for this language, architecture or database version, or a digest mismatch; 5 not ready (the add-on, the database, the launcher, the download or the disk; or not confirmed); 6 the launcher's install failed; 7 the smoke UDF did not pass.",
@@ -846,6 +852,7 @@
     },
     {
       "command": "udf-build",
+      "hidden": true,
       "options": "<requirements.txt> [--alias <NAME>] [--yes]",
       "summary": "Build a container with your pinned packages and install it.",
       "description": "Builds a script language container with every package of the requirements file (each pinned name==version, so the build is reproducible) using the notebook add-on's container tooling, installs it under an alias (PYTHON3_CUSTOM unless --alias names one) and proves every package with the smoke UDF; the database restarts. Needs the notebook add-on, a running Docker engine and about 25 GB free disk.",
@@ -881,6 +888,7 @@
     },
     {
       "command": "udf-file",
+      "hidden": true,
       "options": "<file> [<path in the bucket>]",
       "summary": "Copy a file into BucketFS and print the path a UDF reads it from.",
       "description": "A local database has no BucketFS upload service: its BucketFS is a folder in the deployment. This copies the file there (to the bucket's root, or the relative path you name - never outside the bucket) and prints the path a UDF opens, under /buckets/bfsdefault/default/.",
@@ -910,6 +918,7 @@
     },
     {
       "command": "rust-udf",
+      "hidden": true,
       "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--yes] [--json]",
       "summary": "Create, build and deploy a Rust scoring UDF from exported coefficients.",
       "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
@@ -971,6 +980,7 @@
     },
     {
       "command": "model",
+      "hidden": true,
       "options": "put|inspect|list|rm|prune|template [arguments]",
       "summary": "Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template.",
       "description": "Inspect, copy, list, remove or prune local model files. Each action has its own arguments; exakit model <action> --help shows them. --yes confirms trust for put and removal for prune; --replace belongs only to put.",

@@ -444,12 +444,18 @@ def render_all():
     by_name = {c.get("command"): c for c in commands_of(doc)}
     seen = set()
     for group in doc.get("groups", []):
-        section(group.get("title", ""))
+        rows = []
         for name in group.get("commands", []):
             entry = by_name.get(name)
             if not entry or name in seen:
                 continue
             seen.add(name)
+            rows.append(entry)
+        # A group whose every command is hidden leaves no empty heading behind.
+        if not rows:
+            continue
+        section(group.get("title", ""))
+        for entry in rows:
             cmd_line("", invocation_with_options("exakit", entry), "",
                      entry.get("summary", ""), pad=30)
     rest = [c for c in commands_of(doc) if c.get("command") not in seen]
@@ -462,7 +468,7 @@ def render_all():
     # The per-component command lists, which the overview no longer carries.
     # THIS is "every command", so this is where they belong - the overview was
     # showing more than --all did, which is backwards.
-    others = [key for key in sorted(docs) if key != "exakit"]
+    others = [key for key in sorted(docs) if key != "exakit" and not docs[key].get("help_hidden")]
     if others:
         section("Components")
         for key in others:
@@ -607,12 +613,17 @@ def catalog_rows(include_hidden=False):
     rows = []
     for key in sorted(docs):
         doc = docs[key]
+        # A page this release hides ("help_hidden": true) is listed nowhere; its
+        # commands still answer `exakit help <command>`, and --json marks them hidden.
+        doc_hidden = bool(doc.get("help_hidden"))
+        if doc_hidden and not include_hidden:
+            continue
         tool = "exakit" if key == "exakit" else key
         for entry in commands_of(doc, include_hidden=include_hidden):
             full = invocation(key, entry)
             parts = full.split(maxsplit=1)
             tool, command = parts[0], parts[1] if len(parts) > 1 else ""
-            hidden = bool(entry.get("hidden"))
+            hidden = bool(entry.get("hidden")) or doc_hidden
             row = {"tool": tool, "command": command,
                    "options": entry.get("options", ""),
                    "description": entry.get("summary") or entry.get("description", ""),

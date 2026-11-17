@@ -1239,7 +1239,8 @@ function Invoke-McpSetup {
         Confirm-ExakitRuntimeRunning
     }
 
-    Info "MCP setup will edit the selected AI client config files."
+    # Not on screen: the step heading already says what happens. The log keeps it. Twin of common.sh.
+    Write-ExakitLog "INFO" "MCP setup will edit the selected AI client config files."
 
     # EXAKIT_MCP_CLIENTS lets an agent-driven or scripted install pick clients
     # without a prompt (e.g. "claude", "claude,cursor", "all", or "1,2") - the

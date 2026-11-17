@@ -2003,10 +2003,12 @@ check "every catalog row carries a hidden key" "yes" \
     "$(printf '%s' "$_cat" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
 print("yes" if d["commands"] and all("hidden" in r for r in d["commands"]) else "no")' 2>/dev/null)"
-check "the repair commands are present and marked" "exakit rollback-kit2,exakit skills-install,exakit upgrade-kit2" \
+# Among the hidden rows (the parts this release hides are hidden too).
+check "the repair commands are present and marked" "yes" \
     "$(printf '%s' "$_cat" | python3 -c 'import json,sys
 d = json.load(sys.stdin)
-print(",".join(sorted(r["invocation"] for r in d["commands"] if r.get("hidden"))))' 2>/dev/null)"
+hidden = {r["invocation"] for r in d["commands"] if r.get("hidden")}
+print("yes" if {"exakit rollback-kit2", "exakit skills-install", "exakit upgrade-kit2"} <= hidden else "no")' 2>/dev/null)"
 # ...and the command the kit tells a machine to run is one the catalog admits exists.
 has "skills --json still names skills-install as a next" 'exakit skills-install' \
     "$(cat "$ROOT/setup/lib/common.sh")"

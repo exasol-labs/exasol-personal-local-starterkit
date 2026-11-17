@@ -5703,6 +5703,7 @@ _exakit_addon_table_build() {
     # EXAKIT_ADDON_TABLE_NO_GROUP: no "Select All" row and no tree - the install's
     # table, where two rows install on their own and the rest are single picks.
     _atb_flat=0
+    _atb_top=0
     [ "${EXAKIT_ADDON_TABLE_NO_GROUP:-0}" = 1 ] && _atb_flat=1
     # Via a newline-separated STRING, one line per row, so a row that is not an
     # add-on is an EMPTY line rather than a gap a space-separated list would
@@ -5710,6 +5711,21 @@ _exakit_addon_table_build() {
     if [ "$_atb_flat" = 1 ]; then
         _atb_row=0
         EXAKIT_ADDON_TABLE_IDS=""
+        # EXAKIT_ADDON_TABLE_DISABLED_TOP: rows that cannot be picked (in already)
+        # drawn ABOVE the pickable ones - the install's two, on top either way.
+        while IFS='|' read -r _atb_tid _atb_twhy _atb_tver; do
+            [ -n "$_atb_tid" ] || continue
+            # Drawn as a row this install settled ("✓ installed"), not a dim
+            # "covered" one: the same table either way. No checkbox (UI_TABLE_NOBOX).
+            printf 'plain|%s|0|done|||||%s|%s|%s|%s\n' \
+                "$(_exakit_addon_table_label "$_atb_tid")" "" "$(_exakit_addon_table_cell "Auto installed" "")" "$_atb_tver" "$_atb_twhy" >> "$_atb_f"
+            EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
+"
+            _atb_row=$(( _atb_row + 1 ))
+        done <<EXAKIT_ATB_TOP
+${EXAKIT_ADDON_TABLE_DISABLED_TOP:-}
+EXAKIT_ATB_TOP
+        _atb_top=$_atb_row
     else
         printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
         EXAKIT_ADDON_TABLE_IDS="
@@ -5823,7 +5839,7 @@ EXAKIT_ATB_DISABLED
     printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
     EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
-    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 - _atb_flat ))
+    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 - _atb_flat + ${_atb_top:-0} ))
     EXAKIT_TABLE_EXCLUSIVE="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # "all": the parent is a master toggle, checked only while EVERY child is.
     # Under the default "any" it stayed checked with one child ticked, so the
@@ -5922,6 +5938,8 @@ exakit_addon_table_child() {
 # text is in the logfile either way.
 _exakit_addon_table_cell() {
     _atc_el="$(printf '%5s' "(${2}s)")"
+    # No time (a row that was in before this run): the same width, blank.
+    [ -n "${2:-}" ] || _atc_el="     "
     _atc_text="${1:-installed}"
     # The room is what is left of the column's FLOOR after the tick glyph and
     # its space, the space before the elapsed time, and the time itself: the
@@ -5947,6 +5965,7 @@ _exakit_addon_table_cleanup() {
           "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop" \
           "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     UI_TABLE_NOBOX=""
+    UI_TABLE_LOCKED=""
     EXAKIT_ADDON_TABLE_STATE=""
     UI_TABLE_COL2=""
     UI_TABLE_COL2_YIELDS=0
@@ -6156,9 +6175,15 @@ EXAKIT_MM_ABOUT
         if [ -n "${EXAKIT_MARKETPLACE_ONLY:-}" ]; then
             case ",$EXAKIT_MARKETPLACE_ONLY," in *",$_mm_id,"*) ;; *) continue ;; esac
         fi
-        # The row's name: the repository's on GitHub, the id beside it when different.
-        _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_label "$_mm_id")
+        # The row's name: the repository's on GitHub, the id beside it when different
+        # - except in the install's table, where the name alone says it.
+        if [ "${EXAKIT_MARKETPLACE_INSTALL_TABLE:-0}" = 1 ]; then
+            _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_name "$_mm_id")
 "
+        else
+            _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_label "$_mm_id")
+"
+        fi
         # Disabled placeholders keep menu row indexes stable.
         if exakit_marketplace_addon_installed "$_mm_id"; then
             # Keep the version in its own table column.
@@ -6309,8 +6334,18 @@ EXAKIT_MM_EOF
     #
     # The install's spinner owns this line until the table is drawn (below).
     [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] || printf '\n'
+    # THE INSTALL'S TABLE: the offer's one table, whether or not the two still
+    # have to install - one flat list (no Select All, no tree, no hint), the two
+    # on top. Before this, a re-run (both already in) fell back to the
+    # marketplace's own tree menu with the spinner still drawing beside it.
+    _mm_install_table=0
+    if [ "${UI_TABLE_AUTO:-0}" != 1 ] && \
+       { [ "${EXAKIT_MARKETPLACE_INSTALL_TABLE:-0}" = 1 ] || [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ]; }; then
+        _mm_install_table=1
+    fi
 
     if [ "$_mm_selectable" -eq 0 ]; then
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
         info "Everything available is already covered."
         # Show each covered add-on and its state.
         while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
@@ -6324,6 +6359,7 @@ EXAKIT_MM_COVERED
 
     # A headless run needs an explicit selection; persona add sets UI_TABLE_AUTO.
     if [ -z "$(_exakit_prompt_tty)" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
         info "No terminal to ask on — nothing was installed."
         info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
         info "Install explicitly: exakit marketplace <id>   or EXAKIT_MARKETPLACE_ADDONS=<ids>|all exakit marketplace"
@@ -6351,9 +6387,27 @@ EXAKIT_MM_COVERED
     EXAKIT_ADDON_TABLE_LABELS="$_mm_labels"
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # The help command supplies details beyond the table.
-    [ "${UI_TABLE_AUTO:-0}" = 1 ] || [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] || info "Details on any add-on: exakit help <id>"
-    if [ -n "${EXAKIT_MARKETPLACE_AUTO_FIRST:-}" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
+    [ "${UI_TABLE_AUTO:-0}" = 1 ] || [ "$_mm_install_table" = 1 ] || info "Details on any add-on: exakit help <id>"
+    EXAKIT_ADDON_TABLE_DISABLED_TOP=""
+    if [ "$_mm_install_table" = 1 ]; then
         EXAKIT_ADDON_TABLE_NO_GROUP=1
+        # The two that install on their own and are in already: on top, like
+        # when they install here, not at the bottom as "covered".
+        _mm_ctop=""
+        _mm_crest=""
+        while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
+            [ -n "$_mm_cid" ] || continue
+            case " $EXAKIT_AUTO_ADDONS " in
+                *" $_mm_cid "*) _mm_ctop="$_mm_ctop$_mm_cid|$_mm_cwhy|$_mm_cver
+" ;;
+                *) _mm_crest="$_mm_crest$_mm_cid|$_mm_cwhy|$_mm_cver
+" ;;
+            esac
+        done <<EXAKIT_MM_CSPLIT
+$_mm_covered
+EXAKIT_MM_CSPLIT
+        EXAKIT_ADDON_TABLE_DISABLED_TOP="$_mm_ctop"
+        EXAKIT_ADDON_TABLE_DISABLED="$_mm_crest"
         # The ones that install on their own on top, then the rest in the registry's order.
         _mm_first=()
         _mm_rest=()
@@ -6363,10 +6417,14 @@ EXAKIT_MM_COVERED
                 *) _mm_rest+=("$_mm_one") ;;
             esac
         done
-        _mm_pick_ids=("${_mm_first[@]}" "${_mm_rest[@]}")
+        # Each group A-Z by the name the row shows.
+        _mm_first=($(for _mm_one in ${_mm_first[@]+"${_mm_first[@]}"}; do printf '%s|%s\n' "$(_exakit_addon_table_label "$_mm_one" | tr '[:upper:]' '[:lower:]')" "$_mm_one"; done | sort | cut -d'|' -f2))
+        _mm_rest=($(for _mm_one in ${_mm_rest[@]+"${_mm_rest[@]}"}; do printf '%s|%s\n' "$(_exakit_addon_table_label "$_mm_one" | tr '[:upper:]' '[:lower:]')" "$_mm_one"; done | sort | cut -d'|' -f2))
+        _mm_pick_ids=(${_mm_first[@]+"${_mm_first[@]}"} ${_mm_rest[@]+"${_mm_rest[@]}"})
     fi
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     EXAKIT_ADDON_TABLE_NO_GROUP=0
+    EXAKIT_ADDON_TABLE_DISABLED_TOP=""
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
     UI_TABLE_COL1="Add-on"
@@ -6392,6 +6450,8 @@ EXAKIT_MM_COVERED
         if [ "$_mm_auto_rows" != " " ]; then
             UI_TABLE_COL3=""
             UI_TABLE_NOBOX="$_mm_auto_rows"
+            # Ticked and locked, like the sample datasets: they install, no choice.
+            UI_TABLE_LOCKED="$_mm_auto_rows"
             # Nothing is ticked while the two install: the question comes after.
             ui_table_tick "$EXAKIT_ADDON_TABLE_STATE" ""
             UI_TABLE_LINES=0
@@ -6408,12 +6468,28 @@ EXAKIT_MM_COVERED
             EXAKIT_TABLE_DEFAULTS="$EXAKIT_ADDON_TABLE_ROW_SKIP"
         fi
     fi
+    if [ "$_mm_install_table" = 1 ] && [ "$_mm_auto_done" != 1 ]; then
+        UI_TABLE_COL3=""
+        # The two that are in already: on top, no checkbox.
+        _mm_trows=" "
+        _mm_ti=0
+        while IFS= read -r _mm_tline; do
+            [ -n "$_mm_tline" ] || continue
+            _mm_ti=$(( _mm_ti + 1 ))
+            _mm_trows="$_mm_trows$_mm_ti "
+        done <<EXAKIT_MM_TROWS
+${_mm_ctop:-}
+EXAKIT_MM_TROWS
+        [ "$_mm_trows" = " " ] || { UI_TABLE_NOBOX="$_mm_trows"; UI_TABLE_LOCKED="$_mm_trows"; }
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
+        printf '\n\n'
+    fi
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
     # The Description helps the choice and goes once it is made (see below).
     UI_TABLE_COL3=""
     # The two keep no checkbox while the rest install in the same table; the
     # table is gone once this returns (_exakit_addon_table_cleanup).
-    [ "$_mm_auto_done" = 1 ] || UI_TABLE_NOBOX=""
+    [ "$_mm_auto_done" = 1 ] || [ "$_mm_install_table" = 1 ] || UI_TABLE_NOBOX=""
     if [ "$_mm_auto_done" = 1 ]; then
         # What the two installs had to say: the table's rows already say it, so the
         # log keeps the lines (a warning still shows).
@@ -6423,6 +6499,8 @@ EXAKIT_MM_COVERED
         done <<EXAKIT_MM_AUTO_NOTES
 $_mm_auto_notes
 EXAKIT_MM_AUTO_NOTES
+    fi
+    if [ "$_mm_install_table" = 1 ]; then
         # Skip, or nothing more ticked: the two are in, and that is the whole answer.
         case ",$EXAKIT_TABLE_SELECTION," in
             *",$EXAKIT_ADDON_TABLE_ROW_SKIP,"*|,none,|,,) _exakit_addon_table_cleanup; return 0 ;;
@@ -6718,7 +6796,7 @@ exakit_marketplace_offer() {
         ui_spin_begin ""
         EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none \
             EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" EXAKIT_MARKETPLACE_SPINNING=1 \
-            exakit_marketplace_menu || true
+            EXAKIT_MARKETPLACE_INSTALL_TABLE=1 exakit_marketplace_menu || true
         ui_spin_end
     elif [ -n "$_mo_ids" ]; then
         # Nobody to ask: the two, drawn ticked and installed, and nothing else.
@@ -6827,7 +6905,7 @@ _exakit_marketplace_apply_python() {
             installing)
                 _mpa_current="$_mpa_id"
                 _exakit_log_file "INFO  Installing add-on: $_mpa_id"
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 installing
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo installing)"
                 if ! _exakit_addon_table_live; then
                     info "Installing add-on: $_mpa_id"
                     _mpa_bar="$(mktemp "${TMPDIR:-/tmp}/exakit-addon-bar.XXXXXX")" || _mpa_bar=""
@@ -6838,19 +6916,19 @@ _exakit_marketplace_apply_python() {
                 fi
                 ;;
             validating)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 validating
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo validating)"
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 65 90 8 "$_mpa_id · validating"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Validating add-on: $_mpa_id"; fi
                 ;;
             starting)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 starting
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo starting)"
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 90 100 3 "$_mpa_id · starting"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Starting add-on: $_mpa_id"; fi
                 ;;
             done)
                 if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; _mpa_bar_live=0; fi
                 [ -z "$_mpa_bar" ] || { rm -f "$_mpa_bar"; _mpa_bar=""; }
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" done '' '' '' '' "$(_exakit_addon_table_cell "$_mpa_detail" "$_mpa_seconds")"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" done '' '' '' '' "$(_exakit_addon_table_cell "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installed' || printf '%s' "$_mpa_detail")" "$_mpa_seconds")"
                 _mpa_notes="$_mpa_notes
 ok|$_mpa_id installed${_mpa_detail:+ — $_mpa_detail}"
                 ;;
@@ -12091,7 +12169,8 @@ exakit_mcp_setup() {
         fi
     fi
 
-    info "MCP setup will edit the selected AI client config files."
+    # Not on screen: the step heading already says what happens. The log keeps it.
+    _exakit_log_file "INFO  MCP setup will edit the selected AI client config files."
 
     EXAKIT_MCP_TABLE_STATE=""
     _mcp_rows=""                    # the table rows the progress phase fills in

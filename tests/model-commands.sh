@@ -178,7 +178,8 @@ contains "and template" "exakit model template" "$out"
 out="$(cli model put --help 2>&1)"
 contains "model put --help shows put" "--replace" "$out"
 lacks "and only put" "exakit model list" "$out"
-contains "the catalog lists the commands" "model put" "$(cli catalog model 2>&1)"
+# udf-devkit is hidden in this release: its commands answer help, and the catalog lists them nowhere.
+lacks "the catalog does not list the hidden add-on's commands" "model put" "$(cli catalog model 2>&1)"
 
 echo "rm removes a recorded model:"
 printf 'disposable' > "$WORK/disposable.pkl"
