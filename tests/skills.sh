@@ -868,7 +868,9 @@ has "...returning the override, not falling through" 'return $roots' "$_PS_ROOTS
 _PS_INSTALL="$(awk '/^function Install-ExakitSkills/,/^}$/' "$ROOT/setup/lib/exakit-common.ps1")"
 has "the twin reads what it placed before" 'Get-ExakitManifestValue "components.skills.installed"' "$_PS_INSTALL"
 has "...and unplaces a name the new set no longer carries" 'Remove-ExakitSkillCopy -Name $prevName' "$_PS_INSTALL"
-has "...only when the source set really dropped it" 'if (Test-Path (Join-Path (Join-Path $skillsSrc $prevName) "SKILL.md")) { continue }' "$_PS_INSTALL"
+# Kept only while the set still carries it AND it is still wanted here (a closed
+# persona or add-on gate retires it too, as on the shell side).
+has "...only when the source set dropped it or no longer wants it here" 'if ((Test-Path $prevMd) -and (Test-ExakitSkillWanted -Path $prevMd)) { continue }' "$_PS_INSTALL"
 has "...and says so out loud" 'Ok "Retired $retired $retiredUnit the new set no longer carries"' "$_PS_INSTALL"
 
 # SKL-03: an add-on-gated skill is not counted pending on EITHER half. The shell

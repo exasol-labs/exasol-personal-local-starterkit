@@ -1,6 +1,6 @@
 ---
 name: exakit
-description: The master skill for the Exasol Personal Local Starter Kit — what the kit is, what is on this machine and what each piece is for, how to find any command, option, persona, add-on or dataset from the kit's own JSON answers instead of guessing, and the MANDATORY order of tools for every task (loading data with exakit data-load first, reading through MCP, notebooks from the kit's own persona notebooks, dashboards on dash-server) and the semantic layer (Exasol Semantic Views - read the models first, answer from their metrics, build one model across sources, keep it refreshed). Load it before any other Exasol skill on a machine that has exakit; its rules win over every other skill, the components' own ones included. Triggers — "what is the starter kit", "what can this kit do", "which tool should I use", "load this file into the database", "import my data", "create a new notebook", "make me a notebook", "which notebook should I use", "which personas does this kit have", "what add-ons are available", "which datasets does the kit have", "what options does exakit X take", "how do I install/remove/update an add-on", "is there a command for", "what is installed on this machine", "what parameters does", "list everything the starter kit offers", "semantic view", "semantic model", "semantic layer", "create a semantic view across my sources", "refresh the semantic model", "what do my metrics mean", "link my sources", "how do my tables join", "insights across my sources".
+description: The master skill for the Exasol Personal Local Starter Kit — what the kit is, what is on this machine and what each piece is for, how to find any command, option, persona, add-on or dataset from the kit's own JSON answers instead of guessing, and the MANDATORY order of tools for every task (loading data with exakit data-load first, reading through MCP, dashboards on dash-server) and the semantic layer (Exasol Semantic Views - read the models first, answer from their metrics). Load it before any other Exasol skill on a machine that has exakit; its rules win over every other skill, the components' own ones included. Triggers — "what is the starter kit", "what can this kit do", "which tool should I use", "load this file into the database", "import my data", "what add-ons are available", "which datasets does the kit have", "what options does exakit X take", "how do I install/remove/update an add-on", "is there a command for", "what is installed on this machine", "what parameters does", "list everything the starter kit offers", "semantic view", "semantic model", "semantic layer", "what do my metrics mean", "how do my tables join", "insights across my sources".
 ---
 
 # exakit — the starter kit, and how to work on it
@@ -8,7 +8,7 @@ description: The master skill for the Exasol Personal Local Starter Kit — what
 The **Exasol Personal Local Starter Kit** puts an Exasol database on this
 computer and wires everything around it: an SQL/bulk-load CLI (exapump), a
 read-only MCP connection for AI clients, a Python driver (pyexasol), sample
-datasets, personas, AI skills, and optional add-ons from its marketplace. One
+datasets, AI skills, and optional add-ons from its marketplace. One
 command operates all of it: `exakit` (`exakit.cmd` on Windows; call
 `~/.local/bin/exakit` when a non-interactive shell does not find it).
 
@@ -28,8 +28,6 @@ add-on or dataset the kit does not report does not exist here: say so.
 |---|---|---|
 | Which commands exist, with which options? | `exakit catalog --json` (search: `exakit catalog <word> --json`) | `commands[]`: `invocation`, `usage`, `options`, `parameters`, `examples`, `help_command`; `hidden: true` is not for normal use |
 | How exactly does one command or add-on work? | `exakit help <command> --json`, `exakit help <add-on id> --json` | a command's `environment` and `exit_codes`; an add-on's `role`, `platforms`, `environment` and `management` (its exact install / update / uninstall / uninstall_preview commands) |
-| Which personas exist, what does each bring? | `exakit persona list --json`, `exakit persona show <id> --json` | `id`, `title`, `summary`, `datasets`, `mcp_clients`, `notebooks[]`, `start_here`, and `addons` / `services` / `udf_language` when the persona has them; `recorded` = the personas this kit was set up as |
-| What of a persona is still missing? | `exakit persona plan [<id>] --json` | `datasets.loaded/pending`, `addons.installed/pending`, `nothing_pending` |
 | Which add-ons exist, which are installed? | `exakit marketplace --list --json` | `addons[]`: `id`, `status`, `installed`, `ownership`, `version`, `reason` (why one is not offered here) |
 | Is the database up, what data is loaded? | `exakit status --json` | `status`, `datasets_loaded`, `services`, `remedy`; exit 0 running, 3 stopped, 4 not installed |
 | Versions, installed and advertised | `exakit version --json` | one row per component and add-on |
@@ -50,17 +48,15 @@ fixes it — relay that exact line rather than composing your own.
 |---|---|---|
 | Exasol Personal (the database) | everything; `exakit start` / `stop` / `status` | `exasol-runtime` |
 | exakit itself | discovery, updates, logs, uninstall | this one, `exakit-lifecycle` |
-| Personas | what this machine is set up for | `exakit-personas` |
 | MCP connection (read-only user) | the AI client reading the database | `exasol-mcp` (setup), `exasol-mcp-server` (using its tools) |
 | `exakit sql` | one statement from a shell, with remedies; reads unless `--write` | this one |
 | exapump | bulk upload, multi-statement scripts, BucketFS files | `exasol-exapump`, `exasol-database`, `exasol-bucketfs` |
-| pyexasol | Python programs outside notebooks | `exasol-pyexasol` + §7 below |
+| pyexasol | Python programs | `exasol-pyexasol` + §6 below |
 | Exasol SQL | writing correct SQL | `exasol-sql-dialect`, `exasol-system-tables`, `exasol-table-design`, `exasol-import-export`, `exasol-udfs` |
 | External sources | `exakit connect` / `exakit source`: a remote database or files queried in place as a virtual schema | `exasol-virtual-schemas` (the shared rules), then the `exasol-vs-<connector>` skill it names |
 | Marketplace | choosing, installing, updating, removing add-ons | `exasol-marketplace` |
-| notebook add-on | JupyterLab / Marimo with the kit's persona notebooks | `notebook` |
-| dash-server add-on | live dashboards | `dash-server` (server), `exasol-dash` (writing the app) |
-| udf-devkit add-on (hidden for now: not offered; a kit that has it keeps it) | Python/Rust UDF containers, models in BucketFS, local MLflow | `udf-devkit` |
+| dash-server add-on | every dashboard and chart | `dash-server` (server), `exasol-dash` (writing the app) |
+| semantic-views add-on | the semantic layer: models, metrics, verified questions | `exasol-semantic-analyst` (answering), `exasol-semantic-modeler` (building), `exasol-semantic-reviewer` (reviewing) |
 | exasol-scheduler add-on | SQL on a cron schedule | `exasol-scheduler` |
 | json-tables add-on | JSON data as tables | `json-tables` |
 | dbt-exasol add-on | SQL models with dbt | `dbt-exasol` |
@@ -126,106 +122,34 @@ WHERE MODEL_NAME = 'all_data';
 - Join along the model's relationships before any link you find yourself.
 - A column marked sensitive is never a dimension and never a public fact: never
   chart, group or send it to a model.
-- The target (the outcome to predict) is chosen by the user. It is in the
-  column map, not the model: `exakit describe <id> --show --json` →
-  `slots.target`. Never guess it.
-- **Semantic Views not installed** (`SEMANTIC_CATALOG` does not exist): the
-  first approval installs it; or the user runs `exakit marketplace semantic-views`.
+- The target (the outcome to predict) is chosen by the user. Never guess it.
+- **Semantic Views not installed** (`SEMANTIC_CATALOG` does not exist): offer
+  `exakit marketplace semantic-views`, and install only when the user agrees.
 
 **A table that is in no model: warn, then ask.** List every table you are about
 to use that is no entity of any model, before your first finding:
 
 > ⚠ Not in a semantic model: `VS_CATALOG.inventory_weekly`, `RETAIL_SIGNALS.CUSTOMER_REVIEWS`.
 > Their meanings below are my reading of names and values, not yours.
-> Approve a column map so every agent and notebook reads the same meaning:
->
-> ```bash
-> exakit describe VS_CATALOG.inventory_weekly          # proposes a role per column, writes nothing
-> exakit describe VS_CATALOG.inventory_weekly --approve --role target=<COLUMN>   # approves; rebuilds the schema's model
-> ```
->
-> To answer across sources (sample data, your files, any number of external
-> sources) in one model:
->
-> ```bash
-> exakit describe --model sales_360 --table AMAZON_SALES.ORDER_LINES --table VS_LOGISTICS.COURIER_DAILY \
->   --link AMAZON_SALES.ORDER_LINES.STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE --ai --dry-run
-> ```
->
-> (without `--dry-run` it publishes). In a notebook: `nb.review_roles(connection, "VS_CATALOG.inventory_weekly")`
-> and **Approve column map**, then the **Semantic views** card or `nb.semantic_model(connection, ...)`.
-> Should I go on with my reading, or will you approve the maps first?
+> Should I go on with my reading, or set up a model for them first?
 
-Wait for the answer. Approving and building a model write to the database, so
-they are the user's commands to run, never yours through MCP (the MCP user is
-read-only). `--ai` lets the user's own model propose business names, synonyms
-and metrics from metadata only; every proposal is checked before it is applied.
+Wait for the answer.
 
-**Asked for insights across several sources? Build the model first, then answer from it.** When a question
-needs tables of more than one schema (a sample dataset, the user's files, external sources) and no model covers
-them, do this in order. Steps 1 to 4 only read.
+**Building or changing a model** is the `exasol-semantic-modeler` skill
+(placed with the semantic-views add-on), reviewing one the
+`exasol-semantic-reviewer` skill. A model change writes to the database, so it
+is the user's to approve: show what it will do and wait for a yes. The MCP user
+is read-only and cannot write it.
 
-1. See what exists: `exakit describe --models`, `exakit source list --json`, and the schemas through MCP.
-2. Find how the sources join: `exakit describe --links A,B,C`. It compares values, not names, and needs no
-   foreign key. Each link comes back with its evidence (how many rows match, which values do not).
-   - `[high]`: a text key the data backs. Use it.
-   - `[low]`: a link between plain numbers. Numbers in a sequence match by chance, so the data cannot prove it.
-     Use it only if the meaning of the two columns says so, and say that to the user.
-   - `[partial]`: values that only partly match (spellings). Not a link: report it as data to clean.
-3. Add what you understand from the meaning. You read the column names, notes and the question; the search does
-   not. Check each pair you believe in: `exakit describe --links A,B --link S.T.COL=S.T.KEY`. A pair the data
-   contradicts comes back `[rejected]`: drop it. Never join on a pair you did not check.
-4. Show the plan: `exakit describe --model <NAME> --schemas A,B,C --find-links --ai --dry-run` (add
-   `--link S.T.COL=S.T.KEY` for each number link the user should confirm). Give the user the views, the links
-   with their evidence, the tables left out for want of an approved column map, and ask for a yes.
-5. On the user's yes, publish: the same command without `--dry-run`. With a shell (Claude Code, Codex) you may run
-   it yourself after that yes; through MCP alone you cannot, so hand the command to the user. Each link's
-   evidence is stored in the model (`SEMANTIC_CATALOG.CUSTOM_EXTENSIONS`, vendor `exakit`), so the next agent
-   reads why a join is there.
-6. Answer from the model with Semantic SQL, and say which model and metrics you used.
+**Not in this release: `exakit describe`, `exakit semantic`, `exakit board`.**
+They run on the notebook add-on, which this release does not offer, and stop
+with "The notebook add-on is not installed". Never run them, never build a plan
+around them, and never offer to install the notebook add-on to reach them.
 
-A table with no approved column map is not in a model. Name it and the command that approves it; never guess
-its meaning into a model.
-
-**Keep the models current.** A model is built from the column maps and links
-approved at that time. Approving a column map rebuilds its schema's model and
-every multi-source model the table is in. After a load that reshapes a table, a
-new source, or a link the user agreed to, say which model is stale and give the
-command: `exakit describe --model <NAME> --refresh` (`exakit describe --models`
-lists them; in a notebook `nb.refresh_semantic(connection, "<NAME>")`). A
-column map whose table changed since approval is shown as a draft again by
-`exakit describe`: treat its table as missing from the model and say so.
-
-**The rest of the semantic layer is `exakit semantic` - the notebook's own functions, never SQL of your own
-against `SEMANTIC_ADMIN`.** Read freely; every write waits for the user's yes, after you showed what it will do.
-
-| Need | Command | Writes |
-|---|---|---|
-| A model's fields, with what each holds and why it is used | `exakit semantic fields all_data --json` | no |
-| A draft of the data map to show the user (grains, links with their type, starts, metrics, rules), never saved by itself | `exakit semantic draft --table S.T --table S.T` | no |
-| The fields that match the user's words, best first (use it before picking names from a large model) | `exakit semantic search "revenue country" --model all_data --json` | no |
-| The SQL for a question, from metric and dimension names | `exakit semantic compile '{"model": "all_data", "object": "ORDER_LINES", "metrics": ["total_amount"], "dimensions": ["state"]}' --json` - a refusal with choices means ask the user which one | no |
-| Questions already reviewed (use them before drafting) | `exakit semantic verified all_data --json` | no |
-| Keep an approved question in the model | `exakit semantic verify all_data --object ORDER_LINES --name "Revenue by state" --question "..." --request '{...}'` | yes |
-| The same rows in two sources (customers here and in a CRM) | `exakit semantic fuse all_data --table MY_DATA.CUSTOMERS --same-as VS_CRM.CUSTOMERS [--key CUST_ID] [--wins model\|other]` - a dry run; show its result, then add `--apply` on a yes | only with `--apply` |
-| The same rows with different ids, or older rows elsewhere | `exakit semantic fuse ... --mapping-table S.XREF --mapping-local COL --mapping-key COL`, or `--split-column DATE --split-at YYYY-MM-DD` - a dry run; `--apply` on a yes; `exakit semantic coverage all_data` after a split | only with `--apply` |
-| The model's fusion, its column maps | `exakit semantic fusion all_data`, `exakit semantic column-maps all_data` | no |
-| A view the user already wrote (one table, grouped, SUM / COUNT / AVG / MIN / MAX) | `exakit semantic adopt logistics MART_SEMANTIC.SHIPPING --dry-run` shows the view and the statement; drop `--dry-run` on a yes. A join, a WHERE or several tables is refused: approve the tables' column maps instead | without `--dry-run` |
-| A dashboard's tiles after the model changed | `exakit board recheck <NAME>` lists tiles whose SQL the model now writes differently; `--update` on a yes | only with `--update` |
-| What Semantic Views finds wrong with a model, in its own words | `exakit semantic validate all_data` | no |
-| A metric as Semantic Views explains it | `exakit semantic explain all_data <VIEW> <METRIC>` | no |
-| The data map's versions, kept in the model; an older one saved again | `exakit semantic versions all_data`; `exakit semantic restore-version all_data <N>` on a yes | restore-version |
-| Suggested changes to review; a decision on one | `exakit semantic suggestions all_data`; `exakit semantic review <ID> certified\|rejected --why "..."` on the user's word | review |
-| Faster dashboards on large tables | `exakit semantic totals all_data --store <VIEW> --metric M --dimension D` on a yes; `--refresh <NAME>` later | yes |
-| A view a BI tool can read | `exakit semantic freeze SCHEMA.NAME --sql "SELECT ... FROM SEM_ALL_DATA.<VIEW> ..."` on a yes; `exakit semantic frozen all_data` | freeze |
-| A lost store, a lost model | `exakit semantic restore-maps all_data` (add `--write` on a yes); `exakit semantic refresh all_data` | `--write`, refresh |
-
-**A dashboard of several answers is `exakit board`, on Dash Server.** Show each query to the user; pinning it is
-its approval: `exakit board pin <NAME> --page <PAGE> --question "..." --sql "SELECT ..."` (from a verified question
-or a compiled request where there is one). `exakit board show <NAME>`, `move`, `remove`, `kind` arrange it.
-`exakit board preview <NAME>` builds a health-checked preview - a tab per page, filters on the columns every
-tile of a page returns - and gives its URL. Only after the user opened it and said the figures are right:
-`exakit board publish <NAME> --figures-checked`. One chart or a custom app is still the dash-server tools.
+**A dashboard, of one chart or many, is Dash Server.** Show each query to the
+user first, then build the app with the `dash-server` (the server and its
+tools) and `exasol-dash` (writing the app) skills, and give the user its URL.
+If dash-server is not installed, offer `exakit marketplace dash-server`.
 
 ## 4. MANDATORY: the order of tools for each task
 
@@ -234,9 +158,9 @@ it, and say why when you do.
 
 **Load data**
 
-1. A bundled dataset: `exakit data-load <dataset id>` (ids: `persona show
-   <id> --json` → `datasets`, or the data dictionary). Several:
-   `EXAKIT_DATASETS=tpch,energy exakit data-load`.
+1. A bundled dataset: `exakit data-load <dataset id>` (ids: `retail_sales`,
+   `bank_transaction`; the data dictionary describes them). Several:
+   `EXAKIT_DATASETS=retail_sales,bank_transaction exakit data-load`.
 2. The user's file or folder — CSV, Parquet, JSON/NDJSON/GeoJSON, a tabular
    `.tsv`/`.txt`: `exakit data-load <path>`. Without a terminal, answer its
    questions with variables: `EXAKIT_DATA_TABLE=SCHEMA.TABLE exakit data-load
@@ -251,8 +175,7 @@ it, and say why when you do.
    that neither tool takes: SQL `IMPORT` (`exasol-import-export`), run with
    `exakit sql --write`.
 
-Never load row by row from a Python loop of `INSERT`s. In a notebook, use
-`nb.load_own_file(...)` (§6).
+Never load row by row from a Python loop of `INSERT`s.
 
 Data that should stay where it is (another database, a lake, a bucket) is not
 loaded: `exakit connect` queries it in place through a virtual schema
@@ -266,7 +189,7 @@ agent connects with the unattended `exakit connect <connector> ...` form.
 1. The MCP tools — they connect as the read-only user, so nothing can change.
 2. `exakit sql "<statement>" [--json]` — one statement, with remedies.
 3. `exapump sql -p starter-kit` — a multi-statement script.
-4. pyexasol — only inside a Python program (§7); inside a notebook, `exakit.nb`.
+4. pyexasol — only inside a Python program (§6).
 
 **Change data or schema** — only when the user asked. Show the SQL first,
 then `exakit sql --write`. `exakit sql`, exapump and pyexasol connect as the
@@ -277,72 +200,21 @@ write the read-only MCP path refused.
 
 | Task | First choice | Then |
 |---|---|---|
-| Notebook work | the kit's notebooks via `exakit notebook` (§6) | — never a bare `pip install jupyter` |
-| Dashboard or chart | approved answers on pages: `exakit board pin` / `preview` / `publish` (§3); one custom app: dash-server (`dash-server`, `exasol-dash`) | if missing: offer `exakit marketplace dash-server` — no other dashboard tool |
+| Dashboard or chart | dash-server (`dash-server`, `exasol-dash`) — never `exakit board` (§3) | if missing: offer `exakit marketplace dash-server` — no other dashboard tool |
 | Run SQL on a schedule | exasol-scheduler | offer `exakit marketplace exasol-scheduler` |
-| UDFs, model scoring in the database | udf-devkit commands (`exakit udf-setup`, `udf-use`, `model put`, `udf-file`) | `exasol-udfs` for the `CREATE SCRIPT` itself |
-| Files for UDFs | `exakit udf-file` / `exakit model put` | `exasol-bucketfs` |
+| UDFs | `exasol-udfs` for the `CREATE SCRIPT` itself | — |
+| Files for UDFs | `exasol-bucketfs` | — |
 | JSON data | `exakit data-load <file.json>` (uses json-tables) | `json-tables` |
 | SQL models | dbt-exasol | — |
 | Install, update, remove anything | `exakit marketplace`, `exakit update`, `exakit uninstall <id> --dry-run` | never `pip`, `brew`, `exasol install`, `uvx` by hand |
 
-## 5. Personas: what to reach for first
+## 5. What to reach for first
 
-Confirm what the user's persona brings with `exakit persona show <id> --json`
-(the recorded ones: `persona list --json` → `recorded`); its `start_here` is
-the first step. Then, in this order:
+On this kit: the AI client over MCP on the loaded sample data (`exakit status
+--json` → `datasets_loaded`), then `exakit sql` for a statement from a shell,
+then a dashboard on Dash Server (§3) when the user wants to see it.
 
-| Persona | First | Then | Then |
-|---|---|---|---|
-| `data-scientist` | its notebooks in order: `00_quickstart`, `01_explore`, `02_ask_your_data`, `03_share` | its datasets through MCP / `exakit sql` | `03_share` → a dashboard on dash-server |
-| `ml-engineer` (not offered in this release: only a kit set up with it before) | its notebooks in order: `00_quickstart`, `01_train` (logs to the local MLflow), `02_rust_score`, `03_score_external_model` | udf-devkit: `exakit udf-setup`, `exakit model put`, `exakit mlflow` | MCP / `exakit sql` to check the scores |
-| `general` | the AI client over MCP on TPC-H, energy and weather | `exakit sql` | add a persona when the user wants more: `exakit persona add <id>` |
-
-Anything a persona lists as pending (`persona plan --json`) is brought in with
-`exakit persona add <id>` — not by installing pieces by hand.
-
-## 6. MANDATORY: notebooks
-
-The kit's notebooks are connected, tested starting points. Use them; never
-start from an empty notebook or write connection code by hand.
-
-- **Open** with `exakit notebook` (JupyterLab) or `exakit notebook marimo`.
-  Without a terminal name the tool. `exakit notebook check` proves the
-  connection without starting anything. The notebook add-on must be installed
-  (`exakit marketplace notebook`).
-- **Where they are:** `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/`
-  (JupyterLab) and `~/.exasol-starter-kit/notebooks/marimo/<persona>/` (Marimo).
-  The persona's `notebooks[]` in `persona show <id> --json` gives each path,
-  relative to those folders (`data-scientist/00_quickstart.ipynb`).
-- **Their documentation** opens from any cell: `nb.docs()` (this persona's
-  section), `nb.docs("descriptor")` (search), `nb.docs(nb.describe)` (one
-  command's page). It covers every `exakit.nb` helper, the column map and who
-  approves it, workflows, sources and hand-off, and is served from this
-  computer by the kit, with no internet. The pages' sources are in the kit copy,
-  `notebook/docs/content/docs/` (`llms.txt` at the site's root lists them).
-- **Use first, in this order:** the persona's notebook for the task (see §5).
-  Changing what it analyses is usually one assignment in its first cell
-  (`DATASET = ...`, or a data file with a descriptor beside it).
-- **Editing:** edit the kit's notebook in place when the user asks for a change
-  to it. An edited kit notebook is never overwritten by an update, and a
-  deleted one is not copied back.
-- **A new notebook** goes into the **same persona folder**, named with the next
-  step number and a short topic (`04_churn_by_region.ipynb`; Marimo:
-  `04_churn_by_region.py`), and **starts as a copy of that persona's
-  `00_quickstart`** (or of the kit notebook closest to the task) so it keeps
-  the `Exasol (Starter Kit)` kernel and the connection cells. Then edit the
-  copy. Connect only through the helpers:
-
-  ```python
-  import exakit.nb as nb
-  conn = nb.connect()                         # the kit's connection; no host, user or password in a cell
-  df = nb.sql(conn, "SELECT ...")
-  nb.load_own_file("~/data/x.csv", "MY_DATA.X", {...})   # loading from a notebook (a folder: exakit data-load)
-  ```
-- **Never** put a host, user, password or token in a notebook cell, its
-  output, or a file beside it.
-
-## 7. This machine's connection facts
+## 6. This machine's connection facts
 
 - The database: `127.0.0.1:8563`, with a **self-signed certificate that the kit
   pins**: its SHA-256 fingerprint is `runtime.tls_fingerprint` in
@@ -361,18 +233,17 @@ start from an empty notebook or write connection code by hand.
   default`; `exakit sql` needs neither.
 - pyexasol: use the interpreter the kit recorded (`exakit info --json` →
   `components.pyexasol.python`; usually `~/.exasol-starter-kit/pyexasol-venv/bin/python`).
-  Never install into the system Python. Dataframes need pandas, which that
-  environment does not have — use a notebook, which does.
+  Never install into the system Python.
 - Bundled datasets each live in their own schema (`TPCH`, `ENERGY`, `WEATHER`,
-  bundled and loaded offline, and per persona `AMAZON` and `FRAUD`, downloaded
-  from the kit's `datasets` release); the user's own files default to `STARTER_KIT`. `starter-kit` is
+  the sample datasets `RETAIL_SALES` and `BANK_TRANSACTION`); the user's own
+  files default to `STARTER_KIT`. `starter-kit` is
   a profile name, not a schema.
 - MCP reads through a dedicated read-only user; that boundary is real. The
   other connections are admin.
 
-## 8. Before anything that changes the machine
+## 7. Before anything that changes the machine
 
 The read-only commands in §1 are always safe. For an install, update, data
 load, write or removal: say what will happen, run the preview where there is
-one (`exakit uninstall <id> --dry-run`, `exakit persona plan <id> --json`),
+one (`exakit uninstall <id> --dry-run`),
 and go ahead only when the user wants it.

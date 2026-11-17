@@ -18,8 +18,7 @@ EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace
 ```
 
 Interactively, `exakit marketplace` lists it with Space to select and Enter to
-install. The Data Scientist persona installs it for you, before the notebook, so the
-notebooks' Share step has its server.
+install. Every install puts it in on its own, together with JSON Tables.
 
 ## The two endpoints
 

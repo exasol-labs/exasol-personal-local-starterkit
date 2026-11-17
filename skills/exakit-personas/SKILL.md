@@ -1,5 +1,6 @@
 ---
 name: exakit-personas
+persona: data-scientist
 description: Work with the starter kit's personas — named bundles of datasets, AI clients, add-ons and services such as Data Scientist, ML Engineer and General — listing them, showing what one brings, seeing what is still pending, adding one to an installed kit, removing one, choosing one at install time, and defining a new one as a file. Use it whenever the user talks about what the machine is for, a role, or a persona. Triggers — "what personas are there", "set the kit up for data science", "add the ML engineer persona", "I am a data scientist", "what does a persona install", "what is still missing for my persona", "remove a persona", "switch persona", "make my own persona", "EXAKIT_PERSONA".
 ---
 

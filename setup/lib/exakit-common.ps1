@@ -6301,9 +6301,13 @@ function Install-ExakitSkills {
     foreach ($prevName in $previous) {
         $prevName = "$prevName".Trim()
         if (-not $prevName) { continue }
-        if (Test-Path (Join-Path (Join-Path $skillsSrc $prevName) "SKILL.md")) { continue }
+        # Kept: still in the set and still wanted here. One whose gate is now
+        # closed (a persona this kit was never set up as, an add-on not
+        # installed) goes too. Twin of the same rule in exakit_install_skills.
+        $prevMd = Join-Path (Join-Path $skillsSrc $prevName) "SKILL.md"
+        if ((Test-Path $prevMd) -and (Test-ExakitSkillWanted -Path $prevMd)) { continue }
         Remove-ExakitSkillCopy -Name $prevName
-        Write-ExakitLog "OK" "Retired skill: $prevName (no longer in the kit's skill set)"
+        Write-ExakitLog "OK" "Retired skill: $prevName (no longer in the kit's skill set, or not for this kit)"
         $retired++
     }
     if ($retired -eq 1) { $retiredUnit = "skill" } else { $retiredUnit = "skills" }
