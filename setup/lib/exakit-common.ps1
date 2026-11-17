@@ -7938,9 +7938,9 @@ function Set-ExakitAddonProgress {
     Set-ExakitAddonActivity -Message $Phase
     # Table rows already show the add-on ID.
     if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
-        # The ones installing on their own say so through every step of theirs. Twin of the shell's.
+        # The two installing on their own say just "installing" through every step. Twin of the shell's.
         $shown = $Phase
-        if ($script:ExakitAddonTableKeep) { $shown = 'Auto installing' }
+        if ($script:ExakitAddonTableKeep) { $shown = 'installing' }
         Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "running" `
             -Pct $Pct -Ceiling $Ceiling -Secs $Secs -Phase $shown -Table $script:ExakitAddonTable
         return
@@ -8047,7 +8047,7 @@ function Invoke-ExakitMarketplaceApplyPython {
                             Write-ExakitLog 'INFO' "Installing add-on: $id"
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
-                                    -Pct 0 -Ceiling 65 -Secs 40 -Phase $(if ($script:ExakitAddonTableKeep) { 'Auto installing' } else { 'installing' }) -Table $script:ExakitAddonTable
+                                    -Pct 0 -Ceiling 65 -Secs 40 -Phase 'installing' -Table $script:ExakitAddonTable
                             } else {
                                 Info "Installing add-on: $id"
                                 $script:ExakitAddonBarLive = [bool](Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40 -Phase "$id - installing")
@@ -8056,7 +8056,7 @@ function Invoke-ExakitMarketplaceApplyPython {
                         'validating' {
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
-                                    -Pct 65 -Ceiling 90 -Secs 8 -Phase $(if ($script:ExakitAddonTableKeep) { 'Auto installing' } else { 'validating' }) -Table $script:ExakitAddonTable
+                                    -Pct 65 -Ceiling 90 -Secs 8 -Phase $(if ($script:ExakitAddonTableKeep) { 'installing' } else { 'validating' }) -Table $script:ExakitAddonTable
                             } elseif ($script:ExakitAddonBarLive) {
                                 Set-ExakitProgress -Pct 65 -Ceiling 90 -Secs 8 -Phase "$id - validating"
                             } else { Info "Validating add-on: $id" }
@@ -8064,7 +8064,7 @@ function Invoke-ExakitMarketplaceApplyPython {
                         'starting' {
                             if ($script:ExakitAddonTableRow -gt 0) {
                                 Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State 'running' `
-                                    -Pct 90 -Ceiling 100 -Secs 3 -Phase $(if ($script:ExakitAddonTableKeep) { 'Auto installing' } else { 'starting' }) -Table $script:ExakitAddonTable
+                                    -Pct 90 -Ceiling 100 -Secs 3 -Phase $(if ($script:ExakitAddonTableKeep) { 'installing' } else { 'starting' }) -Table $script:ExakitAddonTable
                             } elseif ($script:ExakitAddonBarLive) {
                                 Set-ExakitProgress -Pct 90 -Ceiling 100 -Secs 3 -Phase "$id - starting"
                             } else { Info "Starting add-on: $id" }
