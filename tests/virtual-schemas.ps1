@@ -1513,8 +1513,8 @@ Remove-Item Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $env:EXAKIT_PUBLIC_IP_URL = $ipUrl
 $script:shown.Clear()
 $picked = @(Invoke-ExakitVsPick)
-# 8f7e44c9: the menu is the table alone; the IP is the review's "Whitelist IP" line.
-Check "the menu is the table, no line before it" "MENU" ((@($script:shown) | Select-Object -First 1) -join "|")
+# 8f7e44c9: one "Whitelist IP" line, then the table - no "Tick one or more sources" line.
+Check "the menu's first line is this computer's public IP, then the table" "INFO Whitelist IP: 203.0.113.7|MENU" ((@($script:shown) | Select-Object -First 2) -join "|")
 Check "...the answer is kept for the rest of the command" "203.0.113.7" $env:_EXAKIT_VS_PUBLIC_IP
 $t = $script:menuTable
 Check "the table: the Source column alone, no Status column either" "Source||0" ("{0}|{1}{2}|{3}" -f $t.Col1, $t.Col2, $t.Col3, $t.StatMin)

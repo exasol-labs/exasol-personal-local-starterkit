@@ -17,9 +17,17 @@
 #
 #   pwsh -NoProfile -File tests/data-question-ps.ps1
 $ErrorActionPreference = "Stop"
-$repo = Split-Path -Parent $PSScriptRoot
+$shipped = Split-Path -Parent $PSScriptRoot
 $work = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-dq-$([guid]::NewGuid().ToString('N'))"
 New-Item -ItemType Directory -Force -Path $work | Out-Null
+# This release offers retail_sales and bank_transaction only (the others are hidden=yes); what the data question
+# does with several bundled datasets is still the kit's, so it runs on a kit copy with them on (tests/release_kit.py),
+# as tests/data-question.sh does.
+$py = Get-Command python3 -ErrorAction SilentlyContinue
+if (-not $py) { $py = Get-Command python -ErrorAction SilentlyContinue }
+if (-not $py) { throw "FAIL: no python on PATH for tests/release_kit.py" }
+$repo = ("" + (& $py.Source -c "import sys; sys.path.insert(0, sys.argv[1] + '/tests'); from pathlib import Path; from release_kit import kit_with_hidden_parts_on; print(kit_with_hidden_parts_on(Path(sys.argv[2]), personas=(), addons=()))" $shipped (Join-Path $work "release-kit"))).Trim()
+if (-not $repo -or -not (Test-Path -LiteralPath (Join-Path $repo "setup"))) { throw "FAIL: tests/release_kit.py made no kit copy" }
 $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 foreach ($v in "EXAKIT_PERSONA", "EXAKIT_DATASETS", "EXAKIT_DATA_FILE", "EXAKIT_DATASETS_PRESELECT",
@@ -186,7 +194,7 @@ try {
     $tmText = (Get-Content -Raw (Join-Path $repo "setup/lib/ui.ps1"))
     Has "Invoke-ExakitTableMenu: Enter on Skip answers Skip alone" `
         'if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }' $tmText
-    Has "...a disabled row is not pickable" 'if ($Table.Rows[$i - 1].State -ne "disabled") { [void]$pickable.Add($i) }' $tmText
+    Has "...a disabled row is not pickable" 'if ($Table.Rows[$i - 1].State -ne "disabled" -and -not (@($script:UiTableNoBox) -contains $i)) { [void]$pickable.Add($i) }' $tmText
     Has "...and the cursor starts on a pickable row" 'if (-not $pickable.Contains($cur)) { $cur = [int](& $step $cur 1) }' $tmText
 
     Write-Host "exakit data-load [-Force] [<file-or-folder>|<dataset>]:"
@@ -277,7 +285,13 @@ try {
     Lacks "...and it is not an error" "THREW" $out
     Has "an unknown id among them still refuses" "THREW REJECT: Unknown marketplace add-on" (Market "json-tables,not-a-tool")
     $offer = (Get-Content -Raw (Join-Path $repo "setup/lib/exakit-common.ps1"))
-    Lacks "a persona's offer lists the whole marketplace, never only its own" '$env:EXAKIT_MARKETPLACE_ONLY = ' $offer
+    # The one narrowed table is Install-ExakitAutoAddons' (aaabaca8: the add-ons every kit gets, installed
+    # without a question); every offer outside it lists the whole marketplace.
+    $autoAt = $offer.IndexOf("function Install-ExakitAutoAddons")
+    $autoEnd = $offer.IndexOf("`nfunction ", $autoAt + 1)
+    if ($autoEnd -lt 0) { $autoEnd = $offer.Length }
+    $outsideAuto = $offer.Substring(0, [Math]::Max($autoAt, 0)) + $offer.Substring($autoEnd)
+    Lacks "a persona's offer lists the whole marketplace, never only its own" '$env:EXAKIT_MARKETPLACE_ONLY = ' $outsideAuto
 
     Write-Host "after the table: your own file, then the external source:"
     # Picked in any order, the file's question comes first and the connect
