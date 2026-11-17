@@ -8201,6 +8201,7 @@ function Show-ExakitConnectionPanel {
             exapumpPath    = Get-ExakitManifestValue "components.exapump.path"
             exapumpProfile = Get-ExakitManifestValue "components.exapump.profile"
             mcpConfigs     = Get-ExakitManifestValue "components.mcp_server.configs"
+            tlsFp          = Get-ExakitTlsFingerprint
         }
     }
     $type    = $panel.type
@@ -8224,7 +8225,16 @@ function Show-ExakitConnectionPanel {
     if ($pwFile) { Write-ExakitPanelLine "Admin pass:   $(Get-ExakitTilde $pwFile)" }
     if ($mcpUser) { Write-ExakitPanelLine "MCP user:     $mcpUser" }
     if ($mcpPwf)  { Write-ExakitPanelLine "MCP pass:     $(Get-ExakitTilde $mcpPwf)" }
-    Write-ExakitPanelLine "TLS:          enabled (self-signed certificate)"
+    # The pin, from the manifest only (no handshake: `exakit status` compares
+    # it with the live certificate). The command has its own row, so the panel
+    # stays inside 80 columns. Twin of the same rows in common.sh.
+    if ($panel.tlsFp) {
+        Write-ExakitPanelLine ("TLS:          enabled (self-signed certificate) {0} pinned" -f $script:UiMidDot)
+        Write-ExakitPanelLine "              details: exakit tls-pin"
+    } else {
+        Write-ExakitPanelLine ("TLS:          enabled (self-signed certificate) {0} not pinned" -f $script:UiMidDot)
+        Write-ExakitPanelLine "              pin it: exakit tls-pin --accept"
+    }
     if ($exapumpPath) { Write-ExakitPanelLine "exapump:      $(Get-ExakitTilde $exapumpPath) (profile: $exapumpProfile)" }
     # Stdio MCP configs live inside each AI client's own config file, not in
     # the kit's mcp/ dir (that holds only pre-edit backups) - mirrors common.sh.

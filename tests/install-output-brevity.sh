@@ -61,7 +61,7 @@ manifest_get() {
     return 0
 }
 manifest_set() { return 0; }
-# connection_panel batches its six reads through manifest_get_many (one python
+# connection_panel batches its reads through manifest_get_many (one python
 # process instead of six), so stubbing manifest_get alone leaves it empty.
 # One line PER KEY, empty ones included: the panel reads the answers
 # positionally, so a missing key that emits nothing would shift every row after
@@ -165,6 +165,20 @@ has "exakit info still has the runtime"  "Runtime:"     "$FULL"
 has "...the manifest"                    "Manifest:"    "$FULL"
 has "...the logs"                        "Logs:"        "$FULL"
 has "...and the MCP user"                "MCP user:"    "$FULL"
+# The TLS rows name the command that shows or makes the pin, read from the
+# manifest alone (the stub above records none).
+has "exakit info: unpinned TLS row" "enabled (self-signed certificate) · not pinned" "$FULL"
+has "...with the command that pins"  "pin it: exakit tls-pin --accept" "$FULL"
+eval "$(declare -f manifest_get | sed '1s/manifest_get/_brevity_manifest_get/')"
+manifest_get() {
+    [ "$1" = runtime.tls_fingerprint ] && { printf 'ab%062d\n' 0; return 0; }
+    _brevity_manifest_get "$@"
+}
+PINNED_PANEL="$(connection_panel 2>&1)"
+has "exakit info: pinned TLS row"    "enabled (self-signed certificate) · pinned" "$PINNED_PANEL"
+has "...with the command that shows it" "details: exakit tls-pin" "$PINNED_PANEL"
+lacks "...and no pin-it hint"         "pin it:" "$PINNED_PANEL"
+eval "$(declare -f _brevity_manifest_get | sed '1s/_brevity_manifest_get/manifest_get/')"
 check "the install panel is shorter than the reference one" "yes" \
     "$([ "$(printf '%s\n' "$SHORT" | grep -c .)" -lt "$(printf '%s\n' "$FULL" | grep -c .)" ] && echo yes || echo no)"
 

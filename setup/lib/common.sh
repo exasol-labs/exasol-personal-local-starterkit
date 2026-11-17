@@ -13665,17 +13665,18 @@ connection_panel() {
     # to read one key out of the same file: ~53ms each, ~890ms for the panel.
     # The spinner above explains that wait; batching removes it.
     #
-    # THE ORDER OF THESE SIX NAMES IS THE CONTRACT with the loop below. Every
+    # THE ORDER OF THESE NAMES IS THE CONTRACT with the loop below. Every
     # variable is initialised first, so a missing manifest leaves them empty
     # and the panel prints "unknown" exactly as it did before.
-    _type=""; _dsn=""; _user=""; _pwfile=""; _mcp_user=""; _mcp_pwfile=""
+    _type=""; _dsn=""; _user=""; _pwfile=""; _mcp_user=""; _mcp_pwfile=""; _cp_tls_fp=""
     _cp_values="$(manifest_get_many \
         runtime.type \
         runtime.dsn \
         runtime.user \
         runtime.password_file \
         components.mcp_server.connection.user \
-        components.mcp_server.connection.password_file 2>/dev/null)"
+        components.mcp_server.connection.password_file \
+        runtime.tls_fingerprint 2>/dev/null)"
     _cp_i=0
     while IFS= read -r _cp_line; do
         _cp_i=$((_cp_i + 1))
@@ -13686,6 +13687,7 @@ connection_panel() {
             4) _pwfile="$_cp_line" ;;
             5) _mcp_user="$_cp_line" ;;
             6) _mcp_pwfile="$_cp_line" ;;
+            7) _cp_tls_fp="$_cp_line" ;;
         esac
     done <<_EXAKIT_CONN_EOF
 $_cp_values
@@ -13705,7 +13707,19 @@ _EXAKIT_CONN_EOF
     [ -n "$_pwfile" ]    && ui_panel_line "Admin pass:   $(ui_tilde "$_pwfile")"
     [ -n "$_mcp_user" ]  && ui_panel_line "MCP user:     $_mcp_user"
     [ -n "$_mcp_pwfile" ] && ui_panel_line "MCP pass:     $(ui_tilde "$_mcp_pwfile")"
-    ui_panel_line "TLS:          enabled (self-signed certificate)"
+    # The pin, from the manifest only (no handshake here: `exakit status`
+    # compares it with the live certificate). The command goes on its own row:
+    # on the TLS row it would take the panel past 80 columns. The same test as
+    # exakit_tls_recorded_fingerprint: 64 lowercase hex digits or no pin.
+    case "$_cp_tls_fp" in ''|*[!0-9a-f]*) _cp_tls_fp="" ;; esac
+    [ "${#_cp_tls_fp}" -eq 64 ] || _cp_tls_fp=""
+    if [ -n "$_cp_tls_fp" ]; then
+        ui_panel_line "TLS:          enabled (self-signed certificate) · pinned"
+        ui_panel_line "              details: exakit tls-pin"
+    else
+        ui_panel_line "TLS:          enabled (self-signed certificate) · not pinned"
+        ui_panel_line "              pin it: exakit tls-pin --accept"
+    fi
 
     _exapump="$(manifest_get components.exapump.path 2>/dev/null)"
     if [ -n "$_exapump" ]; then
