@@ -345,6 +345,16 @@ function Stop-ExakitSpinner {
     try { [Console]::Write("`r$($script:UiEsc)[K$($script:UiEsc)[?25h") } catch { }  # clear line, restore cursor
 }
 
+# Stop-ExakitSpinnerAll - the line is wanted NOW (a table is about to be drawn
+# by someone else, Python included): stop the animation whatever references are
+# still out, and clear its line. A reference taken by a nested Start and never
+# given back made Stop-ExakitSpinner only count down, and the owner's last frame
+# stayed frozen above the add-ons table. Twin of ui_spin_end_all in ui.sh.
+function Stop-ExakitSpinnerAll {
+    $script:UiSpinNested = 0
+    Stop-ExakitSpinner
+}
+
 # Suspend-ExakitSpinner / Resume-ExakitSpinner - print a line without losing the
 # spinner. Twins of ui_spin_pause / ui_spin_resume in ui.sh.
 #

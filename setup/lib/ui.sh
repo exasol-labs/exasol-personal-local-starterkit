@@ -408,6 +408,16 @@ ui_spin_end() {
     _ui_step_stop_spinner
 }
 
+# ui_spin_end_all — the line is wanted NOW (a table is about to be drawn by
+# someone else, Python included): stop the animation whatever references are
+# still out, and clear its line. A reference taken by a nested ui_spin_begin
+# and never given back made ui_spin_end only count down, and the owner's last
+# frame stayed frozen above the add-ons table. Twin of Stop-ExakitSpinnerAll.
+ui_spin_end_all() {
+    _UI_SPIN_NESTED=0
+    _ui_step_stop_spinner
+}
+
 # ui_spin_pause / ui_spin_resume — print a line without losing the spinner.
 #
 # A spinner OWNS its line and rewrites it every 80ms, so anything printed while
