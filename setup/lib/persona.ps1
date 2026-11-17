@@ -305,7 +305,13 @@ function Invoke-ExakitPersonaData {
         -Body {
             $env:EXAKIT_DATA_TABLE_COMPACT = "1"
             try { Request-ExakitDataLoadOffer -KitRoot $KitRoot }
-            finally { Remove-Item Env:EXAKIT_DATA_TABLE_COMPACT -ErrorAction SilentlyContinue }
+            finally {
+                Remove-Item Env:EXAKIT_DATA_TABLE_COMPACT -ErrorAction SilentlyContinue
+                # What the compact table kept through its progress goes with it.
+                $script:UiTableNoBox = @()
+                $script:UiTableLocked = @()
+                if ($script:UiTable) { $script:UiTable.Col1 = "Dataset"; $script:UiTable.StatMin = $null }
+            }
         })
 }
 
