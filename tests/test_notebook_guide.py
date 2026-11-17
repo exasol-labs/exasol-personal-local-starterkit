@@ -40,6 +40,7 @@ _spec.loader.exec_module(build_tool)
 
 HAVE_ANYWIDGET = importlib.util.find_spec("anywidget") is not None
 HAVE_SKLEARN = importlib.util.find_spec("sklearn") is not None and importlib.util.find_spec("numpy") is not None
+HAVE_NUMPY = importlib.util.find_spec("numpy") is not None
 
 CARDS = {"00_quickstart": "guide.start()", "01_explore": "guide.explore()", "02_ask_your_data": "guide.ask()",
          "03_share": "guide.share()"}
@@ -1282,6 +1283,7 @@ class SeveralTablesTest(unittest.TestCase):
         self.assertEqual(("done", "saved"), steps["Data map"])
         self.assertEqual("src_add", flow["add"]["action"])
 
+    @unittest.skipUnless(HAVE_NUMPY, "numpy is not installed here (the kit's notebook environment has it)")
     def test_a_live_table_waits_for_a_click_and_only_the_chosen_tables_are_linked(self):
         explore = importlib.import_module("exakit_guide.screens.explore")
         card = explore.Prepare.__new__(explore.Prepare)
@@ -2050,6 +2052,7 @@ class PrepareDraftsTest(unittest.TestCase):
         self.assertTrue(self.module._PREPARING["VS_TEST.ORDERS"].wait(5))     # finished before the next test
 
 
+@unittest.skipUnless(HAVE_ANYWIDGET, "anywidget is not installed here (the kit's notebook environment has it)")
 class PinTitleTest(unittest.TestCase):
     """A pinned answer keeps the title you give it: rewritten SQL answers something else than the question drafted."""
 

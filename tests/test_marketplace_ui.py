@@ -245,7 +245,8 @@ class MarketplaceModelTest(unittest.TestCase):
         (self.root / "marketplace/ui.py").write_text("", encoding="utf-8")
         home = self.root / "kit home"
         terminal = SimpleNamespace(isatty=lambda: True)
-        with patch.dict(os.environ, {"EXAKIT_HOME": str(home)}, clear=True), \
+        # A home of its own: the environment is cleared, and on Windows Path.home() needs USERPROFILE.
+        with patch.dict(os.environ, {"EXAKIT_HOME": str(home), "HOME": str(self.root), "USERPROFILE": str(self.root)}, clear=True), \
              patch("launch.sys.platform", "linux"), \
              patch("launch.sys.stdin", terminal), patch("launch.sys.stdout", terminal), \
              patch("launch.shutil.which", return_value="/usr/bin/uv"), \
@@ -256,7 +257,8 @@ class MarketplaceModelTest(unittest.TestCase):
     def test_ui_uses_the_managed_python_version(self) -> None:
         (self.root / "marketplace/ui.py").write_text("", encoding="utf-8")
         terminal = SimpleNamespace(isatty=lambda: True)
-        with patch.dict(os.environ, {"EXAKIT_MANAGED_PYTHON_VERSION": "3.13"}, clear=True), \
+        with patch.dict(os.environ, {"EXAKIT_MANAGED_PYTHON_VERSION": "3.13", "HOME": str(self.root),
+                                     "USERPROFILE": str(self.root)}, clear=True), \
              patch("launch.sys.platform", "linux"), \
              patch("launch.sys.stdin", terminal), patch("launch.sys.stdout", terminal), \
              patch("launch.shutil.which", return_value="/usr/bin/uv"), \
