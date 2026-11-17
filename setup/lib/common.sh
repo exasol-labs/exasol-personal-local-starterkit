@@ -6914,7 +6914,7 @@ _exakit_marketplace_apply_python() {
             installing)
                 _mpa_current="$_mpa_id"
                 _exakit_log_file "INFO  Installing add-on: $_mpa_id"
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo installing)"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 installing
                 if ! _exakit_addon_table_live; then
                     info "Installing add-on: $_mpa_id"
                     _mpa_bar="$(mktemp "${TMPDIR:-/tmp}/exakit-addon-bar.XXXXXX")" || _mpa_bar=""
@@ -6925,12 +6925,12 @@ _exakit_marketplace_apply_python() {
                 fi
                 ;;
             validating)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo validating)"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 validating
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 65 90 8 "$_mpa_id · validating"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Validating add-on: $_mpa_id"; fi
                 ;;
             starting)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo 'Auto installing' || echo starting)"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 starting
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 90 100 3 "$_mpa_id · starting"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Starting add-on: $_mpa_id"; fi
                 ;;
