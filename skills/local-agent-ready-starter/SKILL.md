@@ -75,13 +75,9 @@ releases:
   Claude Code CLI; also `claude_desktop`, `claude_code`, `codex`, `cursor`, `copilot`,
   `gemini`, `opencode`, `continue`, `all`, comma-separated); or `EXAKIT_SKIP_MCP=1` to set
   MCP up later via `exakit mcp-setup`
-- what the machine is for → `EXAKIT_PERSONA=general` (or `data-scientist`,
-  comma-separated to combine; `ml-engineer` is not offered in this release): a named set of the answers below; an answer you set yourself
-  wins for that one variable (it replaces the persona's: name the persona's add-ons too to keep them)
-- which data to load → `EXAKIT_DATASETS=tpch,weather` (bundled dataset ids; wins over
+- which data to load → `EXAKIT_DATASETS=retail_sales,bank_transaction` (bundled dataset ids; wins over
   `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip the samples);
-  `EXAKIT_DATA_FILE=/abs/path.csv` loads the user's own file after them (a persona's
-  datasets included). `external` in `EXAKIT_DATASETS` never starts the connect wizard
+  `EXAKIT_DATA_FILE=/abs/path.csv` loads the user's own file after them. `external` in `EXAKIT_DATASETS` never starts the connect wizard
   unattended: it prints the `exakit connect` hint, so connect a source afterwards with
   `exakit connect <connector> ...` (`exasol-virtual-schemas`)
 - on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)

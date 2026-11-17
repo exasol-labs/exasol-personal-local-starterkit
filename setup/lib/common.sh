@@ -10810,9 +10810,16 @@ exakit_install_skills() {
     _isk_retired=0
     for _isk_name in $_isk_prev; do
         [ -n "$_isk_name" ] || continue
-        [ -f "$_skills_src/$_isk_name/SKILL.md" ] && continue
+        # Kept: still in the set and still wanted here. A skill the set still
+        # carries but whose gate is now closed - a persona this kit was never set
+        # up as (a persona-gated skill), an add-on not installed - goes
+        # too: placed by an older kit, it kept steering agents to commands this
+        # kit no longer offers.
+        if [ -f "$_skills_src/$_isk_name/SKILL.md" ] && _exakit_skill_wanted "$_skills_src/$_isk_name/SKILL.md"; then
+            continue
+        fi
         _exakit_skill_unplace "$_isk_name"
-        _exakit_log_file "OK    Retired skill: $_isk_name (no longer in the kit's skill set)"
+        _exakit_log_file "OK    Retired skill: $_isk_name (no longer in the kit's skill set, or not for this kit)"
         _isk_retired=$((_isk_retired + 1))
     done
     [ "$_isk_retired" -gt 0 ] && \
