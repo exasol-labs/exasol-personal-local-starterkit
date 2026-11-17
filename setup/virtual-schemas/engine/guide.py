@@ -11,8 +11,9 @@ left out; a guide that is missing falls back to the catalog's own words.
 Standard library only, and no credential is read: it runs on the kit's Python
 or any python3, before the kit is installed too. The output is ASCII (the
 Windows console and Windows PowerShell 5.1 pipes), one line per row, each
-"<style>|<text>" for the shell to colour: T title, N normal, D dimmed,
-H heading, A a command. Exit 0 with a guide, 2 for a word that is no
+"<style>|<text>" for the shell to colour: T title, F the Federation title
+(bold and accented), N normal, D dimmed, H heading, A a command. A command is
+never cut: a line wider than the window wraps whole. Exit 0 with a guide, 2 for a word that is no
 connector (the list follows it), 10 with --exact for a word that is no
 connector's id or alias (nothing printed: the caller's own help answers).
 """
@@ -220,11 +221,26 @@ def connect_options(defs):
 
 
 def options(defs, width):
-    synopsis = connect_options(defs)
-    if synopsis:
-        for line in wrap(synopsis, width, "Options:    ", "            "):
-            say("D", line)
-    say("D", "Every option: exakit help connect")
+    say("D", "All options       exakit help connect")
+
+
+def repo(defs):
+    """owner/name of the kit's repository, from setup/help/exakit.json."""
+    try:
+        doc = json.load(open(os.path.join(os.path.dirname(defs), "help", "exakit.json"), encoding="utf-8"))
+        return ascii_text(doc.get("repo") or "") or "exasol-labs/exasol-personal-local-starterkit"
+    except (OSError, ValueError):
+        return "exasol-labs/exasol-personal-local-starterkit"
+
+
+def github_url(defs, name):
+    """The rendered guide on GitHub, on main (what every kit is released from)."""
+    return "https://github.com/%s/blob/main/docs/virtual-schemas/%s" % (repo(defs), name)
+
+
+def links(defs, path, name):
+    say("D", "Guide on GitHub   " + github_url(defs, name))
+    say("D", "Guide offline     " + shown_path(path))
 
 
 def readme_point(readme, label):
@@ -260,13 +276,16 @@ def guide_list(defs, docs, width):
     text = load(os.path.join(docs, "README.md"))
     entries = catalog(defs)
     head, parts = sections(text or "", 2)
-    title = next((plain(l[2:]) for l in head if l.startswith("# ")), "")
-    say("T", title or "exakit connect: the connectors")
+    say("F", "Federation - query your external data from the local Exasol, without copying it.")
+    for line in wrap("Each source you connect becomes a virtual schema (VS_<NAME>) you query with SQL.", width):
+        say("N", line)
+    say("N", "")
     rows = {}
     for row in table("\n".join(head)):
         if len(row) >= 4:
             rows[plain(row[0])] = row
     col = max(len(e["id"]) for e in entries) + 2
+    say("H", "  " + "Source".ljust(col) + "What you need")
     for e in entries:
         row = rows.get(e["id"])
         if row:
@@ -280,16 +299,17 @@ def guide_list(defs, docs, width):
         for i, line in enumerate(wrap(need, width - col - 2, "", "")):
             say("N", "  " + (e["id"] if i == 0 else "").ljust(col) + line)
     say("N", "")
-    say("A", "One connector's guide: exakit connect <connector> --help")
-    easiest = find(parts, "Easiest")
-    if easiest:
-        paras = paragraphs(prose(easiest))
-        if paras:
-            for line in wrap(plain(re.split(r"(?<=\.)\s", paras[0])[0]), width):
-                say("N", line)
-    options(defs, width)
+    for label, command, note in (
+            ("Start", "exakit connect", "pick sources in a menu"),
+            ("One guide", "exakit connect <source> --help", ""),
+            ("Manage", "exakit source", "list, refresh, re-point, remove"),
+            ("Let AI do it", "each source has a skill: exasol-vs-<source>", "")):
+        say("A" if command.startswith("exakit") else "N",
+            "  " + label.ljust(14) + (command.ljust(32) + note if note else command).rstrip())
     if text is not None:
-        say("D", "Full guides: " + shown_path(os.path.join(docs, "README.md")))
+        say("D", "  " + "Full guides".ljust(14) + github_url(defs, "README.md"))
+        say("D", "  " + "Offline".ljust(14) + shown_path(os.path.join(docs, "README.md")))
+    say("D", "  " + "All options".ljust(14) + "exakit help connect")
     return 0
 
 
@@ -334,19 +354,43 @@ def settings_block(defs, cid, width):
              "--password-file ~/token.txt" % cid)
 
 
+def step_code(body):
+    """A step's first code block that is a command (not a JSON mapping), whole,
+    and the label of the bullet it sits under ("RDS", "Azure"), if any."""
+    label = ""
+    for kind, value in items(body):
+        if kind == "text":
+            lead = re.match(r"\*\*([^*]+?):?\*\*", value)
+            label = plain(lead.group(1)).rstrip(":") if lead else ""
+        elif kind == "code":
+            lines = [ascii_text(l) for l in value if l and not l.startswith("#")]
+            if lines and not lines[0].startswith(("{", "[")):
+                return label, lines
+    return "", []
+
+
+def command_lines(command, width, indent):
+    """One command, never cut and never split: one line, however wide, so a
+    copied line is the whole command (the terminal wraps it on screen; the
+    full-window reader wraps it too, never cutting it)."""
+    return [indent + command]
+
+
 def guide_one(defs, docs, entry, width, shell):
     cid = entry["id"]
     path = os.path.join(docs, cid + ".md")
     text = load(path)
     if text is None:
-        say("T", "%s - exakit connect %s" % (ascii_text(entry["name"]), cid))
+        say("F", "%s - Federation guide" % ascii_text(entry["name"]))
         say("N", "This kit copy has no guide for %s (%s). Update the kit: exakit update" % (cid, shown_path(path)))
         say("A", "Connect: exakit connect %s" % cid)
         options(defs, width)
         return 0
     head, parts = sections(text, 2)
     title = next((plain(l[2:]) for l in head if l.startswith("# ")), ascii_text(entry["name"]))
-    say("T", "%s - exakit connect %s" % (title, cid))
+    say("F", "%s - Federation guide" % ascii_text(entry["name"]))
+    for line in wrap("Query %s from your local Exasol, without copying the data." % ascii_text(entry["name"]), width):
+        say("D", line)
     # The top box: "> **Easiest ...**" and "> **You still need ...**".
     box = paragraphs([l[1:].strip() if l.startswith(">") else "" for l in head if l.startswith(">") or not l.strip()])
     box += paragraphs(prose(find(parts, "The simplest way")))
@@ -355,10 +399,11 @@ def guide_one(defs, docs, entry, width, shell):
             if para.startswith("**" + lead):
                 for line in wrap(plain(para), width, "", "  ", 3):
                     say("N", line)
-    # What it asks for: which fields are required, matched to the steps by their words.
+    # 1 Prepare: which fields are required, matched to the steps by their words.
     fields = asked(find(parts, "What exakit connect asks for"))
     where = find(parts, "Where to find each value")
     rows = []
+    commands = []
     network = None
     if where is not None:
         for heading, body in sections(where, 3)[1]:
@@ -373,22 +418,26 @@ def guide_one(defs, docs, entry, width, shell):
                         mark = "*"
                     elif required and not required.startswith("no") and not note:
                         note = " (%s)" % required
-            rows.append((mark, need + note) + first_point(body))
+            point = first_point(body)[0]
+            # Its first sentence, whole: never cut off with "...".
+            point = re.split(r"(?<=[a-z)\]]\.)\s", point)[0] if point else ""
+            rows.append((mark, need + note, point))
+            label, code = step_code(body)
+            if code:
+                commands.append((need + (" (%s)" % label if label else ""), code))
+    say("N", "")
+    say("H", "1  Prepare")
     if rows:
         col = min(24, max(len(r[1]) for r in rows) + 2)
         right = max(24, width - col - 4)
-        say("N", "")
         say("H", "  " + "You need (* required)".ljust(col + 2) + "Where to find it")
-        for mark, need, point, command in rows:
+        for mark, need, point in rows:
             left = wrap(need, col, "", "", 2)
-            text_lines = wrap(point, right, "", "", 2) if point else [""]
+            text_lines = wrap(point, right, "", "") if point else [""]
             for i in range(max(len(left), len(text_lines))):
                 l = left[i] if i < len(left) else ""
                 r = text_lines[i] if i < len(text_lines) else ""
                 say("N", (mark if i == 0 else " ") + " " + l.ljust(col + 2) + r)
-            if command:
-                say("D", " " * (col + 4) + fit(command, right))
-    say("N", "")
     ip = publicip.get()
     if ip:
         for line in wrap(ascii_text(publicip.advice(ip)), width, "", "  ", 3):
@@ -399,20 +448,42 @@ def guide_one(defs, docs, entry, width, shell):
         if point or network is not None:
             for line in wrap("Network: " + (point or first_point(network)[0]), width, "", "  ", 3):
                 say("N", line)
+    say("N", "")
+    say("H", "2  Connect")
+    say("A", "  exakit connect %s" % cid)
     paste = find(parts, "Connection string you can paste")
     blocks = code_blocks(paste)
     if blocks and blocks[0]:
-        say("N", "Paste at the prompt, e.g.:")
-        say("A", "  " + ascii_text(blocks[0][0]))
+        say("N", "  Paste at the prompt, e.g.:")
+        say("A", "    " + ascii_text(blocks[0][0]))
         if shell == "powershell":
             for para in paragraphs(prose(find(parts, "Connect", exact=True))):
                 if para.startswith("**Windows:**"):
                     first = re.split(r"(?<=\.)\s", plain(para))[0]
-                    for line in wrap(first, width, "", "  ", 2):
+                    for line in wrap(first, width, "  ", "  ", 2):
                         say("N", line)
     settings_block(defs, cid, width)
-    say("A", "Connect: exakit connect %s" % cid)
-    say("D", "Full guide: " + shown_path(path))
+    say("N", "")
+    say("H", "3  Query")
+    query = ""
+    for block in code_blocks(find(parts, "Connect", exact=True)):
+        query = next((ascii_text(l) for l in block if l.startswith("exakit sql")), "") or query
+    say("A", "  " + (query or "exakit sql 'SELECT * FROM VS_<NAME>.<TABLE> LIMIT 10'"))
+    say("A", "  exakit source     list, refresh, re-point, remove")
+    if commands:
+        say("N", "")
+        say("H", "Commands for step 1 (copy whole lines)")
+        for need, code in commands:
+            if len(code) > 8:
+                # Never a part of a block: a cut heredoc or statement list breaks when pasted.
+                say("D", "  %s: %d lines, in the guide below" % (need, len(code)))
+                continue
+            say("D", "  " + need)
+            for line in code:
+                for row in command_lines(line, width, "    "):
+                    say("A", row)
+    say("N", "")
+    links(defs, path, cid + ".md")
     options(defs, width)
     return 0
 

@@ -2455,6 +2455,22 @@ ui_open_path() {
     return 0
 }
 
+# ui_open_url <url> — a web page in this computer's browser: open on macOS,
+# xdg-open on Linux (in the background, so the caller never waits). 1 when
+# there is no opener or it failed; the caller then says the address.
+# ⇄ twin: Open-ExakitUrl in ui.ps1.
+ui_open_url() {
+    case "${1:-}" in https://*) ;; *) return 1 ;; esac
+    if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
+        command -v open >/dev/null 2>&1 || return 1
+        open "$1" >/dev/null 2>&1 < /dev/null && return 0
+        return 1
+    fi
+    command -v xdg-open >/dev/null 2>&1 || return 1
+    ( xdg-open "$1" >/dev/null 2>&1 < /dev/null & ) 2>/dev/null
+    return 0
+}
+
 # _ui_pager_leave — the reader's screen gone: the alternate screen left (the
 # screen before it comes back as it was), or, without one, the window cleared
 # for the caller to redraw; the cursor shown again.
@@ -2481,7 +2497,8 @@ _ui_pager_interrupted() {
 # keys and where in the text the window is. Enter, q and Esc return; so does
 # each letter in [keys] (lower case). With UI_PAGER_OPEN set to a file, o opens
 # it in place (ui_open_path) and the line above the footer says it was opened -
-# or where it is. UI_PAGER_KEY is the key that returned: enter, q, esc, eof, or
+# or where it is. With UI_PAGER_URL set to a web page, g opens it in the browser
+# (ui_open_url) the same way; without one, g goes to the top. UI_PAGER_KEY is the key that returned: enter, q, esc, eof, or
 # the letter. EXAKIT_NO_ALTSCREEN=1 (or a terminal without one: TERM linux,
 # vt100...) clears the window instead, and clears it again on the way out for
 # the caller to redraw. Returns 1, with nothing drawn, without a fancy terminal.
@@ -2558,7 +2575,13 @@ ui_pager() {
             j|J) _upg_top=$(( _upg_top + 1 )) ;;
             k|K) _upg_top=$(( _upg_top - 1 )) ;;
             b|B) _upg_top=$(( _upg_top - _upg_view )) ;;
-            g) _upg_top=0 ;;
+            g)
+                if [ -n "${UI_PAGER_URL:-}" ]; then
+                    if ui_open_url "$UI_PAGER_URL"; then _upg_note="Opened $UI_PAGER_URL"
+                    else _upg_note="On GitHub: $UI_PAGER_URL"; fi
+                else
+                    _upg_top=0
+                fi ;;
             G) _upg_top="$_upg_last" ;;
             o|O)
                 if [ -n "${UI_PAGER_OPEN:-}" ]; then

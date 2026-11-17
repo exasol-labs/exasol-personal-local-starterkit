@@ -93,23 +93,48 @@ function Get-ExakitVsGuideRaw {
 }
 
 # Format-ExakitVsGuideLine -Line [-Width] - one guide line coloured: "<style>|<text>",
-# T title, H heading, D dimmed, A a command. With -Width the text is cut to it
-# first (the full-window reader's rows are one console row each). Twin of
-# _exakit_vs_guide_paint.
+# T title, F the Federation title (bold, accented), H heading, D dimmed, A a
+# command. With -Width (the full-window reader's rows are one console row
+# each) a longer line is never cut: it goes on over as many rows as it takes,
+# returned as several strings. Twin of _exakit_vs_guide_paint.
 function Format-ExakitVsGuideLine {
     param([string]$Line, [int]$Width = 0)
     $line = "" + $Line
     $style = ""
     $text = $line
     if ($line.Length -ge 2 -and $line[1] -eq '|') { $style = $line.Substring(0, 1); $text = $line.Substring(2) }
-    if ($Width -gt 0 -and $text.Length -gt $Width) { $text = $text.Substring(0, $Width) }
+    $on = ""
     switch ($style) {
-        "T" { return ("{0}{1}{2}" -f $script:UiBold, $text, $script:UiReset) }
-        "H" { return ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
-        "D" { return ("{0}{1}{2}" -f $script:UiDim, $text, $script:UiReset) }
-        "A" { return ("{0}{1}{2}" -f $script:UiAccent, $text, $script:UiReset) }
+        "T" { $on = $script:UiBold }
+        "F" { $on = $script:UiBold + $script:UiAccent }
+        "H" { $on = $script:UiDim }
+        "D" { $on = $script:UiDim }
+        "A" { $on = $script:UiAccent }
     }
-    return $text
+    $off = ""
+    if ($on) { $off = $script:UiReset }
+    $rows = @()
+    if ($Width -gt 0) {
+        while ($text.Length -gt $Width) {
+            $rows += ("{0}{1}{2}" -f $on, $text.Substring(0, $Width), $off)
+            $text = $text.Substring($Width)
+        }
+    }
+    $rows += ("{0}{1}{2}" -f $on, $text, $off)
+    if ($rows.Count -eq 1) { return $rows[0] }
+    return $rows
+}
+
+# Get-ExakitVsGuideUrl -Lines - the guide's own page on GitHub, from its
+# "Guide on GitHub" (or the list's "Full guides") line; "" without one.
+# Twin of _exakit_vs_guide_url.
+function Get-ExakitVsGuideUrl {
+    param([string[]]$Lines = @())
+    foreach ($l in @($Lines)) {
+        $m = [regex]::Match(("" + $l), '^D\|(Guide on GitHub|  Full guides) +(https://\S+)')
+        if ($m.Success) { return $m.Groups[2].Value }
+    }
+    return ""
 }
 
 # Get-ExakitVsGuideDoc -Connector - the guide's own file on this computer,
@@ -130,8 +155,9 @@ function Get-ExakitVsGuideDoc {
 # Show-ExakitVsGuideScreen -Connector -Footer [-Keys] - one connector's guide
 # (guide.py, as `exakit connect <id> --help` prints it) in the full-window
 # reader (Show-ExakitPager): it disappears again, the screen under it as it
-# was. o opens the full guide's .md, or says where it is. Returns the key that
-# closed it, "" when it cannot be shown. Twin of _exakit_vs_guide_screen.
+# was. o opens the guide's .md on this computer, g its page on GitHub; each
+# says where it is when it cannot open it. Returns the key that closed it, ""
+# when it cannot be shown. Twin of _exakit_vs_guide_screen.
 function Show-ExakitVsGuideScreen {
     param([string]$Connector, [string]$Footer, [string]$Keys = "")
     $cols = 80; try { if ([Console]::WindowWidth -gt 0) { $cols = [Console]::WindowWidth } } catch { }
@@ -139,8 +165,8 @@ function Show-ExakitVsGuideScreen {
     $raw = Get-ExakitVsGuideRaw -Connector $Connector -Width $cols
     if ($raw.Code -ne 0) { return "" }
     $lines = @()
-    foreach ($line in @($raw.Lines)) { $lines += (Format-ExakitVsGuideLine -Line $line -Width ($cols - 1)) }
-    return (Show-ExakitPager -Lines $lines -Footer $Footer -Keys $Keys -OpenPath (Get-ExakitVsGuideDoc -Connector $Connector))
+    foreach ($line in @($raw.Lines)) { $lines += @(Format-ExakitVsGuideLine -Line $line -Width ($cols - 1)) }
+    return (Show-ExakitPager -Lines $lines -Footer $Footer -Keys $Keys -OpenPath (Get-ExakitVsGuideDoc -Connector $Connector) -OpenUrl (Get-ExakitVsGuideUrl -Lines @($raw.Lines)))
 }
 
 # Show-ExakitVsGuideBack -Connector - the guide from inside exakit connect (? in
@@ -148,7 +174,7 @@ function Show-ExakitVsGuideScreen {
 # pressed. Twin of _exakit_vs_guide_back.
 function Show-ExakitVsGuideBack {
     param([string]$Connector)
-    [void](Show-ExakitVsGuideScreen -Connector $Connector -Footer ("Enter/q back {0} o open full doc" -f $script:UiMidDot))
+    [void](Show-ExakitVsGuideScreen -Connector $Connector -Footer ("Enter/q back {0} o open offline guide {0} g open on GitHub" -f $script:UiMidDot))
 }
 
 # Get-ExakitVsGuideName -Connector - its name in the catalog (PostgreSQL), the
@@ -192,7 +218,7 @@ function Invoke-ExakitVsGuidePicker {
         $next = "Enter next guide"
         if ($i -eq $count - 1) { $next = "Enter done" }
         $d = $script:UiMidDot
-        $foot = "{0} {1} o open full doc {1} c connect {2} now {1} q quit" -f $next, $d, (Get-ExakitVsGuideName -Connector $id)
+        $foot = "{0} {1} o offline guide {1} g GitHub {1} c connect {2} now {1} q quit" -f $next, $d, (Get-ExakitVsGuideName -Connector $id)
         $key = Show-ExakitVsGuideScreen -Connector $id -Footer $foot -Keys "c"
         if ($key -eq "") { continue }
         if ($key -eq "c") { return $id }

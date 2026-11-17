@@ -2433,7 +2433,28 @@ function Open-ExakitPath {
     } catch { return $false }
 }
 
-# Show-ExakitPager -Lines -Footer [-Keys] [-OpenPath] - a full-window reader, for
+# Open-ExakitUrl <url> - a web page in this computer's browser: Start-Process on
+# Windows, open on macOS, xdg-open on Linux. $false when there is no opener or
+# it failed; the caller then says the address. Never an error. Twin of
+# ui_open_url in ui.sh.
+function Open-ExakitUrl {
+    param([string]$Url)
+    if (-not $Url -or -not $Url.StartsWith("https://")) { return $false }
+    try {
+        $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
+        if ($onWindows) { Start-Process -FilePath $Url -ErrorAction Stop | Out-Null; return $true }
+        if ($IsMacOS) {
+            if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+            & open $Url 2>$null | Out-Null
+            return ($LASTEXITCODE -eq 0)
+        }
+        if (-not (Get-Command xdg-open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
+        Start-Process -FilePath "xdg-open" -ArgumentList @($Url) -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
+}
+
+# Show-ExakitPager -Lines -Footer [-Keys] [-OpenPath] [-OpenUrl] - a full-window reader, for
 # a guide: the lines (one console row each, colour included - the caller cuts
 # them to the width) in the console's alternate screen, so the screen under it
 # comes back exactly as it was. Longer than the window, Up/Down (j/k),
@@ -2441,13 +2462,14 @@ function Open-ExakitPath {
 # row, says the keys and where in the text the window is. Enter, q and Esc
 # return; so does each letter in -Keys. With -OpenPath, o opens that file in
 # place (Open-ExakitPath) and the line above the footer says it was opened - or
-# where it is. Returns the key that closed it: enter, q, esc, or the letter;
+# where it is. With -OpenUrl, g opens that web page (Open-ExakitUrl) the same
+# way; without one, g goes to the top. Returns the key that closed it: enter, q, esc, or the letter;
 # "" with nothing drawn without a fancy console. A console without virtual
 # terminal sequences (old conhost), or EXAKIT_NO_ALTSCREEN=1, clears the window
 # instead, and clears it again on the way out for the caller to redraw. Ctrl-C
 # leaves it through the finally block. Twin of ui_pager in ui.sh.
 function Show-ExakitPager {
-    param([string[]]$Lines = @(), [string]$Footer = "", [string]$Keys = "", [string]$OpenPath = "")
+    param([string[]]$Lines = @(), [string]$Footer = "", [string]$Keys = "", [string]$OpenPath = "", [string]$OpenUrl = "")
     if (-not $script:UiFancy -or -not (Test-ExakitMenuConsole)) { return "" }
     $e = $script:UiEsc
     $rows = @($Lines)
@@ -2526,7 +2548,12 @@ function Show-ExakitPager {
                 "Char" {
                     $c = "" + $key.Char
                     if ($c -ceq "G") { $top = $last }
-                    elseif ($c -ceq "g") { $top = 0 }
+                    elseif ($c -ceq "g") {
+                        if ($OpenUrl) {
+                            if (Open-ExakitUrl -Url $OpenUrl) { $note = "Opened " + $OpenUrl }
+                            else { $note = "On GitHub: " + $OpenUrl }
+                        } else { $top = 0 }
+                    }
                     else {
                         $lc = $c.ToLowerInvariant()
                         if ($lc -eq "q") { $result = "q"; $stop = $true }

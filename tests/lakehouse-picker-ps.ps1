@@ -222,7 +222,7 @@ function Run-Picker([string]$Keys, [string[]]$ScreenKeys) {
 $d = $script:UiMidDot
 Check "Enter shows the next guide, c on it connects that source" "mysql" (Run-Picker " j E" @("enter", "c"))
 Check "...each guide in turn, its footer: next, open, connect, quit" `
-    ("postgresql|Enter next guide $d o open full doc $d c connect PostgreSQL now $d q quit|c" + "`n" + "mysql|Enter done $d o open full doc $d c connect MySQL now $d q quit|c") `
+    ("postgresql|Enter next guide $d o offline guide $d g GitHub $d c connect PostgreSQL now $d q quit|c" + "`n" + "mysql|Enter done $d o offline guide $d g GitHub $d c connect MySQL now $d q quit|c") `
     ($script:Screens -join "`n")
 Check "q ends the guides, nothing to connect" "|1" ((Run-Picker " j E" @("q")) + "|" + $script:Screens.Count)
 Check "Esc too" "|1" ((Run-Picker " j E" @("esc")) + "|" + $script:Screens.Count)

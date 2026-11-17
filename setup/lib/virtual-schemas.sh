@@ -2934,20 +2934,35 @@ _exakit_vs_guide_raw() {
 }
 
 # _exakit_vs_guide_paint <raw-file> [width] — the guide's lines coloured: one
-# "<style>|<text>" per line, T title, H heading, D dimmed, A a command. With a
-# width, each line is cut to it first (the full-window reader's rows are one
-# screen row each).
+# "<style>|<text>" per line, T title, F the Federation title (bold, accented),
+# H heading, D dimmed, A a command. With a width (the full-window reader's rows
+# are one screen row each), a longer line is never cut: it goes on over as many
+# rows as it takes, so a command or a link is always there whole.
 _exakit_vs_guide_paint() {
     while IFS= read -r _evg_line || [ -n "$_evg_line" ]; do
         _evg_text="${_evg_line#?|}"
-        [ -n "${2:-}" ] && [ "${#_evg_text}" -gt "$2" ] && _evg_text="${_evg_text:0:$2}"
         case "$_evg_line" in
-            T\|*)      printf '%s%s%s\n' "${UI_BOLD:-}" "$_evg_text" "${UI_RESET:-}" ;;
-            H\|*|D\|*) printf '%s%s%s\n' "${UI_DIM:-}" "$_evg_text" "${UI_RESET:-}" ;;
-            A\|*)      printf '%s%s%s\n' "${UI_ACCENT:-}" "$_evg_text" "${UI_RESET:-}" ;;
-            *)         printf '%s\n' "$_evg_text" ;;
+            T\|*)      _evg_on="${UI_BOLD:-}" ;;
+            F\|*)      _evg_on="${UI_BOLD:-}${UI_ACCENT:-}" ;;
+            H\|*|D\|*) _evg_on="${UI_DIM:-}" ;;
+            A\|*)      _evg_on="${UI_ACCENT:-}" ;;
+            *)         _evg_on="" ;;
         esac
+        _evg_off=""; [ -n "$_evg_on" ] && _evg_off="${UI_RESET:-}"
+        if [ -n "${2:-}" ] && [ "$2" -gt 0 ] 2>/dev/null; then
+            while [ "${#_evg_text}" -gt "$2" ]; do
+                printf '%s%s%s\n' "$_evg_on" "${_evg_text:0:$2}" "$_evg_off"
+                _evg_text="${_evg_text:$2}"
+            done
+        fi
+        printf '%s%s%s\n' "$_evg_on" "$_evg_text" "$_evg_off"
     done < "$1"
+}
+
+# _exakit_vs_guide_url <raw-file> — the guide's own page on GitHub, from its
+# "Guide on GitHub" (or the list's "Full guides") line; nothing without one.
+_exakit_vs_guide_url() {
+    sed -n 's/^D|Guide on GitHub  *//p; s/^D|  Full guides  *//p' "$1" 2>/dev/null | head -n 1
 }
 
 # _exakit_vs_guide_doc <connector-id> — the guide's own file on this computer,
@@ -2963,7 +2978,8 @@ _exakit_vs_guide_doc() {
 # _exakit_vs_guide_screen <connector-id> <footer> [keys] — one connector's
 # guide (guide.py, as `exakit connect <id> --help` prints it) in the
 # full-window reader (ui_pager): it disappears again, the screen under it as it
-# was. o opens the full guide's .md (ui_open_path), or says where it is. The
+# was. o opens the guide's .md on this computer (ui_open_path), g its page on
+# GitHub (ui_open_url); each says where it is when it cannot open it. The
 # key that closed it is in UI_PAGER_KEY. Returns 1 when it cannot be shown.
 # ⇄ twin: Show-ExakitVsGuideScreen.
 _exakit_vs_guide_screen() {
@@ -2973,8 +2989,9 @@ _exakit_vs_guide_screen() {
     case "$?" in 0) ;; *) rm -f "$_egs_raw"; return 1 ;; esac
     _exakit_vs_guide_paint "$_egs_raw" $(( _egs_cols - 1 )) > "$_egs_raw.lines"
     UI_PAGER_OPEN="$(_exakit_vs_guide_doc "$1" 2>/dev/null)"
+    UI_PAGER_URL="$(_exakit_vs_guide_url "$_egs_raw")"
     ui_pager "$_egs_raw.lines" "$2" "${3:-}"; _egs_rc=$?
-    UI_PAGER_OPEN=""
+    UI_PAGER_OPEN=""; UI_PAGER_URL=""
     rm -f "$_egs_raw" "$_egs_raw.lines"
     return "$_egs_rc"
 }
@@ -2983,7 +3000,7 @@ _exakit_vs_guide_screen() {
 # (? in the menu or in a source's panel): Enter, q or Esc go back to where ?
 # was pressed.
 _exakit_vs_guide_back() {
-    _exakit_vs_guide_screen "$1" "Enter/q back · o open full doc"
+    _exakit_vs_guide_screen "$1" "Enter/q back · o open offline guide · g open on GitHub"
 }
 
 # _exakit_vs_pick_help <row> — ? in the connector menu: the guide of the
@@ -3034,7 +3051,7 @@ exakit_vs_guide_picker() {
         _egp_name="$(_exakit_vs_guide_name "$_egp_id")"
         _egp_next="Enter next guide"; [ "$_egp_at" -eq "$#" ] && _egp_next="Enter done"
         _exakit_vs_guide_screen "$_egp_id" \
-            "$_egp_next · o open full doc · c connect $_egp_name now · q quit" c || continue
+            "$_egp_next · o offline guide · g GitHub · c connect $_egp_name now · q quit" c || continue
         case "$UI_PAGER_KEY" in
             c) EXAKIT_VS_GUIDE_CONNECT="$_egp_id"; return 0 ;;
             enter) ;;
