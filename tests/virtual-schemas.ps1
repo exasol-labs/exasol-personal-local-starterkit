@@ -1275,14 +1275,17 @@ $ErrorActionPreference = "Stop"
 $text = (@($out) | ForEach-Object { "$_" }) -join "`n"
 Check "a refusal the engine never logged (an unknown connector): no log line" "2 False" ("$childCode " + $text.Contains("Log (every SQL"))
 # --json: stdout stays the one object; the path goes to stderr.
-$jsonErr = Join-Path $work "json-err.txt"
 $ErrorActionPreference = "Continue"
-$o = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name psjson @pgSet --password-file $wrongPw --json 2>$jsonErr
+# Both streams through 2>&1, split by kind: Windows PowerShell 5.1 writes a
+# native command's stderr to a 2> file as error records at the console width,
+# which folds a long path across lines.
+$all = @(& $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name psjson @pgSet --password-file $wrongPw --json 2>&1)
 $childCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
+$o = @($all | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] })
 $jsonText = (@($o) | ForEach-Object { "$_" }) -join "`n"
 $doc = $null; try { $doc = $jsonText | ConvertFrom-Json } catch { }
-$errText = (@(Get-Content -LiteralPath $jsonErr -ErrorAction SilentlyContinue) | ForEach-Object { "$_" }) -join "`n"
+$errText = (@($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] }) | ForEach-Object { $_.ToString() }) -join "`n"
 Check "connect --json that fails: exit 1, one object, kind auth" "1 auth" ("$childCode " + $(if ($doc) { $doc.kind } else { "NOT-ONE-OBJECT" }))
 Check "...the path once on stderr" 1 ([regex]::Matches($errText, [regex]::Escape($logLine)).Count)
 Check "...and not on stdout" $false ($jsonText.Contains("Log (every SQL"))
