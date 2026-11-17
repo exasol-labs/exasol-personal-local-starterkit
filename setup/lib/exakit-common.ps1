@@ -2476,7 +2476,6 @@ function Register-ExakitTlsPin {
         Info "Pinned the new database's TLS certificate (SHA-256 $($live.Substring(0, 16))...)"
     } else {
         Write-ExakitLog "INFO" "TLS pin: recorded $live (trust on first use)"
-        Info "Pinned the database's TLS certificate (SHA-256 $($live.Substring(0, 16))...); clients now refuse any other"
     }
     return $true
 }
@@ -7615,6 +7614,9 @@ function Show-ExakitMarketplaceMenu {
         # that are in already without a checkbox. Twin of the shell's.
         $script:ExakitAddonTable.Col3 = ""
         if ($topRows.Count -gt 0) { $script:UiTableNoBox = $topRows; $script:UiTableLocked = $topRows }
+        # The offer's spinner gives its line back first, as on the auto-install
+        # path: written under it, the blank line came out as two.
+        if ($script:ExakitMarketplaceSpinning -or $null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll; $script:ExakitMarketplaceSpinning = $false }
         Write-Host ""
     }
     $groupParent = 1

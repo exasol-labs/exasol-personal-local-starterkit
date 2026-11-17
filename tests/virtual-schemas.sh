@@ -956,7 +956,7 @@ check "no terminal, no --yes: nothing installed, nothing asked (exit 21 follows)
 OUT="$(prep 0 0 1 0 _exakit_vs_install_java)"
 check "no terminal, --yes: installed" "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
 OUT="$(prep 0 0 0 1 _exakit_vs_install_java)"
-check "a terminal but not a connect (exakit source refresh): still asked, as before" "ASKED Install the Java language container now? [y/N]" \
+check "a terminal but not a connect (exakit source refresh): still asked, as before" "ASKED Set up connector support now? [y/N]" \
     "$(grep '^ASKED' "$WORK/prep.calls")"
 OUT="$(PREP_DNS=2 prep 1 0 0 1 _exakit_vs_repair 20)"
 check "a connect at a terminal, Docker's DNS repair: one restart with no question" "rc=0 EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
@@ -3332,8 +3332,8 @@ PY
     check "...no y/N at all: picking the source was the answer" "0" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "Enabling Federation" "$TUI_SCREEN"
     has "...one line says what the kit does and why" "Database configured for your sources" "$(tr -d '\r' < "$WORK/tui.raw")"
-    lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
-    lacks "...no y/N for the Java container either" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
+    lacks "...and asks nothing" "Set up connector support now?" "$(cat "$WORK/tui.raw")"
+    lacks "...no y/N for the connector support either" "connector support now? [y/N]" "$(cat "$WORK/tui.raw")"
     has "...the launcher installed it, with no restart of its own" "slc install java --no-restart" "$(cat "$TUI_FAKE_CALLS" 2>/dev/null)"
     has "...then the kit's own stop and start: the one restart" "exakit stop|exakit start" "$(tr '\n' '|' < "$TUI_FAKE_CALLS" 2>/dev/null)"
     has "...the install said done" "Database configured for your sources" "$TUI_SCREEN"
@@ -3350,7 +3350,7 @@ PY
         "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
     has "line by line, Java missing: one line says what the kit does and why" "Enabling Federation" "$TUI_RAW"
-    lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
+    lacks "...and asks nothing" "Set up connector support now?" "$TUI_RAW"
     check "...no y/N at all: not Connect now? either" "0" "$(printf '%s\n' "$TUI_RAW" | grep -c '\[y/N\]')"
     check "...and the source connects after it" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEJAVA"]["secret"]')"
 
@@ -3438,7 +3438,7 @@ PY
     # after the credential (over the stand-in bucket), its tables and one key,
     # the panel's row as auto, and the drafted tables connected.
     db '{"sources": {"'"$S3HOST"'": {"secret": "'"$AWSSECRET"'", "region": "ap-south-1"}}}'
-    Q_MAP="$(when 'EDML mapping path:')"; Q_KEYID="$(when 'Access key ID:')"; Q_SKEY="$(when 'Secret access key * (hidden')"
+    Q_MAP="$(when 'EDML mapping path:')"; Q_KEYID="$(when 'Access key ID *:')"; Q_SKEY="$(when 'Secret access key * (hidden')"
     Q_DRAFT="$(when 'n to give a folder instead')"
     EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
     TUI_ARGS="s3 --name s3form --set bucket=docs-bucket --set region=ap-south-1" \

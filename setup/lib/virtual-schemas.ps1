@@ -950,9 +950,10 @@ function Install-ExakitVsRust {
     if (-not $pin) { Write-Host "  There is no Rust language container build for this CPU ($arch)." -ForegroundColor Red; return $false }
     $mib = [int]([double]$pin.size / 1048576)
     if (-not (Test-ExakitVsPrepareSaid)) {
-        Info "This source runs a native adapter inside the database, and its Rust language container is not installed."
-        Info ("Installing it downloads {0} {1} (about {2} MiB, checksum-pinned) and restarts the database once (add-on services restart with it)." -f $custom.upstream, $custom.version, $mib)
-        if (-not (Confirm-ExakitVs "Install the Rust language container now?")) {
+        # The screen says what it is for; the log keeps which container and its size.
+        if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "INFO" ("The Rust language container is not installed; installing it downloads {0} {1} (about {2} MiB, checksum-pinned) and restarts the database once (add-on services restart with it)." -f $custom.upstream, $custom.version, $mib) }
+        Info "This source needs connector support set up in the database first (one time; the database restarts once)."
+        if (-not (Confirm-ExakitVs "Set up connector support now?")) {
             Info "Nothing was installed. Run the same exakit connect again when you are ready."
             return $false
         }
@@ -1039,9 +1040,10 @@ function Invoke-ExakitVsPrepStep {
 
 function Install-ExakitVsJava {
     if (-not (Test-ExakitVsPrepareSaid)) {
-        Info "Virtual schemas run Java inside the database, and its Java language container is not installed."
-        Info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
-        if (-not (Confirm-ExakitVs "Install the Java language container now?")) {
+        # The screen says what it is for; the log keeps which container and its size.
+        if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "INFO" "The Java language container is not installed; installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)." }
+        Info "This source needs connector support set up in the database first (one time; the database restarts once)."
+        if (-not (Confirm-ExakitVs "Set up connector support now?")) {
             Write-ExakitVsInfoCmds "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
             return $false
         }

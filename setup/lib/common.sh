@@ -10868,7 +10868,6 @@ exakit_tls_record() {
         info "Pinned the new database's TLS certificate (SHA-256 ${_tr_live:0:16}...)"
     else
         _exakit_log_file "INFO  TLS pin: recorded $_tr_live (trust on first use)"
-        info "Pinned the database's TLS certificate (SHA-256 ${_tr_live:0:16}...); clients now refuse any other"
     fi
     return 0
 }

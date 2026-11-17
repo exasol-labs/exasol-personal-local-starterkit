@@ -1093,6 +1093,9 @@ function Get-ExakitTableWidths {
     # that column's room, so it is measured apart. Twin of UI_TABLE_SPAN_EMPTY.
     $spanOn = ($Table.ContainsKey("SpanEmpty") -and $Table.SpanEmpty -and $col2W -gt 0 -and -not $Table.Col3)
     $span = 0
+    # The widest status a row actually holds (the floor above is room kept for a
+    # bar, not text). Twin of _utw_statneed in ui_table_widths.
+    $statNeed = 0
     foreach ($row in $Table.Rows.ToArray()) {
         $len = $row.Label.Length
         if ($col2W -gt 0 -and ("" + $row.Col2).Length -gt $col2W) { $col2W = ("" + $row.Col2).Length }
@@ -1118,11 +1121,13 @@ function Get-ExakitTableWidths {
         if ($row.Final -and $row.State -and $row.State -ne "idle" -and $row.State -ne "disabled") {
             $finalLen = $row.Final.Length + $script:UiTick.Length + 1
             if ($finalLen -gt $statW) { $statW = $finalLen }
+            if ($finalLen -gt $statNeed) { $statNeed = $finalLen }
         }
         # A skipped row with nothing to add says "skipped".
         if (-not $row.Final -and $row.State -eq "skipped") {
             $finalLen = 7 + $script:UiTick.Length + 1
             if ($finalLen -gt $statW) { $statW = $finalLen }
+            if ($finalLen -gt $statNeed) { $statNeed = $finalLen }
         }
     }
     # A spanning row's name needs what the name and the second column hold together.
@@ -1180,6 +1185,22 @@ function Get-ExakitTableWidths {
             $col3W -= $over
             $over = 0
             if ($col3W -lt 8) { $over = 8 - $col3W; $col3W = 8 }
+        }
+    }
+    # Without fancy output nothing animates, so the frame is drawn once and its
+    # geometry cannot move under a redraw: the room the status floor keeps for a
+    # bar goes back to the names before a single label is cut (an agent shell
+    # read "Upload a file or fold..." beside an empty Status). Down to the widest
+    # status any row holds, never below 12. Twin of the same block in
+    # ui_table_widths.
+    if ($over -gt 0 -and -not $script:UiFancy -and $statW -gt 0) {
+        $statKeep = $statNeed
+        if ($statKeep -lt 12) { $statKeep = 12 }
+        if ($statW -gt $statKeep) {
+            $give = $statW - $statKeep
+            if ($give -gt $over) { $give = $over }
+            $statW -= $give
+            $over -= $give
         }
     }
     if ($over -gt 0) {
@@ -1500,7 +1521,13 @@ function Get-ExakitTableFrame {
         $room = $nameW
         $spanRow = ($Table.ContainsKey("SpanEmpty") -and $Table.SpanEmpty -and $col2W -gt 0 -and $col3W -eq 0 -and -not ("" + $row.Col2).Trim())
         if ($spanRow) { $room = $nameW + $sepW + $col2W }
-        if ($plain.Length -gt $room) { $plain = $plain.Substring(0, $room - 1) + "…" }
+        # The palette's marker: "..." without fancy output, never a byte an ASCII
+        # reader shows as junk. Measured, because the two markers differ in length.
+        if ($plain.Length -gt $room) {
+            $cut = $room - $script:UiEllipsis.Length
+            if ($cut -lt 1) { $cut = 1 }
+            $plain = $plain.Substring(0, $cut) + $script:UiEllipsis
+        }
         $nameLen = $plain.Length
         if ($row.State -eq "disabled") { $name = $script:UiDim + $plain + $script:UiReset }
         else { $name = $plain }
@@ -1517,7 +1544,11 @@ function Get-ExakitTableFrame {
             $used += $col2W + $sepW
         } elseif ($col2W -gt 0) {
             $v2 = "" + $row.Col2
-            if ($v2.Length -gt $col2W) { $v2 = $v2.Substring(0, $col2W - 1) + "…" }
+            if ($v2.Length -gt $col2W) {
+                $cut2 = $col2W - $script:UiEllipsis.Length
+                if ($cut2 -lt 1) { $cut2 = 1 }
+                $v2 = $v2.Substring(0, $cut2) + $script:UiEllipsis
+            }
             $mid += $sep + $script:UiDim + $v2 + $script:UiReset + (" " * ($col2W - $v2.Length))
             $used += $col2W + $sepW
         }

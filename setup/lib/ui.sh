@@ -1344,6 +1344,9 @@ ui_table_widths() {
     # front of its first child.
     _UI_TABLE_PARENTS=" "
     _utw_span=0
+    # The widest status a row actually holds (the floor is room kept for a bar,
+    # not text). Twin of $statNeed in Get-ExakitTableWidths.
+    _utw_statneed=0
     _utw_i=0
     _utw_prevkind=""
     while IFS='|' read -r _utw_kind _utw_label _utw_tick _utw_state _utw_pct \
@@ -1402,6 +1405,7 @@ ui_table_widths() {
                 [ "$_utw_state" = skipped ] && [ -z "$_utw_final" ] && _utw_final=skipped
                 _utw_flen=$(( ${#_utw_final} + ${#UI_TICK} + 1 ))
                 [ "$_utw_flen" -gt "$UI_TABLE_STAT_W" ] && UI_TABLE_STAT_W="$_utw_flen"
+                [ "$_utw_flen" -gt "$_utw_statneed" ] && _utw_statneed="$_utw_flen"
                 ;;
         esac
     done < "$1"
@@ -1477,6 +1481,22 @@ ui_table_widths() {
         _utw_over=$(( _utw_over - UI_TABLE_COL2_W - _utw_sepw ))
         UI_TABLE_COL2_W=0
         [ "$_utw_over" -ge 0 ] || _utw_over=0
+    fi
+    # Without fancy output nothing animates, so the frame is drawn once and its
+    # geometry cannot move under a redraw: the room the status floor keeps for a
+    # bar goes back to the names before a single label is cut (an agent shell
+    # read "Upload a file or fold..." beside an empty Status). Down to the widest
+    # status any row holds, never below 12. Twin of the same block in
+    # Get-ExakitTableWidths.
+    if [ "$_utw_over" -gt 0 ] && [ "${UI_FANCY:-0}" != 1 ] && [ "$UI_TABLE_STAT_W" -gt 0 ]; then
+        _utw_keep="$_utw_statneed"
+        [ "$_utw_keep" -ge 12 ] || _utw_keep=12
+        if [ "$UI_TABLE_STAT_W" -gt "$_utw_keep" ]; then
+            _utw_give=$(( UI_TABLE_STAT_W - _utw_keep ))
+            [ "$_utw_give" -le "$_utw_over" ] || _utw_give="$_utw_over"
+            UI_TABLE_STAT_W=$(( UI_TABLE_STAT_W - _utw_give ))
+            _utw_over=$(( _utw_over - _utw_give ))
+        fi
     fi
     if [ "$_utw_over" -gt 0 ]; then
         UI_TABLE_NAME_W=$(( UI_TABLE_NAME_W - _utw_over ))
@@ -1807,8 +1827,14 @@ $(cat "$1.activity" 2>/dev/null)
             _utr_span=1
             _utr_room=$(( UI_TABLE_NAME_W + _UI_TABLE_SEP_W + UI_TABLE_COL2_W ))
         fi
-        [ "${#_utr_plain}" -le "$_utr_room" ] || \
-            _utr_plain="${_utr_plain:0:$(( _utr_room - 1 ))}…"
+        # "..." without fancy output, never a byte an ASCII reader shows as junk.
+        if [ "${#_utr_plain}" -gt "$_utr_room" ]; then
+            if [ "${UI_FANCY:-0}" = 1 ]; then
+                _utr_plain="${_utr_plain:0:$(( _utr_room - 1 ))}…"
+            else
+                _utr_plain="${_utr_plain:0:$(( _utr_room > 3 ? _utr_room - 3 : 1 ))}..."
+            fi
+        fi
         _utr_namelen=${#_utr_plain}
         if [ "$_utr_state" = "disabled" ]; then
             _utr_name="${UI_DIM:-}${_utr_plain}${UI_RESET:-}"
@@ -1833,8 +1859,13 @@ $(cat "$1.activity" 2>/dev/null)
             _utr_used=$(( _utr_used + UI_TABLE_COL2_W + _UI_TABLE_SEP_W ))
         elif [ "$UI_TABLE_COL2_W" -gt 0 ]; then
             _utr_v2="$_utr_c2"
-            [ "${#_utr_v2}" -le "$UI_TABLE_COL2_W" ] || \
-                _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W - 1 ))}…"
+            if [ "${#_utr_v2}" -gt "$UI_TABLE_COL2_W" ]; then
+                if [ "${UI_FANCY:-0}" = 1 ]; then
+                    _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W - 1 ))}…"
+                else
+                    _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W > 3 ? UI_TABLE_COL2_W - 3 : 1 ))}..."
+                fi
+            fi
             _utr_mid="$_utr_mid${_UI_TABLE_SEP}${UI_DIM:-}${_utr_v2}${UI_RESET:-}${_UI_TABLE_SP:0:$(( UI_TABLE_COL2_W - ${#_utr_v2} ))}"
             _utr_used=$(( _utr_used + UI_TABLE_COL2_W + _UI_TABLE_SEP_W ))
         fi

@@ -4151,11 +4151,11 @@ function Select-ExakitDataLoad {
     $onScreen = 0
     $startRow = 0
     if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1" -and @($script:ExakitTableSampleIds).Count -gt 0) {
-        # THE INSTALL'S SAMPLE ROW, before the question: no column heading, no
+        # THE INSTALL'S SAMPLE ROW, before the question: its column heading as on
+        # a re-run (one table, one heading), no
         # checkbox on it, and its datasets loading at once with the bar to the
         # right of the row. Then the same table asks about the rows under it,
         # Skip ticked so Enter goes on. Twin of _exakit_data_compact_samples.
-        if ($script:UiTable) { $script:UiTable.Col1 = " " }
         # A narrow console (under 100 columns): a narrower Status, so no row's
         # name is cut short, and the sample row says how many rather than which.
         # Twin of _dcs_wide in exapump.sh.
@@ -4191,7 +4191,9 @@ function Select-ExakitDataLoad {
         $script:ExakitTableIds[0] = ""
         $script:ExakitTableSampleIds = @()
         $script:ExakitTableDefaults = @($script:ExakitTableRowSkip)
-        if ($script:UiTable) { $onScreen = [int]$script:UiTable.Lines + 1 }
+        # The frame only, as its twin passes UI_TABLE_LINES: one more moved the
+        # menu up onto the blank line above the box and drew over it.
+        if ($script:UiTable) { $onScreen = [int]$script:UiTable.Lines }
         $startRow = 2
     } else {
         Write-Host ""
