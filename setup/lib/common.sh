@@ -6711,6 +6711,78 @@ EXAKIT_ML_OUT
 #     EXAKIT_MARKETPLACE_ADDONS pre-answers, which installs without asking.
 # Best-effort by contract: callers run it in a subshell so nothing in here can
 # end an install that already succeeded. ⇄ twin: Request-ExakitMarketplaceOffer.
+# exakit_ready_line_text — the words of the closing line. With AI clients
+# connected (what mcp-setup recorded in the manifest, so a re-run names the
+# clients an earlier run connected) it says which, with this line's own short
+# names ("Claude Desktop"); with none it is the plain "ready to use". The list is cut to "A, B and N more" so the line stays within
+# 80 columns after its 8-column tick prefix. Display only: nothing is re-run.
+# Twin: Get-ExakitReadyLineText in exakit-common.ps1.
+exakit_ready_line_text() {
+    _erl_fallback="Your starter kit is ready to use."
+    _erl_text=""
+    # tput answers 80 when it has no terminal to ask, so only a real one counts.
+    _erl_cols=""
+    if [ -t 2 ]; then _erl_cols="$(tput cols 2>/dev/null || true)"; fi
+    [ -z "${EXAKIT_READY_LINE_COLS:-}" ] || _erl_cols="$EXAKIT_READY_LINE_COLS"
+    case "$_erl_cols" in ''|*[!0-9]*) _erl_cols=120 ;; esac
+    if [ -n "${EXAKIT_MANIFEST:-}" ] && [ -f "$EXAKIT_MANIFEST" ] \
+        && exakit_can_run_python_any 2>/dev/null; then
+        _erl_text="$(run_python_any - "$EXAKIT_MANIFEST" "$_erl_cols" 2>/dev/null <<'EXAKIT_READY_LINE'
+import json, sys
+
+LABELS = [
+    ("claude_code", "Claude Code"),
+    ("claude_desktop", "Claude Desktop"),
+    ("codex", "Codex"),
+    ("cursor", "Cursor"),
+    ("vscode_copilot", "GitHub Copilot"),
+    ("gemini_cli", "Gemini CLI"),
+    ("opencode", "OpenCode"),
+    ("continue", "Continue"),
+]
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        doc = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+setup = (doc.get("components", {}) or {}).get("mcp_server", {}) or {}
+setup = setup.get("client_setup", {}) or {}
+configured = set(setup.get("configured_clients") or [])
+names = [label for key, label in LABELS if key in configured]
+if not names:
+    raise SystemExit(0)
+
+
+def join(items):
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " and " + items[-1]
+
+
+def sentence(clients, count):
+    pronoun = "it" if count == 1 else "them"
+    return ("Exasol starterkit is ready and connected into "
+            + clients + ". Ask " + pronoun + " about your data.")
+
+
+try:
+    BUDGET = int(sys.argv[2]) - 8  # the "      ✓ " prefix
+except (IndexError, ValueError):
+    BUDGET = 112
+text = sentence(join(names), len(names))
+if len(text) > BUDGET and len(names) > 1:
+    for keep in range(len(names) - 1, 0, -1):
+        text = sentence(", ".join(names[:keep])
+                        + " and %d more" % (len(names) - keep), len(names))
+        if len(text) <= BUDGET:
+            break
+print(text)
+EXAKIT_READY_LINE
+)" || _erl_text=""
+    fi
+    printf '%s' "${_erl_text:-$_erl_fallback}"
+}
+
 # exakit_print_ready_line — the install's ONE closing line.
 #
 # There were two: an "ok Setup complete" before the connection panel, and this
@@ -6730,7 +6802,7 @@ EXAKIT_ML_OUT
 exakit_print_ready_line() {
     [ -z "${EXAKIT_SOFT_FAILED:-}" ] || return 0
     printf '\n'
-    ok "Your starter kit is ready to use."
+    ok "$(exakit_ready_line_text)"
     # Where each recorded persona starts, which only `exakit persona show` named
     # before (NEW-04). Nothing for a kit without a persona or one with no first step.
     if command -v _exakit_persona_service >/dev/null 2>&1; then

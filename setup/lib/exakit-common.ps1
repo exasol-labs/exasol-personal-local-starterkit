@@ -8179,10 +8179,60 @@ function Invoke-ExakitMarketplaceApply {
 # Silent after a soft failure, deliberately: "done and working" must be true
 # before it is said, and Write-ExakitSoftFailures has just listed what is not.
 # Twin of exakit_print_ready_line in common.sh.
+# Get-ExakitReadyLineText - the words of the closing line. With AI clients
+# connected (what mcp-setup recorded in the manifest, so a re-run names the
+# clients an earlier run connected) it says which, with this line's own short
+# names ("Claude Desktop"); with none it is the plain "ready to use". The list is cut to "A, B and N more" so the line stays within
+# 80 columns after its 8-column tick prefix. Display only: nothing is re-run.
+# Twin of exakit_ready_line_text in common.sh.
+function Get-ExakitReadyLineText {
+    $fallback = "Your starter kit is ready to use."
+    $labels = @(
+        @("claude_code", "Claude Code"), @("claude_desktop", "Claude Desktop"),
+        @("codex", "Codex"), @("cursor", "Cursor"),
+        @("vscode_copilot", "GitHub Copilot"), @("gemini_cli", "Gemini CLI"),
+        @("opencode", "OpenCode"), @("continue", "Continue")
+    )
+    $configured = @()
+    try { $configured = @(Get-ExakitManifestValue "components.mcp_server.client_setup.configured_clients") } catch { $configured = @() }
+    $names = @()
+    foreach ($pair in $labels) {
+        if ($configured -contains $pair[0]) { $names += $pair[1] }
+    }
+    if ($names.Count -eq 0) { return $fallback }
+    $cols = 120
+    try {
+        $w = [int]$Host.UI.RawUI.WindowSize.Width
+        if ($w -gt 0) { $cols = $w }
+    } catch { }
+    if ($env:EXAKIT_READY_LINE_COLS) { $cols = [int]$env:EXAKIT_READY_LINE_COLS }
+    $budget = $cols - 8
+    $text = Format-ExakitReadySentence (Join-ExakitReadyNames $names) $names.Count
+    if ($text.Length -gt $budget -and $names.Count -gt 1) {
+        for ($keep = $names.Count - 1; $keep -ge 1; $keep--) {
+            $head = ($names[0..($keep - 1)] -join ", ")
+            $text = Format-ExakitReadySentence ("{0} and {1} more" -f $head, ($names.Count - $keep)) $names.Count
+            if ($text.Length -le $budget) { break }
+        }
+    }
+    return $text
+}
+
+function Join-ExakitReadyNames([string[]]$Names) {
+    if ($Names.Count -eq 1) { return $Names[0] }
+    return (($Names[0..($Names.Count - 2)] -join ", ") + " and " + $Names[$Names.Count - 1])
+}
+
+function Format-ExakitReadySentence([string]$Clients, [int]$Count) {
+    $pronoun = "them"
+    if ($Count -eq 1) { $pronoun = "it" }
+    return ("Exasol starterkit is ready and connected into {0}. Ask {1} about your data." -f $Clients, $pronoun)
+}
+
 function Write-ExakitReadyLine {
     if ($script:ExakitSoftFailed.Count -gt 0) { return }
     Write-Host ""
-    Ok "Your starter kit is ready to use."
+    Ok (Get-ExakitReadyLineText)
     # Where each recorded persona starts (NEW-04). Twin of exakit_print_ready_line.
     if (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue) {
         foreach ($id in @(("" + (Get-ExakitManifestValue "persona.id")) -split ',' | Where-Object { $_ })) {

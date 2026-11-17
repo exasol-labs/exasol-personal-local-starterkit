@@ -652,5 +652,29 @@ lacks "...nor on Windows"               "ExakitMcpPrefetch"       "$MCP_PS_ALL$W
 lacks "no stdio server to prime"        "exasol-mcp-server@"      "$MCP_SH_ALL"
 lacks "...on either side"               'McpPackage)@$($script:McpVersion)' "$MCP_PS_ALL"
 
+echo
+echo "the closing line names the AI clients it connected:"
+# Read from the manifest mcp-setup wrote; nothing re-runs. No client: the plain line.
+_RL_SAVED="$EXAKIT_MANIFEST"
+EXAKIT_READY_LINE_COLS=120; export EXAKIT_READY_LINE_COLS
+EXAKIT_MANIFEST="$WORK/ready-manifest.json"
+printf '%s\n' '{"components":{"mcp_server":{"client_setup":{"configured_clients":["codex","claude_code","vscode_copilot"]}}}}' > "$EXAKIT_MANIFEST"
+check "three clients: the sentence names them" \
+    "Exasol starterkit is ready and connected into Claude Code, Codex and GitHub Copilot. Ask them about your data." \
+    "$(exakit_ready_line_text)"
+printf '%s\n' '{"components":{"mcp_server":{"client_setup":{"configured_clients":["claude_code","claude_desktop","codex","cursor","vscode_copilot","gemini_cli"]}}}}' > "$EXAKIT_MANIFEST"
+_RL_LONG="$(exakit_ready_line_text)"
+has "six clients: the list is cut" " more. Ask them about your data." "$_RL_LONG"
+check "...and the line fits a 120-column terminal with its tick" "yes" \
+    "$([ $(( ${#_RL_LONG} + 8 )) -le 120 ] && echo yes || echo no)"
+printf '%s\n' '{"components":{"mcp_server":{"client_setup":{"configured_clients":["claude_desktop"]}}}}' > "$EXAKIT_MANIFEST"
+check "one client: \"it\", and the short desktop name" \
+    "Exasol starterkit is ready and connected into Claude Desktop. Ask it about your data." \
+    "$(exakit_ready_line_text)"
+printf '%s\n' '{"components":{"mcp_server":{"client_setup":{"configured_clients":[]}}}}' > "$EXAKIT_MANIFEST"
+check "no client: the plain line" "Your starter kit is ready to use." "$(exakit_ready_line_text)"
+EXAKIT_MANIFEST="$_RL_SAVED"
+unset EXAKIT_READY_LINE_COLS
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
