@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Uninstall
+
+- **A full uninstall also removes the Federation images.** `exasol/mcp-server` (the MCP server beside the database) and `exasol/script-language-container` (the language containers a first connect installs, about 1 GB for Java) were left behind. They go now with `exasol/nano`, under the same rules: only these repositories, `rmi` without force, an image still in use is kept with the command that removes it later. `--dry-run` lists them with sizes.
+- **An uninstall waits for another exakit run to close.** An `exakit connect` left open in another window had the kit deleted from under it. A full uninstall now names every other exakit run of the kit that is still alive ("exakit is still running in another window: exakit connect (pid N). Close it, then run exakit uninstall again."), removes nothing and exits 1; it never stops that run. `--dry-run` lists it as the blocker.
+
 ### A shorter install (rc-1-federation)
 
 - **No persona question.** The install sets up the General persona without asking or naming it. Data Scientist and ML Engineer are disabled (`"visible": false`): not offered, not listed and refused by name; an install that recorded one keeps working.

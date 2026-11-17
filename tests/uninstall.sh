@@ -555,5 +555,39 @@ check "dry: each path is a plan line" "1" "$(printf '%s\n' "$_o" | grep -v '^LOG
 check "dry: no bare path line" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
 
 echo
+echo "another exakit run of this kit blocks a full uninstall (named, never stopped):"
+# A stub `ps` lists the processes; docker/podman/exasol stubs fail, so even a
+# run that got past the check would stay inside the sandbox.
+_ob="$SANDBOX/ob"; mkdir -p "$_ob/bin" "$_ob/home/.local/bin" "$_ob/home/.exasol-starter-kit/kit/setup"
+printf '{"kit_version":"0.3.0"}\n' > "$_ob/home/.exasol-starter-kit/manifest.json"
+: > "$_ob/home/.local/bin/exakit"
+for _s in docker podman exasol launchctl systemctl; do printf '#!/bin/sh\nexit 1\n' > "$_ob/bin/$_s"; chmod +x "$_ob/bin/$_s"; done
+_ob_ps() { # _ob_ps <lines...>: the stub ps prints these as "pid ppid command"
+    { printf '#!/bin/sh\ncat <<'"'"'PSOUT'"'"'\n'; printf '%s\n' "$@"; printf 'PSOUT\n'; } > "$_ob/bin/ps"; chmod +x "$_ob/bin/ps"
+}
+_ob_run() { # _ob_run <args...>
+    HOME="$_ob/home" EXAKIT_HOME="$_ob/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_ob/home/.local/bin" \
+        EXAKIT_EXAPUMP_CONFIG_DIR="$_ob/home/.exapump" EXAKIT_NO_IP_LOOKUP=1 PATH="$_ob/bin:/usr/bin:/bin" \
+        /bin/bash "$ROOT/setup/exakit" uninstall "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+}
+_ob_ps "  1     0 /sbin/launchd" "  4242  1 /bin/bash $_ob/home/.local/bin/exakit connect --name pg" \
+       "  4243  1 vim $_ob/home/.local/bin/exakit"
+_o="$(_ob_run --dry-run)"
+check "dry run names the other run" "1" "$(printf '%s\n' "$_o" | grep -c 'exakit is still running in another window: exakit connect --name pg (pid 4242). Close it, then run exakit uninstall again.')"
+check "dry run says the uninstall would refuse" "1" "$(printf '%s\n' "$_o" | grep -c 'refuses to start until the exakit run named above is closed')"
+check "an editor with the file open is not a run" "0" "$(printf '%s\n' "$_o" | grep -c 'pid 4243')"
+_o="$(_ob_run --yes; printf 'RC=%s\n' "${PIPESTATUS[0]}")"
+_orc="$(HOME="$_ob/home" EXAKIT_HOME="$_ob/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_ob/home/.local/bin" EXAKIT_EXAPUMP_CONFIG_DIR="$_ob/home/.exapump" EXAKIT_NO_IP_LOOKUP=1 PATH="$_ob/bin:/usr/bin:/bin" /bin/bash "$ROOT/setup/exakit" uninstall --yes >/dev/null 2>&1; echo $?)"
+check "--yes refuses with exit 1" "1" "$_orc"
+check "--yes names the other run" "1" "$(printf '%s\n' "$_o" | grep -c 'pid 4242')"
+check "--yes removed nothing: the kit home stays" "yes" "$(exists "$_ob/home/.exasol-starter-kit/manifest.json")"
+check "--yes removed nothing: the command stays" "yes" "$(exists "$_ob/home/.local/bin/exakit")"
+check "the other run is never stopped" "0" "$(printf '%s\n' "$_o" | grep -c -i 'kill\|stopped 4242')"
+_ob_ps "  1     0 /sbin/launchd" "  4243  1 vim $_ob/home/.local/bin/exakit" "  4244  1 bash /somewhere/else/exakit connect"
+_o="$(_ob_run --dry-run)"
+check "no other run: nothing blocks" "0" "$(printf '%s\n' "$_o" | grep -c 'still running in another window')"
+check "another kit's exakit is not this kit's" "0" "$(printf '%s\n' "$_o" | grep -c 'pid 4244')"
+
+echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

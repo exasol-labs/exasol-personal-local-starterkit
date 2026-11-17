@@ -1416,11 +1416,11 @@ $env:FAKE_START_RC = "1"
 $said = @(Install-ExakitVsJava 6>&1)
 $r = $said[-1]; $text = (@($said) | ForEach-Object { "$_" }) -join "|"
 Check "Install-ExakitVsJava, the start fails: False, and it says so" "False True True" `
-    ("$r " + $text.Contains("The database did not come back after installing Java. Run: exakit start") + " " + $text.Contains("Java language container installed"))
+    ("$r " + $text.Contains("The database did not come back after installing Java. Run: exakit start") + " " + $text.Contains("Database configured for your sources"))
 [void](Calls)
 $env:FAKE_START_RC = "0"
 $said = @(Install-ExakitVsJava 6>&1)
-Check "...the start succeeds: True, installed" "True True stop|start" ("$($said[-1]) " + ((@($said) | ForEach-Object { "$_" }) -join "|").Contains("Java language container installed") + " " + (Calls))
+Check "...the start succeeds: True, installed" "True True stop|start" ("$($said[-1]) " + ((@($said) | ForEach-Object { "$_" }) -join "|").Contains("Database configured for your sources") + " " + (Calls))
 # Docker, an older installed kit: the second restart is checked too.
 $script:stubNeedsStart = $true
 $env:FAKE_START_RC = "1"
@@ -1464,7 +1464,8 @@ $script:stubNeedsStart = $false
 Set-Prep $true $false $false $true
 $script:said = @(Install-ExakitVsJava 6>&1)
 Check "a connect at a console, Java missing: installed with no question, one restart" "True 0 stop|start" ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))
-Check "...one line says what it does and why" $true ((Shown).Contains("OK Java language container installed|OK Database restarted"))
+Check "...one line says what it does and why" $true ((Shown).Contains("OK Database configured for your sources|OK Database restarted"))
+Check "...the screen names no language: no Java, no size" $false ((Shown) -match "Java language container|250 MiB")
 Set-Prep $true $true $false $true
 $script:said = @(Install-ExakitVsJava 6>&1)
 Check "--json at the same console: the contract - nothing installed, nothing asked" "False 0 " ("$($script:said[-1]) " + $script:asked.Count + " " + (Calls))

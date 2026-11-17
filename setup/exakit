@@ -2048,6 +2048,18 @@ cmd_uninstall() {
         exit 0
     fi
 
+    # ANOTHER exakit RUN OF THIS KIT STILL ALIVE (an `exakit connect` left open
+    # in another window) blocks every full uninstall: deleting the kit from
+    # under it broke whatever it was doing, and nothing said it was there. It
+    # is named, never stopped; the run exits 1 with nothing removed (the kit
+    # remains). A dry run lists it as the blocker and still shows the plan.
+    _uni_blocked=0
+    exakit_uninstall_blocked "$_uni_dry" && _uni_blocked=1
+    if [ "$_uni_blocked" = 1 ] && [ "$_uni_dry" != 1 ]; then
+        info "Nothing was removed."
+        exit 1
+    fi
+
     # --dry-run previews the FULL plan; --yes is the scripted full uninstall
     # (automation and AGENTS.md rely on both). Everything else goes through
     # the selectable menu: pick what goes, see what that means, type the word.
@@ -2059,6 +2071,7 @@ cmd_uninstall() {
         printf '\n'
         info "Not touched: uv/uvx (shared tool), any PATH line in your shell profile, and anything the kit did not install."
         info "Dry run only — nothing was removed. Pick individual pieces interactively with: exakit uninstall"
+        [ "$_uni_blocked" = 1 ] && info "The uninstall refuses to start until the exakit run named above is closed."
         exit 0
     fi
 

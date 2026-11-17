@@ -275,8 +275,8 @@ def _aws_keys(values, secret):
         key_id = key_id or file_id
     hidden = [secret, secret_key, token]
     if not key_id:
-        raise DocumentError("no access key ID: give --set access_key_id=AKIA... with the secret key, or a "
-                            "credential file that holds both")
+        raise DocumentError("Access key ID is required: give --set access_key_id=AKIA... with the secret access "
+                            "key, or a credential file (the JSON aws iam create-access-key prints) that holds both")
     if not KEY_ID.match(key_id):
         raise DocumentError("the access key ID must look like AKIA... or ASIA... (20 characters)")
     if not secret_key or len(secret_key) < 30 or re.search(r"\s", secret_key):

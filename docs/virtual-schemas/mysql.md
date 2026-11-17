@@ -184,7 +184,7 @@ exakit sql 'SELECT "first_name" FROM VS_SHOP."actor" LIMIT 10'
 |---|---|---|
 | Port | `3306` | `3306` |
 | TLS | `verify` | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
+| CA certificate file (PEM) | for `verify` (the default): required, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
 
 ## Connection string you can paste (reference)
 

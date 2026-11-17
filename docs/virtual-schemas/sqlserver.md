@@ -198,7 +198,7 @@ exakit sql 'SELECT "OrderID" FROM VS_ERP."Orders" LIMIT 10'
 | Port | `1433` | `1433` |
 | Schema | `dbo` | `dbo` |
 | TLS | `verify` | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify`: none, so give one, root plus intermediates ([step 5](#5-the-ca-certificates)) | `~/certs/eu-central-1-bundle.pem` |
+| CA certificate file (PEM) | for `verify` (the default): required, so give one, root plus intermediates ([step 5](#5-the-ca-certificates)) | `~/certs/eu-central-1-bundle.pem` |
 
 ## Connection string you can paste (reference)
 

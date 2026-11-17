@@ -191,7 +191,7 @@ exakit sql "SELECT CAST(RENTAL_RATE AS DECIMAL(10,2)) FROM VS_SALES.FILM LIMIT 1
 | Port | `5432` | `5432` |
 | Schema | `public` | `public` |
 | TLS | `verify` | `verify`, `require` or `disable` |
-| CA certificate file (PEM) | for `verify`: none, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
+| CA certificate file (PEM) | for `verify` (the default): required, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
 
 ## Connection string you can paste (reference)
 

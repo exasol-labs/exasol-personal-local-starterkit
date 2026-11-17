@@ -457,6 +457,7 @@ if (Test-Path $startup) { Remove-Item -Recurse -Force $startup }
 Write-Host ""
 Write-Host "Invoke-ExakitUninstallRun removes the kit's container images, and only those:"
 $dockerImgs = @('exasol/nano|2026.2.0-nano.8|aaa111|812MB', 'exasol/nano|<none>|ggg777|800MB', 'exasol/mcp-server|<none>|bbb222|426MB',
+    'exasol/script-language-container|standard-EXASOL-all-java-17-release_abc|hhh888|1.01GB',
     'exasol/nanoX|1|ccc333|1MB', 'library/postgres|16|ddd444|400MB', 'someone/exasol/nano|1|eee555|1MB') -join "`n"
 $env:STUB_DOCKER_IMAGES = $dockerImgs
 $env:STUB_PODMAN_IMAGES = 'docker.io/exasol/nano|2026.2.0-nano.8|fff666|812MB'
@@ -465,7 +466,8 @@ Seed-Kit; Seed-Deploy; $env:STUB_DESTROY_REMOVES = "1"; $script:engCalls = @()
 Invoke-ExakitUninstallRun -DryRun
 Has   "i1: dry run lists exasol/nano" "will remove: docker image exasol/nano:2026.2.0-nano.8 (812MB)" $script:out
 Has   "i1: dry run lists the untagged nano" "will remove: docker image exasol/nano:<none> (800MB)" $script:out
-Lacks "i1: exasol/mcp-server is not the kit's (MCP runs through uvx)" "exasol/mcp-server" $script:out
+Has   "i1: dry run lists the MCP server image the sidecar ran from" "will remove: docker image exasol/mcp-server:<none> (426MB)" $script:out
+Has   "i1: dry run lists the language container a connect installed" "will remove: docker image exasol/script-language-container:standard-EXASOL-all-java-17-release_abc (1.01GB)" $script:out
 Has   "i1: dry run lists podman's copy" "will remove: podman image exasol/nano:2026.2.0-nano.8 (812MB)" $script:out
 Lacks "i1: a foreign image is not listed" "postgres" $script:out
 Lacks "i1: nor a near-miss repository" "nanoX" $script:out
@@ -477,14 +479,15 @@ Invoke-ExakitUninstallRun
 Has   "i2: exasol/nano removed by name" "docker rmi exasol/nano:2026.2.0-nano.8" $script:engCalls
 Has   "i2: the untagged image removed by id" "docker rmi ggg777" $script:engCalls
 Has   "i2: podman's copy removed by the exact listed reference" "podman rmi docker.io/exasol/nano:2026.2.0-nano.8" $script:engCalls
-Lacks "i2: exasol/mcp-server is untouched" "bbb222" $script:engCalls
+Has   "i2: the MCP server image (pulled by digest, <none>) removed by id" "docker rmi bbb222" $script:engCalls
+Has   "i2: the language container removed by name" "docker rmi exasol/script-language-container:standard-EXASOL-all-java-17-release_abc" $script:engCalls
 Lacks "i2: never with -f" "rmi -f" $script:engCalls
 Lacks "i2: never --force" "--force" $script:engCalls
 Lacks "i2: a foreign image is untouched" "ddd444" $script:engCalls
 Lacks "i2: by name either" "postgres" $script:engCalls
 Lacks "i2: a near-miss repository is untouched" "ccc333" $script:engCalls
 Lacks "i2: an image ending in exasol/nano is untouched" "eee555" $script:engCalls
-Has   "i2: the removal is recorded" "Container images removed (docker): exasol/nano:2026.2.0-nano.8, exasol/nano:<none>" $script:out
+Has   "i2: the removal is recorded, one name per repository" "Container images removed (docker): exasol/nano, exasol/mcp-server, script-language-container" $script:out
 Check "i2: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
 # (i2b) podman lists one image as a tag row AND a <none> row: one rmi, no "kept".
 $savedPodman = $env:STUB_PODMAN_IMAGES; $savedDocker = $env:STUB_DOCKER_IMAGES
@@ -550,8 +553,15 @@ Lacks "i2f: no engine is asked which containers use it" "ancestor=" $script:engC
 Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/nano:2026.2.0-nano.8"; $env:STUB_PODMAN_IMAGES = ""
 Invoke-ExakitUninstallRun
 Has   "i3: a refused rmi is kept with its remedy" "Kept image exasol/nano:2026.2.0-nano.8: docker did not remove it (a container may still use it, or docker did not answer). Remove it later with: docker rmi exasol/nano:2026.2.0-nano.8" $script:out
-Has   "i3: the other image still goes" "Container images removed (docker): exasol/nano:<none>" $script:out
+Has   "i3: the other images still go" "Container images removed (docker): exasol/nano, exasol/mcp-server, script-language-container" $script:out
 Check "i3: and the database is not flagged" "False" ("" + $script:ExakitUninstallDbLeft)
+$env:STUB_RMI_FAIL = ""
+# (i3b) the language container still in use: kept with its remedy, the rest goes.
+Seed-Kit; Seed-Deploy; $script:engCalls = @(); $env:STUB_RMI_FAIL = "exasol/script-language-container:standard-EXASOL-all-java-17-release_abc"; $env:STUB_PODMAN_IMAGES = ""
+Invoke-ExakitUninstallRun
+Has   "i3b: an in-use language container is kept with its remedy" "Kept image exasol/script-language-container:standard-EXASOL-all-java-17-release_abc: docker did not remove it" $script:out
+Has   "i3b: the others still go" "Container images removed (docker): exasol/nano, exasol/mcp-server" $script:out
+Lacks "i3b: the kept one is not called removed" "mcp-server, script-language-container" $script:out
 $env:STUB_RMI_FAIL = ""
 # (i4) the engine does not answer: one hint.
 Seed-Kit; Seed-Deploy; $env:STUB_DOCKER_RC = "1"

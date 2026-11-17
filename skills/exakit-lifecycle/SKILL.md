@@ -208,7 +208,11 @@ Kit 0.2.5 and later also remove the launcher download cache, empty
 `~/.exasol` folders, the kit's autostart entries (orphaned ones too), the
 `exasol/nano` image when no container uses it (on Linux/WSL/Windows with
 Docker or Podman; macOS runs the database in the launcher's VM), and the kit's
-own MCP server processes on macOS/Linux. Exit codes (kit 0.2.5 and later): `0`
+own MCP server processes on macOS/Linux. Kit 0.3.0 also removes the
+`exasol/mcp-server` and `exasol/script-language-container` images the
+Federation feature pulled, and refuses a full uninstall (exit `1`, nothing
+removed) while another exakit run of the kit is still open: it names that run;
+close it, then uninstall again. Exit codes (kit 0.2.5 and later): `0`
 done, a dry run, or nothing to do; `1` something remains (the output names it
 and the command that removes it); `2` unknown add-on id, or an unknown option
 (macOS/Linux only); `5` only for `exakit uninstall <addon-id>` that was not

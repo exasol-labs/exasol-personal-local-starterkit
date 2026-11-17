@@ -506,6 +506,40 @@ Check "addon: its staged .cmd.new is gone" "no" (Ex (Join-Path $script:BinDir "d
 Check "addon: exakit.cmd.new is not its to remove" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
 Check "addon: a bystander .cmd.new stays" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
 Check "addon: exakit.cmd stays" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd"))
+# --- another exakit run of this kit blocks a full uninstall (named, never stopped) ---
+Write-Host ""
+Write-Host "another exakit run of this kit blocks a full uninstall:"
+$kitPs1 = Join-Path $script:ExakitHome "kit\setup\exakit.ps1"
+$script:fakeProcs = @(
+    [pscustomobject]@{ ProcessId = 900;  ParentProcessId = 1;    Name = "cmd.exe";        CommandLine = "cmd.exe /c `"$($script:BinDir)\exakit.cmd`" uninstall -Yes" },
+    [pscustomobject]@{ ProcessId = $PID; ParentProcessId = 900;  Name = "powershell.exe"; CommandLine = "powershell.exe -NoProfile -File `"$kitPs1`" uninstall -Yes" },
+    [pscustomobject]@{ ProcessId = 4241; ParentProcessId = 1;    Name = "cmd.exe";        CommandLine = "cmd.exe /c `"$($script:BinDir)\exakit.cmd`" connect" },
+    [pscustomobject]@{ ProcessId = 4242; ParentProcessId = 4241; Name = "powershell.exe"; CommandLine = "powershell.exe -NoProfile -File `"$kitPs1`" connect --name pg" },
+    [pscustomobject]@{ ProcessId = 4243; ParentProcessId = $PID; Name = "powershell.exe"; CommandLine = "powershell.exe -NoProfile -File `"$kitPs1`" mcp-doctor" },
+    [pscustomobject]@{ ProcessId = 4250; ParentProcessId = 1;    Name = "cmd.exe";        CommandLine = "cmd.exe /K `"$($script:BinDir)\exakit.cmd`" start" },
+    [pscustomobject]@{ ProcessId = 4251; ParentProcessId = 1;    Name = "notepad.exe";    CommandLine = "notepad.exe `"$kitPs1`"" },
+    [pscustomobject]@{ ProcessId = 4252; ParentProcessId = 1;    Name = "powershell.exe"; CommandLine = "powershell.exe -File C:\elsewhere\setup\exakit.ps1 connect" }
+)
+function Get-CimInstance { param([string]$ClassName, [string]$Filter, $ErrorAction) $script:fakeProcs }
+$runs = @(Get-ExakitUninstallOtherRuns)
+Check "other runs: only the open connect counts" "4242" (($runs | ForEach-Object { $_.Pid }) -join ",")
+Check "other runs: named by its command" "exakit connect --name pg" (($runs | ForEach-Object { $_.Command }) -join ",")
+$script:warned = @()
+function Warn2($m) { $script:warned += "$m" }
+Check "blocked: true while it runs" "True" ("" + (Test-ExakitUninstallBlocked))
+Check "blocked: the line names it and what to do" "exakit is still running in another window: exakit connect --name pg (pid 4242). Close it, then run exakit uninstall again." ($script:warned -join "|")
+$script:fakeProcs = @($script:fakeProcs | Where-Object { $_.ProcessId -ne 4242 })
+$script:warned = @()
+Check "not blocked: this run, its parents, children, idle shells, editors and another kit's exakit" "False" ("" + (Test-ExakitUninstallBlocked))
+Check "not blocked: nothing named" "" ($script:warned -join "|")
+Remove-Item Function:\Get-CimInstance
+# The refusal comes before anything is removed and answers 1; read off the
+# command's own source (an exit would end this suite).
+$cmdAst = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Invoke-CmdUninstall" }, $true).Extent.Text
+$iBlock = $cmdAst.IndexOf("Test-ExakitUninstallBlocked")
+$iRun = $cmdAst.IndexOf("Invoke-ExakitUninstallRun")
+Check "refusal: checked before the first removal" "True" ("" + ($iBlock -gt 0 -and $iBlock -lt $iRun))
+Check "refusal: exits 1 with nothing removed" "True" ("" + ($cmdAst -match 'if \(\$blocked -and -not \$DryRun\) \{\s*Info "Nothing was removed\."\s*exit 1'))
 # --- the Claude permission rules: uninstall removes every rule the install wrote ---
 # The real writer and remover, run against the sandboxed profile. Uninstall used
 # to miss the 14 `tls-pin` rules (12 Bash spellings, 2 PowerShell): only a

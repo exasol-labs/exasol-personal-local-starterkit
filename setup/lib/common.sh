@@ -520,7 +520,7 @@ info_step() {
 #
 #   ▸ Step 3/4  Setup Utilities
 #       ✓ Data Loader                            (14s)
-#       ███████░░░░░░░░░░░░░  1/4  SQL Preprocessor · verifying checksum (3s)
+#       ███████░░░░░░░░░░░░░  1/3  SQL Preprocessor · verifying checksum (3s)
 #
 # Without a count each item is a spinner, then its tick and one dim line of
 # what was done.
@@ -9556,6 +9556,11 @@ exakit_on_failure() {
     _status=$?
     # Runs on EXIT (any status). Stop any live spinner and un-hide the cursor
     # first, so a failure mid-animation never leaves a stuck/invisible cursor.
+    # A hard failure inside an item of Setup Utilities (the kit command's
+    # refresh dies loudly) ends that item with its cross first, then the card.
+    if [ $_status -ne 0 ] && [ -n "${EXAKIT_ITEM_LOG:-}" ] && command -v exakit_item_end >/dev/null 2>&1; then
+        exakit_item_end 1 2>/dev/null || true
+    fi
     ui_spin_end 2>/dev/null || true
     ui_restore_cursor
     exakit_sweep_sensitive_tmp     # never leave credential temp files behind
@@ -13666,17 +13671,12 @@ kit_helper_step() {
     # The step flag alone is not trusted: if the exakit command was removed
     # (cleanup, testing), a re-run must reinstall it rather than skip.
     _helper_needed=0
-    # As the last item of "Setup Utilities" (kit_shared_steps) it is the item
-    # "Kit CLI": its tick is its line, and the PATH advice is printed after the
-    # item ends, never under a running bar.
-    _khs_item=0
+    # Inside Setup Utilities (kit_shared_steps) it runs within an item the
+    # caller opened: no line of its own, and the PATH advice is left to the
+    # caller (EXAKIT_HELPER_PATH_HINT), to print once no bar owns the line.
     _khs_path=0
     _khs_title="Step ${_step_no}/${_total}  exakit helper command"
-    if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
-        _khs_item=1
-        _khs_title="Kit CLI"
-        exakit_item_begin "Kit CLI"
-    fi
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && _khs_title="exakit command"
     if begin_step exakit_helper "$_khs_title"; then
         _helper_needed=1
     elif [ ! -x "$EXAKIT_BIN_DIR/exakit" ]; then
@@ -13788,9 +13788,19 @@ kit_helper_step() {
         mark_step exakit_helper
         ok_step "exakit installed ($(ui_tilde "$EXAKIT_BIN_DIR/exakit"))"
     fi
-    [ "$_khs_item" = 1 ] && exakit_item_end 0
-    [ "$_khs_path" = 1 ] && ensure_path_hint "$EXAKIT_BIN_DIR"
+    if [ "$_khs_path" = 1 ]; then
+        if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then EXAKIT_HELPER_PATH_HINT=1
+        else ensure_path_hint "$EXAKIT_BIN_DIR"; fi
+    fi
     return 0
+}
+
+# _kss_helper — kit_helper_step inside an open item of Setup Utilities. It
+# shares kit_shared_steps' globals' names, so those are kept around the call.
+_kss_helper() {
+    _kssh_no="$_step_no"; _kssh_tot="$_total"
+    kit_helper_step "" "" "$_script_dir" "$_kit_root"
+    _step_no="$_kssh_no"; _total="$_kssh_tot"
 }
 
 kit_shared_steps() {
@@ -13825,19 +13835,26 @@ kit_shared_steps() {
     # pass. A task that fails is booked in the closing summary and the steps
     # after it still run; each checks its own prerequisites.
     _kss_util_label="Step ${_step_no}/${_total}  Setup Utilities"
-    # SETUP UTILITIES AS ONE BAR: the data loader (exapump), the SQL
-    # preprocessor (the database features), the Python driver (pyexasol) and the
-    # kit's own command line, each one item. Every step underneath runs, records
-    # and resumes exactly as before -- the grouping is the screen's only. The
-    # Python driver used to be its own step after the AI bridge; it needs only
-    # the database (and uv, which exakit_ensure_uv provides on its own), so it
-    # runs here. The kit CLI was the install's last step for the screen's sake
-    # only (the command is in place from the start: exakit_install_helper_early).
-    # Without a database only the kit CLI runs: everything else needs one.
+    # SETUP UTILITIES AS ONE BAR: three items the reader sees -- the data loader
+    # (exapump), the SQL preprocessor (the database features), the Python driver
+    # (pyexasol) -- each one line when done. Every step underneath runs, records
+    # and resumes exactly as before; the grouping is the screen's only. pyexasol
+    # used to be its own step after the AI bridge; it needs only the database
+    # (and uv, which exakit_ensure_uv provides on its own), so it runs here.
+    #
+    # The kit's own command (kit_helper_step: the exakit command's refresh, the
+    # kit copy, the step tick) was the install's last step for the screen's sake
+    # only -- the command is in place from the start (exakit_install_helper_early).
+    # It runs here, inside the Python driver item: no line of its own, its time
+    # in that item's, the bar saying "finishing" while it runs. Without a
+    # database it is the step's only work and reads "Command line ready".
     if [ "$_kss_nodb" = 1 ]; then
         exakit_step_group_begin "$_kss_util_label" 1
+        exakit_item_begin "Command line ready"
+        _kss_helper
+        exakit_item_end 0
     else
-        exakit_step_group_begin "$_kss_util_label" 4
+        exakit_step_group_begin "$_kss_util_label" 3
         if command -v exapump_install >/dev/null 2>&1; then
             exakit_item_begin "Data Loader"
             if begin_step exapump "Data Loader"; then
@@ -13864,26 +13881,26 @@ kit_shared_steps() {
         # pyexasol is optional and must not be able to end the run: a soft
         # failure explains itself, records validated=false, and leaves the step
         # unmarked so a re-run (or `exakit update pyexasol`) retries.
+        exakit_item_begin "Python Driver"
+        _kss_py=0
         if command -v pyexasol_install >/dev/null 2>&1; then
-            exakit_item_begin "Python Driver"
             if begin_step pyexasol "Python Driver"; then
                 if exakit_soft_step pyexasol "exakit update" "pyexasol" _exakit_install_pyexasol; then
                     mark_step pyexasol
-                    exakit_item_end 0
                 else
-                    exakit_item_end 1
+                    _kss_py=1
                 fi
-            else
-                exakit_item_end 0
             fi
         else
             info "pyexasol — not part of this installation, skipping"
         fi
+        ui_spin_relabel "finishing"
+        _kss_helper
+        exakit_item_end "$_kss_py"
     fi
-    # kit_helper_step shares these globals' names; keep this function's own.
-    _kss_no="$_step_no"; _kss_tot="$_total"
-    kit_helper_step "" "" "$_script_dir" "$_kit_root"
-    _step_no="$_kss_no"; _total="$_kss_tot"
+    # The PATH advice the helper found needed, now that no bar owns the line.
+    [ "${EXAKIT_HELPER_PATH_HINT:-0}" = 1 ] && ensure_path_hint "$EXAKIT_BIN_DIR"
+    EXAKIT_HELPER_PATH_HINT=0
     exakit_step_group_end
     _step_no=$((_step_no + 1))
 
@@ -15705,9 +15722,21 @@ _exakit_uninstall_closing_hints() {
 # the launcher's own VM, so the host engine holds nothing of the kit's there.
 # Every engine call is bounded, so a hung engine cannot stall the uninstall.
 # Twin of Invoke-ExakitUninstallKitImages.
-# Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx), so an
-# image of it on this machine is the user's own.
-EXAKIT_KIT_IMAGE_REPOS="exasol/nano"
+# The Federation kit pulls two more through the launcher, into the same
+# engine: the MCP server that runs beside the database (exasol/mcp-server,
+# pulled by digest, so the engine lists it as <none>) and the script language
+# containers a first `exakit connect` installs
+# (exasol/script-language-container, the Java one is ~1 GB). Both were left
+# behind by a full uninstall. Only these exact repositories, the same rules.
+EXAKIT_KIT_IMAGE_REPOS="exasol/nano exasol/mcp-server exasol/script-language-container"
+
+# _exakit_kit_image_label <repo> - the short name a ✓ line uses for a repo.
+_exakit_kit_image_label() {
+    case "$1" in
+        exasol/script-language-container) printf 'script-language-container' ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
 _exakit_uninstall_kit_images() {
     _kim_dry="${1:-0}"
     _kim_os="$(detect_os 2>/dev/null || uname -s 2>/dev/null)"
@@ -15718,7 +15747,7 @@ _exakit_uninstall_kit_images() {
         command -v "$_kim_eng" >/dev/null 2>&1 || continue
         _kim_any=1
         if ! _kim_list="$(exakit_run_bounded 30 "$_kim_eng" images --format '{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}' 2>/dev/null)"; then
-            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/nano"
+            info "Could not ask $_kim_eng for the kit's container images (is it running?); check later with: $_kim_eng images exasol/*"
             continue
         fi
         _kim_rows="$(printf '%s\n' "$_kim_list" | while IFS='|' read -r _kr_repo _kr_tag _kr_id _kr_size; do
@@ -15763,19 +15792,96 @@ _exakit_uninstall_kit_images() {
                 continue
             fi
             if exakit_run_bounded 60 "$_kim_eng" rmi "$_kr_ref" >/dev/null 2>&1; then
-                _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_name"
+                # One name per repository on the ✓ line, however many tags went.
+                _kr_label="$(_exakit_kit_image_label "$_kr_repo")"
+                case ", $_kim_gone, " in *", $_kr_label, "*) : ;; *) _kim_gone="${_kim_gone:+$_kim_gone, }$_kr_label" ;; esac
             else
                 info "Kept image $_kr_name: $_kim_eng did not remove it (a container may still use it, or $_kim_eng did not answer). Remove it later with: $_kim_eng rmi $_kr_ref"
             fi
         done <<KIMROWS
 $_kim_rows
 KIMROWS
-        [ -n "$_kim_gone" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_gone"
+        # In the fixed repository order, whatever order the engine listed them.
+        _kim_line=""
+        for _kr_want in $EXAKIT_KIT_IMAGE_REPOS; do
+            _kr_label="$(_exakit_kit_image_label "$_kr_want")"
+            case ", $_kim_gone, " in *", $_kr_label, "*) _kim_line="${_kim_line:+$_kim_line, }$_kr_label" ;; esac
+        done
+        [ -n "$_kim_line" ] && [ "$_kim_dry" != "1" ] && ok_step "Container images removed ($_kim_eng): $_kim_line"
         _kim_gone=""
     done
     if [ "$_kim_any" = 0 ]; then
-        info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
+        info "Neither Docker nor Podman was found, so the kit's container images were not checked."
     fi
+    return 0
+}
+
+# _exakit_uninstall_other_runs - every OTHER exakit run of this kit that is
+# still alive, one "pid|short command" line each.
+#
+# An `exakit connect` left open in another window kept running while a full
+# uninstall deleted the kit from under it: nothing said it was there, and it
+# failed half-way through whatever it was doing. A run is this kit's when its
+# command line names the installed command ($EXAKIT_BIN_DIR/exakit) or a
+# script in the kit's own copy ($EXAKIT_HOME/kit/setup/), run directly or by
+# a shell (an editor with the file open is not a run). This shell, its
+# parents and its own children (subshells, spinner animators) are not "other".
+# Read-only: nothing is ever stopped. Twin of Get-ExakitUninstallOtherRuns.
+_exakit_uninstall_other_runs() {
+    _uor_bin="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/exakit"
+    _uor_kit="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/kit/setup/"
+    _uor_ps="$(ps -axo pid=,ppid=,command= 2>/dev/null)" || return 0
+    [ -n "$_uor_ps" ] || return 0
+    printf '%s\n' "$_uor_ps" | awk -v self="$$" -v bin="$_uor_bin" -v kit="$_uor_kit" '
+        {
+            line = $0; sub(/^[ \t]+/, "", line)
+            pid = line; sub(/[ \t].*$/, "", pid)
+            rest = line; sub(/^[0-9]+[ \t]+/, "", rest)
+            ppid = rest; sub(/[ \t].*$/, "", ppid)
+            cmd = rest; sub(/^[0-9]+[ \t]*/, "", cmd)
+            par[pid] = ppid; c[pid] = cmd; ord[++n] = pid
+        }
+        END {
+            p = self; k = 0
+            while (p != "" && p != "0" && !(p in anc) && k < 128) { anc[p] = 1; p = par[p]; k++ }
+            for (i = 1; i <= n; i++) {
+                pid = ord[i]
+                if (pid in anc) continue
+                cmd = c[pid]; at = 0
+                b = index(cmd, bin)
+                if (b > 0) { nx = substr(cmd, b + length(bin), 1); if (nx == "" || nx == " ") at = b }
+                if (!at) { kk = index(cmd, kit); if (kk > 0) { tail = substr(cmd, kk + length(kit)); sub(/[ \t].*$/, "", tail); if (tail == "exakit" || tail ~ /\.sh$/) at = kk } }
+                if (!at) continue
+                # Only a RUN of it: the path is the program, or what a shell
+                # (bash/sh/zsh, through env) was told to run - not an editor
+                # or a pager that has the file open.
+                pre = substr(cmd, 1, at - 1); np = split(pre, pw, /[ \t]+/); okp = 1
+                for (j = 1; j <= np; j++) {
+                    if (pw[j] == "") continue
+                    bn = pw[j]; sub(/.*\//, "", bn)
+                    if (bn !~ /^-?(ba|z|da|k)?sh$/ && bn != "env" && pw[j] !~ /^-/) { okp = 0; break }
+                }
+                if (!okp) continue
+                q = par[pid]; d = 0; k = 0
+                while (q != "" && q != "0" && k < 128) { if (q == self) { d = 1; break }; q = par[q]; k++ }
+                if (d) continue
+                s = substr(cmd, at); n1 = split(s, w, /[ \t]+/)
+                name = w[1]; sub(/.*\//, "", name)
+                out = name; for (j = 2; j <= n1 && j <= 4; j++) out = out " " w[j]
+                print pid "|" out
+            }
+        }'
+}
+
+# exakit_uninstall_blocked <dry> - say which other exakit runs are alive; 0
+# when at least one is (the uninstall must not start), 1 when none is.
+exakit_uninstall_blocked() {
+    _ub_list="$(_exakit_uninstall_other_runs 2>/dev/null || true)"
+    [ -n "$_ub_list" ] || return 1
+    printf '%s\n' "$_ub_list" | while IFS='|' read -r _ub_pid _ub_cmd; do
+        [ -n "$_ub_pid" ] || continue
+        warn "exakit is still running in another window: $_ub_cmd (pid $_ub_pid). Close it, then run exakit uninstall again."
+    done
     return 0
 }
 

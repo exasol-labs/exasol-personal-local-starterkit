@@ -945,7 +945,8 @@ calls() { tr '\n' '|' < "$WORK/prep.calls"; }
 OUT="$(prep 1 0 0 1 _exakit_vs_install_java)"
 check "a connect at a terminal, Java missing: installed with no question, one restart" \
     "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
-has "...one line says what it does and why" "Java language container installed" "$OUT"
+has "...one line says what it does and why" "Database configured for your sources" "$OUT"
+lacks "...the screen names no language container" "Java language container installed" "$OUT"
 lacks "...and nothing asked" "ASKED" "$(calls)"
 OUT="$(prep 1 1 0 1 _exakit_vs_install_java)"
 check "--json at the same terminal: the contract - nothing installed, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
@@ -1503,6 +1504,50 @@ for c in postgresql mysql sqlserver oracle; do
     has "C1: $c plan warns that tls=verify needs a CA file, a public CA too" "tls=verify needs a CA file here" "$(printf '%s\n' "$E7" | grep "^$c|")"
     has "...and not once a CA is given" "|None" "$(printf '%s\n' "$E7" | grep "^$c|")"
     lacks "C1: $c's CA prompt no longer says it is only for a private CA" "only for a private CA" "$(cat "$ROOT/setup/virtual-schemas/connectors/$c/connector.json")"
+done
+
+printf '\n== Required fields: what a connect needs, the form marks and asks for ==\n'
+# Measured 17 Nov: the S3 form showed "Access key ID" without a *, accepted it
+# empty, then the connect failed on the missing key. A value the connect needs
+# is marked required and asked for; a script that leaves it to the credential
+# file is refused before anything is downloaded, naming the field. A CA file
+# needed only with tls=verify says so in its question.
+REQ="$(python3 - "$ROOT" <<'PYE'
+import json, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import plan, document
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+req = lambda c, n: any(s["name"] == n and s.get("required") for s in c["inputs"])
+s3 = defs.connector("s3")
+print("s3_key_required|%s" % req(s3, "access_key_id"))
+print("s3_mapping_optional|%s" % (not req(s3, "mapping")))
+for g in ({"catalog": "glue", "files": "s3"}, {"catalog": "none", "files": "s3"}):
+    print("lake_%s_key_required|%s" % (g["catalog"], req(defs.connector("lakehouse", g), "access_key_id")))
+try:
+    document._aws_keys({}, "x" * 40)
+    print("s3_raw_secret_no_key|accepted")
+except document.DocumentError as error:
+    print("s3_raw_secret_no_key|%s" % error)
+cred = json.dumps({"AccessKey": {"AccessKeyId": "AKIAABCDEFGHIJKLMNOP", "SecretAccessKey": "y" * 40}})
+print("s3_credential_file_no_key|%s" % document._aws_keys({}, cred)[0])
+try:
+    plan.validate_inputs(s3, {"bucket": "my-bucket", "region": "eu-central-1"})
+    print("s3_script_no_key|accepted")
+except plan.PlanError as error:
+    print("s3_script_no_key|refused: %s" % error)
+for c in ("postgresql", "mysql", "sqlserver", "oracle"):
+    print("%s_ca|%s" % (c, next(s["label"] for s in defs.connector(c)["inputs"] if s["name"] == "ca")))
+PYE
+)"
+check "S3: Access key ID is required in the form" "s3_key_required|True" "$(printf '%s\n' "$REQ" | grep '^s3_key_required')"
+check "...the EDML mapping stays optional (drafted from the bucket)" "s3_mapping_optional|True" "$(printf '%s\n' "$REQ" | grep '^s3_mapping_optional')"
+check "Lakehouse glue: Access key ID is required in the form" "lake_glue_key_required|True" "$(printf '%s\n' "$REQ" | grep '^lake_glue')"
+check "Lakehouse none + S3: Access key ID is required in the form" "lake_none_key_required|True" "$(printf '%s\n' "$REQ" | grep '^lake_none')"
+has "S3: a raw secret with no key ID is refused naming Access key ID" "Access key ID is required" "$(printf '%s\n' "$REQ" | grep '^s3_raw_secret_no_key')"
+check "...a credential file that holds the key ID is still enough for a script" "s3_credential_file_no_key|AKIAABCDEFGHIJKLMNOP" "$(printf '%s\n' "$REQ" | grep '^s3_credential_file_no_key')"
+check "...and plan validation leaves it to the credential, checked before any download" "s3_script_no_key|accepted" "$(printf '%s\n' "$REQ" | grep '^s3_script_no_key')"
+for c in postgresql mysql sqlserver oracle; do
+    has "$c: the CA question says it is required with TLS verify" "required with TLS verify" "$(printf '%s\n' "$REQ" | grep "^${c}_ca")"
 done
 
 printf '\n== Snowflake: the loader trusts the container'"'"'s CA store ==\n'
@@ -3286,12 +3331,12 @@ PY
     check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
     check "...no y/N at all: picking the source was the answer" "0" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "Enabling Federation" "$TUI_SCREEN"
-    has "...one line says what the kit does and why" "Java language container installed" "$(tr -d '\r' < "$WORK/tui.raw")"
+    has "...one line says what the kit does and why" "Database configured for your sources" "$(tr -d '\r' < "$WORK/tui.raw")"
     lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
     lacks "...no y/N for the Java container either" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
     has "...the launcher installed it, with no restart of its own" "slc install java --no-restart" "$(cat "$TUI_FAKE_CALLS" 2>/dev/null)"
     has "...then the kit's own stop and start: the one restart" "exakit stop|exakit start" "$(tr '\n' '|' < "$TUI_FAKE_CALLS" 2>/dev/null)"
-    has "...the install said done" "Java language container installed" "$TUI_SCREEN"
+    has "...the install said done" "Database configured for your sources" "$TUI_SCREEN"
     has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
 
     # The same at the line-by-line questions (a terminal without the drawn

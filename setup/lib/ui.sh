@@ -334,7 +334,7 @@ _UI_SPIN_PREFIX=''
 # line under the ticks of the items already done:
 #
 #     ✓ Data Loader                                          (14s)
-#     ███████░░░░░░░░░░░░░  1/4  SQL Preprocessor · verifying checksum (3s)
+#     ███████░░░░░░░░░░░░░  1/3  SQL Preprocessor · verifying checksum (3s)
 #
 # The bar, the count and the item's name are fixed for the item; what follows
 # the dot is whatever the item's own code says it is doing now. That code calls
