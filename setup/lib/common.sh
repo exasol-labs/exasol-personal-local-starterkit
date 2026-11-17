@@ -6093,8 +6093,14 @@ _exakit_addon_progress() {
     exakit_addon_activity "$6"
     # Table rows already show the add-on ID.
     if [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
-        ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
-            "$3" "$4" "$5" "$6"
+        # The ones installing on their own say so through every step of theirs.
+        if [ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ]; then
+            ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
+                "$3" "$4" "$5" "Auto installing"
+        else
+            ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
+                "$3" "$4" "$5" "$6"
+        fi
         return 0
     fi
     ui_progress_state "$1" "$3" "$4" "$5" "$2 · $6"

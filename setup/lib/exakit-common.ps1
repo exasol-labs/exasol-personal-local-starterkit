@@ -7938,8 +7938,11 @@ function Set-ExakitAddonProgress {
     Set-ExakitAddonActivity -Message $Phase
     # Table rows already show the add-on ID.
     if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
+        # The ones installing on their own say so through every step of theirs. Twin of the shell's.
+        $shown = $Phase
+        if ($script:ExakitAddonTableKeep) { $shown = 'Auto installing' }
         Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "running" `
-            -Pct $Pct -Ceiling $Ceiling -Secs $Secs -Phase $Phase -Table $script:ExakitAddonTable
+            -Pct $Pct -Ceiling $Ceiling -Secs $Secs -Phase $shown -Table $script:ExakitAddonTable
         return
     }
     Set-ExakitProgress -Pct $Pct -Ceiling $Ceiling -Secs $Secs -Phase "$Id - $Phase"
