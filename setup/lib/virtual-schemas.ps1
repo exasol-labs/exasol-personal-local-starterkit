@@ -724,8 +724,16 @@ function Read-ExakitVsStdinSecret {
     $buffer = New-Object System.IO.MemoryStream
     $stdin = [Console]::OpenStandardInput()
     try { $stdin.CopyTo($buffer) } finally { $stdin.Dispose() }
-    $text = ConvertFrom-ExakitVsSecretBytes -Bytes $buffer.ToArray()
+    $bytes = $buffer.ToArray()
     $buffer.Dispose()
+    # A .NET Framework caller under code page 65001 (Windows PowerShell 5.1's
+    # Process.StandardInput) writes a UTF-8 BOM before what it was given: a UTF-16
+    # secret then arrives as EF BB BF FF FE ... The UTF-8 mark is not the secret's.
+    if ($bytes.Length -ge 5 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF -and
+        (($bytes[3] -eq 0xFF -and $bytes[4] -eq 0xFE) -or ($bytes[3] -eq 0xFE -and $bytes[4] -eq 0xFF))) {
+        $bytes = $bytes[3..($bytes.Length - 1)]
+    }
+    $text = ConvertFrom-ExakitVsSecretBytes -Bytes ([byte[]]$bytes)
     if ($null -eq $text) { Deny-ExakitVsInput "--password-stdin: the credential on standard input is not UTF-8 or UTF-16 text (another encoding, or a NUL byte)." "the credential is not UTF-8 or UTF-16 text" "send it as UTF-8 (UTF-16 needs its byte-order mark), or give it with --password-file <file>" }
     if (-not $text) { Deny-ExakitVsInput "--password-stdin read nothing: standard input was empty." "--password-stdin was given, but standard input was empty" "pipe the credential into the command and close the pipe once it is written, or give it with --password-file <file>" }
     return $text
