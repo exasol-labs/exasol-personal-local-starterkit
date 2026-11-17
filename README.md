@@ -18,13 +18,13 @@
 **macOS / Linux / WSL**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/install.sh | EXAKIT_REF=feat/rc-build-0.3.0-federation sh
+curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/install.sh | EXAKIT_REF=feat/rc-build-0.3.0-federation EXAKIT_VERSIONS_URL=https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/versions.json sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-$env:EXAKIT_REF = "feat/rc-build-0.3.0-federation"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/install.ps1 | iex
+$env:EXAKIT_REF = "feat/rc-build-0.3.0-federation"; $env:EXAKIT_VERSIONS_URL = "https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/versions.json"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0-federation/install.ps1 | iex
 ```
 
 To have an AI agent do the install, paste this into Claude Code, Codex or any other coding agent:
