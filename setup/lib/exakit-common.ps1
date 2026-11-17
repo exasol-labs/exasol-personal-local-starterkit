@@ -2302,9 +2302,33 @@ function Set-ManifestValue {
 }
 
 # manifest_get equivalent: reads from disk fresh every call, like bash.
+# The manifest was read and parsed from disk for every key asked: a screen asks
+# dozens. The parsed copy is kept for these read lookups and taken again when
+# the file's write time or length differs - so a write by this process or any
+# other is seen on the next ask. Read-ExakitManifest itself is unchanged: the
+# callers that modify what it returns always get their own copy.
+$script:ExakitManifestReadCache = $null
+$script:ExakitManifestReadStamp = ""
 function Get-ExakitManifestValue {
     param([Parameter(Mandatory)][string]$Path)
-    $doc = Read-ExakitManifest
+    $doc = $null
+    $stamp = ""
+    try {
+        $item = Get-Item -LiteralPath $script:ManifestPath -ErrorAction Stop
+        $stamp = "" + $item.LastWriteTimeUtc.Ticks + ":" + $item.Length
+    } catch { $stamp = "" }
+    if ($stamp -and $stamp -eq $script:ExakitManifestReadStamp -and $null -ne $script:ExakitManifestReadCache) {
+        $doc = $script:ExakitManifestReadCache
+    } else {
+        $doc = Read-ExakitManifest
+        if ($stamp -and $null -ne $doc) {
+            $script:ExakitManifestReadCache = $doc
+            $script:ExakitManifestReadStamp = $stamp
+        } else {
+            $script:ExakitManifestReadCache = $null
+            $script:ExakitManifestReadStamp = ""
+        }
+    }
     if ($null -eq $doc) { return $null }
     return (Get-ManifestValue -Manifest $doc -Path $Path)
 }
@@ -6310,6 +6334,24 @@ function Install-ExakitSkills {
 # when the caller allows it, and otherwise refused with the exact command that
 # fixes it.
 # Twin of exakit_ensure_runtime_running in common.sh.
+# Test-ExakitRuntimeAnswersQuick - is the kit's own database answering right now?
+# The port, then a completed TLS handshake on it: a fraction of a second, no
+# launcher, no heal. NOT the whole truth (the launcher's word outranks the port,
+# see Test-PersonalDeploymentRunning) - only enough to draw a menu before the
+# full check, which the caller still owes before it loads anything. Twin of
+# exakit_runtime_answers_quick.
+function Test-ExakitRuntimeAnswersQuick {
+    try {
+        if ((Get-ExakitManifestValue "runtime.type") -ne "personal") { return $false }
+        foreach ($name in @("Get-PersonalDbPort", "Test-PersonalTlsAnswers", "Test-ExakitPortInUse")) {
+            if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { return $false }
+        }
+        if (-not $script:PersonalDeployDir -or -not (Test-Path $script:PersonalDeployDir)) { return $false }
+        if (-not (Test-ExakitPortInUse (Get-PersonalDbPort))) { return $false }
+        return [bool](Test-PersonalTlsAnswers)
+    } catch { return $false }
+}
+
 function Confirm-ExakitRuntimeRunning {
     param([switch]$Deploy)
     $runtimeType = Get-ExakitManifestValue "runtime.type"

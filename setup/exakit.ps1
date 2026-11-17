@@ -4547,7 +4547,22 @@ function Invoke-CmdDataLoad {
     Initialize-ExakitLogging
     # Loading data needs a database that answers - a stopped one used to make
     # the dataset checks silently trust the manifest and the load itself fail.
-    Confirm-ExakitRuntimeRunning -Deploy
+    #
+    # THE MENU DOES NOT WAIT FOR THE LAUNCHER. The full check asks the launcher
+    # for its state, seconds before the table could draw, to confirm a database
+    # that was answering all along. With a console and nothing named, the quick
+    # proof (the port, then the TLS handshake) is enough to draw the table; the
+    # full check - and its self-heal - runs once something is picked
+    # (Show-ExakitDataLoadMenu), or here when the quick proof fails. Twin of the
+    # same block in setup/exakit.
+    $script:ExakitRuntimeCheckDeferred = $false
+    if (-not $ForceFlag -and -not $env:EXAKIT_DATASETS -and -not $env:EXAKIT_DATA_FILE -and
+        (Test-ExakitInteractive) -and (Get-Command Test-ExakitRuntimeAnswersQuick -ErrorAction SilentlyContinue) -and
+        (Test-ExakitRuntimeAnswersQuick)) {
+        $script:ExakitRuntimeCheckDeferred = $true
+    } else {
+        Confirm-ExakitRuntimeRunning -Deploy
+    }
     if ($ForceFlag) {
         $kitRoot = Get-ExakitRepoRoot
         if (-not $kitRoot) { Fail "Could not find the kit's sql/ and data/ files to load." }
