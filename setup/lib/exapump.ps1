@@ -4310,6 +4310,9 @@ function Invoke-ExakitDataExternal {
     $code = 1
     try { $code = [int](Invoke-ExakitVsConnectWizard) } catch { Write-ExakitLog "WARN" "data load: exakit connect could not run: $_" }
     Write-ExakitLog "INFO" "data load: exakit connect (the external-source row) exited $code"
+    # Ctrl+C: the person wants their prompt back - no update check after this
+    # run (Show-ExakitUpdateNotice). A declined connect (5) is not an interrupt.
+    if ($code -eq 130 -or $code -eq -1073741510) { $script:ExakitUserInterrupted = $true }
     if (Test-ExakitConnectCancelled $code) {
         Info "No external source was connected. Connect one any time with: exakit connect"
     } elseif ($code -ne 0) {

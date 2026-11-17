@@ -4728,8 +4728,10 @@ function Write-ExakitNoticeLines {
     $reset = $script:UiReset
     [Console]::Error.WriteLine("")
     if ($Light.Count -gt 0) {
-        $word = Get-ExakitNoticeWord $LightWorst
-        [Console]::Error.WriteLine("$dim$word update is available for $($Light -join ', ') - apply in seconds:  exakit update$reset")
+        # One plain sentence, the command in green; which components are pending
+        # is what `exakit version` and `exakit update --check` show.
+        $ok = $script:UiOk
+        [Console]::Error.WriteLine("${dim}Updates are available to your starterkit. Run ${ok}exakit update${reset}${dim} to upgrade anytime.$reset")
     }
     if ($Heavy.Count -gt 0) {
         # Never "run update now" for the runtime: it stops the database, so the user
@@ -4793,6 +4795,9 @@ function Get-ExakitNoticeWord {
 # never changes what the command before it reported.
 function Show-ExakitUpdateNotice {
     if ($env:EXAKIT_NO_UPDATE_NOTICE -eq "1") { return }
+    # A run the person stopped with Ctrl+C ends now: no version lookup, no wait,
+    # no notice after it. The next command they run says it instead.
+    if ($script:ExakitUserInterrupted) { return }
     if ($script:VersionPolicy -ne "manifest") { return }
     # stderr must be a terminal: a notice has no business in a log file, a pipe, or
     # a CI transcript.

@@ -4168,6 +4168,9 @@ exakit_data_external_run() {
         5|130) EXAKIT_DATA_EXTERNAL_NOTE="info|No external source was connected. Connect one any time with: exakit connect" ;;
         *)     EXAKIT_DATA_EXTERNAL_NOTE="warn|Connecting the external source did not finish (see above). Retry any time with: exakit connect" ;;
     esac
+    # Ctrl+C: the person wants their prompt back, so this run says what it has
+    # to say and ends - no update check after it (exakit_notice_after_command).
+    [ "$_der_rc" -eq 130 ] && _EXAKIT_INTERRUPTED=1
     return 0
 }
 
