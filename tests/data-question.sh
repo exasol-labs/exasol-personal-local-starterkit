@@ -161,10 +161,11 @@ if command -v python3 >/dev/null 2>&1; then
     # the fix, and a pipe when setup is started from `curl | sh`.
     _conn_skip="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated"))' "$ROOT/setup/virtual-schemas/catalog.json")"
     # aaabaca8: the samples load without a menu, so the data table is three rows
-    # (file, Federation, Skip) with the cursor on Skip - k reaches Federation.
+    # (file, Federation, Skip) with the cursor on Skip - once it reads keys, k
+    # reaches Federation.
     # 8f7e44c9: the connector menu's title is its first line, the connectors
     # alphabetical (Amazon S3 first).
-    _conn_keys="k \\r\\x02Federation: Select data sources\\x03\\x02Enter to confirm\\x03$_conn_skip \\r"
+    _conn_keys="\\x02Enter to confirm\\x03k \\r\\x02Federation: Select data sources\\x03\\x02Enter to confirm\\x03$_conn_skip \\r"
     for _dq_stdin in terminal pipe; do
         out="$(TTY_REPLAY_COLS=100 TTY_REPLAY_CTTY=1 TTY_REPLAY_WAIT=40 replay "$_conn_keys" DQ_SCENE=install DQ_STDIN="$_dq_stdin")"
         has "install, stdin a $_dq_stdin: the connect menu is the table" "╭─ Federation: Select data sources" "$out"

@@ -115,7 +115,7 @@ PG_SET="--set host=pg.example.com --set database=sales --set user=reader"
 
 printf '\n== search and plan ==\n'
 run resolve mssql; has "an alias resolves" '"connector": "sqlserver"' "$OUT"
-run resolve sql; check "an ambiguous search is refused, exit 2" "2" "$RC"; has "...with the choices" "choices: postgresql, mysql, sqlserver" "$OUT"
+run resolve sql; check "an ambiguous search is refused, exit 2" "2" "$RC"; has "...with the choices" "choices: databricks, mysql, postgresql, sqlserver" "$OUT"
 db '{}'
 run plan pg --name sales $PG_SET
 check "plan: exit 0" "0" "$RC"
@@ -3189,6 +3189,10 @@ pasted() { printf '\\x0e%s\\x0f' "$1"; }
 # macOS): a hidden prompt in canonical mode never saw its Enter.
 LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
+# 8f7e44c9: the connectors are listed as catalog.json has them, alphabetically -
+# Amazon S3 first, where the cursor starts. down_to <id>: the j presses to it.
+down_to() { python3 -c 'import json, sys; ids = [c["id"] for c in json.load(open(sys.argv[1]))["connectors"] if c["id"] not in ("iceberg-rest", "unity")]; print("j" * ids.index(sys.argv[2]))' "$ROOT/setup/virtual-schemas/catalog.json" "$1"; }
+PICK_PG="${MENU}$(down_to postgresql) "                  # PostgreSQL ticked
 Q_PASTE="$(when 'Connection string (hidden) - paste + Enter, or Enter alone for the fields:')"
 # The question after a string was read and shown back masked: Enter uses it.
 Q_USE="$(when 'Esc/n to type the fields instead')"
@@ -3223,15 +3227,15 @@ if command -v python3 >/dev/null 2>&1; then
     # one wrong answer, corrected; Enter leaves the summary. The public IP lookup
     # is on (a file:// URL): the review says the address.
     TTY_REPLAY_RAW="$WORK/tui.raw" EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
-        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
+        "$PICK_PG$MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
     lacks "...the review goes straight on to connect: no Connect it now?" "Connect it now?" "$(cat "$WORK/tui.raw")"
     lacks "...and no y/N anywhere" "[y/N]" "$(cat "$WORK/tui.raw")"
-    check "the first line is this computer's public IP, before the menu's own line" \
-        "    • Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|    • Tick one or more sources; the details for each are asked next." \
-        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print("|".join([l for l in t.split("\n") if l.strip()][:2]))' "$WORK/tui.raw")"
+    check "the first line is this computer's public IP, before the menu" \
+        "    • Whitelist IP: 203.0.113.7" \
+        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print([l for l in t.split("\n") if l.strip()][0])' "$WORK/tui.raw")"
     has "...the review names this computer's public IP for a source on the internet" \
-        "Tip: cloud sources see you as 203.0.113.7" "$TUI_SCREEN"
+        "Whitelist IP: 203.0.113.7" "$TUI_SCREEN"
     has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
     has "...under the Source column" "Source" "$TUI_SCREEN"
     lacks "...no Version column" "Version" "$TUI_SCREEN"
@@ -3241,7 +3245,9 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...no Kind column any more" "REST + JDBC" "$TUI_SCREEN"
     has "...the panel shows every answer" "Host name or address *              pg.example.com" "$TUI_SCREEN"
     has "...the credential as given, never its value" "(given, hidden)" "$TUI_SCREEN"
-    has "...the review says who can read the result" "Every file is SHA-256 checked before it reaches the database" "$TUI_SCREEN"
+    # 4c4fbc64: no question under the review, so the live table takes its place;
+    # the footer was said on the way (the stream), not left on the final screen.
+    has "...the review says who can read the result" "Every file is SHA-256 checked before it reaches the database" "$(cat "$WORK/tui.raw")"
     has "...and the row ends with the schema and its tables" "✓ VS_TUIONE · 2 tables" "$TUI_SCREEN"
     lacks "...the refused answer's line is gone once it was corrected" "would be the database itself" "$TUI_SCREEN"
     lacks "the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
@@ -3256,7 +3262,7 @@ PY
     # Two sources at 80 columns, the second unreachable: one row each, and the
     # failure's whole sentence under the table rather than in a cell.
     TUI_COLS=80 tui connect-tui-scenario.sh "Connect 2 sources" 4 \
-        "$MENU ${MENU}j$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuitwo\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$Q_PASTE\r${Q_NAME}tuimy\r${Q_HOST}my.example.com\r$Q_PORT\r${Q_DB}shop\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
+        "${MENU}$(down_to mysql) ${MENU}jj$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuimy\r${Q_HOST}my.example.com\r$Q_PORT\r${Q_DB}shop\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$Q_PASTE\r${Q_NAME}tuitwo\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
     check "two sources: still one table" "0" "$TUI_RC"
     lacks "...no Connect all 2 now? either" "Connect all" "$TUI_SCREEN"
     has "...the one that worked" "✓ VS_TUITWO · 1 table" "$TUI_SCREEN"
@@ -3276,7 +3282,7 @@ import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump
 PY
     export TUI_FAKE_CALLS="$WORK/fake-calls"
     TTY_REPLAY_RAW="$WORK/tui.raw" TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect 1 source" 3 \
-        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when '%')\r"
+        "$PICK_PG$MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when '%')\r"
     check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
     check "...no y/N at all: picking the source was the answer" "0" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "Enabling Federation" "$TUI_SCREEN"
@@ -3311,7 +3317,7 @@ PY
     TUI_ARGS="pg --name tuiargs --set host=pg.example.com --set database=sales --set user=reader --password-file $WORK/tui.pw" \
         tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r${Q_SUM}7\r$Q_PW\r$Q_SUM\r"
     check "a named connector skips the menu" "0" "$TUI_RC"
-    lacks "...no menu" "Connect external sources" "$TUI_SCREEN"
+    lacks "...no menu" "Federation: Select data sources" "$TUI_SCREEN"
     lacks "...no connection string asked for" "Connection string" "$(cat "$WORK/tui.raw")"
     has "...the given credential file is used, not asked for" "(read from a file)" "$TUI_SCREEN"
     has "...picked in the summary, Enter keeps it" "Password * (hidden, Enter keeps the one given):" "$(cat "$WORK/tui.raw")"
@@ -3323,11 +3329,9 @@ PY
     # gated one, and the menu's one Lakehouse row stands for iceberg-rest and
     # unity too (their rows are folded into it).
     _skip_keys="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated" and e["id"] not in ("iceberg-rest", "unity")))' "$DEFS/catalog.json")"
-    TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
+    TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario.sh "Federation: Select data sources" 1 "$_skip_keys \r"
     has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
-    check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line comes first" \
-        "    • Tick one or more sources; the details for each are asked next." \
-        "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print([l for l in t.split("\n") if l.strip()][0])' "$WORK/tui.raw")"
+    lacks "EXAKIT_NO_IP_LOOKUP=1: no Whitelist IP line" "Whitelist IP" "$(cat "$WORK/tui.raw")"
     lacks "...nothing about the public IP anywhere" "public IP" "$(cat "$WORK/tui.raw")"
     has "the menu: the Source column alone" "│     Source " "$TUI_SCREEN"
     lacks "...no Status column in a menu that runs nothing" "Status" "$TUI_SCREEN"
@@ -3338,9 +3342,9 @@ PY
         # The PowerShell twin, under the same terminal model. pwsh starts slower:
         # the menu is waited for like every question.
         EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
-            "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
+            "$PICK_PG$MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
         check "PowerShell: one menu, one panel, one table" "0" "$TUI_RC"
-        has "...its review names this computer's public IP too" "Tip: cloud sources see you as 203.0.113.7" "$TUI_SCREEN"
+        has "...its review names this computer's public IP too" "Whitelist IP: 203.0.113.7" "$TUI_SCREEN"
         has "...and the row ends with the schema" "✓ VS_TUIPS · 1 table" "$TUI_SCREEN"
         lacks "...the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
         check "...it reached the CONNECTION, an arrow and Delete pressed in it dropped" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
@@ -3362,7 +3366,7 @@ PY
     has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
     if command -v pwsh >/dev/null 2>&1; then
         TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
-            "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")$Q_USE\r${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
+            "$PICK_PG$MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")$Q_USE\r${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
         check "PowerShell: the same paste and Ctrl-D: one menu, one panel" "0" "$TUI_RC"
         has "...the long string was read whole" "$(printf '%-34s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
         has "...the second line answered nothing" "Name (alias) for this connection *  tuipslong" "$TUI_SCREEN"
@@ -3372,7 +3376,7 @@ PY
         # character; the string is shown back masked, e asks again, and the
         # second one is used.
         TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
-            "$MENU $MENU\r${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}postgres://reader:psPw-zz5@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipsagain\r$Q_SCHEMA\r${Q_TLS}\x04"
+            "$PICK_PG$MENU\r${Q_PASTE}$(pasted 'abc')$(pasted '\x1b[D')$(pasted '\x1b[3~')\r${Q_USE}e${Q_PASTE}postgres://reader:psPw-zz5@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipsagain\r$Q_SCHEMA\r${Q_TLS}\x04"
         check "PowerShell: a string, e, a second string: one menu, one panel" "0" "$TUI_RC"
         TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
         has "...the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db')" "$TUI_RAW"
@@ -4086,8 +4090,9 @@ if command -v python3 >/dev/null 2>&1; then
     check "? in the panel: one panel and one table left, the guide screen gone" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "...the legend says ? shows the guide" "│     * required · ? + Enter: guide " "$TUI_RAW"
-    has "...the guide is this source's" "PostgreSQL - exakit connect postgresql" "$TUI_RAW"
-    has "...its footer says how back" "Enter/q back · o open full doc" "$TUI_RAW"
+    # The guides are the Federation guides (85ea72b7, 9c2841be): their title and the reader's footer.
+    has "...the guide is this source's" "PostgreSQL - Federation guide" "$TUI_RAW"
+    has "...its footer says how back" "Enter/q back · o open offline guide" "$TUI_RAW"
     check "...shown three times (host, database, summary), always left again" "=== alternate screen: entered 3 times, left ===" \
         "$(printf '%s\n' "$TUI_OUT" | grep '^=== alternate screen')"
     lacks "...no guide text left on the screen" "PostgreSQL - exakit connect postgresql" "$TUI_SCREEN"
@@ -4134,10 +4139,11 @@ if command -v python3 >/dev/null 2>&1; then
     has "...from the corrected host" "$(prow 'Host name or address *' 'pg.example.com ')" "$TUI_SCREEN"
 
     # A refusal naming two inputs (ca needs tls=verify) opens the summary with its
+    # (TLS is a radio since 55cc827c: Down then Enter picks require.)
     # reason; "-" takes the optional CA back; skip leaves the source out. (Root B:
     # the private-CA tests above move root A away.)
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
-        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}require\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r$(when 'CA certificate file (- clears it)')-\r${Q_SUM}skip\r"
+        "$Q_PASTE\r${Q_NAME}tuica\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r${Q_TLS}\x1b[B\r${Q_CA}$CA/TestRootB.pem\r$Q_SUM\r${Q_SUM}9\r$(when 'CA certificate file (- clears it)')-\r${Q_SUM}skip\r"
     check "a refusal naming two inputs, a cleared answer, skip: one panel" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "...the summary comes back with the reason" "ca is used to verify the server, so it needs tls=verify (not require)" "$TUI_RAW"
@@ -4475,11 +4481,11 @@ lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep 
 # address when it is passed straight as an argument (tests/bash32-guard.sh).
 _null_ip="$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
 check "...and public_ip is null" "None" "$_null_ip"
-# The connect menu's first line: catalog --public-ip asks once, says it as one
+# The connect menu's first line (8f7e44c9: "Whitelist IP: <ip>"): catalog --public-ip asks once, says it as one
 # INFO line, and its answer is handed on to the rest of the command
 # (_EXAKIT_VS_PUBLIC_IP), so a later plan does not ask again.
 OUT="$(ipeng catalog --public-ip </dev/null 2>&1)"
-check "catalog --public-ip: the menu's line, first" "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." \
+check "catalog --public-ip: the menu's line, first" "INFO Whitelist IP: 203.0.113.7" \
     "$(printf '%s\n' "$OUT" | head -n 1)"
 check "...and --json carries it" "203.0.113.7" "$(ipeng --json catalog --public-ip </dev/null 2>/dev/null | pubip)"
 # On a colour screen the tip shows the address in green (UI_ACCENT); the log
@@ -4487,19 +4493,19 @@ check "...and --json carries it" "203.0.113.7" "$(ipeng --json catalog --public-
 # the colour codes.
 _tipshow() { ( EXAKIT_HOME="$WORK/tiphome"; mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
-    exakit_vs_engine() { printf '%s\n' "INFO Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." \
+    exakit_vs_engine() { printf '%s\n' "INFO Whitelist IP: 203.0.113.7" \
         'RESULT {"connectors": [], "public_ip": "203.0.113.7"}'; }
     UI_ACCENT="$1"; UI_RESET="$2"; UI_DIM=""; UI_BULLET="-"; EXAKIT_LOG_FILE="$WORK/tip.log"; : > "$EXAKIT_LOG_FILE"
     _exakit_vs_catalog "$WORK/tipcat"; printf 'KEPT=%s RESULT=%s\n' "${_EXAKIT_VS_PUBLIC_IP:-}" "$EXAKIT_VS_RESULT" ) 2>&1; }
 OUT="$(_tipshow '<G>' '</G>')"
 check "the tip: the address in green on a colour screen" \
-    "    -</G> Tip: cloud sources see you as <G>203.0.113.7</G> - allow it if the source has an IP allowlist." "$(printf '%s\n' "$OUT" | head -n 1)"
+    "    -</G> Whitelist IP: <G>203.0.113.7</G>" "$(printf '%s\n' "$OUT" | head -n 1)"
 has "...the catalog is still read, the address kept" 'KEPT=203.0.113.7 RESULT={"connectors": [], "public_ip": "203.0.113.7"}' "$OUT"
 lacks "...the log has the plain words" "<G>" "$(cat "$WORK/tip.log" 2>/dev/null)"
-has "...and the tip" "Tip: cloud sources see you as 203.0.113.7" "$(cat "$WORK/tip.log" 2>/dev/null)"
+has "...and the tip" "Whitelist IP: 203.0.113.7" "$(cat "$WORK/tip.log" 2>/dev/null)"
 OUT="$(_tipshow '' '')"
 check "...plain without colour" \
-    "    - Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist." "$(printf '%s\n' "$OUT" | head -n 1)"
+    "    - Whitelist IP: 203.0.113.7" "$(printf '%s\n' "$OUT" | head -n 1)"
 OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$IPURL" eng catalog --public-ip </dev/null 2>&1)"
 lacks "EXAKIT_NO_IP_LOOKUP=1: the menu says nothing about it" "public IP" "$OUT"
 lacks "a catalog without --public-ip asks nothing" "public IP" "$(ipeng catalog </dev/null 2>&1)"
