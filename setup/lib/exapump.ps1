@@ -4139,6 +4139,9 @@ function Select-ExakitDataLoad {
         if ($script:ExakitTableHasDesc) { $script:UiTable.Col2 = "Description" } else { $script:UiTable.Col2 = " " }
         # The install's compact table has no descriptions: no blank column either, so the names keep their width.
         if ($env:EXAKIT_DATA_TABLE_COMPACT -eq "1") { $script:UiTable.Col2 = "" }
+        # A row with no description runs its name on into the Description's room,
+        # so on 80 columns no name is cut short. Twin of UI_TABLE_SPAN_EMPTY.
+        $script:UiTable.SpanEmpty = $true
     }
     $onScreen = 0
     $startRow = 0

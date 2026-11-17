@@ -4037,8 +4037,12 @@ exakit_data_samples_select() {
     [ "${EXAKIT_TABLE_HAS_DESC:-0}" = 1 ] && UI_TABLE_COL2="Description"
     # The install's compact table has no descriptions: no blank column either, so the names keep their width.
     [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ] && UI_TABLE_COL2=""
+    # A row with no description (the file and Federation rows) runs its name on
+    # into the Description's room, so on 80 columns no name is cut short.
+    UI_TABLE_SPAN_EMPTY=1
     [ "${UI_TABLE_MENU_ONSCREEN:-0}" != 0 ] || printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
+    UI_TABLE_SPAN_EMPTY=0
     UI_TABLE_COL2=""
     UI_TABLE_COL1=""
     UI_TABLE_NOBOX=""

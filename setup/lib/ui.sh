@@ -1233,6 +1233,7 @@ ui_table_widths() {
     # this pass already reads every row, and a parent is simply the row in
     # front of its first child.
     _UI_TABLE_PARENTS=" "
+    _utw_span=0
     _utw_i=0
     _utw_prevkind=""
     while IFS='|' read -r _utw_kind _utw_label _utw_tick _utw_state _utw_pct \
@@ -1263,7 +1264,15 @@ ui_table_widths() {
         # A radio row (a "one" group in ui_table_menu) carries "( ) " after
         # its connector.
         case "${_UI_TREE_RADIO:- }" in *" $_utw_i "*) _utw_len=$(( _utw_len + 4 )) ;; esac
-        [ "$_utw_len" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="$_utw_len"
+        # UI_TABLE_SPAN_EMPTY=1: a row with nothing in the second column may run
+        # its name on into that column's room (the data table's "Federation: ...
+        # - unavailable" beside no description), so it is measured apart.
+        if [ "${UI_TABLE_SPAN_EMPTY:-0}" = 1 ] && [ "$UI_TABLE_COL2_W" -gt 0 ] && \
+           [ -z "${UI_TABLE_COL3:-}" ] && [ -z "${_utw_c2// /}" ]; then
+            [ "$_utw_len" -gt "$_utw_span" ] && _utw_span="$_utw_len"
+        else
+            [ "$_utw_len" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="$_utw_len"
+        fi
         if [ "$UI_TABLE_COL2_W" -gt 0 ] && [ "${#_utw_c2}" -gt "$UI_TABLE_COL2_W" ]; then
             UI_TABLE_COL2_W="${#_utw_c2}"
         fi
@@ -1286,6 +1295,10 @@ ui_table_widths() {
                 ;;
         esac
     done < "$1"
+    # A spanning row's name needs what the name and the second column hold together.
+    if [ "$_utw_span" -gt $(( UI_TABLE_NAME_W + 2 + UI_TABLE_COL2_W )) ]; then
+        UI_TABLE_NAME_W=$(( _utw_span - 2 - UI_TABLE_COL2_W ))
+    fi
     # 2 border + 1 space + 4 checkbox + name + 2 gap + status + 1 space + 1 border
     # = 11, PLUS the two-column left margin ui_table_frame prints every row with
     # and one column left unwritten at the right. The margin was missing here,
@@ -1676,8 +1689,16 @@ $(cat "$1.activity" 2>/dev/null)
                     esac ;;
             esac
         fi
-        [ "${#_utr_plain}" -le "$UI_TABLE_NAME_W" ] || \
-            _utr_plain="${_utr_plain:0:$(( UI_TABLE_NAME_W - 1 ))}…"
+        # A row that spans into an empty second column (UI_TABLE_SPAN_EMPTY).
+        _utr_room="$UI_TABLE_NAME_W"
+        _utr_span=0
+        if [ "${UI_TABLE_SPAN_EMPTY:-0}" = 1 ] && [ "$UI_TABLE_COL2_W" -gt 0 ] && \
+           [ "$UI_TABLE_COL3_W" -eq 0 ] && [ -z "${_utr_c2// /}" ]; then
+            _utr_span=1
+            _utr_room=$(( UI_TABLE_NAME_W + _UI_TABLE_SEP_W + UI_TABLE_COL2_W ))
+        fi
+        [ "${#_utr_plain}" -le "$_utr_room" ] || \
+            _utr_plain="${_utr_plain:0:$(( _utr_room - 1 ))}…"
         _utr_namelen=${#_utr_plain}
         if [ "$_utr_state" = "disabled" ]; then
             _utr_name="${UI_DIM:-}${_utr_plain}${UI_RESET:-}"
@@ -1691,13 +1712,16 @@ $(cat "$1.activity" 2>/dev/null)
         # expression < 0") printed straight into the frame, and the row then goes
         # out unpadded -- so a width miscalculation would show up as garbage on
         # screen instead of a border a column out of line.
-        _utr_npad=$(( UI_TABLE_NAME_W - _utr_namelen )); [ "$_utr_npad" -ge 0 ] || _utr_npad=0
+        _utr_npad=$(( _utr_room - _utr_namelen )); [ "$_utr_npad" -ge 0 ] || _utr_npad=0
         # The optional cells, dim so the eye still lands on the name and the
         # status. Truncated to their own column, never measured with
         # _ui_visible_len: every string here is one this file assembled, so its
         # width is arithmetic rather than a sed per cell per frame.
         _utr_mid=""
-        if [ "$UI_TABLE_COL2_W" -gt 0 ]; then
+        if [ "$_utr_span" = 1 ]; then
+            # Its name already filled the second column's room.
+            _utr_used=$(( _utr_used + UI_TABLE_COL2_W + _UI_TABLE_SEP_W ))
+        elif [ "$UI_TABLE_COL2_W" -gt 0 ]; then
             _utr_v2="$_utr_c2"
             [ "${#_utr_v2}" -le "$UI_TABLE_COL2_W" ] || \
                 _utr_v2="${_utr_v2:0:$(( UI_TABLE_COL2_W - 1 ))}…"

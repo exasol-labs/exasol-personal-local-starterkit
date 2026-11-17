@@ -1011,6 +1011,10 @@ function Get-ExakitTableWidths {
     if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3Max = [int]$Table.Col3Fixed }
     if ($Table.Col3) { $col3W = $script:UiTableCol3Fixed; if ($Table.ContainsKey("Col3Fixed") -and $Table.Col3Fixed) { $col3W = [int]$Table.Col3Fixed } }
     $rowNo = 0
+    # SpanEmpty: a row with nothing in the second column may run its name on into
+    # that column's room, so it is measured apart. Twin of UI_TABLE_SPAN_EMPTY.
+    $spanOn = ($Table.ContainsKey("SpanEmpty") -and $Table.SpanEmpty -and $col2W -gt 0 -and -not $Table.Col3)
+    $span = 0
     foreach ($row in $Table.Rows.ToArray()) {
         $len = $row.Label.Length
         if ($col2W -gt 0 -and ("" + $row.Col2).Length -gt $col2W) { $col2W = ("" + $row.Col2).Length }
@@ -1024,7 +1028,8 @@ function Get-ExakitTableWidths {
         # after its connector.
         $rowNo++
         if ($Table.ContainsKey("Radio") -and (@($Table.Radio) -contains $rowNo)) { $len += 4 }
-        if ($len -gt $nameW) { $nameW = $len }
+        if ($spanOn -and -not ("" + $row.Col2).Trim()) { if ($len -gt $span) { $span = $len } }
+        elseif ($len -gt $nameW) { $nameW = $len }
         # Measured the way Get-ExakitTableCell RENDERS it, not as stored: a
         # finished cell is "<tick> <final>", so a column sized to the bare string
         # is short by the glyph and its space. Short means a row wider than the
@@ -1042,6 +1047,8 @@ function Get-ExakitTableWidths {
             if ($finalLen -gt $statW) { $statW = $finalLen }
         }
     }
+    # A spanning row's name needs what the name and the second column hold together.
+    if ($span -gt ($nameW + 2 + $col2W)) { $nameW = $span - 2 - $col2W }
     $cols = 80
     if ([int]$Table.Cols -gt 0) { $cols = [int]$Table.Cols }
     # 2 border + 1 space + 4 checkbox + name + 2 gap + status + 1 space + 1 border
@@ -1411,11 +1418,15 @@ function Get-ExakitTableFrame {
         # MEASURED plain, PRINTED possibly dim: a disabled row's name carries
         # colour escapes, and .Length would count those as width.
         $plain = $conn + $row.Label
-        if ($plain.Length -gt $nameW) { $plain = $plain.Substring(0, $nameW - 1) + "…" }
+        # A row that spans into an empty second column (SpanEmpty).
+        $room = $nameW
+        $spanRow = ($Table.ContainsKey("SpanEmpty") -and $Table.SpanEmpty -and $col2W -gt 0 -and $col3W -eq 0 -and -not ("" + $row.Col2).Trim())
+        if ($spanRow) { $room = $nameW + $sepW + $col2W }
+        if ($plain.Length -gt $room) { $plain = $plain.Substring(0, $room - 1) + "…" }
         $nameLen = $plain.Length
         if ($row.State -eq "disabled") { $name = $script:UiDim + $plain + $script:UiReset }
         else { $name = $plain }
-        $namePad = $nameW - $nameLen
+        $namePad = $room - $nameLen
         if ($namePad -lt 0) { $namePad = 0 }
         $cell = Get-ExakitTableCell -Row $row -StatusWidth $statW -Now $now
         # The optional cells, dim so the eye still lands on the name and the
@@ -1423,7 +1434,10 @@ function Get-ExakitTableFrame {
         # file assembled, so its width is arithmetic, never measured.
         $mid = ""
         $used = 1 + $boxLen + 1 + $nameW + $statSepW + [int]$cell.Len
-        if ($col2W -gt 0) {
+        if ($spanRow) {
+            # Its name already filled the second column's room.
+            $used += $col2W + $sepW
+        } elseif ($col2W -gt 0) {
             $v2 = "" + $row.Col2
             if ($v2.Length -gt $col2W) { $v2 = $v2.Substring(0, $col2W - 1) + "…" }
             $mid += $sep + $script:UiDim + $v2 + $script:UiReset + (" " * ($col2W - $v2.Length))
