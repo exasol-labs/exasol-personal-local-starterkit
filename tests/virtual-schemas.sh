@@ -945,7 +945,8 @@ calls() { tr '\n' '|' < "$WORK/prep.calls"; }
 OUT="$(prep 1 0 0 1 _exakit_vs_install_java)"
 check "a connect at a terminal, Java missing: installed with no question, one restart" \
     "rc=0 RUN exasol slc install java --no-restart|EXAKIT stop|EXAKIT start|" "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
-has "...one line says what it does and why" "Java language container installed" "$OUT"
+has "...one line says what it does and why" "Database configured for your sources" "$OUT"
+lacks "...the screen names no language container" "Java language container installed" "$OUT"
 lacks "...and nothing asked" "ASKED" "$(calls)"
 OUT="$(prep 1 1 0 1 _exakit_vs_install_java)"
 check "--json at the same terminal: the contract - nothing installed, nothing asked" "rc=1 " "$(printf '%s' "$OUT" | tail -n 1) $(calls)"
@@ -3330,12 +3331,12 @@ PY
     check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
     check "...no y/N at all: picking the source was the answer" "0" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "Enabling Federation" "$TUI_SCREEN"
-    has "...one line says what the kit does and why" "Java language container installed" "$(tr -d '\r' < "$WORK/tui.raw")"
+    has "...one line says what the kit does and why" "Database configured for your sources" "$(tr -d '\r' < "$WORK/tui.raw")"
     lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
     lacks "...no y/N for the Java container either" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
     has "...the launcher installed it, with no restart of its own" "slc install java --no-restart" "$(cat "$TUI_FAKE_CALLS" 2>/dev/null)"
     has "...then the kit's own stop and start: the one restart" "exakit stop|exakit start" "$(tr '\n' '|' < "$TUI_FAKE_CALLS" 2>/dev/null)"
-    has "...the install said done" "Java language container installed" "$TUI_SCREEN"
+    has "...the install said done" "Database configured for your sources" "$TUI_SCREEN"
     has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
 
     # The same at the line-by-line questions (a terminal without the drawn

@@ -958,8 +958,9 @@ function Install-ExakitVsRust {
         }
     }
     $script:EvrPin = $pin
-    $doing = "Installing the Rust language container ({0} {1}, about {2} MiB)" -f $custom.upstream, $custom.version, $mib
-    if (-not (Invoke-ExakitVsPrepStep -Doing $doing -Done "Rust language container installed" -Action { Add-ExakitVsRust -Pin $script:EvrPin })) { return $false }
+    # The screen says what it is for; the log keeps which container it was.
+    if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "INFO" ("Installing the Rust language container ({0} {1}, about {2} MiB)" -f $custom.upstream, $custom.version, $mib) }
+    if (-not (Invoke-ExakitVsPrepStep -Doing "Setting up connector support" -Done "Database configured for your sources" -Action { Add-ExakitVsRust -Pin $script:EvrPin })) { return $false }
     return (Invoke-ExakitVsPrepStep -Doing "Restarting the database" -Done "Database restarted" -Action { Restart-ExakitVsDatabase })
 }
 
@@ -1045,7 +1046,9 @@ function Install-ExakitVsJava {
             return $false
         }
     }
-    if (-not (Invoke-ExakitVsPrepStep -Doing "Installing the Java language container (about 250 MiB)" -Done "Java language container installed" -Action { Add-ExakitVsJava })) { return $false }
+    # The screen says what it is for; the log keeps which container it was.
+    if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "INFO" "Installing the Java language container (about 250 MiB)" }
+    if (-not (Invoke-ExakitVsPrepStep -Doing "Setting up connector support" -Done "Database configured for your sources" -Action { Add-ExakitVsJava })) { return $false }
     return (Invoke-ExakitVsPrepStep -Doing "Restarting the database" -Done "Database restarted" -Action { Restart-ExakitVsForJava })
 }
 

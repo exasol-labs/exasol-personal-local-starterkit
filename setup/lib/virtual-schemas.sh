@@ -737,8 +737,10 @@ _exakit_vs_install_java() {
             return 1
         fi
     fi
-    _exakit_vs_prep_step "Installing the Java language container (about 250 MiB)" \
-        "Java language container installed" _exakit_vs_java_add || return 1
+    # The screen says what it is for; the log keeps which container it was.
+    _exakit_log_file "INFO  Installing the Java language container (about 250 MiB)"
+    _exakit_vs_prep_step "Setting up connector support" \
+        "Database configured for your sources" _exakit_vs_java_add || return 1
     _exakit_vs_prep_step "Restarting the database" "Database restarted" _exakit_vs_java_restart
 }
 
@@ -788,8 +790,10 @@ EOF
             return 1
         fi
     fi
-    _exakit_vs_prep_step "Installing the Rust language container ($_evr_upstream $_evr_version, about $((_evr_size / 1048576)) MiB)" \
-        "Rust language container installed" _exakit_vs_rust_add || return 1
+    # The screen says what it is for; the log keeps which container it was.
+    _exakit_log_file "INFO  Installing the Rust language container ($_evr_upstream $_evr_version, about $((_evr_size / 1048576)) MiB)"
+    _exakit_vs_prep_step "Setting up connector support" \
+        "Database configured for your sources" _exakit_vs_rust_add || return 1
     _exakit_vs_prep_step "Restarting the database" "Database restarted" _exakit_vs_db_restart
 }
 
