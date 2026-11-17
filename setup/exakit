@@ -2225,6 +2225,10 @@ cmd_data_load() {
     # something else instead (the file won over the id without a word).
     # The ids are read whole and then matched: a `| grep -q` here can lose its
     # writer to SIGPIPE under `set -o pipefail` and miss an id that is there.
+    # The dataset list is read once for the whole run (it was read three times
+    # before the table drew): exakit_bundled_datasets answers from this.
+    EXAKIT_BUNDLED_DATASETS_MEMO="$(exakit_bundled_datasets 2>/dev/null || true)"
+    export EXAKIT_BUNDLED_DATASETS_MEMO
     _dl_ids="$(exakit_bundled_datasets 2>/dev/null | cut -d'|' -f1)" || _dl_ids=""
     if [ -n "$_dl_path" ] && [ ! -e "$_dl_path" ] && \
        case "
@@ -2254,7 +2258,22 @@ $_dl_path
     exakit_init_logging
     # Loading data needs a database that answers — a stopped one used to make
     # the dataset checks silently trust the manifest and the load itself fail.
-    exakit_ensure_runtime_running deploy
+    #
+    # THE MENU DOES NOT WAIT FOR THE LAUNCHER. The full check asks the launcher
+    # for its state, which took two seconds before the table could draw, to
+    # confirm a database that was answering all along. With a terminal and
+    # nothing named, the quick proof (the port, then the TLS handshake) is
+    # enough to draw the table; the full check - and its self-heal - runs once
+    # something is picked (exakit_data_load_menu), or here when the quick proof
+    # fails.
+    EXAKIT_RUNTIME_CHECK_DEFERRED=0
+    if [ -z "$_dl_force" ] && [ -z "${EXAKIT_DATASETS:-}" ] && [ -z "${EXAKIT_DATA_FILE:-}" ] && \
+       [ -t 0 ] && [ -t 1 ] && command -v exakit_runtime_answers_quick >/dev/null 2>&1 && \
+       exakit_runtime_answers_quick; then
+        EXAKIT_RUNTIME_CHECK_DEFERRED=1
+    else
+        exakit_ensure_runtime_running deploy
+    fi
     if [ -n "$_dl_force" ]; then
         _kit_root="$(exakit_repo_root)" || \
             die "Could not find the kit's sql/ and data/ files to load."

@@ -6155,7 +6155,12 @@ exakit_marketplace_menu() {
             # on a fresh machine) are got ready under the spinner; the table then
             # opens at once.
             ui_spin_begin "Opening the add-ons"
-            if exakit_marketplace_list 1 >"$_mm_state"; then
+            # THREE THINGS AT ONCE, not in turn: the states, the descriptions and
+            # Textual's warm-up do not need each other, and one after the other
+            # they were most of the wait before the table.
+            ( exakit_marketplace_list 1 >"$_mm_state" ) &
+            _mm_p_list=$!
+            (
                # Each row's name and Description, the add-on repository's on
                # GitHub: id|label|About. The About first, as its lookup fills the
                # cache the name is read from.
@@ -6166,7 +6171,13 @@ exakit_marketplace_menu() {
                done <<EXAKIT_MM_ABOUT >"$_mm_state.about"
 $(exakit_marketplace_addons)
 EXAKIT_MM_ABOUT
-               run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" warm || true
+            ) &
+            _mm_p_about=$!
+            ( run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" warm >/dev/null 2>&1 || true ) &
+            _mm_p_warm=$!
+            wait "$_mm_p_about" 2>/dev/null || true
+            wait "$_mm_p_warm" 2>/dev/null || true
+            if wait "$_mm_p_list"; then
                ui_spin_end
                # The table below is drawn by Python, not ui_table_menu, so nothing
                # else stops a spinner a caller started around this one (the
@@ -6663,46 +6674,80 @@ EXAKIT_ML_JSON
 # state; nothing here writes the manifest, a failure note, or a log. The
 # status vocabulary is fixed: installed / available / managed outside the
 # kit / not in this kit copy / not available on this machine.
+# _exakit_marketplace_list_row <id> - one add-on's listing row on stdout:
+# id|status|version|reason|repo|docs|name|url|about. Its own function so the
+# rows can be worked out side by side (exakit_marketplace_list).
+_exakit_marketplace_list_row() {
+    _ml_id="$1"
+    _ml_ver=""
+    _ml_reason=""
+    if ! _exakit_addon_applicable "$_ml_id" 2>/dev/null && \
+       ! exakit_marketplace_addon_installed "$_ml_id" 2>/dev/null; then
+        _ml_status="not available on this machine"
+        _ml_reason="$(_exakit_addon_applicable_reason "$_ml_id" 2>/dev/null || true)"
+    elif exakit_marketplace_addon_installed "$_ml_id"; then
+        _ml_status="installed"
+        _ml_ver="$(exakit_version_plain "$(exakit_component_current "$_ml_id" 2>/dev/null || true)")"
+    elif _exakit_addon_system_present "$_ml_id"; then
+        _ml_status="managed outside the kit"
+    elif ! exakit_marketplace_addon_available "$_ml_id"; then
+        _ml_status="not in this kit copy"
+    else
+        _ml_status="available"
+        _ml_ver="$(exakit_version_plain "$(exakit_component_available "$_ml_id" 2>/dev/null || true)")"
+    fi
+    # Where to read more. A listing of names and version numbers is all an
+    # agent deciding whether an add-on fits a task had to go on; the help
+    # document for every add-on already carries its repository and a
+    # documentation link, so the row points at both. Read from the
+    # document on disk (no network), empty when the document is missing.
+    _ml_repo="$(_exakit_addon_repo "$_ml_id" 2>/dev/null || true)"
+    _ml_docs="$(_exakit_addon_doc_field "$_ml_id" docs 2>/dev/null || true)"
+    case "$_ml_docs" in
+        https://*) ;;
+        *) _ml_docs="" ;;
+    esac
+    # The repository's name, link and About on GitHub, from the cache or the
+    # catalog: this listing never fetches. The About last: prose may hold a "|".
+    printf '%s|%s|%s|%s|%s|%s|%s|%s|%s\n' "$_ml_id" "$_ml_status" "$_ml_ver" "$_ml_reason" "$_ml_repo" "$_ml_docs" \
+        "$(exakit_marketplace_addon_name "$_ml_id")" "$(exakit_marketplace_addon_url "$_ml_id" 2>/dev/null || true)" \
+        "$(_exakit_marketplace_addon_about_offline "$_ml_id")"
+}
+
 exakit_marketplace_list() {
     _ml_json="${1:-0}"
     _ml_rows=""
+    # EVERY ADD-ON AT ONCE. A row is a dozen small lookups (installed? which
+    # version? where are its docs?), about a second of forks each, and eight of
+    # them in turn held the add-ons table back for most of ten seconds. Each row
+    # is its own background job writing its own file; they are read back in the
+    # registry's order. Nothing here fetches or writes shared state.
+    _ml_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-mlist.XXXXXX" 2>/dev/null)" || _ml_dir=""
+    _ml_n=0
+    _ml_pids=""
     while IFS='|' read -r _ml_id _ml_label; do
         [ -n "$_ml_id" ] || continue
-        _ml_ver=""
-        _ml_reason=""
-        if ! _exakit_addon_applicable "$_ml_id" 2>/dev/null && \
-           ! exakit_marketplace_addon_installed "$_ml_id" 2>/dev/null; then
-            _ml_status="not available on this machine"
-            _ml_reason="$(_exakit_addon_applicable_reason "$_ml_id" 2>/dev/null || true)"
-        elif exakit_marketplace_addon_installed "$_ml_id"; then
-            _ml_status="installed"
-            _ml_ver="$(exakit_version_plain "$(exakit_component_current "$_ml_id" 2>/dev/null || true)")"
-        elif _exakit_addon_system_present "$_ml_id"; then
-            _ml_status="managed outside the kit"
-        elif ! exakit_marketplace_addon_available "$_ml_id"; then
-            _ml_status="not in this kit copy"
+        _ml_n=$(( _ml_n + 1 ))
+        if [ -n "$_ml_dir" ]; then
+            ( _exakit_marketplace_list_row "$_ml_id" > "$_ml_dir/$_ml_n" 2>/dev/null ) &
+            _ml_pids="$_ml_pids $!"
         else
-            _ml_status="available"
-            _ml_ver="$(exakit_version_plain "$(exakit_component_available "$_ml_id" 2>/dev/null || true)")"
-        fi
-        # Where to read more. A listing of names and version numbers is all an
-        # agent deciding whether an add-on fits a task had to go on; the help
-        # document for every add-on already carries its repository and a
-        # documentation link, so the row points at both. Read from the
-        # document on disk (no network), empty when the document is missing.
-        _ml_repo="$(_exakit_addon_repo "$_ml_id" 2>/dev/null || true)"
-        _ml_docs="$(_exakit_addon_doc_field "$_ml_id" docs 2>/dev/null || true)"
-        case "$_ml_docs" in
-            https://*) ;;
-            *) _ml_docs="" ;;
-        esac
-        # The repository's name, link and About on GitHub, from the cache or the
-        # catalog: this listing never fetches. The About last: prose may hold a "|".
-        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason|$_ml_repo|$_ml_docs|$(exakit_marketplace_addon_name "$_ml_id")|$(exakit_marketplace_addon_url "$_ml_id" 2>/dev/null || true)|$(_exakit_marketplace_addon_about_offline "$_ml_id")
+            _ml_rows="$_ml_rows$(_exakit_marketplace_list_row "$_ml_id")
 "
+        fi
     done <<EXAKIT_ML_EOF
 $(exakit_marketplace_addons)
 EXAKIT_ML_EOF
+    if [ -n "$_ml_dir" ]; then
+        for _ml_pid in $_ml_pids; do wait "$_ml_pid" 2>/dev/null || true; done
+        _ml_i=0
+        while [ "$_ml_i" -lt "$_ml_n" ]; do
+            _ml_i=$(( _ml_i + 1 ))
+            [ -s "$_ml_dir/$_ml_i" ] && _ml_rows="$_ml_rows$(cat "$_ml_dir/$_ml_i")
+"
+        done
+        rm -rf "$_ml_dir"
+    fi
 
     if [ "$_ml_json" = "1" ]; then
         # Built as one line per add-on, then laid out one key per line by the
@@ -12183,6 +12228,19 @@ PY
 # fixes it. A machine with no runtime recorded, or whose runtime module is not
 # loaded, is left alone — that is the installer's territory, not a repair.
 # ⇄ twin: Confirm-ExakitRuntimeRunning in setup/lib/exakit-common.ps1.
+# exakit_runtime_answers_quick — is the kit's own database answering right now?
+# The port, then a completed TLS handshake on it: a fraction of a second, no
+# launcher, no heal. NOT the whole truth (the launcher's word outranks the port,
+# see personal_deployment_running) - only enough to draw a menu before the full
+# check, which the caller still owes before it loads anything.
+exakit_runtime_answers_quick() {
+    [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
+    command -v personal_db_port >/dev/null 2>&1 && command -v personal_tls_answers >/dev/null 2>&1 || return 1
+    [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-/nonexistent}" ] || return 1
+    port_in_use "$(personal_db_port)" || return 1
+    personal_tls_answers
+}
+
 exakit_ensure_runtime_running() {
     _err_deploy="${1:-}"
     case "$(manifest_get runtime.type 2>/dev/null || true)" in
