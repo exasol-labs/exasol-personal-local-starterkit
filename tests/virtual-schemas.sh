@@ -6081,7 +6081,8 @@ check "...no line wider than the terminal except whole commands and links" "" \
 lacks "...offline: no public IP is asked for (EXAKIT_NO_IP_LOOKUP=1)" "see you as" "$G"
 has "...the network line then names what to allow, from the README" "Network: A source on the internet must allow" "$G"
 G2="$(EXAKIT_NO_IP_LOOKUP=0 EXAKIT_PUBLIC_IP_URL="$IPURL" guide connect postgresql --help)"
-has "...with the lookup on, the network line names this computer's public IP" "Network: cloud sources see you as 203.0.113.7" "$G2"
+# With the lookup on, the guide says publicip.advice(): "Whitelist IP: <ip>" (8f7e44c9).
+has "...with the lookup on, the network line names this computer's public IP" "Whitelist IP: 203.0.113.7" "$G2"
 check "help pg is the same guide (an alias)" "$G" "$(guide help pg)"
 check "help connect postgresql is the same guide" "$G" "$(guide help connect postgresql)"
 check "connect pg -h is the same guide" "$G" "$(guide connect pg -h)"
