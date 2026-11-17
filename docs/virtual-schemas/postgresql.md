@@ -183,7 +183,6 @@ exakit sql "SELECT CAST(RENTAL_RATE AS DECIMAL(10,2)) FROM VS_SALES.FILM LIMIT 1
 | Database | `sales` | RDS: Configuration → DB name ([step 2](#2-database-and-schema)). |
 | Username | `exakit_reader` | The read-only user you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That user's password. |
-| CA certificate file (PEM), with TLS `verify` (the default) | `~/certs/eu-central-1-bundle.pem` | The CA that signed the server ([step 5](#5-the-ca-certificate)); a public CA too. Not needed with `require` or `disable`. |
 
 ### Optional
 
@@ -192,6 +191,7 @@ exakit sql "SELECT CAST(RENTAL_RATE AS DECIMAL(10,2)) FROM VS_SALES.FILM LIMIT 1
 | Port | `5432` | `5432` |
 | Schema | `public` | `public` |
 | TLS | `verify` | `verify`, `require` or `disable` |
+| CA certificate file (PEM) | for `verify` (the default): required, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
 
 ## Connection string you can paste (reference)
 

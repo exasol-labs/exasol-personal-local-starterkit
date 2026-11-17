@@ -190,7 +190,6 @@ exakit sql 'SELECT "OrderID" FROM VS_ERP."Orders" LIMIT 10'
 | Database | `erp` | `sys.databases` ([step 2](#2-database-and-schema)). |
 | Username | `exakit_reader` | The SQL login you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That login's password. |
-| CA certificate file (PEM), with TLS `verify` (the default) | `~/certs/eu-central-1-bundle.pem` | The CA that signed the server, root plus intermediates ([step 5](#5-the-ca-certificates)); a public CA too. Not needed with `require` or `disable`. |
 
 ### Optional
 
@@ -199,6 +198,7 @@ exakit sql 'SELECT "OrderID" FROM VS_ERP."Orders" LIMIT 10'
 | Port | `1433` | `1433` |
 | Schema | `dbo` | `dbo` |
 | TLS | `verify` | `verify`, `require` or `disable` |
+| CA certificate file (PEM) | for `verify` (the default): required, so give one, root plus intermediates ([step 5](#5-the-ca-certificates)) | `~/certs/eu-central-1-bundle.pem` |
 
 ## Connection string you can paste (reference)
 

@@ -176,7 +176,6 @@ exakit sql "SELECT * FROM VS_HR.EMPLOYEES LIMIT 10"
 | Schema (owner) | `HR` | The owner of the tables ([step 2](#2-schema)). |
 | Username | `EXAKIT_READER` | The read-only user you make ([step 3](#3-a-read-only-user)). |
 | Password | (hidden) | That user's password. |
-| CA certificate file (PEM), with TLS `verify` (the default) | `~/certs/eu-central-1-bundle.pem` | The CA that signed the server ([step 5](#5-the-ca-certificate)); a public CA too. Not needed with `require` or `disable`. |
 
 ### Optional
 
@@ -184,6 +183,7 @@ exakit sql "SELECT * FROM VS_HR.EMPLOYEES LIMIT 10"
 |---|---|---|
 | Port | `1521` | `2484` for TCPS |
 | TLS | `verify` | `verify` or `disable` |
+| CA certificate file (PEM) | for `verify` (the default): required, so give one ([step 5](#5-the-ca-certificate)) | `~/certs/eu-central-1-bundle.pem` |
 
 **TLS modes:** `verify` is TCPS with the certificate's host name checked.
 Oracle has no `require` level here; `disable` is plain TCP and sends the
