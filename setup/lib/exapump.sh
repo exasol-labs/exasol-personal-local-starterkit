@@ -3020,6 +3020,10 @@ _exakit_dataset_conf_get() {
 
 
 exakit_bundled_datasets() {
+    # --all: the hidden ones too. What the kit ever loaded is still the kit's
+    # data (an older install's TPC-H), so the legacy crossing's sample catalog
+    # and the flag reset ask with --all; every offer, list and load does not.
+    _bdr_all=0; [ "${1:-}" = --all ] && _bdr_all=1
     _bdr_root="$(exakit_repo_root 2>/dev/null)" || return 0
     for _bdr_conf in "$_bdr_root"/data/datasets/*/dataset.conf; do
         [ -f "$_bdr_conf" ] || continue
@@ -3032,7 +3036,7 @@ exakit_bundled_datasets() {
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
         # Not part of this release (hidden=yes): its folder stays, but it is not
         # offered, listed or loaded - asked for by name, it is an unknown id.
-        case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
+        [ "$_bdr_all" = 1 ] || case "$(_exakit_dataset_conf_get hidden "$_bdr_conf")" in yes|true|1) continue ;; esac
         # A dataset that will be downloaded says how big the download is, in
         # every list that offers it ("... - 3.9 MB download").
         _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"

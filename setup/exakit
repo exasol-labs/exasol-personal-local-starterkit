@@ -1467,7 +1467,7 @@ exakit_reset_dataset_flags() {
 data.datasets.${_rdf_id}.loaded=false
 "
     done <<EXAKIT_RDF
-$(exakit_bundled_datasets 2>/dev/null)
+$(exakit_bundled_datasets --all 2>/dev/null)
 EXAKIT_RDF
     [ -n "$_rdf_lines" ] && printf '%s' "$_rdf_lines" | manifest_set_many
     return 0

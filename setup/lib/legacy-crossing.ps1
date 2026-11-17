@@ -461,7 +461,7 @@ function Get-LegacySampleCatalog {
     if (-not (Get-Command Get-ExakitBundledDatasets -ErrorAction SilentlyContinue)) { return $catalog }
     $root = Get-ExakitRepoRoot
     if (-not $root) { return $catalog }
-    foreach ($ds in @(Get-ExakitBundledDatasets)) {
+    foreach ($ds in @(Get-ExakitBundledDatasets -IncludeHidden)) {
         $seen = @()
         $dir = Join-Path $root ("data\datasets\" + $ds.Id + "\data")
         foreach ($csv in (Get-ChildItem -Path (Join-Path $dir "*.csv") -File -ErrorAction SilentlyContinue)) {

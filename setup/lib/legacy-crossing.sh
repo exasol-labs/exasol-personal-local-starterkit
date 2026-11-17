@@ -438,7 +438,7 @@ legacy_count_lines() {
 legacy_sample_catalog() {
     command -v exakit_bundled_datasets >/dev/null 2>&1 || return 0
     _lsc_root="$(exakit_repo_root 2>/dev/null)" || return 0
-    exakit_bundled_datasets | while IFS='|' read -r _lsc_id _lsc_label _lsc_flag _lsc_markers _lsc_schema; do
+    exakit_bundled_datasets --all | while IFS='|' read -r _lsc_id _lsc_label _lsc_flag _lsc_markers _lsc_schema; do
         [ -n "$_lsc_id" ] || continue
         _lsc_seen=""
         for _lsc_csv in "$_lsc_root/data/datasets/$_lsc_id/data"/*.csv; do

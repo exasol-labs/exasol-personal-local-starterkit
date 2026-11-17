@@ -1356,7 +1356,7 @@ function Invoke-CmdStop {
 # rebuild empties the database. Twin of exakit_reset_dataset_flags.
 function Reset-ExakitDatasetFlags {
     if (-not (Get-Command Get-ExakitBundledDatasets -ErrorAction SilentlyContinue)) { return }
-    foreach ($ds in @(Get-ExakitBundledDatasets)) {
+    foreach ($ds in @(Get-ExakitBundledDatasets -IncludeHidden)) {
         try {
             Set-ExakitManifestValue $ds.Flag $false
             Set-ExakitManifestValue "data.datasets.$($ds.Id).loaded" $false

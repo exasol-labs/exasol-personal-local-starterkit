@@ -2948,6 +2948,9 @@ function Invoke-ExakitSqlScript {
 # database-wide read (USE ANY SCHEMA + SELECT ANY TABLE), so it sees every
 # dataset schema with no per-schema grant.
 function Get-ExakitBundledDatasets {
+    # -IncludeHidden: the hidden ones too (twin of exakit_bundled_datasets --all):
+    # the legacy crossing's sample catalog and the flag reset, never an offer or a load.
+    param([switch]$IncludeHidden)
     # Every dataset (TPC-H included) is discovered from its dataset.conf;
     # nothing is hardcoded. A conf may set flag= to override the default
     # manifest key (TPC-H keeps the historical data.loaded) and schema= to name
@@ -2963,7 +2966,7 @@ function Get-ExakitBundledDatasets {
             if (-not $kv.id -or -not $kv.label) { continue }
             # Not part of this release (hidden=yes): its folder stays, but it is not
             # offered, listed or loaded. Twin of the same skip in exakit_bundled_datasets.
-            if (("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
+            if (-not $IncludeHidden -and ("" + $kv.hidden) -match '^(yes|true|1)$') { continue }
             # A dataset that will be downloaded says how big the download is, in
             # every list that offers it ("... - 3.9 MB download").
             $label = $kv.label
