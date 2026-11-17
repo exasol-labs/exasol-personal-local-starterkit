@@ -4044,10 +4044,15 @@ exakit_data_samples_select() {
     ui_table_menu "$EXAKIT_TABLE_STATE"
     UI_TABLE_SPAN_EMPTY=0
     UI_TABLE_COL2=""
-    UI_TABLE_COL1=""
-    UI_TABLE_NOBOX=""
-    UI_TABLE_LOCKED=""
-    unset UI_TABLE_STAT_MIN
+    # The install's compact table keeps its look through the progress that
+    # follows: no "Dataset" heading, and the sample row's ghost tick (it loaded,
+    # it is no choice). exakit_data_table_release resets them with the table.
+    if [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" != 1 ]; then
+        UI_TABLE_COL1=""
+        UI_TABLE_NOBOX=""
+        UI_TABLE_LOCKED=""
+        unset UI_TABLE_STAT_MIN
+    fi
 
     # Skip answers none; the caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in
@@ -4087,6 +4092,11 @@ exakit_data_table_release() {
     rm -f "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_STATE.new" "$EXAKIT_TABLE_STATE.lines" \
           "$EXAKIT_TABLE_STATE.stop" "$EXAKIT_TABLE_STATE.fatal"
     EXAKIT_TABLE_STATE=""
+    # What the compact table kept through its progress goes with it.
+    UI_TABLE_COL1=""
+    UI_TABLE_NOBOX=""
+    UI_TABLE_LOCKED=""
+    unset UI_TABLE_STAT_MIN
     return 0
 }
 

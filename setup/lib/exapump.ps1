@@ -4202,9 +4202,16 @@ function Select-ExakitDataLoad {
             -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
             -GroupLast $script:ExakitTableGroupLast -GroupMode "all" -OnScreen $onScreen -StartRow $startRow)
     } finally {
-        if ($script:UiTable) { $script:UiTable.Col2 = ""; $script:UiTable.Col1 = "Dataset"; $script:UiTable.StatMin = $null }
-        $script:UiTableNoBox = @()
-        $script:UiTableLocked = @()
+        if ($script:UiTable) { $script:UiTable.Col2 = "" }
+        # The install's compact table keeps its look through the progress that
+        # follows: no "Dataset" heading, and the sample row's ghost tick. The
+        # offer (persona.ps1) resets them once the table is done. Twin of the
+        # same rule in exakit_data_samples_select.
+        if ($env:EXAKIT_DATA_TABLE_COMPACT -ne "1") {
+            if ($script:UiTable) { $script:UiTable.Col1 = "Dataset"; $script:UiTable.StatMin = $null }
+            $script:UiTableNoBox = @()
+            $script:UiTableLocked = @()
+        }
     }
     if ($selection -contains $script:ExakitTableRowSkip) { return @("none") }
     # With nothing pending the local-file row is pre-ticked so Enter does
