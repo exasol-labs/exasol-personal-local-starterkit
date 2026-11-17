@@ -44,7 +44,7 @@ $ErrorActionPreference = "Stop"
 # entry must be a name that genuinely exists on Windows - never add one to
 # silence a finding without checking that first.
 $windowsOnly = @(
-    "Get-CimInstance", "Get-NetTCPConnection", "Set-Acl", "Get-Acl",
+    "Get-CimInstance", "New-CimInstance", "Invoke-CimMethod", "Get-NetTCPConnection", "Set-Acl", "Get-Acl",
     "Get-ItemProperty", "Set-ItemProperty", "New-ItemProperty"
 )
 

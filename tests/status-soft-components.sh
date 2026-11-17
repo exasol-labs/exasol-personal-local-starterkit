@@ -268,6 +268,7 @@ un_out="$(common_sh '
 manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; runtime.ownership) printf "kit\n" ;; *) return 1 ;; esac; }
 personal_teardown() { return 0; }
 exakit_mcp_operation() { return 0; }
+_exakit_uninstall_mcp_processes() { return 0; }   # never the real process table
 : > "$EXAKIT_BIN_DIR/exakit"
 EXAKIT_QUIET_DETAIL=1
 exakit_uninstall_run 0

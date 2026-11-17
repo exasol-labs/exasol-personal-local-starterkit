@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-10",
+  "updated": "2026-11-17",
   "kit": {
     "version": "0.3.0"
   },
@@ -58,7 +58,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.24.43",
+      "version": "1.24.44",
       "severity": "normal"
     },
     "dash-server": {

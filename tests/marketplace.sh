@@ -785,6 +785,7 @@ _as_sweep="$( (
     # not the point — that entries existed and none survived is.
     [ "$(ls "$EXAKIT_LAUNCHAGENT_DIR" | wc -l | tr -d ' ')" -gt 0 ] && printf 'before=some ' || printf 'before=none '
     personal_teardown() { :; }; exakit_mcp_operation() { :; }
+    _exakit_uninstall_mcp_processes() { :; }   # never the real process table
     exakit_uninstall_run 0 >/dev/null 2>&1
     printf 'after=%s' "$(ls "$EXAKIT_LAUNCHAGENT_DIR" 2>/dev/null | wc -l | tr -d ' ')"
 ) )"

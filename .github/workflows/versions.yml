@@ -930,6 +930,10 @@ jobs:
         if: matrix.shard == 3
       - run: bash tests/uninstall.sh
         if: matrix.shard == 3
+      # A full uninstall never reports success while the deployment is still
+      # on the machine (directory, runner, container): exit 1 and the remedy.
+      - run: bash tests/uninstall-leftovers.sh
+        if: matrix.shard == 3
       # An installation made by an older kit has a database this kit cannot
       # drive, and the crossing is the only code that touches one. What it
       # DECIDES and what it HANDS to the engine and to exapump are both
@@ -1342,6 +1346,8 @@ jobs:
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/component-ownership-ps.ps1
+            pwsh -NoProfile -File tests/shim-update-ps.ps1
+            pwsh -NoProfile -File tests/uninstall-leftovers-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
             pwsh -NoProfile -File tests/mcp-sidecar-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
@@ -1368,6 +1374,7 @@ jobs:
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
             pwsh -NoProfile -File tests/db-clock-skew-ps.ps1
             pwsh -NoProfile -File tests/temp-cleanup-ps.ps1
+            pwsh -NoProfile -File tests/exapump-stdin-bom-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
             exit 1

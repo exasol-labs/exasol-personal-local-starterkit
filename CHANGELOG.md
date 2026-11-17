@@ -583,6 +583,24 @@ can now finish setup that only the installer can do.**
   container if it is missing (asked; one restart).
 - New skill `exasol-virtual-schemas`. Tests: `tests/virtual-schemas.{sh,ps1}`,
   `tests/personal-slc-dns.sh`.
+## 0.2.5
+
+**A hotfix release: the macOS install, a complete uninstall, and Windows MCP.**
+
+- **macOS install.** The readiness probe no longer fails on the stock
+  (LibreSSL) openssl, and a first boot that the launcher recorded as failed
+  while its database runs is recovered: the kit's own runner is proven to
+  belong to this deployment before it is restarted, and the data is kept.
+- **Uninstall removes more of what the kit added** - the launcher download
+  cache, empty `~/.exasol` folders, autostart entries (orphaned ones too), the
+  kit's `exasol/nano` image when no container uses it (Docker/Podman hosts),
+  the legacy permission rules - and says plainly when something stays.
+  Exit codes: `0` done (also a full uninstall that removed nothing, which
+  says so), `1` something remains, `2` unknown add-on id or (macOS/Linux) an
+  unknown option, `5` a declined `exakit uninstall <addon-id>` (macOS/Linux).
+- **Windows.** `mcp-doctor` and `mcp-setup` work from AI agent shells (the
+  BOM fix). Launchers left behind by an uninstall remove themselves, and the
+  `exakit.cmd` refresh never swaps the file under a running copy.
 
 ## 0.2.4
 

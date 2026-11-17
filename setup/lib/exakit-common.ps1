@@ -3019,6 +3019,10 @@ function Write-ExakitSoftFailures {
 #
 # Uses Process directly rather than Start-Job: a job pays PowerShell startup per
 # call, and WaitForExit(ms) is the one primitive that is honest about giving up.
+#
+# $script:ExakitBoundedOutcome says why the last call answered what it did:
+# "ok", "timeout", "exit <code>" or "error" (it could not be run), so a caller
+# can tell a hang from a refusal without a second run.
 function Invoke-ExakitBounded {
     param(
         [Parameter(Mandatory)][string]$FilePath,
@@ -3058,6 +3062,7 @@ function Invoke-ExakitBounded {
     $info.UseShellExecute = $false
     $info.CreateNoWindow = $true
     $process = $null
+    $script:ExakitBoundedOutcome = "error"
     try {
         $process = [System.Diagnostics.Process]::Start($info)
         # BOTH pipes on tasks, and both started before the wait. Redirecting a
@@ -3074,10 +3079,12 @@ function Invoke-ExakitBounded {
         $errReader = $process.StandardError.ReadToEndAsync()
         if (-not $process.WaitForExit($TimeoutSeconds * 1000)) {
             try { $process.Kill() } catch { }
+            $script:ExakitBoundedOutcome = "timeout"
             Write-ExakitLog "WARN" "$FilePath did not answer within ${TimeoutSeconds}s; giving up"
             return $null
         }
         if ($process.ExitCode -ne 0) {
+            $script:ExakitBoundedOutcome = "exit $($process.ExitCode)"
             # Now that it is drained, stderr is worth keeping: a probe that
             # failed for a nameable reason used to fail namelessly.
             $errText = ""
@@ -3087,6 +3094,7 @@ function Invoke-ExakitBounded {
             }
             return $null
         }
+        $script:ExakitBoundedOutcome = "ok"
         return $reader.Result
     } catch {
         Write-ExakitLog "WARN" "$FilePath could not be run: $_"
@@ -3987,7 +3995,22 @@ function Get-ExakitCmdShimContent {
             $target = "%USERPROFILE%" + $target.Substring($profileDir.Length)
         }
     }
-    return "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*`r`n"
+    # Self-cleaning: a shim whose target is gone is a leftover of an uninstall
+    # whose deferred delete never ran (the detached cleaner was killed with the
+    # console's job, or the delete failed). Rather than fail with powershell's
+    # "-File parameter does not exist", it says so and deletes itself.
+    # `(goto) 2>nul` ends the batch context first, so cmd.exe never re-reads the
+    # deleted file; the rest of that line was already parsed and still runs.
+    # `cmd /c exit 1` sets the exit code without `exit`, which would close an
+    # interactive cmd.exe once the batch context is gone. A label and goto, not a
+    # parenthesised if-block, because the message itself contains parentheses.
+    $nl = "`r`n"
+    return "@echo off" + $nl +
+        "if exist `"$target`" goto run" + $nl +
+        ">&2 echo exakit is no longer installed here (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To install exakit again, run the installer from the starter kit README." + $nl +
+        "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1" + $nl +
+        ":run" + $nl +
+        "powershell -NoProfile -ExecutionPolicy Bypass -File `"$target`" %*" + $nl
 }
 
 # Get-ExakitOemEncoding - the console code page cmd.exe reads a batch file in.
@@ -4022,22 +4045,386 @@ function Write-ExakitCmdFile {
     else { Set-Content -Path $Path -Value $Text -NoNewline }
 }
 
+# Write-ExakitCmdShimFile - the shim bytes, in the code page cmd.exe itself
+# reads a batch file in. It only matters for a target the %USERPROFILE%
+# substitution could not fold away - a kit installed outside the user profile
+# under a non-ASCII path - but Set-Content's 5.1 default is the ANSI code page,
+# which is the one code page cmd.exe will not be using. A machine whose OEM code
+# page cannot be resolved falls back to the old behaviour rather than losing
+# the shim.
+function Write-ExakitCmdShimFile {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Content)
+    $oem = Get-ExakitOemEncoding
+    if ($oem) { [System.IO.File]::WriteAllText($Path, $Content, $oem) }
+    else { Set-Content -Path $Path -Value $Content -NoNewline }
+}
+
+# Get-ExakitShimLauncherPids - the processes that must exit before exakit.cmd
+# may be replaced, or an empty list when this process was not started by it.
+#
+# cmd.exe does not hold a batch file in memory: after each command returns it
+# re-opens the file and resumes reading at the byte offset it had reached. An
+# `exakit update` (or `exakit repair-runtime`, which re-runs setup-windows.ps1)
+# that rewrote exakit.cmd in place therefore had cmd.exe read the NEW file from
+# the OLD shim's offset - which lands inside the self-cleaning line, so cmd ran
+# a fragment of it and deleted the shim it had just been given.
+#
+# Walks the parent chain from this process. Any process whose command line
+# names exakit.cmd or the kit's setup\exakit.ps1 means the shim is in the chain;
+# the list is then this process plus every ancestor up to the first cmd.exe.
+# A cmd.exe whose own command line does not name the shim is an interactive
+# shell that ran it in-process: it never exits, so it is not waited for (the
+# batch it was running finishes within moments of its child returning).
+# A chain with no cmd.exe at all (exakit.ps1 started directly by a scheduled
+# task, an agent or CI) has nothing reading exakit.cmd, so it is not under the
+# shim: waiting on its ancestors would wait on explorer.exe until logout.
+#
+# Fail safe: when the chain cannot be read (the WMI query fails), the answer is
+# "under the shim" with this process to wait for - deferring the swap costs one
+# helper, writing in place under a running shim deletes it.
+function Get-ExakitShimLauncherPids {
+    param([string]$ShimPath)
+    $chain = @()
+    $launched = $false
+    $foundCmd = $false
+    $cur = $PID
+    for ($depth = 0; $depth -lt 12 -and $cur; $depth++) {
+        try {
+            $p = Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction Stop
+        } catch {
+            $launched = $true
+            $foundCmd = $true
+            $chain += [int]$PID
+            break
+        }
+        if (-not $p) { break }
+        $cl = "$($p.CommandLine)"
+        $namesShim = ($ShimPath -and $cl.IndexOf($ShimPath, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                     ($cl.IndexOf("exakit.cmd", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                     ($cl.IndexOf("\setup\exakit.ps1", [System.StringComparison]::OrdinalIgnoreCase) -ge 0)
+        if ($namesShim) { $launched = $true }
+        $isCmd = ("$($p.Name)" -ieq "cmd.exe")
+        if ($isCmd) {
+            $foundCmd = $true
+            if ($cl.IndexOf("exakit.cmd", [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $chain += [int]$cur }
+            break
+        }
+        $chain += [int]$cur
+        $cur = [int]$p.ParentProcessId
+    }
+    if (-not $launched -or -not $foundCmd) { return @() }
+    return @($chain | Sort-Object -Unique)
+}
+
+# Start-ExakitDetachedPowerShell - run a script in a hidden PowerShell that
+# outlives this process. Win32_Process.Create first: WMI creates the process, so
+# it is outside this process's job object and survives an agent or console that
+# kills the whole tree when it closes. Start-Process stays as the fallback.
+# Returns $true when one of the two started it.
+function Start-ExakitDetachedPowerShell {
+    param([Parameter(Mandatory)][string]$Script)
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($Script))
+    try {
+        $cimArgs = @{ CommandLine = "powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand $encoded" }
+        try {
+            $cimArgs.ProcessStartupInformation = New-CimInstance -ClassName Win32_ProcessStartup -Namespace root/cimv2 -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+        } catch { }
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments $cimArgs -ErrorAction Stop
+        if ($r -and $r.ReturnValue -eq 0) { return $true }
+    } catch { }
+    try {
+        Start-Process -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded) `
+            -WindowStyle Hidden | Out-Null
+        return $true
+    } catch { }
+    return $false
+}
+
+# Set-ExakitCmdShim - write the shim, never in place under a running exakit.cmd.
+#
+# A current shim is left alone. Outside the shim (install.ps1, a direct
+# setup-windows.ps1 run) it is written in place. Under it (exakit update,
+# exakit repair-runtime, anything Get-ExakitShimLauncherPids finds the shim
+# behind, or any other process whose command line names exakit.cmd's path) the
+# new content goes to exakit.cmd.new and a detached helper moves it over
+# exakit.cmd once all of those have exited. If no helper can be
+# started, exakit.cmd.new is removed and the old shim - which still works - is
+# kept; the next update or install tries again.
 function Set-ExakitCmdShim {
     param([Parameter(Mandatory)][string]$PsTarget)
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
     Remove-Item -Force (Join-Path $script:BinDir "exakit.ps1") -ErrorAction SilentlyContinue
     $shimPath = Join-Path $script:BinDir "exakit.cmd"
+    $newPath = "$shimPath.new"
     $content = Get-ExakitCmdShimContent -PsTarget $PsTarget
-    # Written in the code page cmd.exe itself reads a batch file in. It only
-    # matters for a target the %USERPROFILE% substitution could not fold away - a
-    # kit installed outside the user profile under a non-ASCII path - but
-    # Set-Content's 5.1 default is the ANSI code page, which is the one code page
-    # cmd.exe will not be using. A machine whose OEM code page cannot be resolved
-    # falls back to the old behaviour rather than losing the shim.
-    $oem = Get-ExakitOemEncoding
-    if ($oem) { [System.IO.File]::WriteAllText($shimPath, $content, $oem) }
-    else { Set-Content -Path $shimPath -Value $content -NoNewline }
+    if ((Test-Path -LiteralPath $shimPath) -and (Test-ExakitCmdShimCurrent -PsTarget $PsTarget)) {
+        Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+        return $shimPath
+    }
+    $waitPids = @()
+    if (Test-Path -LiteralPath $shimPath) {
+        # Own launcher chain, plus any other process running exakit.cmd by its
+        # path right now (a second window's `exakit start`, a Startup entry),
+        # plus a PowerShell running the kit's exakit.ps1: an `exakit` typed at
+        # an interactive cmd.exe prompt shows only there, and that cmd.exe
+        # reads exakit.cmd again when it exits. Waited for, never stopped.
+        $waitPids = @(@(Get-ExakitShimLauncherPids -ShimPath $shimPath) +
+                      @(Get-ExakitLauncherRunningPids -Path $shimPath) +
+                      @(Get-ExakitKitScriptRunningPids -Path $PsTarget) | Sort-Object -Unique)
+    }
+    if ($waitPids.Count -eq 0) {
+        # Not under the shim: in place, and a leftover .new from an earlier
+        # deferred swap that never ran is dropped rather than applied later.
+        Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+        Write-ExakitCmdShimFile -Path $shimPath -Content $content
+        return $shimPath
+    }
+    Write-ExakitCmdShimDeferred -ShimPath $shimPath -Content $content -WaitPids $waitPids -Recheck -RecheckScript $PsTarget | Out-Null
     return $shimPath
+}
+
+# Invoke-ExakitFileReplace -New <path> -Target <path> - one atomic File.Replace
+# of Target by New, with no backup. NullString, not a plain null: PowerShell
+# passes null to a string parameter as an empty string, which Replace rejects
+# as a backup path. Its own function so the deferred helper (which embeds this
+# definition) and Complete-ExakitAddonLauncherUpdate share it, and the tests
+# can make it fail the way ReplaceFile documents for 1176/1177: Target gone,
+# New still under its own name.
+function Invoke-ExakitFileReplace {
+    param([Parameter(Mandatory)][string]$New, [Parameter(Mandatory)][string]$Target)
+    [System.IO.File]::Replace($New, $Target, [System.Management.Automation.Language.NullString]::Value)
+}
+
+# Write-ExakitCmdShimDeferred - stage exakit.cmd.new and hand the rename to a
+# detached helper that waits for -WaitPids first. $true when the helper started.
+#
+# -WaitTimeoutSeconds 0 waits for -WaitPids without a limit. -Recheck makes the
+# helper, once those are gone, look again for any process whose command line
+# names -ShimPath and wait for it too before the move: an add-on launcher may be
+# started again (exakit start) in the moment between its old copy exiting and
+# the swap. -RecheckScript also counts a powershell.exe / pwsh.exe whose
+# command line names that script as a path token (Get-ExakitKitScriptRunningPids).
+# -Label names the file in the log.
+function Write-ExakitCmdShimDeferred {
+    param(
+        [Parameter(Mandatory)][string]$ShimPath,
+        [Parameter(Mandatory)][string]$Content,
+        [int[]]$WaitPids = @(),
+        [int]$WaitTimeoutSeconds = 0,
+        [switch]$Recheck,
+        [string]$RecheckScript = "",
+        [string]$Label = "exakit.cmd"
+    )
+    $newPath = "$ShimPath.new"
+    try {
+        Write-ExakitCmdShimFile -Path $newPath -Content $Content
+    } catch {
+        Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+        return $false
+    }
+    $pidList = (@($WaitPids) + @(0)) -join ','
+    $qShim = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($ShimPath)
+    $qNew = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($newPath)
+    $timeoutArg = ""
+    if ($WaitTimeoutSeconds -gt 0) { $timeoutArg = " -Timeout $WaitTimeoutSeconds" }
+    $recheckBlock = ""
+    if ($Recheck) {
+        $qScriptRe = ""
+        if ($RecheckScript) {
+            $qScriptRe = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent(
+                '(^|["\s])' + [regex]::Escape($RecheckScript) + '(["\s]|$)')
+        }
+        $recheckBlock = @"
+`$scriptRe = '$qScriptRe'
+for (`$r = 0; `$r -lt 1000; `$r++) {
+    `$busy = @()
+    try { `$busy = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object { `$_.ProcessId -ne `$PID -and (("" + `$_.CommandLine).IndexOf('$qShim', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or (`$scriptRe -and @('powershell.exe', 'pwsh.exe') -contains ("" + `$_.Name).ToLowerInvariant() -and [regex]::IsMatch("" + `$_.CommandLine, `$scriptRe, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase))) } | ForEach-Object { [int]`$_.ProcessId }) } catch {}
+    if (`$busy.Count -eq 0) { break }
+    foreach (`$id in `$busy) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} }
+    Start-Sleep -Milliseconds 500
+}
+"@
+    }
+    $replaceBody = "" + ${function:Invoke-ExakitFileReplace}
+    # Pids are waited on by number. A waited pid that exits and is reused by an
+    # unrelated process keeps the helper waiting on that one (until logout, for
+    # a long-lived process), and the alive check below then skips the swap.
+    # Both are the safe direction: the old file stays and the next update
+    # tries again; a reused pid can never make a live copy look gone.
+    $deferred = @"
+foreach (`$id in @($pidList)) { if (`$id) { try { Wait-Process -Id `$id$timeoutArg -ErrorAction SilentlyContinue } catch {} } }
+Start-Sleep -Milliseconds 1500
+$recheckBlock
+# NEVER swap under a running copy: cmd.exe resumes a batch file at its old byte
+# offset, and the new content there can be the self-delete line. If a waited
+# process is still alive (a bounded wait ran out), keep the old file.
+foreach (`$id in @($pidList)) { if (`$id -and (Get-Process -Id `$id -ErrorAction SilentlyContinue)) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; exit } }
+# One atomic File.Replace: it needs the target to exist, so a target removed
+# meanwhile (an uninstall ran) is never brought back, and there is no moment
+# with no file at the target. Target gone before the Replace: .new is dropped.
+# A Replace that fails and leaves the target gone with .new still there
+# (ReplaceFile's 1176/1177): the target existed a moment ago, so .new is moved
+# onto it, and never dropped. Any other failure (a scanner holding .new): the
+# old file and .new both stay.
+    function Invoke-ExakitFileReplace {
+$replaceBody
+}
+`$half = `$false
+for (`$n = 0; `$n -lt 20; `$n++) {
+    if (-not (Test-Path -LiteralPath '$qNew')) { break }
+    if (-not `$half) {
+        if (-not (Test-Path -LiteralPath '$qShim')) { Remove-Item -Force -LiteralPath '$qNew' -ErrorAction SilentlyContinue; break }
+        try { Invoke-ExakitFileReplace -New '$qNew' -Target '$qShim'; break } catch { `$half = -not (Test-Path -LiteralPath '$qShim') }
+    }
+    if (`$half) { try { Move-Item -LiteralPath '$qNew' -Destination '$qShim' -ErrorAction Stop; break } catch {} }
+    Start-Sleep -Milliseconds 500
+}
+"@
+    if (Start-ExakitDetachedPowerShell -Script $deferred) {
+        Write-ExakitLog "INFO" "$Label refresh staged; it is swapped in once the running copy exits"
+        return $true
+    }
+    Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+    Write-ExakitLog "WARN" "Could not start the $Label refresh helper; the current $Label is kept"
+    return $false
+}
+
+# Get-ExakitAddonLauncherGuard <id> <target> - the self-cleaning head of a
+# marketplace add-on's .cmd launcher, the same pattern as exakit.cmd: a
+# launcher whose target is gone is a leftover of an uninstall that did not
+# finish, so it says so and deletes itself instead of failing on a missing
+# executable. `(goto) 2>nul` leaves the batch context first, so cmd.exe never
+# re-reads the deleted file; `cmd /c exit 1` sets the exit code without
+# closing an interactive cmd.exe. A label and goto, not a parenthesised
+# if-block, because the message contains parentheses. The label is
+# kit-prefixed so it cannot collide with one in the launcher body.
+function Get-ExakitAddonLauncherGuard {
+    param([Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][string]$Target)
+    return @(
+        "if exist `"$Target`" goto exakit_target_ok"
+        ">&2 echo $Id is no longer installed (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To add it again: exakit marketplace"
+        "(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"
+        ":exakit_target_ok"
+    )
+}
+
+# Get-ExakitLauncherRunningPids <path> - processes (other than this one) whose
+# command line names the launcher's path: a cmd.exe running it right now. An
+# empty list where processes cannot be listed.
+#
+# Known blind spot: a launcher typed by name at an interactive cmd.exe prompt
+# runs inside that cmd.exe, whose command line is just "cmd.exe" - Windows
+# exposes no record of which batch file an interactive shell is executing, and
+# the launcher's child names the add-on's target, not the launcher. Such a run
+# is not detected, and an add-on update writes that launcher in place. The
+# Startup entry, exakit start and a cmd /c run all name the path and are found.
+#
+# The deferred swap waits for what this finds with no time limit, so the blind
+# spot matters there too: the swap lands whenever the waited copy exits, and a
+# run typed by name at another interactive prompt at that moment is not seen.
+# For exakit.cmd that run's PowerShell child names the kit's exakit.ps1 and is
+# waited for (Get-ExakitKitScriptRunningPids); an add-on launcher typed by
+# name has no such witness. Accepted: it needs a second, concurrent run typed
+# at a prompt in the instant of the swap.
+function Get-ExakitLauncherRunningPids {
+    param([Parameter(Mandatory)][string]$Path)
+    $found = @()
+    try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return @() }
+    foreach ($p in $procs) {
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        # Only cmd.exe interprets a batch file, so only cmd.exe is a running
+        # copy. An editor or viewer with the launcher open names the path too,
+        # and must not hold a launcher update back.
+        if (("" + $p.Name).ToLowerInvariant() -ne "cmd.exe") { continue }
+        $cl = "" + $p.CommandLine
+        if ($cl -and $cl.IndexOf($Path, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $found += [int]$p.ProcessId }
+    }
+    return @($found | Sort-Object -Unique)
+}
+
+# Get-ExakitKitScriptRunningPids <path> - powershell.exe / pwsh.exe processes
+# (other than this one) whose command line names the kit's exakit.ps1 <path> as
+# a path token (at the start or after a quote or space, and followed by a
+# quote, a space or the end), so <path>.bak or X<path> is no match. Used only
+# to WAIT before a shim swap, never to stop anything. An empty list where
+# processes cannot be listed.
+function Get-ExakitKitScriptRunningPids {
+    param([string]$Path)
+    if (-not $Path) { return @() }
+    $re = '(^|["\s])' + [regex]::Escape($Path) + '(["\s]|$)'
+    $found = @()
+    try { $procs = @(Get-CimInstance Win32_Process -ErrorAction Stop) } catch { return @() }
+    foreach ($p in $procs) {
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        if (@("powershell.exe", "pwsh.exe") -notcontains ("" + $p.Name).ToLowerInvariant()) { continue }
+        if ([regex]::IsMatch("" + $p.CommandLine, $re, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $found += [int]$p.ProcessId }
+    }
+    return @($found | Sort-Object -Unique)
+}
+
+# Write-ExakitAddonLauncher <path> <content> - write an add-on .cmd launcher,
+# never in place while a cmd.exe runs it. cmd.exe resumes a batch file at the
+# byte offset it had reached, so rewriting a running launcher (dash-server runs
+# for as long as the server does) makes it resume inside the new content -
+# possibly inside the self-cleaning line. Same bytes already on disk: nothing
+# to do. Running: staged as <path>.new and swapped in by a detached helper
+# once every copy has exited (Write-ExakitCmdShimDeferred). Otherwise in place,
+# dropping a leftover .new. Throws only when the in-place write fails; a
+# helper that cannot start keeps the current, working launcher. Answers
+# "staged" when the new launcher waits in <path>.new for the running copy to
+# exit (a logoff can end the helper first: Complete-ExakitAddonLauncherUpdate
+# applies it at the next start), "written" otherwise.
+function Write-ExakitAddonLauncher {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Content)
+    $newPath = "$Path.new"
+    if (Test-Path -LiteralPath $Path) {
+        $oem = Get-ExakitOemEncoding
+        if ($oem) { $want = $oem.GetBytes($Content) }
+        else { $want = [System.Text.Encoding]::Default.GetBytes($Content) }
+        $same = $false
+        try {
+            $have = [System.IO.File]::ReadAllBytes($Path)
+            if ($have.Length -eq $want.Length) {
+                $same = $true
+                for ($i = 0; $i -lt $want.Length; $i++) { if ($have[$i] -ne $want[$i]) { $same = $false; break } }
+            }
+        } catch { $same = $false }
+        if ($same) {
+            Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+            return "written"
+        }
+        $running = @(Get-ExakitLauncherRunningPids -Path $Path)
+        if ($running.Count -gt 0) {
+            if (Write-ExakitCmdShimDeferred -ShimPath $Path -Content $Content -WaitPids $running `
+                -WaitTimeoutSeconds 0 -Recheck -Label (Split-Path -Leaf $Path)) { return "staged" }
+            return "written"
+        }
+    }
+    Remove-Item -Force -LiteralPath $newPath -ErrorAction SilentlyContinue
+    Write-ExakitCmdShimFile -Path $Path -Content $Content
+    return "written"
+}
+
+# Complete-ExakitAddonLauncherUpdate <path> - just before the kit starts an
+# add-on launcher: a <path>.new that Write-ExakitAddonLauncher staged while a
+# copy ran (its helper ended at a logoff, or the copy was stopped for this very
+# restart) is applied now, but only when no copy runs (the writer's own check)
+# and <path> itself still exists. The same atomic File.Replace as the helper;
+# on failure both files stay and the current launcher starts. A failure that
+# leaves <path> gone with .new still there (ReplaceFile's 1176/1177) moves .new
+# onto <path>: it existed a moment ago.
+function Complete-ExakitAddonLauncherUpdate {
+    param([Parameter(Mandatory)][string]$Path)
+    $newPath = "$Path.new"
+    if (-not (Test-Path -LiteralPath $newPath)) { return }
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+    if (@(Get-ExakitLauncherRunningPids -Path $Path).Count -gt 0) { return }
+    try { Invoke-ExakitFileReplace -New $newPath -Target $Path } catch {
+        if (-not (Test-Path -LiteralPath $Path) -and (Test-Path -LiteralPath $newPath)) {
+            Move-Item -LiteralPath $newPath -Destination $Path -ErrorAction SilentlyContinue
+        }
+    }
 }
 
 # Test-ExakitCmdShimCurrent - is the installed shim the one this kit would write?
@@ -4594,7 +4981,10 @@ function Update-ExakitSelf {
     }
 
     # The shim lives in the bin directory, which is never locked, and its target
-    # path does not change across the swap - so it is safe to write either way.
+    # path does not change across the swap. This process runs under exakit.cmd,
+    # so Set-ExakitCmdShim stages any change as exakit.cmd.new and swaps it in
+    # after exit - rewriting the batch file cmd.exe is still reading would have
+    # it resume mid-line in the new content.
     Set-ExakitCmdShim -PsTarget (Join-Path $kitDir "setup\exakit.ps1") | Out-Null
     Confirm-ExakitOnPath $script:BinDir
 
@@ -4674,12 +5064,12 @@ function Complete-ExakitSelfUpdateDeferred {
     $pidList = $waitPids -join ','
     # Single-quote the paths and double any quote they contain, exactly as
     # Remove-ExakitBinariesDeferred does.
-    $q1 = $KitDir -replace "'", "''"
-    $q2 = $Backup -replace "'", "''"
-    $q3 = $StagedRoot -replace "'", "''"
-    $q4 = $script:KitUpdateNotePath -replace "'", "''"
-    $q5 = $Version -replace "'", "''"
-    $q6 = $Source -replace "'", "''"
+    $q1 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($KitDir)
+    $q2 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Backup)
+    $q3 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($StagedRoot)
+    $q4 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($script:KitUpdateNotePath)
+    $q5 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Version)
+    $q6 = [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($Source)
     # Only the directory swap is deferred; the shim was already written by the
     # caller, and its target path is the same before and after.
     #
@@ -7929,9 +8319,14 @@ function Get-ExakitActualTarget {
     return $Component
 }
 
+# The name prefix of every Startup entry the kit writes - the twin of
+# EXAKIT_AUTOSTART_PREFIX in common.sh. The uninstall sweep finds orphaned
+# entries by it, so it is defined once, here.
+function Get-ExakitAutostartPrefix { return "com.exasol.exakit" }
+
 function Get-ExakitAutostartEntryPath {
     param([Parameter(Mandatory)][string]$Id)
-    return (Join-Path (Get-ExakitStartupDir) "com.exasol.exakit.$Id.cmd")
+    return (Join-Path (Get-ExakitStartupDir) "$(Get-ExakitAutostartPrefix).$Id.cmd")
 }
 
 # Get-ExakitComponentAvailable - the version this kit would install NOW, under the

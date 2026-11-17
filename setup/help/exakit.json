@@ -1117,7 +1117,7 @@
       "options": "[<addon-id>] [--dry-run] [--yes]",
       "summary": "Remove what the kit installed.",
       "description": "Pick what to remove (Skip, each add-on, or EVERYTHING) with a confirmation summary and a typed gate. --dry-run previews the full plan and changes nothing. Removing one add-on only: exakit uninstall <addon-id> [--yes] - the rest of the kit is untouched.",
-      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries. Your notebooks, MLflow runs and models and Dash dashboards stay in the kit home unless EXAKIT_UNINSTALL_NOTEBOOKS=remove.",
+      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries. Your notebooks, MLflow runs and models and Dash dashboards stay in the kit home unless EXAKIT_UNINSTALL_NOTEBOOKS=remove. Kit 0.2.5 and later also remove the launcher download cache, empty ~/.exasol folders and the kit's autostart entries (orphaned ones too). They remove the exasol/nano image when no container uses it (on Linux/WSL/Windows with Docker or Podman; macOS runs the database in the launcher's VM), and the kit's own MCP server processes on macOS/Linux. Exit 0 can come with a line naming something the kit could not check or remove (an engine that did not answer, or an exasol/nano image it kept): the database is gone, and the line names the command to finish by hand.",
       "examples": [
         "exakit uninstall --dry-run",
         "exakit uninstall --yes",
@@ -1148,7 +1148,13 @@
           "default": "off",
           "required": false
         }
-      ]
+      ],
+      "exit_codes": {
+        "0": "done (the database is gone; a printed line may name one thing to finish by hand), a dry run, or nothing to do - also a full uninstall that removed nothing (Skip, nothing selected, cancelled, or no terminal), which says so",
+        "1": "something remains - what remains and one command that removes it are printed",
+        "2": "unknown add-on id, or an unknown option (macOS/Linux only: Windows ignores it, so spell --dry-run exactly)",
+        "5": "declined - exakit uninstall <addon-id> not confirmed, nothing was removed (macOS/Linux; Windows answers 0)"
+      }
     },
     {
       "command": "help",

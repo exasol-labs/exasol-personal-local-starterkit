@@ -1033,6 +1033,90 @@ function Unregister-ExakitAutostart {
 # Same rule as Invoke-CmdAutostart: on means EVERY service is registered,
 # because a partly-registered set will not bring the kit back. Twin of the
 # loop in cmd_status (setup/exakit).
+# Get-ExakitOrphanAutostartEntries - every Startup entry the kit owns (by its
+# name prefix) that step 0a of the uninstall left behind, as {Id, Path}. Non-kit
+# entries never match: the prefix ends in a dot and the suffix is .cmd.
+function Get-ExakitOrphanAutostartEntries {
+    param([switch]$DryRun)
+    $dir = Get-ExakitStartupDir
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { return @() }
+    $prefix = (Get-ExakitAutostartPrefix) + "."
+    $known = @(Get-ExakitServiceIds)
+    $found = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $dir -File -Filter "$prefix*.cmd" -ErrorAction SilentlyContinue)) {
+        $name = $f.Name
+        if (-not $name.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        if (-not $name.EndsWith(".cmd", [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+        $id = $name.Substring($prefix.Length, $name.Length - $prefix.Length - 4)
+        if (-not $id) { continue }
+        # Step 0a already listed a registered service's entry in a dry run;
+        # anything it left behind in a real run is a leftover all the same.
+        if ($DryRun -and ($known -contains $id) -and (Test-ExakitAutostartRegistered -Id $id)) { continue }
+        $found += [pscustomobject]@{ Id = $id; Path = $f.FullName }
+    }
+    return $found
+}
+
+# Get-ExakitOrphanAutostartPids <id> <entry> - processes still running from an
+# orphaned entry. The entry runs `start "" /min <bindir>\<id>.cmd ...` and
+# exits at once, so what is left running names the launcher, not the entry.
+# Two proofs count, nothing looser: a command line that names the entry's full
+# path, or one that names the launcher's exact full path <BinDir>\<id>.cmd as a
+# path token (at the start or after a quote or space, and followed by a quote,
+# a space or the end). The bin dir and the id on their own are no proof: a
+# C:\other\<id>.cmd, or <id>.cmd.bak, is not the kit's launcher. Both proofs
+# count only for a cmd.exe: an editor or viewer (notepad.exe, Code.exe) that
+# has the entry or the launcher open names the same path and is never stopped.
+function Get-ExakitOrphanAutostartPids {
+    param([string]$Id, [string]$Entry)
+    $ours = @()
+    if (-not $Entry) { return @() }
+    $launcherRe = $null
+    if ($Id -and $script:BinDir) {
+        $launcher = Join-Path $script:BinDir "$Id.cmd"
+        $launcherRe = '(^|["\s])' + [regex]::Escape($launcher) + '(["\s]|$)'
+    }
+    foreach ($p in @(Get-ExakitProcessList)) {
+        $cmd = "" + $p.CommandLine
+        if (-not $cmd) { continue }
+        if ([int]$p.ProcessId -eq $PID) { continue }
+        if (-not (("" + $p.Name) -ieq "cmd.exe")) { continue }
+        if ($cmd.IndexOf($Entry, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) { $ours += [int]$p.ProcessId; continue }
+        if ($launcherRe -and [regex]::IsMatch($cmd, $launcherRe, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)) { $ours += [int]$p.ProcessId }
+    }
+    return @($ours | Sort-Object -Unique)
+}
+
+# Invoke-ExakitUninstallOrphanAutostart - remove (or, in a dry run, list) every
+# orphaned kit Startup entry, and stop a launcher cmd.exe still running from
+# one. Only that cmd.exe is stopped, never what it started: Windows has no
+# process-group stop, so the add-on server below it (or a launcher that is not
+# a .cmd, such as exasol-scheduler's PowerShell one) may keep running until
+# logout or a reboot, and both runs say so. Twin of
+# _exakit_uninstall_orphan_autostart.
+function Invoke-ExakitUninstallOrphanAutostart {
+    param([switch]$DryRun)
+    foreach ($o in @(Get-ExakitOrphanAutostartEntries -DryRun:$DryRun)) {
+        $pids = @(Get-ExakitOrphanAutostartPids -Id $o.Id -Entry $o.Path)
+        $note = "a $($o.Id) server already started from it may keep running until logout or a reboot"
+        if ($DryRun) {
+            Info "  will remove: the leftover automatic-start entry for $($o.Id) ($($o.Path))"
+            if ($pids.Count -gt 0) { Info "  will stop: the leftover $($o.Id) launcher (pids $($pids -join ' '))" }
+            Info "  note: $note"
+            continue
+        }
+        Remove-Item -LiteralPath $o.Path -Force -ErrorAction SilentlyContinue
+        if (Test-Path -LiteralPath $o.Path) { Warn2 "Could not remove the leftover automatic-start entry $($o.Path)" }
+        else { Ok "$($o.Id): leftover automatic-start entry removed" }
+        foreach ($procId in $pids) {
+            if (-not (Stop-ExakitPidQuiet -Id $procId)) {
+                Warn2 "A leftover $($o.Id) process (pid $procId) is still running; it stops at the next logout."
+            }
+        }
+        Info "  $note"
+    }
+}
+
 function Test-ExakitAutostartAll {
     $ids = @(Get-ExakitServiceIds)
     if ($ids.Count -eq 0) { return $false }
@@ -1853,8 +1937,116 @@ function Get-ExakitUninstallKeptWork {
     return ($said -join ", ")
 }
 
+# Write-ExakitUninstallLeftoverReport - say what of the database survived a
+# teardown, and the one command that removes it (Remove-Personal leaves both in
+# $script:PersonalTeardownLeftovers / $script:PersonalTeardownRemedy). Twin of
+# _exakit_uninstall_leftover_report in common.sh.
+function Write-ExakitUninstallLeftoverReport {
+    Write-Host "      [x] The database was NOT removed. Still on this machine:" -ForegroundColor Red
+    Write-ExakitLog "ERROR" "The database was NOT removed."
+    $left = @($script:PersonalTeardownLeftovers)
+    if ($left.Count -eq 0) { $left = @("the local Exasol Personal deployment") }
+    foreach ($line in $left) { Info "  $line" }
+    if ($script:PersonalTeardownRemedy) {
+        Info "Remove it with this PowerShell command (it deletes the database and all its data):"
+        Info "  $($script:PersonalTeardownRemedy)"
+    }
+}
+
+# Invoke-ExakitUninstallKitImages -DryRun - the container images the database
+# used. Twin of _exakit_uninstall_kit_images in common.sh.
+#
+# The launcher deploys the database into Docker or Podman, and the engine keeps
+# what it pulled: exasol/nano (~800 MB) was still on a Windows machine after a
+# full uninstall, and nothing on screen said so. Only that repository is ever
+# touched (podman spells it docker.io/exasol/...; rmi gets the exact reference
+# the engine listed), every tag of it including <none>, and `rmi` runs
+# WITHOUT -f: an image a container still uses stays, with the one command that
+# removes it later. Every engine call is bounded, so a hung engine cannot stall
+# the uninstall.
+function Invoke-ExakitUninstallKitImages {
+    param([switch]$DryRun)
+    # Not exasol/mcp-server: the kit never pulls it (MCP runs through uvx).
+    $kitRepos = @("exasol/nano")
+    $anyEngine = $false
+    foreach ($engineName in @("docker", "podman")) {
+        $engine = Get-Command $engineName -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $engine) { continue }
+        $anyEngine = $true
+        $list = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 30 `
+            -Arguments @("images", "--format", "{{.Repository}}|{{.Tag}}|{{.ID}}|{{.Size}}")
+        if ($null -eq $list) {
+            Info "Could not ask $engineName for the kit's container images (is it running?); check later with: $engineName images exasol/nano"
+            continue
+        }
+        $gone = @()
+        $seenIds = @{}
+        # Tagged rows first, then <none> rows: every tag of an image is removed
+        # by its own name (an image with two tags needs both, or it stays), and
+        # a <none> row whose id a tag already covered is skipped (podman lists
+        # one image twice when it carries a tag AND a <none> row).
+        $allLines = @(("" + $list) -split "`r?`n")
+        $taggedLines = @($allLines | Where-Object { $p = $_.Trim() -split '\|'; $p.Count -ge 2 -and $p[1] -and $p[1] -ne "<none>" })
+        $noneLines = @($allLines | Where-Object { $p = $_.Trim() -split '\|'; $p.Count -ge 2 -and (-not $p[1] -or $p[1] -eq "<none>") })
+        foreach ($line in ($taggedLines + $noneLines)) {
+            $parts = $line.Trim() -split '\|'
+            if ($parts.Count -lt 3) { continue }
+            $listed = $parts[0]
+            $repo = $listed
+            if ($repo.StartsWith("docker.io/")) { $repo = $repo.Substring(10) }
+            if ($kitRepos -notcontains $repo) { continue }
+            # podman lists one image twice when it carries a tag AND a <none>
+            # row; one rmi handles it, and the second row is not "kept".
+            $isNone = (-not $parts[1]) -or ($parts[1] -eq "<none>")
+            if ($isNone -and $parts[2] -and $seenIds.ContainsKey($parts[2])) { continue }
+            if ($parts[2]) { $seenIds[$parts[2]] = $true }
+            $tag = $parts[1]
+            $size = ""
+            if ($parts.Count -ge 4) { $size = $parts[3] }
+            $name = "${repo}:$tag"
+            # A dangling image has no tag to name it by; its id is the handle.
+            # Otherwise the exact reference the engine listed (docker.io/...
+            # under podman).
+            $ref = "${listed}:$tag"
+            if ((-not $tag) -or ($tag -eq "<none>")) { $ref = $parts[2] }
+            # A <none> row whose id another repository also names (the user
+            # tagged the kit's image): podman's rmi by id deletes an image
+            # with a single name, the user's tag with it. Kept.
+            if ($ref -eq $parts[2]) {
+                $foreign = @($allLines | Where-Object {
+                    $q = $_.Trim() -split '\|'
+                    $qr = $q[0]
+                    if ($qr.StartsWith("docker.io/")) { $qr = $qr.Substring(10) }
+                    $q.Count -ge 3 -and $q[2] -eq $parts[2] -and ($kitRepos -notcontains $qr) })
+                if ($foreign.Count -gt 0) {
+                    Info "Kept image $name (id $($parts[2])): it also carries another repository's tag."
+                    continue
+                }
+            }
+            if ($DryRun) {
+                $sizeNote = ""
+                if ($size) { $sizeNote = " ($size)" }
+                Info "  will remove: $engineName image $name$sizeNote"
+                continue
+            }
+            $rmi = Invoke-ExakitBounded -FilePath $engine.Source -TimeoutSeconds 60 -Arguments @("rmi", $ref)
+            if ($null -ne $rmi) { $gone += $name }
+            else { Info "Kept image ${name}: $engineName did not remove it (a container may still use it, or $engineName did not answer). Remove it later with: $engineName rmi $ref" }
+        }
+        if ((-not $DryRun) -and $gone.Count -gt 0) {
+            OkStep "Container images removed ($engineName): $($gone -join ', ')"
+        }
+    }
+    if (-not $anyEngine) {
+        Info "Neither Docker nor Podman was found, so the kit's container image (exasol/nano) was not checked."
+    }
+}
+
 function Invoke-ExakitUninstallRun {
     param([switch]$DryRun)
+    # Set when the database survived the teardown; the caller must not print
+    # success over it. Twin of EXAKIT_UNINSTALL_DB_LEFT.
+    $script:ExakitUninstallDbLeft = $false
 
     # THE GUARD RUNS BEFORE ANYTHING IS REMOVED, so "Nothing was removed" is
     # true when it fires. Twin of the check at the top of exakit_uninstall_run.
@@ -1925,6 +2117,12 @@ function Invoke-ExakitUninstallRun {
             else { Unregister-ExakitAutostart -Id $svcId }
         }
     }
+    # 0a') Orphaned boot entries: every Startup entry carrying the kit's
+    #      prefix, whatever the registry says. An add-on whose files or
+    #      manifest record were already gone is no longer a service id, so
+    #      the loop above never saw its entry, and it ran at every login,
+    #      pointing at a target that no longer exists.
+    Invoke-ExakitUninstallOrphanAutostart -DryRun:$DryRun
 
     # 0b) Kit-managed marketplace add-ons that live OUTSIDE the kit home (the
     #    VS Code extension). Registry-driven: a new add-on ships its own
@@ -1948,19 +2146,81 @@ function Invoke-ExakitUninstallRun {
 
     # 1) Database + all data.
     $type = Get-RuntimeType
+    # Only a run that found a deployment may remove the engine's images (step
+    # 1c): a sandboxed home (the test suites) must never reach the real ones.
+    $unHadDeploy = [bool]($script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir))
     if ($type -and -not (Test-ExakitComponentManaged "database")) {
         Write-ExakitPreservedComponent "database"
+        # A database the kit does not own keeps the images it runs from.
+        $unHadDeploy = $false
     } elseif ($type) {
         if ($DryRun) {
             Info "  will remove: local Exasol $type deployment and ALL its data"
         } else {
             Info "Removing the local Exasol $type deployment and all data"
             switch ($type) {
-                "personal" { try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" } }
+                "personal" {
+                    # Still best-effort for the REST of the run, but no longer
+                    # for the answer: what survived is reported at the end and
+                    # the caller does not print success.
+                    $script:PersonalTeardownLeftovers = @()
+                    $script:PersonalTeardownRemedy = ""
+                    $script:PersonalTeardownWarnings = @()
+                    try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" }
+                    if (@($script:PersonalTeardownLeftovers).Count -gt 0) { $script:ExakitUninstallDbLeft = $true }
+                }
                 default { Warn2 "Unknown runtime type '$type'; skipping database removal" }
             }
-            RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
+            if (-not $script:ExakitUninstallDbLeft) {
+                RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
+            }
+            # A container check that could not run is said right under that
+            # line, never folded into it.
+            foreach ($tw in @($script:PersonalTeardownWarnings)) { if ($tw) { Warn2 $tw } }
         }
+        # 1b) What the launcher leaves beside the deployment: its download cache
+        #     and the state folders the deployment lived in. Only once the
+        #     deployment is gone, never while another deployment shares them;
+        #     the dry run lists the same paths. Twin of step 1b in
+        #     exakit_uninstall_run.
+        if ($type -eq "personal" -and -not $script:ExakitUninstallDbLeft -and
+            (Get-Command Get-PersonalLauncherLeftovers -ErrorAction SilentlyContinue)) {
+            $launcherLeft = Get-PersonalLauncherLeftovers
+            if ($launcherLeft.Cache) {
+                $cacheLabel = "$($launcherLeft.Cache) ($($launcherLeft.CacheSize))"
+                if ($DryRun) { Info "  will remove: Exasol launcher download cache $cacheLabel" }
+                else {
+                    Info "Removing the Exasol launcher download cache $cacheLabel"
+                    try {
+                        Remove-Item -LiteralPath $launcherLeft.Cache -Recurse -Force -ErrorAction Stop
+                        RecordRemoved "Launcher download cache removed: $cacheLabel"
+                    } catch { Warn2 "Could not remove the launcher download cache $($launcherLeft.Cache) (continuing uninstall)" }
+                }
+            }
+            foreach ($stateDir in @($launcherLeft.Dirs)) {
+                if ($DryRun) { Info "  will remove: empty launcher folder $stateDir"; continue }
+                # Non-recursive: a folder that is not empty stays.
+                try { [System.IO.Directory]::Delete($stateDir, $false) } catch { break }
+            }
+        }
+    } elseif (-not $DryRun -and $script:PersonalDeployDir -and (Test-Path -LiteralPath $script:PersonalDeployDir)) {
+        # No runtime recorded, but the deployment is on disk: nothing below
+        # removes it, so the run must not end on "complete". Twin of the same
+        # arm in exakit_uninstall_run.
+        $script:ExakitUninstallDbLeft = $true
+        $script:PersonalTeardownLeftovers = @("the deployment directory $($script:PersonalDeployDir) (the database and ALL its data)")
+        $script:PersonalTeardownRemedy = "Remove-Item -Recurse -Force '" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($script:PersonalDeployDir) + "'"
+    }
+
+    # 1c) The container images the deployment ran from, once its containers
+    #     are gone (a full uninstall only; removing just the database keeps
+    #     them, so a re-install does not pull them again). Same guards as 1b:
+    #     never while the database is still there or another deployment still
+    #     runs from the same image. Twin of step 1c in exakit_uninstall_run.
+    if ($type -eq "personal" -and $unHadDeploy -and -not $script:ExakitUninstallDbLeft) {
+        $otherDeploys = @()
+        if (Get-Command Get-PersonalOtherDeployments -ErrorAction SilentlyContinue) { $otherDeploys = @(Get-PersonalOtherDeployments) }
+        if ($otherDeploys.Count -eq 0) { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
     }
 
     # 2) Managed MCP configuration in the AI clients. Best-effort.
@@ -1982,6 +2242,11 @@ function Invoke-ExakitUninstallRun {
         RecordRemoved "MCP entry removed from the AI clients the kit manages: $mcpClientList"
     }
     if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) { Remove-McpSidecar -DryRun:$DryRun }
+    # 2b) MCP servers an open AI client still runs are NOT stopped here.
+    #     Windows does not expose another process's environment, so the bash
+    #     side's EXA_USER/EXA_DSN proof of ownership is unavailable, and a
+    #     command-line match cannot prove a server is the kit's. The closing
+    #     hints ask the user to restart any AI client that was open instead.
 
     # 3) Installed AI skills: the live kit list, or what the install recorded
     #    once the checkout is gone. One helper, shared with the selectable
@@ -2093,6 +2358,12 @@ function Invoke-ExakitUninstallRun {
     if (Get-Command Get-ExakitMarketplaceAddons -ErrorAction SilentlyContinue) {
         foreach ($addon in Get-ExakitMarketplaceAddons) { $binNames += "$($addon.Id).cmd" }
     }
+    # A staged <launcher>.cmd.new (the deferred shim writer's) whose swap has
+    # not run yet goes too: it is the kit's file, and left behind it is a
+    # stray launcher nobody removes.
+    foreach ($bin in @($binNames)) {
+        if ($bin.EndsWith(".cmd", [System.StringComparison]::OrdinalIgnoreCase)) { $binNames += "$bin.new" }
+    }
     foreach ($bin in $binNames) {
         $p = Join-Path $script:BinDir $bin
         if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { Info "Keeping $p (not installed by this kit)."; continue }
@@ -2105,12 +2376,16 @@ function Invoke-ExakitUninstallRun {
     if (-not $DryRun -and $binPaths.Count -gt 0) {
         Remove-ExakitBinariesDeferred -Paths $binPaths
         $binNamesGone = @($binPaths | ForEach-Object { Split-Path -Leaf $_ })
-        RecordRemoved "Kit-owned commands removed: $($binNamesGone -join ', ')"
+        # "as this window closes", not "removed": the delete runs after this
+        # process exits, so at this point it has been arranged, not done. A shim
+        # it misses still cleans itself up on its next run.
+        RecordRemoved "Kit-owned commands in $($script:BinDir) are removed when you close this window: $($binNamesGone -join ', ')"
     }
     } finally {
         Stop-ExakitSpinner
         $script:ExakitQuietDetail = $unPrevQuiet
     }
+    Write-ExakitUninstallClosingHints -DryRun:$DryRun
     # Said last, and said plainly, because it is the one thing the reader cannot
     # find out afterwards: the logfile that held the per-path detail lived inside
     # the kit home this run has just deleted, so the lines above are the only
@@ -2118,6 +2393,44 @@ function Invoke-ExakitUninstallRun {
     if (-not $DryRun) {
         InfoStep "The lines above are the whole record of this uninstall - the install log lived in the kit home and went with it."
     }
+    # The one step that is not best-effort for the answer: a database left on
+    # the machine is said last, with the command that removes it.
+    if (-not $DryRun -and $script:ExakitUninstallDbLeft) {
+        Write-Host ""
+        Write-ExakitUninstallLeftoverReport
+    }
+}
+
+# Get-ExakitProcessList - every process as {ProcessId, ParentProcessId, Name,
+# CommandLine}. Its own function so the uninstall suites can hand in a fixed
+# list; nothing else here enumerates processes.
+function Get-ExakitProcessList {
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction Stop |
+            Select-Object ProcessId, ParentProcessId, Name, CommandLine)
+    } catch { return @() }
+}
+
+function Stop-ExakitPidQuiet {
+    param([int]$Id)
+    try { Stop-Process -Id $Id -ErrorAction Stop; return $true } catch { return $false }
+}
+
+# Write-ExakitUninstallClosingHints - what uninstall leaves on purpose: open AI
+# clients still hold the removed MCP entry, and uv keeps the MCP server package
+# in its own cache, which is uv's to clean. Twin of
+# _exakit_uninstall_closing_hints. Silent on a dry run: they are advice for
+# after a real removal, the same on both sides.
+function Write-ExakitUninstallClosingHints {
+    param([switch]$DryRun)
+    if ($DryRun) { return }
+    $uv = "uv"
+    if (-not (Get-Command uv -ErrorAction SilentlyContinue)) {
+        $kitUv = Join-Path $script:BinDir "uv.exe"
+        if (Test-Path -LiteralPath $kitUv) { $uv = "& '" + $kitUv + "'" }
+    }
+    Info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
+    Info "uv keeps the MCP server package in its cache. To free that space, run in PowerShell: $uv cache clean exasol-mcp-server"
 }
 
 # Delete the CLI binaries from a short-lived detached PowerShell that first
@@ -2136,18 +2449,41 @@ function Remove-ExakitBinariesDeferred {
     } catch { }
     $waitPids = @($waitPids | Sort-Object -Unique)
     $pidList = $waitPids -join ','
-    $quoted  = ($Paths | ForEach-Object { "'" + ($_ -replace "'", "''") + "'" }) -join ','
+    $quoted  = ($Paths | ForEach-Object { "'" + [System.Management.Automation.Language.CodeGeneration]::EscapeSingleQuotedStringContent($_) + "'" }) -join ','
     $deferred = @"
 foreach (`$id in @($pidList)) { try { Wait-Process -Id `$id -Timeout 60 -ErrorAction SilentlyContinue } catch {} }
 Start-Sleep -Milliseconds 250
-foreach (`$f in @($quoted)) { try { Remove-Item -Force -ErrorAction SilentlyContinue `$f } catch {} }
+foreach (`$f in @($quoted)) {
+    for (`$n = 0; `$n -lt 10; `$n++) {
+        try { Remove-Item -LiteralPath `$f -Force -ErrorAction Stop } catch {}
+        if (-not (Test-Path -LiteralPath `$f)) { break }
+        Start-Sleep -Milliseconds 500
+    }
+}
 "@
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($deferred))
+    # Win32_Process.Create first: WMI creates the process, so it is outside this
+    # process's job object and survives an agent or console that kills the whole
+    # tree when it closes - Start-Process children die with that tree, which is
+    # how exakit.cmd was left behind. Start-Process stays as the fallback.
+    $started = $false
     try {
-        Start-Process -FilePath "powershell.exe" `
-            -ArgumentList @("-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded) `
-            -WindowStyle Hidden | Out-Null
-    } catch {
+        $cimArgs = @{ CommandLine = "powershell.exe -NoProfile -WindowStyle Hidden -EncodedCommand $encoded" }
+        try {
+            $cimArgs.ProcessStartupInformation = New-CimInstance -ClassName Win32_ProcessStartup -Namespace root/cimv2 -ClientOnly -Property @{ ShowWindow = [uint16]0 }
+        } catch { }
+        $r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments $cimArgs -ErrorAction Stop
+        if ($r -and $r.ReturnValue -eq 0) { $started = $true }
+    } catch { }
+    if (-not $started) {
+        try {
+            Start-Process -FilePath "powershell.exe" `
+                -ArgumentList @("-NoProfile", "-WindowStyle", "Hidden", "-EncodedCommand", $encoded) `
+                -WindowStyle Hidden | Out-Null
+            $started = $true
+        } catch { }
+    }
+    if (-not $started) {
         # If we cannot spawn the detached cleaner, fall back to deleting inline.
         # The batch-file message may reappear, but the binaries are still gone.
         foreach ($f in $Paths) { Remove-Item -Force -ErrorAction SilentlyContinue $f }
@@ -2189,6 +2525,9 @@ function Invoke-CmdUninstall {
                 (Get-Command $addonEntry.UninstallFn -ErrorAction SilentlyContinue)) {
                 [void](& $addonEntry.UninstallFn -DryRun)
             }
+            # The staged launcher refresh goes too (Invoke-ExakitUninstallComponent).
+            $stagedLauncher = Join-Path $script:BinDir "$Addon.cmd.new"
+            if (Test-Path -LiteralPath $stagedLauncher) { Info "  will remove: staged launcher $stagedLauncher" }
             return
         }
         if (-not $AssumeYes) {
@@ -2222,12 +2561,20 @@ function Invoke-CmdUninstall {
         Warn2 "exakit uninstall -Yes removes the FULL kit (all local database data included)."
         Invoke-ExakitUninstallRun
         Write-Host ""
+        if ($script:ExakitUninstallDbLeft) {
+            # "Uninstall complete" here was the bug: exit 0 over a database
+            # still on disk. Twin of the same arm in cmd_uninstall.
+            Write-Host "      [x] Uninstall did not finish: the database is still on this machine (see above)." -ForegroundColor Red
+            exit 1
+        }
         Ok "Uninstall complete - the Exasol Personal Local Starter Kit has been removed."
         Write-ExakitUninstallLeftovers
         return
     }
 
+    $script:ExakitUninstallDbLeft = $false
     Show-ExakitUninstallMenu
+    if ($script:ExakitUninstallDbLeft) { exit 1 }
 }
 
 # The interactive `exakit uninstall`: pick exactly what goes, see exactly what
@@ -2349,6 +2696,12 @@ function Show-ExakitUninstallMenu {
     Write-Host ""
     foreach ($key in $picked) { Invoke-ExakitUninstallComponent -Key $key }
     Write-Host ""
+    # The database survived (the report above names it and the command that
+    # removes it): "Done" would be the one false line of the run.
+    if ($script:ExakitUninstallDbLeft) {
+        Write-Host "      [x] Uninstall did not finish: the database is still on this machine (see above)." -ForegroundColor Red
+        return
+    }
     # A full uninstall has just deleted the exakit command, so pointing at
     # `exakit info` ends the run with an instruction that cannot be followed.
     # Anything short of EVERYTHING leaves the CLI in place.
@@ -2376,8 +2729,21 @@ function Invoke-ExakitUninstallComponent {
             # can still change the answer. Twin of the same move in
             # _exakit_uninstall_component.
             Info "Removing the local Exasol Personal deployment and all data"
+            $script:PersonalTeardownLeftovers = @()
+            $script:PersonalTeardownRemedy = ""
+            $script:PersonalTeardownWarnings = @()
             try { Remove-Personal } catch { Warn2 "Database removal reported errors" }
-            Remove-ExakitStepDone "runtime"
+            if (@($script:PersonalTeardownLeftovers).Count -gt 0) {
+                # Not best-effort: the deployment is still there, so the step
+                # stays marked and the caller is told.
+                $script:ExakitUninstallDbLeft = $true
+                Write-ExakitUninstallLeftoverReport
+            } else {
+                Remove-ExakitStepDone "runtime"
+            }
+            # A container check that could not run is said here too, as the
+            # full run does (Invoke-ExakitUninstallRun step 1).
+            foreach ($tw in @($script:PersonalTeardownWarnings)) { if ($tw) { Warn2 $tw } }
         }
         "mcp_configs" {
             Info "Removing the managed MCP configuration from the AI clients"
@@ -2428,6 +2794,9 @@ function Invoke-ExakitUninstallComponent {
                 # ...and so does its BOOT ENTRY - left behind, it kept firing a
                 # launcher that no longer exists on every login, forever.
                 try { Unregister-ExakitAutostart -Id $Key } catch { }
+                # ...and a staged <id>.cmd.new whose refresh helper never ran
+                # (logoff, reboot): the full run removes it, so this one does.
+                Remove-Item -Force -LiteralPath (Join-Path $script:BinDir "$Key.cmd.new") -ErrorAction SilentlyContinue
             } else {
                 if ($addonEntry) { throw "The $Key module carries no uninstall - update the kit: exakit update" }
                 Warn2 "The $Key module carries no uninstall - update the kit: exakit update"
@@ -4985,6 +5354,25 @@ function Invoke-CmdSql {
     exit 0
 }
 
+# Test-ExakitMcpDoctorFailedRecordAnswers - true when the launcher records the
+# deployment as deployment_failed, yet its database answers the probe AND the
+# port is provably held by this deployment's own runner. mcp-doctor then checks
+# against that database and names the stale record in one warning; the status
+# itself (Test-PersonalDeploymentRunning) is unchanged. The runner proof is
+# Test-PersonalPortHeldByOwnRunner, the twin of
+# _personal_port_held_by_own_runner; where no such proof exists on this side,
+# nothing is proven and the answer is false. Twin of
+# _mcp_doctor_failed_record_but_answers in setup/exakit.
+function Test-ExakitMcpDoctorFailedRecordAnswers([string]$RuntimeType) {
+    if ($RuntimeType -ne "personal") { return $false }
+    if ((Get-PersonalLauncherState) -ne "deployment_failed") { return $false }
+    # The runner proof first: on this side it is a constant no, and the
+    # database probe it saves is a network round trip. The bash twin probes
+    # first; the answer is the same either way.
+    if (-not (Test-PersonalPortHeldByOwnRunner)) { return $false }
+    return [bool](Test-PersonalDbAnswers)
+}
+
 # Stop-ExakitBadOption <message> - refuse an unknown option as BAD INPUT: exit 2,
 # the code AGENTS.md documents and the bash twin returns. These arms used Fail,
 # which exits 1 and records a failure note, so an agent reading the exit code
@@ -5357,6 +5745,14 @@ try {
             $doctorArgs = @($RestArgs | Where-Object { $_ -notin @("--json", "-j") })
             $doctorType = Get-RuntimeType
             $doctorUp = ($doctorType -eq "personal" -and (Get-PersonalStatus) -eq "running")
+            if (-not $doctorUp -and (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType $doctorType)) {
+                $doctorStale = "Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept)."
+                # --json keeps stdout one object: the warning goes to stderr
+                # there, as the shell twin's warn() does everywhere.
+                if ($doctorJson) { [Console]::Error.WriteLine("      ! $doctorStale"); Write-ExakitLog "WARN" $doctorStale }
+                else { Warn2 $doctorStale }
+                $doctorUp = $true
+            }
             if (-not $doctorUp) {
                 if ($doctorJson) {
                     # The same three keys every --json state answer carries.

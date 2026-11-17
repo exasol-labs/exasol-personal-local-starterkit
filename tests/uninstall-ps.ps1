@@ -86,6 +86,14 @@ function Get-RuntimeType { "personal" }
 function Get-ExakitRepoRoot { return $null }   # force fallback skill list
 function Get-ExakitProfileHome { return $fakeProfile }
 function Remove-Personal { $script:markers.database = $true }
+# The launcher cache and state folders: nothing to remove here (their own
+# cases live in uninstall-leftovers-ps.ps1).
+function Get-PersonalLauncherLeftovers { [pscustomobject]@{ Cache = ""; CacheSize = ""; Dirs = @() } }
+function Get-PersonalOtherDeployments { @() }
+# The container-image step asks docker/podman through the bounded runner: a stub
+# that runs nothing, so no real engine is ever asked or touched (its own cases
+# live in tests/uninstall-leftovers-ps.ps1).
+function Invoke-ExakitBounded { param([string]$FilePath, [string[]]$Arguments = @(), [string]$ArgumentString = "", [int]$TimeoutSeconds = 8) return "" }
 function Invoke-McpOperation { param($Operation, $InputArgs) $script:markers.mcp = $Operation; return $true }
 # The real helper defers deletion to a detached process (so cmd.exe does not
 # choke on exakit.cmd being removed mid-run); here we delete synchronously so
@@ -101,12 +109,16 @@ function Write-ExakitPreservedComponent { param([string]$Component) }
 function Get-ExakitServiceIds { @("database") }
 function Test-ExakitAutostartRegistered { param([string]$Id) $true }
 function Unregister-ExakitAutostart { param([string]$Id) $script:markers.autostart = $Id }
+# The orphan sweep reads the Startup folder: a sandbox path with nothing in
+# it, never the real one (its own cases live in uninstall-leftovers-ps.ps1).
+function Get-ExakitStartupDir { return (Join-Path $sandbox "Startup") }
+function Get-ExakitAutostartPrefix { return "com.exasol.exakit" }
 # No add-ons in the sandbox: their removal has its own suite
 # (tests/uninstall-addons-only.sh) and dragging the registry in here would make
 # this test depend on which add-ons happen to be registered.
 function Get-ExakitMarketplaceInstalledAddons { @() }
 function Get-ExakitMarketplaceAddon { param([string]$Id) $null }
-function Get-ExakitMarketplaceAddons { @() }
+function Get-ExakitMarketplaceAddons { @([pscustomobject]@{ Id = "dash-server" }) }
 # These four live in setup/lib/, not setup/exakit.ps1, so extracting the CLI's
 # functions does not bring them along.
 #
@@ -130,6 +142,15 @@ function Remove-McpSidecar { param([switch]$DryRun) }
 # harness with no console would only get in the way.
 function Start-ExakitSpinner { param([string]$Label) }
 function Stop-ExakitSpinner { }
+# The process list is a FIXTURE, never the machine's: a real run here would
+# enumerate - and stop - the exasol-mcp-server of whatever AI client is open on
+# the box running the suite. Stops are recorded, never sent. Empty by default.
+$script:procFixture = @()
+$script:stopped = @()
+function Get-ExakitProcessList { return $script:procFixture }
+function Stop-ExakitPidQuiet { param([int]$Id) $script:stopped += $Id; return $true }
+# Info is silent above; the cases below need what it said.
+$script:said = @()
 
 function Seed {
     if (Test-Path $sandbox) { Remove-Item -Recurse -Force $sandbox }
@@ -143,7 +164,8 @@ function Seed {
         "$($script:ExakitHome)\credentials")) {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
     }
-    foreach ($f in @("exakit.cmd", "exapump.exe", "exasol.exe", "some-other-tool.exe")) {
+    foreach ($f in @("exakit.cmd", "exapump.exe", "exasol.exe", "some-other-tool.exe",
+                     "exakit.cmd.new", "dash-server.cmd", "dash-server.cmd.new", "some-other-tool.cmd.new")) {
         New-Item -ItemType File -Force -Path (Join-Path $script:BinDir $f) | Out-Null
     }
     New-Item -ItemType File -Force -Path (Join-Path $script:ExakitHome "manifest.json") | Out-Null
@@ -158,7 +180,15 @@ Write-Host "Invoke-ExakitUninstallRun:"
 
 # --- dry run: nothing removed, no teardown -------------------------------
 Seed
+$script:dryInfo = @()
+function Info($m) { $script:dryInfo += "$m" }
 Invoke-ExakitUninstallRun -DryRun
+function Info($m) {}
+$dryText = $script:dryInfo -join "`n"
+Check "dry: lists a staged exakit.cmd.new" "True" ($dryText.Contains("will remove: CLI binary " + (Join-Path $script:BinDir "exakit.cmd.new")))
+Check "dry: lists a staged add-on .cmd.new" "True" ($dryText.Contains("will remove: CLI binary " + (Join-Path $script:BinDir "dash-server.cmd.new")))
+Check "dry: does not list a bystander .cmd.new" "False" ($dryText.Contains("some-other-tool.cmd.new"))
+Check "dry: staged .new kept" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
 Check "dry: kit home kept"   "yes" (Ex $script:ExakitHome)
 Check "dry: exapump kept"    "yes" (Ex (Join-Path $fakeHome ".exapump"))
 Check "dry: exapump under the profile home kept" "yes" (Ex (Join-Path $fakeProfile ".exapump"))
@@ -185,6 +215,10 @@ Check "real: exakit.cmd gone"   "no"  (Ex (Join-Path $script:BinDir "exakit.cmd"
 Check "real: skill A gone"      "no"  (Ex "$fakeHome\.claude\skills\local-agent-ready-starter")
 Check "real: skill B gone"      "no"  (Ex "$fakeHome\.claude\skills\trusted-ai-workflow")
 Check "real: bystander kept"    "yes" (Ex (Join-Path $script:BinDir "some-other-tool.exe"))
+Check "real: exakit.cmd.new gone" "no" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
+Check "real: add-on launcher gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd"))
+Check "real: add-on .cmd.new gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
+Check "real: bystander .cmd.new kept" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
 
 # --- the user's work stays: notebooks, MLflow runs, dashboards (audit DAY-01) ---
 Seed
@@ -218,6 +252,233 @@ Check "snapshots: the older one is gone" "no" (Ex $older)
 # --- idempotent second run on empty tree ---------------------------------
 $ok = $true; try { Invoke-ExakitUninstallRun } catch { $ok = $false }
 Check "idempotent second run" "True" ("" + $ok)
+
+# --- MCP servers the open AI clients still run are never stopped ---------
+# Windows cannot read another process's environment, so ownership of an
+# exasol-mcp-server cannot be proven. Uninstall (dry or real) neither names nor
+# stops one, even one whose command line names the kit's own uvx; the closing
+# hints ask the user to restart the AI client instead.
+Write-Host ""
+Write-Host "uninstall never stops exasol-mcp-server processes:"
+function Info($m) { $script:said += "$m" }
+function OkStep($m) { $script:said += "OK $m" }
+$kitUvx = Join-Path $script:BinDir "uvx.exe"
+$script:procFixture = @(
+    [pscustomobject]@{ ProcessId = 501; ParentProcessId = 1;   CommandLine = "`"$kitUvx`" exasol-mcp-server@1.2.0" },
+    [pscustomobject]@{ ProcessId = 502; ParentProcessId = 501; CommandLine = "C:\cache\uv\archive-v0\x\Scripts\python.exe C:\cache\uv\archive-v0\x\Scripts\exasol-mcp-server" },
+    [pscustomobject]@{ ProcessId = 601; ParentProcessId = 1;   CommandLine = "C:\other\uvx.exe exasol-mcp-server@1.2.0" })
+Seed
+$script:said = @(); $script:stopped = @()
+Invoke-ExakitUninstallRun -DryRun
+Check "dry: no MCP process is listed" "0" (@($script:said | Where-Object { $_ -like "*exasol-mcp-server process*" }).Count)
+Check "dry: nothing stopped" "0" $script:stopped.Count
+Seed
+$script:said = @(); $script:stopped = @()
+Invoke-ExakitUninstallRun
+Check "real: no MCP process is stopped" "0" $script:stopped.Count
+Check "real: none reported stopped" "0" (@($script:said | Where-Object { $_ -like "*Stopped the kit's exasol-mcp-server*" }).Count)
+$script:procFixture = @()
+$srcMcp = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "the engine has no MCP process stop" "False" ($srcMcp -match 'Invoke-ExakitUninstallMcpProcesses|Get-ExakitKitMcpServerPids')
+
+# --- the closing hints ---------------------------------------------------
+Write-Host ""
+Write-Host "uninstall ends with the restart advice and the uv cache hint:"
+$script:said = @()
+Write-ExakitUninstallClosingHints
+Check "the restart advice is printed" "1" (@($script:said | Where-Object { $_ -like "Restart any AI client that was open*" }).Count)
+Check "the uv cache hint is printed" "1" (@($script:said | Where-Object { $_ -like "*cache clean exasol-mcp-server" }).Count)
+# A dry run says nothing: --yes runs the plan first, so hints there printed twice.
+$script:said = @()
+Write-ExakitUninstallClosingHints -DryRun
+Check "dry run: no hints" "0" $script:said.Count
+$src = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "the engine prints the hints" "True" ($src -match '(?m)^\s+Write-ExakitUninstallClosingHints -DryRun:\$DryRun\s*$')
+
+# --- the permission rules: every one the kit ever wrote, and only those ---
+Write-Host ""
+Write-Host "uninstall removes every permission rule the kit wrote, and no other:"
+$common = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$null, [ref]$null)
+foreach ($f in $common.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        @("Remove-ExakitReadonlyAllowlist", "Test-ExakitLegacyAllowlistRule", "Write-ExakitSettingsJson") -contains $n.Name }, $true)) {
+    Invoke-Expression $f.Extent.Text
+}
+$rulesHome = Join-Path $sandbox "rules-home"
+function Get-ExakitAgentHome { return $rulesHome }
+New-Item -ItemType Directory -Force -Path (Join-Path $rulesHome ".claude") | Out-Null
+$settings = Join-Path $rulesHome ".claude\settings.json"
+@'
+{
+  "model": "keep-me",
+  "permissions": {
+    "allow": [
+      "Bash(git status:*)",
+      "Bash(exakit mcp-validate:*)",
+      "Bash(~/.local/bin/exakit mcp-validate:*)",
+      "Bash($HOME/.local/bin/exakit mcp-validate:*)",
+      "Bash(exakit.cmd mcp-validate:*)",
+      "Bash(exakit status:*)",
+      "mcp__exasol",
+      "Bash(exakit-other mcp-validate:*)"
+    ],
+    "deny": ["Bash(rm -rf:*)", "PowerShell(exakit uninstall:*)"]
+  }
+}
+'@ | Set-Content -LiteralPath $settings
+Check "the removal counts all seven kit rules" "REMOVED 7" (Remove-ExakitReadonlyAllowlist)
+$doc = Get-Content -Raw $settings | ConvertFrom-Json
+$left = @($doc.permissions.allow) + @($doc.permissions.deny)
+Check "only the user's rules are left" "Bash(git status:*)|Bash(exakit-other mcp-validate:*)|Bash(rm -rf:*)" ($left -join '|')
+Check "the rest of the file is kept" "keep-me" $doc.model
+
+# --- the exakit.cmd shim cleans itself up once its target is gone ----------
+# Uninstall deletes the shim from a detached process after it exits. When that
+# process is killed with the console's job, or the delete fails, the shim used
+# to survive the kit home and fail with powershell's "-File parameter does not
+# exist". The shim now checks its target and removes itself.
+Write-Host ""
+Write-Host "exakit.cmd self-cleaning shim"
+$cErr = $null; $cTok = $null
+$cAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$cTok, [ref]$cErr)
+foreach ($name in @("Get-ExakitCmdShimContent", "Get-ExakitOemEncoding", "Set-ExakitCmdShim", "Test-ExakitCmdShimCurrent", "Write-ExakitCmdShimFile", "Get-ExakitShimLauncherPids", "Write-ExakitCmdShimDeferred", "Start-ExakitDetachedPowerShell", "Get-ExakitLauncherRunningPids")) {
+    $def = $cAst.FindAll({ param($n)
+        $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true) | Select-Object -First 1
+    if (-not $def) { throw "$name not found in exakit-common.ps1" }
+    Invoke-Expression $def.Extent.Text
+}
+# Not under a running exakit.cmd here: in place. (Without WMI - this suite off
+# Windows - the real probe answers "under it" by its fail-safe rule.)
+function Get-ExakitShimLauncherPids { param([string]$ShimPath) return @() }
+function Get-ExakitLauncherRunningPids { param([string]$Path) return @() }
+function Get-ExakitKitScriptRunningPids { param([string]$Path) return @() }
+$shimBin = Join-Path $sandbox "shimbin"
+$savedBin = $script:BinDir
+$script:BinDir = $shimBin
+$missing = Join-Path $sandbox "gone\kit\setup\exakit.ps1"
+$shim = Get-ExakitCmdShimContent -PsTarget $missing
+# The shim folds a target under the profile to %USERPROFILE% (on Windows the
+# sandbox lives under TEMP, inside the profile), so expect the folded form.
+$want = $missing
+if ($env:USERPROFILE -and $want.StartsWith($env:USERPROFILE + [string][char]92, [System.StringComparison]::OrdinalIgnoreCase)) {
+    $want = "%USERPROFILE%" + $want.Substring($env:USERPROFILE.Length)
+}
+Check "shim: checks its target exists" "True" ($shim.Contains("if exist `"$want`" goto run"))
+Check "shim: says it is a leftover" "True" ($shim.Contains("exakit is no longer installed here (its files are gone), so this leftover launcher (`"%~f0`") removes itself now. To install exakit again, run the installer from the starter kit README."))
+Check "shim: self-deletes after leaving the batch context" "True" ($shim.Contains("(goto) 2>nul & del `"%~f0`" & cmd /c exit 1"))
+Check "shim: still runs the target" "True" ($shim.Contains("powershell -NoProfile -ExecutionPolicy Bypass -File `"$want`" %*"))
+Check "shim: pure ASCII" "True" (-not ($shim -match '[^\x00-\x7F]'))
+New-Item -ItemType Directory -Force -Path $shimBin | Out-Null
+# The previous format: no target check. An install or update must rewrite it.
+[System.IO.File]::WriteAllText((Join-Path $shimBin "exakit.cmd"),
+    "@echo off`r`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$missing`" %*`r`n",
+    [System.Text.Encoding]::ASCII)
+Check "shim: an old-format shim is not current" "False" (Test-ExakitCmdShimCurrent -PsTarget $missing)
+$shimPath = Set-ExakitCmdShim -PsTarget $missing
+Check "shim: the rewritten shim is current" "True" (Test-ExakitCmdShimCurrent -PsTarget $missing)
+$cmdExe = Get-Command cmd.exe -ErrorAction SilentlyContinue
+if ($cmdExe) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $out = & cmd.exe /d /c "`"$shimPath`" version" 2>&1 | Out-String -Width 4096
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = $prevEap
+    Check "shim (cmd.exe): prints the leftover message" "True" ($out -match 'exakit is no longer installed here \(its files are gone\), so this leftover launcher')
+    Check "shim (cmd.exe): no -File error" "False" ($out -match 'does not exist')
+    Check "shim (cmd.exe): exits non-zero" "True" ($code -ne 0)
+    Check "shim (cmd.exe): deleted itself" "False" (Test-Path -LiteralPath $shimPath)
+} else {
+    Write-Host "  skip shim (cmd.exe): not on Windows"
+}
+$script:BinDir = $savedBin
+
+# --- mcp-doctor: a failed record over a database that answers ------------
+# The launcher says deployment_failed, the probe answers and the port is
+# provably this deployment's own runner: mcp-doctor checks against it (with one
+# warning). Any one missing - or no runner proof on this side at all - and it
+# does not. Twin of the shell check in tests/personal-agent-contract.sh.
+Write-Host ""
+Write-Host "mcp-doctor: deployment_failed while the database answers:"
+$script:stubState = "deployment_failed"; $script:stubAnswers = $true; $script:stubOwn = $true
+function Get-PersonalLauncherState { $script:stubState }
+function Test-PersonalDbAnswers { $script:stubAnswers }
+# The shipped Windows twin proves nothing (the port is the engine relay's).
+$rpText = Get-Content -Raw (Join-Path $repo "setup/lib/runtime-personal.ps1")
+Check "doctor: the Windows runner proof always says no" "True" ($rpText -match 'function Test-PersonalPortHeldByOwnRunner \{\s*return \$false')
+$script:probed = 0
+function Test-PersonalDbAnswers { $script:probed++; $script:stubAnswers }
+function Test-PersonalPortHeldByOwnRunner { $false }
+Check "doctor: no runner proof on this side -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+Check "doctor: no runner proof -> the database is never probed" "0" $script:probed
+function Test-PersonalPortHeldByOwnRunner { $script:stubOwn }
+Check "doctor: failed record, answers, own runner -> reachable" "True" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubOwn = $false
+Check "doctor: ...not the own runner -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubOwn = $true; $script:stubAnswers = $false
+Check "doctor: ...database silent -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubAnswers = $true; $script:stubState = "stopped"
+Check "doctor: ...launcher says stopped -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "personal")
+$script:stubState = "deployment_failed"
+Check "doctor: ...not a personal runtime -> not reachable" "False" (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType "")
+Remove-Item Function:\Test-PersonalPortHeldByOwnRunner -ErrorAction SilentlyContinue
+$cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "doctor: the mcp-doctor arm asks it" "True" ($cliText.Contains('if (-not $doctorUp -and (Test-ExakitMcpDoctorFailedRecordAnswers -RuntimeType $doctorType)) {'))
+Check "doctor: and says the one warning" "True" ($cliText.Contains('Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept).'))
+$cliText = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "uninstall: says the commands go as the window closes" "True" ($cliText.Contains('are removed when you close this window: '))
+Check "uninstall: deferred cleaner starts outside the job (Win32_Process Create)" "True" ($cliText -match 'Invoke-CimMethod -ClassName Win32_Process -MethodName Create')
+
+# --- the deferred delete, run for real (Windows only) ----------------------
+# The checks above read the source. This one runs Remove-ExakitBinariesDeferred
+# in a child powershell under a cmd.exe - the exakit.cmd shape - and waits for
+# the detached cleaner to remove the sandbox files once both have exited.
+if ($cmdExe) {
+    Write-Host ""
+    Write-Host "deferred delete (cmd.exe)"
+    $ddDir = Join-Path $sandbox "deferred"
+    New-Item -ItemType Directory -Force -Path $ddDir | Out-Null
+    $ddA = Join-Path $ddDir "a.exe"; $ddB = Join-Path $ddDir "exakit.cmd"
+    foreach ($f in @($ddA, $ddB)) { Set-Content -Path $f -Value "x" }
+    $cliAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $repo "setup/exakit.ps1"), [ref]$null, [ref]$null)
+    $ddDef = $cliAst.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $n.Name -eq "Remove-ExakitBinariesDeferred" }, $true) | Select-Object -First 1
+    $ddChild = Join-Path $ddDir "child.ps1"
+    $qA = $ddA -replace "'", "''"; $qB = $ddB -replace "'", "''"
+    Set-Content -Path $ddChild -Value ($ddDef.Extent.Text + "`r`nRemove-ExakitBinariesDeferred -Paths @('$qA', '$qB')`r`nexit 0`r`n")
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    & cmd.exe /d /c "powershell -NoProfile -ExecutionPolicy Bypass -File `"$ddChild`"" 2>&1 | Out-Null
+    $ErrorActionPreference = $prevEap
+    for ($i = 0; $i -lt 40 -and ((Test-Path -LiteralPath $ddA) -or (Test-Path -LiteralPath $ddB)); $i++) { Start-Sleep -Milliseconds 500 }
+    Check "deferred delete (cmd.exe): the binary is gone" "False" (Test-Path -LiteralPath $ddA)
+    Check "deferred delete (cmd.exe): the shim is gone" "False" (Test-Path -LiteralPath $ddB)
+} else {
+    Write-Host "  skip deferred delete (cmd.exe): not on Windows"
+}
+
+# --- exakit uninstall <addon-id>: its staged <id>.cmd.new goes too -------
+Write-Host ""
+Write-Host "exakit uninstall <addon-id> removes its staged launcher:"
+Seed
+function Get-ExakitMarketplaceAddon { param([string]$Id) if ($Id -eq "dash-server") { [pscustomobject]@{ Id = "dash-server"; UninstallFn = "Uninstall-FakeDash" } } }
+function Uninstall-FakeDash { param([switch]$DryRun) if (-not $DryRun) { Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $script:BinDir "dash-server.cmd") } }
+function Test-ExakitMarketplaceAddonInstalled { param([string]$Id) $true }
+function Remove-ExakitAddonSkills { param([string]$Id) }
+function Initialize-ExakitLogging { }
+$script:dryInfo = @()
+function Info($m) { $script:dryInfo += "$m" }
+$script:ManifestPath = Join-Path $script:ExakitHome "manifest.json"
+Invoke-CmdUninstall -Addon "dash-server" -DryRun
+function Info($m) {}
+Check "addon dry: lists its staged .cmd.new" "True" (($script:dryInfo -join "`n").Contains("will remove: staged launcher " + (Join-Path $script:BinDir "dash-server.cmd.new")))
+Check "addon dry: the staged .cmd.new is kept" "yes" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
+Invoke-ExakitUninstallComponent -Key "dash-server"
+Check "addon: its staged .cmd.new is gone" "no" (Ex (Join-Path $script:BinDir "dash-server.cmd.new"))
+Check "addon: exakit.cmd.new is not its to remove" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd.new"))
+Check "addon: a bystander .cmd.new stays" "yes" (Ex (Join-Path $script:BinDir "some-other-tool.cmd.new"))
+Check "addon: exakit.cmd stays" "yes" (Ex (Join-Path $script:BinDir "exakit.cmd"))
 
 Remove-Item -Recurse -Force $sandbox -ErrorAction SilentlyContinue
 Write-Host ""

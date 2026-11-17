@@ -70,6 +70,14 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/component-ownership-ps.ps1
+      - name: exakit.cmd is never rewritten in place under itself, under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/shim-update-ps.ps1
+      - name: uninstall never claims success over a leftover database, under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/uninstall-leftovers-ps.ps1
       - name: non-interactive answers under 5.1
         if: matrix.shard == 2
         shell: powershell
@@ -216,6 +224,12 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/db-clock-skew-ps.ps1
+      # No BOM ahead of the SQL piped into exapump's stdin, with the console
+      # at code page 65001 (chcp 65001) as agent harnesses set it.
+      - name: exapump stdin carries no BOM under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/exapump-stdin-bom-ps.ps1
       # The skill layer, executed rather than grepped. tests/skills.sh asserts
       # this half with awk against exakit-common.ps1, which catches a deleted
       # line and nothing else.

@@ -2072,7 +2072,14 @@ cmd_uninstall() {
         info "  exapump sql -p $EXAKIT_EXAPUMP_PROFILE -f csv 'SELECT * FROM <SCHEMA>.<TABLE>' > <TABLE>.csv"
         info "  ...which exakit data-load <TABLE>.csv loads back into a new install (the file name becomes the table name)."
         printf '\n'
-        exakit_uninstall_run 0
+        if ! exakit_uninstall_run 0; then
+            # The run has just named what survived and the command that removes
+            # it. "Uninstall complete" here was the bug: exit 0 over a database
+            # still on disk, with the launcher that could remove it deleted.
+            printf '\n'
+            error "Uninstall did not finish: the database is still on this machine (see above)."
+            exit 1
+        fi
         printf '\n'
         ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
         exakit_uninstall_leftovers
@@ -2378,7 +2385,43 @@ cmd_mcp_remove() {
     exakit_mcp_operation uninstall "$@" || die "Could not remove the MCP entries"
 }
 
+# _mcp_doctor_failed_record_but_answers - 0 when the launcher records this
+# deployment as deployment_failed, yet its database answers the probe AND
+# every listener on the port is provably this deployment's own runner
+# (_personal_port_held_by_own_runner). personal_deployment_running rightly
+# calls that "not running" - the launcher's word outranks the port - but the
+# MCP checks run against the database itself, which is up. Twin of
+# Test-ExakitMcpDoctorFailedRecordAnswers in setup/exakit.ps1.
+_mcp_doctor_failed_record_but_answers() {
+    [ "$(exakit_installation_runtime_type 2>/dev/null || true)" = personal ] || return 1
+    command -v personal_launcher_state >/dev/null 2>&1 || return 1
+    command -v _personal_port_held_by_own_runner >/dev/null 2>&1 || return 1
+    [ "$(personal_launcher_state 2>/dev/null || true)" = deployment_failed ] || return 1
+    personal_db_answers >/dev/null 2>&1 || return 1
+    _personal_port_held_by_own_runner
+}
+
+# _mcp_doctor_db_reachable - whether mcp-doctor has a database to check
+# against: running, or the failed record above, which is named in one warning
+# so the user can repair the record.
+#
+# The failed record also sets the remedy a --json report carries (remedy
+# "exakit start" with a remedy_hint), through EXAKIT_MCP_RESULT_REMEDY and
+# EXAKIT_MCP_RESULT_REMEDY_HINT, which the MCP result stamp honours.
+_mcp_doctor_db_reachable() {
+    exakit_runtime_is_running && return 0
+    _mcp_doctor_failed_record_but_answers || return 1
+    warn "Exasol marked this database as failed, but it is running. To clear that, run: exakit start (it restarts the database; your data is kept)."
+    EXAKIT_MCP_RESULT_REMEDY="exakit start"
+    EXAKIT_MCP_RESULT_REMEDY_HINT="the launcher still records this deployment as failed although its database answers; exakit start restarts the database (data kept) and clears the record"
+    export EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
+    return 0
+}
+
 cmd_mcp_doctor() {
+    # The remedy override is this run's own (_mcp_doctor_db_reachable); one
+    # inherited from the caller's environment must never answer for it.
+    unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     # Parse BEFORE the install check: the check's own answer has to honour
     # --json, and it has to exit 4 rather than 1. Reversing these two lines is
     # what made `mcp-doctor --json` print nothing on a machine with no install.
@@ -2407,7 +2450,7 @@ cmd_mcp_doctor() {
         exit 3
     fi
     exakit_init_logging
-    if ! exakit_runtime_is_running; then
+    if ! _mcp_doctor_db_reachable; then
         if [ "$_cmd_json" -eq 1 ]; then
             # Same three keys as every other --json answer from a state query
             # (installed / status / remedy), so one parser handles all of them.
@@ -2511,6 +2554,8 @@ cmd_mcp_doctor() {
 }
 
 cmd_mcp_status() {
+    # No inherited remedy override: the MCP result stamp honours it.
+    unset EXAKIT_MCP_RESULT_REMEDY EXAKIT_MCP_RESULT_REMEDY_HINT
     # --json is read BEFORE the install check, so the check answers in the shape
     # the caller asked for. The other order printed no JSON at all on a machine
     # with nothing installed - the one state a parser most needs an answer for.
