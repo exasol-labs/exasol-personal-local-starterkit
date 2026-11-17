@@ -24,9 +24,6 @@ function Get-ExakitHelpIds {
     if (-not (Test-Path $dir)) { return @() }
     $ids = @()
     foreach ($file in (Get-ChildItem -Path $dir -Filter "*.json" -ErrorAction SilentlyContinue)) {
-        # A page marked "help_hidden": true (an add-on this release hides) is not
-        # one help offers. Twin of exakit_help_ids.
-        if (Select-String -Path $file.FullName -Pattern '"help_hidden": *true' -Quiet -ErrorAction SilentlyContinue) { continue }
         $ids += $file.BaseName
     }
     return ($ids | Sort-Object)
@@ -364,7 +361,7 @@ function Show-ExakitHelpAll {
     # THIS is "every command", so this is where they belong - the overview was
     # showing more than --all did, which is backwards.
     $others = @()
-    foreach ($key in ($docs.Keys | Sort-Object)) { if ($key -ne "exakit") { $others += $key } }
+    foreach ($key in ($docs.Keys | Sort-Object)) { if ($key -ne "exakit" -and -not $docs[$key].help_hidden) { $others += $key } }
     if ($others.Count -gt 0) {
         Write-ExakitHelpSection "Components"
         foreach ($key in $others) {
@@ -510,6 +507,10 @@ function Get-ExakitHelpRows {
     $seen = @{}
     foreach ($key in ($docs.Keys | Sort-Object)) {
         $doc = $docs[$key]
+        # A page this release hides ("help_hidden": true) is listed nowhere; its
+        # commands still answer help, and the JSON marks them hidden. Twin of catalog_rows.
+        $docHidden = [bool]$doc.help_hidden
+        if ($docHidden -and -not $IncludeHidden) { continue }
         foreach ($entry in (Get-ExakitHelpVisibleCommands $doc -IncludeHidden:$IncludeHidden)) {
             $full = Get-ExakitHelpInvocation -DocId $key -Entry $entry -Doc $doc
             $parts = $full -split '\s+', 2
@@ -533,7 +534,7 @@ function Get-ExakitHelpRows {
                 help_command = ('exakit help "' + $full + '" --json')
                 source = $key
                 topics = @($key)
-                hidden = [bool]($entry.PSObject.Properties["hidden"] -and $entry.hidden)
+                hidden = [bool](($entry.PSObject.Properties["hidden"] -and $entry.hidden) -or $docHidden)
             }
             foreach ($field in @('parameters','parameter_note','examples','exit_codes','environment','warning','primary','subcommands','example_notes')) {
                 if ($entry.PSObject.Properties[$field]) {

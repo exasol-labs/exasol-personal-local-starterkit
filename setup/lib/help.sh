@@ -42,9 +42,6 @@ exakit_help_ids() {
     [ -d "$_hi_dir" ] || return 1
     for _hi_f in "$_hi_dir"/*.json; do
         [ -f "$_hi_f" ] || continue
-        # A page marked "help_hidden": true (an add-on this release hides) is not
-        # one help offers. Twin of Get-ExakitHelpIds.
-        grep -q '"help_hidden": *true' "$_hi_f" 2>/dev/null && continue
         _hi_b="${_hi_f##*/}"
         printf '%s\n' "${_hi_b%.json}"
     done
@@ -471,7 +468,7 @@ def render_all():
     # The per-component command lists, which the overview no longer carries.
     # THIS is "every command", so this is where they belong - the overview was
     # showing more than --all did, which is backwards.
-    others = [key for key in sorted(docs) if key != "exakit"]
+    others = [key for key in sorted(docs) if key != "exakit" and not docs[key].get("help_hidden")]
     if others:
         section("Components")
         for key in others:
@@ -616,12 +613,17 @@ def catalog_rows(include_hidden=False):
     rows = []
     for key in sorted(docs):
         doc = docs[key]
+        # A page this release hides ("help_hidden": true) is listed nowhere; its
+        # commands still answer `exakit help <command>`, and --json marks them hidden.
+        doc_hidden = bool(doc.get("help_hidden"))
+        if doc_hidden and not include_hidden:
+            continue
         tool = "exakit" if key == "exakit" else key
         for entry in commands_of(doc, include_hidden=include_hidden):
             full = invocation(key, entry)
             parts = full.split(maxsplit=1)
             tool, command = parts[0], parts[1] if len(parts) > 1 else ""
-            hidden = bool(entry.get("hidden"))
+            hidden = bool(entry.get("hidden")) or doc_hidden
             row = {"tool": tool, "command": command,
                    "options": entry.get("options", ""),
                    "description": entry.get("summary") or entry.get("description", ""),
