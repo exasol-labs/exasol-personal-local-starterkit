@@ -184,7 +184,7 @@ seed_deploy
 out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1 STUB_DOCKER_FAIL="permission denied while trying to connect to the Docker daemon socket")"
 contains "g2: an engine that refuses is not a leftover" "RC=0" "$out"
 contains "g2: nothing is counted left over" "LEFT=;" "$out"
-contains "g2: but it is a warning with the check command" "WARNINGS=Could not ask docker whether the database's container is gone (docker said: permission denied while trying to connect to the Docker daemon socket). Check by hand once docker answers: docker ps -a --filter name=exa-test1 (if docker needs sudo here: sudo docker ps -a --filter name=exa-test1)" "$out"
+contains "g2: but it is a warning with the check command" "WARNINGS=Could not confirm the database container is gone (docker said: permission denied while trying to connect to the Docker daemon socket). Check: docker ps -a (or sudo docker ps -a)" "$out"
 out="$(teardown STUB_OS=linux STUB_DESTROY_RC=0 STUB_DESTROY_REMOVES=1)"
 contains "g2: an engine that answers gives no warning" "WARNINGS=" "$out"
 lacks    "g2: none at all" "Could not ask" "$out"

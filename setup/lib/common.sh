@@ -6136,6 +6136,15 @@ $(exakit_marketplace_addons)
 EXAKIT_MM_ABOUT
                run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" warm || true
                ui_spin_end
+               # The table below is drawn by Python, not ui_table_menu, so nothing
+               # else stops a spinner a caller started around this one (the
+               # install's add-on offer does): its frame stayed frozen above the
+               # table. The line is the table's now: stopped, nesting zeroed.
+               # Twin of the same block in Show-ExakitMarketplaceMenu.
+               if [ -n "${_UI_SPIN_PID:-}" ]; then
+                   _UI_SPIN_NESTED=0
+                   _ui_step_stop_spinner
+               fi
                EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
                run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" marketplace \
                    --states "$_mm_state" --about "$_mm_state.about" --out "$_mm_result" \
@@ -16081,7 +16090,12 @@ EXAKIT_PRESERVED_PATHS_EOF
             exapump) _un_bin_path="${_un_exapump_path:-$_un_bin_path}" ;;
         esac
         if [ -e "$_un_bin_path" ]; then
-            _step "CLI binary $_un_bin_path"
+            # An add-on's own dry run (step 0b) already listed its launcher:
+            # listed once, on the add-on's row. Twin of the same check in exakit.ps1.
+            case ", $_un_addons_gone, " in
+                *", $_bin, "*) [ "$_dry" = "1" ] || _step "CLI binary $_un_bin_path" ;;
+                *) _step "CLI binary $_un_bin_path" ;;
+            esac
             _rm "$_un_bin_path"
             _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }$_bin"
         fi

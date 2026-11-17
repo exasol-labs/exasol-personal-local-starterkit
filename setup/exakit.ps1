@@ -2396,7 +2396,13 @@ function Invoke-ExakitUninstallRun {
         if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { if (Test-Path -LiteralPath $p) { Info "Keeping $p (not installed by this kit)." }; continue }
         if ($ownedCoreBinPaths.ContainsKey($bin) -and $ownedCoreBinPaths[$bin]) { $p = $ownedCoreBinPaths[$bin] }
         if (Test-Path $p) {
-            if ($DryRun) { Info "  will remove: CLI binary $p" }
+            # An add-on's own dry run (step 0b) already listed its launcher:
+            # listed once, on the add-on's row.
+            if ($DryRun) {
+                $listedByAddon = $false
+                foreach ($gone in $addonsGone) { if ($bin -ieq "$gone.cmd" -or $bin -ieq "$gone.cmd.new") { $listedByAddon = $true } }
+                if (-not $listedByAddon) { Info "  will remove: CLI binary $p" }
+            }
             else { $binPaths += $p }
         }
     }
@@ -3207,7 +3213,10 @@ function Write-ExakitUninstallLeftovers {
             $more = "; uv's Python $version (if nothing else uses it: uv python uninstall $version)"
         }
     }
-    Info "Left for you: any PATH entry for $script:BinDir in your profile$more"
+    # The ~ form, like the uninstall's other lines (twin: ui_tilde in common.sh).
+    $binShown = $script:BinDir
+    if (Get-Command Get-ExakitTilde -ErrorAction SilentlyContinue) { $binShown = Get-ExakitTilde $script:BinDir }
+    Info "Left for you: any PATH entry for $binShown in your profile$more"
 }
 
 function Invoke-CmdPersona {

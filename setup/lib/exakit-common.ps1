@@ -7230,6 +7230,15 @@ function Show-ExakitMarketplaceMenu {
             if ($python) { & $python $launcher $root warm | Out-Null }
             else { & (Install-ExakitUv) run --no-project --python $script:ManagedPythonVersion python $launcher $root warm | Out-Null }
             Stop-ExakitSpinner
+            # The table below is drawn by Python, not Invoke-ExakitTableMenu, so
+            # nothing else stops a spinner a caller started around this one (the
+            # install's add-on offer does): its frame stayed frozen on its own
+            # line above the table. The line is the table's now: stopped and
+            # cleared, nesting zeroed.
+            if ($null -ne $script:UiSpinFlag) {
+                $script:UiSpinNested = 0
+                try { Stop-ExakitSpinner } catch { }
+            }
             if ($python) {
                 & $python $launcher $root marketplace --states $statesPath --about $aboutPath --out $resultPath `
                     --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) `
