@@ -179,8 +179,8 @@ Write-Host "== the query hint after connect: a quoted name, piped to exakit.cmd 
 # quotes of an argument it hands to a batch file: a quoted name needs \".
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result ([pscustomobject]@{ example = 'SELECT * FROM VS_X."actor" LIMIT 10'; tips = @("a tip") }) -Name "x"
-# 8f7e44c9: shorter post-connect lines - "Query it:" and the sql line, no tips line.
-Check "the hint opens the list" 'INFO Query it:' $script:shown[0]
+# 8f7e44c9: shorter post-connect lines - "Query:" and the sql line, no tips line.
+Check "the hint opens the list" 'INFO Query:' $script:shown[0]
 Check "...a query with a double quote is piped to exakit sql, as PowerShell keeps its quotes in a pipe" '''SELECT * FROM VS_X."actor" LIMIT 10'' | exakit sql' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_X."actor" LIMIT 10')
 Check "...one without is an argument" 'exakit sql ''SELECT * FROM VS_SALES.ORDERS LIMIT 10''' (Format-ExakitVsSqlLine -Query 'SELECT * FROM VS_SALES.ORDERS LIMIT 10')
 Check "...a single quote in it is doubled" 'exakit sql ''SELECT * FROM VS_X.IT''''S LIMIT 10''' (Format-ExakitVsSqlLine -Query "SELECT * FROM VS_X.IT'S LIMIT 10")
@@ -188,7 +188,7 @@ Check "...and says nothing else: the tips are exakit source show's" 1 @($script:
 $connectResult = Show-ExakitVsLines -Lines $connectLines
 $script:shown.Clear()
 Show-ExakitVsQueryHints -Result $connectResult -Name "sales"
-Check "the real connect: the list, nothing after it" 'INFO Query it:' (@($script:shown) -join "|")
+Check "the real connect: the list, nothing after it" 'INFO Query:' (@($script:shown) -join "|")
 Check "...and nothing says From PowerShell" $false ((@($script:shown) -join "|").Contains("From PowerShell"))
 
 Write-Host ""
@@ -919,7 +919,7 @@ function Invoke-JsonConnect {
 $one = Invoke-JsonConnect (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))
 Check "a real connect: stdout is one JSON object, exit 0" "True 0" "$one $jsonCode"
 Check "...the connect result: ok, the schema, public_ip present" "True VS_JSONPS True" ("{0} {1} {2}" -f $jsonDoc.ok, $jsonDoc.objects.schema, ($null -ne $jsonDoc.PSObject.Properties["public_ip"]))
-Check "...no query hint or Manage line on stdout" $false ($jsonText.Contains("Manage it with") -or $jsonText.Contains("OK "))
+Check "...no query hint or Manage line on stdout" $false ($jsonText.Contains("Manage with") -or $jsonText.Contains("OK "))
 $one = Invoke-JsonConnect (@("pg", "--name", "jsondry") + $pgSet + @("--dry-run", "--json"))
 Check "a dry run: one object, the plan, exit 0" "True 0 jsondry" "$one $jsonCode $($jsonDoc.name)"
 Check "...no rendered plan before it" $false ($jsonText.Contains("Plan for"))

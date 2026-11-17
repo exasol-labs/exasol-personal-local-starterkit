@@ -1692,10 +1692,12 @@ _p2kss="$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "the db-dependent steps are skipped in one line"     "they all need the database, which is not installed" "$_p2kss"
 has "...decided by the recorded failure" 'exakit_soft_failed runtime' "$_p2kss"
 check "...guarding all three of them (Setup Utilities' database items, data, AI bridge)" "3"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
-# The helper is the last item of Setup Utilities (kit_helper_step, called from
-# kit_shared_steps): it still installs without a database, outside that guard.
+# The helper runs inside the last item of Setup Utilities (kit_helper_step,
+# through _kss_helper, called from kit_shared_steps - 5d3c54bd): it still
+# installs without a database, outside that guard.
 has "...and the exakit helper still runs" "begin_step exakit_helper" "$(sed -n '/^kit_helper_step()/,/^}/p' "$ROOT/setup/lib/common.sh")"
-has "...as the last item of Setup Utilities" 'kit_helper_step "" "" "$_script_dir" "$_kit_root"' "$_p2kss"
+has "...as the last item of Setup Utilities" '_kss_helper' "$_p2kss"
+has "...which is kit_helper_step" 'kit_helper_step "" "" "$_script_dir" "$_kit_root"' "$(sed -n '/^_kss_helper()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 
 # THE WINDOWS TWIN. There the LAUNCHER installs Podman, through winget, so the
 # kit cannot retry it - but a machine whose winget refused must reach the end of

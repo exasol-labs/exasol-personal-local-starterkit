@@ -1205,7 +1205,7 @@ function Format-ExakitVsSqlLine {
 function Show-ExakitVsQueryList {
     param([object[]]$Items = @())
     $all = @($Items)
-    Info "Query it:"
+    Info "Query:"
     foreach ($it in $all) {
         $q = ""
         $r = $it.Result
@@ -3237,7 +3237,7 @@ function Invoke-ExakitVsTuiFlow {
     if ($done.Count -gt 0) {
         Show-ExakitVsQueryList -Items @($done | ForEach-Object { @{ Name = $_.Name; Result = $_.Result } })
         Write-Host ""
-        Info "Manage it: exakit source"
+        Info "Manage: exakit source"
     }
     # Nothing secret outlives the command in this session.
     foreach ($s in $sources) { $s.Secret = $null; $s.Storage = $null }
