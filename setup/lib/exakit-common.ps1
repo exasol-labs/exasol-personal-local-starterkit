@@ -8178,6 +8178,11 @@ function Show-ExakitConnectionSummary {
     # BOM-less .ps1 with the system ANSI codepage and would render the dot as
     # mojibake. A twin audit that diffs the two strings will flag this line;
     # it is the encoding rule, deliberately.
+    if ((Get-Command Test-ExakitVsAvailable -ErrorAction SilentlyContinue) -and (Test-ExakitVsAvailable)) {
+        # Federation: shown where a source can be connected from here, the
+        # same test as the data table's row (twin of connection_summary).
+        Write-ExakitPanelLine ("{0,-13} {1}" -f "Federation", "exakit connect  |  exakit source")
+    }
     Write-ExakitPanelLine ("{0,-13} {1}" -f "Everything", "exakit info  |  exakit guide")
     Complete-ExakitPanel
 }

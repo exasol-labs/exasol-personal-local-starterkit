@@ -147,7 +147,7 @@ COPIED="$(exakit_print_mcp_ready_panel permanent 2>&1)"
 has "on the clipboard, it is one line" "is on your clipboard" "$COPIED"
 lacks "and the panel is gone"          "First prompt to try"  "$COPIED"
 
-printf '\n== the closing panel is four rows, and exakit info is still complete ==\n'
+printf '\n== the closing panel is short, and exakit info is still complete ==\n'
 
 SHORT="$(connection_summary 2>&1)"
 has "the DSN and admin user" "127.0.0.1:8563   (admin sys, TLS self-signed)" "$SHORT"
@@ -157,6 +157,14 @@ has "and where everything is" "exakit info" "$SHORT"
 lacks "no manifest row"       "Manifest"    "$SHORT"
 lacks "no logs row"           "Logs:"       "$SHORT"
 lacks "no MCP backups row"    "MCP backups" "$SHORT"
+# The Federation row: only where a source can be connected from here (the
+# virtual-schemas module answers exakit_vs_available); not loaded here, so absent.
+lacks "no Federation row where connect cannot run" "Federation" "$SHORT"
+exakit_vs_available() { return 0; }
+FED_SHORT="$(connection_summary 2>&1)"
+has "the Federation row" "exakit connect  ·  exakit source" "$(printf '%s\n' "$FED_SHORT" | grep 'Federation')"
+check "...before Everything, which stays the last row" "Everything" "$(printf '%s\n' "$FED_SHORT" | grep -E 'Everything|Federation' | tail -1 | sed 's/^[^A-Za-z]*//; s/ .*//')"
+unset -f exakit_vs_available
 
 # The full panel is what `exakit info` prints. Collapsing the INSTALL must not
 # collapse the reference screen.

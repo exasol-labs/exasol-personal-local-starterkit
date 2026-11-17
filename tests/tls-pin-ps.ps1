@@ -107,6 +107,14 @@ try {
     Has "pinned: the panel says so" "enabled (self-signed certificate) $($script:UiMidDot) pinned" $panelText
     Has "...and where the details are" "details: exakit tls-pin" $panelText
     Lacks "...not the pin-it hint" "pin it:" $panelText
+    # The install's closing box: a Federation row where connect can run, before
+    # Everything, which stays the last row.
+    function Test-ExakitVsAvailable { return $true }
+    $summaryText = (Show-ExakitConnectionSummary 6>&1 | Out-String)
+    Has "closing box: the Federation row" "Federation    exakit connect  |  exakit source" $summaryText
+    Check "...before Everything, which stays the last row" $true (($summaryText.IndexOf("Federation") -ge 0) -and ($summaryText.IndexOf("Federation") -lt $summaryText.IndexOf("Everything")))
+    function Test-ExakitVsAvailable { return $false }
+    Lacks "...and none where connect cannot run" "Federation" (Show-ExakitConnectionSummary 6>&1 | Out-String)
     Check "...and when, as UTC ISO 8601 on 5.1 and pwsh alike" $true ((Get-ExakitTlsPinnedAt) -match '^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$')
     Check "pinned: the DSN carries the pin (pyexasol form)" "127.0.0.1/${fp1}:$port1" (Get-ExakitPinnedDsn)
     Check "...for any DSN handed in" "127.0.0.1/${fp1}:9" (Get-ExakitPinnedDsn "127.0.0.1:9")

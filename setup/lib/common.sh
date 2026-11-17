@@ -13641,6 +13641,12 @@ connection_summary() {
     else
         ui_panel_line "$(printf '%-13s %s' "SQL client" "$(ui_link https://dbeaver.io/download/ "DBeaver") or $(ui_link https://www.dbvis.com/download/ "DbVisualizer")")"
     fi
+    # Federation: shown where a source can be connected from here, the same
+    # test as the data table's "Connect other data sources" row (the module is
+    # loaded and the kit's pyexasol, which runs the engine, is installed).
+    if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
+        ui_panel_line "$(printf '%-13s %s' "Federation" "exakit connect  ·  exakit source")"
+    fi
     ui_panel_line "$(printf '%-13s %s' "Everything" "exakit info  ·  exakit guide")"
     ui_panel_end
 }
