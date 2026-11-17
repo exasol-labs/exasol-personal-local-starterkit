@@ -5836,7 +5836,13 @@ EXAKIT_ATB_KIDS
     done <<EXAKIT_ATB_DISABLED
 ${EXAKIT_ADDON_TABLE_DISABLED:-}
 EXAKIT_ATB_DISABLED
-    printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
+    # The install's table (flat): the two are in either way, so the last row goes on
+    # rather than skips. Twin of the same row in Show-ExakitMarketplaceMenu.
+    if [ "$_atb_flat" = 1 ]; then
+        printf 'plain|Continue|0|idle|||||| \n' >> "$_atb_f"
+    else
+        printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
+    fi
     EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
     EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 - _atb_flat + ${_atb_top:-0} ))
