@@ -1744,7 +1744,7 @@ function Get-ExakitUvPinnedVersion {
 function Get-ExakitUvPinnedSha256 {
     param([Parameter(Mandatory)][string]$Key)
     switch ($Key) {
-        "uv-0.13.7-windows-x86_64" { return "0cdc5b38fe5a8168ed6a25814f5ba43c21d313dd3187314fccb37b7cec46e021" }
+        "uv-0.13.8-windows-x86_64" { return "529e78a9cec6cd7e3e014f7ecd8bda0c113969d4ed0f2efeedb85c30943325b8" }
         default { return $null }
     }
 }
