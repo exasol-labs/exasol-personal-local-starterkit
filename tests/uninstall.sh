@@ -507,6 +507,41 @@ check "and pasted, it removes exactly that directory" "0" "$([ -e "$_qdir" ] && 
 # The no-runtime branch in the engine builds the same remedy the same way.
 check "engine no-runtime remedy escapes quotes too" "1" "$(grep -c "EXAKIT_TEARDOWN_REMEDY=\"rm -rf '\$(printf '%s' \"\$_un_dd\" | sed \"s/'/'\\\\\\\\\\\\\\\\''/g\")'\"" "$ROOT/setup/lib/common.sh")"
 
+# --- an add-on's removed paths never reach the terminal --------------------
+# The add-on modules answer with the paths they removed, one per line on
+# stdout. Passed straight through, a real `exakit uninstall` printed them as
+# bare absolute paths: in the plan and again spliced into the spinner line.
+echo
+echo "an add-on uninstall keeps its paths off the screen (real run) and lists them (dry run):"
+_addon_paths() { # _addon_paths <dry 0|1> <rc>
+    SANDBOX="$SANDBOX" ROOT="$ROOT" D="$1" RC="$2" bash <<'ADDON'
+set -u
+HOME="$SANDBOX/addon-home"; export HOME
+EXAKIT_HOME="$HOME/.exasol-starter-kit"; EXAKIT_BIN_DIR="$HOME/.local/bin"
+export EXAKIT_HOME EXAKIT_BIN_DIR
+mkdir -p "$EXAKIT_HOME/logs"
+. "$ROOT/setup/lib/common.sh"
+EXAKIT_LOG_FILE="$EXAKIT_HOME/logs/addon.log"
+_exakit_marketplace_root() { printf '%s\n' "$ROOT"; }
+_exakit_marketplace_run_python() {
+    printf '%s\n' "$EXAKIT_HOME/dash-server-venv" "$EXAKIT_BIN_DIR/dash-server"
+    return "$RC"
+}
+_exakit_marketplace_python dash-server uninstall "$D"
+echo "RC=$?"
+echo "LOG:$(cat "$EXAKIT_LOG_FILE" 2>/dev/null | tr '\n' '|')"
+ADDON
+}
+_o="$(_addon_paths 0 0 2>&1)"
+check "real: no bare path line on screen" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
+check "real: the paths go to the log" "1" "$(printf '%s\n' "$_o" | grep '^LOG:' | grep -c 'dash-server-venv')"
+check "real: the module's answer is kept" "RC=0" "$(printf '%s\n' "$_o" | grep '^RC=')"
+_o="$(_addon_paths 0 3 2>&1)"
+check "real: a failing module still answers its code" "RC=3" "$(printf '%s\n' "$_o" | grep '^RC=')"
+_o="$(_addon_paths 1 0 2>&1)"
+check "dry: each path is a plan line" "1" "$(printf '%s\n' "$_o" | grep -v '^LOG:' | grep -c 'will remove: ~/.exasol-starter-kit/dash-server-venv')"
+check "dry: no bare path line" "0" "$(printf '%s\n' "$_o" | grep -c '^/')"
+
 echo
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

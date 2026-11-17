@@ -284,7 +284,7 @@ done <<'EOF'
 the database it removed|Database removed
 the kit home it removed|Kit home removed
 the AI clients it edited|MCP entry removed
-that the lines on screen are the only record|whole record of this uninstall
+the commands it removed|Commands removed
 EOF
 
 # The PowerShell twin carries the identical fault, and carried the identical

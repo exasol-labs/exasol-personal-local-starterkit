@@ -4804,6 +4804,28 @@ _exakit_marketplace_python() {
                 ;;
         esac
         case "$2" in
+            uninstall)
+                # The module answers with the paths it removed (or would
+                # remove), one per line on stdout. Passed straight through they
+                # reached the terminal as bare absolute paths: in the middle of
+                # the --yes plan and again spliced into the "Removing the kit"
+                # spinner line. A dry run lists them as plan lines; a real run
+                # sends them to the logfile, like every other path a removal
+                # touches. Twin of the $DryRun / Write-ExakitLog arms at the end
+                # of Invoke-ExakitMarketplacePython in exakit-common.ps1.
+                _mcp_out="$(_exakit_marketplace_run_python mutate "$_mcp_root/marketplace/service.py" "$@")"
+                _mcp_rc=$?
+                while IFS= read -r _mcp_line; do
+                    [ -n "$_mcp_line" ] || continue
+                    if [ "${3:-}" = --dry-run ]; then
+                        info "  will remove: $(ui_tilde "$_mcp_line")"
+                    else
+                        _exakit_log_file "INFO  $1 $_mcp_line"
+                    fi
+                done <<EXAKIT_MCP_UNINSTALL_EOF
+$_mcp_out
+EXAKIT_MCP_UNINSTALL_EOF
+                return "$_mcp_rc" ;;
             latest|validate)
                 EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
                     _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@" ;;
@@ -15210,13 +15232,17 @@ EXAKIT_UM_PANEL_EOF
 # in uv's own shared folder (another project of yours may use it). Said with
 # the command that removes each, never removed here (audit DAY-09).
 exakit_uninstall_leftovers() {
-    info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
-    command -v uv >/dev/null 2>&1 || return 0
-    _ul_dir="$(uv python dir 2>/dev/null || true)"
-    [ -n "$_ul_dir" ] && [ -d "$_ul_dir" ] || return 0
-    _ul_py="$(ls -d "$_ul_dir"/cpython-"$EXAKIT_MANAGED_PYTHON_VERSION".* 2>/dev/null | head -1)"
-    [ -n "$_ul_py" ] || return 0
-    info "uv keeps the Python $EXAKIT_MANAGED_PYTHON_VERSION it downloaded for the kit in $_ul_dir. If nothing else of yours uses it: uv python uninstall $EXAKIT_MANAGED_PYTHON_VERSION"
+    # One line, not two paragraphs: both items are optional tidying, and each
+    # carries the one thing needed to act on it.
+    _ul_more=""
+    if command -v uv >/dev/null 2>&1; then
+        _ul_dir="$(uv python dir 2>/dev/null || true)"
+        if [ -n "$_ul_dir" ] && [ -d "$_ul_dir" ] && \
+           [ -n "$(ls -d "$_ul_dir"/cpython-"$EXAKIT_MANAGED_PYTHON_VERSION".* 2>/dev/null | head -1)" ]; then
+            _ul_more="; uv's Python $EXAKIT_MANAGED_PYTHON_VERSION (if nothing else uses it: uv python uninstall $EXAKIT_MANAGED_PYTHON_VERSION)"
+        fi
+    fi
+    info "Left for you: any PATH entry for $(ui_tilde "$EXAKIT_BIN_DIR") in your shell profile$_ul_more"
 }
 
 # _exakit_kit_mcp_server_pids - the pids of running exasol-mcp-server processes
@@ -15311,8 +15337,7 @@ _exakit_uninstall_closing_hints() {
     if ! command -v uv >/dev/null 2>&1 && [ -x "${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv" ]; then
         _uch_uv="${EXAKIT_BIN_DIR:-$HOME/.local/bin}/uv"
     fi
-    info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
-    info "uv keeps the MCP server package in its cache; free that space with: $_uch_uv cache clean exasol-mcp-server"
+    info "Restart any AI client that was open so it drops the Exasol MCP server; free uv's cached copy with: $_uch_uv cache clean exasol-mcp-server"
 }
 
 # _exakit_uninstall_kit_images <dry> - the container images the database used.
@@ -15425,10 +15450,19 @@ exakit_uninstall_run() {
     # NOT in a dry run: there, listing every path IS the output. That is the
     # only thing --dry-run produces and the reason anyone asks for it.
     _un_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
-    if [ "$_dry" != "1" ] && [ -t 1 ]; then
+    #
+    # Quiet on EVERY real run, not only on a terminal: an agent's shell or a
+    # pipe has no spinner to read, so there the record lines are the whole
+    # output, one per area, instead of every plan line under them.
+    if [ "$_dry" != "1" ]; then
         EXAKIT_QUIET_DETAIL=1
         ui_spin_begin "Removing the kit"
     fi
+    # _un_phase <label> — the spinner line names the phase under way. Display
+    # only: no spinner (dry run, no terminal) and it does nothing.
+    _un_phase() {
+        [ "$_dry" = "1" ] || ! command -v ui_spin_relabel >/dev/null 2>&1 || ui_spin_relabel "$1"
+    }
     _step() { # _step <message>  — narrate the action (or the plan line)
         if [ "$_dry" = "1" ]; then info "  will remove: $1"; else info "$1"; fi
     }
@@ -15568,6 +15602,7 @@ EXAKIT_PRESERVED_PATHS_EOF
     #    VS Code extension). Anything under the kit home or the bin dir is
     #    swept by steps 5-6 regardless; a system-installed copy the kit never
     #    managed is not touched (each hook enforces that itself).
+    _un_phase "Removing add-ons"
     _un_addons_gone=""
     # Tells an add-on hook that the kit home goes next, so it does not promise
     # to keep something step 5 is about to delete (dash-server's instance).
@@ -15586,6 +15621,7 @@ EXAKIT_PRESERVED_PATHS_EOF
     fi
     [ -n "$_un_addons_gone" ] && _done "Add-ons removed: $_un_addons_gone"
 
+    _un_phase "Removing the database"
     # 1) Database + all data. Uses the runtime removal helper (always --data),
     #    which for Personal also reaps any orphaned runner daemon on the DB port.
     _type="$(manifest_get runtime.type 2>/dev/null || true)"
@@ -15631,7 +15667,7 @@ EXAKIT_PRESERVED_PATHS_EOF
         case "$_type" in
             personal)
                 [ "$EXAKIT_UNINSTALL_DB_LEFT" = 1 ] || \
-                    _done "Database removed: the local Exasol Personal deployment and all its data"
+                    _done "Database removed: the local deployment and all its data"
                 # A container check that could not run is said right under
                 # that line, never folded into it.
                 [ "$_dry" = "1" ] || _exakit_uninstall_teardown_warnings ;;
@@ -15692,11 +15728,13 @@ EXAKIT_PRESERVED_PATHS_EOF
        [ "$EXAKIT_UNINSTALL_DB_LEFT" != 1 ] && \
        command -v _exakit_uninstall_kit_images >/dev/null 2>&1 && \
        [ -z "$(personal_other_deployments 2>/dev/null)" ]; then
+        _un_phase "Removing container images"
         _exakit_uninstall_kit_images "$_dry"
     fi
 
     # 2) Managed MCP configuration in every AI client the kit configures.
     #    Best-effort: a failure here must not block the rest.
+    _un_phase "Removing AI client settings"
     if command -v exakit_mcp_operation >/dev/null 2>&1; then
         # The client list comes from the one function that owns it rather than
         # being spelled out here: this line named three clients while the
@@ -15708,7 +15746,7 @@ EXAKIT_PRESERVED_PATHS_EOF
             exakit_mcp_operation uninstall >/dev/null 2>&1 || \
                 warn "Removing the managed AI client config reported issues (continuing uninstall)"
         fi
-        _done "MCP entry removed from the AI clients the kit manages: ${_un_mcp_clients:-all managed clients}"
+        _done "MCP entry removed from the AI clients: ${_un_mcp_clients:-all managed clients}"
     fi
     # The launcher's MCP server the kit set up (mcp_sidecar_apply), on a
     # deployment that stays: a database the kit did not remove keeps running,
@@ -15740,6 +15778,7 @@ EXAKIT_PRESERVED_PATHS_EOF
         _rm "$EXAKIT_HOME/exapump"
     fi
 
+    _un_phase "Removing kit files"
     # 5) Kit home: credentials, logs, manifest, cached kit copy, MCP snapshots,
     #    and the pyexasol / marketplace add-on virtual environments and state
     #    (dash-server's venv and instance data live under the kit home too).
@@ -15759,8 +15798,9 @@ EXAKIT_PRESERVED_PATHS_EOF
                 for _un_old in "${EXAKIT_HOME}"-backups-*; do
                     [ -d "$_un_old" ] && [ ! -L "$_un_old" ] && [ "$_un_old" != "$_un_keep" ] && rm -rf "$_un_old"
                 done
-                info "AI client config snapshots kept at $_un_keep, readable by you only; they hold the MCP password."
-                info "  Delete it once your AI clients work: rm -rf '$_un_keep'"
+                # On screen even in a quiet run: a folder holding a password,
+                # left behind on purpose, is the one thing to read here.
+                info_step "AI client config snapshots kept at $(ui_tilde "$_un_keep") (they hold the MCP password). Delete once your AI clients work: rm -rf '$_un_keep'"
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.
@@ -15795,17 +15835,18 @@ EXAKIT_PRESERVED_PATHS_EOF
                 done
             fi
             if _un_keep_notebooks; then
-                _done "Kit-owned files removed from $EXAKIT_HOME; your work was kept there ($(_un_kept_work)); reused resources were preserved"
+                _done "Kit files removed from $(ui_tilde "$EXAKIT_HOME"); your $(_un_kept_work) stay there"
             else
-                _done "Kit-owned files removed from $EXAKIT_HOME; reused resources were preserved"
+                _done "Kit files removed from $(ui_tilde "$EXAKIT_HOME"); files other tools reuse stay there"
             fi
         else
             _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
             _rm "$EXAKIT_HOME"
-            _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+            _done "Kit home removed: $(ui_tilde "$EXAKIT_HOME")"
         fi
     fi
 
+    _un_phase "Removing commands"
     # 6) CLI binaries. Removed last so earlier steps can still call the launcher.
     #    Removing the running exakit binary itself is safe (the inode survives
     #    until the process exits). Marketplace add-on launchers are swept by
@@ -15817,7 +15858,10 @@ EXAKIT_PRESERVED_PATHS_EOF
     fi
     _un_bins_gone=""
     for _bin in $_bins; do
-        case "$_un_protected_bins" in *" $_bin "*) info "Keeping $_bin (not installed by this kit)."; continue ;; esac
+        # Named only when there is something there to keep: the registry lists
+        # every add-on, and "Keeping dbt-exasol" over one never installed read
+        # as if the kit had found it.
+        case "$_un_protected_bins" in *" $_bin "*) [ -e "$EXAKIT_BIN_DIR/$_bin" ] && info "Keeping $_bin (not installed by this kit)."; continue ;; esac
         _un_bin_path="$EXAKIT_BIN_DIR/$_bin"
         case "$_bin" in
             exasol) _un_bin_path="${_un_exasol_path:-$_un_bin_path}" ;;
@@ -15829,17 +15873,10 @@ EXAKIT_PRESERVED_PATHS_EOF
             _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }$_bin"
         fi
     done
-    [ -n "$_un_bins_gone" ] && _done "Kit-owned commands removed: $_un_bins_gone"
+    [ -n "$_un_bins_gone" ] && _done "Commands removed: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"
     command -v _exakit_uninstall_closing_hints >/dev/null 2>&1 && _exakit_uninstall_closing_hints "$_dry"
-    # Said last, and said plainly, because it is the one thing the reader cannot
-    # find out afterwards: the logfile that held the per-path detail lived inside
-    # the kit home this run has just deleted, so the lines above are the only
-    # account of what was removed that still exists anywhere.
-    if [ "$_dry" != "1" ]; then
-        info_step "The lines above are the whole record of this uninstall — the install log lived in the kit home and went with it."
-    fi
     # Every step here is best-effort - each failure warns and carries on - with
     # ONE exception: the database. A run that left it on the machine says so,
     # last, with the command that removes it, and answers 1 so no caller can

@@ -411,6 +411,21 @@ ui_spin_resume() {
     ui_spin_begin "$_UI_SPIN_PAUSE_LABEL" "$_UI_SPIN_PAUSE_T0"
 }
 
+# ui_spin_relabel <label> — the same spinner line, now saying what it does next.
+#
+# A long job that narrates itself on ONE line (the uninstall) still has phases,
+# and "Removing the kit (40s)" over all of them hides which one is slow. The
+# animator is a subshell that copied its label when it started, so the label
+# changes the way a pause does: stop, then start again with the new words and a
+# fresh counter. No spinner of our own (not a TTY, or a nested caller): nothing.
+# ⇄ twin: Set-ExakitSpinnerLabel in ui.ps1.
+ui_spin_relabel() {
+    ui_spin_pause
+    [ "${_UI_SPIN_PAUSED:-0}" = 1 ] || return 0
+    _UI_SPIN_PAUSED=0
+    ui_spin_begin "$1"
+}
+
 # ui_step_start <label> — begin a visible step: an animated spinner in fancy
 # mode, or a plain "> label…" line otherwise. Pair with ui_step_ok/_fail.
 ui_step_start() {

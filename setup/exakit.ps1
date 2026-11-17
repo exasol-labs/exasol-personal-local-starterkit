@@ -2074,10 +2074,19 @@ function Invoke-ExakitUninstallRun {
     #
     # NOT in a dry run: there, listing every path IS the output. Twin of
     # exakit_uninstall_run in common.sh.
+    #
+    # Quiet on EVERY real run, not only in a fancy console: an agent's shell has
+    # no spinner to read, so there the record lines are the whole output.
+    # Start-ExakitSpinner draws nothing in plain mode.
     $unPrevQuiet = $script:ExakitQuietDetail
-    if (-not $DryRun -and $script:UiFancy) {
+    if (-not $DryRun) {
         $script:ExakitQuietDetail = $true
         Start-ExakitSpinner "Removing the kit"
+    }
+    # The spinner line names the phase under way. Display only. No Verb-Noun
+    # name, for the same reason as RecordRemoved below.
+    function UninstallPhase([string]$Label) {
+        if (-not $DryRun -and (Get-Command Set-ExakitSpinnerLabel -ErrorAction SilentlyContinue)) { Set-ExakitSpinnerLabel $Label }
     }
     # Real runs only: a dry run removed nothing, so a line in the past tense
     # would be a lie, and the plan lines above already say what it would do.
@@ -2124,6 +2133,7 @@ function Invoke-ExakitUninstallRun {
     #      pointing at a target that no longer exists.
     Invoke-ExakitUninstallOrphanAutostart -DryRun:$DryRun
 
+    UninstallPhase "Removing add-ons"
     # 0b) Kit-managed marketplace add-ons that live OUTSIDE the kit home (the
     #    VS Code extension). Registry-driven: a new add-on ships its own
     #    UninstallFn and appears here with no edits. A system-installed copy
@@ -2144,6 +2154,7 @@ function Invoke-ExakitUninstallRun {
     $script:ExakitUninstallFull = $false
     if ($addonsGone.Count -gt 0) { RecordRemoved "Add-ons removed: $($addonsGone -join ', ')" }
 
+    UninstallPhase "Removing the database"
     # 1) Database + all data.
     $type = Get-RuntimeType
     # Only a run that found a deployment may remove the engine's images (step
@@ -2172,7 +2183,7 @@ function Invoke-ExakitUninstallRun {
                 default { Warn2 "Unknown runtime type '$type'; skipping database removal" }
             }
             if (-not $script:ExakitUninstallDbLeft) {
-                RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
+                RecordRemoved "Database removed: the local deployment and all its data"
             }
             # A container check that could not run is said right under that
             # line, never folded into it.
@@ -2220,9 +2231,10 @@ function Invoke-ExakitUninstallRun {
     if ($type -eq "personal" -and $unHadDeploy -and -not $script:ExakitUninstallDbLeft) {
         $otherDeploys = @()
         if (Get-Command Get-PersonalOtherDeployments -ErrorAction SilentlyContinue) { $otherDeploys = @(Get-PersonalOtherDeployments) }
-        if ($otherDeploys.Count -eq 0) { Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
+        if ($otherDeploys.Count -eq 0) { UninstallPhase "Removing container images"; Invoke-ExakitUninstallKitImages -DryRun:$DryRun }
     }
 
+    UninstallPhase "Removing AI client settings"
     # 2) Managed MCP configuration in the AI clients. Best-effort.
     if (Get-Command Invoke-McpOperation -ErrorAction SilentlyContinue) {
         # The client list comes from the table that owns it (mcp.ps1) rather than
@@ -2239,7 +2251,7 @@ function Invoke-ExakitUninstallRun {
             try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @()) }
             catch { Warn2 "Removing the managed AI client config reported issues (continuing uninstall)" }
         }
-        RecordRemoved "MCP entry removed from the AI clients the kit manages: $mcpClientList"
+        RecordRemoved "MCP entry removed from the AI clients: $mcpClientList"
     }
     if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) { Remove-McpSidecar -DryRun:$DryRun }
     # 2b) MCP servers an open AI client still runs are NOT stopped here.
@@ -2287,6 +2299,7 @@ function Invoke-ExakitUninstallRun {
         else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $kitProfileDir }
     }
 
+    UninstallPhase "Removing kit files"
     # 5) Kit home: credentials, logs, manifest, cached kit copy, MCP snapshots.
     if (Test-Path $script:ExakitHome) {
         # The MCP snapshots taken in step 2 are the only copy of each client
@@ -2308,8 +2321,9 @@ function Invoke-ExakitUninstallRun {
                         Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
                     }
                 }
-                Info "AI client config snapshots kept at $keep, readable by you only; they hold the MCP password."
-                Info "  Delete it once your AI clients work: Remove-Item -Recurse -Force '$keep'"
+                # On screen even in a quiet run: a folder holding a password,
+                # left behind on purpose, is the one thing to read here.
+                InfoStep "AI client config snapshots kept at $keep (they hold the MCP password). Delete once your AI clients work: Remove-Item -Recurse -Force '$keep'"
             } catch { }
         }
         if ((Test-ExakitUninstallKeepsNotebooks) -or $preservedComponentPaths.Count -gt 0) {
@@ -2337,15 +2351,16 @@ function Invoke-ExakitUninstallRun {
                     Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-            if ($keptSaid) { RecordRemoved "Kit-owned files removed from $script:ExakitHome; your work was kept there ($keptSaid); reused resources were preserved" }
-            else { RecordRemoved "Kit-owned files removed from $script:ExakitHome; reused resources were preserved" }
+            if ($keptSaid) { RecordRemoved "Kit files removed from $($script:ExakitHome); your $keptSaid stay there" }
+            else { RecordRemoved "Kit files removed from $($script:ExakitHome); files other tools reuse stay there" }
         } else {
             if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
             else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }
-            RecordRemoved "Kit home removed: $script:ExakitHome (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+            RecordRemoved "Kit home removed: $($script:ExakitHome)"
         }
     }
 
+    UninstallPhase "Removing commands"
     # 6) CLI binaries. Removed last so earlier steps can still call them.
     #    exakit.cmd is the wrapper cmd.exe is still executing right now; deleting
     #    it in-process makes cmd.exe print "The batch file cannot be found." when
@@ -2366,7 +2381,7 @@ function Invoke-ExakitUninstallRun {
     }
     foreach ($bin in $binNames) {
         $p = Join-Path $script:BinDir $bin
-        if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { Info "Keeping $p (not installed by this kit)."; continue }
+        if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { if (Test-Path -LiteralPath $p) { Info "Keeping $p (not installed by this kit)." }; continue }
         if ($ownedCoreBinPaths.ContainsKey($bin) -and $ownedCoreBinPaths[$bin]) { $p = $ownedCoreBinPaths[$bin] }
         if (Test-Path $p) {
             if ($DryRun) { Info "  will remove: CLI binary $p" }
@@ -2379,20 +2394,13 @@ function Invoke-ExakitUninstallRun {
         # "as this window closes", not "removed": the delete runs after this
         # process exits, so at this point it has been arranged, not done. A shim
         # it misses still cleans itself up on its next run.
-        RecordRemoved "Kit-owned commands in $($script:BinDir) are removed when you close this window: $($binNamesGone -join ', ')"
+        RecordRemoved "Commands are removed when you close this window: $($binNamesGone -join ', ')"
     }
     } finally {
         Stop-ExakitSpinner
         $script:ExakitQuietDetail = $unPrevQuiet
     }
     Write-ExakitUninstallClosingHints -DryRun:$DryRun
-    # Said last, and said plainly, because it is the one thing the reader cannot
-    # find out afterwards: the logfile that held the per-path detail lived inside
-    # the kit home this run has just deleted, so the lines above are the only
-    # account of what was removed that still exists anywhere.
-    if (-not $DryRun) {
-        InfoStep "The lines above are the whole record of this uninstall - the install log lived in the kit home and went with it."
-    }
     # The one step that is not best-effort for the answer: a database left on
     # the machine is said last, with the command that removes it.
     if (-not $DryRun -and $script:ExakitUninstallDbLeft) {
@@ -2429,8 +2437,7 @@ function Write-ExakitUninstallClosingHints {
         $kitUv = Join-Path $script:BinDir "uv.exe"
         if (Test-Path -LiteralPath $kitUv) { $uv = "& '" + $kitUv + "'" }
     }
-    Info "Restart any AI client that was open (Claude Desktop, Claude Code, Cursor, ...) so it drops the removed Exasol MCP server."
-    Info "uv keeps the MCP server package in its cache. To free that space, run in PowerShell: $uv cache clean exasol-mcp-server"
+    Info "Restart any AI client that was open so it drops the Exasol MCP server; free uv's cached copy (in PowerShell) with: $uv cache clean exasol-mcp-server"
 }
 
 # Delete the CLI binaries from a short-lived detached PowerShell that first
@@ -2558,7 +2565,8 @@ function Invoke-CmdUninstall {
 
     if ($AssumeYes) {
         Write-Host ""
-        Warn2 "exakit uninstall -Yes removes the FULL kit (all local database data included)."
+        Warn2 "Removes the full kit, including all database data."
+        Info "Your tables are not exported. To see every item first: exakit uninstall -DryRun"
         Invoke-ExakitUninstallRun
         Write-Host ""
         if ($script:ExakitUninstallDbLeft) {
@@ -2567,7 +2575,7 @@ function Invoke-CmdUninstall {
             Write-Host "      [x] Uninstall did not finish: the database is still on this machine (see above)." -ForegroundColor Red
             exit 1
         }
-        Ok "Uninstall complete - the Exasol Personal Local Starter Kit has been removed."
+        Ok "Uninstall complete."
         Write-ExakitUninstallLeftovers
         return
     }
@@ -3176,15 +3184,18 @@ function Write-ExakitVersionNote {
 # (another project may use it). Said with the command that removes each, never removed (audit DAY-09). Twin of
 # exakit_uninstall_leftovers.
 function Write-ExakitUninstallLeftovers {
-    Info "If a PATH entry for $script:BinDir remains in your profile, remove it manually if you no longer need it."
+    # One line, not two paragraphs. Twin of exakit_uninstall_leftovers.
+    $more = ""
     $uv = Get-Command uv -ErrorAction SilentlyContinue
-    if (-not $uv) { return }
-    $dir = ""
-    try { $dir = ("" + (& $uv.Source python dir 2>$null)).Trim() } catch { $dir = "" }
-    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { return }
-    $version = $script:ManagedPythonVersion
-    if (-not @(Get-ChildItem -LiteralPath $dir -Directory -Filter "cpython-$version.*" -ErrorAction SilentlyContinue).Count) { return }
-    Info "uv keeps the Python $version it downloaded for the kit in $dir. If nothing else of yours uses it: uv python uninstall $version"
+    if ($uv) {
+        $dir = ""
+        try { $dir = ("" + (& $uv.Source python dir 2>$null)).Trim() } catch { $dir = "" }
+        $version = $script:ManagedPythonVersion
+        if ($dir -and (Test-Path -LiteralPath $dir) -and @(Get-ChildItem -LiteralPath $dir -Directory -Filter "cpython-$version.*" -ErrorAction SilentlyContinue).Count) {
+            $more = "; uv's Python $version (if nothing else uses it: uv python uninstall $version)"
+        }
+    }
+    Info "Left for you: any PATH entry for $script:BinDir in your profile$more"
 }
 
 function Invoke-CmdPersona {

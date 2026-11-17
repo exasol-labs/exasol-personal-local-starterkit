@@ -361,6 +361,17 @@ function Resume-ExakitSpinner {
     }
 }
 
+# Set-ExakitSpinnerLabel - the same spinner line, now saying what it does next,
+# with a fresh counter. The runspace reads Label and T0 from the synchronized
+# hashtable on every frame, so changing them is enough. Only the owner relabels;
+# no spinner of our own (plain mode, or a nested caller): nothing.
+# Twin of ui_spin_relabel in ui.sh.
+function Set-ExakitSpinnerLabel([string]$Label) {
+    if ($script:UiSpinNested -gt 0) { return }
+    if ($null -eq $script:UiSpinFlag) { return }
+    try { $script:UiSpinFlag.Label = $Label; $script:UiSpinFlag.T0 = (Get-Date) } catch { }
+}
+
 function Restore-ExakitCursor { Disable-ExakitMenuMouse; if ($script:UiFancy) { try { [Console]::Write("$($script:UiEsc)[?25h") } catch { } } }
 
 # --- mouse in the menus -------------------------------------------------------

@@ -2283,10 +2283,12 @@ check "...an unknown target still exits 2"         "2" "$(_dc_run not-a-thing)"
 
 # LIF-05: --yes is what AGENTS.md documents for automation, so it is the path
 # an agent takes when a user says "uninstall the kit" - and it printed one warn
-# line and destroyed, leaving no record of WHAT went.
+# line and destroyed, leaving no record of WHAT went. The record is now the
+# run's own per-area lines (ok_step, checked in status-soft-components.sh); the
+# itemised plan moved to --dry-run, which this path names.
 _dc_yes="$(sed -n '/if \[ "\$_uni_yes" = 1 \]; then/,/^    fi/p' "$ROOT/setup/exakit")"
-has "a --yes uninstall prints the plan first" 'exakit_uninstall_run 1' "$_dc_yes"
-has "...and says there is no export step"     'no export step' "$_dc_yes"
+has "a --yes uninstall warns that the database data goes" 'including all database data' "$_dc_yes"
+has "...says nothing is exported, and names the full list" 'not exported. To see every item first: exakit uninstall --dry-run' "$_dc_yes"
 has "...and still performs the removal"       'exakit_uninstall_run 0' "$_dc_yes"
 
 # LIF-12: the rescue line printed before repair-runtime named `exakit sql

@@ -2055,23 +2055,13 @@ cmd_uninstall() {
 
     if [ "$_uni_yes" = 1 ]; then
         printf '\n'
-        warn "exakit uninstall --yes removes the FULL kit (all local database data included)."
-        # THE PLAN RUNS ON THIS PATH TOO, not only under --dry-run. --yes is
-        # what AGENTS.md documents for automation, so it is the path an agent
-        # takes when a user says "uninstall the starter kit" - and it used to
-        # print one warn line and then destroy, leaving no record anywhere of
-        # WHAT it destroyed. The kit has no data-export facility (see
-        # exakit_update_runtime's note), so the database's contents are gone
-        # with no recoverable copy; the least this can do is name them first,
-        # in the transcript the agent keeps and in the log.
-        info "About to remove:"
-        exakit_uninstall_run 1
-        printf '\n'
-        info "There is no export step: the kit cannot copy your tables out, and this does not stop to ask."
-        info "To keep anything, stop now (Ctrl-C) and copy it out first, one table at a time:"
-        info "  exapump sql -p $EXAKIT_EXAPUMP_PROFILE -f csv 'SELECT * FROM <SCHEMA>.<TABLE>' > <TABLE>.csv"
-        info "  ...which exakit data-load <TABLE>.csv loads back into a new install (the file name becomes the table name)."
-        printf '\n'
+        warn "Removes the full kit, including all database data."
+        # NO PLAN LIST ON THIS PATH ANY MORE. It printed every area and path
+        # (thirty-odd lines) before a run that then printed its own record,
+        # which buried the one warning that matters. The record lines the run
+        # promotes (ok_step) still name every area it removed, in the agent's
+        # transcript; the itemised list is what --dry-run is for.
+        info "Your tables are not exported. To see every item first: exakit uninstall --dry-run"
         if ! exakit_uninstall_run 0; then
             # The run has just named what survived and the command that removes
             # it. "Uninstall complete" here was the bug: exit 0 over a database
@@ -2081,7 +2071,7 @@ cmd_uninstall() {
             exit 1
         fi
         printf '\n'
-        ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
+        ok "Uninstall complete."
         exakit_uninstall_leftovers
         exit 0
     fi
