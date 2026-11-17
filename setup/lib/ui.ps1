@@ -2236,10 +2236,13 @@ function Invoke-ExakitTableMenu {
         if ($treeOn -and (Test-ExakitTreeCollapseOn -Specs $groupSpecs)) { $openHint = " · → to open" }
         $helpHint = ""
         if ($null -ne $Help) { $helpHint = " · ? guide" }
-        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $helpHint + $script:UiReset
+        # [K ends each line: redrawn in place, the hint row is written over
+        # whatever was there, and a longer leftover (the table's own bottom
+        # border, seen live as "Enter to confirm────…╯") stayed on its right.
+        $hint = "      " + $script:UiDim + "↑/↓ to move · Space to toggle" + $openHint + " · Enter to confirm" + $helpHint + $script:UiReset + $script:UiEsc + "[K"
         $extra = 0
         if ($note) {
-            $hint += "`r`n    " + $script:UiWarn + "!" + $script:UiReset + " " + $note
+            $hint += "`r`n    " + $script:UiWarn + "!" + $script:UiReset + " " + $note + $script:UiEsc + "[K"
             $extra = 1; $note = ""
         }
         # Overwritten in place while the geometry is unchanged, and only erased
@@ -2421,6 +2424,19 @@ function Read-ExakitPickMenu {
 }
 
 # --- full-window reader -----------------------------------------------------
+# Start-ExakitDetached <target> - hand a file or a web address to Windows'
+# own handler WITHOUT this console. Invoke-Item / Start-Process on the target
+# left the handler attached to the kit's console, so an Electron editor (VS
+# Code as the .md handler) or a browser wrote its stderr into the guide view:
+# "(node:23568) [DEP0169] DeprecationWarning ..." and "Unknown channel ..."
+# over the text until the next redraw (found live on Windows 11). cmd.exe's
+# `start` in a hidden window of its own detaches the handler from this one.
+function Start-ExakitDetached {
+    param([string]$Target)
+    $quoted = '"' + ($Target -replace '"', '') + '"'
+    Start-Process -FilePath "cmd.exe" -ArgumentList ('/d /c start "" ' + $quoted) -WindowStyle Hidden -ErrorAction Stop | Out-Null
+}
+
 # Open-ExakitPath <path> - a local file opened in this computer's own viewer:
 # Invoke-Item on Windows, open on macOS, xdg-open on Linux. $false when the file
 # is not there, there is no opener, or it failed; the caller then says the
@@ -2430,7 +2446,7 @@ function Open-ExakitPath {
     if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
     try {
         $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
-        if ($onWindows) { Invoke-Item -LiteralPath $Path -ErrorAction Stop; return $true }
+        if ($onWindows) { Start-ExakitDetached -Target $Path; return $true }
         if ($IsMacOS) {
             if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
             & open $Path 2>$null | Out-Null
@@ -2451,7 +2467,7 @@ function Open-ExakitUrl {
     if (-not $Url -or -not $Url.StartsWith("https://")) { return $false }
     try {
         $onWindows = ($PSVersionTable.PSVersion.Major -le 5) -or $IsWindows
-        if ($onWindows) { Start-Process -FilePath $Url -ErrorAction Stop | Out-Null; return $true }
+        if ($onWindows) { Start-ExakitDetached -Target $Url; return $true }
         if ($IsMacOS) {
             if (-not (Get-Command open -CommandType Application -ErrorAction SilentlyContinue)) { return $false }
             & open $Url 2>$null | Out-Null

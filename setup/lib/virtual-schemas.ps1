@@ -3224,7 +3224,8 @@ function Invoke-ExakitVsTuiFlow {
     foreach ($s in $sources) {
         if ($s.Outcome -eq "ok") { continue }
         Warn2 "$($s.Name) did not connect:"
-        if ($s.Error) { Write-Host ("  {0} {1}" -f $script:UiCross, $s.Error) -ForegroundColor Red }
+        # Under the warning's text (Warn2 prints "      ! "), not back at column 2.
+        if ($s.Error) { Write-Host ("        {0} {1}" -f $script:UiCross, $s.Error) -ForegroundColor Red }
         if ($code -eq 0) { $code = [int]$s.Code; if ($code -eq 0) { $code = 1 } }
     }
     $done = @($sources | Where-Object { $_.Outcome -eq "ok" })
