@@ -2794,7 +2794,7 @@ for w in p["warnings"]:
         done > "$_EVT_DIR/hints"
         _exakit_vs_query_list "$_EVT_DIR/hints" "$_evt_n"
         printf '\n'
-        info "Manage it: exakit source"
+        info "Manage: exakit source"
     fi
     # Nothing secret outlives the command in this shell.
     for _evt_i in $_evt_all; do _EVT_S_SECRET[$_evt_i]=""; _EVT_S_STORAGE[$_evt_i]=""; done
@@ -3360,7 +3360,7 @@ EOF
     unset _cc_secret _cc_storage EXAKIT_VS_STDIN_SECRET _EVP_SECRET
     if [ "$_cc_rc" -eq 0 ] && [ "$_cc_json" = 0 ]; then
         _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
-        info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
+        info "Manage with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
     fi
     _exakit_vs_exit "$_cc_rc"
 }
@@ -3396,7 +3396,7 @@ _exakit_vs_word() {
 # kind of source names and types what it sends (the connector's tips) is
 # exakit source show's. ⇄ twin: Show-ExakitVsQueryList.
 _exakit_vs_query_list() {
-    info "Query it:"
+    info "Query:"
     while IFS="$(printf '\t')" read -r _eql_name _eql_json; do
         [ -n "$_eql_name" ] || continue
         _eql_q="$(run_python_any -c 'import json, sys

@@ -5043,7 +5043,7 @@ function Invoke-CmdConnect {
     }
     if ($code -eq 0) {
         Show-ExakitVsQueryHints -Result $script:ExakitVsResult -Name $name
-        Info "Manage it with: exakit source show $name | check | reauth | refresh | disconnect | remove"
+        Info "Manage with: exakit source show $name | check | reauth | refresh | disconnect | remove"
     }
     Exit-ExakitVs $code
 }

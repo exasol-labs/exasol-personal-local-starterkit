@@ -4693,7 +4693,7 @@ db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
 jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
 check "a real connect: exit 0, one object - the engine's result" "0 [True, 'jsonok', 'VS_JSONOK', None]" \
     "$JRC $(one '[d["ok"], d["name"], d["objects"]["schema"], d["public_ip"]]')"
-lacks "...no query hint or Manage line on stdout" "Manage it with" "$JOUT"
+lacks "...no query hint or Manage line on stdout" "Manage with" "$JOUT"
 lacks "...and the credential is nowhere in it" "$SECRET" "$JOUT$JERR"
 # jsonok's database objects as connected: the db resets below drop them, and
 # the menu tests put them back before they break the source (jsonok_db_back).
