@@ -1,4 +1,4 @@
-# MySQL — Federation guide
+# MySQL · Federation guide
 
 > **Federation** lets your local Exasol query MySQL data in place, without copying it.
 > `exakit connect mysql` turns one database into a virtual schema, `VS_<NAME>`, that you query with SQL.

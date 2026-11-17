@@ -1,4 +1,4 @@
-# SQL Server — Federation guide
+# SQL Server · Federation guide
 
 > **Federation** lets your local Exasol query SQL Server data in place, without copying it.
 > `exakit connect sqlserver` turns one schema into a virtual schema, `VS_<NAME>`, that you query with SQL.

@@ -1,4 +1,4 @@
-# PostgreSQL — Federation guide
+# PostgreSQL · Federation guide
 
 > **Federation** lets your local Exasol query PostgreSQL data in place, without copying it.
 > `exakit connect postgresql` turns one schema into a virtual schema, `VS_<NAME>`, that you query with SQL.

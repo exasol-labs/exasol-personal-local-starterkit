@@ -13,8 +13,8 @@ each query fetches only what it needs.
 | `oracle` | [Oracle](oracle.md) | host, TCPS port, service name, schema, a read-only user | Yes, for `tls=verify` |
 | `snowflake` | [Snowflake](snowflake.md) | account identifier, database, warehouse, a user and its programmatic access token | No |
 | `bigquery` | [BigQuery](bigquery.md) | project ID, dataset, a service-account key file (JSON) | No |
-| `s3` | [Amazon S3 files](s3.md) | bucket, region, an EDML mapping, an IAM access key | No |
-| `azure-blob` | [Azure Blob files](azure-blob.md) | storage account, container, an EDML mapping, a SAS token | No |
+| `s3` | [Amazon S3](s3.md) | bucket, region, an EDML mapping, an IAM access key | No |
+| `azure-blob` | [Azure Blob Storage](azure-blob.md) | storage account, container, an EDML mapping, a SAS token | No |
 | `databricks` | [Databricks (SQL warehouse)](databricks.md) | workspace host, warehouse HTTP path, catalog, schema, a personal access token | No |
 | `lakehouse` | [Lakehouse (Iceberg / Delta)](lakehouse.md) | a catalog (Iceberg REST, Unity Catalog, AWS Glue, or none for a Parquet folder), the files (vended, S3 or Azure ADLS) and their logins | No |
 | `mongodb` | [MongoDB](mongodb.md) | URI, database, collection, a read-only user and its password | No |

@@ -1,4 +1,4 @@
-# Oracle — Federation guide
+# Oracle · Federation guide
 
 > **Federation** lets your local Exasol query Oracle data in place, without copying it.
 > `exakit connect oracle` turns one schema into a virtual schema, `VS_<NAME>`, that you query with SQL.
