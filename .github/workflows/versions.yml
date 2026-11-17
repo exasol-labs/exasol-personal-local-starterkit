@@ -899,11 +899,12 @@ jobs:
         # names the one group it runs in; only job plumbing has no `if:`, since
         # a step without one runs in every group. The four suites too long to
         # share a job have a group each (versions-manifest, virtual-schemas, the
-        # crossing resilience suite, the PowerShell crossing suite); the rest
+        # crossing resilience suite), the PowerShell crossing suite runs as four
+        # ps-crossing-N slices of its numbered sections; the rest
         # are packed into suites-N groups of about three minutes on the macOS
         # runner, from the step times of a full run. A new suite joins the
         # group with the most room; past about three minutes, add a suites-N.
-        group: [suites-1, suites-2, suites-3, suites-4, suites-5, suites-6, suites-7, suites-8, suites-9, suites-10, suites-11, suites-12, suites-13, suites-14, crossing-resilience, ps-crossing, versions-manifest, virtual-schemas]
+        group: [suites-1, suites-2, suites-3, suites-4, suites-5, suites-6, suites-7, suites-8, suites-9, suites-10, suites-11, suites-12, suites-13, suites-14, crossing-resilience, ps-crossing-1, ps-crossing-2, ps-crossing-3, ps-crossing-4, versions-manifest, virtual-schemas]
     steps:
       - uses: actions/checkout@v7
       - name: bash version
@@ -1434,13 +1435,17 @@ jobs:
           else
             echo "pwsh not installed on this runner - PowerShell suites skipped"
           fi
-      # The crossing suite is the one long PowerShell run (seven minutes on
-      # either runner), so it has a group to itself; beside its shell sibling
-      # the two ran back to back for fifteen.
-      - name: PowerShell crossing suite
-        if: matrix.group == 'ps-crossing'
+      # The crossing suite is the one long PowerShell run (eleven minutes on
+      # the macOS runner whole), so it runs as four ps-crossing-N slices of its
+      # numbered sections (EXAKIT_LC_SECTIONS, the same seams windows-ps51.yml
+      # cuts it along: its slices taken in pairs). Each slice hands in what it
+      # reached, and ps-crossing-coverage holds the coverage floor over all four.
+      - name: PowerShell crossing suite, slice
+        if: startsWith(matrix.group, 'ps-crossing-')
         env:
           EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+          EXAKIT_LC_SECTIONS: ${{ fromJSON('{"ps-crossing-1":"1,2,3,4,5,6,7,8,9,10","ps-crossing-2":"11,12,13","ps-crossing-3":"14,15,16,18,20,21,22","ps-crossing-4":"17,19,23,24,25"}')[matrix.group] }}
+          EXAKIT_LC_COVERAGE_OUT: ${{ runner.temp }}/legacy-crossing-coverage-${{ matrix.group }}.txt
         run: |
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
@@ -1450,9 +1455,41 @@ jobs:
           else
             echo "pwsh not installed on this runner - PowerShell suites skipped"
           fi
+      - uses: actions/upload-artifact@v4
+        if: startsWith(matrix.group, 'ps-crossing-')
+        with:
+          name: ps-crossing-coverage-${{ matrix.os }}-${{ matrix.group }}
+          path: ${{ runner.temp }}/legacy-crossing-coverage-${{ matrix.group }}.txt
+          if-no-files-found: error
+          retention-days: 1
       # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
       - run: bash tests/smoke-test.sh
         if: matrix.group == 'suites-7'
+
+  # The PowerShell crossing suite's coverage floor over its four slices on
+  # each runner, and a refusal of any slice set that leaves a section out
+  # (tests/legacy-crossing-ps.ps1, "slices"). Reading which module lines are
+  # executable is text work, so it runs where a runner starts fastest.
+  ps-crossing-coverage:
+    name: PowerShell crossing coverage floor (${{ matrix.os }})
+    needs: shell-tests
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ps-crossing-coverage-${{ matrix.os }}-*
+          path: ${{ runner.temp }}/legacy-crossing-coverage
+          merge-multiple: true
+      - name: the crossing's coverage floor, over every slice
+        env:
+          EXAKIT_LC_COVERAGE_MERGE: ${{ runner.temp }}/legacy-crossing-coverage
+          EXAKIT_LC_COVERAGE_PARTS: "4"
+        run: pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
 
   notebooks-live:
     name: notebooks headless on a live database (Linux)
