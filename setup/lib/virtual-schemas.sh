@@ -730,9 +730,10 @@ _exakit_vs_java_restart() {
 # two steps under "Enabling Federation", nothing asked. Otherwise asked.
 _exakit_vs_install_java() {
     if ! _exakit_vs_prepare_said; then
-        info "Virtual schemas run Java inside the database, and its Java language container is not installed."
-        info "Installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
-        if ! _exakit_vs_confirm "Install the Java language container now?"; then
+        # The screen says what it is for; the log keeps which container and its size.
+        _exakit_log_file "INFO  The Java language container is not installed; installing it downloads about 250 MiB and restarts the database once (add-on services restart with it)."
+        info "This source needs connector support set up in the database first (one time; the database restarts once)."
+        if ! _exakit_vs_confirm "Set up connector support now?"; then
             _exakit_vs_info_cmds "Install it later with: exasol slc install java --no-restart, then exakit stop and exakit start"
             return 1
         fi
@@ -783,9 +784,10 @@ PY
 $_evr_pin
 EOF
     if ! _exakit_vs_prepare_said; then
-        info "This source runs a native adapter inside the database, and its Rust language container is not installed."
-        info "Installing it downloads $_evr_upstream $_evr_version (about $((_evr_size / 1048576)) MiB, checksum-pinned) and restarts the database once (add-on services restart with it)."
-        if ! _exakit_vs_confirm "Install the Rust language container now?"; then
+        # The screen says what it is for; the log keeps which container and its size.
+        _exakit_log_file "INFO  The Rust language container is not installed; installing it downloads $_evr_upstream $_evr_version (about $((_evr_size / 1048576)) MiB, checksum-pinned) and restarts the database once (add-on services restart with it)."
+        info "This source needs connector support set up in the database first (one time; the database restarts once)."
+        if ! _exakit_vs_confirm "Set up connector support now?"; then
             info "Nothing was installed. Run the same exakit connect again when you are ready."
             return 1
         fi

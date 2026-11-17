@@ -1478,7 +1478,7 @@ $script:said = @(Install-ExakitVsJava 6>&1)
 Check "no console, --yes: installed" "True stop|start" ("$($script:said[-1]) " + (Calls))
 Set-Prep $false $false $false $true
 $script:said = @(Install-ExakitVsJava 6>&1)
-Check "a console but not a connect (exakit source refresh): still asked, as before" "Install the Java language container now? [y/N]" ($script:asked -join "|")
+Check "a console but not a connect (exakit source refresh): still asked, as before" "Set up connector support now? [y/N]" ($script:asked -join "|")
 $script:stubNeedsStart = $true
 Set-Prep $true $false $false $true
 $script:said = @(Repair-ExakitVsForRetry -Code 20 6>&1)
