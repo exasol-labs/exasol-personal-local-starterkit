@@ -4301,7 +4301,14 @@ exakit_data_table_build() {
         fi
         _dtb_n=$(( _dtb_n + 1 ))
     fi
-    printf 'plain|Skip|0|idle|||||| \n' >> "$_dtb_f"
+    # The install's compact table loads its samples before it asks, so the last
+    # row goes on rather than skips (as the add-ons table does). `exakit
+    # data-load` keeps Skip. Twin of the same row in New-ExakitDataTable.
+    if [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ]; then
+        printf 'plain|Continue|0|idle|||||| \n' >> "$_dtb_f"
+    else
+        printf 'plain|Skip|0|idle|||||| \n' >> "$_dtb_f"
+    fi
     EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS
 "
     _dtb_n=$(( _dtb_n + 1 ))

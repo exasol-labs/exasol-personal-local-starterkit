@@ -120,6 +120,14 @@ try {
         (Rows)
     Check "...and no group" "0~0" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "one screen: no separate source question" "False" "$($null -ne (Get-Command Select-ExakitDataSource -ErrorAction SilentlyContinue))"
+    $env:EXAKIT_DATA_TABLE_COMPACT = "1"
+    [void](Table @("tpch", "energy"))
+    $last = @($script:UiTable.Rows | Where-Object { $_.Kind -eq "plain" })[-1]
+    Remove-Item Env:EXAKIT_DATA_TABLE_COMPACT -ErrorAction SilentlyContinue
+    Check "the install's compact table ends with Continue, not Skip (its samples are in already)" "plain|Continue|idle" "$($last.Kind)|$($last.Label)|$($last.State)"
+    [void](Table @("tpch", "energy"))
+    $last = @($script:UiTable.Rows | Where-Object { $_.Kind -eq "plain" })[-1]
+    Check "...and exakit data-load keeps Skip" "plain|Skip|idle" "$($last.Kind)|$($last.Label)|$($last.State)"
 
     Write-Host "the defaults: Skip when nothing on offer is wanted:"
     Check "no persona: the parent and every pending row ticked" "1,2,3~4~6" (Table @("tpch", "energy"))
