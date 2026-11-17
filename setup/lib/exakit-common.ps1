@@ -2476,7 +2476,6 @@ function Register-ExakitTlsPin {
         Info "Pinned the new database's TLS certificate (SHA-256 $($live.Substring(0, 16))...)"
     } else {
         Write-ExakitLog "INFO" "TLS pin: recorded $live (trust on first use)"
-        Info "Pinned the database's TLS certificate (SHA-256 $($live.Substring(0, 16))...); clients now refuse any other"
     }
     return $true
 }
