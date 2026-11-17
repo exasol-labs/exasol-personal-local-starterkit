@@ -6093,14 +6093,8 @@ _exakit_addon_progress() {
     exakit_addon_activity "$6"
     # Table rows already show the add-on ID.
     if [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
-        # The two installing on their own say just "installing" through every step.
-        if [ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ]; then
-            ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
-                "$3" "$4" "$5" installing
-        else
-            ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
-                "$3" "$4" "$5" "$6"
-        fi
+        ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
+            "$3" "$4" "$5" "$6"
         return 0
     fi
     ui_progress_state "$1" "$3" "$4" "$5" "$2 · $6"
@@ -6922,12 +6916,12 @@ _exakit_marketplace_apply_python() {
                 fi
                 ;;
             validating)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo installing || echo validating)"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 validating
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 65 90 8 "$_mpa_id · validating"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Validating add-on: $_mpa_id"; fi
                 ;;
             starting)
-                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 "$([ "${EXAKIT_ADDON_TABLE_KEEP:-0}" = 1 ] && echo installing || echo starting)"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 starting
                 [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 90 100 3 "$_mpa_id · starting"
                 if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Starting add-on: $_mpa_id"; fi
                 ;;
