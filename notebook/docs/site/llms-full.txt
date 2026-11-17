@@ -27,53 +27,6 @@ nb.docs(nb.describe)       # one command's page
 `nb.docs()` opens the section of the persona whose notebook you are in.
 
 
-# The kit and its personas (/kit)
-
-
-
-The Exasol Personal Local Starter Kit installs a database on this computer and the tools around it. One command, `exakit`, runs all of it.
-
-## What every install has [#what-every-install-has]
-
-| Part          | What it is for                                                |
-| ------------- | ------------------------------------------------------------- |
-| The database  | Exasol, running on this computer                              |
-| `exakit`      | The command that starts, checks, loads and updates everything |
-| The AI bridge | Lets your AI clients query the database, read-only            |
-| AI skills     | Instructions that teach an AI client how to use the kit       |
-| Sample data   | Datasets to practise on                                       |
-
-## What a persona adds [#what-a-persona-adds]
-
-A **persona** is the kit set up for one kind of work. It decides which datasets are loaded, which add-ons are installed and which notebooks you get. See [What is a persona](/kit/personas/what-is-a-persona).
-
-## Find your task [#find-your-task]
-
-| I want to                                             | Go to                                                          |
-| ----------------------------------------------------- | -------------------------------------------------------------- |
-| See or change which persona this kit is               | [Choose and change a persona](/kit/personas/choose-and-change) |
-| Load a file, a folder or a kit dataset                | [Load data](/kit/data/load-data)                               |
-| Say what each column of a table means                 | [Column maps](/kit/data/column-maps)                           |
-| Run a query from the terminal                         | [Run SQL](/kit/data/run-sql)                                   |
-| Install a dashboard server, notebooks or another tool | [Add-ons](/kit/tools/add-ons)                                  |
-| Open JupyterLab or Marimo                             | [Notebooks](/kit/tools/notebooks)                              |
-| See what a piece of work did, step by step            | [Workflows](/kit/tools/workflows)                              |
-| Connect an AI client                                  | [AI clients and skills](/kit/tools/ai-clients-and-skills)      |
-| Look up a command                                     | [All exakit commands](/kit/reference/commands)                 |
-| Work through the Data Scientist notebooks             | [Data Scientist](/data-scientist)                              |
-
-## Help on this computer [#help-on-this-computer]
-
-```bash
-exakit help                # every command
-exakit help data-load      # one command in full
-exakit catalog load        # search the commands
-exakit status              # is the database up?
-```
-
-The same help is built into the kit, so it always matches the version you have.
-
-
 # Add-ons and downloads (/security/add-ons-and-downloads)
 
 
@@ -642,6 +595,53 @@ The installer adds the kit's `bin` folder to your shell profile, through `ensure
 * The virtual schema log removes its files older than `KEEP_DAYS` when a new day's file is opened (`setup/virtual-schemas/engine/vslog.py`). This page found no pruning rule for the other logs.
 
 
+# The kit and its personas (/kit)
+
+
+
+The Exasol Personal Local Starter Kit installs a database on this computer and the tools around it. One command, `exakit`, runs all of it.
+
+## What every install has [#what-every-install-has]
+
+| Part          | What it is for                                                |
+| ------------- | ------------------------------------------------------------- |
+| The database  | Exasol, running on this computer                              |
+| `exakit`      | The command that starts, checks, loads and updates everything |
+| The AI bridge | Lets your AI clients query the database, read-only            |
+| AI skills     | Instructions that teach an AI client how to use the kit       |
+| Sample data   | Datasets to practise on                                       |
+
+## What a persona adds [#what-a-persona-adds]
+
+A **persona** is the kit set up for one kind of work. It decides which datasets are loaded, which add-ons are installed and which notebooks you get. See [What is a persona](/kit/personas/what-is-a-persona).
+
+## Find your task [#find-your-task]
+
+| I want to                                             | Go to                                                          |
+| ----------------------------------------------------- | -------------------------------------------------------------- |
+| See or change which persona this kit is               | [Choose and change a persona](/kit/personas/choose-and-change) |
+| Load a file, a folder or a kit dataset                | [Load data](/kit/data/load-data)                               |
+| Say what each column of a table means                 | [Column maps](/kit/data/column-maps)                           |
+| Run a query from the terminal                         | [Run SQL](/kit/data/run-sql)                                   |
+| Install a dashboard server, notebooks or another tool | [Add-ons](/kit/tools/add-ons)                                  |
+| Open JupyterLab or Marimo                             | [Notebooks](/kit/tools/notebooks)                              |
+| See what a piece of work did, step by step            | [Workflows](/kit/tools/workflows)                              |
+| Connect an AI client                                  | [AI clients and skills](/kit/tools/ai-clients-and-skills)      |
+| Look up a command                                     | [All exakit commands](/kit/reference/commands)                 |
+| Work through the Data Scientist notebooks             | [Data Scientist](/data-scientist)                              |
+
+## Help on this computer [#help-on-this-computer]
+
+```bash
+exakit help                # every command
+exakit help data-load      # one command in full
+exakit catalog load        # search the commands
+exakit status              # is the database up?
+```
+
+The same help is built into the kit, so it always matches the version you have.
+
+
 # The data science workflow (/data-scientist)
 
 
@@ -680,618 +680,6 @@ Every button is one call, so clicking **Approve** and running the approve call d
 ## Developers [#developers]
 
 If you build on the kit, or want the commands behind the notebooks, see [For developers](/data-scientist/development). It has the command reference, how the cards and helpers fit together, and where the kit keeps its files.
-
-
-# Column maps (/kit/data/column-maps)
-
-
-
-A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Column map and approval](/data-scientist/explore).
-
-## Draft [#draft]
-
-```bash
-exakit describe AMAZON.ORDER_LINES
-```
-
-The table is profiled with SELECTs only. Nothing is written to the database. Every column gets one of eight roles, with its confidence and the evidence that chose it:
-
-`key`, `time`, `measure`, `category`, `flag`, `text`, `identifier`, `other`.
-
-* The draft is deterministic: the same table gives the same draft.
-* A column whose values look like e-mail addresses, phone numbers, IBANs or postcodes is marked **sensitive**.
-* The **target** is never drafted. Only a person sets it.
-
-## Approve [#approve]
-
-```bash
-exakit describe AMAZON.ORDER_LINES --approve --role target=CANCELLED --owner dana
-```
-
-`--role <slot>=<COLUMN>` corrects a slot: `key`, `time`, `text`, `target`, `category`, `entity`. `<slot>=-` leaves it empty.
-
-Approval:
-
-* checks that every column has a role, that none sits in two slots, and that the table has not changed since it was profiled
-* writes a new version, never rewriting an old one
-* publishes the roles in [Exasol Semantic Views](/kit/data/semantic-views): the schema's semantic model is rebuilt with this table as an entity, readable by the read-only AI user. Semantic Views is installed first when the database does not have it yet.
-
-Your own table is never commented. If publishing fails, the approval still stands and the message says why.
-
-## What you get at the end [#what-you-get-at-the-end]
-
-A new version of the column map, kept under `~/.exasol-starter-kit/descriptors/`, and the schema's semantic model (its views in `SEM_<SCHEMA>`) rebuilt from it. The notebooks and AI clients read the approved version from then on.
-
-## See and compare [#see-and-compare]
-
-```bash
-exakit describe amazon_sales --show              # the current version
-exakit describe amazon_sales --show --version 1  # an earlier one
-exakit describe amazon_sales --versions          # every version
-exakit describe orders --comments                # rebuild the schema's semantic model again
-```
-
-Add `--json` to any of them for a script.
-
-## A whole schema [#a-whole-schema]
-
-```bash
-exakit describe --schema TPCH
-```
-
-This lists every table with its rows and key, and every many-to-one link between tables with its evidence. A link is a foreign key the database declares, or a column whose values are in another table's key (at most 0.1% of them may be missing). A name alone never makes a link.
-
-```bash
-exakit describe --schema TPCH --approve --unlink ORDERS.O_CLERK
-```
-
-`--link TABLE.COLUMN=TABLE.KEY` adds a link and `--unlink TABLE.COLUMN` removes one. The approved links become relationships of the schema's semantic model. To join tables of different schemas, build a [multi-source model](/kit/data/semantic-views).
-
-## Where they are kept [#where-they-are-kept]
-
-`~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/`: the draft, every approved version and the current one.
-
-## When the table changes [#when-the-table-changes]
-
-Columns whose name and type did not change keep their approved roles. The rest are flagged, and you approve again.
-
-## With an AI model [#with-an-ai-model]
-
-When a model is set up, one call adds a one-line note per column. It is sent each column's name, type, role, evidence and top values, never a row and never a sensitive column. A note never decides a role.
-
-## From a notebook [#from-a-notebook]
-
-```python
-draft = nb.describe("AMAZON.ORDER_LINES")
-draft.slot(target="CANCELLED")
-dataset = draft.approve()
-```
-
-See [Review and approve the column map](/data-scientist/explore).
-
-
-# Datasets (/kit/data/datasets)
-
-
-
-The kit carries sample datasets to practise on. `exakit data-load` lists them and loads the ones you pick.
-
-| Dataset              | Loaded by                   | Where it comes from                          |
-| -------------------- | --------------------------- | -------------------------------------------- |
-| `tpch`               | General                     | Bundled with the kit, loads without internet |
-| `energy`             | General                     | Bundled with the kit, loads without internet |
-| `weather`            | General                     | Bundled with the kit, loads without internet |
-| `amazon_sales`       | Data Scientist, ML Engineer | Downloaded when you load it                  |
-| `fraud_transactions` | Data Scientist, ML Engineer | Downloaded when you load it                  |
-
-## Downloaded datasets [#downloaded-datasets]
-
-`amazon_sales` and `fraud_transactions` are archives in the kit's datasets release. An archive is fetched only when you load that dataset. The kit checks the archive's SHA-256 and every file's digest, and refuses a mismatch.
-
-```bash
-exakit data-load amazon_sales
-```
-
-## A dataset with a column map [#a-dataset-with-a-column-map]
-
-`amazon_sales` and `fraud_transactions` each ship with an approved [column map](/kit/data/column-maps), so the notebooks can use them straight away. You can approve your own version at any time.
-
-The ML Engineer persona is not offered in this release, so for now only Data Scientist and General load these datasets.
-
-## Load one again [#load-one-again]
-
-```bash
-exakit data-load --force amazon_sales
-```
-
-<Callout type="warn">
-  `--force` drops that dataset's tables and rebuilds them. Anything you changed in its schema is lost.
-</Callout>
-
-## Add a dataset to the kit [#add-a-dataset-to-the-kit]
-
-A dataset is one folder in `data/datasets/`. Nothing else names it, so a new folder appears in the menu.
-
-
-# Load data (/kit/data/load-data)
-
-
-
-```bash
-exakit data-load
-```
-
-On a terminal this opens a menu: the kit's datasets, your own data, or an external source. Name what you want to skip the menu.
-
-<Tabs items="['A kit dataset', 'One file', 'A folder']">
-  <Tab value="A kit dataset">
-    ```bash
-    exakit data-load amazon_sales
-    ```
-
-    See [Datasets](/kit/data/datasets) for the list.
-  </Tab>
-
-  <Tab value="One file">
-    ```bash
-    exakit data-load ./sales.csv
-    ```
-
-    It asks two things, whatever the file's kind: the file, then `SCHEMA.TABLE`. To answer up front:
-
-    ```bash
-    EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load
-    ```
-
-    CSV, Parquet and JSON are loaded. JSON is split into tables by an engine the kit installs for you on macOS, Linux and WSL. A `;`-separated CSV is loaded with its delimiter. A tabular `.txt` or `.tsv` file is listed with the rename to `.csv` that the loader needs.
-  </Tab>
-
-  <Tab value="A folder">
-    ```bash
-    exakit data-load ~/exports
-    ```
-
-    Every CSV, Parquet and JSON (.json, .geojson) file at the folder's top level becomes one table named after the file. The schema is asked once:
-
-    ```bash
-    EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load
-    ```
-
-    Subfolders are not scanned. Files of other kinds are ignored. Duplicates are skipped with the reason. On Windows, a folder's JSON files are listed as skipped.
-  </Tab>
-</Tabs>
-
-## Running it again is safe [#running-it-again-is-safe]
-
-* A file already loaded is skipped, not loaded on top of itself.
-* A file that a stopped run left half-written is loaded again from scratch.
-* A table holding rows this kit did not load is left alone, unless you say otherwise.
-
-```bash
-EXAKIT_ON_EXISTING=replace exakit data-load ~/exports
-```
-
-`EXAKIT_ON_EXISTING` takes `skip` (the default), `replace` or `append`. Without a terminal the answer is `skip`. On a terminal you are asked.
-
-## What you get at the end [#what-you-get-at-the-end]
-
-Every file is listed with its table and the rows that landed, or the reason it did not load. A file the loader refuses leaves no empty table behind.
-
-## From a notebook [#from-a-notebook]
-
-```python
-nb.exakit("data-load", "fraud_transactions")
-own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
-```
-
-See [Load data in the Data Scientist notebooks](/data-scientist/get-the-data).
-
-## An external source [#an-external-source]
-
-Data in another database is not copied. It is connected with `exakit connect` and read where it lives. See [Sources](/data-scientist/get-the-data).
-
-## Further reading [#further-reading]
-
-* [IMPORT](https://docs.exasol.com/db/latest/sql/import.htm), the statement that moves data into a table.
-* [Load data from local or remote files](https://docs.exasol.com/db/latest/loading_data/load_data_local_remote_location.htm) and [Load data from external sources](https://docs.exasol.com/db/latest/loading_data/load_data_from_externalsources.htm).
-* [Virtual Schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm) and the [Virtual Schema User Guide](https://docs.exasol.com/db/latest/database_concepts/virtual_schema/user_guide.htm), for the external sources the kit connects.
-* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses to load files.
-* [exasol/virtual-schemas](https://github.com/exasol/virtual-schemas), the entry-point repository for Exasol's virtual schemas.
-* [How the kit handles credentials and external sources](/security/credentials).
-
-
-# Run SQL (/kit/data/run-sql)
-
-
-
-```bash
-exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
-```
-
-It runs one statement and prints the result.
-
-## Reads only unless you say otherwise [#reads-only-unless-you-say-otherwise]
-
-A statement that would change data is refused unless you add `--write`.
-
-```bash
-exakit sql --write 'CREATE SCHEMA SCRATCH'
-```
-
-<Callout type="warn">
-  `exakit sql` connects as the kit's admin user, and that user is not sandboxed. The read-only boundary is the MCP user that AI clients use, not this command.
-</Callout>
-
-## A saved statement [#a-saved-statement]
-
-```bash
-exakit sql --file ./report.sql
-```
-
-Comment lines and a trailing semicolon are dropped first. A statement can also come on standard input.
-
-## Errors come with their fix [#errors-come-with-their-fix]
-
-The three faults everyone hits first are turned into what to do:
-
-| Fault                  | What you are told  |
-| ---------------------- | ------------------ |
-| Connection refused     | Run `exakit start` |
-| `FETCH FIRST` or `TOP` | Use `LIMIT`        |
-| Object not found       | Describe it first  |
-
-The fix is printed first, with the error.
-
-## For a script [#for-a-script]
-
-```bash
-exakit sql --json 'SELECT 1'
-```
-
-One JSON object comes back and nothing else: the rows and their count on success, or the error with a command to run, when there is one.
-
-<Callout>
-  On Windows PowerShell 5.1, a double quote inside an argument is dropped before `exakit` runs. Pass a statement with quoted names through `--file`.
-</Callout>
-
-## Further reading [#further-reading]
-
-* [SELECT](https://docs.exasol.com/db/latest/sql/select.htm), the statement the examples on this page use.
-* [Privileges](https://docs.exasol.com/db/latest/database_concepts/privileges.htm), the rules behind the admin and read-only users.
-* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses for SQL and loading.
-* [AI clients and the read-only user](/security/ai-clients), which explains why `exakit sql` is not the read-only path.
-
-
-# Semantic fusion (/kit/data/semantic-fusion)
-
-
-
-Your data lives in more than one place: a database here, files there, a cloud source somewhere else. The usual answer is to copy everything into one store first (ETL). The kit does not. It reads each source where it is, agrees once on what the data means, and answers from that. Only answers travel back.
-
-<Flow
-  caption="Sources stay where they are. One model gives them one meaning."
-  steps="[
-  { title: &#x22;Sources&#x22;, text: &#x22;A PostgreSQL database, your files, sample data. Nothing is copied&#x22;, tone: &#x22;db&#x22;, href: &#x22;/kit/data/load-data&#x22; },
-  { title: &#x22;Connect&#x22;, text: &#x22;An external source becomes a virtual schema, read live&#x22;, code: &#x22;exakit connect postgresql&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;Agree on meaning&#x22;, text: &#x22;You approve what each column is&#x22;, code: &#x22;exakit describe ... --approve&#x22;, tone: &#x22;you&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
-  { title: &#x22;Fuse&#x22;, text: &#x22;Links found from the values, one semantic model over all of it&#x22;, code: &#x22;exakit describe --model ... --find-links&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/semantic-views&#x22; },
-  { title: &#x22;Use&#x22;, text: &#x22;Notebooks, AI clients and dashboards ask the same model&#x22;, tone: &#x22;you&#x22; },
-]"
-/>
-
-## The four layers [#the-four-layers]
-
-| Layer          | What it does                                                                             | Where the data is         |
-| -------------- | ---------------------------------------------------------------------------------------- | ------------------------- |
-| Connectors     | A virtual schema (`VS_<NAME>`) per external source. A query is pushed down to the source | Stays in the source       |
-| Column maps    | Each column gets a role: key, time, measure, category. You approve it                    | Nothing moves             |
-| Semantic model | Tables become entities, links become relationships, measures become metrics              | Definitions only, no rows |
-| Answers        | Semantic SQL is compiled into one query over the live sources                            | Only the result returns   |
-
-## An example, measured [#an-example-measured]
-
-Three sources that share no key and no column names: Amazon order lines (sample data, 128,975 rows), a PostgreSQL logistics database read live, and a state population table.
-
-**1. Find how they join.** No foreign key exists. The kit compares values:
-
-```bash
-exakit describe --links AMAZON,VS_LOGISTICS,RETAIL_SIGNALS
-```
-
-```text
-[high] AMAZON.ORDER_LINES.SHIP_STATE -> VS_LOGISTICS.STATE_LOGISTICS.SHIP_STATE:
-       128,921 of 128,942 rows match; 21 do not (ORISSA, RAJSHTHAN, ...)
-```
-
-The 21 rows are misspelt state names. The link stands, and you get the list to clean. It took 26 small queries.
-
-**2. Put one model over them.**
-
-```bash
-exakit describe --model sales_360 --schemas AMAZON,RETAIL_SIGNALS --find-links
-```
-
-This published one model over the order lines and the state table, joined on the state name, a link found the same way. Why the link is there is stored with it. (The run was measured under a test model name; `sales_360` stands for it here. The PostgreSQL source was not reachable when the model was published, so its link from step 1 is not in these figures.)
-
-**3. Ask it.** Revenue by region needs both sources. In Semantic SQL you name what you want, not how to join:
-
-```sql
-SELECT region, order_lines_count, total_amount
-FROM SEM_SALES_360.ORDER_LINES GROUP BY region
-```
-
-| Region | Order lines | Revenue       |
-| ------ | ----------- | ------------- |
-| South  | 52,761      | 31,314,207.29 |
-| North  | 30,148      | 19,245,528.38 |
-| West   | 27,956      | 16,744,010.73 |
-
-The model compiled that into one scan, one join and one `GROUP BY`. A hand-written join returned the same figures for all 128,975 rows.
-
-## Who uses the model [#who-uses-the-model]
-
-<Flow
-  caption="One model, three ways to ask it"
-  steps="[
-  { title: &#x22;A notebook&#x22;, text: &#x22;Ask in plain language. The AI writes Semantic SQL, you approve the SQL&#x22;, code: &#x22;nb.ask(dataset, question, conn=connection)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/explore/questions&#x22; },
-  { title: &#x22;An AI client&#x22;, text: &#x22;Claude Code, Codex, Cursor read the model over a read-only connection&#x22;, tone: &#x22;ai&#x22;, href: &#x22;/kit/tools/ai-clients-and-skills&#x22; },
-  { title: &#x22;A dashboard&#x22;, text: &#x22;A checked result becomes a live page on Dash Server&#x22;, code: &#x22;03_share&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate&#x22; },
-]"
-/>
-
-All three read the same definitions, so *revenue* is the same number everywhere.
-
-## What it costs [#what-it-costs]
-
-| Measured                                        | Result                                        |
-| ----------------------------------------------- | --------------------------------------------- |
-| Model query on 10,002,745 rows joined to 30,000 | 0.12 to 0.27 s (hand-written: 0.13 to 0.21 s) |
-| Finding links across six schemas, 25 tables     | 223 small queries, about 60 s                 |
-| Rows copied out of a source                     | 0                                             |
-
-A live source answers at its own speed. Each query to it is a filter or an aggregate the source runs itself.
-
-## The same pattern, larger [#the-same-pattern-larger]
-
-The hospital chain reference build uses this pattern on three systems that share no patient id: a legacy system on PostgreSQL, a health record on MongoDB and an imaging archive on Amazon S3. Exasol reads all three in place, resolves 1,609 patient records to 1,223 people, and answers a question across them in 0.3 to 4 seconds. The images never pass through the database.
-
-## Limits [#limits]
-
-* A link between two plain number columns cannot be proven from the data: numbers in a sequence match by chance. The kit marks it for you to confirm.
-* A table needs an approved column map before it joins a model.
-* A source that is down cannot be asked. Nothing is cached unless you load a copy yourself.
-
-## Further reading [#further-reading]
-
-* [Semantic views](/kit/data/semantic-views): the commands
-* [Links across sources](/data-scientist/explore/semantic-views#links-across-sources): how links are found and what was measured
-* [Virtual schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm) in the Exasol documentation
-* [Exasol Semantic Views](https://github.com/exasol-labs/exasol-semantic-views) on GitHub
-
-
-# Semantic views (/kit/data/semantic-views)
-
-
-
-The kit's semantic layer is **Exasol Semantic Views**, the database's own semantic layer. A model says what your data means in business terms: its entities (tables), the relationships between them, the dimensions you group by and the metrics you ask for. AI clients read it over MCP and answer from its metrics; notebooks ask it with Semantic SQL.
-
-You do not write a model by hand. The kit builds it from what you approved:
-
-| You approved                          | It becomes                                                      |
-| ------------------------------------- | --------------------------------------------------------------- |
-| A table's column map                  | An entity, with its key and grain                               |
-| A link between two tables             | A relationship (many-to-one)                                    |
-| A `time`, `category` or `flag` column | A dimension (a time column also gives `<column>_month`)         |
-| A `measure` column                    | A fact, and the metrics `total_<column>` and `average_<column>` |
-| Every table                           | A row count, `<table>_count`                                    |
-
-A column marked **sensitive** is never a dimension and never a public fact.
-
-## Installed when it is needed [#installed-when-it-is-needed]
-
-Semantic Views is a marketplace add-on (`semantic-views`). The first approval installs it into the database, as this would:
-
-```bash
-exakit marketplace semantic-views
-```
-
-If that install fails, the approval still stands and says which command to run.
-
-## One model per schema [#one-model-per-schema]
-
-Approving a column map rebuilds its schema's model:
-
-```bash
-exakit describe AMAZON.ORDER_LINES --approve --role target=CANCELLED
-```
-
-The model is named after the schema (`amazon`) and its views are published in `SEM_<SCHEMA>` (`SEM_AMAZON.ORDER_LINES`). Approving a schema's links (`exakit describe --schema AMAZON --approve`) rebuilds it with the links as relationships.
-
-## One model across sources [#one-model-across-sources]
-
-A question often needs more than one schema: a sample dataset, your own files and one or more external sources. Build one model over all of them:
-
-```bash
-exakit describe --model sales_360 \
-  --table AMAZON.ORDER_LINES --table MY_DATA.TARGETS --table VS_LOGISTICS.COURIER_DAILY \
-  --link AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE \
-  --ai --dry-run
-```
-
-* Every table needs an approved column map first.
-* `--link SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY` joins tables of different schemas. The key side must be unique. The approved links of each schema are used too.
-* An external source (a virtual schema, `VS_<NAME>`) is read live: nothing is copied.
-* `--dry-run` prints what would be built and writes nothing. Run it again without `--dry-run` to publish.
-
-### Whole schemas, and links found for you [#whole-schemas-and-links-found-for-you]
-
-Name schemas and the kit takes every table of them that has an approved column map. `--find-links` looks for the joins between the schemas in the values, with no foreign key and no matching names needed:
-
-```bash
-exakit describe --links AMAZON,MY_DATA,VS_LOGISTICS                 # the links alone, each with its evidence
-exakit describe --model all_data --schemas AMAZON,MY_DATA,VS_LOGISTICS --find-links --ai --dry-run
-```
-
-A text link the data backs is used. A link between plain numbers is only named, because numbers in a sequence match by chance: pass it with `--link` if it is right. A pair you or an AI client believes in is checked with `exakit describe --links A,B --link S.T.COL=S.T.KEY`. How the search works, and what it measured, is on [Semantic views](/data-scientist/explore/semantic-views#links-across-sources).
-
-### Let the AI propose the fields [#let-the-ai-propose-the-fields]
-
-With `--ai`, the model you set up for the kit (`EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL`) proposes business names, comments and synonyms for every field, and the metrics people will ask for: filtered totals (completed revenue), differences and ratios.
-
-It is sent names, types, grains, column notes and a category's most frequent values. It is never sent a row, and never a sensitive column.
-
-Every proposed metric is checked before it is used: it may only add up a fact of its view, combine that view's metrics, and filter on a dimension with one of its known values. The product validates it again when it is applied. A refused one is skipped, and the output names it and says why.
-
-## Keep it current [#keep-it-current]
-
-A model is built from what was approved at the time.
-
-* Approving a column map rebuilds its schema's model and every multi-source model the table is in.
-* After a new link or a new table, rebuild a model yourself:
-
-```bash
-exakit describe --model sales_360 --refresh
-exakit describe --models                         # every model, and which the kit can refresh
-```
-
-The kit only rebuilds models it built. A model of the same name that someone else made is left alone.
-
-## Ask a model [#ask-a-model]
-
-A published view is queried with Semantic SQL: its metrics, grouped by its dimensions.
-
-```sql
-EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL();
-SELECT ship_state, total_amount, orders_count
-FROM SEM_SALES_360.ORDER_LINES
-GROUP BY ship_state;
-```
-
-An AI client sets the preprocessor through the Exasol MCP server (`set_exasol_preprocessor`) and runs the same query. To see what a model holds, read `SEMANTIC_CATALOG.MODELS`, `ENTITIES`, `DIMENSIONS`, `METRICS` and `RELATIONSHIPS`.
-
-## From a notebook [#from-a-notebook]
-
-```python
-semantic = nb.semantic_model(connection, "sales_360",
-                             tables=["AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"],
-                             links=["AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE"],
-                             preview=True)
-semantic = semantic.publish()
-nb.semantic_sql(connection, "SELECT ship_state, total_amount FROM SEM_SALES_360.ORDER_LINES GROUP BY ship_state")
-nb.refresh_semantic(connection, "sales_360")
-```
-
-In the guided view, the **Semantic views** card in Understand does the same: pick the tables, let the AI propose the fields, preview, publish, refresh.
-
-## Further reading [#further-reading]
-
-* [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views), the add-on's repository and README.
-* [What the kit writes](/security/what-the-kit-writes), which schemas the semantic models create, and which tables they never change.
-* [What is sent to an AI model](/security/what-goes-to-a-model), the exact content of the `--ai` proposal.
-
-
-# All exakit commands (/kit/reference/commands)
-
-
-
-{/* Generated by tools/nb_docs.py from setup/help/exakit.json. Edit those, then run the tool. */}
-
-`exakit help <command>` prints a command's full reference on this computer, and `exakit catalog <word>`
-searches them.
-
-## Everyday [#everyday]
-
-| Command            | Takes                                                                   | What it does                                                                    |
-| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `exakit status`    | `[--json]`                                                              | Is the database up and healthy?                                                 |
-| `exakit info`      | `[--json]`                                                              | Your connection details.                                                        |
-| `exakit start`     | `[<service>]`                                                           | Start the database and every add-on service, or one of them.                    |
-| `exakit stop`      | `[<service>]`                                                           | Stop the add-on services and the database, or one of them.                      |
-| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]` | Run one SQL statement, with the error translated.                               |
-| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                               | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
-| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                         | Every log the kit can show.                                                     |
-| `exakit autostart` |                                                                         | Come back automatically after a restart?                                        |
-
-## AI clients (MCP) [#ai-clients-mcp]
-
-| Command             | Takes                      | What it does                       |
-| ------------------- | -------------------------- | ---------------------------------- |
-| `exakit mcp-setup`  |                            | Connect your AI clients.           |
-| `exakit mcp-doctor` | `[clients] [--json]`       | Test and repair the AI connection. |
-| `exakit mcp-status` | `[clients] [--json \| -j]` | Show managed MCP state per client. |
-
-## External sources (virtual schemas) [#external-sources-virtual-schemas]
-
-| Command          | Takes                                                                                                                                                                                                                                                                                | What it does                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `exakit connect` | `[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F \| --password-stdin] [--storage-secret-file F] [--dry-run] [--yes] [--json]`                                                                                                                             | Query an external database from the local one (virtual schema). |
-| `exakit source`  | `list\|issues [--status S]\|catalog\|show <name>\|describe <name> [TABLE] [--ddl] [--schema S]\|check <name>\|--all\|reauth <name> [--password-file F \| --password-stdin] [--storage-secret-file F]\|refresh <name>\|disconnect <name>\|remove <name> [--dry-run] [--yes] [--json]` | List, check and manage connected external sources.              |
-
-## Semantic layer and dashboards [#semantic-layer-and-dashboards]
-
-| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | What it does                                                                                                                                                                                                                     |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                                                      |
-| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                                                |
-| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients.                                |
-| `exakit semantic` | `models [--json] \| fields <MODEL> [--json] \| search <words> [--model <MODEL>] [--json] \| compile '<request json>' \| --request-file <file> [--json] \| verify <MODEL> --object <OBJECT> --name <NAME> --question <text> --request '<json>' [--json] \| verified <MODEL> [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> [--key <COLUMN>] [--wins model\|other] [--apply] [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> --mapping-table <SCHEMA.TABLE> --mapping-local <COLUMN> --mapping-key <COLUMN> [--apply] [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> --split-column <COLUMN> --split-at <YYYY-MM-DD> [--apply] [--json] \| coverage <MODEL> [--json] \| combinations <MODEL> <VIEW> [--metric <M>]... [--json] \| fuse <MODEL> --document <file> [--apply] [--json] \| fusion <MODEL> [--json] \| column-maps <MODEL> [--json] \| restore-maps <MODEL> [--write] [--json] \| refresh <MODEL> [--json] \| plan <MODEL> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--json] \| run <MODEL> --sql-file <file> [--json] \| adopt <MODEL> <SCHEMA.VIEW> [--dry-run] [--json] \| draft --table <SCHEMA.TABLE>... [--json] \| validate <MODEL> [--json] \| explain <MODEL> <VIEW> <METRIC> [--json] \| versions <MODEL> [--json] \| restore-version <MODEL> <N> [--json] \| totals <MODEL> [--store <VIEW> --metric <M>... --dimension <D>... [--name <N>] [--max-age <n UNIT>] \| --refresh <N> \| --off <N> \| --on <N>] [--json] \| freeze <SCHEMA.NAME> --sql <SELECT ...> [--json] \| frozen <MODEL> [--sync] [--json] \| governance <MODEL> open\|governed [--json] \| composition <MODEL> on\|off [--json] \| logging [on\|off] [--session] [--json] \| history [--limit <N>] [--json] \| suggestions <MODEL> [--all] [--json] \| propose <MODEL> --kind <K> --object-type <T> [--object <O>] --change <json> --why <text> [--json] \| review <ID> certified\|rejected --why <text> [--json] \| import-databricks <MODEL> --file <yaml> [--apply] [--json] \| import-osi --file <json> [--json]` | The semantic layer (Exasol Semantic Views) from the command line: a model's fields, structured requests compiled to SQL, verified questions, fusion of the same rows kept in two sources, and the column maps the model carries. |
-| `exakit board`    | `recheck <NAME> [--update] [--json] \| list [--json] \| starter [<NAME>] [--rules '<json>'] [--json] \| show <NAME> [--json] \| pin <NAME> --page <PAGE> --question <text> --sql <SELECT ...> \| --sql-file <file> [--title <text>] [--kind kpi\|bar\|line\|table] [--json] \| edit <NAME> <TILE> --sql <SELECT ...> \| --sql-file <file> [--title <text>] \| move <NAME> <TILE> <PAGE> \| remove <NAME> <TILE> \| kind <NAME> <TILE> <kpi\|bar\|line\|table> \| preview <NAME> [--rules '<json>'] [--app-file <file>] [--json] \| publish <NAME> --figures-checked [--app-file <file>] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | A dashboard of several pages from approved answers, on Dash Server: pin answers to pages, arrange them, preview it, publish it.                                                                                                  |
-| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                                               |
-
-## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
-
-| Command            | Takes                                                                                                                                          | What it does                                                                                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `exakit mlflow`    | `start\|stop\|disable\|status\|url\|replay [action options]`                                                                                   | Start or stop the local MLflow server, show its address, or replay pending runs.                                                 |
-| `exakit udf-setup` | `[--language python\|rust] [--force] [--yes] [--json]`                                                                                         | Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).        |
-| `exakit udf-use`   | `default [--language python\|rust] [--yes] [--json] \| <container.tar.gz> [--alias NAME] [--language python\|rust] [--yes] [--json] \| --list` | Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.                         |
-| `exakit udf-build` | `<requirements.txt> [--alias <NAME>] [--yes]`                                                                                                  | Build a container with your pinned packages and install it.                                                                      |
-| `exakit udf-file`  | `<file> [<path in the bucket>]`                                                                                                                | Copy a file into BucketFS and print the path a UDF reads it from.                                                                |
-| `exakit rust-udf`  | `new <name> [--coefficients <file>] \| build <name> \| deploy <name> [--schema <SCHEMA>] [--yes] [--json]`                                     | Create, build and deploy a Rust scoring UDF from exported coefficients.                                                          |
-| `exakit model`     | `put\|inspect\|list\|rm\|prune\|template [arguments]`                                                                                          | Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template. |
-
-## Add-ons [#add-ons]
-
-| Command              | Takes                                | What it does                                                                         |
-| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------ |
-| `exakit marketplace` | `[<addon-id>...] \| --list [--json]` | Optional add-ons: dashboards, JSON tables, semantic views, dbt, scheduling and more. |
-
-## Keeping up to date [#keeping-up-to-date]
-
-| Command          | Takes                            | What it does                          |
-| ---------------- | -------------------------------- | ------------------------------------- |
-| `exakit version` | `[--json \| -j]`                 | What is installed, and what is newer. |
-| `exakit update`  | `[<component>] [--yes] [--json]` | Apply the updates that are waiting.   |
-
-## Repair and removal [#repair-and-removal]
-
-| Command                 | Takes                                                                                                                              | What it does                                          |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| `exakit preflight`      |                                                                                                                                    | Check this machine's requirements; install nothing.   |
-| `exakit repair-runtime` | `[--yes] [--json \| -j]`                                                                                                           | Rebuild a database that cannot start.                 |
-| `exakit tls-pin`        | `[--accept [--yes]] [--json \| -j]`                                                                                                | Compare or re-pin the database's TLS certificate.     |
-| `exakit migrate`        | `docker-nano [--container NAME] [--engine docker\|podman] [--dsn HOST:PORT] [--user USER] [--password-file PATH] [--yes] [--json]` | Copy an older kit's container database into this one. |
-| `exakit uninstall`      | `[<addon-id>] [--dry-run] [--yes]`                                                                                                 | Remove what the kit installed.                        |
-
-## Reference [#reference]
-
-| Command            | Takes                                                             | What it does                                                                                       |
-| ------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| `exakit docs`      | `[<add-on \| command \| page \| words>] [--print] [--json \| -j]` | Open the kit's documentation in the browser: all of it, an add-on, a command, a page, or a search. |
-| `exakit guide`     |                                                                   | Friendly walkthrough of every way to connect.                                                      |
-| `exakit skills`    | `[--json \| -j]`                                                  | List the AI skills the kit carries.                                                                |
-| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]`       | This screen.                                                                                       |
-| `exakit catalog`   | `[search] [--json \| -j]`                                         | Browse or search every command.                                                                    |
-| `exakit whats-new` | `[<version>]`                                                     | What changed in this kit version.                                                                  |
-
-## Other [#other]
-
-| Command                 | Takes                    | What it does                                               |
-| ----------------------- | ------------------------ | ---------------------------------------------------------- |
-| `exakit mcp-remove`     | `<client> [<client>...]` | Remove the kit's MCP entries from named AI clients.        |
-| `exakit skills-install` |                          | Re-place the AI skills the kit copy carries (repair only). |
-| `exakit upgrade-kit2`   |                          | Add the Kit 2 trust assets to this install (internal).     |
-| `exakit rollback-kit2`  |                          | Remove exactly what upgrade-kit2 added (internal).         |
 
 
 # Choose and change a persona (/kit/personas/choose-and-change)
@@ -1805,6 +1193,110 @@ The helpers refuse a password, a token, a secret or an API key, and a connection
 </Callout>
 
 
+# All exakit commands (/kit/reference/commands)
+
+
+
+{/* Generated by tools/nb_docs.py from setup/help/exakit.json. Edit those, then run the tool. */}
+
+`exakit help <command>` prints a command's full reference on this computer, and `exakit catalog <word>`
+searches them.
+
+## Everyday [#everyday]
+
+| Command            | Takes                                                                   | What it does                                                                    |
+| ------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| `exakit status`    | `[--json]`                                                              | Is the database up and healthy?                                                 |
+| `exakit info`      | `[--json]`                                                              | Your connection details.                                                        |
+| `exakit start`     | `[<service>]`                                                           | Start the database and every add-on service, or one of them.                    |
+| `exakit stop`      | `[<service>]`                                                           | Stop the add-on services and the database, or one of them.                      |
+| `exakit sql`       | `'<statement>' \| --file <path> \| (stdin) [--json] [--write] [--help]` | Run one SQL statement, with the error translated.                               |
+| `exakit data-load` | `[<file-or-folder-or-dataset>] [--force]`                               | Load a dataset (downloaded only when you pick it), one file, or a whole folder. |
+| `exakit logs`      | `[<target>] [-f] [--lines N] [--path] [--json]`                         | Every log the kit can show.                                                     |
+| `exakit autostart` |                                                                         | Come back automatically after a restart?                                        |
+
+## AI clients (MCP) [#ai-clients-mcp]
+
+| Command             | Takes                      | What it does                       |
+| ------------------- | -------------------------- | ---------------------------------- |
+| `exakit mcp-setup`  |                            | Connect your AI clients.           |
+| `exakit mcp-doctor` | `[clients] [--json]`       | Test and repair the AI connection. |
+| `exakit mcp-status` | `[clients] [--json \| -j]` | Show managed MCP state per client. |
+
+## External sources (virtual schemas) [#external-sources-virtual-schemas]
+
+| Command          | Takes                                                                                                                                                                                                                                                                                | What it does                                                    |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- |
+| `exakit connect` | `[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F \| --password-stdin] [--storage-secret-file F] [--dry-run] [--yes] [--json]`                                                                                                                             | Query an external database from the local one (virtual schema). |
+| `exakit source`  | `list\|issues [--status S]\|catalog\|show <name>\|describe <name> [TABLE] [--ddl] [--schema S]\|check <name>\|--all\|reauth <name> [--password-file F \| --password-stdin] [--storage-secret-file F]\|refresh <name>\|disconnect <name>\|remove <name> [--dry-run] [--yes] [--json]` | List, check and manage connected external sources.              |
+
+## Semantic layer and dashboards [#semantic-layer-and-dashboards]
+
+| Command           | Takes                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | What it does                                                                                                                                                                                                                     |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit persona`  | `list \| show <id> \| plan [<id>] [--json] \| add [<id>[,<id>]] \| remove <id>`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Who the kit is set up for - Data Scientist or General: list, show, plan, add or remove one.                                                                                                                                      |
+| `exakit notebook` | `[jupyterlab \| marimo] [check] [setup] [stop] [--no-browser] [--port <number>]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Open JupyterLab or Marimo, connected to the local database (the notebook add-on).                                                                                                                                                |
+| `exakit describe` | `<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] \| <id\|SCHEMA.TABLE\|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] \| <id> --show [--version <n>] [--json] \| <id> --versions [--json] \| <id> --comments [--json] \| --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json] \| --model <NAME> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--ai] [--description <text>] [--dry-run] [--json] \| --model <NAME> --refresh [--json] \| --models [--json] \| --model <NAME> --schemas <A,B,C> [--find-links] [--ai] [--dry-run] [--json] \| --links <A,B[,C...]> [--ai] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), approve it, and publish it as an Exasol Semantic Views model for the notebooks and AI clients.                                |
+| `exakit semantic` | `models [--json] \| fields <MODEL> [--json] \| search <words> [--model <MODEL>] [--json] \| compile '<request json>' \| --request-file <file> [--json] \| verify <MODEL> --object <OBJECT> --name <NAME> --question <text> --request '<json>' [--json] \| verified <MODEL> [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> [--key <COLUMN>] [--wins model\|other] [--apply] [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> --mapping-table <SCHEMA.TABLE> --mapping-local <COLUMN> --mapping-key <COLUMN> [--apply] [--json] \| fuse <MODEL> --table <SCHEMA.TABLE> --same-as <SCHEMA.TABLE> --split-column <COLUMN> --split-at <YYYY-MM-DD> [--apply] [--json] \| coverage <MODEL> [--json] \| combinations <MODEL> <VIEW> [--metric <M>]... [--json] \| fuse <MODEL> --document <file> [--apply] [--json] \| fusion <MODEL> [--json] \| column-maps <MODEL> [--json] \| restore-maps <MODEL> [--write] [--json] \| refresh <MODEL> [--json] \| plan <MODEL> --table <SCHEMA.TABLE>... [--link <SCHEMA.TABLE.COLUMN>=<SCHEMA.TABLE.KEY>]... [--json] \| run <MODEL> --sql-file <file> [--json] \| adopt <MODEL> <SCHEMA.VIEW> [--dry-run] [--json] \| draft --table <SCHEMA.TABLE>... [--json] \| validate <MODEL> [--json] \| explain <MODEL> <VIEW> <METRIC> [--json] \| versions <MODEL> [--json] \| restore-version <MODEL> <N> [--json] \| totals <MODEL> [--store <VIEW> --metric <M>... --dimension <D>... [--name <N>] [--max-age <n UNIT>] \| --refresh <N> \| --off <N> \| --on <N>] [--json] \| freeze <SCHEMA.NAME> --sql <SELECT ...> [--json] \| frozen <MODEL> [--sync] [--json] \| governance <MODEL> open\|governed [--json] \| composition <MODEL> on\|off [--json] \| logging [on\|off] [--session] [--json] \| history [--limit <N>] [--json] \| suggestions <MODEL> [--all] [--json] \| propose <MODEL> --kind <K> --object-type <T> [--object <O>] --change <json> --why <text> [--json] \| review <ID> certified\|rejected --why <text> [--json] \| import-databricks <MODEL> --file <yaml> [--apply] [--json] \| import-osi --file <json> [--json]` | The semantic layer (Exasol Semantic Views) from the command line: a model's fields, structured requests compiled to SQL, verified questions, fusion of the same rows kept in two sources, and the column maps the model carries. |
+| `exakit board`    | `recheck <NAME> [--update] [--json] \| list [--json] \| starter [<NAME>] [--rules '<json>'] [--json] \| show <NAME> [--json] \| pin <NAME> --page <PAGE> --question <text> --sql <SELECT ...> \| --sql-file <file> [--title <text>] [--kind kpi\|bar\|line\|table] [--json] \| edit <NAME> <TILE> --sql <SELECT ...> \| --sql-file <file> [--title <text>] \| move <NAME> <TILE> <PAGE> \| remove <NAME> <TILE> \| kind <NAME> <TILE> <kpi\|bar\|line\|table> \| preview <NAME> [--rules '<json>'] [--app-file <file>] [--json] \| publish <NAME> --figures-checked [--app-file <file>] [--json]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | A dashboard of several pages from approved answers, on Dash Server: pin answers to pages, arrange them, preview it, publish it.                                                                                                  |
+| `exakit workflow` | `list \| show <id> [--json \| -j]`                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | The workflow logs the notebook helpers write: list them, show one.                                                                                                                                                               |
+
+## Models and UDFs (udf-devkit, hidden for now) [#models-and-udfs-udf-devkit-hidden-for-now]
+
+| Command            | Takes                                                                                                                                          | What it does                                                                                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `exakit mlflow`    | `start\|stop\|disable\|status\|url\|replay [action options]`                                                                                   | Start or stop the local MLflow server, show its address, or replay pending runs.                                                 |
+| `exakit udf-setup` | `[--language python\|rust] [--force] [--yes] [--json]`                                                                                         | Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).        |
+| `exakit udf-use`   | `default [--language python\|rust] [--yes] [--json] \| <container.tar.gz> [--alias NAME] [--language python\|rust] [--yes] [--json] \| --list` | Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.                         |
+| `exakit udf-build` | `<requirements.txt> [--alias <NAME>] [--yes]`                                                                                                  | Build a container with your pinned packages and install it.                                                                      |
+| `exakit udf-file`  | `<file> [<path in the bucket>]`                                                                                                                | Copy a file into BucketFS and print the path a UDF reads it from.                                                                |
+| `exakit rust-udf`  | `new <name> [--coefficients <file>] \| build <name> \| deploy <name> [--schema <SCHEMA>] [--yes] [--json]`                                     | Create, build and deploy a Rust scoring UDF from exported coefficients.                                                          |
+| `exakit model`     | `put\|inspect\|list\|rm\|prune\|template [arguments]`                                                                                          | Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template. |
+
+## Add-ons [#add-ons]
+
+| Command              | Takes                                | What it does                                                                         |
+| -------------------- | ------------------------------------ | ------------------------------------------------------------------------------------ |
+| `exakit marketplace` | `[<addon-id>...] \| --list [--json]` | Optional add-ons: dashboards, JSON tables, semantic views, dbt, scheduling and more. |
+
+## Keeping up to date [#keeping-up-to-date]
+
+| Command          | Takes                            | What it does                          |
+| ---------------- | -------------------------------- | ------------------------------------- |
+| `exakit version` | `[--json \| -j]`                 | What is installed, and what is newer. |
+| `exakit update`  | `[<component>] [--yes] [--json]` | Apply the updates that are waiting.   |
+
+## Repair and removal [#repair-and-removal]
+
+| Command                 | Takes                                                                                                                              | What it does                                          |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `exakit preflight`      |                                                                                                                                    | Check this machine's requirements; install nothing.   |
+| `exakit repair-runtime` | `[--yes] [--json \| -j]`                                                                                                           | Rebuild a database that cannot start.                 |
+| `exakit tls-pin`        | `[--accept [--yes]] [--json \| -j]`                                                                                                | Compare or re-pin the database's TLS certificate.     |
+| `exakit migrate`        | `docker-nano [--container NAME] [--engine docker\|podman] [--dsn HOST:PORT] [--user USER] [--password-file PATH] [--yes] [--json]` | Copy an older kit's container database into this one. |
+| `exakit uninstall`      | `[<addon-id>] [--dry-run] [--yes]`                                                                                                 | Remove what the kit installed.                        |
+
+## Reference [#reference]
+
+| Command            | Takes                                                             | What it does                                                                                       |
+| ------------------ | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `exakit docs`      | `[<add-on \| command \| page \| words>] [--print] [--json \| -j]` | Open the kit's documentation in the browser: all of it, an add-on, a command, a page, or a search. |
+| `exakit guide`     |                                                                   | Friendly walkthrough of every way to connect.                                                      |
+| `exakit skills`    | `[--json \| -j]`                                                  | List the AI skills the kit carries.                                                                |
+| `exakit help`      | `[<component> \| <command> [<action>...]] [--all] [--json]`       | This screen.                                                                                       |
+| `exakit catalog`   | `[search] [--json \| -j]`                                         | Browse or search every command.                                                                    |
+| `exakit whats-new` | `[<version>]`                                                     | What changed in this kit version.                                                                  |
+
+## Other [#other]
+
+| Command                 | Takes                    | What it does                                               |
+| ----------------------- | ------------------------ | ---------------------------------------------------------- |
+| `exakit mcp-remove`     | `<client> [<client>...]` | Remove the kit's MCP entries from named AI clients.        |
+| `exakit skills-install` |                          | Re-place the AI skills the kit copy carries (repair only). |
+| `exakit upgrade-kit2`   |                          | Add the Kit 2 trust assets to this install (internal).     |
+| `exakit rollback-kit2`  |                          | Remove exactly what upgrade-kit2 added (internal).         |
+
+
 # Build the dashboard query (/data-scientist/communicate/dashboard-query)
 
 
@@ -2223,6 +1715,514 @@ nb.show_sql()   # the SQL the last query ran
 ```
 
 Back to [Preview, check, publish](/data-scientist/communicate/preview-check-publish). Next: [The hand-off bundle](/data-scientist/communicate/hand-off-bundle).
+
+
+# Column maps (/kit/data/column-maps)
+
+
+
+A **column map** (the descriptor) gives every column of a table a role. Notebooks and AI clients read it, so they all work from the same meaning. For the idea behind it, see [Column map and approval](/data-scientist/explore).
+
+## Draft [#draft]
+
+```bash
+exakit describe AMAZON.ORDER_LINES
+```
+
+The table is profiled with SELECTs only. Nothing is written to the database. Every column gets one of eight roles, with its confidence and the evidence that chose it:
+
+`key`, `time`, `measure`, `category`, `flag`, `text`, `identifier`, `other`.
+
+* The draft is deterministic: the same table gives the same draft.
+* A column whose values look like e-mail addresses, phone numbers, IBANs or postcodes is marked **sensitive**.
+* The **target** is never drafted. Only a person sets it.
+
+## Approve [#approve]
+
+```bash
+exakit describe AMAZON.ORDER_LINES --approve --role target=CANCELLED --owner dana
+```
+
+`--role <slot>=<COLUMN>` corrects a slot: `key`, `time`, `text`, `target`, `category`, `entity`. `<slot>=-` leaves it empty.
+
+Approval:
+
+* checks that every column has a role, that none sits in two slots, and that the table has not changed since it was profiled
+* writes a new version, never rewriting an old one
+* publishes the roles in [Exasol Semantic Views](/kit/data/semantic-views): the schema's semantic model is rebuilt with this table as an entity, readable by the read-only AI user. Semantic Views is installed first when the database does not have it yet.
+
+Your own table is never commented. If publishing fails, the approval still stands and the message says why.
+
+## What you get at the end [#what-you-get-at-the-end]
+
+A new version of the column map, kept under `~/.exasol-starter-kit/descriptors/`, and the schema's semantic model (its views in `SEM_<SCHEMA>`) rebuilt from it. The notebooks and AI clients read the approved version from then on.
+
+## See and compare [#see-and-compare]
+
+```bash
+exakit describe amazon_sales --show              # the current version
+exakit describe amazon_sales --show --version 1  # an earlier one
+exakit describe amazon_sales --versions          # every version
+exakit describe orders --comments                # rebuild the schema's semantic model again
+```
+
+Add `--json` to any of them for a script.
+
+## A whole schema [#a-whole-schema]
+
+```bash
+exakit describe --schema TPCH
+```
+
+This lists every table with its rows and key, and every many-to-one link between tables with its evidence. A link is a foreign key the database declares, or a column whose values are in another table's key (at most 0.1% of them may be missing). A name alone never makes a link.
+
+```bash
+exakit describe --schema TPCH --approve --unlink ORDERS.O_CLERK
+```
+
+`--link TABLE.COLUMN=TABLE.KEY` adds a link and `--unlink TABLE.COLUMN` removes one. The approved links become relationships of the schema's semantic model. To join tables of different schemas, build a [multi-source model](/kit/data/semantic-views).
+
+## Where they are kept [#where-they-are-kept]
+
+`~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/`: the draft, every approved version and the current one.
+
+## When the table changes [#when-the-table-changes]
+
+Columns whose name and type did not change keep their approved roles. The rest are flagged, and you approve again.
+
+## With an AI model [#with-an-ai-model]
+
+When a model is set up, one call adds a one-line note per column. It is sent each column's name, type, role, evidence and top values, never a row and never a sensitive column. A note never decides a role.
+
+## From a notebook [#from-a-notebook]
+
+```python
+draft = nb.describe("AMAZON.ORDER_LINES")
+draft.slot(target="CANCELLED")
+dataset = draft.approve()
+```
+
+See [Review and approve the column map](/data-scientist/explore).
+
+
+# Datasets (/kit/data/datasets)
+
+
+
+The kit carries sample datasets to practise on. `exakit data-load` lists them and loads the ones you pick.
+
+| Dataset              | Loaded by                   | Where it comes from                          |
+| -------------------- | --------------------------- | -------------------------------------------- |
+| `tpch`               | General                     | Bundled with the kit, loads without internet |
+| `energy`             | General                     | Bundled with the kit, loads without internet |
+| `weather`            | General                     | Bundled with the kit, loads without internet |
+| `amazon_sales`       | Data Scientist, ML Engineer | Downloaded when you load it                  |
+| `fraud_transactions` | Data Scientist, ML Engineer | Downloaded when you load it                  |
+
+## Downloaded datasets [#downloaded-datasets]
+
+`amazon_sales` and `fraud_transactions` are archives in the kit's datasets release. An archive is fetched only when you load that dataset. The kit checks the archive's SHA-256 and every file's digest, and refuses a mismatch.
+
+```bash
+exakit data-load amazon_sales
+```
+
+## A dataset with a column map [#a-dataset-with-a-column-map]
+
+`amazon_sales` and `fraud_transactions` each ship with an approved [column map](/kit/data/column-maps), so the notebooks can use them straight away. You can approve your own version at any time.
+
+The ML Engineer persona is not offered in this release, so for now only Data Scientist and General load these datasets.
+
+## Load one again [#load-one-again]
+
+```bash
+exakit data-load --force amazon_sales
+```
+
+<Callout type="warn">
+  `--force` drops that dataset's tables and rebuilds them. Anything you changed in its schema is lost.
+</Callout>
+
+## Add a dataset to the kit [#add-a-dataset-to-the-kit]
+
+A dataset is one folder in `data/datasets/`. Nothing else names it, so a new folder appears in the menu.
+
+
+# Load data (/kit/data/load-data)
+
+
+
+```bash
+exakit data-load
+```
+
+On a terminal this opens a menu: the kit's datasets, your own data, or an external source. Name what you want to skip the menu.
+
+<Tabs items="['A kit dataset', 'One file', 'A folder']">
+  <Tab value="A kit dataset">
+    ```bash
+    exakit data-load amazon_sales
+    ```
+
+    See [Datasets](/kit/data/datasets) for the list.
+  </Tab>
+
+  <Tab value="One file">
+    ```bash
+    exakit data-load ./sales.csv
+    ```
+
+    It asks two things, whatever the file's kind: the file, then `SCHEMA.TABLE`. To answer up front:
+
+    ```bash
+    EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load
+    ```
+
+    CSV, Parquet and JSON are loaded. JSON is split into tables by an engine the kit installs for you on macOS, Linux and WSL. A `;`-separated CSV is loaded with its delimiter. A tabular `.txt` or `.tsv` file is listed with the rename to `.csv` that the loader needs.
+  </Tab>
+
+  <Tab value="A folder">
+    ```bash
+    exakit data-load ~/exports
+    ```
+
+    Every CSV, Parquet and JSON (.json, .geojson) file at the folder's top level becomes one table named after the file. The schema is asked once:
+
+    ```bash
+    EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load
+    ```
+
+    Subfolders are not scanned. Files of other kinds are ignored. Duplicates are skipped with the reason. On Windows, a folder's JSON files are listed as skipped.
+  </Tab>
+</Tabs>
+
+## Running it again is safe [#running-it-again-is-safe]
+
+* A file already loaded is skipped, not loaded on top of itself.
+* A file that a stopped run left half-written is loaded again from scratch.
+* A table holding rows this kit did not load is left alone, unless you say otherwise.
+
+```bash
+EXAKIT_ON_EXISTING=replace exakit data-load ~/exports
+```
+
+`EXAKIT_ON_EXISTING` takes `skip` (the default), `replace` or `append`. Without a terminal the answer is `skip`. On a terminal you are asked.
+
+## What you get at the end [#what-you-get-at-the-end]
+
+Every file is listed with its table and the rows that landed, or the reason it did not load. A file the loader refuses leaves no empty table behind.
+
+## From a notebook [#from-a-notebook]
+
+```python
+nb.exakit("data-load", "fraud_transactions")
+own_data = nb.load_own_file("~/sales-data/orders.csv", "SALES", conn=connection)
+```
+
+See [Load data in the Data Scientist notebooks](/data-scientist/get-the-data).
+
+## An external source [#an-external-source]
+
+Data in another database is not copied. It is connected with `exakit connect` and read where it lives. See [Sources](/data-scientist/get-the-data).
+
+## Further reading [#further-reading]
+
+* [IMPORT](https://docs.exasol.com/db/latest/sql/import.htm), the statement that moves data into a table.
+* [Load data from local or remote files](https://docs.exasol.com/db/latest/loading_data/load_data_local_remote_location.htm) and [Load data from external sources](https://docs.exasol.com/db/latest/loading_data/load_data_from_externalsources.htm).
+* [Virtual Schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm) and the [Virtual Schema User Guide](https://docs.exasol.com/db/latest/database_concepts/virtual_schema/user_guide.htm), for the external sources the kit connects.
+* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses to load files.
+* [exasol/virtual-schemas](https://github.com/exasol/virtual-schemas), the entry-point repository for Exasol's virtual schemas.
+* [How the kit handles credentials and external sources](/security/credentials).
+
+
+# Run SQL (/kit/data/run-sql)
+
+
+
+```bash
+exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
+```
+
+It runs one statement and prints the result.
+
+## Reads only unless you say otherwise [#reads-only-unless-you-say-otherwise]
+
+A statement that would change data is refused unless you add `--write`.
+
+```bash
+exakit sql --write 'CREATE SCHEMA SCRATCH'
+```
+
+<Callout type="warn">
+  `exakit sql` connects as the kit's admin user, and that user is not sandboxed. The read-only boundary is the MCP user that AI clients use, not this command.
+</Callout>
+
+## A saved statement [#a-saved-statement]
+
+```bash
+exakit sql --file ./report.sql
+```
+
+Comment lines and a trailing semicolon are dropped first. A statement can also come on standard input.
+
+## Errors come with their fix [#errors-come-with-their-fix]
+
+The three faults everyone hits first are turned into what to do:
+
+| Fault                  | What you are told  |
+| ---------------------- | ------------------ |
+| Connection refused     | Run `exakit start` |
+| `FETCH FIRST` or `TOP` | Use `LIMIT`        |
+| Object not found       | Describe it first  |
+
+The fix is printed first, with the error.
+
+## For a script [#for-a-script]
+
+```bash
+exakit sql --json 'SELECT 1'
+```
+
+One JSON object comes back and nothing else: the rows and their count on success, or the error with a command to run, when there is one.
+
+<Callout>
+  On Windows PowerShell 5.1, a double quote inside an argument is dropped before `exakit` runs. Pass a statement with quoted names through `--file`.
+</Callout>
+
+## Further reading [#further-reading]
+
+* [SELECT](https://docs.exasol.com/db/latest/sql/select.htm), the statement the examples on this page use.
+* [Privileges](https://docs.exasol.com/db/latest/database_concepts/privileges.htm), the rules behind the admin and read-only users.
+* [exapump](https://github.com/exasol-labs/exapump), the command-line client the kit uses for SQL and loading.
+* [AI clients and the read-only user](/security/ai-clients), which explains why `exakit sql` is not the read-only path.
+
+
+# Semantic fusion (/kit/data/semantic-fusion)
+
+
+
+Your data lives in more than one place: a database here, files there, a cloud source somewhere else. The usual answer is to copy everything into one store first (ETL). The kit does not. It reads each source where it is, agrees once on what the data means, and answers from that. Only answers travel back.
+
+<Flow
+  caption="Sources stay where they are. One model gives them one meaning."
+  steps="[
+  { title: &#x22;Sources&#x22;, text: &#x22;A PostgreSQL database, your files, sample data. Nothing is copied&#x22;, tone: &#x22;db&#x22;, href: &#x22;/kit/data/load-data&#x22; },
+  { title: &#x22;Connect&#x22;, text: &#x22;An external source becomes a virtual schema, read live&#x22;, code: &#x22;exakit connect postgresql&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;Agree on meaning&#x22;, text: &#x22;You approve what each column is&#x22;, code: &#x22;exakit describe ... --approve&#x22;, tone: &#x22;you&#x22;, href: &#x22;/kit/data/column-maps&#x22; },
+  { title: &#x22;Fuse&#x22;, text: &#x22;Links found from the values, one semantic model over all of it&#x22;, code: &#x22;exakit describe --model ... --find-links&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/kit/data/semantic-views&#x22; },
+  { title: &#x22;Use&#x22;, text: &#x22;Notebooks, AI clients and dashboards ask the same model&#x22;, tone: &#x22;you&#x22; },
+]"
+/>
+
+## The four layers [#the-four-layers]
+
+| Layer          | What it does                                                                             | Where the data is         |
+| -------------- | ---------------------------------------------------------------------------------------- | ------------------------- |
+| Connectors     | A virtual schema (`VS_<NAME>`) per external source. A query is pushed down to the source | Stays in the source       |
+| Column maps    | Each column gets a role: key, time, measure, category. You approve it                    | Nothing moves             |
+| Semantic model | Tables become entities, links become relationships, measures become metrics              | Definitions only, no rows |
+| Answers        | Semantic SQL is compiled into one query over the live sources                            | Only the result returns   |
+
+## An example, measured [#an-example-measured]
+
+Three sources that share no key and no column names: Amazon order lines (sample data, 128,975 rows), a PostgreSQL logistics database read live, and a state population table.
+
+**1. Find how they join.** No foreign key exists. The kit compares values:
+
+```bash
+exakit describe --links AMAZON,VS_LOGISTICS,RETAIL_SIGNALS
+```
+
+```text
+[high] AMAZON.ORDER_LINES.SHIP_STATE -> VS_LOGISTICS.STATE_LOGISTICS.SHIP_STATE:
+       128,921 of 128,942 rows match; 21 do not (ORISSA, RAJSHTHAN, ...)
+```
+
+The 21 rows are misspelt state names. The link stands, and you get the list to clean. It took 26 small queries.
+
+**2. Put one model over them.**
+
+```bash
+exakit describe --model sales_360 --schemas AMAZON,RETAIL_SIGNALS --find-links
+```
+
+This published one model over the order lines and the state table, joined on the state name, a link found the same way. Why the link is there is stored with it. (The run was measured under a test model name; `sales_360` stands for it here. The PostgreSQL source was not reachable when the model was published, so its link from step 1 is not in these figures.)
+
+**3. Ask it.** Revenue by region needs both sources. In Semantic SQL you name what you want, not how to join:
+
+```sql
+SELECT region, order_lines_count, total_amount
+FROM SEM_SALES_360.ORDER_LINES GROUP BY region
+```
+
+| Region | Order lines | Revenue       |
+| ------ | ----------- | ------------- |
+| South  | 52,761      | 31,314,207.29 |
+| North  | 30,148      | 19,245,528.38 |
+| West   | 27,956      | 16,744,010.73 |
+
+The model compiled that into one scan, one join and one `GROUP BY`. A hand-written join returned the same figures for all 128,975 rows.
+
+## Who uses the model [#who-uses-the-model]
+
+<Flow
+  caption="One model, three ways to ask it"
+  steps="[
+  { title: &#x22;A notebook&#x22;, text: &#x22;Ask in plain language. The AI writes Semantic SQL, you approve the SQL&#x22;, code: &#x22;nb.ask(dataset, question, conn=connection)&#x22;, tone: &#x22;you&#x22;, href: &#x22;/data-scientist/explore/questions&#x22; },
+  { title: &#x22;An AI client&#x22;, text: &#x22;Claude Code, Codex, Cursor read the model over a read-only connection&#x22;, tone: &#x22;ai&#x22;, href: &#x22;/kit/tools/ai-clients-and-skills&#x22; },
+  { title: &#x22;A dashboard&#x22;, text: &#x22;A checked result becomes a live page on Dash Server&#x22;, code: &#x22;03_share&#x22;, tone: &#x22;kit&#x22;, href: &#x22;/data-scientist/communicate&#x22; },
+]"
+/>
+
+All three read the same definitions, so *revenue* is the same number everywhere.
+
+## What it costs [#what-it-costs]
+
+| Measured                                        | Result                                        |
+| ----------------------------------------------- | --------------------------------------------- |
+| Model query on 10,002,745 rows joined to 30,000 | 0.12 to 0.27 s (hand-written: 0.13 to 0.21 s) |
+| Finding links across six schemas, 25 tables     | 223 small queries, about 60 s                 |
+| Rows copied out of a source                     | 0                                             |
+
+A live source answers at its own speed. Each query to it is a filter or an aggregate the source runs itself.
+
+## The same pattern, larger [#the-same-pattern-larger]
+
+The hospital chain reference build uses this pattern on three systems that share no patient id: a legacy system on PostgreSQL, a health record on MongoDB and an imaging archive on Amazon S3. Exasol reads all three in place, resolves 1,609 patient records to 1,223 people, and answers a question across them in 0.3 to 4 seconds. The images never pass through the database.
+
+## Limits [#limits]
+
+* A link between two plain number columns cannot be proven from the data: numbers in a sequence match by chance. The kit marks it for you to confirm.
+* A table needs an approved column map before it joins a model.
+* A source that is down cannot be asked. Nothing is cached unless you load a copy yourself.
+
+## Further reading [#further-reading]
+
+* [Semantic views](/kit/data/semantic-views): the commands
+* [Links across sources](/data-scientist/explore/semantic-views#links-across-sources): how links are found and what was measured
+* [Virtual schemas](https://docs.exasol.com/db/latest/database_concepts/virtual_schemas.htm) in the Exasol documentation
+* [Exasol Semantic Views](https://github.com/exasol-labs/exasol-semantic-views) on GitHub
+
+
+# Semantic views (/kit/data/semantic-views)
+
+
+
+The kit's semantic layer is **Exasol Semantic Views**, the database's own semantic layer. A model says what your data means in business terms: its entities (tables), the relationships between them, the dimensions you group by and the metrics you ask for. AI clients read it over MCP and answer from its metrics; notebooks ask it with Semantic SQL.
+
+You do not write a model by hand. The kit builds it from what you approved:
+
+| You approved                          | It becomes                                                      |
+| ------------------------------------- | --------------------------------------------------------------- |
+| A table's column map                  | An entity, with its key and grain                               |
+| A link between two tables             | A relationship (many-to-one)                                    |
+| A `time`, `category` or `flag` column | A dimension (a time column also gives `<column>_month`)         |
+| A `measure` column                    | A fact, and the metrics `total_<column>` and `average_<column>` |
+| Every table                           | A row count, `<table>_count`                                    |
+
+A column marked **sensitive** is never a dimension and never a public fact.
+
+## Installed when it is needed [#installed-when-it-is-needed]
+
+Semantic Views is a marketplace add-on (`semantic-views`). The first approval installs it into the database, as this would:
+
+```bash
+exakit marketplace semantic-views
+```
+
+If that install fails, the approval still stands and says which command to run.
+
+## One model per schema [#one-model-per-schema]
+
+Approving a column map rebuilds its schema's model:
+
+```bash
+exakit describe AMAZON.ORDER_LINES --approve --role target=CANCELLED
+```
+
+The model is named after the schema (`amazon`) and its views are published in `SEM_<SCHEMA>` (`SEM_AMAZON.ORDER_LINES`). Approving a schema's links (`exakit describe --schema AMAZON --approve`) rebuilds it with the links as relationships.
+
+## One model across sources [#one-model-across-sources]
+
+A question often needs more than one schema: a sample dataset, your own files and one or more external sources. Build one model over all of them:
+
+```bash
+exakit describe --model sales_360 \
+  --table AMAZON.ORDER_LINES --table MY_DATA.TARGETS --table VS_LOGISTICS.COURIER_DAILY \
+  --link AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE \
+  --ai --dry-run
+```
+
+* Every table needs an approved column map first.
+* `--link SCHEMA.TABLE.COLUMN=SCHEMA.TABLE.KEY` joins tables of different schemas. The key side must be unique. The approved links of each schema are used too.
+* An external source (a virtual schema, `VS_<NAME>`) is read live: nothing is copied.
+* `--dry-run` prints what would be built and writes nothing. Run it again without `--dry-run` to publish.
+
+### Whole schemas, and links found for you [#whole-schemas-and-links-found-for-you]
+
+Name schemas and the kit takes every table of them that has an approved column map. `--find-links` looks for the joins between the schemas in the values, with no foreign key and no matching names needed:
+
+```bash
+exakit describe --links AMAZON,MY_DATA,VS_LOGISTICS                 # the links alone, each with its evidence
+exakit describe --model all_data --schemas AMAZON,MY_DATA,VS_LOGISTICS --find-links --ai --dry-run
+```
+
+A text link the data backs is used. A link between plain numbers is only named, because numbers in a sequence match by chance: pass it with `--link` if it is right. A pair you or an AI client believes in is checked with `exakit describe --links A,B --link S.T.COL=S.T.KEY`. How the search works, and what it measured, is on [Semantic views](/data-scientist/explore/semantic-views#links-across-sources).
+
+### Let the AI propose the fields [#let-the-ai-propose-the-fields]
+
+With `--ai`, the model you set up for the kit (`EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL`) proposes business names, comments and synonyms for every field, and the metrics people will ask for: filtered totals (completed revenue), differences and ratios.
+
+It is sent names, types, grains, column notes and a category's most frequent values. It is never sent a row, and never a sensitive column.
+
+Every proposed metric is checked before it is used: it may only add up a fact of its view, combine that view's metrics, and filter on a dimension with one of its known values. The product validates it again when it is applied. A refused one is skipped, and the output names it and says why.
+
+## Keep it current [#keep-it-current]
+
+A model is built from what was approved at the time.
+
+* Approving a column map rebuilds its schema's model and every multi-source model the table is in.
+* After a new link or a new table, rebuild a model yourself:
+
+```bash
+exakit describe --model sales_360 --refresh
+exakit describe --models                         # every model, and which the kit can refresh
+```
+
+The kit only rebuilds models it built. A model of the same name that someone else made is left alone.
+
+## Ask a model [#ask-a-model]
+
+A published view is queried with Semantic SQL: its metrics, grouped by its dimensions.
+
+```sql
+EXECUTE SCRIPT SEMANTIC_ADMIN.ENABLE_SEMANTIC_SQL();
+SELECT ship_state, total_amount, orders_count
+FROM SEM_SALES_360.ORDER_LINES
+GROUP BY ship_state;
+```
+
+An AI client sets the preprocessor through the Exasol MCP server (`set_exasol_preprocessor`) and runs the same query. To see what a model holds, read `SEMANTIC_CATALOG.MODELS`, `ENTITIES`, `DIMENSIONS`, `METRICS` and `RELATIONSHIPS`.
+
+## From a notebook [#from-a-notebook]
+
+```python
+semantic = nb.semantic_model(connection, "sales_360",
+                             tables=["AMAZON.ORDER_LINES", "VS_LOGISTICS.COURIER_DAILY"],
+                             links=["AMAZON.ORDER_LINES.SHIP_STATE=VS_LOGISTICS.STATE_LOGISTICS.STATE"],
+                             preview=True)
+semantic = semantic.publish()
+nb.semantic_sql(connection, "SELECT ship_state, total_amount FROM SEM_SALES_360.ORDER_LINES GROUP BY ship_state")
+nb.refresh_semantic(connection, "sales_360")
+```
+
+In the guided view, the **Semantic views** card in Understand does the same: pick the tables, let the AI propose the fields, preview, publish, refresh.
+
+## Further reading [#further-reading]
+
+* [exasol-labs/exasol-semantic-views](https://github.com/exasol-labs/exasol-semantic-views), the add-on's repository and README.
+* [What the kit writes](/security/what-the-kit-writes), which schemas the semantic models create, and which tables they never change.
+* [What is sent to an AI model](/security/what-goes-to-a-model), the exact content of the `--ai` proposal.
 
 
 # Add a command (/data-scientist/development/add-a-command)
@@ -4628,463 +4628,6 @@ Each entry quotes the message the kit prints, or describes the step that stops.
 Back to [Model](/data-scientist/model).
 
 
-# External sources (/data-scientist/get-the-data/external-sources)
-
-
-
-An external source is a database or a lake somewhere else. The kit reads it where it lives. Nothing is copied. The kit connects it as a **virtual schema**, which is a schema in your local database whose tables point at the source. A query fetches the rows it needs at the moment you run it.
-
-The kit connects through its source engine, the same engine `exakit connect` runs.
-
-## The kinds the kit can connect [#the-kinds-the-kit-can-connect]
-
-* PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks and MongoDB.
-* Iceberg and Delta tables through a lakehouse catalog: Iceberg REST, Unity Catalog or AWS Glue.
-* A folder of Parquet files, or document files in S3 or Azure Blob Storage.
-
-These helpers list the kinds and what each one asks:
-
-```python
-nb.connectors()                        # every kind the kit can connect
-nb.connector_inputs("postgresql")      # what that kind asks, with the required inputs marked
-nb.connected_sources(connection)       # the sources connected now, with their table counts
-nb.load_source(connection, None)       # lists the connected sources, and loads nothing
-```
-
-## Connect from this computer [#connect-from-this-computer]
-
-The database runs in its own virtual machine. On macOS, the database cannot reach this computer as `localhost`.
-
-* Use `192.168.64.1` for a database on this computer. If you give `localhost` or `127.0.0.1` on macOS, the kit replaces it with that address and prints one line about it. The source must then listen on that address too, not only on the loopback address.
-* For a cloud source, allow this computer's public IP address at the source. The card shows the address. `exakit connect` shows it as its first line on a terminal.
-
-## A lakehouse [#a-lakehouse]
-
-A lakehouse is one connector for several things. It has two settings: a catalog, and where its files are. Each combination asks for different details. In the **Data source** list it appears as a tree. Pick a leaf and both settings are chosen. Pick the lakehouse itself and the settings are asked one at a time.
-
-```python
-form = nb.connector_inputs("lakehouse")
-form["tree"]                                                       # the picks, as the tree shows them
-form = nb.connector_inputs("lakehouse", catalog="unity", files="s3")
-form["inputs"]                                                     # what that combination asks
-nb.connect_source("lakehouse", "lake", catalog="unity", files="s3", workspace_url="https://...", namespace="main.sales")
-```
-
-Some combinations have two secrets: the catalog login and the storage keys. The catalog login is asked like any password. The storage keys go to the kit in a file only you can read, and the file is removed as soon as the kit has read it.
-
-## An example: a PostgreSQL source [#an-example-a-postgresql-source]
-
-This example reads a PostgreSQL database that runs on this computer. Your connector, host, database and table will differ.
-
-```python
-CONNECTOR = "postgresql"
-SOURCE_NAME = "sales"                                   # its tables appear as VS_SALES
-SOURCE_URL = "postgres://reader@192.168.64.1:5432/shop" # the password is asked in a hidden box
-source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL)
-source_test = nb.test_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL)
-connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL)
-SOURCE = None                                           # or "VS_SALES.ORDERS"
-source_data = nb.load_source(connection, SOURCE or connected)
-```
-
-Run the cells in order. The reading shows what the connection string did not give. The test checks the inputs and whether this computer reaches the host and port. It changes nothing. The connect step runs the kit's connect command and makes the virtual schema.
-
-## Step by step: a new external source [#step-by-step-a-new-external-source]
-
-Under **External sources**, the **Choose your data** card lists the connections you have. Tick one or more and the tables to read from each, then press **Use this data**.
-
-Tick **New connection…** and a single form opens under the list, two fields to a row. There is no step to press through: you pick the source, fill in the form, and press one button.
-
-<Steps>
-  <Step>
-    ### Data source [#data-source]
-
-    One list of every kind of source the kit connects, each with a line saying what it is. Type in the box at its top to narrow it. The list opens inside the card, under the field, so it never covers the page.
-
-    The card does not hold this list. It asks the kit (`nb.connectors()`), which answers with what `exakit connect` offers. A source added to the kit appears here without a change to the notebook.
-  </Step>
-
-  <Step>
-    ### The source's own settings [#the-sources-own-settings]
-
-    Shown only for a source that has several kinds in one. Each setting is its own list, in the order the kit asks them. A lakehouse, for example, asks for its catalog, then where its files are, then how to sign in.
-
-    A choice decides what the next lists offer. The card asks the kit again after each pick (`nb.connector_inputs(source, catalog=...)`) and takes the kit's default for the settings that follow, so the details below are always the ones that combination needs. A choice the kit does not support yet is shown greyed out with its reason.
-  </Step>
-
-  <Step>
-    ### How to fill it in [#how-to-fill-it-in]
-
-    **Fill in the details** shows every question below. **Paste a connection string** adds a box for the string: paste it and the kit reads it (`nb.read_connection_string`), fills in the details, and marks only what the string did not hold.
-  </Step>
-
-  <Step>
-    ### Details and optional settings [#details-and-optional-settings]
-
-    Everything `exakit connect` asks for that source, in one place:
-
-    | Part              | What is in it                                                                                                                                                                          |
-    | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | Details           | The name (alias) first: lower case, for example `sales`, and its tables appear as `VS_SALES`. Then every required input, such as the host, the database, the account and the password. |
-    | Optional settings | A port, a schema, TLS, a CA certificate file and the like. Each shows the kit's default. Change one only to use another value.                                                         |
-
-    The password goes into a hidden box. It is never shown, saved or logged by the card.
-  </Step>
-
-  <Step>
-    ### Test connection, then Connect and use this data [#test-connection-then-connect-and-use-this-data]
-
-    **Test connection** checks the inputs and whether this computer reaches the source. It changes nothing and needs no password. **Connect and use this data** runs the kit's connect command with the password on its standard input, then loads what you ticked.
-  </Step>
-</Steps>
-
-From an empty card that is two picks and one button: tick **New connection…**, pick the data source, fill in the form, press **Connect and use this data**.
-
-<Flow
-  caption="A new external source"
-  steps="[
-  { title: &#x22;You name the source&#x22;, text: &#x22;The kind, a connection string or the details, and a name&#x22;, tone: &#x22;you&#x22; },
-  { title: &#x22;The kit checks the inputs&#x22;, text: &#x22;Every input, the way the kit's connect form checks it&#x22;, code: &#x22;nb.test_source(...)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;This computer reaches the source&#x22;, text: &#x22;The host and port answer from here&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;You enter the password&#x22;, text: &#x22;In a hidden box. It goes to the kit only.&#x22;, tone: &#x22;you&#x22; },
-  { title: &#x22;The kit connects&#x22;, text: &#x22;A connection is saved and a virtual schema is made&#x22;, code: &#x22;nb.connect_source(...)&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;The tables read live&#x22;, text: &#x22;VS_SALES.ORDERS is read from the source when you query it&#x22;, tone: &#x22;db&#x22; },
-]"
-/>
-
-## Passwords [#passwords]
-
-* A password is asked in a hidden box. The kit receives it on its standard input.
-* It is never written into a cell, the code view, a command line or the workflow log.
-* A password inside a connection string is used and never shown.
-* In Marimo there is no hidden box. Pass a password field, `mo.ui.text(kind="password")`, as the `password` argument, or pass a `password_file`.
-
-## Live sources and AI [#live-sources-and-ai]
-
-A table from an external source is read from the source as you query it. Before sampled rows from a live source go to a model, the notebook names the source and asks. Only a yes sends them. A table in the database does not ask.
-
-Back to [Get the data](/data-scientist/get-the-data). Next: [The data map](/data-scientist/get-the-data/the-data-map).
-
-
-# Get the data (/data-scientist/get-the-data)
-
-
-
-Every data project starts with data that is in one place, can be read again, and is the same each time you read it. In this stage you put a table in front of the kit. The kit offers three origins: a sample dataset that comes with the kit, your own file or folder, and an external database or lake that the kit reads live. Each origin ends in a table the rest of the workflow can describe.
-
-<Flow
-  caption="Choosing an origin, loading it and reading it in the data map"
-  steps="[
-  { title: &#x22;You pick an origin&#x22;, text: &#x22;A kit dataset, your own file or folder, a table already in the database, or an external source&#x22;, tone: &#x22;you&#x22;, href: &#x22;/kit/data/load-data&#x22; },
-  { title: &#x22;The kit loads it&#x22;, text: &#x22;A sample or your file is copied into a table. An external source is connected, not copied.&#x22;, code: &#x22;exakit data-load amazon_sales&#x22;, tone: &#x22;kit&#x22; },
-  { title: &#x22;The table is in the database&#x22;, text: &#x22;AMAZON.ORDER_LINES, MY_DATA.ORDERS or VS_SALES.ORDERS&#x22;, tone: &#x22;db&#x22; },
-  { title: &#x22;The data map lists it&#x22;, text: &#x22;Every table by origin, with its rows, its column map and its links&#x22;, code: &#x22;nb.data_map(connection)&#x22;, tone: &#x22;kit&#x22; },
-]"
-/>
-
-The flow is the same for all three origins. Only the first loading step differs. A sample dataset loads once and stays. Your file is copied into a table. An external source stays where it is: the kit creates a **virtual schema**, a schema in your local database whose tables point at a database or lake somewhere else. Its name is `VS_<NAME>`, where `<NAME>` is the name you gave the connection. Its tables are read when you query them.
-
-You do not need a terminal for this stage. Every step runs from a cell or a card. The terminal commands are listed for scripts and for people who prefer them.
-
-## Where you do it [#where-you-do-it]
-
-| Guided view                                                                                                                             | Notebook code                                                                                                                                                                                                                                           | Terminal                                                                                           |
-| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| The **Choose your data** card in `00_quickstart`. Tick kit datasets, your own tables and external sources, any number of them together. | The shared cells in `00_quickstart`, under *Choose a dataset*, *Load your own data*, *An external source*: `SAMPLE`, `MY_DATA`, `MY_SCHEMA`, `MY_TABLE`, `CONNECTOR`, `SOURCE_URL`, `SOURCE`, then `nb.first(...)`, which picks the first loaded source | `exakit data-load` for a kit dataset, a file or a folder. `exakit connect` for an external source. |
-
-## Several tables at once [#several-tables-at-once]
-
-The three options of the **Choose your data** card are tick boxes, and so is every list under them: datasets, your tables, connections, and the tables of each connection. Tick what you want from any mix of them and press **Use this data**.
-
-| What the card does                                                          | The cell it runs                                                                                   |
-| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
-| Loads each ticked table                                                     | The same cell as for one table: `nb.load_sample`, `nb.use_table`, `nb.dataset` or `nb.load_source` |
-| Keeps each one by its table name                                            | `chosen_tables[<table>] = ...`                                                                     |
-| Works on the first                                                          | `chosen_data = chosen_tables[<table>]`                                                             |
-| Notes them for `01_explore`                                                 | `nb.remember_chosen([...])`                                                                        |
-| Draws up every table's column roles in the background, every source at once | `nb.prepare_drafts([...])`                                                                         |
-
-A table that could not be loaded is named under the card with the kit's reason. The others are used.
-
-You do not wait for one table after another. The first table's column roles show while the others are still read: every source at the same time, each on its own connection, and the tables of one source in the order you chose them, since a source answers one statement at a time. A table read in the last hour whose columns have not changed is not read again, so `01_explore` opens straight away after the quickstart.
-
-What follows from the choice:
-
-* The quickstart ends here, with **Next** at the bottom of the card. `01_explore` opens the tables you chose (`nb.open_chosen(connection)`); nothing is copied or loaded again.
-* Its first card is **What each column means** with **Semantic views** under it, in one card. A *Table* list shows when you chose more than one, with how many still need approval; picking another opens its column map, and one already drawn up opens without reading the table again. Each table is approved on its own, and approving it publishes it in Exasol Semantic Views.
-* **Semantic views**, at the bottom of that card, starts with your tables ticked, so **Find links between them** and **Publish the model** work on the same choice. See [Semantic views](/data-scientist/explore/semantic-views).
-
-With one table ticked the card runs the cells it always ran, and `chosen_tables` is not created.
-
-## In this stage [#in-this-stage]
-
-<Cards>
-  <Card title="Sample datasets" href="/data-scientist/get-the-data/sample-datasets" description="amazon_sales and fraud_transactions: what is in each, with the numbers" />
-
-  <Card title="Your own file" href="/data-scientist/get-the-data/your-own-files" description="Load a CSV, Parquet, JSON or Excel file, a folder, or a table already in the database" />
-
-  <Card title="External sources" href="/data-scientist/get-the-data/external-sources" description="Connect a database or lake that stays where it is, step by step, and handle passwords" />
-
-  <Card title="The data map" href="/data-scientist/get-the-data/the-data-map" description="Every table by origin, its column map state and its links" />
-
-  <Card title="The dataset" href="/data-scientist/get-the-data/the-dataset" description="A table with its approved column map, and how a notebook picks one" />
-
-  <Card title="Troubleshooting" href="/data-scientist/get-the-data/troubleshooting" description="File, source and table problems" />
-</Cards>
-
-## What you have at the end [#what-you-have-at-the-end]
-
-The tables you chose, as `chosen_data` (and `chosen_tables` for several), noted for `01_explore`, and a data map that shows them. They have no approved column map yet: `01_explore` reviews the roles and approves them.
-
-Next: [Explore and understand](/data-scientist/explore).
-
-<StageNav n="2" />
-
-
-# Sample datasets (/data-scientist/get-the-data/sample-datasets)
-
-
-
-The kit ships two sample datasets, so you can run every stage before you bring your own data. `amazon_sales` is a clean table of orders. `fraud_transactions` has repeats, gaps and placeholders on purpose, so the cleaning steps have something to find. Both load with the same cell.
-
-## Load one [#load-one]
-
-The first cell of `00_quickstart` picks the dataset:
-
-```python
-SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
-sample_data = nb.load_sample(connection, SAMPLE)
-```
-
-If the dataset is not in the database, the cell runs `exakit data-load amazon_sales` and waits for it. If it is already there, the cell says it is loaded and uses it. `nb.sample_datasets()` lists the kit's datasets and which are loaded.
-
-## How we used it: amazon_sales [#how-we-used-it-amazon_sales]
-
-The table is `AMAZON.ORDER_LINES`. It holds order lines of one fashion seller. Each row is one line of an order, so the key is `ORDER_LINE_ID`, and the time column is `ORDER_DATE`. The target for the worked examples is `CANCELLED`, which is 1 when the line was cancelled.
-
-These numbers come from a real local database, read with read-only queries on 12 November 2026:
-
-```sh
-exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
-exakit sql 'SELECT COUNT(DISTINCT ORDER_ID) FROM AMAZON.ORDER_LINES'
-exakit sql 'SELECT MIN(ORDER_DATE), MAX(ORDER_DATE) FROM AMAZON.ORDER_LINES'
-exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES WHERE CANCELLED = 1'
-```
-
-| Query                           | Result                          |
-| ------------------------------- | ------------------------------- |
-| `COUNT(*)`                      | 128,975 rows                    |
-| `COUNT(DISTINCT ORDER_ID)`      | 120,378 orders                  |
-| `MIN` and `MAX` of `ORDER_DATE` | 2022-03-31 to 2022-06-29        |
-| `CANCELLED = 1`                 | 18,332 rows, 14.2% of the lines |
-
-Two facts matter for the later stages:
-
-* **Many lines per order.** 128,975 lines belong to 120,378 orders, so an order can have more than one line. Count orders with `COUNT(DISTINCT ORDER_ID)` when you mean orders.
-* **STATUS gives the target away.** Every cancelled line has `STATUS = 'Cancelled'`, and no other line does. Run `SELECT COUNT(*) FROM AMAZON.ORDER_LINES WHERE STATUS = 'Cancelled'`: it returns 18,332, the same as `CANCELLED = 1`. A model that sees `STATUS` learns the answer from it, not from the order. [Prepare](/data-scientist/prepare) shows how the kit catches this.
-
-## How we used it: fraud_transactions [#how-we-used-it-fraud_transactions]
-
-```python
-SAMPLE = "fraud_transactions"
-sample_data = nb.load_sample(connection, SAMPLE)
-```
-
-The table is `FRAUD.TRANSACTIONS`: 51,000 card and bank transactions. Of these, 2,510 are fraud (4.9%).
-
-The table is messy on purpose. The dataset's README (`data/datasets/fraud_transactions/README.md`) records what is wrong with it:
-
-* **Repeated ids.** `TRANSACTION_ID` is not unique. 51,000 rows hold 50,000 distinct ids, so 1,000 ids appear twice. The README counts 881 exact copies and 119 copies that disagree. `ROW_ID` is the key for this table.
-* **Placeholders.** `DEVICE_USED` has 1,530 rows `Unknown Device`, and `PAYMENT_METHOD` has 1,530 rows `Invalid Method`. They look like categories, but they mean "not known".
-* **Gaps.** Some values are missing, and the README says about 5% of `DEVICE_USED` and `PAYMENT_METHOD` are NULL.
-
-The kit does not clean this table. The cleaning is part of the work, and it is covered in [Prepare](/data-scientist/prepare).
-
-Back to [Get the data](/data-scientist/get-the-data). Next: [Your own file](/data-scientist/get-the-data/your-own-files).
-
-
-# The data map (/data-scientist/get-the-data/the-data-map)
-
-
-
-The data map lists every table the kit can see, grouped by where it came from. It is the place to check what you have before you choose a dataset.
-
-## The data map [#the-data-map]
-
-```python
-nb.data_map(connection)
-```
-
-The map has one table per origin: external sources first, then your data, then the samples. Each table shows its rows, its column map state and its roles. Under the tables it lists the links between them.
-
-`nb.data_map(connection)` reads the database's metadata, and only the metadata. It does not read rows from your tables.
-
-| Column     | What it shows                                                                                                              |
-| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Origin     | `Sample data`, `Your data` or `External source`                                                                            |
-| Table      | `SCHEMA.TABLE`. A virtual table shows its rows as `live`.                                                                  |
-| Column map | `none yet`, `draft`, `approved vN`, or `shipped` for a kit dataset. It also says whether the table is in a semantic model. |
-| Roles      | The slots by name, then a count of each role                                                                               |
-
-The map returns a DataFrame through `data.tables`, `data.columns` and `data.links`.
-
-## How links are found [#how-links-are-found]
-
-Links come from three places:
-
-* An approved schema map gives its links.
-* A semantic model you published gives its links.
-* The rest are **possible** links, or **shared dimensions**.
-
-Two tables are a **possible** link when they have a key-like column with the same name, for example `ID`, `_ID` or `_CODE`. They are a **shared dimension** when they share a name such as `STATE`, `REGION`, `CATEGORY`, `MONTH` or `YEAR`.
-
-A possible link is a lead to check, not a join the kit made for you. Check either kind before you join on it.
-
-Back to [Get the data](/data-scientist/get-the-data). Next: [The dataset](/data-scientist/get-the-data/the-dataset).
-
-
-# The dataset (/data-scientist/get-the-data/the-dataset)
-
-
-
-A **dataset** is a table with its approved column map. The column map says what each column is for: its role, and the slot the steps use. The notebooks never read a table directly. They read a dataset and build every query from its roles.
-
-```python
-dataset_id = nb.chosen_dataset(DATASET)        # DATASET = None: the dataset approved last
-dataset = nb.dataset(connection, dataset_id)   # refuses a column map that is not approved
-dataset.fact_table                              # the table or view the steps query
-dataset.has("label")                            # is there a target?
-dataset.col("label")                            # its column, quoted for SQL
-dataset.missing                                 # the roles no column plays, each with the reason
-```
-
-`nb.dataset(...)` refuses a column map that is not approved. You approve a column map in [Explore and understand](/data-scientist/explore).
-
-## Pick the dataset for each notebook [#pick-the-dataset-for-each-notebook]
-
-One assignment picks the data for each notebook: `SAMPLE = "..."` in the quickstart and `DATASET = "..."` in the other notebooks. With `DATASET = None`, `01_explore` opens the tables you chose in the quickstart (`nb.chosen_tables()` lists them), and the later notebooks follow the dataset you approved last. Approve a different one in `01_explore`. The other notebooks pick it up when you run their first cell again.
-
-To pin one notebook to one dataset, set `DATASET = "..."` in that notebook.
-
-## Why queries come from roles [#why-queries-come-from-roles]
-
-Because queries come from roles, the same cell runs on `amazon_sales`, on `fraud_transactions` and on your own table. A role no column fits is never guessed. `dataset.has(...)` is false, the step that needs it skips, and the step says why.
-
-Back to [Get the data](/data-scientist/get-the-data). Next: [Troubleshooting](/data-scientist/get-the-data/troubleshooting).
-
-
-# Troubleshooting (/data-scientist/get-the-data/troubleshooting)
-
-
-
-Each entry gives the message the kit shows, then what to do.
-
-<Accordions type="multiple">
-  <Accordion title="Can I use my own table?">
-    Yes. Load a file with `nb.load_own_file(...)`, or use a table already in the database with `nb.use_table(...)`. Both are shown on [Your own file](/data-scientist/get-the-data/your-own-files).
-  </Accordion>
-
-  <Accordion title="How do I switch to another dataset?">
-    Approve it in `01_explore`. With `DATASET = None`, the other notebooks follow the dataset you approved last, when you run their first cell again. To pin one notebook to a dataset, set `DATASET = "..."` in that notebook. See [The dataset](/data-scientist/get-the-data/the-dataset).
-  </Accordion>
-
-  <Accordion title="My file will not load">
-    The kit names the reason in one line. The usual ones:
-
-    | Message                                                  | What to do                                                                |
-    | -------------------------------------------------------- | ------------------------------------------------------------------------- |
-    | `... is not a file load_own_file reads`                  | Use a CSV, Parquet, JSON or Excel file, or a folder of them.              |
-    | `... has columns that are the same name in SQL`          | Rename the columns in the file so each name is different.                 |
-    | `... holds no rows`                                      | Check the file. An empty file cannot be loaded.                           |
-    | `... already exists and was not loaded by load_own_file` | Name another table. To replace the table, pass `replace=True` on purpose. |
-    | `'...' is not SCHEMA.TABLE`                              | Use plain SQL names: letters, digits and `_`, starting with a letter.     |
-  </Accordion>
-
-  <Accordion title="A source was not connected">
-    The message is `<name> was not connected:` and the lines after it give the reason. The usual causes:
-
-    | Reason                                                         | What to do                                                                                                                                                                                                     |
-    | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-    | The source refuses the connection, or the connection times out | Allow this computer's address at the source: a firewall rule, a security group or the server's access list.                                                                                                    |
-    | The password or user is refused                                | Check the user, then enter the password again in the hidden box.                                                                                                                                               |
-    | A certificate cannot be verified                               | Give the source's CA certificate in the optional settings.                                                                                                                                                     |
-    | The schema is not found                                        | Check the schema name and its case.                                                                                                                                                                            |
-    | The host name does not resolve                                 | Read the note the kit gives. It tells you whether the name is wrong, or whether this network's DNS does not answer. Another network, a VPN, or a DNS server of 1.1.1.1 or 8.8.8.8 on this computer can fix it. |
-
-    Use **Test connection** first. It checks the inputs and reaches the source, and changes nothing. To check a connected source later, run `exakit source check <name>`, or `exakit source issues` to list the sources that fail and the command that fixes each.
-  </Accordion>
-
-  <Accordion title="The table of a connected source does not read">
-    `nb.load_source` reads one row to check the table. If it fails, the message names the table and the reason. Run `exakit source check <name>`. If the source has new tables, run `exakit source refresh <name>`.
-  </Accordion>
-
-  <Accordion title="The database does not answer">
-    ```python
-    nb.kit_check()          # is the database running?
-    nb.exakit("start")      # start it, for example after a restart of this computer
-    ```
-
-    More entries are on [Set up Exasol: Troubleshooting](/data-scientist/set-up/troubleshooting).
-  </Accordion>
-</Accordions>
-
-Back to [Get the data](/data-scientist/get-the-data). Next: [Explore and understand](/data-scientist/explore).
-
-
-# Your own file (/data-scientist/get-the-data/your-own-files)
-
-
-
-Your own file becomes a table in the database. The file is copied in, so queries run on the copy and not on the file. If the table is already in the database, you can use it without a copy.
-
-## Load a file or a folder [#load-a-file-or-a-folder]
-
-The shared cells of `00_quickstart` take a file or a folder, a schema and an optional table:
-
-```python
-MY_DATA = "~/sales-data/orders.csv"   # a file or a folder; "" skips it
-MY_SCHEMA = ""                        # empty: the folder's name, so ~/sales-data becomes SALES_DATA
-MY_TABLE = ""                         # or a table already in the database, e.g. "MY_DATA.ORDERS"
-own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
-            else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
-```
-
-For a file called `orders.csv` in a folder called `sales-data`, with no schema named, the table is `SALES_DATA.ORDERS`. The table takes its name from the file.
-
-To call the helper directly, use `nb.load_own_file(path, schema, conn=connection)`.
-
-## What the load accepts [#what-the-load-accepts]
-
-* **CSV, Parquet and JSON** work. JSON can be an array of records or one record per line. A nested value is kept as JSON text.
-* **Excel** works too. The kit makes a CSV or UTF-8 copy next to your file and says so. Your original is not changed.
-* **A folder** loads every CSV, Parquet and JSON file at its top level, one table per file, each named after its file. Subfolders are skipped. The schema is asked once.
-* **Running it again is safe.** A file already loaded is not loaded twice. A file that changed is loaded again. The table keeps the file's SHA-256 in its comment, so the kit can tell.
-
-## How the columns are prepared [#how-the-columns-are-prepared]
-
-When the kit loads a file, it prepares the columns this way:
-
-* Column names become plain upper-case SQL names. Other characters become `_`. A name that starts with a digit gets a `C_` prefix.
-* Columns with the same name after this change stop the load. Rename them in the file.
-* Text that looks like dates (9 in 10 values parse as dates) is stored as `DATE`.
-* True and false values become `0` and `1`. Whole numbers become `DECIMAL(18,0)`. Other numbers become `DOUBLE`. Text becomes `VARCHAR` as wide as its longest value.
-* A file with no rows is refused.
-
-## Use a table that is already there [#use-a-table-that-is-already-there]
-
-`nb.use_table(connection, "MY_DATA.ORDERS")` uses a table that is in the database. `nb.data_map(connection)` lists the tables, and the kit's own schemas are left out unless you pass `include_kit=True`. See [The data map](/data-scientist/get-the-data/the-data-map).
-
-If a table's columns kept names with spaces or small letters, such as `Won` or `Opportunity ID`, the kit's queries cannot read them directly. The kit then creates a view with plain names in `EXAKIT_PREPARED` and uses that view. Your table is not changed. The view is named `EXAKIT_PREPARED."<SCHEMA>__<TABLE>__PLAIN"`.
-
-## Roles written beside a file [#roles-written-beside-a-file]
-
-You can describe your file's roles by hand, instead of reviewing the kit's proposal. Pass a mapping of role to column to `nb.load_own_file(..., descriptor={...})`. The kit writes the roles next to the file as `<name>.descriptor.yaml`, so `DATASET = "<the file>"` in a notebook opens it again.
-
-The roles are a draft until you approve them. The approval is covered in [Explore and understand](/data-scientist/explore).
-
-Back to [Get the data](/data-scientist/get-the-data). Next: [External sources](/data-scientist/get-the-data/external-sources).
-
-
 # Monitor and iterate (/data-scientist/monitor)
 
 
@@ -6671,6 +6214,463 @@ exakit workflow show wf-20261027-3f9a1c
 The kit never writes a key into a cell, the code view or the log.
 
 Back to [Set up Exasol](/data-scientist/set-up). Next: [Set up AI and Langfuse](/data-scientist/set-up/ai-and-langfuse).
+
+
+# External sources (/data-scientist/get-the-data/external-sources)
+
+
+
+An external source is a database or a lake somewhere else. The kit reads it where it lives. Nothing is copied. The kit connects it as a **virtual schema**, which is a schema in your local database whose tables point at the source. A query fetches the rows it needs at the moment you run it.
+
+The kit connects through its source engine, the same engine `exakit connect` runs.
+
+## The kinds the kit can connect [#the-kinds-the-kit-can-connect]
+
+* PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks and MongoDB.
+* Iceberg and Delta tables through a lakehouse catalog: Iceberg REST, Unity Catalog or AWS Glue.
+* A folder of Parquet files, or document files in S3 or Azure Blob Storage.
+
+These helpers list the kinds and what each one asks:
+
+```python
+nb.connectors()                        # every kind the kit can connect
+nb.connector_inputs("postgresql")      # what that kind asks, with the required inputs marked
+nb.connected_sources(connection)       # the sources connected now, with their table counts
+nb.load_source(connection, None)       # lists the connected sources, and loads nothing
+```
+
+## Connect from this computer [#connect-from-this-computer]
+
+The database runs in its own virtual machine. On macOS, the database cannot reach this computer as `localhost`.
+
+* Use `192.168.64.1` for a database on this computer. If you give `localhost` or `127.0.0.1` on macOS, the kit replaces it with that address and prints one line about it. The source must then listen on that address too, not only on the loopback address.
+* For a cloud source, allow this computer's public IP address at the source. The card shows the address. `exakit connect` shows it as its first line on a terminal.
+
+## A lakehouse [#a-lakehouse]
+
+A lakehouse is one connector for several things. It has two settings: a catalog, and where its files are. Each combination asks for different details. In the **Data source** list it appears as a tree. Pick a leaf and both settings are chosen. Pick the lakehouse itself and the settings are asked one at a time.
+
+```python
+form = nb.connector_inputs("lakehouse")
+form["tree"]                                                       # the picks, as the tree shows them
+form = nb.connector_inputs("lakehouse", catalog="unity", files="s3")
+form["inputs"]                                                     # what that combination asks
+nb.connect_source("lakehouse", "lake", catalog="unity", files="s3", workspace_url="https://...", namespace="main.sales")
+```
+
+Some combinations have two secrets: the catalog login and the storage keys. The catalog login is asked like any password. The storage keys go to the kit in a file only you can read, and the file is removed as soon as the kit has read it.
+
+## An example: a PostgreSQL source [#an-example-a-postgresql-source]
+
+This example reads a PostgreSQL database that runs on this computer. Your connector, host, database and table will differ.
+
+```python
+CONNECTOR = "postgresql"
+SOURCE_NAME = "sales"                                   # its tables appear as VS_SALES
+SOURCE_URL = "postgres://reader@192.168.64.1:5432/shop" # the password is asked in a hidden box
+source_reading = nb.read_connection_string(CONNECTOR, SOURCE_URL)
+source_test = nb.test_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL)
+connected = nb.connect_source(CONNECTOR, SOURCE_NAME, url=SOURCE_URL)
+SOURCE = None                                           # or "VS_SALES.ORDERS"
+source_data = nb.load_source(connection, SOURCE or connected)
+```
+
+Run the cells in order. The reading shows what the connection string did not give. The test checks the inputs and whether this computer reaches the host and port. It changes nothing. The connect step runs the kit's connect command and makes the virtual schema.
+
+## Step by step: a new external source [#step-by-step-a-new-external-source]
+
+Under **External sources**, the **Choose your data** card lists the connections you have. Tick one or more and the tables to read from each, then press **Use this data**.
+
+Tick **New connection…** and a single form opens under the list, two fields to a row. There is no step to press through: you pick the source, fill in the form, and press one button.
+
+<Steps>
+  <Step>
+    ### Data source [#data-source]
+
+    One list of every kind of source the kit connects, each with a line saying what it is. Type in the box at its top to narrow it. The list opens inside the card, under the field, so it never covers the page.
+
+    The card does not hold this list. It asks the kit (`nb.connectors()`), which answers with what `exakit connect` offers. A source added to the kit appears here without a change to the notebook.
+  </Step>
+
+  <Step>
+    ### The source's own settings [#the-sources-own-settings]
+
+    Shown only for a source that has several kinds in one. Each setting is its own list, in the order the kit asks them. A lakehouse, for example, asks for its catalog, then where its files are, then how to sign in.
+
+    A choice decides what the next lists offer. The card asks the kit again after each pick (`nb.connector_inputs(source, catalog=...)`) and takes the kit's default for the settings that follow, so the details below are always the ones that combination needs. A choice the kit does not support yet is shown greyed out with its reason.
+  </Step>
+
+  <Step>
+    ### How to fill it in [#how-to-fill-it-in]
+
+    **Fill in the details** shows every question below. **Paste a connection string** adds a box for the string: paste it and the kit reads it (`nb.read_connection_string`), fills in the details, and marks only what the string did not hold.
+  </Step>
+
+  <Step>
+    ### Details and optional settings [#details-and-optional-settings]
+
+    Everything `exakit connect` asks for that source, in one place:
+
+    | Part              | What is in it                                                                                                                                                                          |
+    | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | Details           | The name (alias) first: lower case, for example `sales`, and its tables appear as `VS_SALES`. Then every required input, such as the host, the database, the account and the password. |
+    | Optional settings | A port, a schema, TLS, a CA certificate file and the like. Each shows the kit's default. Change one only to use another value.                                                         |
+
+    The password goes into a hidden box. It is never shown, saved or logged by the card.
+  </Step>
+
+  <Step>
+    ### Test connection, then Connect and use this data [#test-connection-then-connect-and-use-this-data]
+
+    **Test connection** checks the inputs and whether this computer reaches the source. It changes nothing and needs no password. **Connect and use this data** runs the kit's connect command with the password on its standard input, then loads what you ticked.
+  </Step>
+</Steps>
+
+From an empty card that is two picks and one button: tick **New connection…**, pick the data source, fill in the form, press **Connect and use this data**.
+
+<Flow
+  caption="A new external source"
+  steps="[
+  { title: &#x22;You name the source&#x22;, text: &#x22;The kind, a connection string or the details, and a name&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;The kit checks the inputs&#x22;, text: &#x22;Every input, the way the kit's connect form checks it&#x22;, code: &#x22;nb.test_source(...)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;This computer reaches the source&#x22;, text: &#x22;The host and port answer from here&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;You enter the password&#x22;, text: &#x22;In a hidden box. It goes to the kit only.&#x22;, tone: &#x22;you&#x22; },
+  { title: &#x22;The kit connects&#x22;, text: &#x22;A connection is saved and a virtual schema is made&#x22;, code: &#x22;nb.connect_source(...)&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The tables read live&#x22;, text: &#x22;VS_SALES.ORDERS is read from the source when you query it&#x22;, tone: &#x22;db&#x22; },
+]"
+/>
+
+## Passwords [#passwords]
+
+* A password is asked in a hidden box. The kit receives it on its standard input.
+* It is never written into a cell, the code view, a command line or the workflow log.
+* A password inside a connection string is used and never shown.
+* In Marimo there is no hidden box. Pass a password field, `mo.ui.text(kind="password")`, as the `password` argument, or pass a `password_file`.
+
+## Live sources and AI [#live-sources-and-ai]
+
+A table from an external source is read from the source as you query it. Before sampled rows from a live source go to a model, the notebook names the source and asks. Only a yes sends them. A table in the database does not ask.
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [The data map](/data-scientist/get-the-data/the-data-map).
+
+
+# Get the data (/data-scientist/get-the-data)
+
+
+
+Every data project starts with data that is in one place, can be read again, and is the same each time you read it. In this stage you put a table in front of the kit. The kit offers three origins: a sample dataset that comes with the kit, your own file or folder, and an external database or lake that the kit reads live. Each origin ends in a table the rest of the workflow can describe.
+
+<Flow
+  caption="Choosing an origin, loading it and reading it in the data map"
+  steps="[
+  { title: &#x22;You pick an origin&#x22;, text: &#x22;A kit dataset, your own file or folder, a table already in the database, or an external source&#x22;, tone: &#x22;you&#x22;, href: &#x22;/kit/data/load-data&#x22; },
+  { title: &#x22;The kit loads it&#x22;, text: &#x22;A sample or your file is copied into a table. An external source is connected, not copied.&#x22;, code: &#x22;exakit data-load amazon_sales&#x22;, tone: &#x22;kit&#x22; },
+  { title: &#x22;The table is in the database&#x22;, text: &#x22;AMAZON.ORDER_LINES, MY_DATA.ORDERS or VS_SALES.ORDERS&#x22;, tone: &#x22;db&#x22; },
+  { title: &#x22;The data map lists it&#x22;, text: &#x22;Every table by origin, with its rows, its column map and its links&#x22;, code: &#x22;nb.data_map(connection)&#x22;, tone: &#x22;kit&#x22; },
+]"
+/>
+
+The flow is the same for all three origins. Only the first loading step differs. A sample dataset loads once and stays. Your file is copied into a table. An external source stays where it is: the kit creates a **virtual schema**, a schema in your local database whose tables point at a database or lake somewhere else. Its name is `VS_<NAME>`, where `<NAME>` is the name you gave the connection. Its tables are read when you query them.
+
+You do not need a terminal for this stage. Every step runs from a cell or a card. The terminal commands are listed for scripts and for people who prefer them.
+
+## Where you do it [#where-you-do-it]
+
+| Guided view                                                                                                                             | Notebook code                                                                                                                                                                                                                                           | Terminal                                                                                           |
+| --------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| The **Choose your data** card in `00_quickstart`. Tick kit datasets, your own tables and external sources, any number of them together. | The shared cells in `00_quickstart`, under *Choose a dataset*, *Load your own data*, *An external source*: `SAMPLE`, `MY_DATA`, `MY_SCHEMA`, `MY_TABLE`, `CONNECTOR`, `SOURCE_URL`, `SOURCE`, then `nb.first(...)`, which picks the first loaded source | `exakit data-load` for a kit dataset, a file or a folder. `exakit connect` for an external source. |
+
+## Several tables at once [#several-tables-at-once]
+
+The three options of the **Choose your data** card are tick boxes, and so is every list under them: datasets, your tables, connections, and the tables of each connection. Tick what you want from any mix of them and press **Use this data**.
+
+| What the card does                                                          | The cell it runs                                                                                   |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Loads each ticked table                                                     | The same cell as for one table: `nb.load_sample`, `nb.use_table`, `nb.dataset` or `nb.load_source` |
+| Keeps each one by its table name                                            | `chosen_tables[<table>] = ...`                                                                     |
+| Works on the first                                                          | `chosen_data = chosen_tables[<table>]`                                                             |
+| Notes them for `01_explore`                                                 | `nb.remember_chosen([...])`                                                                        |
+| Draws up every table's column roles in the background, every source at once | `nb.prepare_drafts([...])`                                                                         |
+
+A table that could not be loaded is named under the card with the kit's reason. The others are used.
+
+You do not wait for one table after another. The first table's column roles show while the others are still read: every source at the same time, each on its own connection, and the tables of one source in the order you chose them, since a source answers one statement at a time. A table read in the last hour whose columns have not changed is not read again, so `01_explore` opens straight away after the quickstart.
+
+What follows from the choice:
+
+* The quickstart ends here, with **Next** at the bottom of the card. `01_explore` opens the tables you chose (`nb.open_chosen(connection)`); nothing is copied or loaded again.
+* Its first card is **What each column means** with **Semantic views** under it, in one card. A *Table* list shows when you chose more than one, with how many still need approval; picking another opens its column map, and one already drawn up opens without reading the table again. Each table is approved on its own, and approving it publishes it in Exasol Semantic Views.
+* **Semantic views**, at the bottom of that card, starts with your tables ticked, so **Find links between them** and **Publish the model** work on the same choice. See [Semantic views](/data-scientist/explore/semantic-views).
+
+With one table ticked the card runs the cells it always ran, and `chosen_tables` is not created.
+
+## In this stage [#in-this-stage]
+
+<Cards>
+  <Card title="Sample datasets" href="/data-scientist/get-the-data/sample-datasets" description="amazon_sales and fraud_transactions: what is in each, with the numbers" />
+
+  <Card title="Your own file" href="/data-scientist/get-the-data/your-own-files" description="Load a CSV, Parquet, JSON or Excel file, a folder, or a table already in the database" />
+
+  <Card title="External sources" href="/data-scientist/get-the-data/external-sources" description="Connect a database or lake that stays where it is, step by step, and handle passwords" />
+
+  <Card title="The data map" href="/data-scientist/get-the-data/the-data-map" description="Every table by origin, its column map state and its links" />
+
+  <Card title="The dataset" href="/data-scientist/get-the-data/the-dataset" description="A table with its approved column map, and how a notebook picks one" />
+
+  <Card title="Troubleshooting" href="/data-scientist/get-the-data/troubleshooting" description="File, source and table problems" />
+</Cards>
+
+## What you have at the end [#what-you-have-at-the-end]
+
+The tables you chose, as `chosen_data` (and `chosen_tables` for several), noted for `01_explore`, and a data map that shows them. They have no approved column map yet: `01_explore` reviews the roles and approves them.
+
+Next: [Explore and understand](/data-scientist/explore).
+
+<StageNav n="2" />
+
+
+# Sample datasets (/data-scientist/get-the-data/sample-datasets)
+
+
+
+The kit ships two sample datasets, so you can run every stage before you bring your own data. `amazon_sales` is a clean table of orders. `fraud_transactions` has repeats, gaps and placeholders on purpose, so the cleaning steps have something to find. Both load with the same cell.
+
+## Load one [#load-one]
+
+The first cell of `00_quickstart` picks the dataset:
+
+```python
+SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
+sample_data = nb.load_sample(connection, SAMPLE)
+```
+
+If the dataset is not in the database, the cell runs `exakit data-load amazon_sales` and waits for it. If it is already there, the cell says it is loaded and uses it. `nb.sample_datasets()` lists the kit's datasets and which are loaded.
+
+## How we used it: amazon_sales [#how-we-used-it-amazon_sales]
+
+The table is `AMAZON.ORDER_LINES`. It holds order lines of one fashion seller. Each row is one line of an order, so the key is `ORDER_LINE_ID`, and the time column is `ORDER_DATE`. The target for the worked examples is `CANCELLED`, which is 1 when the line was cancelled.
+
+These numbers come from a real local database, read with read-only queries on 12 November 2026:
+
+```sh
+exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES'
+exakit sql 'SELECT COUNT(DISTINCT ORDER_ID) FROM AMAZON.ORDER_LINES'
+exakit sql 'SELECT MIN(ORDER_DATE), MAX(ORDER_DATE) FROM AMAZON.ORDER_LINES'
+exakit sql 'SELECT COUNT(*) FROM AMAZON.ORDER_LINES WHERE CANCELLED = 1'
+```
+
+| Query                           | Result                          |
+| ------------------------------- | ------------------------------- |
+| `COUNT(*)`                      | 128,975 rows                    |
+| `COUNT(DISTINCT ORDER_ID)`      | 120,378 orders                  |
+| `MIN` and `MAX` of `ORDER_DATE` | 2022-03-31 to 2022-06-29        |
+| `CANCELLED = 1`                 | 18,332 rows, 14.2% of the lines |
+
+Two facts matter for the later stages:
+
+* **Many lines per order.** 128,975 lines belong to 120,378 orders, so an order can have more than one line. Count orders with `COUNT(DISTINCT ORDER_ID)` when you mean orders.
+* **STATUS gives the target away.** Every cancelled line has `STATUS = 'Cancelled'`, and no other line does. Run `SELECT COUNT(*) FROM AMAZON.ORDER_LINES WHERE STATUS = 'Cancelled'`: it returns 18,332, the same as `CANCELLED = 1`. A model that sees `STATUS` learns the answer from it, not from the order. [Prepare](/data-scientist/prepare) shows how the kit catches this.
+
+## How we used it: fraud_transactions [#how-we-used-it-fraud_transactions]
+
+```python
+SAMPLE = "fraud_transactions"
+sample_data = nb.load_sample(connection, SAMPLE)
+```
+
+The table is `FRAUD.TRANSACTIONS`: 51,000 card and bank transactions. Of these, 2,510 are fraud (4.9%).
+
+The table is messy on purpose. The dataset's README (`data/datasets/fraud_transactions/README.md`) records what is wrong with it:
+
+* **Repeated ids.** `TRANSACTION_ID` is not unique. 51,000 rows hold 50,000 distinct ids, so 1,000 ids appear twice. The README counts 881 exact copies and 119 copies that disagree. `ROW_ID` is the key for this table.
+* **Placeholders.** `DEVICE_USED` has 1,530 rows `Unknown Device`, and `PAYMENT_METHOD` has 1,530 rows `Invalid Method`. They look like categories, but they mean "not known".
+* **Gaps.** Some values are missing, and the README says about 5% of `DEVICE_USED` and `PAYMENT_METHOD` are NULL.
+
+The kit does not clean this table. The cleaning is part of the work, and it is covered in [Prepare](/data-scientist/prepare).
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [Your own file](/data-scientist/get-the-data/your-own-files).
+
+
+# The data map (/data-scientist/get-the-data/the-data-map)
+
+
+
+The data map lists every table the kit can see, grouped by where it came from. It is the place to check what you have before you choose a dataset.
+
+## The data map [#the-data-map]
+
+```python
+nb.data_map(connection)
+```
+
+The map has one table per origin: external sources first, then your data, then the samples. Each table shows its rows, its column map state and its roles. Under the tables it lists the links between them.
+
+`nb.data_map(connection)` reads the database's metadata, and only the metadata. It does not read rows from your tables.
+
+| Column     | What it shows                                                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Origin     | `Sample data`, `Your data` or `External source`                                                                            |
+| Table      | `SCHEMA.TABLE`. A virtual table shows its rows as `live`.                                                                  |
+| Column map | `none yet`, `draft`, `approved vN`, or `shipped` for a kit dataset. It also says whether the table is in a semantic model. |
+| Roles      | The slots by name, then a count of each role                                                                               |
+
+The map returns a DataFrame through `data.tables`, `data.columns` and `data.links`.
+
+## How links are found [#how-links-are-found]
+
+Links come from three places:
+
+* An approved schema map gives its links.
+* A semantic model you published gives its links.
+* The rest are **possible** links, or **shared dimensions**.
+
+Two tables are a **possible** link when they have a key-like column with the same name, for example `ID`, `_ID` or `_CODE`. They are a **shared dimension** when they share a name such as `STATE`, `REGION`, `CATEGORY`, `MONTH` or `YEAR`.
+
+A possible link is a lead to check, not a join the kit made for you. Check either kind before you join on it.
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [The dataset](/data-scientist/get-the-data/the-dataset).
+
+
+# The dataset (/data-scientist/get-the-data/the-dataset)
+
+
+
+A **dataset** is a table with its approved column map. The column map says what each column is for: its role, and the slot the steps use. The notebooks never read a table directly. They read a dataset and build every query from its roles.
+
+```python
+dataset_id = nb.chosen_dataset(DATASET)        # DATASET = None: the dataset approved last
+dataset = nb.dataset(connection, dataset_id)   # refuses a column map that is not approved
+dataset.fact_table                              # the table or view the steps query
+dataset.has("label")                            # is there a target?
+dataset.col("label")                            # its column, quoted for SQL
+dataset.missing                                 # the roles no column plays, each with the reason
+```
+
+`nb.dataset(...)` refuses a column map that is not approved. You approve a column map in [Explore and understand](/data-scientist/explore).
+
+## Pick the dataset for each notebook [#pick-the-dataset-for-each-notebook]
+
+One assignment picks the data for each notebook: `SAMPLE = "..."` in the quickstart and `DATASET = "..."` in the other notebooks. With `DATASET = None`, `01_explore` opens the tables you chose in the quickstart (`nb.chosen_tables()` lists them), and the later notebooks follow the dataset you approved last. Approve a different one in `01_explore`. The other notebooks pick it up when you run their first cell again.
+
+To pin one notebook to one dataset, set `DATASET = "..."` in that notebook.
+
+## Why queries come from roles [#why-queries-come-from-roles]
+
+Because queries come from roles, the same cell runs on `amazon_sales`, on `fraud_transactions` and on your own table. A role no column fits is never guessed. `dataset.has(...)` is false, the step that needs it skips, and the step says why.
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [Troubleshooting](/data-scientist/get-the-data/troubleshooting).
+
+
+# Troubleshooting (/data-scientist/get-the-data/troubleshooting)
+
+
+
+Each entry gives the message the kit shows, then what to do.
+
+<Accordions type="multiple">
+  <Accordion title="Can I use my own table?">
+    Yes. Load a file with `nb.load_own_file(...)`, or use a table already in the database with `nb.use_table(...)`. Both are shown on [Your own file](/data-scientist/get-the-data/your-own-files).
+  </Accordion>
+
+  <Accordion title="How do I switch to another dataset?">
+    Approve it in `01_explore`. With `DATASET = None`, the other notebooks follow the dataset you approved last, when you run their first cell again. To pin one notebook to a dataset, set `DATASET = "..."` in that notebook. See [The dataset](/data-scientist/get-the-data/the-dataset).
+  </Accordion>
+
+  <Accordion title="My file will not load">
+    The kit names the reason in one line. The usual ones:
+
+    | Message                                                  | What to do                                                                |
+    | -------------------------------------------------------- | ------------------------------------------------------------------------- |
+    | `... is not a file load_own_file reads`                  | Use a CSV, Parquet, JSON or Excel file, or a folder of them.              |
+    | `... has columns that are the same name in SQL`          | Rename the columns in the file so each name is different.                 |
+    | `... holds no rows`                                      | Check the file. An empty file cannot be loaded.                           |
+    | `... already exists and was not loaded by load_own_file` | Name another table. To replace the table, pass `replace=True` on purpose. |
+    | `'...' is not SCHEMA.TABLE`                              | Use plain SQL names: letters, digits and `_`, starting with a letter.     |
+  </Accordion>
+
+  <Accordion title="A source was not connected">
+    The message is `<name> was not connected:` and the lines after it give the reason. The usual causes:
+
+    | Reason                                                         | What to do                                                                                                                                                                                                     |
+    | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+    | The source refuses the connection, or the connection times out | Allow this computer's address at the source: a firewall rule, a security group or the server's access list.                                                                                                    |
+    | The password or user is refused                                | Check the user, then enter the password again in the hidden box.                                                                                                                                               |
+    | A certificate cannot be verified                               | Give the source's CA certificate in the optional settings.                                                                                                                                                     |
+    | The schema is not found                                        | Check the schema name and its case.                                                                                                                                                                            |
+    | The host name does not resolve                                 | Read the note the kit gives. It tells you whether the name is wrong, or whether this network's DNS does not answer. Another network, a VPN, or a DNS server of 1.1.1.1 or 8.8.8.8 on this computer can fix it. |
+
+    Use **Test connection** first. It checks the inputs and reaches the source, and changes nothing. To check a connected source later, run `exakit source check <name>`, or `exakit source issues` to list the sources that fail and the command that fixes each.
+  </Accordion>
+
+  <Accordion title="The table of a connected source does not read">
+    `nb.load_source` reads one row to check the table. If it fails, the message names the table and the reason. Run `exakit source check <name>`. If the source has new tables, run `exakit source refresh <name>`.
+  </Accordion>
+
+  <Accordion title="The database does not answer">
+    ```python
+    nb.kit_check()          # is the database running?
+    nb.exakit("start")      # start it, for example after a restart of this computer
+    ```
+
+    More entries are on [Set up Exasol: Troubleshooting](/data-scientist/set-up/troubleshooting).
+  </Accordion>
+</Accordions>
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [Explore and understand](/data-scientist/explore).
+
+
+# Your own file (/data-scientist/get-the-data/your-own-files)
+
+
+
+Your own file becomes a table in the database. The file is copied in, so queries run on the copy and not on the file. If the table is already in the database, you can use it without a copy.
+
+## Load a file or a folder [#load-a-file-or-a-folder]
+
+The shared cells of `00_quickstart` take a file or a folder, a schema and an optional table:
+
+```python
+MY_DATA = "~/sales-data/orders.csv"   # a file or a folder; "" skips it
+MY_SCHEMA = ""                        # empty: the folder's name, so ~/sales-data becomes SALES_DATA
+MY_TABLE = ""                         # or a table already in the database, e.g. "MY_DATA.ORDERS"
+own_data = (nb.use_table(connection, MY_TABLE) if MY_TABLE
+            else nb.load_own_file(MY_DATA, MY_SCHEMA, conn=connection, missing_ok=True))
+```
+
+For a file called `orders.csv` in a folder called `sales-data`, with no schema named, the table is `SALES_DATA.ORDERS`. The table takes its name from the file.
+
+To call the helper directly, use `nb.load_own_file(path, schema, conn=connection)`.
+
+## What the load accepts [#what-the-load-accepts]
+
+* **CSV, Parquet and JSON** work. JSON can be an array of records or one record per line. A nested value is kept as JSON text.
+* **Excel** works too. The kit makes a CSV or UTF-8 copy next to your file and says so. Your original is not changed.
+* **A folder** loads every CSV, Parquet and JSON file at its top level, one table per file, each named after its file. Subfolders are skipped. The schema is asked once.
+* **Running it again is safe.** A file already loaded is not loaded twice. A file that changed is loaded again. The table keeps the file's SHA-256 in its comment, so the kit can tell.
+
+## How the columns are prepared [#how-the-columns-are-prepared]
+
+When the kit loads a file, it prepares the columns this way:
+
+* Column names become plain upper-case SQL names. Other characters become `_`. A name that starts with a digit gets a `C_` prefix.
+* Columns with the same name after this change stop the load. Rename them in the file.
+* Text that looks like dates (9 in 10 values parse as dates) is stored as `DATE`.
+* True and false values become `0` and `1`. Whole numbers become `DECIMAL(18,0)`. Other numbers become `DOUBLE`. Text becomes `VARCHAR` as wide as its longest value.
+* A file with no rows is refused.
+
+## Use a table that is already there [#use-a-table-that-is-already-there]
+
+`nb.use_table(connection, "MY_DATA.ORDERS")` uses a table that is in the database. `nb.data_map(connection)` lists the tables, and the kit's own schemas are left out unless you pass `include_kit=True`. See [The data map](/data-scientist/get-the-data/the-data-map).
+
+If a table's columns kept names with spaces or small letters, such as `Won` or `Opportunity ID`, the kit's queries cannot read them directly. The kit then creates a view with plain names in `EXAKIT_PREPARED` and uses that view. Your table is not changed. The view is named `EXAKIT_PREPARED."<SCHEMA>__<TABLE>__PLAIN"`.
+
+## Roles written beside a file [#roles-written-beside-a-file]
+
+You can describe your file's roles by hand, instead of reviewing the kit's proposal. Pass a mapping of role to column to `nb.load_own_file(..., descriptor={...})`. The kit writes the roles next to the file as `<name>.descriptor.yaml`, so `DATASET = "<the file>"` in a notebook opens it again.
+
+The roles are a draft until you approve them. The approval is covered in [Explore and understand](/data-scientist/explore).
+
+Back to [Get the data](/data-scientist/get-the-data). Next: [External sources](/data-scientist/get-the-data/external-sources).
 
 
 # Across (/data-scientist/development/reference/across)
