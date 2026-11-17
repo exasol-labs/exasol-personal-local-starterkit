@@ -3983,7 +3983,10 @@ function New-ExakitDataTable {
             if ($picked.Count -gt 0) { $sampleIds = $picked }
         }
         $script:ExakitTableSampleIds = $sampleIds
-        [void](Add-ExakitTableRow -Kind "plain" -Label ("Sample datasets (" + ($sampleIds -join ', ') + ")") -Ticked)
+        $script:ExakitTableSampleLabels = (@($pending | Where-Object { $sampleIds -contains $_.Id } | ForEach-Object { $n = (("" + $_.Label) -replace ' - [0-9.]+ MB download$', '') -replace ' *\(.*$', ''; if ($n) { $n } else { $_.Id } }) -join ', ')
+        # The name alone: the datasets are named in its Status cell once they are
+        # in, so the label is never cut short. Twin of the compact row in exapump.sh.
+        [void](Add-ExakitTableRow -Kind "plain" -Label "Sample datasets" -Ticked)
         [void]$ids.Add("samples")
         [void]$defaults.Add(1)
     } elseif ($pending.Count -gt 0) {
@@ -4145,7 +4148,14 @@ function Select-ExakitDataLoad {
         # right of the row. Then the same table asks about the rows under it,
         # Skip ticked so Enter goes on. Twin of _exakit_data_compact_samples.
         if ($script:UiTable) { $script:UiTable.Col1 = " " }
+        # A narrow console (under 100 columns): a narrower Status, so no row's
+        # name is cut short, and the sample row says how many rather than which.
+        # Twin of _dcs_wide in exapump.sh.
+        $cols = 80; try { $cols = [Console]::WindowWidth } catch { }
+        $script:ExakitDataWide = ($cols -ge 100)
+        if (-not $script:ExakitDataWide -and $script:UiTable) { $script:UiTable.StatMin = 22 }
         $script:UiTableNoBox = @(1)
+        $script:UiTableLocked = @(1)    # ticked and locked: it loads, and it cannot be unticked
         Write-Host ""
         Start-ExakitDataTableRun
         $okCount = 0
@@ -4162,7 +4172,9 @@ function Select-ExakitDataLoad {
             }
         }
         if ($okCount -eq $all.Count) {
-            Set-ExakitTableRow -Row 1 -State "done" -Final "$($all.Count) of $($all.Count) loaded"
+            $say = "$($script:ExakitTableSampleLabels) loaded"
+            if (-not $script:ExakitDataWide -or -not $script:ExakitTableSampleLabels -or $say.Length -gt 40) { $say = "$($all.Count) of $($all.Count) loaded" }
+            Set-ExakitTableRow -Row 1 -State "done" -Final $say
         } else {
             Set-ExakitTableRow -Row 1 -State "failed" -Final "$okCount of $($all.Count) loaded"
         }
@@ -4182,8 +4194,9 @@ function Select-ExakitDataLoad {
             -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
             -GroupLast $script:ExakitTableGroupLast -GroupMode "all" -OnScreen $onScreen -StartRow $startRow)
     } finally {
-        if ($script:UiTable) { $script:UiTable.Col2 = ""; $script:UiTable.Col1 = "Dataset" }
+        if ($script:UiTable) { $script:UiTable.Col2 = ""; $script:UiTable.Col1 = "Dataset"; $script:UiTable.StatMin = $null }
         $script:UiTableNoBox = @()
+        $script:UiTableLocked = @()
     }
     if ($selection -contains $script:ExakitTableRowSkip) { return @("none") }
     # With nothing pending the local-file row is pre-ticked so Enter does

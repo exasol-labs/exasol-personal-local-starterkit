@@ -1386,6 +1386,13 @@ function Get-ExakitTableFrame {
         # Twin of UI_TABLE_NOBOX in ui.sh.
         $noBox = (@($script:UiTableNoBox) -contains $i)
         if ($row.State -eq "disabled" -or $noBox) { $box = "   "; $boxLen = 3 }
+        # $script:UiTableLocked: a no-checkbox row that is always on - a dimmed
+        # ticked box no key can untick (the sample datasets row). Twin of UI_TABLE_LOCKED.
+        if ($noBox -and (@($script:UiTableLocked) -contains $i)) {
+            if ($script:UiFancy) { $mark = $script:UiTick } else { $mark = "x" }
+            $box = $script:UiDim + "[" + $mark + "]" + $script:UiReset
+            $boxLen = 2 + $mark.Length
+        }
         if ($i -eq $Cursor) {
             if ($script:UiFancy) { $ptr = $script:UiAccent + "❯" + $script:UiReset } else { $ptr = ">" }
         } else {
@@ -2039,6 +2046,7 @@ function Test-ExakitTreeRadioRepick {
 # persona add`). No key is read; Start-ExakitTable then turns the same frame
 # into the progress display. Twin of UI_TABLE_AUTO in ui_table_menu.
 $script:UiTableNoBox = @()      # rows drawn without a checkbox and never picked (UI_TABLE_NOBOX)
+$script:UiTableLocked = @()     # of those, rows drawn ticked and dimmed: always on (UI_TABLE_LOCKED)
 
 function Invoke-ExakitTableMenu {
     param(

@@ -1624,6 +1624,15 @@ $(cat "$1.activity" 2>/dev/null)
             # Three spaces, the width of "[ ]": with two the tree connector
             # sat a column left of every pickable row above it.
             _utr_ptr=" "; _utr_box="   "; _utr_boxlen=3
+            # UI_TABLE_LOCKED (" 1 "), a NOBOX row that is always on: a ticked box,
+            # dimmed, that no key can untick - it says "this loads" without
+            # offering a choice. The sample datasets row.
+            case "${UI_TABLE_LOCKED:- }" in
+                *" $_utr_i "*)
+                    if [ "${UI_FANCY:-0}" = 1 ]; then _utr_mark="${UI_TICK:-x}"; else _utr_mark="x"; fi
+                    _utr_box="${UI_DIM:-}[${_utr_mark}]${UI_RESET:-}"
+                    _utr_boxlen=$(( 2 + ${#_utr_mark} )) ;;
+            esac
         elif [ "$_utr_tick" = "1" ]; then
             # A plain "x", not the palette tick, when there is no colour: the
             # plain-palette UI_TICK is the multi-character "[ok]", and a checkbox

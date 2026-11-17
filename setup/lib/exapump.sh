@@ -3943,7 +3943,16 @@ _exakit_data_persona_pending() {
 # loop in exakit_maybe_offer_data_load (_exakit_offer_fail, deferred errors).
 _exakit_data_compact_samples() {
     UI_TABLE_COL1=" "
+    # A narrow terminal (under 100 columns): a narrower Status, so no row's name
+    # is cut short, and the sample row says how many rather than which.
+    _dcs_cols="$(set -- $(stty size < /dev/tty 2>/dev/null || true); printf '%s' "${2:-}")"
+    case "$_dcs_cols" in ''|*[!0-9]*|0) _dcs_cols="${COLUMNS:-80}" ;; esac
+    case "$_dcs_cols" in ''|*[!0-9]*) _dcs_cols=80 ;; esac
+    _dcs_wide=1
+    if [ "$_dcs_cols" -lt 100 ]; then _dcs_wide=0; UI_TABLE_STAT_MIN=22; fi
     UI_TABLE_NOBOX=" 1 "
+    # Ticked and locked: it loads, and it cannot be unticked.
+    UI_TABLE_LOCKED=" 1 "
     printf '\n'
     EXAKIT_TABLE_LIVE=0
     ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
@@ -3965,7 +3974,10 @@ _exakit_data_compact_samples() {
         fi
     done
     if [ "$_dcs_ok" -eq "$_dcs_n" ]; then
-        ui_table_set "$EXAKIT_TABLE_STATE" 1 done "" "" "" "" "$_dcs_n of $_dcs_n loaded"
+        # Which ones, when that fits the cell; else how many.
+        _dcs_say="$EXAKIT_TABLE_SAMPLE_LABELS loaded"
+        [ "$_dcs_wide" = 1 ] && [ -n "${EXAKIT_TABLE_SAMPLE_LABELS:-}" ] && [ "${#_dcs_say}" -le 40 ] || _dcs_say="$_dcs_n of $_dcs_n loaded"
+        ui_table_set "$EXAKIT_TABLE_STATE" 1 done "" "" "" "" "$_dcs_say"
     else
         ui_table_set "$EXAKIT_TABLE_STATE" 1 failed "" "" "" "" "$_dcs_ok of $_dcs_n loaded"
     fi
@@ -4030,6 +4042,8 @@ exakit_data_samples_select() {
     UI_TABLE_COL2=""
     UI_TABLE_COL1=""
     UI_TABLE_NOBOX=""
+    UI_TABLE_LOCKED=""
+    unset UI_TABLE_STAT_MIN
 
     # Skip answers none; the caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in
@@ -4173,6 +4187,7 @@ exakit_data_table_build() {
     case "$_dtb_count" in ''|*[!0-9]*) _dtb_count=0 ;; esac
     _dtb_n=0
     EXAKIT_TABLE_SAMPLE_IDS=""
+    EXAKIT_TABLE_SAMPLE_LABELS=""
     if [ "$_dtb_count" -gt 0 ] && [ "${EXAKIT_DATA_TABLE_COMPACT:-0}" = 1 ]; then
         # THE INSTALL'S FORM: one row for the samples, named by what it loads
         # ("Sample datasets (tpch, energy, weather)"), no tree under it - the
@@ -4184,9 +4199,17 @@ exakit_data_table_build() {
                 case ",$EXAKIT_DATASETS_PRESELECT," in *",$_dtb_id,"*) ;; *) continue ;; esac
             fi
             EXAKIT_TABLE_SAMPLE_IDS="${EXAKIT_TABLE_SAMPLE_IDS:+$EXAKIT_TABLE_SAMPLE_IDS,}$_dtb_id"
+            # The name only: "Retail sales (1,000 sales ...) - 3.9 MB download" -> "Retail sales".
+            _dtb_short="$(printf '%s' "${_dtb_label:-$_dtb_id}" | sed 's/ - [0-9.]* MB download$//; s/ *(.*$//')"
+            EXAKIT_TABLE_SAMPLE_LABELS="${EXAKIT_TABLE_SAMPLE_LABELS:+$EXAKIT_TABLE_SAMPLE_LABELS, }${_dtb_short:-$_dtb_id}"
         done < "$_dtb_pend"
-        [ -n "$EXAKIT_TABLE_SAMPLE_IDS" ] || EXAKIT_TABLE_SAMPLE_IDS="$(cut -d'|' -f1 "$_dtb_pend" | tr '\n' ',' | sed 's/,$//')"
-        printf 'plain|Sample datasets (%s)|1|idle|||||| \n' "$(printf '%s' "$EXAKIT_TABLE_SAMPLE_IDS" | sed 's/,/, /g')" >> "$_dtb_f"
+        if [ -z "$EXAKIT_TABLE_SAMPLE_IDS" ]; then
+            EXAKIT_TABLE_SAMPLE_IDS="$(cut -d'|' -f1 "$_dtb_pend" | tr '\n' ',' | sed 's/,$//')"
+            EXAKIT_TABLE_SAMPLE_LABELS="$(cut -d'|' -f2 "$_dtb_pend" | sed 's/ - [0-9.]* MB download$//; s/ *(.*$//' | tr '\n' ',' | sed 's/,$//; s/,/, /g')"
+        fi
+        # The name alone: the datasets it loads are named in its Status cell once
+        # they are in, so the label is never cut short on an 80-column terminal.
+        printf 'plain|Sample datasets|1|idle|||||| \n' >> "$_dtb_f"
         EXAKIT_TABLE_IDS="samples
 "
         _dtb_n=1
