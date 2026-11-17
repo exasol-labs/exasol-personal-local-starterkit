@@ -7532,7 +7532,10 @@ function Show-ExakitMarketplaceMenu {
         Disable-ExakitTableRow -Row $at -Note ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         [void]$addonIds.Add("")
     }
-    [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
+    # The install's table (flat): the two are in either way, so the last row goes on
+    # rather than skips. Twin of the same row in _exakit_addon_table_build.
+    if ($flat) { $lastLabel = "Continue" } else { $lastLabel = "Skip" }
+    [void](Add-ExakitTableRow -Kind "plain" -Label $lastLabel -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
     $rowSkip = $addonCount + $kidCount + $coveredCount + 2 + $topRows.Count
     if ($flat) { $rowSkip = $rowSkip - 1 }
