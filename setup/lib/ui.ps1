@@ -304,7 +304,10 @@ function Start-ExakitStepBar([int]$Done, [int]$Total, [string]$Title) {
     if ($null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll }
     if ($Total -lt 1) { $Total = 1 }
     if ($Done -gt $Total) { $Done = $Total }
-    $head = "{0}  {1}/{2}  {3}" -f (Get-ExakitBar -Pct ([int]($Done * 100 / $Total))), $Done, $Total, $Title
+    # The count names the item running now (1/3 while the first runs); the
+    # bar's fill stays what is done.
+    $cur = $Done + 1; if ($cur -gt $Total) { $cur = $Total }
+    $head = "{0}  {1}/{2}  {3}" -f (Get-ExakitBar -Pct ([int]($Done * 100 / $Total))), $cur, $Total, $Title
     try {
         $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $head; Sub = ""; T0 = (Get-Date); Indent = $script:UiSpinIndent; Dot = $script:UiMidDot })
         $rs = [runspacefactory]::CreateRunspace()

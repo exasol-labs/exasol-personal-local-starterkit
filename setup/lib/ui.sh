@@ -361,7 +361,10 @@ ui_bar_begin() {
     fi
     _ubb_tot="$2"; [ "$_ubb_tot" -gt 0 ] 2>/dev/null || _ubb_tot=1
     _ubb_done="$1"; [ "$_ubb_done" -gt "$_ubb_tot" ] 2>/dev/null && _ubb_done="$_ubb_tot"
-    _ubb_head="$(ui_bar $(( _ubb_done * 100 / _ubb_tot )))  ${_ubb_done}/${_ubb_tot}  $3"
+    # The count names the item running now (1/3 while the first runs); the
+    # bar's fill stays what is done.
+    _ubb_cur=$(( _ubb_done + 1 )); [ "$_ubb_cur" -gt "$_ubb_tot" ] && _ubb_cur="$_ubb_tot"
+    _ubb_head="$(ui_bar $(( _ubb_done * 100 / _ubb_tot )))  ${_ubb_cur}/${_ubb_tot}  $3"
     _ubb_t0="$(date +%s 2>/dev/null || echo 0)"
     _ubb_parent=$$
     printf '\033[?25l'
