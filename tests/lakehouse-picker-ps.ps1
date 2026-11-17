@@ -142,13 +142,15 @@ Check "...a store the engine marks disabled is never picked" "False" ((@($tree.f
 $rows = @($script:LastTable.Rows.ToArray())
 $top = @($rows | Where-Object { $_.Kind -eq "tee" -or $_.Kind -eq "corner" })
 Check "the menu has 11 sources" "11" $top.Count
+# A catalog's files are the stores connector.json's "valid" lists for it - Google Cloud Storage is
+# in none of them, so it is no row at all (the engine still refuses it by name).
 Check "the subtree's group specs, innermost first" `
-    "11:12:15:collapse+one+first 16:17:20:collapse+one+first 21:22:22:collapse 23:24:26:collapse+one+first 10:11:26:collapse+one" `
+    "11:12:14:collapse+one+first 15:16:18:collapse+one+first 19:20:20:collapse 21:22:23:collapse+one+first 10:11:23:collapse+one" `
     ($script:LastGroups -join ' ')
-Check "Glue's files are a note nobody can pick" "files: Amazon S3 (automatic)|disabled" ($rows[21].Label + "|" + $rows[21].State)
-Check "Google Cloud Storage is a row nobody can pick" "Google Cloud Storage - not supported yet|disabled" ($rows[14].Label + "|" + $rows[14].State)
-Check "No catalog offers no vended access" "Amazon S3 / S3-compatible" $rows[23].Label
-Check "the files hang three levels deep" "tee-tee-tee|tee-corner-corner" ($rows[11].Kind + "|" + $rows[25].Kind)
+Check "Glue's files are a note nobody can pick" "files: Amazon S3 (automatic)|disabled" ($rows[19].Label + "|" + $rows[19].State)
+Check "Google Cloud Storage is not offered under any catalog" 0 @($rows | Where-Object { ("" + $_.Label) -like "Google Cloud Storage*" }).Count
+Check "No catalog offers no vended access" "Amazon S3 / S3-compatible" $rows[21].Label
+Check "the files hang three levels deep" "tee-tee-tee|tee-corner-corner" ($rows[11].Kind + "|" + $rows[22].Kind)
 $script:OldCatalog = $true
 [void](Run-Pick "kE")
 $script:OldCatalog = $false
@@ -166,17 +168,17 @@ Check "the table menu without a collapse group: Left/Right leave the cursor and 
 
 Write-Host "== the frame: hidden rows, radio rows, three levels =="
 $t = $script:LastTable
-$t.Hidden = @(); $t.Radio = @(11, 16, 21, 23, 12, 13, 14)
+$t.Hidden = @(); $t.Radio = @(11, 15, 19, 21, 12, 13, 14)
 Set-ExakitTableTicks -Rows @(10, 11, 12) -Table $t
 $frame = Get-ExakitTableFrame -Table $t -Cursor 0
 $plain = $frame -replace "$([char]27)\[[0-9;]*m", ""
 Check "a picked radio row shows its bullet after the connector" $true ($plain.Contains("(" + $script:UiBullet + ") Iceberg REST catalog"))
 Check "an unpicked one shows ( )" $true ($plain.Contains("( ) Unity Catalog"))
 Check "a third-level row carries both spines" $true ($plain.Contains($script:UiVB + "  " + $script:UiVB + "  " + $script:UiTee + " (" + $script:UiBullet + ") Let the catalog give access"))
-$t.Hidden = @(11..26)
+$t.Hidden = @(11..23)
 $less = ((Get-ExakitTableFrame -Table $t -Cursor 0) -replace "$([char]27)\[[0-9;]*m", "")
 Check "a hidden row is not drawn" $false ($less.Contains("Iceberg REST catalog"))
-Check "...and takes no line" ($plain.Split("`n").Count - 16) ($less.Split("`n").Count)
+Check "...and takes no line" ($plain.Split("`n").Count - 13) ($less.Split("`n").Count)
 $t.Remove("Hidden"); $t.Remove("Radio")
 
 Write-Host "== the connector guides: ? in the menu, the guide picker, the reader =="
@@ -186,7 +188,7 @@ function Get-ExakitVsDefs { return (Join-Path (Join-Path $repo "setup") "virtual
 $script:Guides = New-Object System.Collections.ArrayList
 function Show-ExakitVsGuideBack { param([string]$Connector) [void]$script:Guides.Add($Connector) }
 $script:Guides.Clear()
-Check "? on a row shows its connector's guide; the menu goes on" "PICKED=sqlserver CATALOG= FILES=" (Run-Pick ("jj?" + "? E"))   # two "?" keys, kept apart so the PS 5.1 guard does not read them as ??
+Check "? on a row shows the connector guide; the menu goes on" "PICKED=sqlserver CATALOG= FILES=" (Run-Pick ("jj?" + "? E"))   # two "?" keys, kept apart so the PS 5.1 guard does not read them as ??
 Check "...SQL Server's, once per ?" "sqlserver sqlserver" ($script:Guides -join ' ')
 $script:Guides.Clear()
 Check "? on a Lakehouse catalog row: Lakehouse's guide" "lakehouse" (& { [void](Run-Pick ($lake + "j? E")); $script:Guides -join ' ' })
@@ -199,13 +201,15 @@ function Run-Guides([string]$Keys) {
     $picked = @(Invoke-ExakitVsPick -Guides 6> $null)
     return ($picked -join ' ')
 }
-Check "the guide picker: the ticked connectors, in menu order" "postgresql mysql" (Run-Guides " j E")
+# The guides read catalog.json itself, alphabetical (8f7e44c9): Amazon S3 first.
+Check "the guide picker: the ticked connectors, in menu order" "s3 azure-blob" (Run-Guides " j E")
 Check "...titled Connector guides" "Connector guides" $script:LastTable.Title
 $rows = @($script:LastTable.Rows.ToArray())
 Check "...its last row Quits" "Quit" $rows[-1].Label
 Check "...every connector can be ticked (a gated one has a guide too)" 0 @($rows | Where-Object { ($_.Kind -eq "tee" -or $_.Kind -eq "corner") -and $_.State -eq "disabled" }).Count
 Check "...nothing has to be picked under a Lakehouse catalog" "" (@($script:LastGroups | Where-Object { $_ -like "*one*" -or $_ -like "*first*" }) -join ' ')
-Check "...a Lakehouse catalog ticked is Lakehouse's guide, once" "lakehouse" (Run-Guides ($lake + "j E"))
+# In the guides' (catalog.json) order Lakehouse is the fifth row.
+Check "...a Lakehouse catalog ticked is Lakehouse's guide, once" "lakehouse" (Run-Guides ("jjjj " + "j E"))
 Check "...Quit is no guide" "" (Run-Guides "kE")
 
 $script:Screens = New-Object System.Collections.ArrayList
@@ -220,9 +224,9 @@ function Run-Picker([string]$Keys, [string[]]$ScreenKeys) {
     return ("" + (Invoke-ExakitVsGuidePicker 6> $null))
 }
 $d = $script:UiMidDot
-Check "Enter shows the next guide, c on it connects that source" "mysql" (Run-Picker " j E" @("enter", "c"))
+Check "Enter shows the next guide, c on it connects that source" "azure-blob" (Run-Picker " j E" @("enter", "c"))
 Check "...each guide in turn, its footer: next, open, connect, quit" `
-    ("postgresql|Enter next guide $d o open full doc $d c connect PostgreSQL now $d q quit|c" + "`n" + "mysql|Enter done $d o open full doc $d c connect MySQL now $d q quit|c") `
+    ("s3|Enter next guide $d o offline guide $d g GitHub $d c connect Amazon S3 now $d q quit|c" + "`n" + "azure-blob|Enter done $d o offline guide $d g GitHub $d c connect Azure Blob Storage now $d q quit|c") `
     ($script:Screens -join "`n")
 Check "q ends the guides, nothing to connect" "|1" ((Run-Picker " j E" @("q")) + "|" + $script:Screens.Count)
 Check "Esc too" "|1" ((Run-Picker " j E" @("esc")) + "|" + $script:Screens.Count)
