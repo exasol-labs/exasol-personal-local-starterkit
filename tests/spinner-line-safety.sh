@@ -320,5 +320,32 @@ esac
 grep -q 'LEFT=0' "$WORK/driver.raw" && pass "no animator process outlives the installer" \
     || fail "an animator process outlived the installer"
 
+# THE OFFER'S SPINNER, handed to a table someone else draws. A nested
+# ui_spin_begin that never gave its reference back left ui_spin_end only
+# counting down, so the owner's last frame stayed frozen above the add-ons
+# table. ui_spin_end_all is the real stop the hand-over uses now.
+cat > "$WORK/nested.sh" <<EOF
+cd "$ROOT"; export HOME="$WORK/home"
+. setup/lib/ui.sh; . setup/lib/common.sh 2>/dev/null; ui_detect >/dev/null 2>&1; UI_FANCY=1
+ui_spin_begin ""
+ui_spin_begin "Opening the add-ons"
+sleep 0.6
+ui_spin_end
+echo "COUNTDOWN pid=[\${_UI_SPIN_PID:+set}]"
+ui_spin_end_all
+printf '\nTABLE-START\n'
+sleep 0.8
+echo "TABLE-END pid=[\${_UI_SPIN_PID}] nested=[\${_UI_SPIN_NESTED}]"
+EOF
+python3 "$WORK/ptykeys.py" "$WORK/nested.sh" 4 > "$WORK/nested.raw" 2>&1
+grep -q 'COUNTDOWN pid=\[set\]' "$WORK/nested.raw" && pass "a leaked nested reference keeps ui_spin_end from stopping the owner (the cause)" \
+    || fail "expected ui_spin_end to only count down with a nested reference out"
+case "$(python3 "$WORK/frames.py" "$WORK/nested.raw" TABLE-START TABLE-END)" in
+    "found 0") pass "ui_spin_end_all: no spinner frame once the table owns the line" ;;
+    *)         fail "a frame was drawn after ui_spin_end_all: $(python3 "$WORK/frames.py" "$WORK/nested.raw" TABLE-START TABLE-END)" ;;
+esac
+grep -q 'TABLE-END pid=\[\] nested=\[0\]' "$WORK/nested.raw" && pass "ui_spin_end_all released the slot and every reference" \
+    || fail "ui_spin_end_all left a pid or a reference"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

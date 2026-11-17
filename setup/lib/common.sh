@@ -6141,10 +6141,7 @@ EXAKIT_MM_ABOUT
                # install's add-on offer does): its frame stayed frozen above the
                # table. The line is the table's now: stopped, nesting zeroed.
                # Twin of the same block in Show-ExakitMarketplaceMenu.
-               if [ -n "${_UI_SPIN_PID:-}" ]; then
-                   _UI_SPIN_NESTED=0
-                   _ui_step_stop_spinner
-               fi
+               [ -n "${_UI_SPIN_PID:-}" ] && ui_spin_end_all
                EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
                run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" marketplace \
                    --states "$_mm_state" --about "$_mm_state.about" --out "$_mm_result" \
@@ -6354,7 +6351,7 @@ EXAKIT_MM_EOF
     fi
 
     if [ "$_mm_selectable" -eq 0 ]; then
-        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end_all; EXAKIT_MARKETPLACE_SPINNING=0; }
         info "Everything available is already covered."
         # Show each covered add-on and its state.
         while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
@@ -6368,7 +6365,7 @@ EXAKIT_MM_COVERED
 
     # A headless run needs an explicit selection; persona add sets UI_TABLE_AUTO.
     if [ -z "$(_exakit_prompt_tty)" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
-        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end_all; EXAKIT_MARKETPLACE_SPINNING=0; }
         info "No terminal to ask on — nothing was installed."
         info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
         info "Install explicitly: exakit marketplace <id>   or EXAKIT_MARKETPLACE_ADDONS=<ids>|all exakit marketplace"
@@ -6464,8 +6461,10 @@ EXAKIT_MM_CSPLIT
             # Nothing is ticked while the two install: the question comes after.
             ui_table_tick "$EXAKIT_ADDON_TABLE_STATE" ""
             UI_TABLE_LINES=0
-            # The spinner's line becomes the blank line above the table.
-            [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && ui_spin_end
+            # The spinner's line becomes the blank line above the table. A real
+            # stop, not a count-down: a reference a nested ui_spin_begin never
+            # gave back left the offer's frame frozen above the table.
+            if [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] || [ -n "${_UI_SPIN_PID:-}" ]; then ui_spin_end_all; fi
             printf '\n\n'
             EXAKIT_ADDON_TABLE_KEEP=1 _exakit_marketplace_apply_python "$EXAKIT_MARKETPLACE_AUTO_FIRST" || true
             _mm_auto_notes="${EXAKIT_ADDON_TABLE_NOTES:-}"
@@ -6490,7 +6489,7 @@ EXAKIT_MM_CSPLIT
 ${_mm_ctop:-}
 EXAKIT_MM_TROWS
         [ "$_mm_trows" = " " ] || { UI_TABLE_NOBOX="$_mm_trows"; UI_TABLE_LOCKED="$_mm_trows"; }
-        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end; EXAKIT_MARKETPLACE_SPINNING=0; }
+        [ "${EXAKIT_MARKETPLACE_SPINNING:-0}" = 1 ] && { ui_spin_end_all; EXAKIT_MARKETPLACE_SPINNING=0; }
         printf '\n\n'
     fi
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
@@ -6806,7 +6805,7 @@ exakit_marketplace_offer() {
         EXAKIT_MARKETPLACE_REASONS="$_mo_about" EXAKIT_MARKETPLACE_ONLY="" EXAKIT_MARKETPLACE_PRESELECT=none \
             EXAKIT_MARKETPLACE_NO_TEXTUAL=1 EXAKIT_MARKETPLACE_AUTO_FIRST="$_mo_ids" EXAKIT_MARKETPLACE_SPINNING=1 \
             EXAKIT_MARKETPLACE_INSTALL_TABLE=1 exakit_marketplace_menu || true
-        ui_spin_end
+        ui_spin_end_all
     elif [ -n "$_mo_ids" ]; then
         # Nobody to ask: the two, drawn ticked and installed, and nothing else.
         _mo_about="$(_exakit_marketplace_catalog_about "$_mo_ids")"

@@ -6535,7 +6535,7 @@ function Invoke-ExakitMarketplacePythonNow {
         throw ($failure + (Get-ExakitProxyHint -ErrorText ((@($lines) + @($diagnostics)) -join " ") -Python))
     }
     if ($DryRun) {
-        foreach ($line in $lines) { Info "  will remove: $line" }
+        foreach ($line in $lines) { $shown = Get-ExakitTilde ([string]$line); Info "  will remove: $shown" }
         return $true
     }
     if ($Operation -in @('install', 'update', 'uninstall', 'start', 'stop')) {
@@ -7235,10 +7235,7 @@ function Show-ExakitMarketplaceMenu {
             # install's add-on offer does): its frame stayed frozen on its own
             # line above the table. The line is the table's now: stopped and
             # cleared, nesting zeroed.
-            if ($null -ne $script:UiSpinFlag) {
-                $script:UiSpinNested = 0
-                try { Stop-ExakitSpinner } catch { }
-            }
+            if ($null -ne $script:UiSpinFlag) { try { Stop-ExakitSpinnerAll } catch { } }
             if ($python) {
                 & $python $launcher $root marketplace --states $statesPath --about $aboutPath --out $resultPath `
                     --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) `
@@ -7396,7 +7393,7 @@ function Show-ExakitMarketplaceMenu {
     # in exakit_marketplace_menu.
     $installTable = [bool](($env:EXAKIT_MARKETPLACE_INSTALL_TABLE -eq "1" -or $env:EXAKIT_MARKETPLACE_AUTO_FIRST) -and $env:UI_TABLE_AUTO -ne "1")
     # The spinner stops before anything is printed, whichever way the menu goes.
-    if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
+    if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinnerAll; $script:ExakitMarketplaceSpinning = $false }
     Write-Host ""
 
     if ($selectable.Count -eq 0) {
@@ -7568,7 +7565,10 @@ function Show-ExakitMarketplaceMenu {
             $script:ExakitAddonTable.Col3 = ""
             $script:UiTableNoBox = $autoRows
             $script:UiTableLocked = $autoRows   # ticked and locked, like the sample datasets
-            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
+            # A real stop, not a count-down: the table is drawn next, and a
+            # reference a nested Start never gave back left the offer's frame
+            # frozen on its own line above it.
+            if ($script:ExakitMarketplaceSpinning -or $null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll; $script:ExakitMarketplaceSpinning = $false }
             Write-Host ""
             $script:ExakitAddonTableKeep = $true
             try { Invoke-ExakitMarketplaceApplyPython -Ids $autoIds } catch { Write-ExakitLog "WARN" "$_" } finally {
@@ -7594,6 +7594,9 @@ function Show-ExakitMarketplaceMenu {
     $groupFirst = 2
     $groupLast = $addonCount + $kidCount + 1
     if ($flat) { $groupParent = 0; $groupFirst = 0; $groupLast = 0 }
+    # The menu owns the line from here (Invoke-ExakitTableMenu stops a spinner
+    # too; the offer's flag goes with it so its finally does not stop it twice).
+    if ($script:ExakitMarketplaceSpinning -or $null -ne $script:UiSpinFlag) { Stop-ExakitSpinnerAll; $script:ExakitMarketplaceSpinning = $false }
     try {
         $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
             -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent $groupParent `
@@ -8255,7 +8258,7 @@ function Request-ExakitMarketplaceOffer {
         Start-ExakitSpinner ""
         $script:ExakitMarketplaceSpinning = $true
         try { Show-ExakitMarketplaceMenu } catch { Warn2 "The add-ons did not finish cleanly: $_" } finally {
-            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinner; $script:ExakitMarketplaceSpinning = $false }
+            if ($script:ExakitMarketplaceSpinning) { Stop-ExakitSpinnerAll; $script:ExakitMarketplaceSpinning = $false }
             foreach ($name in @("EXAKIT_MARKETPLACE_REASONS", "EXAKIT_MARKETPLACE_PRESELECT", "EXAKIT_MARKETPLACE_NO_TEXTUAL", "EXAKIT_MARKETPLACE_AUTO_FIRST", "EXAKIT_MARKETPLACE_INSTALL_TABLE")) {
                 Remove-Item "env:$name" -ErrorAction SilentlyContinue
             }

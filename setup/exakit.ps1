@@ -1100,7 +1100,7 @@ function Invoke-ExakitUninstallOrphanAutostart {
         $pids = @(Get-ExakitOrphanAutostartPids -Id $o.Id -Entry $o.Path)
         $note = "a $($o.Id) server already started from it may keep running until logout or a reboot"
         if ($DryRun) {
-            Info "  will remove: the leftover automatic-start entry for $($o.Id) ($($o.Path))"
+            Info "  will remove: the leftover automatic-start entry for $($o.Id) ($(Get-ExakitTilde $o.Path))"
             if ($pids.Count -gt 0) { Info "  will stop: the leftover $($o.Id) launcher (pids $($pids -join ' '))" }
             Info "  note: $note"
             continue
@@ -2207,7 +2207,7 @@ function Invoke-ExakitUninstallRun {
             (Get-Command Get-PersonalLauncherLeftovers -ErrorAction SilentlyContinue)) {
             $launcherLeft = Get-PersonalLauncherLeftovers
             if ($launcherLeft.Cache) {
-                $cacheLabel = "$($launcherLeft.Cache) ($($launcherLeft.CacheSize))"
+                $cacheLabel = "$(Get-ExakitTilde $launcherLeft.Cache) ($($launcherLeft.CacheSize))"
                 if ($DryRun) { Info "  will remove: Exasol launcher download cache $cacheLabel" }
                 else {
                     Info "Removing the Exasol launcher download cache $cacheLabel"
@@ -2218,7 +2218,7 @@ function Invoke-ExakitUninstallRun {
                 }
             }
             foreach ($stateDir in @($launcherLeft.Dirs)) {
-                if ($DryRun) { Info "  will remove: empty launcher folder $stateDir"; continue }
+                if ($DryRun) { Info "  will remove: empty launcher folder $(Get-ExakitTilde $stateDir)"; continue }
                 # Non-recursive: a folder that is not empty stays.
                 try { [System.IO.Directory]::Delete($stateDir, $false) } catch { break }
             }
@@ -2294,7 +2294,7 @@ function Invoke-ExakitUninstallRun {
         }
         if ($found -eq 0) { continue }
         $word = if ($found -eq 1) { "skill" } else { "skills" }
-        if ($DryRun) { Info "  will remove: $found AI $word from $root" }
+        if ($DryRun) { Info "  will remove: $found AI $word from $(Get-ExakitTilde $root)" }
         else { Info "$found AI $word from $root" }
     }
     # The permission rules skills-install merged into ~\.claude\settings.json go
@@ -2309,7 +2309,7 @@ function Invoke-ExakitUninstallRun {
     # Only kit-private profiles are removed; shared user profiles are preserved.
     $kitProfileDir = Join-Path $script:ExakitHome "exapump"
     if ((Test-Path $kitProfileDir) -and -not (Test-PreservedEntry $kitProfileDir)) {
-        if ($DryRun) { Info "  will remove: kit exapump profiles at $kitProfileDir" }
+        if ($DryRun) { Info "  will remove: kit exapump profiles at $(Get-ExakitTilde $kitProfileDir)" }
         else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $kitProfileDir }
     }
 
@@ -2346,8 +2346,8 @@ function Invoke-ExakitUninstallRun {
             # a kit home later.
             $keepWork = Test-ExakitUninstallKeepsNotebooks
             $keptSaid = if ($keepWork) { Get-ExakitUninstallKeptWork } else { "" }
-            if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots) - all but your work" }
-            if ($keepWork) { Info "  your work stays in $($script:ExakitHome): $keptSaid (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes it too)" }
+            if ($DryRun) { Info "  will remove: kit home $(Get-ExakitTilde $script:ExakitHome) (credentials, logs, manifest, snapshots) - all but your work" }
+            if ($keepWork) { Info "  your work stays in $(Get-ExakitTilde $script:ExakitHome): $keptSaid (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes it too)" }
             if ($preservedComponentPaths.Count -gt 0) { Info "  reused component files under the kit home are preserved" }
             if (-not $DryRun) {
                 foreach ($entry in @(Get-ChildItem -LiteralPath $script:ExakitHome -Force -ErrorAction SilentlyContinue)) {
@@ -2368,7 +2368,7 @@ function Invoke-ExakitUninstallRun {
             if ($keptSaid) { RecordRemoved "Kit files removed from $(Get-ExakitTilde $script:ExakitHome); your $keptSaid stay there" }
             else { RecordRemoved "Kit files removed from $(Get-ExakitTilde $script:ExakitHome); files other tools reuse stay there" }
         } else {
-            if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
+            if ($DryRun) { Info "  will remove: kit home $(Get-ExakitTilde $script:ExakitHome) (credentials, logs, manifest, snapshots)" }
             else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }
             RecordRemoved "Kit home removed: $(Get-ExakitTilde $script:ExakitHome)"
         }
@@ -2393,7 +2393,7 @@ function Invoke-ExakitUninstallRun {
     }
     foreach ($bin in $binNames) {
         $p = Join-Path $script:BinDir $bin
-        if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { if (Test-Path -LiteralPath $p) { Info "Keeping $p (not installed by this kit)." }; continue }
+        if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { if (Test-Path -LiteralPath $p) { Info "Keeping $(Get-ExakitTilde $p) (not installed by this kit)." }; continue }
         if ($ownedCoreBinPaths.ContainsKey($bin) -and $ownedCoreBinPaths[$bin]) { $p = $ownedCoreBinPaths[$bin] }
         if (Test-Path $p) {
             # An add-on's own dry run (step 0b) already listed its launcher:
@@ -2401,7 +2401,7 @@ function Invoke-ExakitUninstallRun {
             if ($DryRun) {
                 $listedByAddon = $false
                 foreach ($gone in $addonsGone) { if ($bin -ieq "$gone.cmd" -or $bin -ieq "$gone.cmd.new") { $listedByAddon = $true } }
-                if (-not $listedByAddon) { Info "  will remove: CLI binary $p" }
+                if (-not $listedByAddon) { Info "  will remove: CLI binary $(Get-ExakitTilde $p)" }
             }
             else { $binPaths += $p }
         }
@@ -2552,7 +2552,7 @@ function Invoke-CmdUninstall {
             }
             # The staged launcher refresh goes too (Invoke-ExakitUninstallComponent).
             $stagedLauncher = Join-Path $script:BinDir "$Addon.cmd.new"
-            if (Test-Path -LiteralPath $stagedLauncher) { Info "  will remove: staged launcher $stagedLauncher" }
+            if (Test-Path -LiteralPath $stagedLauncher) { Info "  will remove: staged launcher $(Get-ExakitTilde $stagedLauncher)" }
             return
         }
         if (-not $AssumeYes) {

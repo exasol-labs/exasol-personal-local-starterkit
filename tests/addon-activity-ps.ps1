@@ -42,3 +42,35 @@ $lines = $frame -split "`r?`n"
 $at = 0; while (-not $lines[$at].Contains("dash-server")) { $at++ }
 if (-not $lines[$at - 1].Contains("Starting dashboard service") -or $table.Lines -ne ($height + 2)) { throw "phase failed to follow active bar, one line per add-on" }
 Write-Host "PASS no activity line by default; with UI_TABLE_ACTIVITY=1 the phase sits directly above the active bar, aligned, one line per add-on"
+
+# THE ADD-ON OFFER'S SPINNER, handed to the table. The offer starts a spinner
+# until its table is up; a nested Start taken on the way and never given back
+# left Stop-ExakitSpinner only counting down, so the owner's last frame stayed
+# frozen on its own line above the table (Windows re-test, a7ce624f and
+# c3adec35). The stage that hands the line to the table now uses
+# Stop-ExakitSpinnerAll: a real stop, line cleared, whatever is still out.
+$script:UiFancy = $true
+if (-not $script:UiEsc) { $script:UiEsc = [char]27 }
+$prevOut = [Console]::Out
+$sw = New-Object System.IO.StringWriter
+[Console]::SetOut($sw)
+try {
+    Start-ExakitSpinner ""                      # the offer's (owner)
+    Start-ExakitSpinner "Opening the add-ons"   # nested, never given back
+    Start-Sleep -Milliseconds 300
+    Stop-ExakitSpinner                          # what the stage used to do
+    $leaked = ($null -ne $script:UiSpinFlag)
+    Stop-ExakitSpinnerAll                       # what it does now
+    $afterStop = $sw.ToString().Length
+    Start-Sleep -Milliseconds 300
+    $afterWait = $sw.ToString().Length
+    $tail = $sw.ToString()
+} finally {
+    [Console]::SetOut($prevOut)
+    $script:UiFancy = $false
+}
+if (-not $leaked) { throw "nesting theory: a single Stop after a nested Start should still leave the owner running" }
+if ($null -ne $script:UiSpinFlag -or $script:UiSpinNested -ne 0) { throw "Stop-ExakitSpinnerAll left the spinner running or a reference out" }
+if ($afterWait -ne $afterStop) { throw "frames written after Stop-ExakitSpinnerAll" }
+if (-not $tail.EndsWith("`r$([char]27)[K$([char]27)[?25h")) { throw "the spinner's line was not cleared before the table" }
+Write-Host "PASS a nested spinner reference no longer leaves the offer's frame above the add-ons table"
