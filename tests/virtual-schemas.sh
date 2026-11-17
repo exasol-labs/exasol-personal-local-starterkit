@@ -3202,7 +3202,6 @@ Q_PW="$(when 'Password * (hidden')"
 Q_TLS="$(when 'TLS (')"
 Q_CA="$(when 'CA certificate file:')"
 Q_SUM="$(when 'Number to change, Enter to continue')"
-Q_GO="$(when 'now? [y/N]')"
 if command -v python3 >/dev/null 2>&1; then
     db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
     # Space ticks PostgreSQL - the cursor starts on the first connector, there
@@ -3210,8 +3209,10 @@ if command -v python3 >/dev/null 2>&1; then
     # one wrong answer, corrected; Enter leaves the summary. The public IP lookup
     # is on (a file:// URL): the review says the address.
     TTY_REPLAY_RAW="$WORK/tui.raw" EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
-        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuione\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
+    lacks "...the review goes straight on to connect: no Connect it now?" "Connect it now?" "$(cat "$WORK/tui.raw")"
+    lacks "...and no y/N anywhere" "[y/N]" "$(cat "$WORK/tui.raw")"
     check "the first line is this computer's public IP, before the menu's own line" \
         "    • Tip: cloud sources see you as 203.0.113.7 - allow it if the source has an IP allowlist.|    • Tick one or more sources; the details for each are asked next." \
         "$(python3 -c 'import re, sys; t = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", open(sys.argv[1], encoding="utf-8").read()).replace("\r", ""); print("|".join([l for l in t.split("\n") if l.strip()][:2]))' "$WORK/tui.raw")"
@@ -3241,8 +3242,9 @@ PY
     # Two sources at 80 columns, the second unreachable: one row each, and the
     # failure's whole sentence under the table rather than in a cell.
     TUI_COLS=80 tui connect-tui-scenario.sh "Connect 2 sources" 4 \
-        "$MENU ${MENU}j$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuitwo\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$Q_PASTE\r${Q_NAME}tuimy\r${Q_HOST}my.example.com\r$Q_PORT\r${Q_DB}shop\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+        "$MENU ${MENU}j$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuitwo\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$Q_PASTE\r${Q_NAME}tuimy\r${Q_HOST}my.example.com\r$Q_PORT\r${Q_DB}shop\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
     check "two sources: still one table" "0" "$TUI_RC"
+    lacks "...no Connect all 2 now? either" "Connect all" "$TUI_SCREEN"
     has "...the one that worked" "✓ VS_TUITWO · 1 table" "$TUI_SCREEN"
     has "...the one that did not, in a few words" "✗ the source did not answer" "$TUI_SCREEN"
     has "...and in the engine's words below the table" "tuimy did not connect:" "$TUI_SCREEN"
@@ -3260,31 +3262,31 @@ import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump
 PY
     export TUI_FAKE_CALLS="$WORK/fake-calls"
     TTY_REPLAY_RAW="$WORK/tui.raw" TUI_SLOW_CONNECT=2 TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect 1 source" 3 \
-        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r$(when '%')\r"
+        "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuijava\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when '%')\r"
     check "a missing Java container: no question, then a table of its own" "0" "$TUI_RC"
-    check "...the one y/N was Connect it now?" "1" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
+    check "...no y/N at all: picking the source was the answer" "0" "$(tr -d '\r' < "$WORK/tui.raw" | grep -c '\[y/N\]')"
     has "...the first table says what is missing" "Preparing the database" "$TUI_SCREEN"
     has "...one line says what the kit does and why" "Java language container installed" "$(tr -d '\r' < "$WORK/tui.raw")"
     lacks "...and asks nothing" "Install the Java language container now?" "$(cat "$WORK/tui.raw")"
-    lacks "...no y/N after the connect question" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
+    lacks "...no y/N for the Java container either" "Java language container now? [y/N]" "$(cat "$WORK/tui.raw")"
     has "...the launcher installed it, with no restart of its own" "slc install java --no-restart" "$(cat "$TUI_FAKE_CALLS" 2>/dev/null)"
     has "...then the kit's own stop and start: the one restart" "exakit stop|exakit start" "$(tr '\n' '|' < "$TUI_FAKE_CALLS" 2>/dev/null)"
     has "...the install said done" "Java language container installed" "$TUI_SCREEN"
     has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
 
     # The same at the line-by-line questions (a terminal without the drawn
-    # form): "Connect now?" is the question, and the Java install after it is not.
+    # form): nothing is asked - neither "Connect now?" nor the Java install.
     python3 - "$STATE" <<'PY'
 import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
 PY
     TTY_REPLAY_RAW="$WORK/tui.raw" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_FAKE_JAVA_INSTALL=1 \
         TUI_ARGS="pg --name linejava --set host=pg.example.com --set database=sales --set user=reader" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
     has "line by line, Java missing: one line says what the kit does and why" "Preparing the database" "$TUI_RAW"
     lacks "...and asks nothing" "Install the Java language container now?" "$TUI_RAW"
-    check "...the one question was Connect now?" "1" "$(printf '%s\n' "$TUI_RAW" | grep -c '\[y/N\]')"
+    check "...no y/N at all: not Connect now? either" "0" "$(printf '%s\n' "$TUI_RAW" | grep -c '\[y/N\]')"
     check "...and the source connects after it" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEJAVA"]["secret"]')"
 
     # The command line names the connector and some answers: no menu, no
@@ -3293,7 +3295,7 @@ PY
     printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
     TTY_REPLAY_RAW="$WORK/tui.raw" \
     TUI_ARGS="pg --name tuiargs --set host=pg.example.com --set database=sales --set user=reader --password-file $WORK/tui.pw" \
-        tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r${Q_SUM}7\r$Q_PW\r$Q_SUM\r${Q_GO}y\r"
+        tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r${Q_SUM}7\r$Q_PW\r$Q_SUM\r"
     check "a named connector skips the menu" "0" "$TUI_RC"
     lacks "...no menu" "Connect external sources" "$TUI_SCREEN"
     lacks "...no connection string asked for" "Connection string" "$(cat "$WORK/tui.raw")"
@@ -3322,7 +3324,7 @@ PY
         # The PowerShell twin, under the same terminal model. pwsh starts slower:
         # the menu is waited for like every question.
         EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
-            "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+            "$MENU $MENU\r$Q_PASTE\r${Q_NAME}tuips\r${Q_HOST}localhost\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
         check "PowerShell: one menu, one panel, one table" "0" "$TUI_RC"
         has "...its review names this computer's public IP too" "Tip: cloud sources see you as 203.0.113.7" "$TUI_SCREEN"
         has "...and the row ends with the schema" "✓ VS_TUIPS · 1 table" "$TUI_SCREEN"
@@ -3378,7 +3380,7 @@ PY
     EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
     TUI_ARGS="s3 --name s3form --set bucket=docs-bucket --set region=ap-south-1" \
         tui connect-tui-scenario.sh "1 of 1 · Amazon S3" 2 \
-        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r${Q_GO}y\r"
+        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r"
     check "S3, mapping left empty: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
     has "...the two lines above the question, then the question" "$(printf '%s\n' \
@@ -3396,7 +3398,7 @@ PY
     EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" \
     TUI_ARGS="s3 --name s3deny --set bucket=docs-bucket --set region=ap-south-1" \
         tui connect-tui-scenario.sh "1 of 1 · Amazon S3" 2 \
-        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$(when 'EDML mapping path *')$MAPS\r$Q_SUM\r${Q_GO}y\r"
+        "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$(when 'EDML mapping path *')$MAPS\r$Q_SUM\r"
     check "S3, a key that cannot list: one panel, one table" "0" "$TUI_RC"
     has "...the reason said plainly" "the key cannot list the bucket (s3:ListBucket)" "$(tr -d '\r' < "$WORK/tui.raw")"
     has "...and the path given instead is used" "VS_S3DENY · 3 tables" "$TUI_SCREEN"
@@ -3406,7 +3408,7 @@ PY
         EXAKIT_VS_FAKE_STORE="$STORE" TTY_REPLAY_RAW="$WORK/tui.raw" TUI_PS_SOURCE=s3 TUI_PS_NAME=s3psform \
         TUI_PS_SETS="bucket=docs-bucket region=ap-south-1" \
             tui connect-tui-scenario-ps.sh "1 of 1 · Amazon S3" 2 \
-            "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r${Q_GO}y\r"
+            "$Q_MAP\r${Q_KEYID}$KEYID\r$Q_SKEY$AWSSECRET\r$Q_DRAFT\r$Q_SUM\r"
         check "PowerShell: S3, mapping left empty: one panel, one table" "0" "$TUI_RC"
         TUI_RAW="$(tr -d '\r' < "$WORK/tui.raw")"
         has "...the two lines above the question" "Leave empty and the kit drafts it from the bucket after you give the access key." "$TUI_RAW"
@@ -4005,7 +4007,7 @@ check "--url and --set uri= with a credential together: refused, exit 2" "2" "$R
 # On a terminal the panel opens with the string's answers in it.
 printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
 TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
-    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "$Q_PORT\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
 check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
 lacks "...no connection string asked for, and no question about one" "Esc/n to type the fields instead" "$(cat "$WORK/tui.raw")"
 has "...the panel holds the string's host" "Host name or address *              pg.example.com" "$TUI_SCREEN"
@@ -4027,7 +4029,7 @@ if command -v python3 >/dev/null 2>&1; then
     # (schema) it takes it, on one without (ca) it leaves it empty; 3 asks the
     # port again.
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader@pg.example.com:5433/sales\r$Q_USE\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}postgres://reader@pg.example.com:5433/sales\r$Q_USE\r$Q_NAME\r${Q_NAME}tuipaste\r$Q_SCHEMA\r$Q_PW\r$Q_PW$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r$Q_TLS\r$Q_CA\r${Q_SUM}3\r$(when 'Port (- clears it)')5432\r$Q_SUM\r"
     check "a pasted string, a refused Enter, one answer changed: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "the panel marks a required field with a star after its label" "│     Host name or address *              " "$TUI_RAW"
@@ -4066,7 +4068,7 @@ if command -v python3 >/dev/null 2>&1; then
     # summary again.
     Q_BACK="$(when 'Enter/q back')"
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "$Q_PASTE\r${Q_NAME}tuiguide\r${Q_HOST}?\r$Q_BACK\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}?\r${Q_BACK}q${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw?$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}?\r$Q_BACK\x1b${Q_SUM}\r${Q_GO}y\r"
+        "$Q_PASTE\r${Q_NAME}tuiguide\r${Q_HOST}?\r$Q_BACK\r${Q_HOST}pg.example.com\r$Q_PORT\r${Q_DB}?\r${Q_BACK}q${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r${Q_PW}pw?$TUI_SECRET\r$Q_TLS\r$Q_CA\r${Q_SUM}?\r$Q_BACK\x1b${Q_SUM}\r"
     check "? in the panel: one panel and one table left, the guide screen gone" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "...the legend says ? shows the guide" "│     * required · ? + Enter: guide " "$TUI_RAW"
@@ -4085,7 +4087,7 @@ if command -v python3 >/dev/null 2>&1; then
     # says "(from the string, hidden)", and the CONNECTION gets it. The source
     # record, the log and what was drawn never hold it.
     TTY_REPLAY_RAW="$RAW" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipwstr\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuipwstr\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
     check "a pasted string with a password: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "...shown back, its password masked by the engine" "    • Read: postgres://reader:****@pg.example.com:5433/sales" "$TUI_RAW"
@@ -4105,7 +4107,7 @@ if command -v python3 >/dev/null 2>&1; then
     # fields. A plan that refuses one input goes straight back to that field.
     TTY_REPLAY_RAW="$RAW" TUI_PLAN_FAIL="host=old.example.com is not a host this test lets through" TUI_ARGS="pg" \
         tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address * [old.example.com]:')pg.example.com\r$Q_SUM\r${Q_GO}y\r"
+        "${Q_PASTE}not a url\r${Q_PASTE}jdbc:mysql://my.example.com/shop\r$Q_PASTE\r${Q_NAME}tuijump\r${Q_HOST}old.example.com\r$Q_PORT\r${Q_DB}sales\r$Q_SCHEMA\r${Q_USER}reader\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r$(when 'Host name or address * [old.example.com]:')pg.example.com\r$Q_SUM\r"
     check "a garbage string, then a plan refusing the host: one panel, one table" "0" "$TUI_RC"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "a string with a space is refused in the engine's words" "the connection string has a space, line break or control character in it" "$TUI_RAW"
@@ -4133,22 +4135,22 @@ if command -v python3 >/dev/null 2>&1; then
 
     # 56 columns: a row too narrow for its value and "(from the string)" drops
     # the mark, never overflows the panel (the replay counts the frames). The
-    # review is declined: this is about the form. The hidden question is exactly
+    # review goes straight on to connect: this is about the form. The hidden question is exactly
     # 56 columns wide, on a terminal that holds the wrap (xterm's kind): one row,
     # counted as one, or the next redraw climbs one line too far.
     TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
-        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
+        "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r$Q_USE\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_TLS\r$Q_CA\r$Q_SUM\r"
     check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
     has "...the value kept" "$(printf '%-25s  %s' 'Host name or address *' 'pg.example.com')" "$TUI_SCREEN"
     lacks "...its mark dropped" "(from the string)" "$TUI_SCREEN"
-    has "...and declined, nothing changed" "Nothing was changed." "$TUI_SCREEN"
+    lacks "...and never asks Connect it now?" "now? [y/N]" "$TUI_SCREEN"
 
     # The line-by-line questions (a terminal without the drawn form), on a pty
     # that is the scenario's /dev/tty, as a real terminal is.
     Q_LNAME="$(when 'Name (alias) for this connection (lower case, e.g. sales) *')"
     Q_LPASTE="$(when 'Connection string (hidden) - paste + Enter, or Enter alone for the fields:')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_USE\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the connection string is asked first, hidden" "Connection string (hidden) - paste + Enter, or Enter alone for the fields:" "$TUI_RAW"
     has "...under the hint and one form per line" "$(printf '%s\n' "    • Paste the source's connection string, for example:" '        jdbc:postgresql://host:5432/db' '        postgres://user@host:5432/db' '        host[:port][/database]')" "$TUI_RAW"
@@ -4204,7 +4206,7 @@ if command -v python3 >/dev/null 2>&1; then
     # Line by line too: e asks again, n types the fields; the hidden password
     # prompt (a canonical read) drops an arrow pressed in it.
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Username')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
+        "${Q_LPASTE}postgres://reader@first.example.com/one\r${Q_USE}e${Q_LPASTE}postgres://reader@pg.example.com:5433/sales\r${Q_USE}n$Q_LNAME\r${Q_LNAME}lineno\r$(when '? Host name or address')pg.example.com\r$(when 'Port [5432]')\r$(when '? Database')sales\r$(when 'Schema [public]')\r$(when '? Username')reader\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Password (input hidden):')$TUI_SECRET$(pasted '\x1b[D')$(pasted '\x1b[3~')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the first string shown back" "    • Read: postgres://reader@first.example.com/one" "$TUI_RAW"
     has "...e asked again" "    • Read: postgres://reader@pg.example.com:5433/sales" "$TUI_RAW"
@@ -4231,7 +4233,7 @@ if command -v python3 >/dev/null 2>&1; then
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_STDIN=piped \
         TUI_ARGS="pg --name linepipe --set host=pg.example.com --set database=sales --set user=reader" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "stdin a pipe, /dev/tty a terminal: the questions as before" "Schema [public]" "$TUI_RAW"
     lacks "...no star" "Port *" "$TUI_RAW"
@@ -4246,7 +4248,7 @@ if command -v python3 >/dev/null 2>&1; then
 " \
         TUI_ARGS="pg --name linestdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
         tui connect-tui-scenario.sh "none" 0 \
-        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r$(when 'Connect now? [y/N]')y\r"
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'a public CA too')\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     lacks "--password-stdin, /dev/tty a terminal: no hidden prompt" "(input hidden)" "$TUI_RAW"
     has "...the questions from the terminal as before" "Schema [public]" "$TUI_RAW"

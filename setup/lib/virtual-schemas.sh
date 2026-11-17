@@ -2602,10 +2602,8 @@ for w in p["warnings"]:
     _EVT_ON_SCREEN=0
     _exakit_vs_tui_footer
     _evt_lines=$(( _evt_lines + _EVT_FOOT_N ))
-    if ! _exakit_vs_tui_yes "$(if [ "$_EVT_COUNT" = 1 ]; then printf 'Connect it now?'; else printf 'Connect all %s now?' "$_EVT_COUNT"; fi)"; then
-        _exakit_vs_tui_table_done
-        info "Nothing was changed."; rm -rf "$_EVT_DIR"; return 5
-    fi
+    # No "Connect it now?": picking the sources and filling their forms was
+    # the answer, so the review table goes straight on to connect.
 
     # 4. the database first: a language container a source needs and the
     # database lacks is installed before the table runs, so no row fails for
@@ -2615,7 +2613,7 @@ for w in p["warnings"]:
     _exakit_vs_tui_prepare "$_evt_over" $_evt_need && _evt_over=0
 
     # 5. connect: the review table comes alive in place, over itself, its
-    # footer and the question - or under what the database was prepared with
+    # footer - or under what the database was prepared with
     # shellcheck disable=SC2086 — indexes
     _exakit_vs_tui_live "$_evt_state" "$_evt_over" $_evt_all
 
@@ -3053,7 +3051,7 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}" ;;
     # --json never asks: a terminal is as good as none.
     _cc_tty=""
     [ "$_cc_json" = 1 ] || _cc_tty="$(_exakit_prompt_tty)"
-    # A person at a terminal (asked "Connect now?" below, or gave --yes): what
+    # A person at a terminal (or --yes): what
     # the source needs first - a language container, a restart - is said, not
     # asked (_exakit_vs_interactive). Without one, the contract stands.
     _EXAKIT_VS_INTERACTIVE=0
@@ -3169,10 +3167,6 @@ EOF
         # Asked at a terminal (no by default); without one only --yes agrees.
         _exakit_vs_confirm "Re-point $_cc_name now?" \
             || { info "Nothing was changed. Confirm it with --yes."; exit 5; }
-    elif [ -n "$_cc_tty" ] && ! _exakit_vs_confirm "Connect now?"; then
-        # 5, as every command a person did not confirm: 0 would read as "done".
-        info "Nothing was changed."
-        exit 5
     fi
     # The labels of the combination's secrets (engine inputs): a lakehouse
     # source can have two, the second on --storage-secret-file or asked hidden.

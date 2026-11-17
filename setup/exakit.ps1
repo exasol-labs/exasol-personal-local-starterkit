@@ -4781,7 +4781,7 @@ function Invoke-CmdConnect {
     }
     # --json never asks: a console is as good as none.
     $interactive = (-not $json) -and (Test-ExakitInteractive)
-    # A person at a console (asked "Connect now?" below, or gave --yes): what
+    # A person at a console (or --yes): what
     # the source needs first - a language container, a restart - is said, not
     # asked (Test-ExakitVsInteractive). Without one, the contract stands.
     $script:ExakitVsInteractive = $interactive
@@ -4899,7 +4899,7 @@ function Invoke-CmdConnect {
     if ($action -eq "repoint") {
         # Asked at a console (no by default); without one only --yes agrees.
         if (-not (Confirm-ExakitVs "Re-point $name now?")) { Info "Nothing was changed. Confirm it with --yes."; exit 5 }
-    } elseif ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
+    }
     $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
     # The combination's own secrets (engine inputs): a lakehouse source can

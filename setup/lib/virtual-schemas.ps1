@@ -3028,9 +3028,8 @@ function Invoke-ExakitVsTuiFlow {
     Show-ExakitTable -Table $t -Cursor 0
     $lines = [int]$t.Lines + (Write-ExakitVsTuiFooter)
     $script:EvtOnScreen = 0
-    $question = "Connect all $($sources.Count) now?"
-    if ($sources.Count -eq 1) { $question = "Connect it now?" }
-    if (-not (Confirm-ExakitVsTui $question)) { Info "Nothing was changed."; return 5 }
+    # No "Connect it now?": picking the sources and filling their forms was
+    # the answer, so the review table goes straight on to connect.
     # 4. the database first: a language container a source needs and the
     # database lacks is installed before the table runs, so no row fails for
     # one. Picking the sources was the permission: nothing is asked.
@@ -3038,7 +3037,7 @@ function Invoke-ExakitVsTuiFlow {
     $script:EvtPrepared = @()
     if (Invoke-ExakitVsTuiPrepare -OnScreen $over -Need $need) { $over = 0 }
     # 5. connect: the review table comes alive in place, over itself, its
-    # footer and the question - or under what the database was prepared with
+    # footer - or under what the database was prepared with
     $script:EvtLive = $false
     Invoke-ExakitVsTuiRun -Table $t -Sources $sources -OnScreen $over
     # A language container (a download and a restart), or the restart Docker's
