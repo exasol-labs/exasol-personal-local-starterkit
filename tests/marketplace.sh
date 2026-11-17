@@ -1572,5 +1572,17 @@ has "...and draws them ticked, unasked"           '$env:UI_TABLE_AUTO = "1"'    
 has "...then the rest, nothing ticked"            '$env:EXAKIT_MARKETPLACE_PRESELECT = "none"' "$_ps_offer"
 lacks "...with no question"                       'Read-ExakitCheckboxMenu'                     "$_ps_offer"
 
+echo "the add-on events are read even when a signal interrupts the FIFO open:"
+# A plain `done <fifo` blocks in open() until Python opens the other end; on
+# macOS a signal arriving meanwhile failed it with "Interrupted system call",
+# losing every event (test_marketplace_worker_cannot_abort_its_parent_animation
+# saw it in CI). The read side is opened on its own descriptor, again while the
+# worker lives.
+_apply_body="$(sed -n '/^_exakit_marketplace_apply_python()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+has "the FIFO is opened on its own descriptor" 'exec 8<"$_mpa_dir/events"' "$_apply_body"
+has "...retried while the open fails" 'while ! { exec 8<"$_mpa_dir/events"; } 2>/dev/null; do' "$_apply_body"
+has "...the loop reads that descriptor" '_mpa_seconds <&8; do' "$_apply_body"
+lacks "...never a redirect that one signal can fail" 'done <"$_mpa_dir/events"' "$_apply_body"
+
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]
