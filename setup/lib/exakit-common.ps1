@@ -551,15 +551,27 @@ function Write-ExakitLog([string]$Level, [string]$Msg) {
 # Twin of EXAKIT_QUIET_DETAIL in common.sh.
 $script:ExakitQuietDetail = $false
 
+# $script:ExakitItemHeld - set by Start-ExakitStepItem for the length of ONE
+# item of a grouped step (exapump, the database features under "Setup
+# Utilities"). The item's Info/Ok lines, the ones OkStep/InfoStep keep included,
+# are held there instead of shown: the item says itself in its own two lines when
+# it ends, and replays these only if it failed. The log gets every line as
+# before; Warn2/Fail still print at once. Twin of EXAKIT_ITEM_LOG in common.sh.
+$script:ExakitItemHeld = $null
+
 function Info([string]$Msg) {
-    if (-not $script:ExakitQuietDetail) {
+    if ($null -ne $script:ExakitItemHeld) {
+        [void]$script:ExakitItemHeld.Add("INFO $Msg")
+    } elseif (-not $script:ExakitQuietDetail) {
         if ($script:UiFancy) { Write-Host ("    {0}{1}{2} {3}" -f $script:UiDim, $script:UiBullet, $script:UiReset, $Msg) }
         else { Write-Host ("    {0} {1}" -f $script:UiBullet, $Msg) }
     }
     Write-ExakitLog "INFO" $Msg
 }
 function Ok([string]$Msg) {
-    if (-not $script:ExakitQuietDetail) {
+    if ($null -ne $script:ExakitItemHeld) {
+        [void]$script:ExakitItemHeld.Add("OK $Msg")
+    } elseif (-not $script:ExakitQuietDetail) {
         if ($script:UiFancy) { Write-Host ("      {0}{1}{2} {3}" -f $script:UiOk, $script:UiTick, $script:UiReset, $Msg) }
         else { Write-Host ("      {0} {1}" -f $script:UiTick, $Msg) -ForegroundColor Green }
     }
@@ -594,6 +606,69 @@ function InfoStep([string]$Msg) {
     Info $Msg
     Resume-ExakitSpinner
     $script:ExakitQuietDetail = $prev
+}
+
+# A GROUPED STEP: one heading, several items under it, each drawn as a spinner
+# while it works and then as two lines - a tick with the item and its time, and
+# one dim line of what was done. Display only: every step underneath runs,
+# records and resumes exactly as it does on its own. Start-ExakitStepGroup
+# prints the heading and makes Begin-ExakitStep draw no heading of its own (an
+# item it skips is one line at the item column); Start-ExakitStepItem /
+# Complete-ExakitStepItem bracket one item. Twins of exakit_step_group_begin,
+# exakit_item_begin and exakit_item_end in common.sh.
+$script:ExakitStepGroup = $false
+$script:ExakitItemTitle = ""
+$script:ExakitItemT0 = $null
+function Start-ExakitStepGroup([string]$Title) {
+    Write-ExakitStepHeading $Title
+    $script:ExakitStepGroup = $true
+}
+function Stop-ExakitStepGroup { $script:ExakitStepGroup = $false }
+
+# Write-ExakitItemLine <mark> <title> [time] [detail] - an item's two lines. The
+# title is padded so the times line up; the detail is dim, one level further in.
+function Write-ExakitItemLine([string]$Mark, [string]$Title, [string]$Time = "", [string]$Detail = "") {
+    if ($Time) { Write-Host ("    {0} {1} {2}({3}){4}" -f $Mark, $Title.PadRight(38), $script:UiDim, $Time, $script:UiReset) }
+    else { Write-Host ("    {0} {1}" -f $Mark, $Title) }
+    if ($Detail) { Write-Host ("        {0}{1}{2}" -f $script:UiDim, $Detail, $script:UiReset) }
+}
+function Start-ExakitStepItem([string]$Title) {
+    $script:ExakitItemTitle = $Title
+    $script:ExakitItemT0 = Get-Date
+    $script:ExakitItemHeld = New-Object System.Collections.ArrayList
+    $script:UiSpinIndent = "    "
+    $script:UiSpinPrefix = $Title
+}
+# Test-ExakitItemHeld <pattern> - did the item's held lines say this (a regex)?
+function Test-ExakitItemHeld([string]$Pattern) {
+    if ($null -eq $script:ExakitItemHeld) { return $false }
+    foreach ($h in $script:ExakitItemHeld) { if ("$h" -match $Pattern) { return $true } }
+    return $false
+}
+# Complete-ExakitStepItem -Ok <bool> [-Title] [-Detail] - end the item. Done:
+# the tick, the title, the time and the detail. Not done: a cross, then every
+# line the item held, so the facts it did establish are on screen under the
+# error it already printed.
+function Complete-ExakitStepItem {
+    param([bool]$Ok, [string]$Title = "", [string]$Detail = "")
+    if (-not $Title) { $Title = $script:ExakitItemTitle }
+    $el = 0
+    if ($null -ne $script:ExakitItemT0) { $el = [int]((Get-Date) - $script:ExakitItemT0).TotalSeconds }
+    $held = $script:ExakitItemHeld
+    $script:ExakitItemHeld = $null
+    $script:UiSpinIndent = "  "
+    $script:UiSpinPrefix = ""
+    if ($Ok) {
+        Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Title "${el}s" $Detail
+    } else {
+        Write-ExakitItemLine ($script:UiErr + $script:UiCross + $script:UiReset) $Title "${el}s"
+        if ($null -ne $held) {
+            foreach ($h in $held) {
+                if ("$h".StartsWith("OK ")) { Write-Host ("        {0}{1}{2} {3}" -f $script:UiOk, $script:UiTick, $script:UiReset, "$h".Substring(3)) }
+                elseif ("$h".StartsWith("INFO ")) { Write-Host ("        {0}{1}{2} {3}" -f $script:UiDim, $script:UiBullet, $script:UiReset, "$h".Substring(5)) }
+            }
+        }
+    }
 }
 # Write-ExakitHeading <text> - a green arrow at the STEP indent (two spaces).
 #
@@ -3954,12 +4029,20 @@ function Begin-ExakitStep {
         # "missing" is allowed to override the tick.
         if ((Get-ExakitStepArtifactState $Name) -eq "missing") {
             $rerun = $true
+        } elseif ($script:ExakitStepGroup) {
+            # An item of a grouped step: one line at the item column, under the
+            # group's heading.
+            Write-ExakitItemLine ($script:UiOk + $script:UiTick + $script:UiReset) $Description "" "already done, skipping"
+            Write-ExakitLog "OK" "$Description - already done, skipping"
+            return $false
         } else {
             Ok "$Description - already done, skipping"
             return $false
         }
     }
-    Write-ExakitStepHeading $Description
+    # In a grouped step the group printed the heading; the item draws itself.
+    if ($script:ExakitStepGroup) { Write-ExakitLog "STEP" $Description }
+    else { Write-ExakitStepHeading $Description }
     if ($rerun) {
         if ($script:ExakitStepRerunReason) {
             Info "Recorded as done, but $($script:ExakitStepRerunReason)"
@@ -8088,6 +8171,10 @@ function Request-ExakitMarketplaceOffer {
     }
     # Nothing to install and nobody to ask: nothing on screen.
     if ($ids.Count -eq 0 -and -not ((Test-ExakitInteractive) -and (Test-ExakitMarketplaceHasPending))) { return }
+    # Two empty lines first: the offer is a new part of the run, not one more
+    # line of the install step above it. Twin of exakit_marketplace_offer.
+    Write-Host ""
+    Write-Host ""
     Write-ExakitHeading "Supercharging Exasol with Add-ons"
     if (Test-ExakitInteractive) {
         # ONE table: every add-on on offer, the missing ones of the two installing

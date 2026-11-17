@@ -183,16 +183,15 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <div class="flow">
 <div class="s"><b>Preamble</b>validate answers (bad → exit 2), logging, manifest, exakit.env, early helper, resolve versions</div><div class="ar">→</div>
 <div class="s you"><b>Persona from env</b>exakit_persona_apply_env when EXAKIT_PERSONA is set</div><div class="ar">→</div>
-<div class="s"><b>Step 1/7</b>Exasol launcher (personal_install_launcher)</div><div class="ar">→</div>
-<div class="s db"><b>Step 2/7</b>Local database deployment (personal_deploy_local); TLS cert pinned</div><div class="ar">→</div>
-<div class="s"><b>Step 3/7</b>exapump + profile [starter-kit]</div><div class="ar">→</div>
-<div class="s db"><b>Step 4/7</b>Database features: core tasks (SQL preprocessor)</div>
+<div class="s"><b>Step 1/6</b>Exasol launcher (personal_install_launcher)</div><div class="ar">→</div>
+<div class="s db"><b>Step 2/6</b>Local database deployment (personal_deploy_local); TLS cert pinned</div><div class="ar">→</div>
+<div class="s db"><b>Step 3/6</b>Setup Utilities: exapump + profile [starter-kit], then database features: core tasks (SQL preprocessor)</div>
 </div>
 <div class="flow">
-<div class="s"><b>Step 5/7</b>AI bridge: MCP server, mcp_readonly user, AI clients, skills</div><div class="ar">→</div>
-<div class="s"><b>Step 6/7</b>pyexasol venv</div><div class="ar">→</div>
+<div class="s"><b>Step 4/6</b>AI bridge: MCP server, mcp_readonly user, AI clients, skills</div><div class="ar">→</div>
+<div class="s"><b>Step 5/6</b>pyexasol venv</div><div class="ar">→</div>
 <div class="s you"><b>Persona question</b>exakit_persona_flow → datasets preselect, add-ons preselect, data table</div><div class="ar">→</div>
-<div class="s"><b>Step 7/7</b>exakit helper: copy kit parts to kit/</div><div class="ar">→</div>
+<div class="s"><b>Step 6/6</b>exakit helper: copy kit parts to kit/</div><div class="ar">→</div>
 <div class="s you"><b>Add-ons for your personas</b>exakit_marketplace_offer (preselected, with reasons)</div><div class="ar">→</div>
 <div class="s"><b>Services + summary</b>installer_flow --phase services; connection summary; ready line</div>
 </div>
@@ -201,14 +200,14 @@ irm https://www.exasol.com/install/starter-kit.ps1 | iex                 # Windo
 <tr><td>Preamble</td><td><code>exakit_validate_env_answers</code>, <code>exakit_init_logging</code>, <code>manifest_init</code>, <code>exakit_env_file_install</code>, <code>exakit_install_helper_early</code>, <code>exakit_resolve_install_versions</code></td><td><code>logs/install-&lt;stamp&gt;.log</code>, <code>manifest.json</code> (os, arch, kit.source, kit.version), <code>exakit.env</code> (template copied once)</td></tr>
 <tr><td>Persona from env</td><td><code>exakit_persona_apply_env</code> (skipped when <code>exakit_core_rerun_active</code>)</td><td>exports the persona's answers for anything not set</td></tr>
 <tr><td>0</td><td><code>legacy_crossing_before</code>, <code>personal_check_requirements</code></td><td>compatibility check (OS, arch, RAM, disk)</td></tr>
-<tr><td>1/7</td><td><code>personal_install_launcher</code></td><td><code>~/.local/bin/exasol</code></td></tr>
-<tr><td>2/7</td><td><code>personal_deploy_local</code></td><td>deployment under <code>~/.exasol/personal/deployments/default</code>; <code>credentials/personal_sys_password</code>; pinned TLS fingerprint. A failure is soft-recorded as <code>runtime</code> and later steps that need a database are skipped with one message.</td></tr>
-<tr><td>3/7</td><td><code>_exakit_install_exapump</code> (in <code>kit_shared_steps 3 7</code>, <code>common.sh</code>)</td><td><code>~/.local/bin/exapump</code>, <code>exapump/config.toml</code> profile <code>[starter-kit]</code></td></tr>
-<tr><td>4/7</td><td><code>exakit_core_database_step</code> (tasks in <code>setup/core/tasks.json</code>)</td><td>SQL preprocessor framework from <code>setup/preprocessor</code>, installed, tested, activated</td></tr>
-<tr><td>5/7</td><td><code>_exakit_install_mcp</code>, <code>exakit_maybe_offer_mcp_setup</code>, <code>exakit_maybe_offer_skills_install</code></td><td>MCP sidecar, <code>credentials/mcp_readonly_password</code>, AI client configs, skills in <code>~/.claude/skills</code> and <code>~/.agents/skills</code></td></tr>
-<tr><td>6/7</td><td>pyexasol step</td><td><code>pyexasol-venv/</code></td></tr>
+<tr><td>1/6</td><td><code>personal_install_launcher</code></td><td><code>~/.local/bin/exasol</code></td></tr>
+<tr><td>2/6</td><td><code>personal_deploy_local</code></td><td>deployment under <code>~/.exasol/personal/deployments/default</code>; <code>credentials/personal_sys_password</code>; pinned TLS fingerprint. A failure is soft-recorded as <code>runtime</code> and later steps that need a database are skipped with one message.</td></tr>
+<tr><td>3/6</td><td>Setup Utilities, item 1: <code>_exakit_install_exapump</code> (in <code>kit_shared_steps 3 6</code>, <code>common.sh</code>)</td><td><code>~/.local/bin/exapump</code>, <code>exapump/config.toml</code> profile <code>[starter-kit]</code></td></tr>
+<tr><td>3/6</td><td>Setup Utilities, item 2: <code>exakit_core_database_step</code> (tasks in <code>setup/core/tasks.json</code>)</td><td>SQL preprocessor framework from <code>setup/preprocessor</code>, installed, tested, activated</td></tr>
+<tr><td>4/6</td><td><code>_exakit_install_mcp</code>, <code>exakit_maybe_offer_mcp_setup</code>, <code>exakit_maybe_offer_skills_install</code></td><td>MCP sidecar, <code>credentials/mcp_readonly_password</code>, AI client configs, skills in <code>~/.claude/skills</code> and <code>~/.agents/skills</code></td></tr>
+<tr><td>5/6</td><td>pyexasol step</td><td><code>pyexasol-venv/</code></td></tr>
 <tr><td>Persona</td><td><code>exakit_persona_flow "$KIT_ROOT"</code> then <code>exakit_install_persona_skills</code></td><td>manifest <code>persona.*</code>; datasets loaded; skills with <code>persona:</code> frontmatter</td></tr>
-<tr><td>7/7</td><td><code>kit_helper_step</code></td><td><code>~/.local/bin/exakit</code>; <code>kit/</code> gets setup/lib, setup/core, setup/preprocessor, setup/virtual-schemas, setup/help, whats-new.json, load-data.sh, versions.json, mcp/, sql/, data/, skills/, marketplace/, docs/virtual-schemas</td></tr>
+<tr><td>6/6</td><td><code>kit_helper_step</code></td><td><code>~/.local/bin/exakit</code>; <code>kit/</code> gets setup/lib, setup/core, setup/preprocessor, setup/virtual-schemas, setup/help, whats-new.json, load-data.sh, versions.json, mcp/, sql/, data/, skills/, marketplace/, docs/virtual-schemas</td></tr>
 <tr><td>Close</td><td><code>exakit_marketplace_offer</code>, <code>installer_flow --phase services</code>, <code>exakit_persona_marketplace_note</code>, <code>connection_summary</code>, <code>exakit_print_ready_line</code></td><td>add-on receipts; services started (e.g. mlflow for ml-engineer)</td></tr>
 </table>
 <p>Windows twin: <code>setup/setup-windows.ps1</code> with <code>Set-ExakitPersonaEnv</code>, <code>Invoke-ExakitPersonaFlow</code>, <code>Install-ExakitPersonaSkills</code>, <code>Request-ExakitMarketplaceOffer</code>, <code>Invoke-ExakitMarketplaceCli -Script installer_flow --phase services</code>, <code>Show-ExakitConnectionSummary</code>. The command shim is <code>%USERPROFILE%\.local\bin\exakit.cmd</code>. Shell stays bash 3.2 compatible and PowerShell 5.1 compatible (no ternary, no <code>??</code>, ASCII-only <code>.ps1</code>).</p>

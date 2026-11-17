@@ -147,6 +147,23 @@ Invoke-ExakitCoreDatabaseStep -Label "Step 4/7  Configure database features" -Ki
 Has "the step announces itself" "STEP Step 4/7  Configure database features" ($script:events -join "|")
 Check "a passing handler records the task" "preprocessor" (Get-Completed)
 
+# Under "Setup Utilities" (a grouped step) the task is one item: begun with its
+# name and pinned version, ended with its verdict and a short detail line.
+function Start-ExakitStepItem([string]$Title) { Note "ITEM $Title" }
+function Complete-ExakitStepItem { param([bool]$Ok, [string]$Title = "", [string]$Detail = "") Note "ITEMEND $Ok|$Detail" }
+function Test-ExakitItemHeld([string]$Pattern) { return $false }
+$script:ExakitItemHeld = New-Object System.Collections.ArrayList
+[void]$script:ExakitItemHeld.Add("OK fake framework ready")
+$script:ExakitStepGroup = $true
+New-Manifest
+$script:events.Clear()
+Invoke-ExakitCoreDatabaseStep -Label "Database features" -KitRoot $repo
+$script:ExakitStepGroup = $false
+$script:ExakitItemHeld = $null
+Has "as an item of Setup Utilities: begun with its name" "ITEM SQL preprocessor framework" ($script:events -join "|")
+Has "...ended as done, with what it said last as the detail" "ITEMEND True|fake framework ready" ($script:events -join "|")
+Check "...and recorded the same way" "preprocessor" (Get-Completed)
+
 Write-Host ""
 Write-Host "== exakit update: the pending-task check =="
 $kit = Join-Path $script:ExakitHome "kit"

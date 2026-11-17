@@ -337,7 +337,7 @@ _exakit_autostart_register() { ok "dash-server: starts at login (~/Library/Launc
 manifest_get() { [ "$1" = "autostart.enabled" ] && printf 'true\n'; return 0; }
 
 : > "$EXAKIT_LOG_FILE"
-EXAKIT_ACTIVE_LABEL="Step 7/7  exakit helper"
+EXAKIT_ACTIVE_LABEL="Step 6/6  exakit helper"
 ADDON="$(_exakit_marketplace_install_one dash-server 2>&1)"
 check "the install succeeds" "0" "$?"
 
@@ -356,13 +356,13 @@ has "the version is in the log"   "Installing dash-server 0.1.0" "$LOGGED"
 has "the venv is in the log"      "dash-server-venv"             "$LOGGED"
 has "the autostart is in the log" "starts at login"              "$LOGGED"
 
-check "the label is handed back" "Step 7/7  exakit helper" "$EXAKIT_ACTIVE_LABEL"
+check "the label is handed back" "Step 6/6  exakit helper" "$EXAKIT_ACTIVE_LABEL"
 check "and so is the quiet flag" "0" "${EXAKIT_QUIET_DETAIL:-0}"
 
 # A failing install must hand both back too, or every later line goes silent.
 dash_server_install() { return 1; }
 _exakit_marketplace_install_one dash-server >/dev/null 2>&1
-check "a failed install restores the label" "Step 7/7  exakit helper" "$EXAKIT_ACTIVE_LABEL"
+check "a failed install restores the label" "Step 6/6  exakit helper" "$EXAKIT_ACTIVE_LABEL"
 check "...and the quiet flag" "0" "${EXAKIT_QUIET_DETAIL:-0}"
 LOUD="$(info "still speaking")"
 has "the screen is not left silent" "still speaking" "$LOUD"

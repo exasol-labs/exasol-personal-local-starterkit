@@ -85,6 +85,37 @@ function Get-ExakitCoreTaskLabel {
 # features" step. Never recorded in steps_completed, so it runs on every pass:
 # the core-task record skips the install, never the check. Twin of
 # exakit_core_database_step.
+# Get-ExakitCoreTaskItemTitle - a task as an item of "Setup Utilities": what it
+# is and the version this kit copy pins. Twin of exakit_core_task_item_title.
+function Get-ExakitCoreTaskItemTitle {
+    param([Parameter(Mandatory)][string]$Name, [Parameter(Mandatory)][string]$KitRoot)
+    if ($Name -eq "preprocessor") {
+        $pin = $null
+        try { $pin = Get-ExakitCorePreprocessorPin -KitRoot $KitRoot } catch { }
+        if ($null -ne $pin -and $pin.Version) { return "SQL preprocessor framework $($pin.Version)" }
+        return "SQL preprocessor framework"
+    }
+    return (Get-ExakitCoreTaskLabel $Name)
+}
+
+# Get-ExakitCoreTaskItemDetail - one line of what the task did, in a few words,
+# from the lines it held. Twin of exakit_core_task_item_detail.
+function Get-ExakitCoreTaskItemDetail {
+    param([Parameter(Mandatory)][string]$Name)
+    $parts = @()
+    if ($Name -eq "preprocessor") {
+        if (Test-ExakitItemHeld '^OK Checksum verified') { $parts += "checksum verified" }
+        if (Test-ExakitItemHeld 'installed, tested and activated') { $parts += "tested"; $parts += "active" }
+        if (Test-ExakitItemHeld 'verified and active') { $parts += "verified"; $parts += "active" }
+        if (Test-ExakitItemHeld '^OK Rule resolution refreshed') { $parts += "rule resolution refreshed" }
+    }
+    if ($parts.Count -gt 0) { return ($parts -join " $($script:UiMidDot) ") }
+    # Anything else: the last thing it reported done, as it said it.
+    $last = ""
+    foreach ($h in @($script:ExakitItemHeld)) { if ("$h".StartsWith("OK ")) { $last = "$h".Substring(3) } }
+    return $last
+}
+
 function Invoke-ExakitCoreDatabaseStep {
     param([Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][string]$KitRoot)
     if (-not (Begin-ExakitStep "db_features" $Label)) { return }
@@ -108,13 +139,21 @@ function Invoke-ExakitCoreDatabaseStep {
             Warn2 "$label is not part of this kit copy - carrying on"
             continue
         }
+        # Under "Setup Utilities" each task is one item: a spinner while it
+        # works, then its tick and one line of what was done. Twin of the same
+        # bracket in exakit_core_database_step.
+        $asItem = ($script:ExakitStepGroup -and (Get-Command Start-ExakitStepItem -ErrorAction SilentlyContinue))
+        if ($asItem) { Start-ExakitStepItem (Get-ExakitCoreTaskItemTitle -Name $task -KitRoot $KitRoot) }
         $ok = Invoke-ExakitSoftStep -Component $task -Repair "exakit update" -Label $label -Body {
             # The handler's LAST output is its verdict; anything a cmdlet
             # leaked onto the pipeline before it must not read as success.
             $verdict = @(& $handler -KitRoot $KitRoot)
             return ($verdict.Count -gt 0 -and $verdict[-1] -eq $true)
         }
+        $detail = ""
+        if ($asItem -and $ok) { $detail = Get-ExakitCoreTaskItemDetail -Name $task }
         if ($ok) { [void](Complete-ExakitCoreTask -KitRoot $KitRoot -Name $task) }
+        if ($asItem) { Complete-ExakitStepItem -Ok ([bool]$ok) -Detail $detail }
     }
 }
 
@@ -178,7 +217,11 @@ function Invoke-ExakitCoreTaskPreprocessor {
             "--pin-core-sha256", $pin.CoreSha256)
         if ($script:LogFile) { $argv += @("--log", $script:LogFile) }
         if (Test-Path -LiteralPath $package) { $argv += @("--package", $package) }
-        $result = Invoke-ExakitWithSpinner -Label "Configuring the SQL preprocessor framework" -Body {
+        # As an item of "Setup Utilities" the spinner already names the
+        # framework; it says only what is happening to it.
+        $spinLabel = "Configuring the SQL preprocessor framework"
+        if ($null -ne $script:ExakitItemHeld) { $spinLabel = "installing and testing" }
+        $result = Invoke-ExakitWithSpinner -Label $spinLabel -Body {
             Invoke-ExakitPythonFile -Path $py -Arguments $argv
         }
         $result = @($result)[-1]
@@ -197,7 +240,8 @@ function Invoke-ExakitCoreTaskPreprocessor {
         # Downloaded under its own name in a staging folder: the checksum line
         # names the file it checked. Twin of the bash side.
         $partial = Join-ExakitCorePath (Split-Path -Parent $package) ".incoming" $pin.Asset
-        $script:ExakitActiveLabel = "Downloading the SQL preprocessor framework $($pin.Version)"
+        if ($null -ne $script:ExakitItemHeld) { $script:ExakitActiveLabel = "downloading and verifying the checksum" }
+        else { $script:ExakitActiveLabel = "Downloading the SQL preprocessor framework $($pin.Version)" }
         [void](Get-ExakitFile -Url ("https://github.com/" + $pin.Repo + "/releases/download/" + $pin.Ref + "/" + $pin.Asset) -Dest $partial)
         Test-ExakitSha256 -Path $partial -Expected $pin.Sha256
         Move-Item -Force -LiteralPath $partial -Destination $package

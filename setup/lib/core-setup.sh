@@ -62,6 +62,34 @@ exakit_core_task_label() {
     esac
 }
 
+# exakit_core_task_item_title <name> <kit-root> — a task as an item of "Setup
+# Utilities": what it is and the version this kit copy pins.
+exakit_core_task_item_title() {
+    case "$1" in
+        preprocessor)
+            _ctit_v="$(exakit_core_preprocessor_pin "$2" 2>/dev/null | cut -d'|' -f1)"
+            printf 'SQL preprocessor framework%s\n' "${_ctit_v:+ $_ctit_v}" ;;
+        *) exakit_core_task_label "$1" ;;
+    esac
+}
+
+# exakit_core_task_item_detail <name> — one line of what the task did, in a few
+# words, from the lines it held (exakit_item_held).
+exakit_core_task_item_detail() {
+    _ctid=""
+    case "$1" in
+        preprocessor)
+            exakit_item_held '^OK Checksum verified' && _ctid="checksum verified"
+            exakit_item_held 'installed, tested and activated' && _ctid="${_ctid:+$_ctid · }tested · active"
+            exakit_item_held 'verified and active' && _ctid="${_ctid:+$_ctid · }verified · active"
+            exakit_item_held '^OK Rule resolution refreshed' && _ctid="${_ctid:+$_ctid · }rule resolution refreshed"
+            ;;
+    esac
+    # Anything else: the last thing it reported done, as it said it.
+    [ -n "$_ctid" ] || _ctid="$(grep '^OK ' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | tail -1 | sed 's/^OK //')"
+    printf '%s\n' "$_ctid"
+}
+
 # exakit_core_database_step <label> <kit-root> — the installer's "Configure
 # database features" step: every database-scope task, installed when missing
 # and verified when present. Never recorded in steps_completed, so it runs on
@@ -88,9 +116,20 @@ exakit_core_database_step() {
             warn "$(exakit_core_task_label "$_cds_task") is not part of this kit copy - carrying on"
             continue
         fi
+        # Under "Setup Utilities" each task is one item: a spinner while it
+        # works, then its tick and one line of what was done.
+        _cds_item=0
+        if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ] && command -v exakit_item_begin >/dev/null 2>&1; then
+            _cds_item=1
+            exakit_item_begin "$(exakit_core_task_item_title "$_cds_task" "$_cds_root")"
+        fi
         if exakit_soft_step "$_cds_task" "exakit update" "$(exakit_core_task_label "$_cds_task")" \
                 "exakit_core_task_$_cds_task" "$_cds_root"; then
+            [ "$_cds_item" = 1 ] && _cds_detail="$(exakit_core_task_item_detail "$_cds_task")"
             exakit_core_complete "$_cds_root" "$_cds_task" || true
+            [ "$_cds_item" = 1 ] && exakit_item_end 0 "" "$_cds_detail"
+        else
+            [ "$_cds_item" = 1 ] && exakit_item_end 1
         fi
     done
     return 0
@@ -168,7 +207,13 @@ CTP_PIN
             --pin-core-sha256 "$_ctp_core" \
             --log "${EXAKIT_LOG_FILE:-}"
         [ -f "$_ctp_package" ] && set -- "$@" --package "$_ctp_package"
-        ui_spin_begin "Configuring the SQL preprocessor framework"
+        # As an item of "Setup Utilities" the spinner already names the
+        # framework; it says only what is happening to it.
+        if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+            ui_spin_begin "installing and testing"
+        else
+            ui_spin_begin "Configuring the SQL preprocessor framework"
+        fi
         run_python "$_ctp_py" "$@" > "$_ctp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _ctp_rc=$?
         ui_spin_end
@@ -180,7 +225,11 @@ CTP_PIN
         # the file it checked, and a temporary name there reads as a stray file.
         _ctp_dl="$(dirname "$_ctp_package")/.incoming/$_ctp_asset"
         mkdir -p "$(dirname "$_ctp_dl")" || { exakit_note_failure "could not create $(dirname "$_ctp_dl")"; break; }
-        EXAKIT_ACTIVE_LABEL="Downloading the SQL preprocessor framework $_ctp_ver"
+        if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+            EXAKIT_ACTIVE_LABEL="downloading and verifying the checksum"
+        else
+            EXAKIT_ACTIVE_LABEL="Downloading the SQL preprocessor framework $_ctp_ver"
+        fi
         fetch "https://github.com/$_ctp_repo/releases/download/$_ctp_ref/$_ctp_asset" "$_ctp_dl"
         verify_sha256 "$_ctp_dl" "$_ctp_sha"
         mv -f "$_ctp_dl" "$_ctp_package" || { exakit_note_failure "could not place the framework package in the cache"; break; }

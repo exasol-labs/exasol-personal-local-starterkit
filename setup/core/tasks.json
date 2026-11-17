@@ -11,8 +11,8 @@
     "  name   a permanent key. Append new entries and keep the old ones for users",
     "         who skip releases. Never rename or reuse a name: a later setup pass",
     "         for the same component gets a new one (preprocessor_v2).",
-    "  scope  the installer step that performs the task: database (Step 4,",
-    "         Configure database features) or kit (local, no database needed).",
+    "  scope  the installer step that performs the task: database (Step 3,",
+    "         Setup Utilities: database features) or kit (no database needed).",
     "",
     "Only add a task when a new addition needs the installer to run after an",
     "update. A component that `exakit update` can install by itself does not."

@@ -336,7 +336,7 @@ for _dup_sh in "$ROOT"/setup/lib/*.sh; do
     check "$(basename "$_dup_sh") defines each function once" "" "$_dup_shnames"
 done
 
-printf '\n== all three platforms install in the same seven steps ==\n'
+printf '\n== all three platforms install in the same six steps ==\n'
 
 MAC_SH="$(cat "$ROOT/setup/setup-macos.sh")"
 WSL_SH="$(cat "$ROOT/setup/setup-linux.sh")"
@@ -352,12 +352,13 @@ for _six_h in "Exasol launcher" "Local database deployment"; do
     has "Windows has: $_six_h" "$_six_h" "$WIN_PS"
 done
 
-# Seven on every platform, and the shared tail told the right total.
+# Six on every platform, and the shared tail told the right total.
 # Counted as DECLARATIONS, not as label text: the two shell installers declare
-# their first two steps and delegate the remaining five to kit_shared_steps, so
-# a raw count of 'Step n/7' strings would differ by platform for a reason that
-# has nothing to do with the shape being the same. The fourth step, Configure
-# database features, is declared inside the core-setup module on both sides.
+# their first two steps and delegate the remaining four to kit_shared_steps, so
+# a raw count of 'Step n/6' strings would differ by platform for a reason that
+# has nothing to do with the shape being the same. The third step, Setup
+# Utilities, holds exapump and the database features, which the core-setup
+# module declares on both sides.
 check "macOS declares two, then delegates" "2" \
     "$(printf '%s\n' "$MAC_SH" | grep -c '^if begin_step ')"
 check "WSL declares two, then delegates" "2" \
@@ -365,16 +366,16 @@ check "WSL declares two, then delegates" "2" \
 check "Windows declares six itself" "6" \
     "$(printf '%s\n' "$WIN_PS" | grep -c 'Begin-ExakitStep "')"
 check "...and hands the fourth to the core-setup module" "1" \
-    "$(printf '%s\n' "$WIN_PS" | grep -c 'Invoke-ExakitCoreDatabaseStep -Label $featureLabel')"
-has "...labelled as the fourth of seven" '"Step 4/7  Configure database features"' "$WIN_PS"
+    "$(printf '%s\n' "$WIN_PS" | grep -c 'Invoke-ExakitCoreDatabaseStep -Label "Database features"')"
+has "...under Setup Utilities, the third of six" '"Step 3/6  Setup Utilities"' "$WIN_PS"
 # The shared tail must be told the right start and total, or the five steps it
 # owns would number themselves against the old six.
-check "macOS hands over at 3 of 7" "1" \
-    "$(printf '%s\n' "$MAC_SH" | grep -c 'kit_shared_steps 3 7')"
-check "WSL hands over at 3 of 7"   "1" \
-    "$(printf '%s\n' "$WSL_SH" | grep -c 'kit_shared_steps 3 7')"
-# And no installer still advertises a five- or six-step run.
-for _stale in "/5  " "/6  "; do
+check "macOS hands over at 3 of 6" "1" \
+    "$(printf '%s\n' "$MAC_SH" | grep -c 'kit_shared_steps 3 6')"
+check "WSL hands over at 3 of 6"   "1" \
+    "$(printf '%s\n' "$WSL_SH" | grep -c 'kit_shared_steps 3 6')"
+# And no installer still advertises a five- or seven-step run.
+for _stale in "/5  " "/7  "; do
     lacks "macOS has no stale total ($_stale)"   "$_stale" "$MAC_SH"
     lacks "WSL has no stale total ($_stale)"     "$_stale" "$WSL_SH"
     lacks "Windows has no stale total ($_stale)" "$_stale" "$WIN_PS"

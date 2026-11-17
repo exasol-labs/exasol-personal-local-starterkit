@@ -1537,13 +1537,13 @@ offer() { # offer <installed ids> — what exakit_marketplace_offer hands the me
     )
 }
 check "both missing: both installed, ticked, no question" \
-    "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
+    "||HEADING Supercharging Exasol with Add-ons|MENU ONLY=[dash-server,json-tables] TICKED=[dash-server,json-tables] AUTO=[1]" "$(offer "" | tr '\n' '|' | sed 's/|$//')"
 check "one there: only the other"  "MENU ONLY=[json-tables] TICKED=[json-tables] AUTO=[1]" "$(offer dash-server | grep MENU)"
 check "both there: nothing at all" "" "$(offer "dash-server json-tables")"
 check "on a terminal, ONE table: every add-on, the two installing first, the rest waiting with nothing ticked" \
-    "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[] FIRST=[dash-server,json-tables]" \
+    "||HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[] FIRST=[dash-server,json-tables]" \
     "$(OFFER_TTY=1 OFFER_PENDING=1 offer "" | tr '\n' '|' | sed 's/|$//')"
-check "...also when the two are there already" "HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
+check "...also when the two are there already" "||HEADING Supercharging Exasol with Add-ons|MENU ONLY=[] TICKED=[none] AUTO=[]" \
     "$(OFFER_TTY=1 OFFER_PENDING=1 offer "dash-server json-tables" | tr '\n' '|' | sed 's/|$//')"
 _ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
 _ps_auto="$(sed -n '/^function Install-ExakitAutoAddons/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"

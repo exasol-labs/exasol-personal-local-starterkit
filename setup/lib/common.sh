@@ -461,14 +461,26 @@ _exakit_log_file() {
 # comes from a dozen places in four modules, and a gate per line is a gate
 # somebody forgets. warn/error are deliberately NOT gated — a job that says
 # nothing while it works must still say something when it goes wrong.
+# EXAKIT_ITEM_LOG — set by exakit_item_begin for the length of ONE item of a
+# grouped step (exapump, the database features under "Setup Utilities"). The
+# item's info/ok lines, the ones ok_step/info_step keep included, go to that
+# file instead of the screen: the item says itself in its own two lines when it
+# ends, and replays these only if it failed. The logfile gets every line as
+# before; warn/error still print at once.
 info() {
-    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+    if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+        printf 'INFO %s\n' "$*" >> "$EXAKIT_ITEM_LOG" 2>/dev/null || true
+    elif [ "${EXAKIT_QUIET_DETAIL:-0}" != 1 ]; then
         printf '    %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "$*"
+    fi
     _exakit_log_file "INFO  $*"
 }
 ok() {
-    [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ] || \
+    if [ -n "${EXAKIT_ITEM_LOG:-}" ]; then
+        printf 'OK %s\n' "$*" >> "$EXAKIT_ITEM_LOG" 2>/dev/null || true
+    elif [ "${EXAKIT_QUIET_DETAIL:-0}" != 1 ]; then
         printf '      %s%s%s %s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" "$*"
+    fi
     _exakit_log_file "OK    $*"
 }
 # ok_step / info_step — the lines a one-line step keeps.
@@ -500,6 +512,81 @@ info_step() {
     info "$@"
     ui_spin_resume
     EXAKIT_QUIET_DETAIL="$_ifs_prev"
+}
+
+# A GROUPED STEP: one heading, several items under it, each drawn as a spinner
+# while it works and then as two lines -- a tick with the item and its time,
+# and one dim line of what was done:
+#
+#   ▸ Step 3/6  Setup Utilities
+#       ✓ exapump v0.14.0                        (14s)
+#           profile [starter-kit] · connection verified
+#
+# Display only: every step underneath runs, records and resumes exactly as it
+# does on its own. exakit_step_group_begin prints the heading and makes
+# begin_step draw no heading of its own (an item it skips is one line at the
+# item column); exakit_item_begin/_end bracket one item. ⇄ twins:
+# Start-ExakitStepGroup, Start-ExakitStepItem, Complete-ExakitStepItem in
+# exakit-common.ps1.
+EXAKIT_STEP_GROUP=0
+exakit_step_group_begin() {
+    exakit_step_heading "$1"
+    EXAKIT_STEP_GROUP=1
+}
+exakit_step_group_end() {
+    EXAKIT_STEP_GROUP=0
+}
+# exakit_item_line <mark> <title> [time] [detail] — an item's two lines. The
+# title is padded so the times line up; the detail is dim, one level further in.
+exakit_item_line() {
+    if [ -n "${3:-}" ]; then
+        printf '    %s %-38s %s(%s)%s\n' "$1" "$2" "${UI_DIM:-}" "$3" "${UI_RESET:-}"
+    else
+        printf '    %s %s\n' "$1" "$2"
+    fi
+    [ -z "${4:-}" ] || printf '        %s%s%s\n' "${UI_DIM:-}" "$4" "${UI_RESET:-}"
+}
+# exakit_item_begin <title> — start one item: its spinner names it, and its
+# info/ok lines are held (EXAKIT_ITEM_LOG) until it ends.
+exakit_item_begin() {
+    EXAKIT_ITEM_TITLE="$1"
+    EXAKIT_ITEM_T0="$(date +%s 2>/dev/null || echo 0)"
+    EXAKIT_ITEM_LOG="$(mktemp "${TMPDIR:-/tmp}/exakit-item.XXXXXX" 2>/dev/null)" || EXAKIT_ITEM_LOG=""
+    _UI_SPIN_INDENT='    '
+    _UI_SPIN_PREFIX="$1"
+}
+# exakit_item_end <rc> [title] [detail] — end the item. Done: the tick, the
+# title (the one it began with unless a better one is given), the time, and the
+# detail. Not done: a cross, then every line the item held, so the facts it did
+# establish are on screen under the error it already printed.
+exakit_item_end() {
+    _eie_rc="$1"
+    _eie_title="${2:-$EXAKIT_ITEM_TITLE}"
+    _eie_el=$(( $(date +%s 2>/dev/null || echo 0) - ${EXAKIT_ITEM_T0:-0} ))
+    _eie_log="${EXAKIT_ITEM_LOG:-}"
+    EXAKIT_ITEM_LOG=""
+    _UI_SPIN_INDENT='  '
+    _UI_SPIN_PREFIX=''
+    if [ "$_eie_rc" -eq 0 ]; then
+        exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s" "${3:-}"
+    else
+        exakit_item_line "${UI_ERR:-}${UI_CROSS:-[x]}${UI_RESET:-}" "$_eie_title" "${_eie_el}s"
+        if [ -n "$_eie_log" ] && [ -s "$_eie_log" ]; then
+            while IFS= read -r _eie_line || [ -n "$_eie_line" ]; do
+                case "$_eie_line" in
+                    "OK "*)   printf '        %s%s%s %s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" "${_eie_line#OK }" ;;
+                    "INFO "*) printf '        %s%s%s %s\n' "${UI_DIM:-}" "${UI_BULLET:--}" "${UI_RESET:-}" "${_eie_line#INFO }" ;;
+                esac
+            done < "$_eie_log"
+        fi
+    fi
+    [ -z "$_eie_log" ] || rm -f "$_eie_log"
+    return 0
+}
+# exakit_item_held <pattern> — did the item's held lines say this? For the
+# detail line, which says in a few words what the held lines said in full.
+exakit_item_held() {
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && [ -f "$EXAKIT_ITEM_LOG" ] && grep -q -- "$1" "$EXAKIT_ITEM_LOG" 2>/dev/null
 }
 # heading <text> — a green ▸ at the STEP indent (two spaces).
 #
@@ -6618,6 +6705,9 @@ exakit_marketplace_offer() {
     ( _exakit_marketplace_warm_about >/dev/null 2>&1 & ) 2>/dev/null
     # Nothing to install and nobody to ask: nothing on screen.
     [ -n "$_mo_ids" ] || { [ -n "$(_exakit_prompt_tty)" ] && exakit_marketplace_has_pending; } || return 0
+    # Two empty lines first: the offer is a new part of the run, not one more
+    # line of the install step above it. ⇄ twin: Request-ExakitMarketplaceOffer.
+    printf '\n\n'
     heading "Supercharging Exasol with Add-ons"
     if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
         # ONE table: every add-on on offer, the missing ones of the two installing
@@ -9242,6 +9332,12 @@ begin_step() {
             # and a manifest read, so a second one costs nothing.
             step_artifact_state "$1" >/dev/null 2>&1
             _bs_rerun=1
+        elif [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+            # An item of a grouped step: one line at the item column, under the
+            # group's heading.
+            exakit_item_line "${UI_OK:-}${UI_TICK:-[ok]}${UI_RESET:-}" "$2" "" "already done, skipping"
+            _exakit_log_file "OK    $2 — already done, skipping"
+            return 1
         else
             # Step-level line (a whole step's status, not a nested outcome).
             printf '\n  %s%s%s %s%s%s %s— already done, skipping%s\n' \
@@ -9251,7 +9347,12 @@ begin_step() {
             return 1
         fi
     fi
-    exakit_step_heading "$2"
+    # In a grouped step the group printed the heading; the item draws itself.
+    if [ "${EXAKIT_STEP_GROUP:-0}" = 1 ]; then
+        _exakit_log_file "STEP  $2"
+    else
+        exakit_step_heading "$2"
+    fi
     if [ "$_bs_rerun" -eq 1 ]; then
         info "Recorded as done, but ${EXAKIT_STEP_RERUN_REASON:-what it installed is missing — running it again}"
     fi
@@ -13001,12 +13102,33 @@ exakit_print_soft_failures() {
 _exakit_install_exapump() {
     _eie_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
+    # Under "Setup Utilities" the item's spinner names what it is doing now.
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="downloading"
     exapump_install || { EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"; return 1; }
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="writing the connection profile"
     exapump_create_profile || { EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"; return 1; }
+    [ -n "${EXAKIT_ITEM_LOG:-}" ] && EXAKIT_ACTIVE_LABEL="verifying the connection"
     exapump_validate_connection
     _eie_rc=$?
     EXAKIT_QUIET_DETAIL="$_eie_prev_quiet"
     return $_eie_rc
+}
+
+# The exapump item's tick line and detail, from the lines it held: the version
+# it reports installing (or that it found one already there), the profile name
+# someone types again, and that the connection was verified.
+_exakit_exapump_item_title() {
+    _eit_v="$(grep -oE '^OK exapump v[0-9][^ ]* installed' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | head -1 | sed 's/^OK exapump v//; s/ installed$//')"
+    if [ -n "$_eit_v" ]; then printf 'exapump v%s\n' "$_eit_v"; else printf '%s\n' "$1"; fi
+}
+_exakit_exapump_item_detail() {
+    _eid=""
+    exakit_item_held '^OK exapump already installed' && _eid="already installed"
+    exakit_item_held '^OK exapump runs via the ' && _eid="${_eid:+$_eid · }runs in a container"
+    _eid_p="$(grep -oE '^OK Connection profile \[[^]]*\]' "${EXAKIT_ITEM_LOG:-/dev/null}" 2>/dev/null | head -1 | sed 's/^OK Connection //')"
+    [ -z "$_eid_p" ] || _eid="${_eid:+$_eid · }$_eid_p"
+    exakit_item_held '^OK Database ready' && _eid="${_eid:+$_eid · }connection verified"
+    printf '%s\n' "$_eid"
 }
 
 # One line for this step's server work: the launcher's MCP server, as the
@@ -13483,35 +13605,45 @@ kit_shared_steps() {
         info "Skipping exapump, the sample data, the AI bridge and pyexasol - they all need the database, which is not installed"
     fi
 
-    if [ "$_kss_nodb" = 1 ]; then
-        :
-    elif command -v exapump_install >/dev/null 2>&1; then
-        if begin_step exapump "Step ${_step_no}/${_total}  exapump (data loading CLI)"; then
-            if exakit_soft_step exapump "exakit update" "exapump" \
-                    _exakit_install_exapump; then
-                mark_step exapump
-            fi
-        fi
-    else
-        info "Step ${_step_no}/${_total}  exapump — not part of this installation, skipping"
-    fi
-    _step_no=$((_step_no + 1))
-
-    # CONFIGURE DATABASE FEATURES, right after exapump: the database is up and
+    # SETUP UTILITIES: exapump, then the database features, as ONE step with
+    # one item each. Two steps underneath, as before -- exapump is recorded in
+    # steps_completed and resumes on its own, the database features run on
+    # every pass -- shown under one heading (exakit_step_group_begin).
+    #
+    # The database features come right after exapump: the database is up and
     # exapump can run the setup SQL, and nothing has loaded data or connected
     # an AI client yet. The core tasks of scope "database" run here (today the
     # SQL preprocessor framework) - installed when missing, verified on every
     # pass. A task that fails is booked in the closing summary and the steps
     # after it still run; each checks its own prerequisites.
-    _kss_feature_label="Step ${_step_no}/${_total}  Configure database features"
+    _kss_util_label="Step ${_step_no}/${_total}  Setup Utilities"
     if [ "$_kss_nodb" = 1 ]; then
         :
-    elif ! command -v exakit_core_database_step >/dev/null 2>&1; then
-        info "$_kss_feature_label — not part of this installation, skipping"
-    elif exakit_soft_failed exapump; then
-        info "$_kss_feature_label — skipped: it runs its setup through exapump, which is not installed"
     else
-        exakit_core_database_step "$_kss_feature_label" "$_kit_root"
+        exakit_step_group_begin "$_kss_util_label"
+        if command -v exapump_install >/dev/null 2>&1; then
+            _kss_ep_title="exapump${EXAKIT_EXAPUMP_VERSION:+ v$EXAKIT_EXAPUMP_VERSION}"
+            if begin_step exapump "$_kss_ep_title"; then
+                exakit_item_begin "$_kss_ep_title"
+                if exakit_soft_step exapump "exakit update" "exapump" \
+                        _exakit_install_exapump; then
+                    mark_step exapump
+                    exakit_item_end 0 "$(_exakit_exapump_item_title "$_kss_ep_title")" "$(_exakit_exapump_item_detail)"
+                else
+                    exakit_item_end 1
+                fi
+            fi
+        else
+            info "exapump — not part of this installation, skipping"
+        fi
+        if ! command -v exakit_core_database_step >/dev/null 2>&1; then
+            info "Database features — not part of this installation, skipping"
+        elif exakit_soft_failed exapump; then
+            info "Database features — skipped: they are set up through exapump, which is not installed"
+        else
+            exakit_core_database_step "Database features" "$_kit_root"
+        fi
+        exakit_step_group_end
     fi
     _step_no=$((_step_no + 1))
 

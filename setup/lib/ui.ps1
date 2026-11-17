@@ -278,6 +278,15 @@ $script:UiSpinNested = 0
 # has to exist before the table section is reached.
 $script:UiTableLive = $false
 
+# ONE ITEM OF A GROUPED STEP. A step that shows several items under one heading
+# (the installer's "Setup Utilities": exapump, then the database features) draws
+# each item's spinner one level in, at the item column, and names the item ahead
+# of what it is doing right now: "exapump  downloading (3s)". The caller sets
+# both for the length of the item and clears them after; empty, the spinner is
+# drawn exactly as before. Twins of _UI_SPIN_INDENT / _UI_SPIN_PREFIX in ui.sh.
+$script:UiSpinIndent = "  "
+$script:UiSpinPrefix = ""
+
 function Start-ExakitSpinner([string]$Label) {
     if (Get-Command Set-ExakitAddonActivity -ErrorAction SilentlyContinue) { Set-ExakitAddonActivity -Message $Label }
     # A live table is the same single slot: it is already redrawing these rows, so
@@ -286,8 +295,17 @@ function Start-ExakitSpinner([string]$Label) {
     # table, and its Stop would then tear the table down.
     if ($null -ne $script:UiSpinFlag -or $script:UiTableLive) { $script:UiSpinNested++; return }
     if (-not $script:UiFancy) { return }
+    # An item's spinner says the item first. A label that already starts with it
+    # (the item's own name, or one Resume-ExakitSpinner hands back) is used as it
+    # is, so a pause and resume never names the item twice.
+    if ($script:UiSpinPrefix) {
+        if (-not $Label) { $Label = $script:UiSpinPrefix }
+        elseif (-not $Label.StartsWith($script:UiSpinPrefix)) {
+            $Label = $script:UiSpinPrefix + "  " + $Label.Substring(0, 1).ToLowerInvariant() + $Label.Substring(1)
+        }
+    }
     try {
-        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $Label; T0 = (Get-Date) })
+        $script:UiSpinFlag = [hashtable]::Synchronized(@{ Run = $true; Label = $Label; T0 = (Get-Date); Indent = $script:UiSpinIndent })
         $rs = [runspacefactory]::CreateRunspace()
         $rs.Open()
         $rs.SessionStateProxy.SetVariable('flag', $script:UiSpinFlag)
@@ -300,8 +318,8 @@ function Start-ExakitSpinner([string]$Label) {
             while ($flag.Run) {
                 $el = [int]((Get-Date) - $flag.T0).TotalSeconds
                 # No label: the spinner alone (the heading above says what is coming). Twin of ui_spin_begin "".
-                if ($flag.Label) { [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
-                else { [Console]::Write("`r  ${e}[38;5;35m$($frames[$i])${e}[0m${e}[K") }
+                if ($flag.Label) { [Console]::Write("`r$($flag.Indent)${e}[38;5;35m$($frames[$i])${e}[0m $($flag.Label) ${e}[2m(${el}s)${e}[0m${e}[K") }
+                else { [Console]::Write("`r$($flag.Indent)${e}[38;5;35m$($frames[$i])${e}[0m${e}[K") }
                 $i = ($i + 1) % 10
                 Start-Sleep -Milliseconds 90
             }

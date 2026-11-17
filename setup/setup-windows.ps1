@@ -27,7 +27,7 @@ if (Test-Path $legacyModule) { . $legacyModule }
 . (Join-Path $LibDir "exapump.ps1")
 . (Join-Path $LibDir "mcp.ps1")
 . (Join-Path $LibDir "pyexasol.ps1")
-# Core setup tasks (Step 4, Configure database features). Twin of the
+# Core setup tasks (Step 3, Setup Utilities: database features). Twin of the
 # core-setup.sh load in setup-macos.sh / setup-linux.sh.
 $coreSetupModule = Join-Path $LibDir "core-setup.ps1"
 if (Test-Path $coreSetupModule) { . $coreSetupModule }
@@ -140,12 +140,12 @@ try {
     # --- step 2: the launcher --------------------------------------------------
     # Its own step, matching the macOS shape and heading. Twin of the same
     # split in setup-macos.sh and setup-linux.sh.
-    if (Begin-ExakitStep "launcher" "Step 1/7  Exasol launcher") {
+    if (Begin-ExakitStep "launcher" "Step 1/6  Exasol launcher") {
         Install-PersonalLauncher
         Set-ExakitStepDone "launcher"
     }
 
-    if (Begin-ExakitStep "runtime" "Step 2/7  Local database deployment") {
+    if (Begin-ExakitStep "runtime" "Step 2/6  Local database deployment") {
         $script:PersonalNoDatabase = $false
         Install-PersonalDeployment
         if ($script:PersonalNoDatabase) {
@@ -217,53 +217,69 @@ try {
         Info "The database container itself is fully supported. Details: quickstarts/windows.md"
     }
 
-    # --- step 3: exapump (data loading CLI) ------------------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "exapump" "Step 3/7  exapump (data loading CLI)")) {
-        # Three lines for this step, not nine. Invoke-ExakitLogged animates the
-        # label Begin-ExakitStep set, so the Info bullets under it were the
-        # second telling. What survives goes through OkStep: what was installed
-        # and where, the profile name someone types again, and the one fact the
-        # next steps depend on - that the database can persist a schema, not
-        # merely answer SELECT 1. Twin of _exakit_install_exapump (common.sh).
-        if (Invoke-ExakitSoftStep -Component "exapump" -Repair "exakit update" -Body {
-                $prevQuiet = $script:ExakitQuietDetail
-                if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
-                try {
-                    Install-Exapump
-                    New-ExapumpProfile
-                    Test-ExapumpConnection
-                } finally {
-                    $script:ExakitQuietDetail = $prevQuiet
+    # --- step 3: Setup Utilities (exapump, then the database features) --------
+    # ONE step with one item each. Two steps underneath, as before - exapump is
+    # recorded in steps_completed and resumes on its own, the database features
+    # run on every pass - shown under one heading (Start-ExakitStepGroup). Twin
+    # of the same block in kit_shared_steps (common.sh).
+    #
+    # The database features come right after exapump: the database is up and
+    # exapump can run the setup SQL, and nothing has loaded data or connected an
+    # AI client yet. The core tasks of scope "database" run here (today the SQL
+    # preprocessor framework) - installed when missing, verified on every pass.
+    # A task that fails is booked in the closing summary and the steps after it
+    # still run.
+    if ($dbReady) {
+        Start-ExakitStepGroup "Step 3/6  Setup Utilities"
+        $epTitle = "exapump"
+        if ($script:ExapumpVersion) { $epTitle = "exapump v$($script:ExapumpVersion)" }
+        if ($exapumpSupported -and (Begin-ExakitStep "exapump" $epTitle)) {
+            # Three facts for this item, held while it works and said in two
+            # lines when it ends: what was installed, the profile name someone
+            # types again, and that the database can persist a schema, not
+            # merely answer SELECT 1. Twin of _exakit_install_exapump (common.sh).
+            Start-ExakitStepItem $epTitle
+            if (Invoke-ExakitSoftStep -Component "exapump" -Repair "exakit update" -Body {
+                    $prevQuiet = $script:ExakitQuietDetail
+                    if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
+                    try {
+                        $script:ExakitActiveLabel = "downloading"
+                        Install-Exapump
+                        $script:ExakitActiveLabel = "writing the connection profile"
+                        New-ExapumpProfile
+                        $script:ExakitActiveLabel = "verifying the connection"
+                        Test-ExapumpConnection
+                    } finally {
+                        $script:ExakitQuietDetail = $prevQuiet
+                    }
+                }) {
+                Set-ExakitStepDone "exapump"
+                $epDetail = @()
+                if (Test-ExakitItemHeld '^OK exapump already installed') { $epDetail += "already installed" }
+                foreach ($h in @($script:ExakitItemHeld)) {
+                    if ("$h" -match '^OK Connection profile (\[[^\]]*\])') { $epDetail += "profile $($Matches[1])"; break }
                 }
-            }) {
-            Set-ExakitStepDone "exapump"
+                if (Test-ExakitItemHeld '^OK Database ready') { $epDetail += "connection verified" }
+                foreach ($h in @($script:ExakitItemHeld)) {
+                    if ("$h" -match '^OK exapump v(\S+) installed') { $epTitle = "exapump v$($Matches[1])"; break }
+                }
+                Complete-ExakitStepItem -Ok $true -Title $epTitle -Detail ($epDetail -join " $($script:UiMidDot) ")
+            } else {
+                Complete-ExakitStepItem -Ok $false
+            }
+        } elseif (-not $exapumpSupported) {
+            # Say which item is not happening, so the step does not read as
+            # output that got lost. Twin of kit_shared_steps (common.sh).
+            Info "exapump - not part of this installation, skipping"
         }
-    } elseif (-not $exapumpSupported) {
-        # Say which step is not happening. Begin-ExakitStep is the only thing
-        # that prints a step label, so gating the whole call made the screen
-        # jump from "Step 2/7" to "Step 6/7" - which reads as output that got
-        # lost, not as two steps this machine does not need. Twin of
-        # kit_shared_steps (common.sh), which prints this same line when a
-        # step is not part of the installation.
-        Info "Step 3/7  exapump - not part of this installation, skipping"
-    }
-
-    # --- step 4: Configure database features --------------------------------------
-    # Right after exapump: the database is up and exapump can run the setup SQL,
-    # and nothing has loaded data or connected an AI client yet. The core tasks
-    # of scope "database" run here (today the SQL preprocessor framework) -
-    # installed when missing, verified on every pass. A task that fails is booked
-    # in the closing summary and the steps after it still run. Twin of the same
-    # block in kit_shared_steps (common.sh).
-    $featureLabel = "Step 4/7  Configure database features"
-    if (-not $dbReady) {
-        # already said above - nothing more to add here
-    } elseif (-not (Get-Command Invoke-ExakitCoreDatabaseStep -ErrorAction SilentlyContinue)) {
-        Info "$featureLabel - not part of this installation, skipping"
-    } elseif (-not $exapumpSupported -or (Test-ExakitSoftFailed "exapump")) {
-        Info "$featureLabel - skipped: it runs its setup through exapump, which is not installed"
-    } else {
-        Invoke-ExakitCoreDatabaseStep -Label $featureLabel -KitRoot $KitRoot
+        if (-not (Get-Command Invoke-ExakitCoreDatabaseStep -ErrorAction SilentlyContinue)) {
+            Info "Database features - not part of this installation, skipping"
+        } elseif (-not $exapumpSupported -or (Test-ExakitSoftFailed "exapump")) {
+            Info "Database features - skipped: they are set up through exapump, which is not installed"
+        } else {
+            Invoke-ExakitCoreDatabaseStep -Label "Database features" -KitRoot $KitRoot
+        }
+        Stop-ExakitStepGroup
     }
 
     # The sample data. With persona.ps1 in the kit it follows the persona
@@ -299,8 +315,8 @@ try {
             -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
     }
 
-    # --- step 5: AI bridge (server, clients, skills) ----------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 5/7  Setting up AI bridge (MCP server, clients and skills)")) {
+    # --- step 4: AI bridge (server, clients, skills) ----------------------------
+    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 4/6  Setting up AI bridge (MCP server, clients and skills)")) {
         if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
                 # One line for this step's server work: the spinner narrates
                 # starting the launcher's MCP server and its healing, so the
@@ -321,7 +337,7 @@ try {
             Set-ExakitStepDone "mcp"
         }
     } elseif (-not $exapumpSupported) {
-        Info "Step 5/7  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"
+        Info "Step 4/6  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"
     }
 
     # The AI bridge is finished HERE, in the step that says it is being built:
@@ -367,7 +383,7 @@ try {
             })
     }
 
-    # --- step 6: pyexasol (Exasol Python driver) --------------------------------
+    # --- step 5: pyexasol (Exasol Python driver) --------------------------------
     # Not gated on $exapumpSupported: pyexasol is pure Python via uv, so it
     # works on Windows-on-ARM too, where only exapump's binary is missing.
     # A failed pyexasol install must not end the run: the exakit helper step
@@ -378,7 +394,7 @@ try {
     # soft in name only: the driver could install fine and any Fail() raised while
     # validating (an unwritable manifest, say) still ended the run before the
     # exakit helper below existed. Install and validate are one isolated unit.
-    if ($dbReady -and (Begin-ExakitStep "pyexasol" "Step 6/7  pyexasol (Exasol Python driver)")) {
+    if ($dbReady -and (Begin-ExakitStep "pyexasol" "Step 5/6  pyexasol (Exasol Python driver)")) {
         # Two lines for this step, not five: the outcome, and the interpreter to
         # run it with. Everything between is in the logfile, and the spinner
         # covered it live. Twin of _exakit_install_pyexasol (common.sh).
@@ -416,14 +432,14 @@ try {
         if (Get-Command Install-ExakitPersonaSkills -ErrorAction SilentlyContinue) { try { Install-ExakitPersonaSkills } catch { } }
     }
 
-    # --- step 7: exakit helper command, last, after the persona's data ---------
+    # --- step 6: exakit helper command, last, after the persona's data ---------
     # The command is in place from the start; this is the tick and the refresh,
     # what the reader sees last before the panel. Twin of kit_helper_step.
     # The step flag alone is not trusted: if the shim was removed (cleanup,
     # testing, older builds), a re-run must reinstall it rather than skip -
     # and the PATH check must run either way, since the PATH entry can be
     # missing even when the step is marked done.
-    $helperNeeded = Begin-ExakitStep "exakit_helper" "Step 7/7  exakit helper command"
+    $helperNeeded = Begin-ExakitStep "exakit_helper" "Step 6/6  exakit helper command"
     if (-not $helperNeeded -and -not (Test-Path (Join-Path $script:BinDir "exakit.cmd"))) {
         Info "exakit command is missing - reinstalling it"
         $helperNeeded = $true
